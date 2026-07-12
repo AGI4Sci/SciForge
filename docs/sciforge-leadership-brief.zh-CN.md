@@ -31,7 +31,7 @@ SciForge 是一个面向科研与复杂工程的本地 AI 工作台：把代码�
 
 SciForge 的重要差异是把科研能力拆成可配置、可审计、可替换的 worker / MCP / Skill：
 
-- 科研检索、定时任务、K-Dense 科学 Skill、Scientific Plotting、Image Generation、SciForge Canvas、ppt-master 等能力都可以作为外部工具接入。
+- 科研检索、定时任务、K-Dense 科学 Skill、Scientific Plotting、Image Generation、VisualDocument、ppt-master 等能力都可以作为外部工具接入。
 - 这让 SciForge 可以逐步扩展，而不是把所有能力写死在单一客户端里。
 - 对机构部署更友好：哪些工具可用、哪些需要审批、哪些只读、哪些能写入，都可以在边界上治理。
 

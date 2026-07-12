@@ -76,7 +76,7 @@ import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plottin
 import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
 import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
-import type { SciforgeCanvasMcpLaunchConfig } from '../../sciforge-canvas-mcp-config'
+import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured,
@@ -109,6 +109,7 @@ import type {
   MultiAgentTranscriptEntry,
   MultiAgentUsage
 } from '../../../../packages/workers/multi-agent/src'
+import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
 
 export type CodexRuntimeEventSink = {
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.event, payload: CodexEventPayload): void
@@ -134,7 +135,7 @@ export type CodexRuntimeServiceOptions = {
   bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
   imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
   pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
-  sciforgeCanvasMcpLaunch?: SciforgeCanvasMcpLaunchConfig
+  visualDocumentMcpLaunch?: VisualDocumentMcpLaunchConfig
   computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
   managedMcpServers?: readonly CodexDynamicMcpServerConfig[]
   mcpClientFactory?: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
@@ -203,6 +204,7 @@ const CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES = [
 const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'SciForge may configure specialized MCP tools for this runtime.',
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
+  SCIENTIFIC_VISUAL_RUNTIME_POLICY,
   'For requests about the current GUI, visible panes, right sidebar, previews, PDF annotations, selected text, or component state, first use `gui_visible_context` to discover the visible component/resource index, then follow the returned access hints.',
   'When visual inspection is needed, call `gui_visual_capture` for the whole window or for a componentId/targetId returned by `gui_visible_context`, then inspect the returned local PNG path with the available image tool. Do not substitute OS-level screenshots.',
   'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
@@ -941,7 +943,7 @@ export class CodexRuntimeService {
         bgcDiscoveryMcpLaunch: this.options.bgcDiscoveryMcpLaunch,
         imageGenerationMcpLaunch: this.options.imageGenerationMcpLaunch,
         pptMasterMcpLaunch: this.options.pptMasterMcpLaunch,
-        sciforgeCanvasMcpLaunch: this.options.sciforgeCanvasMcpLaunch
+        visualDocumentMcpLaunch: this.options.visualDocumentMcpLaunch
       })
       this.dynamicMcpBridge = createCodexDynamicMcpToolBridge({
         servers: codexDynamicMcpServers(this.options, current),
@@ -1008,7 +1010,7 @@ export class CodexRuntimeService {
       this.options.bgcDiscoveryMcpLaunch ||
       this.options.imageGenerationMcpLaunch ||
       this.options.pptMasterMcpLaunch ||
-      this.options.sciforgeCanvasMcpLaunch ||
+      this.options.visualDocumentMcpLaunch ||
       (this.options.managedMcpServers ?? []).some((server) => server.id === GUI_RESEARCH_MCP_SERVER_NAME)
     )
   }
@@ -2561,8 +2563,8 @@ function codexDynamicMcpServers(
     pptMasterMcp: options.pptMasterMcpLaunch && settings
       ? { settings, launch: options.pptMasterMcpLaunch }
       : undefined,
-    sciforgeCanvasMcp: options.sciforgeCanvasMcpLaunch && settings
-      ? { settings, launch: options.sciforgeCanvasMcpLaunch }
+    visualDocumentMcp: options.visualDocumentMcpLaunch && settings
+      ? { settings, launch: options.visualDocumentMcpLaunch }
       : undefined,
     computerUseMcp: options.computerUseMcpLaunch && settings
       ? { settings, launch: options.computerUseMcpLaunch }

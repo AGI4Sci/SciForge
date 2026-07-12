@@ -1527,155 +1527,153 @@ export const scientificPlottingMcpConfigPayloadSchema = z
   })
   .strict()
 
-export const sciforgeCanvasMcpConfigPayloadSchema = z
-  .object({
-    workspaceRoot: z.string().trim().max(MAX_PATH_LENGTH).optional()
-  })
-  .strict()
+const visualDocumentIdSchema = trimmedString(120)
+const normalizedCoordinateSchema = z.number().finite().min(0).max(1)
+const normalizedPointSchema = z.object({
+  x: normalizedCoordinateSchema,
+  y: normalizedCoordinateSchema
+}).strict()
+const normalizedBoundsSchema = z.object({
+  x: normalizedCoordinateSchema,
+  y: normalizedCoordinateSchema,
+  width: z.number().finite().positive().max(1),
+  height: z.number().finite().positive().max(1)
+}).strict().refine(
+  ({ x, y, width, height }) => x + width <= 1 && y + height <= 1,
+  'Normalized bounds must remain inside the artifact.'
+)
 
-export const sciforgeCanvasOpenPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional()
-  })
-  .strict()
+const visualAnnotationGeometrySchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('box'), bounds: normalizedBoundsSchema }).strict(),
+  z.object({ kind: z.literal('pin'), point: normalizedPointSchema }).strict(),
+  z.object({ kind: z.literal('arrow'), from: normalizedPointSchema, to: normalizedPointSchema }).strict(),
+  z.object({
+    kind: z.literal('freehand'),
+    points: z.array(normalizedPointSchema).min(2).max(10_000)
+  }).strict()
+])
 
-export const sciforgeCanvasSavePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    snapshot: z.unknown()
-  })
-  .strict()
+const visualNodeSchema = z.object({
+  id: trimmedString(MAX_ID_LENGTH),
+  kind: z.enum(['generated_asset', 'scientific_plot', 'text', 'shape', 'connector', 'group']),
+  bounds: normalizedBoundsSchema,
+  semanticRef: optionalTrimmedString(1_000),
+  sourceSpecRef: optionalTrimmedString(MAX_PATH_LENGTH),
+  assetPath: optionalTrimmedString(MAX_PATH_LENGTH),
+  maskPath: optionalTrimmedString(MAX_PATH_LENGTH),
+  parentId: optionalTrimmedString(MAX_ID_LENGTH),
+  childIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000).optional(),
+  style: z.record(z.string(), z.unknown()).optional(),
+  editable: z.boolean(),
+  truthLocked: z.boolean()
+}).strict()
 
-export const sciforgeCanvasSelectionSavePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    selection: z.object({
-      selectedShapes: z.array(z.object({
-        id: trimmedString(MAX_ID_LENGTH),
-        type: z.string().trim().max(80).optional(),
-        parentId: z.string().trim().max(MAX_ID_LENGTH).optional(),
-        x: z.number().optional(),
-        y: z.number().optional(),
-        rotation: z.number().optional(),
-        meta: z.record(z.string(), z.unknown()).optional(),
-        props: z.record(z.string(), z.unknown()).optional(),
-        asset: z.object({
-          id: trimmedString(MAX_ID_LENGTH),
-          type: z.string().trim().max(80).optional(),
-          name: z.string().trim().max(255).optional(),
-          src: z.string().max(MAX_BODY_BYTES).optional(),
-          w: z.number().optional(),
-          h: z.number().optional(),
-          mimeType: z.string().trim().max(MAX_MIME_TYPE_LENGTH).optional(),
-          fileSize: z.number().optional()
-        }).strict().nullable().optional(),
-        bounds: z.object({
-          x: z.number(),
-          y: z.number(),
-          w: z.number(),
-          h: z.number()
-        }).strict().nullable().optional(),
-        isAiImageHolder: z.boolean().optional()
-      }).strict()).max(200),
-      updatedAt: z.string().trim().max(80).nullable().optional()
-    }).strict()
-  })
-  .strict()
+const visualTruthLockSchema = z.object({
+  id: trimmedString(MAX_ID_LENGTH),
+  description: trimmedString(5_000),
+  nodeIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000),
+  sourceRef: optionalTrimmedString(MAX_PATH_LENGTH)
+}).strict()
 
-const sciforgeCanvasReviewScorePayloadSchema = z.object({
-  overall: z.number(),
-  palette: z.number(),
-  background: z.number(),
-  axes: z.number(),
-  grid: z.number(),
-  layout: z.number(),
-  marks: z.number(),
-  typography: z.number().optional(),
-  warnings: z.array(z.string())
-}).passthrough()
+export const visualDocumentStatusPayloadSchema = z.object({
+  workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH)
+}).strict()
 
-export const sciforgeCanvasInsertArtifactPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    artifactKind: z.enum(['image', 'generated_image', 'edited_image', 'scientific_plot', 'ppt_slide', 'ppt_export']),
-    sourcePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    outputPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    previewPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    renderedPagePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    renderedFromPptxPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    renderedSlideIndex: z.number().int().nonnegative().optional(),
-    manifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    styleSpecPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    diagramSpecPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    frameworkDesignPlanPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    diagramLayerManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    fastSamSegmentationPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    fastSamBoxlibPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    fastSamPreviewPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    frameworkComponentManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    componentBasePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    componentAssetPaths: z.array(z.string().trim().max(MAX_PATH_LENGTH)).max(1000).optional(),
-    referencePath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    projectPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    svgPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    pptxPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    slideIndex: z.number().int().nonnegative().optional(),
-    title: z.string().trim().max(300).optional(),
-    caption: z.string().trim().max(2_000).optional(),
-    sourceTool: z.string().trim().max(120).optional(),
-    reviewScore: sciforgeCanvasReviewScorePayloadSchema.optional(),
-    reviewPacketPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    anchorShapeId: z.string().trim().max(200).optional(),
-    placement: z.enum(['right', 'left', 'below']).optional(),
-    margin: z.number().finite().min(0).max(500).optional(),
-    matchAnchor: z.boolean().optional(),
-    displayWidth: z.number().finite().positive().max(5000).optional(),
-    displayHeight: z.number().finite().positive().max(5000).optional(),
-    altText: z.string().trim().max(500).optional(),
-    fileName: z.string().trim().max(255).optional(),
-    annotationScreenshot: z.string().trim().max(255).optional(),
-    shapeMeta: z.record(z.string(), z.unknown()).optional(),
-    assetMeta: z.record(z.string(), z.unknown()).optional(),
-    dryRun: z.boolean().optional()
-  })
-  .strict()
+export const visualDocumentOpenPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  canvas: z.object({
+    width: z.number().finite().positive().max(100_000).optional(),
+    height: z.number().finite().positive().max(100_000).optional(),
+    background: trimmedString(128).optional()
+  }).strict().optional(),
+  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional()
+}).strict()
 
-export const sciforgeCanvasImportRecentArtifactsPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    scope: z.enum(['current_canvas', 'workspace_recent']).optional(),
-    maxAgeMs: z.number().finite().min(0).max(30 * 24 * 60 * 60 * 1000).optional(),
-    limit: z.number().int().positive().max(20).optional(),
-    includeExisting: z.boolean().optional(),
-    dryRun: z.boolean().optional()
-  })
-  .strict()
+export const visualDocumentInsertArtifactPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  kind: z.enum(['image', 'generated_image', 'edited_image', 'scientific_plot', 'presentation_slide']),
+  sourcePath: trimmedString(MAX_PATH_LENGTH),
+  manifestPath: optionalTrimmedString(MAX_PATH_LENGTH),
+  title: optionalTrimmedString(300),
+  caption: optionalTrimmedString(5_000),
+  mimeType: optionalTrimmedString(MAX_MIME_TYPE_LENGTH),
+  width: z.number().finite().positive().max(100_000).optional(),
+  height: z.number().finite().positive().max(100_000).optional(),
+  nodes: z.array(visualNodeSchema).max(10_000).optional(),
+  truthLocks: z.array(visualTruthLockSchema).max(10_000).optional(),
+  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional()
+}).strict()
 
-export const sciforgeCanvasSplitArtifactComponentsPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    frameworkComponentManifestPath: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    sourceShapeId: z.string().trim().max(200).optional(),
-    displayWidth: z.number().finite().positive().max(5000).optional(),
-    margin: z.number().finite().min(0).max(500).optional(),
-    dryRun: z.boolean().optional()
-  })
-  .strict()
+export const visualDocumentUpdateContextPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  styleProfileRef: z.string().trim().max(MAX_PATH_LENGTH).nullable().optional(),
+  truthLocks: z.array(visualTruthLockSchema).max(10_000).optional(),
+  nodes: z.array(visualNodeSchema).max(10_000).optional()
+}).strict().refine(
+  ({ styleProfileRef, truthLocks, nodes }) => styleProfileRef !== undefined || truthLocks !== undefined || nodes !== undefined,
+  'At least one VisualDocument context field is required.'
+)
 
-export const sciforgeCanvasReviewPacketPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    canvasId: z.string().trim().max(120).optional(),
-    packetId: z.string().trim().max(120).optional(),
-    title: z.string().trim().max(300).optional()
-  })
-  .strict()
+export const visualDocumentSaveAnnotationsPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  annotations: z.array(z.object({
+    id: visualDocumentIdSchema.optional(),
+    geometry: visualAnnotationGeometrySchema,
+    instruction: trimmedString(20_000),
+    targetNodeIds: z.array(trimmedString(MAX_ID_LENGTH)).max(10_000).optional(),
+    status: z.enum(['open', 'resolved']).optional()
+  }).strict()).max(10_000)
+}).strict()
+
+export const visualDocumentExportReviewPacketPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  packetId: visualDocumentIdSchema.optional()
+}).strict()
+
+export const visualDocumentCreateCandidatePayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  candidatePath: trimmedString(MAX_PATH_LENGTH),
+  summary: trimmedString(20_000),
+  reviewEvidence: z.object({
+    tool: z.literal('visual_artifact_review'),
+    ok: z.literal(true),
+    reviewedArtifactPath: trimmedString(MAX_PATH_LENGTH),
+    reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
+    reviewedAt: z.string().datetime(),
+    score: z.object({
+      overall: z.number().min(0).max(1),
+      dimensions: z.number().min(0).max(1),
+      nonEmpty: z.number().min(0).max(1),
+      background: z.number().min(0).max(1),
+      reference: z.number().min(0).max(1).optional(),
+      semantic: z.number().min(0).max(1),
+      warnings: z.array(z.string().max(2_000)).max(100)
+    }).strict(),
+    semantic: z.object({
+      pass: z.literal(true),
+      summary: trimmedString(4_000),
+      violations: z.tuple([]),
+      repairInstructions: z.tuple([])
+    }).strict(),
+    repairable: z.literal(false),
+    warnings: z.array(z.string().max(2_000)).max(100)
+  }).strict(),
+  expectedBaseHash: z.string().trim().regex(/^[a-f0-9]{64}$/i).optional(),
+  width: z.number().finite().positive().max(100_000).optional(),
+  height: z.number().finite().positive().max(100_000).optional()
+}).strict()
+
+export const visualDocumentRevisionDecisionPayloadSchema = z.object({
+  workspaceRoot: trimmedString(MAX_PATH_LENGTH),
+  documentId: visualDocumentIdSchema.optional(),
+  revisionId: visualDocumentIdSchema
+}).strict()
 
 export const scientificPlottingStatusPayloadSchema = z
   .object({
@@ -1715,56 +1713,135 @@ export const scientificSkillsInstallPayloadSchema = z
   })
   .strict()
 
-export const figureStyleExtractPayloadSchema = z
+export const visualStyleExtractPayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     sourcePath: trimmedString(MAX_PATH_LENGTH),
     sourceType: z.enum(['image', 'pdf']).optional(),
+    sourceKind: z.enum(['reference', 'current']).optional(),
+    scope: z.enum(['manuscript', 'workspace', 'artifact']).optional(),
     figureId: z.string().trim().max(128).optional(),
     notes: z.string().trim().max(1_000).optional()
   })
   .strict()
 
-export const figureStyleExtractReferencePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    sourcePath: trimmedString(MAX_PATH_LENGTH),
-    sourceType: z.enum(['image', 'pdf']).optional(),
-    page: z.number().int().positive().max(10_000).optional(),
-    cropBox: scientificPlottingCropBoxPayloadSchema.optional(),
-    figureId: z.string().trim().max(128).optional(),
-    outputDir: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    dpi: z.number().int().min(72).max(600).optional(),
-    notes: z.string().trim().max(1_000).optional()
-  })
-  .strict()
+const visualStyleProfileSchema = z.object({
+  version: z.literal(1),
+  id: z.string().trim().min(1).max(200),
+  scope: z.enum(['manuscript', 'workspace', 'artifact']),
+  source: z.discriminatedUnion('type', [
+    z.object({
+      type: z.literal('reference'),
+      path: trimmedString(MAX_PATH_LENGTH),
+      figureId: z.string().trim().max(128).optional(),
+      notes: z.string().trim().max(1_000).optional()
+    }).strict(),
+    z.object({ type: z.literal('preset'), presetId: trimmedString(200) }).strict(),
+    z.object({ type: z.literal('inherited'), profileId: trimmedString(200) }).strict(),
+    z.object({ type: z.literal('current'), artifactPath: trimmedString(MAX_PATH_LENGTH).optional() }).strict()
+  ]),
+  tokens: z.object({
+    canvas: z.object({
+      width: z.number().finite().positive(),
+      height: z.number().finite().positive(),
+      aspectRatio: z.number().finite().positive(),
+      background: trimmedString(100)
+    }).strict(),
+    palette: z.object({
+      colors: z.array(trimmedString(100)).min(1).max(64),
+      background: trimmedString(100),
+      ink: trimmedString(100),
+      accent: z.array(trimmedString(100)).max(32),
+      colorMode: z.enum(['monochrome', 'limited', 'multi-hue'])
+    }).strict(),
+    typography: z.object({
+      fontFamily: trimmedString(200),
+      axisSize: z.number().finite().nonnegative(),
+      labelSize: z.number().finite().nonnegative(),
+      titleSize: z.number().finite().nonnegative(),
+      weight: z.enum(['regular', 'medium', 'bold'])
+    }).strict(),
+    strokes: z.object({
+      ink: trimmedString(100),
+      primaryWidth: z.number().finite().nonnegative(),
+      secondaryWidth: z.number().finite().nonnegative(),
+      lineCap: z.enum(['butt', 'round', 'square', 'unknown'])
+    }).strict(),
+    spacing: z.object({
+      margin: z.object({
+        left: z.number().finite(),
+        right: z.number().finite(),
+        top: z.number().finite(),
+        bottom: z.number().finite()
+      }).strict(),
+      gutter: z.enum(['compact', 'balanced', 'spacious']),
+      density: z.enum(['sparse', 'balanced', 'dense'])
+    }).strict(),
+    shapes: z.object({
+      fillMode: z.enum(['solid', 'outlined', 'mixed', 'unknown']),
+      cornerRadius: z.number().finite().nonnegative().optional(),
+      borderWidth: z.number().finite().nonnegative().optional(),
+      shadow: z.enum(['none', 'subtle', 'prominent', 'unknown'])
+    }).strict(),
+    plots: z.object({
+      panelGrid: z.string().trim().max(100),
+      panelLabels: z.enum(['none', 'A/B/C', 'a/b/c', 'numeric', 'unknown']),
+      axes: z.object({
+        spine: z.enum(['none', 'left-bottom', 'box', 'minimal', 'unknown']),
+        tickDirection: z.enum(['in', 'out', 'none', 'unknown']),
+        grid: z.boolean(),
+        gridTone: z.enum(['none', 'light', 'medium']),
+        gridColor: trimmedString(100),
+        gridAlpha: z.number().finite(),
+        gridLineWidth: z.number().finite().nonnegative()
+      }).strict(),
+      marks: z.object({
+        lineWidth: z.number().finite().nonnegative(),
+        markerSize: z.number().finite().nonnegative(),
+        errorBarStyle: z.enum(['none', 'caps', 'unknown']),
+        density: z.enum(['sparse', 'balanced', 'dense'])
+      }).strict(),
+      annotations: z.object({
+        significance: z.enum(['none', 'stars', 'brackets', 'unknown']),
+        legend: z.enum(['none', 'frameless', 'boxed', 'unknown'])
+      }).strict(),
+      export: z.object({
+        formats: z.array(z.enum(['pdf', 'svg', 'png'])).min(1).max(3),
+        dpi: z.number().finite().positive(),
+        transparent: z.boolean()
+      }).strict()
+    }).strict().optional(),
+    generatedAssets: z.object({
+      visualTreatment: z.enum(['flat', 'illustrative', 'photorealistic', 'mixed', 'unknown']),
+      backgroundTreatment: z.enum(['transparent', 'solid', 'textured', 'unknown']),
+      edgeTreatment: z.enum(['crisp', 'soft', 'mixed', 'unknown']),
+      detailLevel: z.enum(['sparse', 'balanced', 'rich', 'unknown'])
+    }).strict().optional()
+  }).strict(),
+  semanticDescription: z.string().trim().max(4_000),
+  confidence: z.object({
+    overall: z.number().min(0).max(1),
+    palette: z.number().min(0).max(1),
+    spacing: z.number().min(0).max(1),
+    plots: z.number().min(0).max(1),
+    typography: z.number().min(0).max(1),
+    generatedAssets: z.number().min(0).max(1)
+  }).strict()
+}).strict()
 
-const figureStyleJsonObjectPayloadSchema = z.record(z.string(), z.unknown())
-
-export const figureStyleSaveSpecPayloadSchema = z
+export const visualStyleSaveProfilePayloadSchema = z
   .object({
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),
     path: z.string().trim().max(MAX_PATH_LENGTH).optional(),
-    spec: figureStyleJsonObjectPayloadSchema,
-    applyPlan: figureStyleJsonObjectPayloadSchema,
-    diagnostics: figureStyleJsonObjectPayloadSchema
-  })
-  .strict()
-
-export const figureStyleEvaluatePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    referencePath: trimmedString(MAX_PATH_LENGTH),
-    outputPath: trimmedString(MAX_PATH_LENGTH)
-  })
-  .strict()
-
-export const figureStyleReviewPayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    referencePath: trimmedString(MAX_PATH_LENGTH),
-    outputPath: trimmedString(MAX_PATH_LENGTH),
-    minOverall: z.number().min(0.5).max(0.98).optional()
+    profile: visualStyleProfileSchema,
+    diagnostics: z.object({
+      analyzedAt: z.string().datetime(),
+      sampledPixels: z.number().int().nonnegative(),
+      foregroundRatio: z.number().min(0).max(1),
+      darkPixelRatio: z.number().min(0).max(1),
+      chromaRatio: z.number().min(0).max(1),
+      warnings: z.array(z.string().trim().max(2_000)).max(100)
+    }).strict()
   })
   .strict()
 
@@ -2172,6 +2249,14 @@ export const evidenceDagUpdatePayloadSchema = z
   .refine((payload) => payload.operation === 'rebuild' || (!payload.rebuildKind && !payload.rebuildRationale), {
     message: 'rebuild fields are only valid for an explicit rebuild'
   })
+
+export const evidenceDagPriorityPayloadSchema = z
+  .object({
+    threadId: trimmedString(MAX_ID_LENGTH),
+    runtimeId: agentRuntimeIdSchema,
+    visible: z.boolean()
+  })
+  .strict()
 
 export const evidenceDagEvidencePreviewResolvePayloadSchema = z
   .object({

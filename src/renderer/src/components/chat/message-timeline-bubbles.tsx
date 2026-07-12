@@ -21,7 +21,7 @@ import {
   MarkdownImageArtifactProvider,
   TimelineImagesFromMeta,
   timelineImagesFromMeta,
-  type TimelineImageCanvasArtifact,
+  type TimelineVisualReviewArtifact,
   type TimelineImageReference
 } from './message-timeline-media'
 import { ModelMetaTag } from './message-timeline-cards'
@@ -79,17 +79,12 @@ function UserMessageBubble({
     () => runtimeContextUserTextForDisplay(block.text),
     [block.text]
   )
-  const legacyCanvasReviewDisplayText = useMemo(
-    () => canvasReviewUserTextForDisplay(block.text),
-    [block.text]
-  )
   const displayText =
     parsedMetaClawPrompt?.text ??
     metaDisplayText ??
     parsedRemoteChannelPrompt?.text ??
-    legacyCanvasReviewDisplayText ??
     legacyRuntimeDisplayText
-  const canEdit = !metaDisplayText && !legacyCanvasReviewDisplayText
+  const canEdit = !metaDisplayText
   const showClawInboundCard = isRemoteChannelMessage && parsedRemoteChannelPrompt?.inbound === true
 
   useEffect(() => {
@@ -311,17 +306,6 @@ const LEGACY_RUNTIME_CONTEXT_END_MARKERS = [
   'If the objective is achieved, say so clearly in the final answer. The GUI goal status is controlled by the shared /goal commands.',
   '</sciforge_runtime_instruction>'
 ] as const
-
-const CANVAS_REVIEW_DISPLAY_TEXT = '请根据我在画布上的标注生成修改版。'
-
-function canvasReviewUserTextForDisplay(text: string): string | null {
-  const trimmed = text.trimStart()
-  if (trimmed.startsWith('[SciForge Canvas review request]')) return CANVAS_REVIEW_DISPLAY_TEXT
-  if (trimmed.startsWith('按照当前画布标注修改生成结果，生成新版本并插入回当前画布。')) {
-    return CANVAS_REVIEW_DISPLAY_TEXT
-  }
-  return null
-}
 
 function runtimeContextUserTextForDisplay(text: string): string {
   let current = text
@@ -956,12 +940,12 @@ function MessageBubbleComponent({
   block,
   nested = false,
   markdownImages = [],
-  onOpenImageArtifactInCanvas
+  onOpenImageArtifactInVisualReview
 }: {
   block: ChatBlock
   nested?: boolean
   markdownImages?: TimelineImageReference[]
-  onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const resolveApproval = useChatStore((s) => s.resolveApproval)
@@ -976,11 +960,11 @@ function MessageBubbleComponent({
     return (
       <div className="group/message flex min-w-0 max-w-full flex-col">
         <div className="ds-markdown ds-chat-answer ds-selectable-text min-w-0 max-w-full text-ds-ink">
-          <MarkdownImageArtifactProvider images={markdownImages} onOpenCanvas={onOpenImageArtifactInCanvas}>
+          <MarkdownImageArtifactProvider images={markdownImages} onOpenVisualReview={onOpenImageArtifactInVisualReview}>
             <AssistantMarkdown text={block.text} streaming={streaming} />
           </MarkdownImageArtifactProvider>
         </div>
-        <TimelineImagesFromMeta meta={block.meta} variant="assistant" onOpenCanvas={onOpenImageArtifactInCanvas} />
+        <TimelineImagesFromMeta meta={block.meta} variant="assistant" onOpenVisualReview={onOpenImageArtifactInVisualReview} />
         {!streaming ? (
           <div className="mt-1 flex min-h-5 min-w-0 flex-wrap items-center justify-between gap-2 text-[11.5px] text-ds-faint opacity-0 transition duration-150 group-hover/message:opacity-100">
             <span className="min-w-0 truncate">{createdAtLabel ?? ''}</span>
@@ -1006,7 +990,7 @@ function MessageBubbleComponent({
       <ToolEntry
         block={block}
         nested={nested}
-        onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+        onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
       />
     )
   }
@@ -1110,11 +1094,11 @@ function MessageBubbleComponent({
 function ToolEntry({
   block,
   nested = false,
-  onOpenImageArtifactInCanvas
+  onOpenImageArtifactInVisualReview
 }: {
   block: ToolBlock
   nested?: boolean
-  onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   const [open, setOpen] = useState(() => block.status === 'error' || block.status === 'running')
@@ -1215,7 +1199,7 @@ function ToolEntry({
       <TimelineImagesFromMeta
         meta={block.meta}
         variant="tool"
-        onOpenCanvas={onOpenImageArtifactInCanvas}
+        onOpenVisualReview={onOpenImageArtifactInVisualReview}
       />
       {effectiveOpen && hasDetail ? (
         <div className="ds-panel-strip min-w-0 border-t border-ds-border-muted/60 px-4 py-3">
@@ -1236,5 +1220,5 @@ export const MessageBubble = memo(MessageBubbleComponent, (prev, next) => (
   prev.block === next.block &&
   prev.nested === next.nested &&
   prev.markdownImages === next.markdownImages &&
-  prev.onOpenImageArtifactInCanvas === next.onOpenImageArtifactInCanvas
+  prev.onOpenImageArtifactInVisualReview === next.onOpenImageArtifactInVisualReview
 ))

@@ -21,7 +21,7 @@ from evidence_dag.model import (
 from evidence_dag.snapshot import build_snapshot, snapshot_filename, snapshot_storage_key
 
 from project_dag.contracts import remediation_candidate, select_a3_action
-from project_dag.judge import StubJudge
+from project_dag.judge import Judge, StubJudge
 from project_dag.service import Engine
 from project_dag.store import Store
 
@@ -693,6 +693,110 @@ class WorkflowTests(unittest.TestCase):
             release.set(); worker.join(2)
         self.assertFalse(errors)
         self.assertEqual(len(self.engine.claims(self.project)), 2)
+
+    def test_different_projects_prepare_models_concurrently_before_serial_commit(self):
+        other_project = "path:/workspace/b"
+        self.engine.create_goal(other_project, "Assess the other pipeline")
+        first = write_snapshot(self.sessions, "parallel-a", [("claim a", "source a")])
+        second = write_snapshot(self.sessions, "parallel-b", [("claim b", "source b")])
+        self.enqueue([first], project=self.project)
+        self.enqueue([second], project=other_project)
+
+        barrier = threading.Barrier(2, timeout=2)
+        transaction_states: list[bool] = []
+        judge = self.engine.workflow.compiler.judge
+        original_distill = judge.handlers["distill"]
+
+        def concurrent_distill(payload):
+            transaction_states.append(self.engine.store.conn.in_transaction)
+            barrier.wait()
+            return original_distill(payload)
+
+        judge.handlers["distill"] = concurrent_distill
+        errors: list[Exception] = []
+        workers = [
+            threading.Thread(
+                target=self._capture_error,
+                args=(errors, self.engine.process_updates, project),
+            )
+            for project in (self.project, other_project)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(4)
+
+        self.assertFalse(errors)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(transaction_states, [False, False])
+        self.assertIsNotNone(self.engine.workflow.latest_snapshot(self.project))
+        self.assertIsNotNone(self.engine.workflow.latest_snapshot(other_project))
+
+    def test_dynamic_model_cache_misses_restart_outside_sqlite_transaction(self):
+        engine = self.engine
+
+        class TransactionCheckingLlm:
+            def __init__(self):
+                self.transaction_states: list[bool] = []
+
+            def chat(self, messages, temperature=0.0):
+                del temperature
+                self.transaction_states.append(engine.store.conn.in_transaction)
+                task = messages[0]["content"].splitlines()[0].split(":", 1)[1].strip()
+                payload = json.loads(messages[1]["content"].split("\n(vote ", 1)[0])
+                if task == "distill":
+                    return json.dumps({
+                        "statement": payload["claim"], "claim_type": "finding",
+                        "mentioned_entities": [],
+                        "addresses_goal": payload["active_goals"][0]["id"],
+                        "source_node_ids": [
+                            node["id"] for node in payload["subgraph"]["nodes"]
+                        ],
+                        "confidence": 0.9,
+                    })
+                if task == "claim_equiv":
+                    return json.dumps({
+                        "relation": "new", "target": None, "confidence": 0.9,
+                    })
+                if task == "contradiction":
+                    return json.dumps({"contradicts": False, "confidence": 0.9})
+                raise AssertionError(task)
+
+        llm = TransactionCheckingLlm()
+        judge = Judge(llm, engine.store)
+        engine.judge = judge
+        engine.workflow.compiler.judge = judge
+        snapshot = write_snapshot(self.sessions, "dynamic-prepare", [
+            ("first prepared claim", "first source"),
+            ("second prepared claim", "second source"),
+        ])
+        self.enqueue([snapshot])
+
+        result = engine.process_updates(self.project)
+
+        self.assertIsNotNone(result)
+        self.assertEqual(len(result["snapshot"]["graph"]["claims"]), 2)
+        self.assertGreaterEqual(len(llm.transaction_states), 4)
+        self.assertTrue(all(not state for state in llm.transaction_states))
+
+    def test_same_project_compile_lock_is_scoped_by_project_key(self):
+        compiler = self.engine.workflow.compiler
+        held = compiler._project_lock(self.project)
+        held.acquire()
+        try:
+            with compiler.compile_transaction(
+                    "scheduled", [], project_key=self.project,
+                    evidence_vector=[]) as same_project:
+                self.assertTrue(same_project["skipped"])
+                self.assertIn("for project", same_project["reason"])
+            other_project = "path:/workspace/lock-b"
+            with compiler.compile_transaction(
+                    "scheduled", [], project_key=other_project,
+                    evidence_vector=[]) as other:
+                self.assertFalse(other.get("skipped", False))
+                self.engine.store.conn.rollback()
+        finally:
+            held.release()
 
     def test_audit_sidechain_is_persistent_and_failure_does_not_fail_project_job(self):
         snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])

@@ -55,8 +55,8 @@ const PACKAGE_DEFINITIONS = {
   pptMaster: {
     dir: 'packages/workers/ppt-master'
   },
-  canvas: {
-    dir: 'packages/workers/canvas'
+  visualDocument: {
+    dir: 'packages/workers/visual-document'
   },
   guiOwlComputerUse: {
     dir: 'packages/workers/gui-owl-computer-use'
@@ -81,7 +81,7 @@ const WORKSPACE_PACKAGE_IDS = [
   'imageGeneration',
   'multiAgent',
   'pptMaster',
-  'canvas'
+  'visualDocument'
 ]
 
 const BUNDLED_PACKAGE_IDS = [
@@ -99,7 +99,7 @@ const BUNDLED_PACKAGE_IDS = [
   'imageGeneration',
   'multiAgent',
   'pptMaster',
-  'canvas'
+  'visualDocument'
 ]
 
 const NON_BUNDLED_PACKAGE_IDS = [
@@ -344,18 +344,18 @@ const RUNTIME_ENTRIES = [
     ]
   },
   {
-    id: 'canvas',
-    label: 'Canvas',
-    packageIds: ['canvas'],
-    requiredPathsExport: 'CANVAS_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('canvas', [
+    id: 'visual-document',
+    label: 'VisualDocument',
+    packageIds: ['visualDocument'],
+    requiredPathsExport: 'VISUAL_DOCUMENT_RUNTIME_REQUIRED_PATHS',
+    requiredPaths: packagePaths('visualDocument', [
       'package.json',
-      'src/sciforge-canvas-mcp-server.ts',
-      'src/sciforge-canvas-engine.ts',
+      'src/visual-document-mcp-server.ts',
+      'src/visual-document-engine.ts',
       'src/contract.ts'
     ]),
     mcpNodeEntryPaths: [
-      'out/main/sciforge-canvas-mcp-node-entry.js'
+      'out/main/visual-document-mcp-node-entry.js'
     ]
   }
 ]

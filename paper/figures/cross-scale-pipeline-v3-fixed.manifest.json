@@ -1,0 +1,227 @@
+{
+  "version": 1,
+  "renderer": "sciforge-image-generation-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "image_generation_render",
+  "createdAt": "2026-07-12T00:53:19.744Z",
+  "requestHash": "8d22ff2726a8dc45",
+  "workspaceRoot": "/Applications/workspace/ailab/research/app/DeepSeek-GUI",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.png",
+  "recipe": {
+    "mode": "image_to_image",
+    "prompt": "Fix this scientific framework diagram to make it publication-quality. Critical fixes needed: (1) Ensure all 6 biology stack layers L0-L5 are clearly visible on the right side with correct labels. (2) Add clearly visible dashed connector lines from P1 to L4, P2 to L3, P4 to L2, and P5 to L5. (3) Make gate validation markers visible in red below P4, P5, and P7. (4) Ensure all text labels are crisp, readable, and not overlapping. (5) Keep the existing clean layout with pipeline phases P0-P7, infrastructure section, and Evidence DAG section. Make all labels bold and legible. White background.\n\nSciForge semantic visual brief:\n- Treat any upstream scientific_plotting or diagram draft as structure only; create the polished final visual, not a tiny box draft.\n- Use a full-canvas composition with clear hierarchy, large readable labels, grouped modules, directional arrows, and visual emphasis on the key scientific/technical relationships.\n- Prefer a publication-grade schematic style: clean typography, balanced spacing, subtle color coding, light background, and concise annotations.\n- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.\n- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.\n- Style preset: sciforge_research.\n- Output: one self-contained high-resolution PNG-style figure suitable for review on SciForge Canvas.",
+    "negativePrompt": "blurry, ugly, cluttered, dark, unreadable, overlapping, artifacts, missing elements, invisible labels",
+    "size": {
+      "width": 1920,
+      "height": 1440
+    },
+    "stylePreset": "sciforge_research",
+    "referencePath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3.png",
+    "outputFormat": "png",
+    "intent": "framework_diagram",
+    "confirmation": {
+      "status": "confirmed"
+    },
+    "promptProfile": "default",
+    "scientificPolishDeltaPlan": {
+      "mode": "delta_only",
+      "targetPanels": [
+        {
+          "assetId": "full_diagram",
+          "reason": "Fix missing biology stack, add dashed connections, make gate markers visible"
+        }
+      ],
+      "allowedOperations": [
+        "panel_text_enhance",
+        "label_overlay",
+        "typography_repair"
+      ],
+      "lockedFacts": [
+        "P0",
+        "P1",
+        "P2",
+        "P3",
+        "P4",
+        "P5",
+        "P6",
+        "P7",
+        "L0",
+        "L1",
+        "L2",
+        "L3",
+        "L4",
+        "L5",
+        "Evidence DAG",
+        "Local Frontend",
+        "Remote Execution (PJLab)"
+      ],
+      "handoffPrompt": "Ensure biology stack L0-L5 is visible, dashed connections are present and correct, gate markers are visible in red, and all text is legible."
+    },
+    "scientificVisualPlan": {
+      "route": "hybrid_composite",
+      "routeLocked": true,
+      "rationale": "Fix the generated diagram by adding missing biology stack, dashed connections, and gate markers.",
+      "reproducibleInputs": [
+        "paper/sciforge-report.tex"
+      ],
+      "truthLockedElements": [
+        "P0-P7",
+        "L0-L5",
+        "dashed connections P1→L4,P2→L3,P4→L2,P5→L5",
+        "gate validation",
+        "Evidence DAG",
+        "infrastructure"
+      ],
+      "fallbackPolicy": "fail_closed"
+    }
+  },
+  "intent": "framework_diagram",
+  "componentSegmentationPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.component-segmentation.json",
+  "fastSamSegmentationPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.component-segmentation.json",
+  "componentSegmentationPreviewPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.component-segmentation-preview.png",
+  "fastSamPreviewPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.component-segmentation-preview.png",
+  "frameworkComponentManifestPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.framework-components.json",
+  "componentBasePath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.component-base.png",
+  "componentAssetPaths": [
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-022.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-023.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-024.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-025.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-026.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-045.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-077.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-078.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-079.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-081.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-082.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-087.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-088.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-089.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-090.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-091.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-094.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-169.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-170.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-255.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-271.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-286.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-292.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-302.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-314.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-323.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-579.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-587.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-715.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-720.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-721.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-722.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-729.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-882.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-883.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-917.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-929.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-930.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-938.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-970.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-973.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-974.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-976.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-977.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-978.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-983.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1010.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1012.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1062.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1063.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1198.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1199.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1219.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1220.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1221.transparent.png",
+    "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/cross-scale-pipeline-v3-fixed.components/component-1255.transparent.png"
+  ],
+  "promptProfile": "default",
+  "scientificPolishDeltaPlan": {
+    "mode": "delta_only",
+    "targetPanels": [
+      {
+        "assetId": "full_diagram",
+        "reason": "Fix missing biology stack, add dashed connections, make gate markers visible"
+      }
+    ],
+    "allowedOperations": [
+      "panel_text_enhance",
+      "label_overlay",
+      "typography_repair"
+    ],
+    "lockedFacts": [
+      "P0",
+      "P1",
+      "P2",
+      "P3",
+      "P4",
+      "P5",
+      "P6",
+      "P7",
+      "L0",
+      "L1",
+      "L2",
+      "L3",
+      "L4",
+      "L5",
+      "Evidence DAG",
+      "Local Frontend",
+      "Remote Execution (PJLab)"
+    ],
+    "handoffPrompt": "Ensure biology stack L0-L5 is visible, dashed connections are present and correct, gate markers are visible in red, and all text is legible."
+  },
+  "lockedFacts": [
+    "P0",
+    "P1",
+    "P2",
+    "P3",
+    "P4",
+    "P5",
+    "P6",
+    "P7",
+    "L0",
+    "L1",
+    "L2",
+    "L3",
+    "L4",
+    "L5",
+    "Evidence DAG",
+    "Local Frontend",
+    "Remote Execution (PJLab)"
+  ],
+  "provider": "image-endpoint",
+  "usagePolicy": {
+    "role": "visual_composition_base",
+    "deterministicOverlayRequired": true,
+    "overlayToolchain": "script_or_scientific_plotting",
+    "warning": "Scientific figure image generation is for visual composition/base layers only. Overlay labels, axes, numeric data, citations, molecular annotations, and other scientific claims with deterministic scripts such as scientific_plotting.",
+    "lockedFacts": [
+      "P0",
+      "P1",
+      "P2",
+      "P3",
+      "P4",
+      "P5",
+      "P6",
+      "P7",
+      "L0",
+      "L1",
+      "L2",
+      "L3",
+      "L4",
+      "L5",
+      "Evidence DAG",
+      "Local Frontend",
+      "Remote Execution (PJLab)"
+    ],
+    "sourceControlledArtifacts": []
+  },
+  "warnings": [
+    "Scientific figure image generation is for visual composition/base layers only. Overlay labels, axes, numeric data, citations, molecular annotations, and other scientific claims with deterministic scripts such as scientific_plotting."
+  ]
+}

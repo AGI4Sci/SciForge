@@ -64,6 +64,115 @@ describe('Codex multi-agent dynamic tools', () => {
     expect(executor).toHaveBeenCalledTimes(2)
   })
 
+  it('reuses one child run when app-server replays the same request', async () => {
+    let release!: () => void
+    let markEntered!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    const entered = new Promise<void>((resolve) => { markEntered = resolve })
+    const executor = vi.fn(async () => {
+      markEntered()
+      await waiting
+      return { summary: 'done once' }
+    })
+    const bridge = createCodexMultiAgentToolBridge({
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+    const request = {
+      requestId: 'replayed-request',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { label: 'reader', prompt: 'Read the paper' }
+    }
+
+    const first = bridge.callTool(request)
+    const replayedWhileRunning = bridge.callTool(request)
+    await entered
+    expect(executor).toHaveBeenCalledTimes(1)
+
+    release()
+    await expect(Promise.all([first, replayedWhileRunning])).resolves.toEqual([
+      expect.objectContaining({ success: true }),
+      expect.objectContaining({ success: true })
+    ])
+    await expect(bridge.callTool(request)).resolves.toMatchObject({
+      success: true,
+      contentItems: [{ type: 'inputText', text: 'done once' }]
+    })
+    expect(executor).toHaveBeenCalledTimes(1)
+  })
+
+  it('treats the same request id in a restarted parent turn as a new attempt', async () => {
+    const executor = vi.fn(async () => ({ summary: 'done' }))
+    const bridge = createCodexMultiAgentToolBridge({
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+    const base = {
+      requestId: 'request-1',
+      threadId: 'parent-thread',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { label: 'reader', prompt: 'Read the paper' }
+    }
+
+    await bridge.callTool({ ...base, turnId: 'turn-before-interrupt' })
+    await bridge.callTool({ ...base, turnId: 'turn-after-restart' })
+
+    expect(executor).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not capacity-evict in-flight requests when concurrency exceeds the settled cache limit', async () => {
+    let release!: () => void
+    const waiting = new Promise<void>((resolve) => { release = resolve })
+    const executor = vi.fn(async () => {
+      await waiting
+      return { summary: 'done' }
+    })
+    const bridge = createCodexMultiAgentToolBridge({
+      maxParallel: 300,
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+    const requests = Array.from({ length: 257 }, (_, index) => ({
+      requestId: `request-${index}`,
+      threadId: 'parent-thread',
+      turnId: `parent-turn-${index}`,
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { label: `reader-${index}`, prompt: `Read section ${index}` }
+    }))
+
+    const running = requests.map((request) => bridge.callTool(request))
+    await vi.waitFor(() => expect(executor).toHaveBeenCalledTimes(257))
+    const replayedOldest = bridge.callTool(requests[0])
+    expect(executor).toHaveBeenCalledTimes(257)
+
+    release()
+    await expect(Promise.all([...running, replayedOldest])).resolves.toHaveLength(258)
+    expect(executor).toHaveBeenCalledTimes(257)
+  })
+
+  it('retains a failed request result so replay does not execute side effects twice', async () => {
+    const executor = vi.fn(async () => {
+      throw new Error('child failed after a side effect')
+    })
+    const bridge = createCodexMultiAgentToolBridge({
+      store: new InMemoryMultiAgentStore(),
+      executor
+    })
+    const request = {
+      requestId: 'failed-request',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { label: 'writer', prompt: 'Perform one bounded write' }
+    }
+
+    await expect(bridge.callTool(request)).resolves.toMatchObject({ success: false })
+    await expect(bridge.callTool(request)).resolves.toMatchObject({ success: false })
+    expect(executor).toHaveBeenCalledTimes(1)
+  })
+
   it('rejects empty prompts without starting a child run', async () => {
     const executor = vi.fn(async () => ({ summary: 'unreachable' }))
     const bridge = createCodexMultiAgentToolBridge({

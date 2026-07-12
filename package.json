@@ -33,7 +33,7 @@
     "packages/workers/image-generation",
     "packages/workers/multi-agent",
     "packages/workers/ppt-master",
-    "packages/workers/canvas"
+    "packages/workers/visual-document"
   ],
   "scripts": {
     "dev": "npm run build:local-runtime && electron-vite dev",
@@ -134,9 +134,9 @@
     "ppt-master:start": "npm --workspace @sciforge/ppt-master run start",
     "ppt-master:test": "npm --workspace @sciforge/ppt-master run test",
     "ppt-master:typecheck": "npm --workspace @sciforge/ppt-master run typecheck",
-    "canvas:start": "npm --workspace @sciforge/canvas run start",
-    "canvas:test": "npm --workspace @sciforge/canvas run test",
-    "canvas:typecheck": "npm --workspace @sciforge/canvas run typecheck",
+    "visual-document:start": "npm --workspace @sciforge/visual-document run start",
+    "visual-document:test": "npm --workspace @sciforge/visual-document run test",
+    "visual-document:typecheck": "npm --workspace @sciforge/visual-document run typecheck",
     "smoke:scientific-plotting-style": "node ./scripts/scientific-plotting-style-regression.mjs",
     "smoke:scientific-plotting-alphafold3": "node ./scripts/scientific-plotting-alphafold3-eval.mjs"
   },

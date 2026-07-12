@@ -15,6 +15,8 @@ const labels: Record<string, string> = {
   sidebarChildrenNavigation: 'Child agent navigation',
   sidebarChildrenRoot: 'Main',
   sidebarChildrenViewNested: 'View child agents',
+  sidebarChildrenOpenInFocus: 'Open in focus workspace',
+  sidebarChildrenAttempt: 'attempt {{current}}/{{total}}',
   sidebarChildrenDetail: 'details',
   sidebarChildrenCloseDetail: 'Close child details',
   sidebarChildrenStatus: 'Status',
@@ -462,6 +464,42 @@ describe('ChildAgentsPanelView', () => {
     expect(html.match(/>clone-repo</g)).toHaveLength(1)
   })
 
+  it('labels distinct retries as attempts instead of making them look duplicated', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'reader-first',
+          name: 'read-ending',
+          parentTurnId: 'turn-before-interrupt',
+          status: 'aborted',
+          createdAt: '2026-07-12T01:00:00.000Z'
+        }),
+        child({
+          id: 'reader-restarted',
+          name: 'read-ending',
+          parentTurnId: 'turn-after-restart',
+          status: 'running',
+          createdAt: '2026-07-12T01:01:00.000Z'
+        })
+      ]
+    })
+
+    expect(html).toContain('read-ending · attempt 1/2')
+    expect(html).toContain('read-ending · attempt 2/2')
+    expect(html.match(/role="tab"/g)).toHaveLength(2)
+  })
+
+  it('does not group same-name children with different prompts as retries', () => {
+    const html = renderView({
+      children: [
+        child({ id: 'reader-a', name: 'reader', prompt: 'Read methods' }),
+        child({ id: 'reader-b', name: 'reader', prompt: 'Read results' })
+      ]
+    })
+
+    expect(html).not.toContain('attempt')
+  })
+
   it('renders bounded breadcrumb navigation and a drill-down action in the same panel', () => {
     const html = renderView({
       children: [
@@ -488,6 +526,19 @@ describe('ChildAgentsPanelView', () => {
     expect(html).toContain('aria-current="page"')
     expect(html).toContain('View child agents')
     expect(html).not.toContain('grid-cols-3')
+  })
+
+  it('offers a clear action to promote the selected child into the focus workspace', () => {
+    const html = renderView({
+      children: [child({
+        openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-child' }
+      })],
+      selectedSide: side(),
+      onOpenChildInFocus: vi.fn()
+    })
+
+    expect(html).toContain('Open in focus workspace')
+    expect(html).toContain('title="Open in focus workspace"')
   })
 
   it('defaults to running, then queued, then most recently updated children', () => {

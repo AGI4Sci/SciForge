@@ -146,6 +146,10 @@ export class AgentRuntimeHost {
     this.adapters = normalizeAdapters(options.adapters)
   }
 
+  hasActiveTurns(): boolean {
+    return this.activeThreadTurns.size > 0
+  }
+
   async connect(runtimeId?: AgentRuntimeId): Promise<void> {
     const { adapter, context } = await this.resolveOptionalActiveRuntime(runtimeId)
     await adapter.connect(context)

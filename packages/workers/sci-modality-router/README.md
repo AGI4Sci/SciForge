@@ -155,15 +155,23 @@ Model Router consumes this worker during input routing:
 
 - GUI copies explicit scientific uploads into the workspace and passes a structured `input_object`
   ref through the runtime.
-- Model Router gates refs by explicit scientific extensions such as `.fasta`, `.smi`, `.mol`,
-  `.sdf`, `.mgf`, `.pdb`, `.cif`, `.vcf`, `.bed`, and `.seq`. Generic `.txt`, `.csv`, and `.tsv`
-  are not auto-routed to this service.
+- Model Router protects a broad set of scientific extensions from raw-text fallback, but only
+  allowlisted uploaded-file formats backed by a deployed expert are sent to this service: protein FASTA
+  (`.fasta`, `.fa`, `.faa`), protein structure (`.pdb`, `.cif`, `.mmcif`), and molecule formats
+  (`.smi`, `.smiles`). Generic `.txt`, `.csv`, and `.tsv` are not
+  auto-routed to this service.
+- Because `.fasta` and `.fa` can contain either nucleotide or protein sequences, Model Router
+  performs conservative local content classification before selecting the protein expert. Pure
+  DNA/RNA and nucleotide-ambiguous sequences fail closed; `.faa` is protein-specific.
+- Protected formats without a registered native-to-text expert (for example `.vcf`, `.bed`,
+  `.gff`, and `.mgf`) fail closed with `scientific_modality_unsupported`; neither their raw
+  contents nor an auto-detection request is sent to the translator or text reasoner.
 - When the Model Router profile has `translators.scientific` configured, Model Router reads the
   workspace file text, POSTs it here (`/modality/translate`), and injects the returned evidence
   into the text reasoner. The GUI sidecar and CLI can still use
   `SCIFORGE_SCIMODALITY_SERVICE_URL` / `SCIFORGE_SCIMODALITY_SERVICE_TOKEN` as deployment inputs
-  to generate that profile role. When unset or unavailable, Model Router falls back to readable
-  raw text where safe (fail-open).
+  to generate that profile role. When unset or unavailable, Model Router only falls back to
+  readable raw text for low-risk, non-protected formats.
 
 ## Test
 

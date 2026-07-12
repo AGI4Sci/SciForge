@@ -1,12 +1,11 @@
 import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, isAbsolute, join, relative } from 'node:path'
+import { dirname, join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import {
-  getImageGenerationSettings,
   type AppSettingsPatch,
   type AppSettingsV1,
   type ScheduleRunResult,
@@ -23,7 +22,6 @@ import type {
   ConnectPhoneRuntimeStatus,
   DagPanelStatus,
   DesktopCommand,
-  LocalDrawioUrlResult,
   ModelRouterConfigOpenResult,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
@@ -74,26 +72,24 @@ import {
   desktopCommandSchema,
   evidenceDagEvidencePreviewResolvePayloadSchema,
   evidenceDagUpdatePayloadSchema,
+  evidenceDagPriorityPayloadSchema,
   evidenceDagViewPayloadSchema,
   projectDagGoalSavePayloadSchema,
   projectDagEvidencePreviewResolvePayloadSchema,
   projectDagUpdatePayloadSchema,
   projectDagViewPayloadSchema,
   defaultPathSchema,
-  figureStyleEvaluatePayloadSchema,
-  figureStyleExtractReferencePayloadSchema,
-  figureStyleReviewPayloadSchema,
-  figureStyleExtractPayloadSchema,
-  figureStyleSaveSpecPayloadSchema,
+  visualStyleExtractPayloadSchema,
+  visualStyleSaveProfilePayloadSchema,
   pptMasterMcpConfigPayloadSchema,
-  sciforgeCanvasImportRecentArtifactsPayloadSchema,
-  sciforgeCanvasInsertArtifactPayloadSchema,
-  sciforgeCanvasMcpConfigPayloadSchema,
-  sciforgeCanvasOpenPayloadSchema,
-  sciforgeCanvasReviewPacketPayloadSchema,
-  sciforgeCanvasSavePayloadSchema,
-  sciforgeCanvasSelectionSavePayloadSchema,
-  sciforgeCanvasSplitArtifactComponentsPayloadSchema,
+  visualDocumentCreateCandidatePayloadSchema,
+  visualDocumentExportReviewPacketPayloadSchema,
+  visualDocumentInsertArtifactPayloadSchema,
+  visualDocumentOpenPayloadSchema,
+  visualDocumentRevisionDecisionPayloadSchema,
+  visualDocumentSaveAnnotationsPayloadSchema,
+  visualDocumentStatusPayloadSchema,
+  visualDocumentUpdateContextPayloadSchema,
   scientificPlottingPrepareReferencePayloadSchema,
   scientificPlottingMcpConfigPayloadSchema,
   scientificPlottingStatusPayloadSchema,
@@ -182,10 +178,6 @@ import {
   type ImageGenerationMcpLaunchConfig
 } from '../image-generation-mcp-config'
 import {
-  buildSciforgeCanvasMcpConfigFragment,
-  type SciforgeCanvasMcpLaunchConfig
-} from '../sciforge-canvas-mcp-config'
-import {
   buildPptMasterMcpConfigFragment,
   type PptMasterMcpLaunchConfig
 } from '../ppt-master-mcp-config'
@@ -194,15 +186,16 @@ import {
   prepareScientificPlottingReference
 } from '../../../packages/workers/scientific-plotting/src/scientific-plotting-engine'
 import {
-  exportSciforgeCanvasReviewPacket,
-  getSciforgeCanvasStatus,
-  importRecentSciforgeCanvasArtifacts,
-  insertSciforgeCanvasArtifact,
-  openOrCreateSciforgeCanvas,
-  saveSciforgeCanvasSelection,
-  saveSciforgeCanvasSnapshot,
-  splitSciforgeCanvasArtifactComponents
-} from '../../../packages/workers/canvas/src/sciforge-canvas-engine'
+  acceptVisualCandidateRevision,
+  createVisualCandidateRevision,
+  exportVisualReviewPacket,
+  getVisualDocumentStatus,
+  insertVisualDocumentArtifact,
+  openOrCreateVisualDocument,
+  rejectVisualCandidateRevision,
+  saveVisualDocumentAnnotations,
+  updateVisualDocumentContext
+} from '../../../packages/workers/visual-document/src/visual-document-engine'
 import {
   buildScientificSkillsIndex,
   buildScientificSkillsStatusSummary
@@ -213,26 +206,14 @@ import {
   type ScientificSkillsInstallResult
 } from '../../../packages/workers/scientific-plotting/src/scientific-skills-installer'
 import {
-  evaluateFigureStyleSimilarity,
-  extractFigureStyle,
-  reviewFigureStyleOutput
-} from '../../../packages/workers/scientific-plotting/src/figure-style-extractor'
+  extractVisualStyleProfile
+} from '../../../packages/workers/scientific-plotting/src/visual-style-extractor'
 import type {
-  FigureStyleExtractRequest,
-  FigureStyleExtractReferenceRequest,
-  FigureStyleExtractReferenceResult,
-  FigureStyleExtractResult,
-  FigureStyleReviewRequest,
-  FigureStyleReviewResult,
-  FigureStyleSaveSpecRequest,
-  FigureStyleSaveSpecResult,
-  FigureStyleSimilarityRequest,
-  FigureStyleSimilarityResult
-} from '../../shared/figure-style'
-import {
-  buildFigureStyleArtifactPath,
-  serializeFigureStyleSpecPayload
-} from '../../shared/figure-style-actions'
+  VisualStyleExtractRequest,
+  VisualStyleExtractResult,
+  VisualStyleSaveProfileRequest,
+  VisualStyleSaveProfileResult
+} from '../../shared/visual-style'
 import type {
   ScientificPlottingPrepareReferenceRequest,
   ScientificPlottingPrepareReferenceResult,
@@ -342,8 +323,10 @@ import { listGuiSkills } from '../services/skill-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
 import {
   acknowledgeEvidenceDagSnapshot,
+  enqueueEvidenceDagUpdate,
   enqueueProjectFresh,
   ensureEvidenceDagFresh,
+  prioritizeEvidenceDagUpdate,
   evidenceDagQueueStatus,
   type EvidenceDagQueueStatus,
   type EvidenceSnapshot
@@ -480,29 +463,23 @@ type RegisterAppIpcHandlersOptions = {
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
   getBgcDiscoveryMcpLaunchConfig?: () => BgcDiscoveryMcpLaunchConfig
   getImageGenerationMcpLaunchConfig?: () => ImageGenerationMcpLaunchConfig
-  getSciforgeCanvasMcpLaunchConfig?: () => SciforgeCanvasMcpLaunchConfig
   getPptMasterMcpLaunchConfig?: () => PptMasterMcpLaunchConfig
-  getLocalDrawioUrl?: () => Promise<LocalDrawioUrlResult> | LocalDrawioUrlResult
   installScientificSkills?: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
   getScientificPlottingStatus?: () => Promise<ScientificPlottingStatusResult>
   prepareScientificPlottingReference?: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  getSciforgeCanvasStatus?: typeof getSciforgeCanvasStatus
-  openOrCreateSciforgeCanvas?: typeof openOrCreateSciforgeCanvas
-  saveSciforgeCanvasSnapshot?: typeof saveSciforgeCanvasSnapshot
-  saveSciforgeCanvasSelection?: typeof saveSciforgeCanvasSelection
-  insertSciforgeCanvasArtifact?: typeof insertSciforgeCanvasArtifact
-  importRecentSciforgeCanvasArtifacts?: typeof importRecentSciforgeCanvasArtifacts
-  splitSciforgeCanvasArtifactComponents?: typeof splitSciforgeCanvasArtifactComponents
-  exportSciforgeCanvasReviewPacket?: typeof exportSciforgeCanvasReviewPacket
-  extractFigureStyle?: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
-  evaluateFigureStyle?: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
-  reviewFigureStyle?: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
-  extractFigureStyleReference?: (
-    request: FigureStyleExtractReferenceRequest
-  ) => Promise<FigureStyleExtractReferenceResult>
-  saveFigureStyleSpec?: (request: FigureStyleSaveSpecRequest) => Promise<FigureStyleSaveSpecResult>
+  getVisualDocumentStatus?: typeof getVisualDocumentStatus
+  openVisualDocument?: typeof openOrCreateVisualDocument
+  insertVisualDocumentArtifact?: typeof insertVisualDocumentArtifact
+  updateVisualDocumentContext?: typeof updateVisualDocumentContext
+  saveVisualDocumentAnnotations?: typeof saveVisualDocumentAnnotations
+  exportVisualReviewPacket?: typeof exportVisualReviewPacket
+  createVisualCandidateRevision?: typeof createVisualCandidateRevision
+  acceptVisualCandidateRevision?: typeof acceptVisualCandidateRevision
+  rejectVisualCandidateRevision?: typeof rejectVisualCandidateRevision
+  extractVisualStyleProfile?: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
+  saveVisualStyleProfile?: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   logError: (category: string, message: string, detail?: unknown) => void
   ensureEvidenceDagReady?: () => Promise<void>
   ensureProjectDagReady?: () => Promise<void>
@@ -517,25 +494,6 @@ function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unkn
   if (parsed.success) return parsed.data
   const issue = parsed.error.issues[0]
   throw new Error(`Invalid payload for ${channel}: ${issue?.message ?? 'Bad request.'}`)
-}
-
-function inferFigureStyleReferenceSourceType(
-  sourcePath: string,
-  explicit?: FigureStyleExtractReferenceRequest['sourceType']
-): 'image' | 'pdf' {
-  if (explicit) return explicit
-  return sourcePath.trim().toLowerCase().endsWith('.pdf') ? 'pdf' : 'image'
-}
-
-function workspaceRelativePathForIpc(path: string, workspaceRoot: string): string | null {
-  const trimmedPath = path.trim()
-  if (!trimmedPath) return null
-  if (!isAbsolute(trimmedPath) && !/^[A-Za-z]:[\\/]/.test(trimmedPath)) {
-    return trimmedPath.replace(/\\/g, '/')
-  }
-  const relativePath = relative(workspaceRoot, trimmedPath)
-  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) return null
-  return relativePath.replace(/\\/g, '/')
 }
 
 const EVIDENCE_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
@@ -779,6 +737,39 @@ function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPane
   })
   const excludedSessions = snapshot ? stringArrayField(snapshot, 'excludedSessions') : []
   const isolatedSessions = snapshot ? stringArrayField(snapshot, 'isolatedSessions') : []
+  const staging = objectRecord(record.staging)
+  const graphState = optionalStringField(record, 'graphState') ?? optionalStringField(staging ?? {}, 'status')
+  const stagedCount = finiteNumberField(staging ?? {}, 'newTraceCount') ?? 0
+  const progressiveView = staging || graphState ? {
+    committed: {
+      nodeCount: finiteNumberField(record, 'nodeCount') ?? 0,
+      edgeCount: finiteNumberField(record, 'edgeCount') ?? 0,
+      ...(latestSnapshotDigest ? { snapshotDigest: latestSnapshotDigest } : {})
+    },
+    ...(staging ? {
+      staging: {
+        overlayId: optionalStringField(staging, 'batchDigest'),
+        collectedCount: graphState === 'staging' ? stagedCount : 0,
+        extractingCount: graphState === 'updating' ? stagedCount : 0,
+        pendingVerificationCount: graphState === 'provisional' ? stagedCount : 0,
+        temporaryEdgeCount: finiteNumberField(staging, 'temporaryEdgeCount') ?? 0,
+        updatedAt: optionalStringField(staging, 'updatedAt')
+      }
+    } : {})
+  } : undefined
+  const localProgress = local && local.state !== 'fresh'
+    ? {
+        stage: local.state === 'failed'
+          ? 'retrying' as const
+          : local.phase === 'project'
+            ? 'project' as const
+            : 'evidence' as const,
+        completedItems: local.phase === 'project' ? 1 : 0,
+        totalItems: local.phase === 'project' ? 2 : 1,
+        ...(local.updatedAt ? { updatedAt: local.updatedAt } : {}),
+        ...(local.attempts ? { attempt: local.attempts } : {})
+      }
+    : undefined
   return {
     freshness,
     pendingCount: Math.max(workerPending, local?.pendingCount ?? 0),
@@ -805,6 +796,8 @@ function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPane
       degradedReason: optionalStringField(record, 'degradedReason')
     } : {}),
     ...(local?.nextAttemptAt ? { nextAttemptAt: local.nextAttemptAt } : {}),
+    ...(localProgress ? { progress: localProgress } : {}),
+    ...(progressiveView ? { progressiveView } : {}),
     ...((includedSessions.length || excludedSessions.length || isolatedSessions.length) ? {
       scope: { includedSessions, excludedSessions, isolatedSessions }
     } : {})
@@ -1247,26 +1240,6 @@ function isNativeFileDragSender(sender: AppBridgeSender): sender is NativeFileDr
   return typeof (sender as { startDrag?: unknown }).startDrag === 'function'
 }
 
-const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNER'
-const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
-const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
-const FASTSAM_MODEL_ENV = 'SCIFORGE_FASTSAM_MODEL_PATH'
-
-function syncComponentSegmentationEnvFromSettings(settings: AppSettingsV1): void {
-  const imageGeneration = getImageGenerationSettings(settings)
-  const runner = imageGeneration.componentSegmentationRunnerPath.trim()
-  const model = imageGeneration.componentSegmentationModelPath.trim()
-  setOptionalProcessEnv(COMPONENT_SEGMENTATION_RUNNER_ENV, runner)
-  setOptionalProcessEnv(COMPONENT_SEGMENTATION_MODEL_ENV, model)
-  setOptionalProcessEnv(FASTSAM_RUNNER_ENV, runner)
-  setOptionalProcessEnv(FASTSAM_MODEL_ENV, model)
-}
-
-function setOptionalProcessEnv(name: string, value: string): void {
-  if (value) process.env[name] = value
-  else delete process.env[name]
-}
-
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): AppBridgeDispatcher {
   const {
     store,
@@ -1299,25 +1272,21 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
-    getSciforgeCanvasMcpLaunchConfig,
     getPptMasterMcpLaunchConfig,
-    getLocalDrawioUrl,
     installScientificSkills: installScientificSkillsHandler = installScientificSkills,
     getScientificPlottingStatus: getScientificPlottingStatusHandler = getScientificPlottingStatus,
     prepareScientificPlottingReference: prepareScientificPlottingReferenceHandler = prepareScientificPlottingReference,
-    getSciforgeCanvasStatus: getSciforgeCanvasStatusHandler = getSciforgeCanvasStatus,
-    openOrCreateSciforgeCanvas: openOrCreateSciforgeCanvasHandler = openOrCreateSciforgeCanvas,
-    saveSciforgeCanvasSnapshot: saveSciforgeCanvasSnapshotHandler = saveSciforgeCanvasSnapshot,
-    saveSciforgeCanvasSelection: saveSciforgeCanvasSelectionHandler = saveSciforgeCanvasSelection,
-    insertSciforgeCanvasArtifact: insertSciforgeCanvasArtifactHandler = insertSciforgeCanvasArtifact,
-    importRecentSciforgeCanvasArtifacts: importRecentSciforgeCanvasArtifactsHandler = importRecentSciforgeCanvasArtifacts,
-    splitSciforgeCanvasArtifactComponents: splitSciforgeCanvasArtifactComponentsHandler = splitSciforgeCanvasArtifactComponents,
-    exportSciforgeCanvasReviewPacket: exportSciforgeCanvasReviewPacketHandler = exportSciforgeCanvasReviewPacket,
-    extractFigureStyle: extractFigureStyleHandler = extractFigureStyle,
-    evaluateFigureStyle: evaluateFigureStyleHandler = evaluateFigureStyleSimilarity,
-    reviewFigureStyle: reviewFigureStyleHandler = reviewFigureStyleOutput,
-    extractFigureStyleReference: extractFigureStyleReferenceOverride,
-    saveFigureStyleSpec: saveFigureStyleSpecOverride,
+    getVisualDocumentStatus: getVisualDocumentStatusHandler = getVisualDocumentStatus,
+    openVisualDocument: openVisualDocumentHandler = openOrCreateVisualDocument,
+    insertVisualDocumentArtifact: insertVisualDocumentArtifactHandler = insertVisualDocumentArtifact,
+    updateVisualDocumentContext: updateVisualDocumentContextHandler = updateVisualDocumentContext,
+    saveVisualDocumentAnnotations: saveVisualDocumentAnnotationsHandler = saveVisualDocumentAnnotations,
+    exportVisualReviewPacket: exportVisualReviewPacketHandler = exportVisualReviewPacket,
+    createVisualCandidateRevision: createVisualCandidateRevisionHandler = createVisualCandidateRevision,
+    acceptVisualCandidateRevision: acceptVisualCandidateRevisionHandler = acceptVisualCandidateRevision,
+    rejectVisualCandidateRevision: rejectVisualCandidateRevisionHandler = rejectVisualCandidateRevision,
+    extractVisualStyleProfile: extractVisualStyleProfileHandler = extractVisualStyleProfile,
+    saveVisualStyleProfile: saveVisualStyleProfileOverride,
     logError,
     ensureEvidenceDagReady,
     ensureProjectDagReady,
@@ -1363,105 +1332,19 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   }
 
-  const defaultExtractFigureStyleReference = async (
-    request: FigureStyleExtractReferenceRequest
-  ): Promise<FigureStyleExtractReferenceResult> => {
-    const sourceType = inferFigureStyleReferenceSourceType(request.sourcePath, request.sourceType)
-    if (sourceType === 'pdf') {
-      const preparedReference = await prepareScientificPlottingReferenceHandler({
-        workspaceRoot: request.workspaceRoot,
-        sourcePath: request.sourcePath,
-        sourceType: 'pdf',
-        ...(request.page ? { page: request.page } : {}),
-        ...(request.cropBox ? { cropBox: request.cropBox } : {}),
-        ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
-        ...(request.outputDir?.trim() ? { outputDir: request.outputDir.trim() } : {}),
-        ...(request.dpi ? { dpi: request.dpi } : {}),
-        extractStyle: true
-      })
-      if (!preparedReference.ok) {
-        return {
-          ok: false,
-          message: preparedReference.message,
-          sourceType,
-          preparedReference
-        }
-      }
-
-      const sourcePath = workspaceRelativePathForIpc(preparedReference.croppedImagePath, request.workspaceRoot)
-      if (!sourcePath) {
-        return {
-          ok: false,
-          message: 'Prepared figure style reference path is outside the workspace.',
-          sourceType,
-          preparedReference
-        }
-      }
-      const extraction = await extractFigureStyleHandler({
-        workspaceRoot: request.workspaceRoot,
-        sourcePath,
-        sourceType: 'image',
-        ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
-        ...(request.notes?.trim() ? { notes: request.notes.trim() } : {})
-      })
-      if (!extraction.ok) {
-        return {
-          ok: false,
-          message: extraction.message,
-          sourcePath,
-          sourceType: 'image',
-          preparedReference,
-          extraction
-        }
-      }
-      return {
-        ok: true,
-        sourcePath,
-        sourceType: 'image',
-        preparedReference,
-        extraction
-      }
-    }
-
-    const extraction = await extractFigureStyleHandler({
-      workspaceRoot: request.workspaceRoot,
-      sourcePath: request.sourcePath,
-      sourceType: 'image',
-      ...(request.figureId?.trim() ? { figureId: request.figureId.trim() } : {}),
-      ...(request.notes?.trim() ? { notes: request.notes.trim() } : {})
-    })
-    if (!extraction.ok) {
-      return {
-        ok: false,
-        message: extraction.message,
-        sourcePath: request.sourcePath,
-        sourceType: 'image',
-        extraction
-      }
-    }
-    return {
-      ok: true,
-      sourcePath: request.sourcePath,
-      sourceType: 'image',
-      extraction
-    }
-  }
-
-  const extractFigureStyleReferenceHandler =
-    extractFigureStyleReferenceOverride ?? defaultExtractFigureStyleReference
-
-  const defaultSaveFigureStyleSpec = async (
-    request: FigureStyleSaveSpecRequest
-  ): Promise<FigureStyleSaveSpecResult> => {
-    const path = request.path?.trim() || buildFigureStyleArtifactPath(request.spec)
+  const saveVisualStyleProfileHandler = saveVisualStyleProfileOverride ?? (async (
+    request: VisualStyleSaveProfileRequest
+  ): Promise<VisualStyleSaveProfileResult> => {
+    const path = request.path?.trim() || `.sciforge/visual-styles/${request.profile.id}.json`
     return writeWorkspaceFile({
       workspaceRoot: request.workspaceRoot,
       path,
-      content: serializeFigureStyleSpecPayload(request)
+      content: `${JSON.stringify({
+        profile: request.profile,
+        diagnostics: request.diagnostics
+      }, null, 2)}\n`
     })
-  }
-
-  const saveFigureStyleSpecHandler = saveFigureStyleSpecOverride ?? defaultSaveFigureStyleSpec
+  })
 
   const disposeWorkspaceFileWatch = (watchId: string): boolean => {
     const record = workspaceFileWatchers.get(watchId)
@@ -2503,22 +2386,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('mcp:sciforge-canvas-config', async (_, payload: unknown) => {
+  handleInvoke('visual-document:status', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'mcp:sciforge-canvas-config',
-        sciforgeCanvasMcpConfigPayloadSchema,
+        'visual-document:status',
+        visualDocumentStatusPayloadSchema,
         payload
       )
-      const launch = getSciforgeCanvasMcpLaunchConfig?.() ?? {
-        appPath: app.getAppPath(),
-        execPath: process.execPath,
-        isPackaged: app.isPackaged
-      }
-      return {
-        ok: true as const,
-        config: buildSciforgeCanvasMcpConfigFragment(launch, request.workspaceRoot)
-      }
+      return getVisualDocumentStatusHandler(request.workspaceRoot)
     } catch (error) {
       return {
         ok: false as const,
@@ -2527,41 +2402,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:status', async (_, payload: unknown) => {
+  handleInvoke('visual-document:open', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:status',
-        sciforgeCanvasMcpConfigPayloadSchema,
+        'visual-document:open',
+        visualDocumentOpenPayloadSchema,
         payload
       )
-      return getSciforgeCanvasStatusHandler(request.workspaceRoot)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('drawio:local-url', async () => {
-    if (!getLocalDrawioUrl) {
-      return {
-        ok: false,
-        message: 'Local draw.io server is not available.',
-        checkedPaths: []
-      } satisfies LocalDrawioUrlResult
-    }
-    return getLocalDrawioUrl()
-  })
-
-  handleInvoke('sciforge-canvas:open', async (_, payload: unknown) => {
-    try {
-      const request = parseIpcPayload(
-        'sciforge-canvas:open',
-        sciforgeCanvasOpenPayloadSchema,
-        payload
-      )
-      return openOrCreateSciforgeCanvasHandler(request)
+      return openVisualDocumentHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2571,14 +2419,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:save', async (_, payload: unknown) => {
+  handleInvoke('visual-document:insert-artifact', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:save',
-        sciforgeCanvasSavePayloadSchema,
+        'visual-document:insert-artifact',
+        visualDocumentInsertArtifactPayloadSchema,
         payload
       )
-      return saveSciforgeCanvasSnapshotHandler(request)
+      return insertVisualDocumentArtifactHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2588,14 +2436,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:save-selection', async (_, payload: unknown) => {
+  handleInvoke('visual-document:update-context', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:save-selection',
-        sciforgeCanvasSelectionSavePayloadSchema,
+        'visual-document:update-context',
+        visualDocumentUpdateContextPayloadSchema,
         payload
       )
-      return saveSciforgeCanvasSelectionHandler(request)
+      return updateVisualDocumentContextHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2605,14 +2453,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:insert-artifact', async (_, payload: unknown) => {
+  handleInvoke('visual-document:save-annotations', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:insert-artifact',
-        sciforgeCanvasInsertArtifactPayloadSchema,
+        'visual-document:save-annotations',
+        visualDocumentSaveAnnotationsPayloadSchema,
         payload
       )
-      return insertSciforgeCanvasArtifactHandler(request)
+      return saveVisualDocumentAnnotationsHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2622,14 +2470,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:import-recent-artifacts', async (_, payload: unknown) => {
+  handleInvoke('visual-document:export-review-packet', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:import-recent-artifacts',
-        sciforgeCanvasImportRecentArtifactsPayloadSchema,
+        'visual-document:export-review-packet',
+        visualDocumentExportReviewPacketPayloadSchema,
         payload
       )
-      return importRecentSciforgeCanvasArtifactsHandler(request)
+      return exportVisualReviewPacketHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2639,15 +2487,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:split-artifact-components', async (_, payload: unknown) => {
+  handleInvoke('visual-document:create-candidate', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:split-artifact-components',
-        sciforgeCanvasSplitArtifactComponentsPayloadSchema,
+        'visual-document:create-candidate',
+        visualDocumentCreateCandidatePayloadSchema,
         payload
       )
-      syncComponentSegmentationEnvFromSettings(await store.load())
-      return splitSciforgeCanvasArtifactComponentsHandler(request)
+      return createVisualCandidateRevisionHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2657,14 +2504,31 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('sciforge-canvas:export-review-packet', async (_, payload: unknown) => {
+  handleInvoke('visual-document:accept-candidate', async (_, payload: unknown) => {
     try {
       const request = parseIpcPayload(
-        'sciforge-canvas:export-review-packet',
-        sciforgeCanvasReviewPacketPayloadSchema,
+        'visual-document:accept-candidate',
+        visualDocumentRevisionDecisionPayloadSchema,
         payload
       )
-      return exportSciforgeCanvasReviewPacketHandler(request)
+      return acceptVisualCandidateRevisionHandler(request)
+    } catch (error) {
+      return {
+        ok: false as const,
+        status: 'invalid_request' as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('visual-document:reject-candidate', async (_, payload: unknown) => {
+    try {
+      const request = parseIpcPayload(
+        'visual-document:reject-candidate',
+        visualDocumentRevisionDecisionPayloadSchema,
+        payload
+      )
+      return rejectVisualCandidateRevisionHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2724,14 +2588,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('figure-style:extract', async (_, payload: unknown) => {
+  handleInvoke('visual-style:extract-profile', async (_, payload: unknown) => {
     const request = parseIpcPayload(
-      'figure-style:extract',
-      figureStyleExtractPayloadSchema,
+      'visual-style:extract-profile',
+      visualStyleExtractPayloadSchema,
       payload
     )
     try {
-      return extractFigureStyleHandler(request)
+      return extractVisualStyleProfileHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -2740,62 +2604,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('figure-style:extract-reference', async (_, payload: unknown) => {
+  handleInvoke('visual-style:save-profile', async (_, payload: unknown) => {
     const request = parseIpcPayload(
-      'figure-style:extract-reference',
-      figureStyleExtractReferencePayloadSchema,
-      payload
-    ) as FigureStyleExtractReferenceRequest
-    try {
-      return extractFigureStyleReferenceHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('figure-style:save-spec', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'figure-style:save-spec',
-      figureStyleSaveSpecPayloadSchema,
-      payload
-    ) as FigureStyleSaveSpecRequest
-    try {
-      return saveFigureStyleSpecHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('figure-style:evaluate', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'figure-style:evaluate',
-      figureStyleEvaluatePayloadSchema,
+      'visual-style:save-profile',
+      visualStyleSaveProfilePayloadSchema,
       payload
     )
     try {
-      return evaluateFigureStyleHandler(request)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('figure-style:review', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'figure-style:review',
-      figureStyleReviewPayloadSchema,
-      payload
-    )
-    try {
-      return reviewFigureStyleHandler(request)
+      return saveVisualStyleProfileHandler(request)
     } catch (error) {
       return {
         ok: false as const,
@@ -3299,7 +3115,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     const includedSessions = workspaceRoot
       ? await projectDagSessionScopeForWorkspace({ workspaceRoot }, agentRuntime)
       : undefined
-    const ensured = await ensureEvidenceDagFresh({
+    const queued = await enqueueEvidenceDagUpdate({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
       items,
@@ -3325,14 +3141,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }),
       threadId: input.threadId,
       itemCount: items.length,
-      jobId: ensured.jobId,
-      status: dagPanelStatus({
-        status: 'fresh',
-        snapshot: ensured.snapshot,
-        desiredWatermark: ensured.snapshot.inputWatermark,
-        pendingCount: 0
-      })
+      jobId: queued.jobId,
+      status: dagPanelStatus({}, queued)
     }
+  })
+  handleInvoke('evidenceDag:priority', async (_, payload: unknown) => {
+    const input = parseIpcPayload('evidenceDag:priority', evidenceDagPriorityPayloadSchema, payload)
+    if (!input.visible) return { freshness: 'fresh', pendingCount: 0 } satisfies DagPanelStatus
+    return dagPanelStatus({}, await prioritizeEvidenceDagUpdate(input.runtimeId, input.threadId))
   })
   handleInvoke('evidenceDag:resolve-evidence-preview', async (_, payload: unknown) => {
     const input = parseIpcPayload(

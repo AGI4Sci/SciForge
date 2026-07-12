@@ -491,19 +491,17 @@ function markdownSummary(payload) {
       payload.referenceStyleProfiles.warnings?.slice(0, 3).join('<br>') ?? ''
     ].map((cell) => String(cell).replaceAll('|', '\\|')).join(' | ')} |`)
   }
-  if (payload.v2StyleTransfer) {
+  if (payload.unifiedWorkflow) {
     lines.push('')
-    lines.push('| V2 Style Transfer | Status | Reference | Output | Render Manifest | Review Packet | V2 Manifest | Warnings |')
-    lines.push('| --- | --- | --- | --- | --- | --- | --- | --- |')
+    lines.push('| Unified Plot Workflow | Status | Selected Template | Output | Render Manifest | Warnings |')
+    lines.push('| --- | --- | --- | --- | --- | --- |')
     lines.push(`| ${[
-      payload.v2StyleTransfer.ok ? 'ok' : 'failed',
-      payload.v2StyleTransfer.status ?? '',
-      payload.v2StyleTransfer.referenceImagePath ?? '',
-      payload.v2StyleTransfer.outputPath ?? '',
-      payload.v2StyleTransfer.renderManifestPath ?? '',
-      payload.v2StyleTransfer.reviewPacket?.ok ? payload.v2StyleTransfer.reviewPacket.packetPath : '',
-      payload.v2StyleTransfer.styleTransferManifestPath ?? '',
-      payload.v2StyleTransfer.warnings?.slice(0, 3).join('<br>') ?? payload.v2StyleTransfer.message ?? ''
+      payload.unifiedWorkflow.ok ? 'ok' : 'failed',
+      payload.unifiedWorkflow.status ?? '',
+      payload.unifiedWorkflow.mapping?.selectedTemplate ?? '',
+      payload.unifiedWorkflow.render?.outputPath ?? '',
+      payload.unifiedWorkflow.render?.manifestPath ?? '',
+      payload.unifiedWorkflow.render?.warnings?.slice(0, 3).join('<br>') ?? payload.unifiedWorkflow.message ?? ''
     ].map((cell) => String(cell).replaceAll('|', '\\|')).join(' | ')} |`)
   }
   if (payload.reviewPacket?.ok) {
@@ -550,6 +548,15 @@ const transport = new StdioClientTransport({
 const client = new Client({ name: 'scientific-plotting-style-regression', version: '0.1.0' })
 await client.connect(transport, { timeout: 30_000 })
 
+const controlledPlotPlan = {
+  route: 'deterministic_plot',
+  routeLocked: true,
+  rationale: 'Regression artifacts contain data-bearing marks whose inputs and labels must remain reproducible.',
+  reproducibleInputs: ['structured data', 'labels', 'template or template selection', 'style specification'],
+  truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+  fallbackPolicy: 'fail_closed'
+}
+
 const tools = await client.listTools()
 const status = await client.callTool({
   name: 'scientific_plotting_status',
@@ -591,23 +598,13 @@ for (const item of referencePreparationChecks) {
   })
 }
 
-const v2StyleTransferResponse = await client.callTool({
-  name: 'scientific_plotting_style_transfer',
+const unifiedMappingResponse = await client.callTool({
+  name: 'scientific_plotting_map_data',
   arguments: {
+    scientificVisualPlan: controlledPlotPlan,
     task: 'Use the reference paper style to draw a benchmark comparison bar chart.',
     figureId: 'v2-scientific-plotting-style-transfer',
-    reference: {
-      sourcePath: 'tmp/figure-style-paper-smoke/references/nature-2021-alphafold-fig2.png',
-      sourceType: 'image',
-      figureId: 'v2-scientific-plotting-reference',
-      cropBox: {
-        unit: 'ratio',
-        x: 0,
-        y: 0,
-        width: 1,
-        height: 1
-      }
-    },
+    referencePath: 'tmp/figure-style-paper-smoke/references/nature-2021-alphafold-fig2.png',
     labels: {
       title: 'Benchmark comparison',
       x: 'Model',
@@ -621,22 +618,38 @@ const v2StyleTransferResponse = await client.callTool({
         { model: 'Ablated', score: 0.69 }
       ]
     },
-    outputDir,
-    autoRepair: {
-      enabled: true,
-      maxAttempts: 1,
-      minOverall: 0.82
-    },
-    createReviewPacket: true
+    outputDir
   }
-}, undefined, { timeout: 120_000 })
-const v2StyleTransfer = v2StyleTransferResponse.structuredContent?.result
+}, undefined, { timeout: 60_000 })
+const unifiedMapping = unifiedMappingResponse.structuredContent?.mapping
+let unifiedRender = null
+if (unifiedMapping?.ok) {
+  const unifiedRenderResponse = await client.callTool({
+    name: 'scientific_plotting_render',
+    arguments: {
+      ...unifiedMapping.renderRequest,
+      outputDir,
+      autoRepair: { enabled: true, maxAttempts: 1, minOverall: 0.82 }
+    }
+  }, undefined, { timeout: 90_000 })
+  unifiedRender = unifiedRenderResponse.structuredContent?.result
+}
+const unifiedWorkflow = unifiedMapping?.ok && unifiedRender?.ok
+  ? { ok: true, status: 'rendered', mapping: unifiedMapping, render: unifiedRender }
+  : {
+      ok: false,
+      status: unifiedMapping?.ok ? 'render_failed' : 'mapping_failed',
+      mapping: unifiedMapping,
+      render: unifiedRender,
+      message: unifiedMapping?.message ?? unifiedRender?.message ?? 'Unified workflow failed.'
+    }
 
 const results = []
 for (const item of cases) {
   const response = await client.callTool({
     name: 'scientific_plotting_render',
     arguments: {
+      scientificVisualPlan: controlledPlotPlan,
       template: item.template,
       figureId: `regression-${item.id}`,
       labels: item.labels,
@@ -668,6 +681,7 @@ for (const item of mappedRenderChecks) {
   const mappingResponse = await client.callTool({
     name: 'scientific_plotting_map_data',
     arguments: {
+      scientificVisualPlan: controlledPlotPlan,
       task: item.task,
       data: item.data,
       labels: item.labels,
@@ -730,7 +744,7 @@ const payload = {
   status: status.structuredContent?.status,
   styleProfiles: styleProfiles.structuredContent?.profiles,
   referenceStyleProfiles: referenceStyleProfiles.structuredContent?.profiles,
-  v2StyleTransfer,
+  unifiedWorkflow,
   preparedReferences,
   mappedRenders,
   reviewPacket,
@@ -745,7 +759,7 @@ const failedPreparedReferences = preparedReferences.filter((item) => !item.resul
 const failedMappedRenders = mappedRenders.filter((item) => !item.mapping?.ok || !item.result?.ok)
 const failedStyleProfiles = !payload.styleProfiles?.ok
 const failedReferenceStyleProfiles = !payload.referenceStyleProfiles?.ok
-const failedV2StyleTransfer = !payload.v2StyleTransfer?.ok
+const failedUnifiedWorkflow = !payload.unifiedWorkflow?.ok
 const failedReviewPacket = !reviewPacket?.ok
 const failed = results.filter((item) => !item.result?.ok)
 console.log(JSON.stringify({
@@ -755,17 +769,17 @@ console.log(JSON.stringify({
   failedMappedRenders: failedMappedRenders.map((item) => item.id),
   failedStyleProfiles,
   failedReferenceStyleProfiles,
-  failedV2StyleTransfer,
+  failedUnifiedWorkflow,
   failedReviewPacket,
   failed: failed.map((item) => item.id),
   preparedReferences,
   mappedRenders,
   styleProfiles: payload.styleProfiles,
   referenceStyleProfiles: payload.referenceStyleProfiles,
-  v2StyleTransfer: payload.v2StyleTransfer,
+  unifiedWorkflow: payload.unifiedWorkflow,
   reviewPacket,
   results
 }, null, 2))
-if (failedPreparedReferences.length > 0 || failedMappedRenders.length > 0 || failedStyleProfiles || failedReferenceStyleProfiles || failedV2StyleTransfer || failedReviewPacket || failed.length > 0) {
+if (failedPreparedReferences.length > 0 || failedMappedRenders.length > 0 || failedStyleProfiles || failedReferenceStyleProfiles || failedUnifiedWorkflow || failedReviewPacket || failed.length > 0) {
   process.exitCode = 1
 }

@@ -665,6 +665,12 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
               command: '/tmp/old-node',
               args: ['/tmp/sciforge-test-app/out/main/research-search-mcp-node-entry.js']
             },
+            sciforge_canvas: {
+              enabled: true,
+              transport: 'stdio',
+              command: '/tmp/old-node',
+              args: ['/tmp/sciforge-test-app/out/main/sciforge-canvas-mcp-node-entry.js']
+            },
             user_server: {
               enabled: true,
               transport: 'stdio',
@@ -686,6 +692,7 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       args: ['user-server.js']
     })
     expect(parsed.capabilities.mcp.servers.gui_research).toBeUndefined()
+    expect(parsed.capabilities.mcp.servers.sciforge_canvas).toBeUndefined()
   })
 
   it('adds the shared workflow MCP server to the local runtime capabilities', async () => {
@@ -789,6 +796,42 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       trustScope: 'user',
       timeoutMs: 120000
     })
+  })
+
+  it('adds the unified VisualDocument MCP server without a legacy Canvas server', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./local-runtime-process')
+    const settings = createSettings('/tmp/fake-local-runtime-child.js')
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings(), {
+      visualDocumentMcp: {
+        settings,
+        launch: {
+          appPath: '/tmp/sciforge-test-app',
+          execPath: '/tmp/electron',
+          isPackaged: false
+        }
+      }
+    })
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.mcp.enabled).toBe(true)
+    expect(parsed.capabilities.mcp.servers.visual_document).toMatchObject({
+      enabled: true,
+      transport: 'stdio',
+      command: '/tmp/electron',
+      args: [
+        '/tmp/sciforge-test-app/out/main/visual-document-mcp-node-entry.js',
+        '--sciforge-visual-document-mcp-server',
+        '--workspace-root',
+        '/tmp/workspace'
+      ],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      trustScope: 'user',
+      timeoutMs: 30000
+    })
+    expect(parsed.capabilities.mcp.servers.sciforge_canvas).toBeUndefined()
   })
 
   it('adds the shared workspace intel MCP server to the local runtime capabilities', async () => {

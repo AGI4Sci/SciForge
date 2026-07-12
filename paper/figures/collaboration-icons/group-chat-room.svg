@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Group Chat Room</title>
+  <desc id="desc">A shared research room icon with people and a lead agent node.</desc>
+  <defs>
+    <linearGradient id="bubble" x1="44" y1="46" x2="212" y2="178" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F9FCFF"/>
+      <stop offset="1" stop-color="#E9F1F6"/>
+    </linearGradient>
+    <linearGradient id="agent" x1="101" y1="82" x2="159" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+  </defs>
+  <path d="M51 58h154c14 0 25 11 25 25v75c0 14-11 25-25 25h-68l-39 30v-30H51c-14 0-25-11-25-25V83c0-14 11-25 25-25Z" fill="url(#bubble)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <circle cx="83" cy="116" r="17" fill="#F4B942" stroke="#23313A" stroke-width="6"/>
+  <path d="M52 157c7-18 22-28 31-28s24 10 31 28" fill="#FFFFFF" stroke="#23313A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="173" cy="116" r="17" fill="#EF6F6C" stroke="#23313A" stroke-width="6"/>
+  <path d="M142 157c7-18 22-28 31-28s24 10 31 28" fill="#FFFFFF" stroke="#23313A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="98" r="21" fill="url(#agent)" stroke="#23313A" stroke-width="6"/>
+  <path d="M112 139c8-20 24-31 36-31s28 11 36 31" fill="#FFFFFF" stroke="#23313A" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M119 96h18M128 87v18" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M99 72h58M72 82h24M160 82h24" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round"/>
+</svg>

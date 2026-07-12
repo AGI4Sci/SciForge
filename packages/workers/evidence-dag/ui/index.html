@@ -232,6 +232,21 @@
   .node-card.reasoning::before { background: var(--reasoning); }
   .node-card.claim { background: linear-gradient(180deg, #fff, var(--claim-soft)); }
   .node-card.claim::before { background: var(--claim); }
+  .node-card.staging {
+    border-color: #60a5fa;
+    border-style: dashed;
+    background: linear-gradient(180deg, rgba(239, 246, 255, .96), rgba(219, 234, 254, .88));
+    opacity: .82;
+  }
+  .node-card.staging::after {
+    content: "待验证";
+    position: absolute;
+    right: 7px;
+    bottom: 5px;
+    color: #1d4ed8;
+    font-size: 9px;
+    font-weight: 760;
+  }
   .node-card.selected {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px rgba(37, 99, 235, .22), 0 16px 32px rgba(37, 99, 235, .16);
@@ -306,6 +321,8 @@
   .edge-path.contradicts { stroke: var(--contra); stroke-dasharray: 6 4; }
   .edge-path.refines { stroke: var(--accent); stroke-dasharray: 2 4; }
   .edge-path.prerequisite { stroke: var(--warn); stroke-dasharray: 7 4; }
+  .edge-path.staging { stroke: #3b82f6; stroke-dasharray: 5 5; opacity: .7; }
+  .edge-label.staging { opacity: .72; }
   .edge-path.faded { opacity: .12; }
   .edge-path.in-path { opacity: 1; stroke-width: 3.2; }
   .edge-label text { font-size: 10px; font-weight: 760; fill: #334155; }
@@ -610,6 +627,7 @@ let currentThread = Q_THREAD || null;
 let lastGraph = null;
 let stageModel = null;
 let renderedSig = null;
+let renderedStagingSig = null;
 let selectedNodeId = null;
 let timer = null;
 let currentSnapshot = null;
@@ -868,7 +886,7 @@ function nodeHtml(node, pos) {
     ref ? compact(ref, 38) : ''
   ].filter(Boolean).join(' · ');
   return `
-    <div class="node-card ${escAttr(node.type)}" data-node-id="${escAttr(node.id)}" role="button" tabindex="0"
+    <div class="node-card ${escAttr(node.type)} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" role="button" tabindex="0"
       aria-label="${escAttr(`${meta.label}: ${node.content || node.id}`)}"
       style="left:${pos.x}px;top:${pos.y}px">
       <div class="node-head">
@@ -931,9 +949,9 @@ function edgeHtml(edge, model, index) {
   const label = edgeLabel(edge);
   const marker = markerForRel(rel);
   return `
-    <path class="edge-path ${escAttr(rel)}" data-edge-id="${escAttr(edge.id)}" data-src="${escAttr(edge.src)}" data-dst="${escAttr(edge.dst)}"
+    <path class="edge-path ${escAttr(rel)} ${edge._dagLayer === 'staging' ? 'staging' : ''}" data-edge-id="${escAttr(edge.id)}" data-src="${escAttr(edge.src)}" data-dst="${escAttr(edge.dst)}" data-dag-layer="${escAttr(edge._dagLayer || 'committed')}"
       d="${path}" marker-end="url(#${marker})"></path>
-    ${label ? edgeLabelHtml(edge.id, label, lx, ly) : ''}`;
+    ${label ? edgeLabelHtml(edge.id, label, lx, ly, edge._dagLayer) : ''}`;
 }
 
 function edgeLabel(edge) {
@@ -943,9 +961,9 @@ function edgeLabel(edge) {
   return '';
 }
 
-function edgeLabelHtml(id, label, x, y) {
+function edgeLabelHtml(id, label, x, y, layer) {
   const width = Math.max(42, label.length * 6 + 12);
-  return `<g class="edge-label" data-edge-id="${escAttr(id)}" transform="translate(${x - width / 2} ${y - 10})">
+  return `<g class="edge-label ${layer === 'staging' ? 'staging' : ''}" data-edge-id="${escAttr(id)}" transform="translate(${x - width / 2} ${y - 10})">
     <rect width="${width}" height="20"></rect>
     <text x="${width / 2}" y="14" text-anchor="middle">${esc(label)}</text>
   </g>`;
@@ -1270,26 +1288,47 @@ async function loadGraph() {
   }
   setStatus('loading...');
   try {
-    const graphResponse = await api(`/threads/${encodeURIComponent(currentThread)}/graph`);
-    if (!graphResponse.ok) {
+    const [graphResponse, stagingResponse] = await Promise.all([
+      api(`/threads/${encodeURIComponent(currentThread)}/graph`).catch(() => null),
+      api(`/threads/${encodeURIComponent(currentThread)}/staging`).catch(() => null)
+    ]);
+    if (!graphResponse?.ok && !stagingResponse?.ok) {
       renderEmptyGraph('No DAG yet for this thread. The graph appears after extraction succeeds.');
-      setStatus(graphResponse.error?.code || 'no graph');
+      setStatus('no graph');
       return;
     }
-    const graph = graphResponse.data.graph;
-    currentSnapshot = graphResponse.data.snapshot;
+    const committedGraph = graphResponse?.data?.graph || {nodes: [], edges: []};
+    const committedNodeIds = new Set((committedGraph.nodes || []).map((node) => node.id));
+    const committedEdgeIds = new Set((committedGraph.edges || []).map((edge) => edge.id));
+    const stagingGraph = stagingResponse?.data?.graph;
+    const graph = stagingGraph ? {
+      ...stagingGraph,
+      nodes: (stagingGraph.nodes || []).map((node) => ({
+        ...node,
+        _dagLayer: committedNodeIds.has(node.id) ? 'committed' : 'staging'
+      })),
+      edges: (stagingGraph.edges || []).map((edge) => ({
+        ...edge,
+        _dagLayer: committedEdgeIds.has(edge.id) ? 'committed' : 'staging'
+      }))
+    } : {
+      ...committedGraph,
+      nodes: (committedGraph.nodes || []).map((node) => ({...node, _dagLayer: 'committed'})),
+      edges: (committedGraph.edges || []).map((edge) => ({...edge, _dagLayer: 'committed'}))
+    };
+    currentSnapshot = graphResponse?.data?.snapshot || null;
     selectedNodeId = selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
     blastState = null;
     buildAnalysisMaps(null);
     renderGraph(graph);
-    renderedSig = sigOf(graphResponse.data);
+    renderedSig = sigOf(graphResponse?.data || stagingResponse?.data);
     markUpdated(false);
 
-    const [metrics, analysis, audits] = await Promise.all([
+    const [metrics, analysis, audits] = currentSnapshot ? await Promise.all([
       api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null),
       api(`/threads/${encodeURIComponent(currentThread)}/analysis`).catch(() => null),
       api(`/audits?threadId=${encodeURIComponent(currentThread)}`).catch(() => null)
-    ]);
+    ]) : [null, null, null];
     if (metrics?.ok) showMetrics(metrics.data);
     if (analysis?.ok) {
       buildAnalysisMaps(analysis.data);
@@ -1299,7 +1338,10 @@ async function loadGraph() {
       showAnalysis(null);
     }
     if (audits?.ok) showAuditRun(audits.data.latest);
-    setStatus(`${graph.nodes.length} nodes · ${graph.edges.length} edges`);
+    const stagingNodes = graph.nodes.filter((node) => node._dagLayer === 'staging').length;
+    setStatus(stagingNodes
+      ? `${committedNodeIds.size} committed · ${stagingNodes} staging · 待验证`
+      : `${graph.nodes.length} nodes · ${graph.edges.length} edges`);
   } catch (error) {
     renderEmptyGraph(error instanceof Error ? error.message : String(error));
     setStatus('error');
@@ -1419,8 +1461,20 @@ function markUpdated(on) {
 }
 
 async function pollChanges() {
-  if (!currentThread || renderedSig === null) return;
+  if (!currentThread) return;
   const response = await api(`/updates/status?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
+  const staging = response?.data?.staging || null;
+  const stagingSig = JSON.stringify([
+    response?.data?.graphState || null,
+    staging?.status || null,
+    staging?.batchDigest || null,
+    staging?.newTraceCount || 0
+  ]);
+  if (response?.ok && stagingSig !== renderedStagingSig) {
+    renderedStagingSig = stagingSig;
+    await loadGraph();
+    return;
+  }
   const nextDigest = response?.data?.snapshot?.digest;
   if (response?.ok && nextDigest && nextDigest !== currentSnapshot?.digest) markUpdated(true);
 }

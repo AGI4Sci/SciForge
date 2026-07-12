@@ -16,6 +16,7 @@ import {
 import {
   WritePdfViewer
 } from '../components/write/WritePdfViewer'
+import { rightPanelContextStateKey } from '../components/right-panel-context-state'
 import type { WorkspacePreviewAssetTransportClient } from './host'
 import {
   createPdfWorkspacePreviewAnnotationOperation
@@ -380,6 +381,11 @@ export function PdfWorkspaceViewer({
               size={resolvePdfFileSize(observation, resolvedAsset)}
               mtimeMs={observation?.file.mtimeMs}
               visualContextComponentId={visualContextComponentId}
+              viewStateKey={rightPanelContextStateKey({
+                mode: 'file-pdf',
+                workspaceRoot: observation?.file.workspaceRoot,
+                resourceId: resolvePdfFilePath(observation, resolvedAsset)
+              })}
               initialPage={initialPage}
               onAnnotationAction={onApplyEdit ? handleAnnotationAction : undefined}
               annotationOverlays={annotationOverlays}

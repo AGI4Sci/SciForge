@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Agent Runtime</title>
+  <desc id="desc">A clean runtime hub routing tasks across Codex, Claude, and Local execution backends.</desc>
+  <defs>
+    <linearGradient id="hub" x1="83" y1="77" x2="173" y2="167" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="card" x1="31" y1="44" x2="225" y2="219" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#23313A" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <circle cx="128" cy="122" r="40" fill="url(#hub)" stroke="#23313A" stroke-width="7"/>
+  <path d="M110 122h36M128 104v36" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="128" cy="122" r="8" fill="#FFFFFF" stroke="#23313A" stroke-width="4"/>
+
+  <rect x="36" y="42" width="80" height="44" rx="14" fill="url(#card)" stroke="#23313A" stroke-width="6" filter="url(#softShadow)"/>
+  <text x="76" y="70" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700" fill="#23313A">Codex</text>
+
+  <rect x="140" y="42" width="80" height="44" rx="14" fill="#FFFFFF" stroke="#23313A" stroke-width="6" filter="url(#softShadow)"/>
+  <text x="180" y="70" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="16" font-weight="700" fill="#23313A">Claude</text>
+
+  <rect x="88" y="188" width="80" height="44" rx="14" fill="#FFF7E6" stroke="#23313A" stroke-width="6" filter="url(#softShadow)"/>
+  <text x="128" y="216" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="17" font-weight="700" fill="#23313A">Local</text>
+
+  <path d="M94 86l22 22M162 86l-22 22M128 162v26" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <path d="M107 102l11 7-7-11M149 102l-11 7 7-11M118 175l10 13 10-13" fill="none" stroke="#23313A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <path d="M55 102c-12 10-19 25-19 42s7 32 19 42M201 102c12 10 19 25 19 42s-7 32-19 42" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round" opacity="0.72"/>
+</svg>

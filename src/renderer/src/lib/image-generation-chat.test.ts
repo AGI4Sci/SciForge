@@ -1,38 +1,27 @@
 import { describe, expect, it } from 'vitest'
-import {
-  buildImageGenerationDisplayText,
-  buildImageGenerationWorkflowPrompt,
-  isCreateImageRequest,
-  resolveCreateImageWorkflow
-} from './image-generation-chat'
+import { buildImageGenerationWorkflowPrompt } from './image-generation-chat'
 
-describe('image generation chat compatibility helpers', () => {
-  it('does not route image requests in the renderer chat layer', () => {
-    expect(isCreateImageRequest('生成一张图片')).toBe(false)
-    expect(isCreateImageRequest('画一张流程图')).toBe(false)
-    expect(isCreateImageRequest('做一个 PPT')).toBe(false)
-  })
-
-  it('builds the explicit image-generation MCP workflow prompt', () => {
+describe('visual artifact chat workflow', () => {
+  it('builds a route-neutral workflow prompt with shared artifact arguments', () => {
     const prompt = buildImageGenerationWorkflowPrompt('一张神经网络架构示意图', {
       workspaceRoot: '/tmp/workspace',
-      canvasId: 'thread-canvas',
-      threadId: 'canvas'
+      visualDocumentId: 'paper-figure-6',
+      threadId: 'thread-1'
     })
 
-    expect(prompt).toContain('[SciForge image generation workflow]')
+    expect(prompt).toContain('[SciForge artifact request]')
     expect(prompt).toContain('一张神经网络架构示意图')
-    expect(prompt).toContain('image_generation_plan')
-    expect(prompt).toContain('image_generation_render')
+    expect(prompt).toContain('does not select a renderer')
+    expect(prompt).not.toContain('Route selection and execution')
     expect(prompt).toContain('"workspaceRoot":"/tmp/workspace"')
-    expect(prompt).toContain('"canvasId":"thread-canvas"')
-    expect(prompt).toContain('"threadId":"canvas"')
-    expect(prompt).toContain('"insertToCanvas":true')
+    expect(prompt).toContain('"visualDocumentId":"paper-figure-6"')
+    expect(prompt).toContain('"threadId":"thread-1"')
   })
 
-  it('keeps legacy return shapes stable for unused callers', () => {
-    expect(buildImageGenerationDisplayText('一张神经网络架构示意图')).toBe('一张神经网络架构示意图')
-    expect(resolveCreateImageWorkflow('生成一个季度数据图表', { isScientificPlottingRequest: () => true }))
-      .toBe('image-generation')
+  it('leaves route selection to the runtime policy', () => {
+    const prompt = buildImageGenerationWorkflowPrompt('根据论文数据画图')
+
+    expect(prompt).toContain('The runtime scientific-visual policy owns route selection')
+    expect(prompt).not.toContain('scientific_visual_plan')
   })
 })

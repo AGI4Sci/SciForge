@@ -124,25 +124,59 @@ describe('dev sciforge browser bridge', () => {
     unsubscribe()
   })
 
-  it('forwards local draw.io URL requests through the dev bridge', async () => {
+  it('routes VisualDocument review and revision calls through the dev bridge', async () => {
     installWindow()
-    const fetchMock = vi.fn(async (
-      _input: RequestInfo | URL,
-      _init?: RequestInit
-    ): Promise<Response> => new Response(JSON.stringify({
-        ok: true,
-        payload: { ok: true, url: 'http://127.0.0.1:3000/?embed=1&proto=json' }
-      })))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, payload: { ok: true } })))
     Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
-
     installDevSciForgeBridge()
-    await window.sciforge.getLocalDrawioUrl()
 
-    const invokeCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith('/invoke'))
-    expect(JSON.parse(String((invokeCall?.[1] as RequestInit | undefined)?.body))).toMatchObject({
-      channel: 'drawio:local-url'
-    })
+    const annotationRequest = {
+      workspaceRoot: '/tmp/project',
+      documentId: 'figure-1',
+      annotations: [{
+        geometry: { kind: 'pin' as const, point: { x: 0.4, y: 0.6 } },
+        instruction: 'Enlarge this label.'
+      }]
+    }
+    await window.sciforge.saveVisualDocumentAnnotations(annotationRequest)
+    const candidateRequest: Parameters<typeof window.sciforge.createVisualCandidateRevision>[0] = {
+      workspaceRoot: '/tmp/project',
+      documentId: 'figure-1',
+      candidatePath: '/tmp/candidate.png',
+      summary: 'Enlarged the label.',
+      reviewEvidence: {
+        tool: 'visual_artifact_review',
+        ok: true,
+        reviewedArtifactPath: '/tmp/candidate.png',
+        reviewedArtifactHash: 'a'.repeat(64),
+        reviewedAt: '2026-07-12T00:00:00.000Z',
+        score: { overall: 0.9, dimensions: 1, nonEmpty: 1, background: 1, semantic: 0.92, warnings: [] },
+        semantic: { pass: true, summary: 'Passed review.', violations: [], repairInstructions: [] },
+        repairable: false,
+        warnings: []
+      }
+    }
+    await window.sciforge.createVisualCandidateRevision(candidateRequest)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'visual-document:save-annotations',
+          payload: annotationRequest
+        })
+      })
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://localhost:5173/__sciforge-dev-bridge/invoke',
+      expect.objectContaining({
+        body: JSON.stringify({
+          channel: 'visual-document:create-candidate',
+          payload: candidateRequest
+        })
+      })
+    )
   })
 
   it('routes Project DAG panel calls through the dev bridge', async () => {

@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Presentation Studio</title>
+  <desc id="desc">A presentation screen with generated slides and a narrative path.</desc>
+  <defs>
+    <linearGradient id="screen" x1="42" y1="50" x2="214" y2="175" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="play" x1="139" y1="79" x2="190" y2="131" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="38" y="49" width="180" height="124" rx="17" fill="url(#screen)" stroke="#23313A" stroke-width="8"/>
+  <path d="M61 79h58M61 101h43" fill="none" stroke="#667985" stroke-width="7" stroke-linecap="round"/>
+  <rect x="62" y="124" width="25" height="25" rx="5" fill="#18A999" stroke="#23313A" stroke-width="5"/>
+  <rect x="98" y="114" width="25" height="35" rx="5" fill="#F4B942" stroke="#23313A" stroke-width="5"/>
+  <rect x="134" y="96" width="25" height="53" rx="5" fill="#EF6F6C" stroke="#23313A" stroke-width="5"/>
+  <circle cx="179" cy="103" r="27" fill="url(#play)" stroke="#23313A" stroke-width="7"/>
+  <path d="M172 91l20 12-20 12V91Z" fill="#FFFFFF" stroke="#FFFFFF" stroke-width="4" stroke-linejoin="round"/>
+  <path d="M96 173h64l10 34H86l10-34Z" fill="#DDE8EF" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M72 214h112" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+  <path d="M177 60l8-15M194 70l17-7M193 137l16 9" fill="none" stroke="#7C5CFF" stroke-width="6" stroke-linecap="round"/>
+</svg>

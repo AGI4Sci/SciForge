@@ -210,16 +210,37 @@ const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
 export const DEFAULT_MODEL_ROUTER_TRACE_ROOT = 'traces';
 const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
 
-// Uploaded scientific files (sequence / structure / spectra) that a domain expert model can read.
-// These are classified as 'document' for routing but, when the Model-Router-managed sci-modality
-// worker is configured through `translators.scientific`, are translated to natural-language
-// evidence instead of being inlined as raw text. Treat these extensions as high risk: they can carry
-// sequence, chemistry, structure, or variant information that must not be sent raw to the reasoner.
-const HIGH_RISK_SCIENTIFIC_MODALITY_EXTENSIONS =
-  /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)(?:$|[?#])/i;
+// Protected scientific files can carry sequence, chemistry, structure, variant, or assay data and
+// must never be inlined raw into the text reasoner. This set is intentionally broader than the file
+// formats accepted by the optional native-to-text experts below.
+const PROTECTED_SCIENTIFIC_FILE_EXTENSIONS =
+  /\.(?:fasta|fa|faa|fna|ffn|frn|fastq|fq|smi|smiles|mol|mol2|sdf|mgf|pdb|cif|mmcif|gb|gbk|gff|gff3|gtf|vcf|bed|nwk|seq)(?:$|[?#])/i;
 
-function isScientificModalityPath(path: string): boolean {
-  return HIGH_RISK_SCIENTIFIC_MODALITY_EXTENSIONS.test(path);
+type ScientificTranslatorModality = 'protein' | 'protein_structure' | 'molecule';
+
+// Only formats with a deployed native-to-text expert may cross the sci-modality service boundary.
+// Ambiguous FASTA extensions require conservative local content confirmation below. Nucleotide,
+// variant, annotation, interval, tree, and spectrum formats remain protected but are rejected until
+// a matching expert is explicitly added.
+const TRANSLATABLE_SCIENTIFIC_FILE_MODALITIES: ReadonlyArray<{
+  extensions: RegExp;
+  modality: ScientificTranslatorModality;
+}> = [
+  { extensions: /\.(?:fasta|fa|faa)(?:$|[?#])/i, modality: 'protein' },
+  { extensions: /\.(?:pdb|cif|mmcif)(?:$|[?#])/i, modality: 'protein_structure' },
+  { extensions: /\.(?:smi|smiles)(?:$|[?#])/i, modality: 'molecule' },
+];
+
+function isProtectedScientificFilePath(path: string): boolean {
+  return PROTECTED_SCIENTIFIC_FILE_EXTENSIONS.test(path);
+}
+
+function scientificTranslatorModalityForPath(path: string): ScientificTranslatorModality | undefined {
+  return TRANSLATABLE_SCIENTIFIC_FILE_MODALITIES.find(({ extensions }) => extensions.test(path))?.modality;
+}
+
+function isAmbiguousFastaExtension(path: string): boolean {
+  return /\.(?:fasta|fa)(?:$|[?#])/i.test(path);
 }
 
 export function createModelRouterServer(options: ModelRouterServerOptions): Server {
@@ -228,12 +249,31 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
   const traceDataRoot = resolveModelRouterTraceDataRoot(env, options.traceDataRoot);
   const visionTranslationCache = new Map<string, VisionTranslationCacheEntry>();
-  // Caches scientific-file expert translations by file-content sha. An agentic turn is several router
-  // requests (one per tool round); the uploaded file rides along on each, so without this we'd re-call
-  // the GPU expert every round. With it the expert runs once and its output is re-surfaced each round.
+  // Caches scientific-file expert translations by resolved modality + file-content sha. An agentic
+  // turn is several router requests; the upload rides along on each, so the expert should run once.
   const scientificTranslationCache = new Map<string, ScientificEvidence>();
   const toolCallCache: ToolCallCache = new Map();
   let recentRouterError: RecentProviderError | null = null;
+  const backgroundControllers = new Set<AbortController>();
+  let activeInteractiveRequests = 0;
+  const routeWithPriority = <T>(body: unknown, task: (signal?: AbortSignal) => Promise<T>): Promise<T> => {
+    const background = isDagBackgroundRequest(body);
+    if (background && activeInteractiveRequests > 0) {
+      return Promise.reject(routerError(
+        503,
+        'background_preempted',
+        'Background DAG work yielded to an interactive request.',
+      ));
+    }
+    if (!background) {
+      activeInteractiveRequests += 1;
+      for (const controller of backgroundControllers) controller.abort();
+      return task().finally(() => { activeInteractiveRequests = Math.max(0, activeInteractiveRequests - 1); });
+    }
+    const controller = new AbortController();
+    backgroundControllers.add(controller);
+    return task(controller.signal).finally(() => backgroundControllers.delete(controller));
+  };
   const recordProviderError = (error: Omit<RecentProviderError, 'at'>) => {
     recentRouterError = {
       ...error,
@@ -246,7 +286,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
     try {
       if (request.method === 'OPTIONS') return sendCors(response);
       if (request.method === 'GET' && url.pathname === '/health') {
-        return sendJson(response, 200, { ok: true, service: 'sciforge.model-router', checkedAt: new Date().toISOString() });
+        return sendJson(response, 200, compactObject({
+          ok: true,
+          service: 'sciforge.model-router',
+          instanceId: stringField(env.SCIFORGE_MODEL_ROUTER_INSTANCE_ID),
+          checkedAt: new Date().toISOString(),
+        }));
       }
       if (request.method === 'GET' && url.pathname === '/healthz') {
         const recentProviderDiagnostic = recentProviderErrorDiagnostic(recentRouterError);
@@ -297,7 +342,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
             response,
             responseId,
             options.config.publicModelAlias ?? 'sciforge-model-router',
-            routeResponsesRequest(body, {
+            routeWithPriority(body, (providerSignal) => routeResponsesRequest(body, {
               config: options.config,
               env,
               fetchImpl,
@@ -308,11 +353,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               scientificTranslationCache,
               toolCallCache,
               responseId,
+              providerSignal,
               recordProviderError,
-            }),
+            })),
           );
         }
-        const result = await routeResponsesRequest(body, {
+        const result = await routeWithPriority(body, (providerSignal) => routeResponsesRequest(body, {
           config: options.config,
           env,
           fetchImpl,
@@ -322,8 +368,9 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           visionTranslationCache,
           scientificTranslationCache,
           toolCallCache,
+          providerSignal,
           recordProviderError,
-        });
+        }));
         return sendJson(response, 200, responseObject(result));
       }
       if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
@@ -337,7 +384,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         }
         const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
         const responseRequest = chatCompletionsToResponsesRequest(body, publicModelAlias);
-        const result = await routeResponsesRequest(responseRequest, {
+        const result = await routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
           config: options.config,
           env,
           fetchImpl,
@@ -347,8 +394,9 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           visionTranslationCache,
           scientificTranslationCache,
           toolCallCache,
+          providerSignal,
           recordProviderError,
-        });
+        }));
         return sendJson(response, 200, responseToChatCompletion(responseObject(result), body));
       }
       if (request.method === 'POST' && url.pathname === '/v1/images/generations') {
@@ -358,6 +406,8 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           config: options.config,
           env,
           fetchImpl,
+          workspaceRoot,
+          traceDataRoot,
           request,
         });
         return sendJson(response, 200, result);
@@ -382,7 +432,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
             responseId,
             responseModel,
             body,
-            routeResponsesRequest(responseRequest, {
+            routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
               config: options.config,
               env,
               fetchImpl,
@@ -393,11 +443,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               scientificTranslationCache,
               toolCallCache,
               responseId,
+              providerSignal,
               recordProviderError,
-            }),
+            })),
           );
         }
-        const result = await routeResponsesRequest(responseRequest, {
+        const result = await routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
           config: options.config,
           env,
           fetchImpl,
@@ -407,8 +458,9 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           visionTranslationCache,
           scientificTranslationCache,
           toolCallCache,
+          providerSignal,
           recordProviderError,
-        });
+        }));
         return sendJson(response, 200, responseToAnthropicMessage(responseObject(result), body));
       }
       if (
@@ -453,6 +505,13 @@ function recentProviderErrorDiagnostic(error: RecentProviderError | null): Model
     ...(error.role ? { role: error.role } : {}),
     releaseAcceptance: 'not-evaluated',
   };
+}
+
+function isDagBackgroundRequest(body: unknown): boolean {
+  const request = isRecord(body) ? body : {};
+  const metadata = isRecord(request.metadata) ? request.metadata : {};
+  const source = (stringField(metadata.source) ?? '').toLowerCase();
+  return source === 'evidence-dag' || source === 'project-dag' || source === 'dag-background';
 }
 
 function providerDiagnosticCategory(
@@ -621,6 +680,8 @@ async function routeImageGenerationRequest(
     config: ModelRouterConfig;
     env: Record<string, string | undefined>;
     fetchImpl: typeof fetch;
+    workspaceRoot: string;
+    traceDataRoot: string;
     request: IncomingMessage;
   },
 ): Promise<JsonObject> {
@@ -637,46 +698,77 @@ async function routeImageGenerationRequest(
   }
   validateProviderConfig(provider, 'imageGenerator');
   const secret = secretForProvider(provider, context.env, 'imageGenerator');
+  const requestId = makeId('img');
+  const trace = createTraceContext(context.workspaceRoot, context.traceDataRoot, profile.traceRoot, requestId);
+  const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
+  const startedAt = Date.now();
   const providerBody = {
     ...body,
     model: provider.model,
   };
-  let response: Response;
   try {
-    response = await context.fetchImpl(providerImageGenerationsUrl(provider.baseUrl), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${secret}`,
-      },
-      body: JSON.stringify(providerBody),
+    let response: Response;
+    try {
+      response = await context.fetchImpl(providerImageGenerationsUrl(provider.baseUrl), {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify(providerBody),
+      });
+    } catch (error) {
+      const errorSummary = providerExceptionSummary(error, 'fetch_failed');
+      throw routerError(500, errorSummary, `Provider request failed (${errorSummary}).`, 'imageGenerator');
+    }
+    if (!response.ok) {
+      const errorText = await response.text().catch(() => '');
+      const errorSummary = `provider_http_${response.status}`;
+      throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, provider, secret, errorText), 'imageGenerator');
+    }
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image generation response.', 'imageGenerator');
+    }
+    if (isProviderErrorPayload(payload)) {
+      throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image generation response.', 'imageGenerator');
+    }
+    if (!isRecord(payload)) {
+      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
+    }
+    const jsonPayload = jsonValueField(payload);
+    if (!isRecord(jsonPayload)) {
+      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
+    }
+    const result = await normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl);
+    await writeImageGenerationTrace({
+      trace,
+      requestId,
+      profileId,
+      workspaceRoot: context.workspaceRoot,
+      publicModelAlias,
+      provider,
+      latencyMs: Date.now() - startedAt,
+      status: 'completed',
     });
+    return result;
   } catch (error) {
-    const errorSummary = providerExceptionSummary(error, 'fetch_failed');
-    throw routerError(500, errorSummary, `Provider request failed (${errorSummary}).`, 'imageGenerator');
+    const normalized = normalizeRouterError(error);
+    await writeImageGenerationTrace({
+      trace,
+      requestId,
+      profileId,
+      workspaceRoot: context.workspaceRoot,
+      publicModelAlias,
+      provider,
+      latencyMs: Date.now() - startedAt,
+      status: 'failed',
+      errorSummary: normalized.code,
+    });
+    throw error;
   }
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    const errorSummary = `provider_http_${response.status}`;
-    throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, provider, secret, errorText), 'imageGenerator');
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image generation response.', 'imageGenerator');
-  }
-  if (isProviderErrorPayload(payload)) {
-    throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image generation response.', 'imageGenerator');
-  }
-  if (!isRecord(payload)) {
-    throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
-  }
-  const jsonPayload = jsonValueField(payload);
-  if (!isRecord(jsonPayload)) {
-    throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
-  }
-  return await normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl);
 }
 
 async function normalizeImageGenerationPayload(
@@ -808,6 +900,7 @@ async function routeResponsesRequest(
     scientificTranslationCache: Map<string, ScientificEvidence>;
     toolCallCache: ToolCallCache;
     responseId?: string;
+    providerSignal?: AbortSignal;
     recordProviderError?: (error: Omit<RecentProviderError, 'at'>) => void;
   },
 ): Promise<RoutedResponse> {
@@ -868,6 +961,14 @@ async function routeResponsesRequest(
   if (unsupportedModalities.length > 0) {
     for (const item of unsupportedModalities) {
       const scientificRisk = await classifyScientificModalityRisk(item, context.workspaceRoot);
+      if (scientificRisk.level === 'high' && !scientificRisk.translatorModality) {
+        throw routerError(
+          415,
+          'scientific_modality_unsupported',
+          'This protected scientific file format has no registered native-to-text expert. The raw object text was not sent to any translator or reasoner.',
+          'scientificTranslator',
+        );
+      }
       if (scientificRisk.level === 'high' && !isScientificTranslatorUsable(profile.translators.scientific, context.env)) {
         throw routerError(
           503,
@@ -876,7 +977,7 @@ async function routeResponsesRequest(
           'scientificTranslator',
         );
       }
-      // 1) Scientific file (.fasta / .smi / .mol / .mgf …) + managed sci-modality worker configured:
+      // 1) Allowlisted scientific file (.fasta / .pdb / .smiles) + managed sci-modality worker:
       //    translate to natural-language evidence (the worker owns retry).
       const expert = await translateScientificModalityObservation(
         item,
@@ -885,6 +986,7 @@ async function routeResponsesRequest(
         context.env,
         context.fetchImpl,
         context.scientificTranslationCache,
+        scientificRisk.translatorModality,
       );
       if (expert) {
         observations.push(expert.observation);
@@ -966,6 +1068,7 @@ async function routeResponsesRequest(
             modality,
             phase: 'vision-initial',
             calls,
+            signal: context.providerSignal,
           });
           addUsage(usage, result.usage);
           observation = result.outputText;
@@ -1020,6 +1123,7 @@ async function routeResponsesRequest(
         request,
         requestOptions: textReasonerRequestOptions,
         toolNameAliases,
+        signal: context.providerSignal,
       });
       addUsage(usage, textResult.usage);
       const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
@@ -1053,6 +1157,7 @@ async function routeResponsesRequest(
               modality: target,
               phase: 'vision-supplement',
               calls,
+              signal: context.providerSignal,
             });
             addUsage(usage, result.usage);
             supplementObservation = result.outputText;
@@ -1645,6 +1750,7 @@ async function readWorkspaceTextModalityObservation(item: ModalityRef, workspace
 
 type ScientificModalityRisk = {
   level: 'high' | 'low';
+  translatorModality?: ScientificTranslatorModality;
 };
 
 async function classifyScientificModalityRisk(item: ModalityRef, workspaceRoot: string): Promise<ScientificModalityRisk> {
@@ -1655,9 +1761,49 @@ async function classifyScientificModalityRisk(item: ModalityRef, workspaceRoot: 
   ];
   const target = await workspaceImageTarget(item, workspaceRoot);
   if (target) candidates.push(target.relativeRef);
-  return candidates.some((candidate) => Boolean(candidate && isScientificModalityPath(candidate)))
-    ? { level: 'high' }
-    : { level: 'low' };
+  const level = candidates.some((candidate) => Boolean(candidate && isProtectedScientificFilePath(candidate)))
+    ? 'high'
+    : 'low';
+  // When the workspace target exists, its extension is authoritative. Never let a display title
+  // relabel an unsupported protected file as a translatable modality.
+  let translatorModality = target
+    ? scientificTranslatorModalityForPath(target.relativeRef)
+    : candidates.map((candidate) => candidate ? scientificTranslatorModalityForPath(candidate) : undefined).find(Boolean);
+  // `.fasta` and `.fa` are shared by protein and nucleotide FASTA. Resolve them locally and
+  // conservatively: only a canonical amino-acid sequence containing at least one residue that
+  // cannot be an IUPAC nucleotide symbol may enter the protein expert. `.faa` is unambiguous by
+  // format convention and does not need content classification.
+  if (target && translatorModality === 'protein' && isAmbiguousFastaExtension(target.relativeRef)) {
+    const proteinConfirmed = await isUnambiguousProteinFasta(target.absolutePath);
+    if (!proteinConfirmed) translatorModality = undefined;
+  }
+  return translatorModality ? { level, translatorModality } : { level };
+}
+
+async function isUnambiguousProteinFasta(absolutePath: string): Promise<boolean> {
+  try {
+    const stats = await stat(absolutePath);
+    if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TEXT_MODALITY_BYTES) return false;
+    const bytes = await readFile(absolutePath);
+    if (bytes.subarray(0, 8192).includes(0)) return false;
+    const lines = bytes.toString('utf8').split(/\r?\n/);
+    const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
+    if (firstContentLine < 0 || !lines[firstContentLine]?.trimStart().startsWith('>')) return false;
+    const sequenceLines: string[] = [];
+    for (const line of lines.slice(firstContentLine + 1)) {
+      const trimmed = line.trim();
+      if (trimmed.startsWith('>')) break;
+      if (trimmed) sequenceLines.push(trimmed);
+    }
+    const sequence = sequenceLines.join('').replace(/\s+/g, '').toUpperCase();
+    // EFILPQ are canonical amino-acid symbols outside the IUPAC nucleotide alphabet. Requiring at
+    // least one of them prevents DNA/RNA and ambiguity-only sequences from being labeled protein.
+    return sequence.length >= 10
+      && /^[ACDEFGHIKLMNPQRSTVWY]+$/.test(sequence)
+      && /[EFILPQ]/.test(sequence);
+  } catch {
+    return false;
+  }
 }
 
 function isScientificTranslatorUsable(
@@ -1670,9 +1816,11 @@ function isScientificTranslatorUsable(
 
 // Translate an uploaded scientific file to natural-language evidence via the Model-Router-managed
 // sci-modality worker. Gated by `profile.translators.scientific`; the worker owns modality
-// auto-detection + retry/robustness. Translation-only: it returns evidence, never answers. Returns
-// undefined when the service is unconfigured, the ref is not a scientific file, the file is
-// unreadable/binary, or the call fails; callers decide whether to fail closed by risk level.
+// retry/robustness. Model Router resolves the modality from an allowlisted file extension and sends
+// it explicitly, so unsupported protected formats never reach auto-detection. Translation-only: it
+// returns evidence, never answers. Returns undefined when the service is unconfigured, the ref is
+// not a scientific file, the file is unreadable/binary, or the call fails; callers decide whether
+// to fail closed by risk level.
 type ScientificEvidence = { modalityInputId: string; modality: string; model: string; summary: string };
 
 function buildScientificObservation(item: ModalityRef, evidence: ScientificEvidence): string {
@@ -1694,14 +1842,16 @@ async function translateScientificModalityObservation(
   env: Record<string, string | undefined>,
   fetchImpl: typeof fetch,
   cache?: Map<string, ScientificEvidence>,
+  translatorModality?: ScientificTranslatorModality,
 ): Promise<{ observation: string; evidence: ScientificEvidence } | undefined> {
+  if (!translatorModality) return undefined;
   if (!service) return undefined;
   const serviceUrl = service.baseUrl.trim();
   if (!serviceUrl) return undefined;
   const serviceToken = (env[service.tokenEnv] ?? '').trim();
   if (!serviceToken) return undefined;
   const target = await workspaceImageTarget(item, workspaceRoot);
-  if (!target || !isScientificModalityPath(target.relativeRef)) return undefined;
+  if (!target || scientificTranslatorModalityForPath(target.relativeRef) !== translatorModality) return undefined;
   try {
     const stats = await stat(target.absolutePath);
     if (!stats.isFile() || stats.size <= 0 || stats.size > MAX_TEXT_MODALITY_BYTES) return undefined;
@@ -1710,9 +1860,9 @@ async function translateScientificModalityObservation(
     const payload = bytes.toString('utf8');
     if (!payload.trim()) return undefined;
 
-    // Cache by file-content sha: the same uploaded file rides every tool round of one agentic turn,
-    // so translate once and re-surface the block (incl. on the final answer) without re-calling the GPU.
-    const cacheKey = createHash('sha256').update(payload).digest('hex');
+    // Cache by resolved modality + file-content sha: the same uploaded file rides every tool round
+    // of one agentic turn, so translate once and re-surface the block without re-calling the GPU.
+    const cacheKey = createHash('sha256').update(`${translatorModality}\0${payload}`).digest('hex');
     const cached = cache?.get(cacheKey);
     if (cached) return { observation: buildScientificObservation(item, cached), evidence: cached };
 
@@ -1725,7 +1875,7 @@ async function translateScientificModalityObservation(
       const resp = await fetchImpl(`${serviceUrl.replace(/\/+$/, '')}/modality/translate`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` },
-        body: JSON.stringify({ payload, objectId: item.id, model: service.model }),
+        body: JSON.stringify({ payload, modality: translatorModality, objectId: item.id, model: service.model }),
         signal: controller.signal,
       });
       ok = resp.ok;
@@ -2130,6 +2280,7 @@ async function callVisionTranslator(options: {
   modality: ModalityRef;
   phase: string;
   calls: ProviderCallRecord[];
+  signal?: AbortSignal;
 }) {
   const translator = options.profile.translators.vision;
   if (!translator) throw new Error('Vision translator is not configured.');
@@ -2161,6 +2312,7 @@ async function callVisionTranslator(options: {
     role: 'visionTranslator',
     phase: options.phase,
     calls: options.calls,
+    signal: options.signal,
   });
   return result;
 }
@@ -2177,6 +2329,7 @@ async function callTextReasoner(options: {
   request: Record<string, unknown>;
   requestOptions: Record<string, unknown>;
   toolNameAliases: Record<string, string>;
+  signal?: AbortSignal;
 }) {
   const controlInstruction = options.observations.length
     ? [
@@ -2218,6 +2371,7 @@ async function callTextReasoner(options: {
     calls: options.calls,
     responseRequest: options.request,
     toolNameAliases: options.toolNameAliases,
+    signal: options.signal,
   });
 }
 
@@ -2231,6 +2385,7 @@ async function callChatProvider(options: {
   calls: ProviderCallRecord[];
   responseRequest?: Pick<ResponsesRequest, 'model'>;
   toolNameAliases?: Record<string, string>;
+  signal?: AbortSignal;
 }) {
   const startedAt = Date.now();
   const body = hygienizeChatProviderBody(options.body);
@@ -2243,6 +2398,7 @@ async function callChatProvider(options: {
         authorization: `Bearer ${options.secret}`,
       },
       body: JSON.stringify(body),
+      signal: options.signal,
     });
   } catch (error) {
     const errorSummary = providerExceptionSummary(error, 'fetch_failed');
@@ -3422,6 +3578,49 @@ async function writeRoutingTrace(options: {
   }));
 }
 
+async function writeImageGenerationTrace(options: {
+  trace: TraceContext;
+  requestId: string;
+  profileId: string;
+  workspaceRoot: string;
+  publicModelAlias: string;
+  provider: ModelRouterProviderConfig;
+  latencyMs: number;
+  status: 'completed' | 'failed';
+  errorSummary?: string;
+}) {
+  const audit = compactObject({
+    schemaVersion: 'sciforge.model-router.image-generation-trace.v1',
+    traceId: options.trace.traceId,
+    requestId: options.requestId,
+    route: 'model-router.images.generations',
+    profileId: options.profileId,
+    workspaceId: hashForTrace(options.workspaceRoot),
+    publicModelAlias: options.publicModelAlias,
+    role: 'imageGenerator',
+    upstreamModel: options.provider.model,
+    providerBindingSha256: providerBindingHash(options.provider),
+    wireApi: 'images.generations',
+    latencyMs: Math.max(0, Math.round(options.latencyMs)),
+    status: options.status,
+    errorSummary: options.errorSummary,
+    traceRef: options.trace.relativeDir,
+  });
+  await writeTraceJson(options.trace, 'trace.json', audit);
+  await writeTraceJson(options.trace, 'final-routing-summary.json', compactObject({
+    schemaVersion: 'sciforge.model-router.final-routing-summary.v1',
+    requestId: options.requestId,
+    route: 'model-router.images.generations',
+    profileId: options.profileId,
+    role: 'imageGenerator',
+    upstreamModel: options.provider.model,
+    latencyMs: Math.max(0, Math.round(options.latencyMs)),
+    status: options.status,
+    errorSummary: options.errorSummary,
+    traceRef: options.trace.relativeDir,
+  }));
+}
+
 function publicModalityRef(ref: ModalityRef): JsonObject {
   return compactObject({
     id: ref.id,
@@ -3718,7 +3917,7 @@ function modalityKindFromTextualRefExtension(ref: string): ModalityKind | undefi
   if (/\.(?:mp4|mov|webm|m4v|avi)(?:$|[?#])/i.test(path)) return 'video';
   if (/\.(?:csv|tsv|xlsx?|ods)(?:$|[?#])/i.test(path)) return 'table';
   if (/\.(?:pdf|docx?|pptx?|txt|md|markdown)(?:$|[?#])/i.test(path)) return 'document';
-  if (isScientificModalityPath(path)) return 'document';
+  if (isProtectedScientificFilePath(path)) return 'document';
   return undefined;
 }
 

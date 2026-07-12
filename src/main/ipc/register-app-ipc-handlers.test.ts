@@ -377,57 +377,27 @@ function createPaperRadarServiceMock() {
   }
 }
 
-function figureStyleExtractionFixture() {
-  const spec = {
+function visualStyleExtractionFixture() {
+  const profile = {
     version: 1 as const,
-    source: { path: 'figures/reference.png', type: 'image' as const, figureId: 'Fig. 2A' },
-    canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
-    palette: {
-      colors: ['#222222', '#d24b4b'],
-      background: '#ffffff',
-      ink: '#222222',
-      accent: ['#d24b4b'],
-      colorMode: 'limited' as const
+    id: 'manuscript-default',
+    scope: 'manuscript' as const,
+    source: { type: 'reference' as const, path: 'figures/reference.png', figureId: 'Fig. 2A' },
+    tokens: {
+      canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
+      palette: { colors: ['#222222', '#d24b4b'], background: '#ffffff', ink: '#222222', accent: ['#d24b4b'], colorMode: 'limited' as const },
+      typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
+      strokes: { ink: '#222222', primaryWidth: 1.2, secondaryWidth: 0.6, lineCap: 'round' as const },
+      spacing: { margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 }, gutter: 'balanced' as const, density: 'balanced' as const },
+      shapes: { fillMode: 'mixed' as const, shadow: 'none' as const }
     },
-    typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
-    layout: {
-      panelGrid: '1x1',
-      panelLabels: 'unknown' as const,
-      margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 },
-      gutter: 'balanced' as const
-    },
-    axes: {
-      spine: 'left-bottom' as const,
-      tickDirection: 'out' as const,
-      grid: true,
-      gridTone: 'light' as const,
-      gridColor: '#e2e2df',
-      gridAlpha: 0.52,
-      gridLineWidth: 0.4
-    },
-    marks: { lineWidth: 1.2, markerSize: 3, errorBarStyle: 'unknown' as const, density: 'balanced' as const },
-    annotations: { significance: 'unknown' as const, legend: 'frameless' as const },
-    export: { formats: ['pdf' as const, 'svg' as const, 'png' as const], dpi: 300, transparent: false },
-    confidence: { overall: 0.72, palette: 0.8, layout: 0.7, axes: 0.75, typography: 0.35 }
+    semanticDescription: 'Compact scientific figure with a restrained red accent.',
+    confidence: { overall: 0.72, palette: 0.8, spacing: 0.7, plots: 0.5, typography: 0.35, generatedAssets: 0.2 }
   }
 
   return {
     ok: true as const,
-    spec,
-    applyPlan: {
-      styleSpec: spec,
-      plottingWorkflow: {
-        recommendedSkills: ['scientific-visualization'],
-        recommendedLibraries: ['Matplotlib'],
-        nextControlledTool: 'SciForge DataFigure Engine',
-        guardrails: ['Keep generated figures auditable.']
-      },
-      matplotlibHints: {
-        rcParams: { 'axes.grid': true },
-        palette: ['#d24b4b'],
-        layoutNotes: ['Use 1x1 panel layout.']
-      }
-    },
+    profile,
     diagnostics: {
       analyzedAt: '2026-07-07T00:00:00.000Z',
       sampledPixels: 10,
@@ -462,6 +432,14 @@ describe('registerAppIpcHandlers', () => {
 
     expect(handlers.get('remoteChannel:message:mirror')).toBeTypeOf('function')
     expect(handlers.has(removedFeishuMirrorChannel)).toBe(false)
+  })
+
+  it('does not register the removed draw.io runtime channel', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+
+    registerAppIpcHandlers(registerOptions())
+
+    expect(handlers.has('drawio:local-url')).toBe(false)
   })
 
   it('validates and routes managed visible capture preview requests', async () => {
@@ -600,117 +578,58 @@ describe('registerAppIpcHandlers', () => {
     })
   })
 
-  it('routes Figure Style reference extraction through the high-level IPC command', async () => {
+  it('routes visual style profile extraction through its single IPC command', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const extraction = figureStyleExtractionFixture()
-    const croppedImagePath = '/tmp/workspace/.sciforge/scientific-plotting/references/fig-2a.png'
-    const preparedReference = {
-      ok: true as const,
-      status: 'prepared' as const,
-      source: {
-        path: '/tmp/workspace/paper/main.pdf',
-        type: 'pdf' as const,
-        page: 2,
-        width: 1000,
-        height: 800
-      },
-      cropBox: { unit: 'pixel' as const, x: 10, y: 20, width: 700, height: 500 },
-      croppedImagePath,
-      referenceManifestPath: '/tmp/workspace/.sciforge/scientific-plotting/references/fig-2a.reference.json',
-      referenceManifest: {
-        version: 1 as const,
-        tool: 'scientific_plotting_prepare_reference' as const,
-        createdAt: '2026-07-07T00:00:00.000Z',
-        requestHash: 'hash',
-        source: {
-          path: '/tmp/workspace/paper/main.pdf',
-          type: 'pdf' as const,
-          page: 2,
-          width: 1000,
-          height: 800
-        },
-        cropBox: { unit: 'pixel' as const, x: 10, y: 20, width: 700, height: 500 },
-        croppedImagePath,
-        warnings: [],
-        nextWorkflow: {
-          referencePath: croppedImagePath,
-          suggestedProfileTool: 'scientific_plotting_style_profiles' as const,
-          suggestedPlanTool: 'scientific_plotting_plan' as const,
-          suggestedRenderTool: 'scientific_plotting_render' as const,
-          suggestedReviewTool: 'scientific_plotting_review' as const,
-          guardrails: []
-        }
-      },
-      warnings: []
-    }
-    const prepareScientificPlottingReference = vi.fn(async () => preparedReference)
-    const extractFigureStyle = vi.fn(async () => extraction)
+    const extraction = visualStyleExtractionFixture()
+    const extractVisualStyleProfile = vi.fn(async () => extraction)
 
     registerAppIpcHandlers(registerOptions({
-      prepareScientificPlottingReference,
-      extractFigureStyle
+      extractVisualStyleProfile
     }))
 
-    const result = await handlers.get('figure-style:extract-reference')?.({}, {
+    const result = await handlers.get('visual-style:extract-profile')?.({}, {
       workspaceRoot: '/tmp/workspace',
-      sourcePath: 'paper/main.pdf',
-      sourceType: 'pdf',
-      page: 2,
-      dpi: 180,
-      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      sourcePath: ' figures/reference.png ',
+      sourceType: 'image',
+      sourceKind: 'reference',
+      scope: 'manuscript',
       figureId: ' Fig. 2A ',
       notes: ' style only '
     })
 
-    expect(prepareScientificPlottingReference).toHaveBeenCalledWith({
+    expect(extractVisualStyleProfile).toHaveBeenCalledWith({
       workspaceRoot: '/tmp/workspace',
-      sourcePath: 'paper/main.pdf',
-      sourceType: 'pdf',
-      page: 2,
-      dpi: 180,
-      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
-      figureId: 'Fig. 2A',
-      extractStyle: true
-    })
-    expect(extractFigureStyle).toHaveBeenCalledWith({
-      workspaceRoot: '/tmp/workspace',
-      sourcePath: '.sciforge/scientific-plotting/references/fig-2a.png',
+      sourcePath: 'figures/reference.png',
       sourceType: 'image',
+      sourceKind: 'reference',
+      scope: 'manuscript',
       figureId: 'Fig. 2A',
       notes: 'style only'
     })
-    expect(result).toMatchObject({
-      ok: true,
-      sourcePath: '.sciforge/scientific-plotting/references/fig-2a.png',
-      sourceType: 'image',
-      preparedReference,
-      extraction
-    })
+    expect(result).toEqual(extraction)
   })
 
-  it('saves Figure Style specs through the dedicated IPC command', async () => {
+  it('saves visual style profiles through the dedicated IPC command', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'sciforge-figure-style-')))
-    const extraction = figureStyleExtractionFixture()
+    const workspaceRoot = realpathSync(mkdtempSync(join(tmpdir(), 'sciforge-visual-style-')))
+    const extraction = visualStyleExtractionFixture()
     try {
       registerAppIpcHandlers(registerOptions())
 
-      const result = await handlers.get('figure-style:save-spec')?.({}, {
+      const result = await handlers.get('visual-style:save-profile')?.({}, {
         workspaceRoot,
-        path: ' .sciforge/figure-styles/custom.json ',
-        spec: extraction.spec,
-        applyPlan: extraction.applyPlan,
+        path: ' .sciforge/visual-styles/manuscript-default.json ',
+        profile: extraction.profile,
         diagnostics: extraction.diagnostics
       })
 
       expect(result).toMatchObject({
         ok: true,
-        path: join(workspaceRoot, '.sciforge/figure-styles/custom.json')
+        path: join(workspaceRoot, '.sciforge/visual-styles/manuscript-default.json')
       })
-      const saved = JSON.parse(readFileSync(join(workspaceRoot, '.sciforge/figure-styles/custom.json'), 'utf8'))
+      const saved = JSON.parse(readFileSync(join(workspaceRoot, '.sciforge/visual-styles/manuscript-default.json'), 'utf8'))
       expect(saved).toEqual({
-        spec: extraction.spec,
-        applyPlan: extraction.applyPlan,
+        profile: extraction.profile,
         diagnostics: extraction.diagnostics
       })
     } finally {
@@ -1274,11 +1193,14 @@ describe('registerAppIpcHandlers', () => {
       threadId: 'thread-1',
       url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
       itemCount: 2,
-      status: { freshness: 'fresh', pendingCount: 0 }
+      status: { freshness: 'queued', pendingCount: 1 }
     })
     expect(agentRuntime.readThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
       threadId: 'thread-1'
+    })
+    await vi.waitFor(async () => {
+      await expect(evidenceDagQueueStatus('codex', 'thread-1')).resolves.toMatchObject({ state: 'fresh' })
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'http://127.0.0.1:4897/updates',
@@ -1430,20 +1352,73 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.get('settings:set')).toBeTypeOf('function')
   })
 
-  it('returns canvas IPC validation errors instead of rejecting through Electron', async () => {
+  it('returns VisualDocument IPC validation errors instead of rejecting through Electron', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const openOrCreateSciforgeCanvas = vi.fn()
+    const openVisualDocument = vi.fn()
     const sender = createSender(910)
 
-    const dispatcher = registerAppIpcHandlers(registerOptions({ openOrCreateSciforgeCanvas }))
+    const dispatcher = registerAppIpcHandlers(registerOptions({ openVisualDocument }))
 
     await expect(
-      dispatcher.invoke('sciforge-canvas:open', { workspaceRoot: '' }, sender)
+      dispatcher.invoke('visual-document:open', { workspaceRoot: '' }, sender)
     ).resolves.toMatchObject({
       ok: false,
       status: 'invalid_request'
     })
-    expect(openOrCreateSciforgeCanvas).not.toHaveBeenCalled()
+    expect(openVisualDocument).not.toHaveBeenCalled()
+  })
+
+  it('routes the complete VisualDocument lifecycle through one strict IPC surface', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const handlers = {
+      getVisualDocumentStatus: vi.fn(async () => ({ ok: true })),
+      openVisualDocument: vi.fn(async (request: unknown) => request),
+      insertVisualDocumentArtifact: vi.fn(async (request: unknown) => request),
+      updateVisualDocumentContext: vi.fn(async (request: unknown) => request),
+      saveVisualDocumentAnnotations: vi.fn(async (request: unknown) => request),
+      exportVisualReviewPacket: vi.fn(async (request: unknown) => request),
+      createVisualCandidateRevision: vi.fn(async (request: unknown) => request),
+      acceptVisualCandidateRevision: vi.fn(async (request: unknown) => request),
+      rejectVisualCandidateRevision: vi.fn(async (request: unknown) => request)
+    }
+    const dispatcher = registerAppIpcHandlers(registerOptions(handlers as never))
+    const sender = createSender(911)
+    const requests = [
+      ['visual-document:status', { workspaceRoot: '/tmp/project' }, handlers.getVisualDocumentStatus],
+      ['visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1' }, handlers.openVisualDocument],
+      ['visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }, handlers.insertVisualDocumentArtifact],
+      ['visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }, handlers.updateVisualDocumentContext],
+      ['visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }, handlers.saveVisualDocumentAnnotations],
+      ['visual-document:export-review-packet', { workspaceRoot: '/tmp/project' }, handlers.exportVisualReviewPacket],
+      ['visual-document:create-candidate', {
+        workspaceRoot: '/tmp/project',
+        candidatePath: '/tmp/candidate.png',
+        summary: 'Improved layout',
+        reviewEvidence: {
+          tool: 'visual_artifact_review',
+          ok: true,
+          reviewedArtifactPath: '/tmp/candidate.png',
+          reviewedArtifactHash: 'a'.repeat(64),
+          reviewedAt: '2026-07-12T00:00:00.000Z',
+          score: { overall: 0.9, dimensions: 1, nonEmpty: 1, background: 1, semantic: 0.92, warnings: [] },
+          semantic: { pass: true, summary: 'Passed review.', violations: [], repairInstructions: [] },
+          repairable: false,
+          warnings: []
+        }
+      }, handlers.createVisualCandidateRevision],
+      ['visual-document:accept-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.acceptVisualCandidateRevision],
+      ['visual-document:reject-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }, handlers.rejectVisualCandidateRevision]
+    ] as const
+
+    for (const [channel, payload, handler] of requests) {
+      await dispatcher.invoke(channel, payload, sender)
+      expect(handler).toHaveBeenCalledOnce()
+    }
+    expect(handlers.getVisualDocumentStatus).toHaveBeenCalledWith('/tmp/project')
+    expect(handlers.acceptVisualCandidateRevision).toHaveBeenCalledWith({
+      workspaceRoot: '/tmp/project',
+      revisionId: 'revision-1'
+    })
   })
 
   it('returns a native file drag fallback when the sender cannot start desktop drags', async () => {

@@ -21,6 +21,7 @@ from .assessment import bind_target_digest, run_a0, run_a1, run_a2
 from .events import EventStore, utc_now_iso
 from .extractor import extract_dag
 from .graph import ThreadGraph
+from .incremental import TraceStagingCache, watermark_regresses
 from .llm import LLM
 from .snapshot import (
     EXTRACTOR_VERSION,
@@ -49,6 +50,7 @@ class Engine:
         self._registries: dict[str, ArtifactRegistry] = {}
         self._lock = threading.RLock()
         self._compile_locks: dict[str, threading.RLock] = {}
+        self._trace_staging = TraceStagingCache(storage_dir)
         if storage_dir:
             os.makedirs(storage_dir, exist_ok=True)
         self._event_store = EventStore(
@@ -174,22 +176,51 @@ class Engine:
         # Model extraction and verification can take minutes. A process-wide lock
         # made status reads and unrelated threads wait for the whole compile.
         with self._compile_lock(thread_id):
+            current = self.latest_snapshot(thread_id)
+            current_graph = self.get(thread_id) if current is not None else None
+            if current is not None and not rebuild and watermark_regresses(
+                current.input_watermark, str(target_watermark),
+            ):
+                raise ValueError(
+                    "targetWatermark must not precede the committed input watermark"
+                )
             registry = self._registry(
                 project_key, workspace_root=workspace_root, project_root=project_root,
             )
-            input_digest = self._update_input_digest(
-                thread_id=thread_id, target_watermark=str(target_watermark), reason=reason,
-                trace=trace, workspace_root=workspace_root, project_root=project_root,
-                project_key=project_key, rebuild=rebuild, threshold=threshold,
-                access_policy=access_policy, rebuild_rationale=rebuild_rationale,
-                # Artifact lifecycle is an input even when the runtime trace and
-                # watermark are unchanged.  Omitting it here would make an
-                # ArtifactContentChanged update incorrectly replay the old snapshot.
-                registry_digest=registry.state_digest(),
+            staged = self._trace_staging.begin(
+                thread_id=thread_id,
+                target_watermark=str(target_watermark),
+                trace=trace,
+                committed_graph=current_graph,
+                rebuild=rebuild,
             )
+            incremental_trace = list(staged.trace)
+            registry_digest = registry.state_digest()
+            committed_registry_digest = (
+                current_graph.meta.get("artifactRegistryDigest")
+                if current_graph is not None else None
+            )
+            no_op_against_committed = bool(
+                current is not None
+                and current_graph is not None
+                and not rebuild
+                and not incremental_trace
+                and str(target_watermark) == current.input_watermark
+                and committed_registry_digest == registry_digest
+                and current_graph.meta.get("inputDigest")
+            )
+            input_digest = str(current_graph.meta["inputDigest"]) \
+                if no_op_against_committed else self._update_input_digest(
+                    thread_id=thread_id, target_watermark=str(target_watermark), reason=reason,
+                    trace=incremental_trace, workspace_root=workspace_root, project_root=project_root,
+                    project_key=project_key, rebuild=rebuild, threshold=threshold,
+                    access_policy=access_policy, rebuild_rationale=rebuild_rationale,
+                    # Artifact lifecycle is an input even when the runtime trace and
+                    # watermark are unchanged. Omitting it would make content changes
+                    # incorrectly replay the old snapshot.
+                    registry_digest=registry_digest,
+                )
             previous_status = self._updates.get(thread_id) or self._load_update_status(thread_id)
-            current = self.latest_snapshot(thread_id)
-            current_graph = self.get(thread_id) if current is not None else None
             prior_input_digest = (previous_status or {}).get("inputDigest") or (
                 current_graph.meta.get("inputDigest") if current_graph is not None else None
             )
@@ -213,6 +244,7 @@ class Engine:
                     "priority": priority,
                     "projectKey": project_key,
                     "inputDigest": input_digest,
+                    **staged.summary(),
                 },
             )
             if current is not None and prior_input_digest == input_digest:
@@ -226,6 +258,7 @@ class Engine:
                 }
                 self._updates[thread_id] = replay
                 self._persist_update_status(thread_id)
+                self._trace_staging.complete(staged)
                 return {
                     "update": replay, "snapshot": current.to_dict(),
                     "delta": {"new_nodes": [], "new_edges": []}, "verification": None,
@@ -244,11 +277,13 @@ class Engine:
                 "queuedEventId": queued_event["eventId"],
                 "startedAt": utc_now_iso(),
                 "error": None,
+                "graphState": "staging",
+                "traceStaging": staged.summary(),
             }
             self._updates[thread_id] = status
             self._persist_update_status(thread_id)
             try:
-                base = None if rebuild else self.get(thread_id)
+                base = None if rebuild else current_graph
                 graph = ThreadGraph.from_dict(base.to_dict()) if base is not None else ThreadGraph(thread_id)
                 graph.meta["inputDigest"] = input_digest
                 graph.meta["scope"] = {
@@ -258,10 +293,12 @@ class Engine:
                     "accessPolicy": dict(access_policy or {}),
                 }
 
-                if trace:
+                if incremental_trace:
                     if self.llm is None:
                         raise RuntimeError("no independent Model Router client configured for extraction/review")
-                    extracted = extract_dag(trace, self.llm, thread_id, artifact_registry=registry)
+                    extracted = extract_dag(
+                        incremental_trace, self.llm, thread_id, artifact_registry=registry,
+                    )
                     if rebuild or base is None:
                         extracted.meta.update(graph.meta)
                         graph = extracted
@@ -277,14 +314,25 @@ class Engine:
                 # still invalidate the compiler input.
                 input_digest = self._update_input_digest(
                     thread_id=thread_id, target_watermark=str(target_watermark), reason=reason,
-                    trace=trace, workspace_root=workspace_root, project_root=project_root,
+                    trace=incremental_trace, workspace_root=workspace_root, project_root=project_root,
                     project_key=project_key, rebuild=rebuild, threshold=threshold,
                     access_policy=access_policy, rebuild_rationale=rebuild_rationale,
                     registry_digest=registry.state_digest(),
                 )
                 graph.meta["inputDigest"] = input_digest
+                graph.meta["traceIngestion"] = self._trace_staging.committed_metadata(staged)
+                graph.meta["artifactRegistryDigest"] = registry.state_digest()
                 status["inputDigest"] = input_digest
                 self._sync_registry(graph, registry)
+                self._trace_staging.persist_provisional_graph(
+                    staged, graph, phase="verification",
+                    temporary_edge_count=len(delta.get("new_edges") or []),
+                )
+                status.update({
+                    "graphState": "provisional",
+                    "traceStaging": staged.summary(),
+                })
+                self._persist_update_status(thread_id)
                 if graph.edges:
                     if self.llm is None:
                         raise RuntimeError("no independent verifier configured")
@@ -316,8 +364,10 @@ class Engine:
                     status.update({
                         "state": "fresh", "completedAt": utc_now_iso(),
                         "currentWatermark": current.input_watermark, "snapshotDigest": current.digest,
+                        "graphState": "committed",
                     })
                     self._persist_update_status(thread_id)
+                    self._trace_staging.complete(staged)
                     return {"update": dict(status), "snapshot": current.to_dict(),
                             "delta": {"new_nodes": [], "new_edges": []}, "verification": verification,
                             "idempotent": True, "events": [queued_event]}
@@ -338,6 +388,7 @@ class Engine:
                     "state": "fresh", "completedAt": utc_now_iso(),
                     "currentWatermark": candidate.input_watermark,
                     "snapshotDigest": candidate.digest,
+                    "graphState": "committed",
                 })
                 self._persist_update_status(thread_id)
                 committed_event = self._event_store.append(
@@ -359,15 +410,19 @@ class Engine:
                         "completedAt": status["completedAt"],
                     },
                 )
+                self._trace_staging.complete(staged)
                 return {
                     "update": dict(status), "snapshot": candidate.to_dict(), "delta": delta,
                     "verification": verification, "idempotent": False,
                     "events": [queued_event, committed_event],
                 }
             except Exception as exc:
+                self._trace_staging.fail(staged, exc)
                 status.update({
                     "state": "error", "completedAt": utc_now_iso(),
                     "error": {"type": type(exc).__name__, "message": str(exc)},
+                    "graphState": "failed",
+                    "traceStaging": staged.summary(),
                 })
                 self._persist_update_status(thread_id)
                 raise
@@ -395,6 +450,8 @@ class Engine:
         # last valid snapshot remains readable while its successor is compiled.
         status = dict(self._updates.get(thread_id) or self._load_update_status(thread_id) or {})
         snapshot = self.latest_snapshot(thread_id)
+        committed_graph = self.get(thread_id) if snapshot is not None else None
+        staging = self._trace_staging.status(thread_id)
         return {
             "threadId": thread_id,
             "status": status.get("state", "fresh" if snapshot else "dirty"),
@@ -407,7 +464,17 @@ class Engine:
             "reason": status.get("reason"),
             "priority": status.get("priority"),
             "snapshot": snapshot.to_dict() if snapshot else None,
+            "nodeCount": len(committed_graph.nodes) if committed_graph is not None else 0,
+            "edgeCount": len(committed_graph.edges) if committed_graph is not None else 0,
+            "graphState": status.get("graphState") or (
+                staging.get("status") if staging else "committed" if snapshot else "absent"
+            ),
+            "staging": staging,
         }
+
+    def provisional_graph(self, thread_id: str) -> Optional[ThreadGraph]:
+        """Return the isolated compile candidate, never the committed read model."""
+        return self._trace_staging.provisional_graph(thread_id)
 
     def _sync_registry(self, graph: ThreadGraph, registry: ArtifactRegistry) -> None:
         stale_roots: list[str] = []
@@ -859,9 +926,11 @@ class Engine:
         with open(path, encoding="utf-8") as fh:
             status = json.load(fh)
         if status.get("state") == "updating":
-            status = {**status, "state": "error", "error": {
-                "type": "InterruptedUpdate", "message": "worker restarted during update; retry through /updates",
+            message = "worker restarted during update; retry through /updates"
+            status = {**status, "state": "error", "graphState": "failed", "error": {
+                "type": "InterruptedUpdate", "message": message,
             }}
+            self._trace_staging.interrupt(thread_id, message)
             self._updates[thread_id] = status
             self._persist_update_status(thread_id)
         return status

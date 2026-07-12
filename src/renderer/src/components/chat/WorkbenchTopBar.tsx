@@ -8,6 +8,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  CircleAlert,
   Code2,
   ClipboardList,
   Download,
@@ -41,7 +42,7 @@ export type RightPanelMode =
   | 'sdd-ai'
   | 'checkpoints'
   | 'paper'
-  | 'figure-style'
+  | 'visual-review'
   | 'child-agents'
   | null
 
@@ -58,6 +59,7 @@ type Props = {
   onOpenSideChat?: () => void
   childAgentCount?: number
   childAgentRunningCount?: number
+  childAgentAttentionCount?: number
   childAgentsOpen?: boolean
   onOpenChildAgents?: () => void
   terminalOpen?: boolean
@@ -77,6 +79,7 @@ export function WorkbenchTopBar({
   onOpenSideChat,
   childAgentCount = 0,
   childAgentRunningCount = 0,
+  childAgentAttentionCount = 0,
   childAgentsOpen = false,
   onOpenChildAgents,
   terminalOpen = false,
@@ -99,7 +102,7 @@ export function WorkbenchTopBar({
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
     { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },
-    { mode: 'figure-style' as const, label: t('rightPanelFigureStyle'), icon: Palette },
+    { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw },
@@ -457,7 +460,7 @@ export function WorkbenchTopBar({
         {typeof document === 'undefined' ? editorMenu : createPortal(editorMenu, document.body)}
       </div>
 
-      {onOpenChildAgents && childAgentCount > 0 ? (
+      {onOpenChildAgents && (childAgentCount > 0 || childAgentAttentionCount > 0) ? (
         <button
           type="button"
           onClick={onOpenChildAgents}
@@ -466,15 +469,25 @@ export function WorkbenchTopBar({
               ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
               : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
           }`}
-          aria-label={t('sidebarChildren')}
+          aria-label={childAgentAttentionCount > 0
+            ? t('sidebarChildrenNeedsAttention', { count: childAgentAttentionCount })
+            : t('sidebarChildren')}
           aria-pressed={childAgentsOpen}
-          title={t('sidebarChildren')}
+          title={childAgentAttentionCount > 0
+            ? t('sidebarChildrenNeedsAttention', { count: childAgentAttentionCount })
+            : t('sidebarChildren')}
         >
           <Bot className="h-4 w-4" strokeWidth={1.75} />
-          <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
-            {Math.min(childAgentCount, 9)}
-          </span>
-          {childAgentRunningCount > 0 ? (
+          {childAgentCount > 0 ? (
+            <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-accent px-1 text-[10px] font-semibold leading-none text-white">
+              {Math.min(childAgentCount, 9)}
+            </span>
+          ) : null}
+          {childAgentAttentionCount > 0 ? (
+            <span className="absolute -bottom-1 -right-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-red-500 px-0.5 text-white shadow-[0_0_0_2px_rgba(239,68,68,0.18)]">
+              <CircleAlert className="h-3 w-3" strokeWidth={2.2} aria-hidden="true" />
+            </span>
+          ) : childAgentRunningCount > 0 ? (
             <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 animate-pulse rounded-full bg-emerald-500 shadow-[0_0_0_2px_rgba(16,185,129,0.18)]" />
           ) : null}
         </button>

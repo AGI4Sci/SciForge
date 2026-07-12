@@ -9,6 +9,7 @@ import {
   CircleHelp,
   CornerUpLeft,
   Clock3,
+  ExternalLink,
   Loader2,
   PanelRightClose
 } from 'lucide-react'
@@ -43,12 +44,14 @@ import {
 import { MessageTimeline } from './MessageTimeline'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 import { prepareImageAttachmentUpload } from '../../lib/image-attachment-upload'
+import { buildImageGenerationWorkflowPrompt } from '../../lib/image-generation-chat'
 import {
-  buildImageGenerationDisplayText,
-  buildImageGenerationWorkflowPrompt
-} from '../../lib/image-generation-chat'
+  readRightPanelContextState,
+  rememberRightPanelContextState,
+  rightPanelContextStateKey
+} from '../right-panel-context-state'
 
-type TFunction = (k: string, opts?: Record<string, unknown>) => string
+export type ChildAgentTFunction = (k: string, opts?: Record<string, unknown>) => string
 
 export type ChildAgentTranscriptState =
   | { status: 'idle' }
@@ -78,6 +81,7 @@ export type ChildAgentsPanelProps = {
   error: string | null
   focusChildId?: string | null
   focusChildRequestKey?: number
+  onOpenChildInFocus?: (child: AgentRuntimeChild) => void
   onCollapse: () => void
   className?: string
 }
@@ -88,7 +92,7 @@ export type ChildAgentNavigationCrumb = {
   label: string
 }
 
-type ChildComposerDraft = {
+export type ChildComposerDraft = {
   attachments: AttachmentReference[]
   fileReferences: ComposerFileReference[]
   uploadBusy: boolean
@@ -100,6 +104,12 @@ const EMPTY_CHILD_COMPOSER_DRAFT: ChildComposerDraft = {
   fileReferences: [],
   uploadBusy: false,
   uploadError: null
+}
+
+type RememberedChildPanelState = {
+  selectedChildId: string | null
+  navigationPath: ChildAgentNavigationCrumb[]
+  composerDrafts: Record<string, ChildComposerDraft>
 }
 
 export type ChildAgentsPanelViewProps = {
@@ -123,6 +133,7 @@ export type ChildAgentsPanelViewProps = {
   onSelectChild: (childId: string) => void
   onNavigateToDepth?: (depth: number) => void
   onOpenSelectedChildren?: (child: AgentRuntimeChild) => void
+  onOpenChildInFocus?: (child: AgentRuntimeChild) => void
   onSideInputChange: (threadId: string, value: string) => void
   onSideSend: (
     threadId: string,
@@ -144,7 +155,7 @@ export type ChildAgentsPanelViewProps = {
   onSideReasoningEffortChange: (threadId: string, effort: ComposerReasoningEffort) => void
   onCollapse: () => void
   className?: string
-  t: TFunction
+  t: ChildAgentTFunction
 }
 
 function messageFromError(error: unknown): string {
@@ -224,6 +235,50 @@ export function filterDirectChildAgents(
   return [...deduped.values()]
 }
 
+export type ChildAgentAttemptInfo = {
+  current: number
+  total: number
+}
+
+/**
+ * Identify real retries without collapsing them. Repeated native/event records
+ * have already been removed by filterDirectChildAgents; records that remain
+ * with the same runtime, label and prompt are distinct attempts (usually from
+ * a restarted parent turn) and should be presented as such.
+ */
+export function childAgentAttemptInfo(
+  children: readonly AgentRuntimeChild[]
+): Map<string, ChildAgentAttemptInfo> {
+  const groups = new Map<string, AgentRuntimeChild[]>()
+  for (const child of children) {
+    const name = (child.name?.trim() || child.label?.trim() || '').toLocaleLowerCase()
+    const prompt = child.prompt?.trim().replace(/\s+/g, ' ').toLocaleLowerCase() ?? ''
+    if (!name || !prompt) continue
+    const key = `${child.runtimeId}\u0000${name}\u0000${prompt}`
+    groups.set(key, [...(groups.get(key) ?? []), child])
+  }
+
+  const attempts = new Map<string, ChildAgentAttemptInfo>()
+  for (const group of groups.values()) {
+    if (group.length < 2) continue
+    const ordered = [...group].sort((a, b) => {
+      const aTime = childCreatedTime(a)
+      const bTime = childCreatedTime(b)
+      return aTime - bTime || a.id.localeCompare(b.id)
+    })
+    ordered.forEach((child, index) => attempts.set(child.id, {
+      current: index + 1,
+      total: ordered.length
+    }))
+  }
+  return attempts
+}
+
+function childCreatedTime(child: AgentRuntimeChild): number {
+  const parsed = Date.parse(child.createdAt ?? child.startedAt ?? child.updatedAt ?? '')
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
 function childStatusOrder(status: AgentRuntimeChildStatus): number {
   switch (status) {
     case 'running':
@@ -261,7 +316,7 @@ export function preferredChildAgentId(
   return sorted[0]?.id ?? null
 }
 
-export function childAgentStatusLabel(status: AgentRuntimeChildStatus, t: TFunction): string {
+export function childAgentStatusLabel(status: AgentRuntimeChildStatus, t: ChildAgentTFunction): string {
   switch (status) {
     case 'queued':
       return t('sidebarChildrenStatusQueued')
@@ -315,7 +370,7 @@ function ChildStatusBadge({
   t
 }: {
   status: AgentRuntimeChildStatus
-  t: TFunction
+  t: ChildAgentTFunction
 }): ReactElement {
   return (
     <span
@@ -328,7 +383,7 @@ function ChildStatusBadge({
   )
 }
 
-function childKindLabel(child: AgentRuntimeChild, t: TFunction): string {
+function childKindLabel(child: AgentRuntimeChild, t: ChildAgentTFunction): string {
   switch (child.kind) {
     case 'workflow':
       return t('sidebarChildrenKindWorkflow')
@@ -346,7 +401,7 @@ function formatNumber(value: number): string {
   return value.toLocaleString('en-US')
 }
 
-export function formatChildUsage(child: AgentRuntimeChild, t: TFunction): string {
+export function formatChildUsage(child: AgentRuntimeChild, t: ChildAgentTFunction): string {
   const usage = child.usage
   if (!usage) return t('sidebarChildrenUsageUnavailable')
   const pieces: string[] = []
@@ -550,7 +605,7 @@ function compactToolPayloadText(text: string): string {
 function transcriptToolSummary(
   entry: AgentRuntimeChildTranscriptEntry,
   toolName: string,
-  t: TFunction
+  t: ChildAgentTFunction
 ): string {
   const rawSummary = entry.summary?.trim() || toolName || entry.status?.trim() || t('toolKindTool')
   const payload = compactToolPayloadText(entry.text?.trim() ?? '')
@@ -580,7 +635,7 @@ function transcriptToolStatus(status: string | undefined): ToolBlock['status'] {
 
 function transcriptEntryToBlock(
   entry: AgentRuntimeChildTranscriptEntry,
-  t: TFunction
+  t: ChildAgentTFunction
 ): ChatBlock | null {
   const text = transcriptEntryDisplayText(entry)
   switch (entry.kind) {
@@ -626,7 +681,7 @@ function transcriptEntryToBlock(
 function childTranscriptBlocks(
   child: AgentRuntimeChild,
   state: ChildAgentTranscriptState,
-  t: TFunction
+  t: ChildAgentTFunction
 ): ChatBlock[] {
   if (state.status === 'loaded' && state.childId === child.id) {
     const blocks = transcriptEntriesForDisplay(state.transcript)
@@ -682,7 +737,7 @@ function ChildAgentOverview({
   t
 }: {
   child: AgentRuntimeChild
-  t: TFunction
+  t: ChildAgentTFunction
 }): ReactElement {
   const name = childAgentShortName(child)
 
@@ -749,7 +804,7 @@ function ChildTranscriptProcessGroup({
 }: {
   blocks: ChatBlock[]
   child: AgentRuntimeChild
-  t: TFunction
+  t: ChildAgentTFunction
 }): ReactElement {
   const viewportRef = useRef<HTMLDivElement | null>(null)
   const sections = useMemo(() => groupProcessSections(blocks), [blocks])
@@ -782,7 +837,7 @@ function ChildAgentTranscriptTimeline({
 }: {
   child: AgentRuntimeChild
   state: ChildAgentTranscriptState
-  t: TFunction
+  t: ChildAgentTFunction
 }): ReactElement {
   if (state.status === 'loading' && state.childId === child.id) {
     return (
@@ -837,30 +892,7 @@ function childRuntimeCapabilities(
   }
 }
 
-function ChildAgentChatSurface({
-  child,
-  side,
-  loading,
-  runtimeConnection,
-  composerPickList,
-  composerModelGroups,
-  activeAgentRuntime,
-  runtimeCapabilities,
-  composerDraft,
-  workspaceRoot,
-  onInputChange,
-  onSend,
-  onPickAttachments,
-  onPasteClipboardImage,
-  onRemoveAttachment,
-  onAddFileReference,
-  onRemoveFileReference,
-  onRemoveQueuedMessage,
-  onInterrupt,
-  onModelChange,
-  onReasoningEffortChange,
-  t
-}: {
+export type FocusedChildAgentWorkbenchProps = {
   child: AgentRuntimeChild
   side: SideConversation | null
   loading: boolean
@@ -890,8 +922,38 @@ function ChildAgentChatSurface({
   onInterrupt: (threadId: string) => void
   onModelChange: (threadId: string, model: string) => void
   onReasoningEffortChange: (threadId: string, effort: ComposerReasoningEffort) => void
-  t: TFunction
-}): ReactElement {
+  t: ChildAgentTFunction
+}
+
+/**
+ * Full child-thread timeline and composer without panel chrome. The right-hand
+ * child inspector and the central focus workspace share this surface so their
+ * interaction capabilities stay in sync.
+ */
+export function FocusedChildAgentWorkbench({
+  child,
+  side,
+  loading,
+  runtimeConnection,
+  composerPickList,
+  composerModelGroups,
+  activeAgentRuntime,
+  runtimeCapabilities,
+  composerDraft,
+  workspaceRoot,
+  onInputChange,
+  onSend,
+  onPickAttachments,
+  onPasteClipboardImage,
+  onRemoveAttachment,
+  onAddFileReference,
+  onRemoveFileReference,
+  onRemoveQueuedMessage,
+  onInterrupt,
+  onModelChange,
+  onReasoningEffortChange,
+  t
+}: FocusedChildAgentWorkbenchProps): ReactElement {
   const [mode, setMode] = useState<'plan' | 'agent'>('agent')
   const threadId = childOpenThreadId(child)
   const effectiveCapabilities = childRuntimeCapabilities(runtimeCapabilities)
@@ -911,9 +973,7 @@ function ChildAgentChatSurface({
     onSend(side.threadId, text, {
       attachmentIds: composerDraft.attachments.map((attachment) => attachment.id),
       fileReferences: composerDraft.fileReferences,
-      ...(imageGeneration
-        ? { displayText: buildImageGenerationDisplayText(side.input) }
-        : {})
+      ...(imageGeneration && side.input.trim() ? { displayText: side.input.trim() } : {})
     })
   }
 
@@ -1036,6 +1096,7 @@ export function ChildAgentsPanelView({
   onSelectChild,
   onNavigateToDepth,
   onOpenSelectedChildren,
+  onOpenChildInFocus,
   onSideInputChange,
   onSideSend,
   onSidePickAttachments,
@@ -1053,6 +1114,7 @@ export function ChildAgentsPanelView({
 }: ChildAgentsPanelViewProps): ReactElement {
   const directChildren = sortChildAgents(filterDirectChildAgents(children, activeThreadId, activeRuntimeId))
   const selectedChild = directChildren.find((child) => child.id === selectedChildId) ?? directChildren[0] ?? null
+  const attemptsByChildId = childAgentAttemptInfo(directChildren)
   const runningCount = directChildren.filter((child) => child.status === 'running' || child.status === 'queued').length
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null)
   const transcriptScrollKey = useMemo(() => {
@@ -1145,6 +1207,10 @@ export function ChildAgentsPanelView({
           >
             {directChildren.map((child) => {
               const name = childAgentShortName(child)
+              const attempt = attemptsByChildId.get(child.id)
+              const displayName = attempt
+                ? `${name} · ${t('sidebarChildrenAttempt', attempt)}`
+                : name
               const active = selectedChild?.id === child.id
               return (
                 <button
@@ -1152,7 +1218,7 @@ export function ChildAgentsPanelView({
                   type="button"
                   role="tab"
                   aria-selected={active}
-                  title={`${name}\n${childAgentStatusLabel(child.status, t)}`}
+                  title={`${displayName}\n${childAgentStatusLabel(child.status, t)}`}
                   onClick={() => onSelectChild(child.id)}
                   className={`inline-flex h-9 max-w-44 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition ${
                     active
@@ -1163,7 +1229,7 @@ export function ChildAgentsPanelView({
                   <span className={active ? 'text-accent' : 'text-ds-faint'}>
                     <ChildAgentStatusIcon status={child.status} className="h-3.5 w-3.5" />
                   </span>
-                  <span className="min-w-0 truncate">{name}</span>
+                  <span className="min-w-0 truncate">{displayName}</span>
                 </button>
               )
             })}
@@ -1187,21 +1253,34 @@ export function ChildAgentsPanelView({
           </div>
         ) : selectedChild ? (
           <div className="flex min-h-0 flex-1 flex-col">
-            {childOpenThreadId(selectedChild) && onOpenSelectedChildren ? (
-              <div className="flex shrink-0 justify-end border-b border-ds-border-muted px-3 py-2">
-                <button
-                  type="button"
-                  onClick={() => onOpenSelectedChildren(selectedChild)}
-                  className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-                  title={t('sidebarChildrenViewNested')}
-                >
-                  {t('sidebarChildrenViewNested')}
-                  <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.8} />
-                </button>
+            {childOpenThreadId(selectedChild) && (onOpenChildInFocus || onOpenSelectedChildren) ? (
+              <div className="flex shrink-0 justify-end gap-2 border-b border-ds-border-muted px-3 py-2">
+                {onOpenChildInFocus ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenChildInFocus(selectedChild)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-accent px-2.5 text-[11.5px] font-medium text-white transition hover:bg-accent/90"
+                    title={t('sidebarChildrenOpenInFocus')}
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" strokeWidth={1.8} />
+                    {t('sidebarChildrenOpenInFocus')}
+                  </button>
+                ) : null}
+                {onOpenSelectedChildren ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenSelectedChildren(selectedChild)}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border-muted bg-ds-card/72 px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                    title={t('sidebarChildrenViewNested')}
+                  >
+                    {t('sidebarChildrenViewNested')}
+                    <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.8} />
+                  </button>
+                ) : null}
               </div>
             ) : null}
             {childOpenThreadId(selectedChild) ? (
-              <ChildAgentChatSurface
+              <FocusedChildAgentWorkbench
                 child={selectedChild}
                 side={selectedSide}
                 loading={sideLoading}
@@ -1328,6 +1407,7 @@ export function ChildAgentsPanel({
   error,
   focusChildId = null,
   focusChildRequestKey = 0,
+  onOpenChildInFocus,
   onCollapse,
   className = ''
 }: ChildAgentsPanelProps): ReactElement {
@@ -1355,6 +1435,7 @@ export function ChildAgentsPanel({
   const [attachingThreadId, setAttachingThreadId] = useState<string | null>(null)
   const [composerDrafts, setComposerDrafts] = useState<Record<string, ChildComposerDraft>>({})
   const appliedFocusRequestKeyRef = useRef<number | null>(null)
+  const restoringContextKeyRef = useRef<string | null>(null)
   const activeRuntimeId = activeThread?.runtimeId
   const currentParent = navigationPath[navigationPath.length - 1]
   const currentParentThreadId = currentParent?.threadId ?? activeThreadId
@@ -1387,11 +1468,35 @@ export function ChildAgentsPanel({
   const selectedTranscriptKey = selectedChild
     ? `${currentParentThreadId ?? ''}:${selectedChild.runtimeId}:${selectedChild.id}:${selectedChild.parentTurnId ?? ''}:${selectedChild.updatedAt ?? ''}:${transcriptRefKey(selectedChild.transcriptRef)}`
     : ''
+  const contextStateKey = rightPanelContextStateKey({
+    mode: 'child-agents',
+    threadId: activeThreadId
+  })
 
   useEffect(() => {
-    setNavigationPath([])
-    setComposerDrafts({})
-  }, [activeThreadId])
+    const remembered = readRightPanelContextState<RememberedChildPanelState>(contextStateKey)
+    restoringContextKeyRef.current = contextStateKey
+    setSelectedChildId(remembered?.selectedChildId ?? null)
+    setNavigationPath(remembered?.navigationPath ?? [])
+    setComposerDrafts(Object.fromEntries(
+      Object.entries(remembered?.composerDrafts ?? {}).map(([threadId, draft]) => [
+        threadId,
+        { ...draft, uploadBusy: false }
+      ])
+    ))
+  }, [contextStateKey])
+
+  useEffect(() => {
+    if (restoringContextKeyRef.current === contextStateKey) {
+      restoringContextKeyRef.current = null
+      return
+    }
+    rememberRightPanelContextState<RememberedChildPanelState>(contextStateKey, {
+      selectedChildId,
+      navigationPath,
+      composerDrafts
+    })
+  }, [composerDrafts, contextStateKey, navigationPath, selectedChildId])
 
   const patchComposerDraft = (
     threadId: string,
@@ -1456,10 +1561,12 @@ export function ChildAgentsPanel({
   }
 
   useEffect(() => {
-    setSelectedChildId(null)
+    setSelectedChildId((current) =>
+      current && directChildren.some((child) => child.id === current) ? current : null
+    )
     setTranscriptState({ status: 'idle' })
     appliedFocusRequestKeyRef.current = null
-  }, [currentParentThreadId])
+  }, [currentParentThreadId, directChildren])
 
   useEffect(() => {
     setSelectedChildId((current) => preferredChildAgentId(directChildren, current))
@@ -1602,6 +1709,7 @@ export function ChildAgentsPanel({
           }
         ])
       }}
+      onOpenChildInFocus={onOpenChildInFocus}
       onSideInputChange={(threadId, value) => sideData.setSideInput(threadId, value)}
       onSideSend={(threadId, text, payload) => {
         void sideData.sendSideMessage(threadId, text, payload).then((sent) => {

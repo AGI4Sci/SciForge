@@ -222,8 +222,8 @@ SciForge 将科研能力拆成可单独启动、测试和审计的 worker：
 | `paper-radar` | GUI / MCP 使用的论文 profile、同步、搜索、排名和 digest worker；共享 core 由 worker 包自身拥有 |
 | `search` | arXiv、bioRxiv、Europe PMC、Semantic Scholar 与可选 CNS web search 的科研检索 |
 | `scientific-plotting` | 参考图准备、风格识别、受控绘图、评分和修复建议 |
-| `image-generation` | 受控图片生成、Canvas review packet 到编辑意图、artifact manifest |
-| `canvas` | workspace-local 画布、artifact 插入、批注和 review packet |
+| `image-generation` | 受控图片生成、VisualDocument 审改包到编辑意图、artifact manifest |
+| `visual-document` | workspace-local VisualDocument、artifact 插入、批注和候选版本验收 |
 | `ppt-master` | 科研汇报输出阶段、figure intake、布局 QA 和 PPTX export |
 | `write-assist` | 写作检索、PDF 文本提取和 bounded writing context |
 | `workflow` | 可视化 workflow 执行与 Agent-facing MCP facade |
@@ -412,7 +412,7 @@ npm run write-assist:start
 npm run schedule:start
 npm run paper-radar-mcp:start
 npm run image-generation:start
-npm run canvas:start
+npm run visual-document:start
 npm run ppt-master:start
 npm run runtime-inspector:start
 npm run workspace-intel:start
@@ -425,7 +425,7 @@ npm run workspace-intel:start
 3. 在设置页配置 Model Router。
 4. 选择默认工作目录。
 5. 在 Code 工作台创建线程，描述你的研究任务。
-6. 按需打开右侧 Evidence DAG、Paper Radar、Figure Style、Canvas、Plan、Files、Changes 或 Browser 面板。
+6. 按需打开右侧 Evidence DAG、Paper Radar、图片审改、Plan、Files、Changes 或 Browser 面板。
 7. 进入 Write、Workflow、Connect phone 或 Schedule 扩展工作链路。
 
 设置页还可以管理主题、字体、通知、运行时端口、sandbox、approval policy、Skill、MCP、Webhook、Relay、定时任务和错误日志。

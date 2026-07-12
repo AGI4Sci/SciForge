@@ -22,7 +22,7 @@ export default defineConfig({
           'bgc-discovery-mcp-node-entry': resolve('src/main/bgc-discovery-mcp-node-entry.ts'),
           'image-generation-mcp-node-entry': resolve('src/main/image-generation-mcp-node-entry.ts'),
           'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts'),
-          'sciforge-canvas-mcp-node-entry': resolve('src/main/sciforge-canvas-mcp-node-entry.ts'),
+          'visual-document-mcp-node-entry': resolve('src/main/visual-document-mcp-node-entry.ts'),
           'computer-use-mcp-node-entry': resolve('src/main/computer-use-mcp-node-entry.ts')
         }
       }

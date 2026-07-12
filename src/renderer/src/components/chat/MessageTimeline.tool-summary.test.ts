@@ -8,7 +8,7 @@ import { MessageTimeline, summarizeToolBlock } from './MessageTimeline'
 import { MessageBubble } from './message-timeline-bubbles'
 import {
   resolveMarkdownImageReference,
-  timelineCanvasArtifactsFromToolBlock,
+  timelineVisualReviewArtifactsFromToolBlock,
   timelineImagesFromToolBlock,
   timelineImagesFromToolBlocks,
   timelineVisualSnapshotsFromToolBlock
@@ -540,7 +540,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
       meta: { toolName: 'ppt_master_export_pptx' }
     })
 
-    expect(timelineCanvasArtifactsFromToolBlock(block)).toEqual([
+    expect(timelineVisualReviewArtifactsFromToolBlock(block)).toEqual([
       expect.objectContaining({
         artifactKind: 'ppt_export',
         pptxPath: '/tmp/project/ppt_nature/exports/nature.pptx',
@@ -579,99 +579,14 @@ describe('MessageTimeline local runtime metadata smoke', () => {
         runtimeConnection: 'ready',
         onRetryConnection: () => undefined,
         onOpenSettings: () => undefined,
-        onOpenImageArtifactInCanvas: () => undefined
+        onOpenImageArtifactInVisualReview: () => undefined
       })
     )
 
     expect(html).toContain('PPTX export')
-    expect(html).toContain('Open canvas review')
+    expect(html).toContain('Open visual review')
     expect(html).toContain('Copy file path')
     expect(html).not.toContain('Open original')
-  })
-
-  it('extracts generated images from canvas insertion tool artifacts', () => {
-    const block = toolBlock({
-      summary: 'sciforge_canvas_insert_artifact: inserted',
-      detail: JSON.stringify({
-        structuredContent: {
-          result: {
-            ok: true,
-            canvasId: 'nature-intro-canvas',
-            canvasDir: '/tmp/project/.sciforge/canvases/nature-intro-canvas',
-            shapeId: 'shape:nature-infographic-001',
-            artifact: {
-              artifactKind: 'generated_image',
-              outputPath: '/tmp/project/.sciforge/images/nature-infographic-001.png',
-              artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-infographic-001.artifact.json',
-              title: 'Nature Infographic',
-              sourceTool: 'image_generation'
-            }
-          }
-        }
-      }),
-      meta: { toolName: 'sciforge_canvas_insert_artifact' }
-    })
-
-    expect(timelineImagesFromToolBlock(block)).toEqual([
-      expect.objectContaining({
-        artifactKind: 'generated_image',
-        outputPath: '/tmp/project/.sciforge/images/nature-infographic-001.png',
-        artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-infographic-001.artifact.json',
-        workspaceRoot: '/tmp/project',
-        canvasId: 'nature-intro-canvas',
-        name: 'Nature Infographic',
-        sourceTool: 'image_generation'
-      })
-    ])
-  })
-
-  it('keeps the project workspace root when image artifacts are merged across tool blocks', () => {
-    const renderBlock = toolBlock({
-      id: 'tool_render',
-      summary: 'image_generation_render: rendered',
-      detail: JSON.stringify({
-        structuredContent: {
-          result: {
-            ok: true,
-            status: 'rendered',
-            outputPath: '/tmp/project/nature-infographic/nature-infographic-001.png',
-            manifestPath: '/tmp/project/nature-infographic/nature-infographic-001.manifest.json',
-            artifactManifestPath: '/tmp/project/.sciforge/artifacts/nature-infographic-001.generated-image.artifact.json'
-          }
-        }
-      }),
-      meta: { toolName: 'mcp_image_generation_image_generation_render' }
-    })
-    const canvasBlock = toolBlock({
-      id: 'tool_canvas',
-      summary: 'sciforge_canvas_insert_artifact: inserted',
-      detail: JSON.stringify({
-        structuredContent: {
-          result: {
-            ok: true,
-            canvasId: 'nature-intro-canvas',
-            canvasDir: '/tmp/project/.sciforge/canvases/nature-intro-canvas',
-            artifact: {
-              artifactKind: 'generated_image',
-              outputPath: '/tmp/project/nature-infographic/nature-infographic-001.png',
-              title: 'Nature Infographic',
-              sourceTool: 'image_generation'
-            }
-          }
-        }
-      }),
-      meta: { toolName: 'sciforge_canvas_insert_artifact' }
-    })
-
-    expect(timelineImagesFromToolBlocks([renderBlock, canvasBlock])).toEqual([
-      expect.objectContaining({
-        name: 'Nature Infographic',
-        path: '/tmp/project/nature-infographic/nature-infographic-001.png',
-        outputPath: '/tmp/project/nature-infographic/nature-infographic-001.png',
-        workspaceRoot: '/tmp/project',
-        canvasId: 'nature-intro-canvas'
-      })
-    ])
   })
 
   it('resolves assistant markdown relative images against same-turn MCP artifacts', () => {

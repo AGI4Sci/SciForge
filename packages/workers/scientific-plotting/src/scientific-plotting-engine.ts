@@ -5,9 +5,9 @@ import { homedir, tmpdir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import type {
-  FigureStyleReviewResult,
-  FigureStyleSimilarityScore,
-  FigureStyleSpec
+  FigureStyleSpec,
+  VisualStyleReviewResult,
+  VisualStyleSimilarityMetric
 } from './types'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
@@ -24,7 +24,6 @@ import {
   type ScientificPlottingDataMappingRequest,
   type ScientificPlottingDataMappingResult,
   type ScientificPlottingDraftHandoff,
-  type ScientificPlottingImagePolishRecommendation,
   type ScientificPlottingLabels,
   type ScientificPlottingManifest,
   type ScientificPlottingPlanRequest,
@@ -51,9 +50,6 @@ import {
   type ScientificPlottingStyleProfileSummary,
   type ScientificPlottingStyleProfilesRequest,
   type ScientificPlottingStyleProfilesResult,
-  type ScientificPlottingStyleTransferManifest,
-  type ScientificPlottingStyleTransferRequest,
-  type ScientificPlottingStyleTransferResult,
   type ScientificPlottingTemplate,
   type ScientificPlottingTemplateAdvice,
   type ScientificPlottingTemplateGuide,
@@ -64,10 +60,11 @@ import {
   buildScientificExternalSkillCatalog
 } from './scientific-skills-index'
 import {
-  buildFigureStyleApplyPlan,
-  extractFigureStyle,
-  reviewFigureStyleOutput
-} from './figure-style-extractor'
+  buildMatplotlibStyleAdapterFromFigureStyleSpec,
+  extractVisualStyleProfile,
+  figureStyleSpecFromVisualStyleProfile,
+  reviewVisualStyleSimilarity
+} from './visual-style-extractor'
 import {
   canonicalPath,
   extensionFromName,
@@ -250,10 +247,10 @@ export async function listScientificPlottingStyleProfiles(
       total: 1,
       selectedProfile: shapeStyleProfileForResult(selected, request.includeStyleSpec === true),
       recommendedNextTools: [
-        'scientific_plotting_plan',
+        'scientific_visual_plan',
         'scientific_plotting_map_data',
         'scientific_plotting_render',
-        'scientific_plotting_review'
+        'visual_artifact_review'
       ],
       warnings
     }
@@ -276,10 +273,10 @@ export async function listScientificPlottingStyleProfiles(
       profileMatches: matches,
       referenceProfile,
       recommendedNextTools: [
-        'scientific_plotting_plan',
+        'scientific_visual_plan',
         'scientific_plotting_map_data',
         'scientific_plotting_render',
-        'scientific_plotting_review'
+        'visual_artifact_review'
       ],
       warnings
     }
@@ -310,10 +307,10 @@ export async function listScientificPlottingStyleProfiles(
     profiles: matched.slice(0, topK).map((profile) => shapeStyleProfileForResult(profile, request.includeStyleSpec === true)),
     total: matched.length,
     recommendedNextTools: [
-      'scientific_plotting_plan',
+      'scientific_visual_plan',
       'scientific_plotting_map_data',
       'scientific_plotting_render',
-      'scientific_plotting_review'
+      'visual_artifact_review'
     ],
     warnings
   }
@@ -361,17 +358,9 @@ export function buildScientificFigureNeedClassification(
   const hasExplicitNodeEdges = /\bnodes?\b|\bedges?\b|from\s*[:=]|to\s*[:=]|json|节点|边|连接|步骤\s*[:：]|^\s*\d+[.)、]/im.test(normalizedTask)
   const looksLikeLongProse = normalizedTask.length > 520 || /according to the following|based on the following|one goal in|in this paper|we argue|we discuss|paper excerpt|根据以下内容|根据.*论文|文献内容|论文段落|这篇文章/i.test(normalizedTask)
   const needsResearchBrief = shouldRecommendResearchBrief(normalizedTask, primaryNeed, options.targetVenue)
-  const route = routeForFigureNeed(primaryNeed, {
-    hasExplicitNodeEdges,
-    looksLikeLongProse,
-    needsResearchBrief
-  })
-  const recommendedNextTool = needsResearchBrief
-    ? 'scientific_plotting_research_brief'
-    : route === 'controlled_plotting_renderer' || route === 'panel_layout_then_renderer'
-      ? 'scientific_plotting_map_data'
-      : 'image_generation_plan'
-  const avoidTemplates: ScientificPlottingTemplate[] = route === 'diagram_spec_or_image_generation' && !hasExplicitNodeEdges
+  const route = 'needs_clarification' as const
+  const recommendedNextTool = 'scientific_visual_plan' as const
+  const avoidTemplates: ScientificPlottingTemplate[] = looksLikeLongProse && !hasExplicitNodeEdges
     ? ['flowchart']
     : []
   const warnings = [
@@ -388,10 +377,10 @@ export function buildScientificFigureNeedClassification(
     secondaryNeeds,
     confidence,
     route,
-    routeReason: routeReasonForFigureNeed(primaryNeed, route, { hasExplicitNodeEdges, looksLikeLongProse, needsResearchBrief }),
+    routeReason: 'Figure-need classification does not select an executor. The calling model must submit a structured decision to scientific_visual_plan.',
     domain,
     recommendedNextTool,
-    requiredInputs: requiredInputsForFigureNeed(primaryNeed, route),
+    requiredInputs: requiredInputsForFigureNeed(primaryNeed),
     avoidTemplates,
     warnings
   }
@@ -517,13 +506,7 @@ export async function planScientificPlotting(
   const template = request.templateHint ?? templateForFigureNeed(figureNeed.primaryNeed, referenceProfile?.recommendedTemplate ?? taskTemplate)
   const isStyleTransfer = /style|paper|figure|nature|science|cell|neurips|iclr|论文|文献|风格|顶刊|顶会/i.test(task)
   const templateAdvice = buildTemplateAdvice(template, referenceProfile, undefined)
-  const toolRoutingRecommendation = buildScientificPlottingToolRoutingRecommendation(task, template)
   const researchBriefRecommendation = buildResearchBriefRecommendation(task, figureNeed, request.targetVenue)
-  const imagePolishRecommendation = buildImagePolishRecommendation(task, figureNeed, {
-    targetVenue: request.targetVenue,
-    researchBriefRecommended: researchBriefRecommendation?.recommended === true,
-    template
-  })
   const planSkillCatalog = buildScientificExternalSkillCatalog({
     figureNeeds: [figureNeed.primaryNeed, ...figureNeed.secondaryNeeds],
     domain: request.domain ?? figureNeed.domain
@@ -533,7 +516,7 @@ export async function planScientificPlotting(
   })
   const controlledTool = researchBriefRecommendation?.recommended
     ? 'scientific_plotting_research_brief'
-    : toolRoutingRecommendation?.preferredTool ?? 'scientific_plotting_render'
+    : 'scientific_plotting_render'
   return {
     ok: true,
     recommendedTemplate: template,
@@ -550,9 +533,7 @@ export async function planScientificPlotting(
     templateSelection: buildTemplateSelection(template, request, referenceProfile),
     templateGuides: scientificPlottingTemplateGuides(),
     figureNeed,
-    ...(toolRoutingRecommendation ? { toolRoutingRecommendation } : {}),
     ...(researchBriefRecommendation ? { researchBriefRecommendation } : {}),
-    ...(imagePolishRecommendation ? { imagePolishRecommendation } : {}),
     externalSkillCatalog: {
       recommendedSkillIds,
       primarySources: uniqueStrings(planSkillCatalog
@@ -570,16 +551,14 @@ export async function planScientificPlotting(
       ...warnings,
       ...figureNeed.warnings,
       ...(templateAdvice?.messages ?? []),
-      ...(toolRoutingRecommendation ? [toolRoutingRecommendation.reason] : []),
-      ...(researchBriefRecommendation ? [researchBriefRecommendation.reason] : []),
-      ...(imagePolishRecommendation ? [imagePolishRecommendation.reason] : [])
+      ...(researchBriefRecommendation ? [researchBriefRecommendation.reason] : [])
     ],
     guardrails: [
       'Do not emit executable shell or Python commands.',
       'Use K-Dense skills only as read-only plotting guidance.',
       'Use CNS/domain skills only as read-only planning guidance; do not execute third-party scripts.',
       'For paper figures, confirm figure conclusion, evidence logic, archetype, and export contract before rendering.',
-      'Use the image model only as a final visual polish layer for insets, callouts, panel stitching, or explanatory annotations; prefer gpt-image-2 and fall back to the configured Model Router image model if needed.',
+      'Template planning cannot change the route locked by scientific_visual_plan.',
       'Render with SciForge controlled templates and review the output before presenting it.',
       'Do not alter data values during style repair.'
     ],
@@ -610,6 +589,15 @@ export async function mapScientificPlottingData(
 ): Promise<ScientificPlottingDataMappingResult> {
   const task = request.task.trim()
   const warnings: string[] = []
+  if (!isControlledPlottingPlan(request.scientificVisualPlan)) {
+    return {
+      ok: false,
+      status: 'invalid_request',
+      message: 'scientific_plotting_map_data requires a route-locked deterministic_plot or hybrid_composite handoff from scientific_visual_plan.',
+      missingInputs: ['scientificVisualPlan'],
+      warnings
+    }
+  }
   if (!task) {
     return {
       ok: false,
@@ -691,6 +679,7 @@ export async function mapScientificPlottingData(
     const templateAdvice = buildTemplateAdvice(selected.template, referenceProfile, undefined)
     const renderRequest: ScientificPlottingRenderRequest = {
       workspaceRoot,
+      scientificVisualPlan: request.scientificVisualPlan,
       template: selected.template,
       data: selected.data,
       ...(Object.keys(labels).length > 0 ? { labels } : {}),
@@ -703,7 +692,7 @@ export async function mapScientificPlottingData(
       ...(request.reviewReferencePath ? { reviewReferencePath: request.reviewReferencePath } : {}),
       ...(request.outputDir ? { outputDir: request.outputDir } : {}),
       ...(request.outputScale ? { outputScale: request.outputScale } : {}),
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.autoRepair ? { autoRepair: request.autoRepair } : {})
     }
@@ -740,7 +729,7 @@ export async function mapScientificPlottingData(
         'This tool maps data into a controlled render request; it does not render or write files.',
         'Mapping may reshape records into template JSON, but it must not execute user code.',
         'If duplicate summary rows are aggregated, review the mapping warning before rendering.',
-        'Use scientific_plotting_render for artifact creation and scientific_plotting_review for style QA.'
+        'Use scientific_plotting_render for artifact creation and visual_artifact_review for semantic visual QA.'
       ]
     }
   } catch (error) {
@@ -758,268 +747,20 @@ export async function mapScientificPlottingData(
 export async function reviewScientificPlottingOutput(
   request: ScientificPlottingReviewRequest
 ): Promise<ScientificPlottingReviewResult> {
-  const baseReview = await reviewFigureStyleOutput({
+  const baseReview = await reviewVisualStyleSimilarity({
     workspaceRoot: request.workspaceRoot,
     referencePath: request.referencePath,
-    outputPath: request.outputPath,
-    minOverall: request.minOverall
+    outputPath: request.outputPath
   })
   if (!baseReview.ok) return baseReview
 
   const referenceProfile = await inferReferenceProfileFromReferencePath(request)
-  const templateAdvice = buildTemplateAdvice(request.template, referenceProfile, baseReview.score)
+  const templateAdvice = buildTemplateAdvice(request.template, referenceProfile, baseReview.metric)
   return {
     ...baseReview,
     ...(request.template ? { template: request.template } : {}),
     ...(referenceProfile ? { referenceProfile } : {}),
     ...(templateAdvice ? { templateAdvice } : {})
-  }
-}
-
-export async function runScientificPlottingStyleTransfer(
-  request: ScientificPlottingStyleTransferRequest
-): Promise<ScientificPlottingStyleTransferResult> {
-  const warnings: string[] = []
-  try {
-    const task = request.task.trim()
-    if (!task) {
-      return {
-        ok: false,
-        status: 'invalid_request',
-        message: 'Task is required.',
-        warnings
-      }
-    }
-    const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
-    const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir)
-    await mkdir(outputDir, { recursive: true })
-    const figureId = slugForFigureId(request.figureId ?? `v2-style-transfer-${new Date().toISOString()}`)
-
-    let preparedReference: Extract<ScientificPlottingPrepareReferenceResult, { ok: true }> | undefined
-    let referenceImagePath = request.reference?.referencePath?.trim()
-    let effectiveStyleSpec = request.styleSpec
-    let effectiveStyleSpecPath = request.styleSpecPath?.trim()
-
-    if (request.reference?.sourcePath?.trim()) {
-      const prepared = await prepareScientificPlottingReference({
-        workspaceRoot,
-        sourcePath: request.reference.sourcePath,
-        ...(request.reference.sourceType ? { sourceType: request.reference.sourceType } : {}),
-        ...(request.reference.page ? { page: request.reference.page } : {}),
-        ...(request.reference.cropBox ? { cropBox: request.reference.cropBox } : {}),
-        figureId: request.reference.figureId ?? `${figureId}-reference`,
-        outputDir,
-        ...(request.reference.dpi ? { dpi: request.reference.dpi } : {}),
-        extractStyle: true
-      })
-      if (!prepared.ok) {
-        return {
-          ok: false,
-          status: 'reference_failed',
-          message: prepared.message,
-          preparedReference: prepared,
-          warnings: [...warnings, ...(prepared.warnings ?? [])]
-        }
-      }
-      preparedReference = prepared
-      referenceImagePath = prepared.croppedImagePath
-      if (!effectiveStyleSpec && !effectiveStyleSpecPath && prepared.styleSpecPath) {
-        effectiveStyleSpecPath = prepared.styleSpecPath
-      }
-    }
-
-    const hasExplicitStyleSpec = Boolean(effectiveStyleSpec || effectiveStyleSpecPath)
-    if (request.styleProfileId?.trim() && hasExplicitStyleSpec) {
-      warnings.push('styleProfileId was ignored because explicit styleSpec/styleSpecPath was provided.')
-    }
-
-    const styleProfiles = await selectStyleProfilesForTransfer({
-      workspaceRoot,
-      referenceImagePath,
-      styleSpec: effectiveStyleSpec,
-      styleSpecPath: effectiveStyleSpecPath,
-      explicitStyleProfileId: hasExplicitStyleSpec ? undefined : request.styleProfileId,
-      warnings
-    })
-    if (request.styleProfileId?.trim() && !hasExplicitStyleSpec && styleProfiles && !styleProfiles.ok) {
-      return {
-        ok: false,
-        status: 'invalid_request',
-        message: styleProfiles.message,
-        preparedReference,
-        styleProfiles,
-        warnings
-      }
-    }
-    const selectedStyleProfileId = (!hasExplicitStyleSpec && request.styleProfileId?.trim()) ||
-      (!hasExplicitStyleSpec && styleProfiles?.ok ? styleProfiles.selectedProfile?.id : undefined)
-
-    const plan = await planScientificPlotting({
-      workspaceRoot,
-      task,
-      ...(request.templateHint ? { templateHint: request.templateHint } : {}),
-      ...(effectiveStyleSpec ? { styleSpec: effectiveStyleSpec } : {}),
-      ...(effectiveStyleSpecPath ? { styleSpecPath: effectiveStyleSpecPath } : {}),
-      ...(!hasExplicitStyleSpec && selectedStyleProfileId ? { styleProfileId: selectedStyleProfileId } : {}),
-      ...(referenceImagePath ? { referencePath: referenceImagePath } : {})
-    })
-    if (!plan.ok) {
-      return {
-        ok: false,
-        status: 'invalid_request',
-        message: plan.message,
-        preparedReference,
-        ...(styleProfiles ? { styleProfiles } : {}),
-        plan,
-        warnings
-      }
-    }
-
-    const mapping = await mapScientificPlottingData({
-      workspaceRoot,
-      task,
-      data: request.data,
-      ...(request.labels ? { labels: request.labels } : {}),
-      ...(request.templateHint ? { templateHint: request.templateHint } : {}),
-      ...(effectiveStyleSpec ? { styleSpec: effectiveStyleSpec } : {}),
-      ...(effectiveStyleSpecPath ? { styleSpecPath: effectiveStyleSpecPath } : {}),
-      ...(!hasExplicitStyleSpec && selectedStyleProfileId ? { styleProfileId: selectedStyleProfileId } : {}),
-      ...(referenceImagePath ? { referencePath: referenceImagePath, reviewReferencePath: referenceImagePath } : {}),
-      figureId,
-      outputDir,
-      ...(request.outputScale ? { outputScale: request.outputScale } : {}),
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
-      ...(request.threadId ? { threadId: request.threadId } : {}),
-      autoRepair: request.autoRepair ?? { enabled: true, maxAttempts: 1, minOverall: 0.82 }
-    })
-    if (!mapping.ok) {
-      return {
-        ok: false,
-        status: 'mapping_failed',
-        message: mapping.message,
-        preparedReference,
-        ...(styleProfiles ? { styleProfiles } : {}),
-        plan,
-        mapping,
-        warnings: [...warnings, ...mapping.warnings]
-      }
-    }
-
-    const render = await renderScientificPlot({
-      ...mapping.renderRequest,
-      workspaceRoot,
-      figureId,
-      outputDir,
-      ...(request.outputScale ? { outputScale: request.outputScale } : {}),
-      ...(referenceImagePath ? { referencePath: referenceImagePath, reviewReferencePath: referenceImagePath } : {}),
-      autoRepair: request.autoRepair ?? mapping.renderRequest.autoRepair ?? { enabled: true, maxAttempts: 1, minOverall: 0.82 }
-    })
-    if (!render.ok) {
-      return {
-        ok: false,
-        status: 'render_failed',
-        message: render.message,
-        preparedReference,
-        ...(styleProfiles ? { styleProfiles } : {}),
-        plan,
-        mapping,
-        render,
-        warnings: [...warnings, ...(render.warnings ?? [])]
-      }
-    }
-
-    let reviewPacket: ScientificPlottingReviewPacketResult | undefined
-    if (request.createReviewPacket !== false) {
-      reviewPacket = await createScientificPlottingReviewPacket({
-        workspaceRoot,
-        manifestPaths: [render.manifestPath],
-        packetId: `${figureId}-review-packet`,
-        outputDir,
-        title: `v2 Scientific Plotting Style Transfer: ${task.slice(0, 90)}`
-      })
-      if (!reviewPacket.ok) {
-        return {
-          ok: false,
-          status: 'review_packet_failed',
-          message: reviewPacket.message,
-          preparedReference,
-          ...(styleProfiles ? { styleProfiles } : {}),
-          plan,
-          mapping,
-          render,
-          reviewPacket,
-          warnings: [...warnings, ...(reviewPacket.warnings ?? [])]
-        }
-      }
-    }
-
-    const reviewWarnings = render.review?.ok
-      ? [
-          ...(render.review.status === 'pass' ? [] : [`Final style review status: ${render.review.status}.`]),
-          ...render.review.score.warnings
-        ]
-      : []
-    const finalWarnings = uniqueReviewStrings([...warnings, ...render.warnings, ...reviewWarnings])
-    const styleTransferManifest: ScientificPlottingStyleTransferManifest = {
-      version: 2,
-      tool: 'scientific_plotting_style_transfer',
-      createdAt: new Date().toISOString(),
-      requestHash: hashStyleTransferRequest(request),
-      task,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
-      ...(request.threadId ? { threadId: request.threadId } : {}),
-      ...(request.outputScale ? { outputScale: normalizeOutputScale(request.outputScale) } : {}),
-      ...(referenceImagePath ? { referenceImagePath } : {}),
-      ...(effectiveStyleSpecPath ? { styleSpecPath: effectiveStyleSpecPath } : {}),
-      selectedTemplate: mapping.selectedTemplate,
-      ...(render.styleProfileId ?? selectedStyleProfileId ? { selectedStyleProfileId: render.styleProfileId ?? selectedStyleProfileId } : {}),
-      outputPath: render.outputPath,
-      renderManifestPath: render.manifestPath,
-      artifactManifestPath: render.artifactManifestPath,
-      ...(render.review?.ok ? {
-        reviewStatus: render.review.status,
-        reviewScore: render.review.score
-      } : {}),
-      ...(reviewPacket?.ok ? {
-        reviewPacketPath: reviewPacket.packetPath,
-        reviewPacketJsonPath: reviewPacket.packetJsonPath
-      } : {}),
-      warnings: finalWarnings,
-      guardrails: [
-        'This v2 workflow executes only SciForge first-party controlled plotting code.',
-        'Reference figures are used as style guidance only; data values and statistics come from structured input.',
-        'Auto-repair is limited to bounded visual parameters and never changes source data.',
-        'K-Dense skills may inform planning but are not executed by this workflow.'
-      ]
-    }
-    const styleTransferManifestPath = join(outputDir, `${figureId}.style-transfer.json`)
-    await writeFile(styleTransferManifestPath, `${JSON.stringify(styleTransferManifest, null, 2)}\n`, 'utf8')
-
-    return {
-      ok: true,
-      status: render.status === 'review_failed' ? 'review_failed' : reviewPacket?.ok ? 'completed' : 'rendered',
-      ...(referenceImagePath ? { referenceImagePath } : {}),
-      ...(preparedReference ? { preparedReference } : {}),
-      ...(styleProfiles ? { styleProfiles } : {}),
-      plan,
-      mapping,
-      render,
-      ...(reviewPacket ? { reviewPacket } : {}),
-      outputPath: render.outputPath,
-      renderManifestPath: render.manifestPath,
-      artifactManifestPath: render.artifactManifestPath,
-      styleTransferManifestPath,
-      styleTransferManifest,
-      warnings: finalWarnings
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    return {
-      ok: false,
-      status: message.includes('workspace') ? 'invalid_workspace' : 'invalid_request',
-      message,
-      warnings
-    }
   }
 }
 
@@ -1158,25 +899,24 @@ export async function prepareScientificPlottingReference(
     let styleProfileMatches: ScientificPlottingStyleProfileMatch[] | undefined
     let recommendedStyleProfile: ScientificPlottingStyleProfileSummary | undefined
     if (request.extractStyle !== false) {
-      const extracted = await extractFigureStyle({
+      const extracted = await extractVisualStyleProfile({
         workspaceRoot,
         sourcePath: crop.outputPath,
         sourceType: 'image',
         figureId
       })
       if (extracted.ok) {
-        styleSpec = extracted.spec
-        referenceProfile = inferReferenceProfileFromStyle(extracted.spec, {
+        styleSpec = figureStyleSpecFromVisualStyleProfile(extracted.profile)
+        referenceProfile = inferReferenceProfileFromStyle(styleSpec, {
           task: request.figureId
         })
-        styleProfileMatches = rankStyleProfilesForStyleSpec(extracted.spec, referenceProfile)
+        styleProfileMatches = rankStyleProfilesForStyleSpec(styleSpec, referenceProfile)
           .slice(0, 3)
           .map((match) => shapeStyleProfileMatchForResult(match, false))
         recommendedStyleProfile = styleProfileMatches[0]?.profile
         styleSpecPath = join(outputDir, `${figureId}.style.json`)
         await writeFile(styleSpecPath, `${JSON.stringify({
-          spec: extracted.spec,
-          applyPlan: extracted.applyPlan,
+          profile: extracted.profile,
           diagnostics: extracted.diagnostics,
           referenceProfile,
           styleProfileMatches,
@@ -1213,9 +953,9 @@ export async function prepareScientificPlottingReference(
         referencePath: crop.outputPath,
         ...(recommendedStyleProfile ? { suggestedStyleProfileId: recommendedStyleProfile.id } : {}),
         suggestedProfileTool: 'scientific_plotting_style_profiles',
-        suggestedPlanTool: 'scientific_plotting_plan',
+        suggestedPlanTool: 'scientific_visual_plan',
         suggestedRenderTool: 'scientific_plotting_render',
-        suggestedReviewTool: 'scientific_plotting_review',
+        suggestedReviewTool: 'visual_artifact_review',
         guardrails: [
           'Use the cropped PNG as the review reference, not the full paper page.',
           'Use StyleSpec as styling guidance only; do not execute third-party skill scripts.',
@@ -1262,6 +1002,14 @@ export async function renderScientificPlot(
 ): Promise<ScientificPlottingRenderResult> {
   const warnings: string[] = []
   try {
+    if (!isControlledPlottingPlan(request.scientificVisualPlan)) {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: 'scientific_plotting_render requires a route-locked deterministic_plot or hybrid_composite handoff from scientific_visual_plan.',
+        warnings
+      }
+    }
     validateRenderRequestShape(request)
     const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
     validateTemplateData(request.template, request.data)
@@ -1270,7 +1018,7 @@ export async function renderScientificPlot(
       return {
         ok: false,
         status: 'diagram_requires_image_generation',
-        message: 'This diagram request should not be finalized by scientific_plotting_render. Treat the structured output as a draft and use image_generation_plan/image_generation_render for the polished figure.',
+        message: 'This diagram request should not be finalized by scientific_plotting_render. Treat the structured output as a draft and use image_generation_prepare/image_generation_render for the polished figure.',
         draftHandoff,
         warnings: [
           ...warnings,
@@ -1325,13 +1073,12 @@ export async function renderScientificPlot(
     let finalReview: ScientificPlottingReviewResult | undefined
     let status: 'rendered' | 'repaired' | 'review_failed' = 'rendered'
 
-    let firstReview: FigureStyleReviewResult | undefined
+    let firstReview: VisualStyleReviewResult | undefined
     if (referencePath) {
-      firstReview = await reviewFigureStyleOutput({
+      firstReview = await reviewVisualStyleSimilarity({
         workspaceRoot,
         referencePath,
-        outputPath: baseOutputPath,
-        minOverall: autoRepair.minOverall
+        outputPath: baseOutputPath
       })
       finalReview = decorateReviewWithPlottingContext(firstReview, request.template, referenceProfile)
       if (!firstReview.ok) {
@@ -1351,7 +1098,7 @@ export async function renderScientificPlot(
     if (
       referencePath &&
       firstReview?.ok &&
-      firstReview.autoRepair.shouldRerender &&
+      firstReview.repairSuggestion.shouldRerender &&
       autoRepair.enabled &&
       autoRepair.maxAttempts > 0
     ) {
@@ -1361,15 +1108,14 @@ export async function renderScientificPlot(
         workspaceRoot,
         styleSpec,
         outputPath: repairedOutputPath,
-        rcParamsPatch: firstReview.autoRepair.rcParamsPatch,
-        paletteOverride: firstReview.autoRepair.palette
+        rcParamsPatch: firstReview.repairSuggestion.rcParamsPatch,
+        paletteOverride: firstReview.repairSuggestion.palette
       })
       if (!repair.ok) return repair.error
-      const repairedReview = await reviewFigureStyleOutput({
+      const repairedReview = await reviewVisualStyleSimilarity({
         workspaceRoot,
         referencePath,
-        outputPath: repairedOutputPath,
-        minOverall: autoRepair.minOverall
+        outputPath: repairedOutputPath
       })
       finalOutputPath = repairedOutputPath
       finalReview = decorateReviewWithPlottingContext(repairedReview, request.template, referenceProfile)
@@ -1379,9 +1125,9 @@ export async function renderScientificPlot(
         outputPath: repairedOutputPath,
         repaired: true,
         review: finalReview,
-        rcParamsPatch: firstReview.autoRepair.rcParamsPatch,
+        rcParamsPatch: firstReview.repairSuggestion.rcParamsPatch,
         ...(repair.rendererDiagnostics ? { rendererDiagnostics: repair.rendererDiagnostics } : {}),
-        warnings: repairedReview.ok ? repairedReview.score.warnings : [repairedReview.message]
+        warnings: repairedReview.ok ? repairedReview.metric.warnings : [repairedReview.message]
       })
     }
 
@@ -1401,7 +1147,7 @@ export async function renderScientificPlot(
       createdAt: new Date().toISOString(),
       requestHash: hashRequest(request),
       outputPath: finalOutputPath,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(outputScale > 1 ? { outputScale } : {}),
       ...(request.styleSpecPath ? { styleSpecPath: request.styleSpecPath } : {}),
@@ -1446,6 +1192,17 @@ export async function renderScientificPlot(
   }
 }
 
+function isControlledPlottingPlan(value: ScientificPlottingRenderRequest['scientificVisualPlan'] | undefined): boolean {
+  return Boolean(
+    value
+    && value.routeLocked === true
+    && value.fallbackPolicy === 'fail_closed'
+    && (value.route === 'deterministic_plot' || value.route === 'hybrid_composite')
+    && value.reproducibleInputs.length > 0
+    && value.truthLockedElements.length > 0
+  )
+}
+
 async function renderAttempt(input: {
   request: ScientificPlottingRenderRequest
   workspaceRoot: string
@@ -1454,9 +1211,9 @@ async function renderAttempt(input: {
   rcParamsPatch?: Record<string, string | number | boolean>
   paletteOverride?: string[]
 }): Promise<{ ok: true; rendererDiagnostics?: RendererDiagnostics } | { ok: false; error: ScientificPlottingRenderResult }> {
-  const applyPlan = buildFigureStyleApplyPlan(input.styleSpec)
+  const styleAdapter = buildMatplotlibStyleAdapterFromFigureStyleSpec(input.styleSpec)
   const rcParams = enforceReadableTextColors(enforcePublicationTypography({
-    ...applyPlan.matplotlibHints.rcParams,
+    ...styleAdapter.rcParams,
     ...(input.rcParamsPatch ?? {})
   }))
   const payload: RenderPayload = {
@@ -1466,11 +1223,11 @@ async function renderAttempt(input: {
     outputPath: input.outputPath,
     styleSpec: input.styleSpec,
     rcParams,
-    palette: input.paletteOverride ?? applyPlan.matplotlibHints.palette,
+    palette: input.paletteOverride ?? styleAdapter.palette,
     ...heatmapCmapForRequest(
       input.request,
       input.styleSpec,
-      input.paletteOverride ?? applyPlan.matplotlibHints.palette
+      input.paletteOverride ?? styleAdapter.palette
     )
   }
   const run = await runPythonRenderer(payload, input.workspaceRoot)
@@ -1650,7 +1407,7 @@ async function writeScientificPlottingArtifactManifest(input: {
     path: input.outputPath,
     outputPath: input.outputPath,
     manifestPath: input.manifestPath,
-    ...(input.request.canvasId ? { canvasId: input.request.canvasId } : {}),
+    ...(input.request.visualDocumentId ? { visualDocumentId: input.request.visualDocumentId } : {}),
     ...(input.request.threadId ? { threadId: input.request.threadId } : {}),
     ...(input.request.outputScale ? { outputScale: normalizeOutputScale(input.request.outputScale) } : {}),
     ...(input.request.styleSpecPath ? { styleSpecPath: input.request.styleSpecPath } : {}),
@@ -1658,7 +1415,7 @@ async function writeScientificPlottingArtifactManifest(input: {
       ? { referencePath: input.request.reviewReferencePath ?? input.request.referencePath }
       : {}),
     title: input.request.labels?.title ?? input.request.figureId ?? input.figureId,
-    ...(input.review?.ok ? { reviewScore: input.review.score } : {})
+    ...(input.review?.ok ? { styleSimilarity: input.review.metric } : {})
   }
   await writeFile(artifactManifestPath, `${JSON.stringify(artifactManifest, null, 2)}\n`, 'utf8')
   return artifactManifestPath
@@ -1682,13 +1439,13 @@ function buildReviewPacketItem(input: {
 }): ScientificPlottingReviewPacketItem {
   const lastAttempt = input.manifest.attempts.at(-1)
   const review = okReview(input.manifest.finalReview) || okReview(lastAttempt?.review)
-  const score = review?.score
+  const styleSimilarity = review?.metric
   const status = inferManifestRenderStatus(input.manifest)
   const layoutQuality = lastAttempt?.rendererDiagnostics?.layoutQuality
   const typography = lastAttempt?.rendererDiagnostics?.typography
   const warnings = uniqueReviewStrings([
     ...stringItems(input.manifest.warnings),
-    ...stringItems(score?.warnings),
+    ...stringItems(styleSimilarity?.warnings),
     ...input.manifest.attempts.flatMap((attempt) => stringItems(attempt.warnings)),
     ...input.manifest.attempts.flatMap((attempt) => stringItems(attempt.rendererDiagnostics?.layoutQuality?.warnings)),
     ...stringItems(input.manifest.templateAdvice?.messages)
@@ -1704,8 +1461,8 @@ function buildReviewPacketItem(input: {
     template: input.manifest.template,
     status,
     ...(input.manifest.createdAt ? { createdAt: input.manifest.createdAt } : {}),
-    ...(score ? { score } : {}),
-    ...(review ? { reviewStatus: review.status } : {}),
+    ...(styleSimilarity ? { styleSimilarity } : {}),
+    styleRepairSuggested: review?.repairSuggestion.shouldRerender === true,
     repairAttempted,
     attempts: input.manifest.attempts.length,
     warnings,
@@ -1714,8 +1471,8 @@ function buildReviewPacketItem(input: {
     notes,
     recommendedActions: buildReviewPacketRecommendedActions({
       status,
-      score,
-      reviewStatus: review?.status,
+      styleSimilarity,
+      styleRepairSuggested: review?.repairSuggestion.shouldRerender === true,
       repairAttempted,
       layoutQuality,
       warnings
@@ -1728,7 +1485,7 @@ function summarizeReviewPacketItems(
   packetWarnings: string[]
 ): ScientificPlottingReviewPacket['summary'] {
   const scores = items
-    .map((item) => item.score?.overall)
+    .map((item) => item.styleSimilarity?.overall)
     .filter((score): score is number => typeof score === 'number' && Number.isFinite(score))
   const total = scores.reduce((sum, score) => sum + score, 0)
   const needsAttention = items.filter((item) => reviewPacketItemNeedsAttention(item)).length
@@ -1737,9 +1494,7 @@ function summarizeReviewPacketItems(
     repaired: items.filter((item) => item.status === 'repaired').length,
     reviewFailed: items.filter((item) => item.status === 'review_failed').length,
     needsAttention,
-    pass: items.filter((item) => item.reviewStatus === 'pass').length,
-    repairable: items.filter((item) => item.reviewStatus === 'repairable').length,
-    manualReview: items.filter((item) => item.reviewStatus === 'manual_review').length,
+    styleRepairSuggested: items.filter((item) => item.styleRepairSuggested).length,
     ...(scores.length > 0 ? {
       bestOverall: roundScore(Math.max(...scores)),
       worstOverall: roundScore(Math.min(...scores)),
@@ -1784,8 +1539,8 @@ function renderReviewPacketMarkdown(packet: ScientificPlottingReviewPacket): str
     lines.push(`- Output: ${item.outputPath}`)
     lines.push(`- Manifest: ${item.manifestPath}`)
     lines.push(`- Attempts: ${item.attempts}${item.repairAttempted ? ' (repaired)' : ''}`)
-    if (item.score) {
-      lines.push(`- Score: overall ${formatScore(item.score.overall)}, palette ${formatScore(item.score.palette)}, axes ${formatScore(item.score.axes)}, grid ${formatScore(item.score.grid)}, layout ${formatScore(item.score.layout)}, marks ${formatScore(item.score.marks)}, typography ${formatScore(item.score.typography)}`)
+    if (item.styleSimilarity) {
+      lines.push(`- Style similarity: overall ${formatScore(item.styleSimilarity.overall)}, palette ${formatScore(item.styleSimilarity.palette)}, axes ${formatScore(item.styleSimilarity.axes)}, grid ${formatScore(item.styleSimilarity.grid)}, layout ${formatScore(item.styleSimilarity.layout)}, marks ${formatScore(item.styleSimilarity.marks)}, typography ${formatScore(item.styleSimilarity.typography)}`)
     }
     if (item.layoutQuality) {
       lines.push(`- Layout QA: legend ${item.layoutQuality.legendOutsidePlot ? 'outside' : 'inside'}, overlap ${item.layoutQuality.legendOverlapRisk}, text ${item.layoutQuality.textOverflowRisk}, panel adjusted ${item.layoutQuality.panelLabelAdjusted}`)
@@ -1820,14 +1575,16 @@ function inferManifestRenderStatus(manifest: ScientificPlottingManifest): Scient
   return 'unknown'
 }
 
-function okReview(review: unknown): Extract<FigureStyleReviewResult, { ok: true }> | undefined {
-  return isRecord(review) && review.ok === true && isRecord(review.score) ? review as Extract<FigureStyleReviewResult, { ok: true }> : undefined
+function okReview(review: unknown): Extract<VisualStyleReviewResult, { ok: true }> | undefined {
+  return isRecord(review) && review.ok === true && isRecord(review.metric)
+    ? review as Extract<VisualStyleReviewResult, { ok: true }>
+    : undefined
 }
 
 function reviewPacketItemNeedsAttention(item: ScientificPlottingReviewPacketItem): boolean {
   if (item.status === 'review_failed') return true
-  if (item.reviewStatus === 'repairable' || item.reviewStatus === 'manual_review') return true
-  if (item.score && item.score.overall < 0.72) return true
+  if (item.styleRepairSuggested) return true
+  if (item.styleSimilarity && item.styleSimilarity.overall < 0.72) return true
   if (item.layoutQuality?.legendOverlapRisk === 'medium' || item.layoutQuality?.legendOverlapRisk === 'high') return true
   if (item.layoutQuality?.textOverflowRisk === 'medium' || item.layoutQuality?.textOverflowRisk === 'high') return true
   return item.warnings.length > 0
@@ -1835,37 +1592,34 @@ function reviewPacketItemNeedsAttention(item: ScientificPlottingReviewPacketItem
 
 function buildReviewPacketRecommendedActions(input: {
   status: ScientificPlottingReviewPacketItem['status']
-  score?: FigureStyleSimilarityScore
-  reviewStatus?: ScientificPlottingReviewPacketItem['reviewStatus']
+  styleSimilarity?: VisualStyleSimilarityMetric
+  styleRepairSuggested: boolean
   repairAttempted: boolean
   layoutQuality?: ScientificPlottingReviewPacketItem['layoutQuality']
   warnings: string[]
 }): string[] {
   const actions: string[] = []
-  if (!input.score) {
-    actions.push('Use scientific_plotting_review with a reference image before treating this figure as style-matched.')
+  if (!input.styleSimilarity) {
+    actions.push('Use visual_artifact_review with the task, truth locks, and reference image before treating this figure as complete.')
   } else {
-    if (input.score.overall < 0.72) {
+    if (input.styleSimilarity.overall < 0.72) {
       actions.push('Inspect reference similarity before acceptance; style match is currently weak.')
     }
-    if (input.score.palette < 0.72) {
+    if (input.styleSimilarity.palette < 0.72) {
       actions.push('Tune palette mapping or use a closer StyleSpec palette.')
     }
-    if (input.score.axes < 0.72 || input.score.grid < 0.72) {
+    if (input.styleSimilarity.axes < 0.72 || input.styleSimilarity.grid < 0.72) {
       actions.push('Compare axes, spine, and grid visibility against the reference.')
     }
-    if ((input.score.typography ?? 1) < 0.72) {
+    if ((input.styleSimilarity.typography ?? 1) < 0.72) {
       actions.push('Review typography weight and label density at final figure size.')
     }
   }
   if (input.status === 'review_failed') {
     actions.push('Repair the missing or invalid review reference before relying on the score.')
   }
-  if (input.reviewStatus === 'repairable') {
+  if (input.styleRepairSuggested) {
     actions.push('Allow one bounded style repair or inspect the repair history before final approval.')
-  }
-  if (input.reviewStatus === 'manual_review') {
-    actions.push('Send this figure to visual user review before using it in a manuscript draft.')
   }
   if (input.repairAttempted) {
     actions.push('Compare the repaired output with the first attempt to ensure only style changed.')
@@ -2361,7 +2115,7 @@ async function resolvePlanStyleSpec(
       warnings.push('referencePath was provided, but workspaceRoot is required to inspect it.')
       return undefined
     }
-    const extracted = await extractFigureStyle({
+    const extracted = await extractVisualStyleProfile({
       workspaceRoot,
       sourcePath: request.referencePath,
       sourceType: 'image',
@@ -2371,7 +2125,7 @@ async function resolvePlanStyleSpec(
       warnings.push(`Could not inspect referencePath: ${extracted.message}`)
       return undefined
     }
-    return extracted.spec
+    return figureStyleSpecFromVisualStyleProfile(extracted.profile)
   }
   return undefined
 }
@@ -2379,23 +2133,23 @@ async function resolvePlanStyleSpec(
 async function inferReferenceProfileFromReferencePath(
   request: ScientificPlottingReviewRequest
 ): Promise<ScientificPlottingReferenceProfile | undefined> {
-  const extracted = await extractFigureStyle({
+  const extracted = await extractVisualStyleProfile({
     workspaceRoot: request.workspaceRoot,
     sourcePath: request.referencePath,
     sourceType: 'image',
     figureId: 'scientific-plotting-review-reference'
   })
   if (!extracted.ok) return undefined
-  return inferReferenceProfileFromStyle(extracted.spec, {})
+  return inferReferenceProfileFromStyle(figureStyleSpecFromVisualStyleProfile(extracted.profile), {})
 }
 
 function decorateReviewWithPlottingContext(
-  review: FigureStyleReviewResult,
+  review: VisualStyleReviewResult,
   template: ScientificPlottingTemplate,
   referenceProfile: ScientificPlottingReferenceProfile | undefined
 ): ScientificPlottingReviewResult {
   if (!review.ok) return review
-  const templateAdvice = buildTemplateAdvice(template, referenceProfile, review.score)
+  const templateAdvice = buildTemplateAdvice(template, referenceProfile, review.metric)
   return {
     ...review,
     template,
@@ -2647,58 +2401,15 @@ function hasCnsVenueSignal(text: string): boolean {
     /(?:Nature|Science|Cell)\s*(?:期刊|论文|文章|风格|图|figure|journal|paper|style)/i.test(text)
 }
 
-function routeForFigureNeed(
-  primaryNeed: ScientificFigureNeed,
-  options: {
-    hasExplicitNodeEdges: boolean
-    looksLikeLongProse: boolean
-    needsResearchBrief: boolean
-  }
-): ScientificFigureNeedClassification['route'] {
-  if (primaryNeed === 'quantitative_chart' || primaryNeed === 'statistical_comparison' || primaryNeed === 'heatmap_matrix') {
-    return 'controlled_plotting_renderer'
-  }
-  if (primaryNeed === 'multi_panel_figure' || primaryNeed === 'image_panel') return 'panel_layout_then_renderer'
-  return 'diagram_spec_or_image_generation'
-}
-
-function routeReasonForFigureNeed(
-  primaryNeed: ScientificFigureNeed,
-  route: ScientificFigureNeedClassification['route'],
-  options: {
-    hasExplicitNodeEdges: boolean
-    looksLikeLongProse: boolean
-    needsResearchBrief: boolean
-  }
-): string {
-  if (route === 'controlled_plotting_renderer') {
-    return 'The request is primarily structured numeric, matrix, or statistical plotting that fits SciForge controlled templates.'
-  }
-  if (route === 'panel_layout_then_renderer') {
-    return 'The request is a paper-style panel figure, so SciForge should plan the panel contract before rendering individual panels.'
-  }
-  if (options.looksLikeLongProse && !options.hasExplicitNodeEdges) {
-    return 'The request contains long prose; first convert it into a figure brief or diagram prompt instead of forcing dense text into boxes.'
-  }
-  if (options.needsResearchBrief) {
-    return 'The request needs paper-figure reasoning: conclusion, evidence hierarchy, archetype, and export contract should be confirmed first.'
-  }
-  return 'The request is a schematic/diagram-style figure where visual grouping and composition matter more than numeric axes.'
-}
-
 function requiredInputsForFigureNeed(
-  primaryNeed: ScientificFigureNeed,
-  route: ScientificFigureNeedClassification['route']
+  primaryNeed: ScientificFigureNeed
 ): string[] {
   if (primaryNeed === 'quantitative_chart') return ['structured data or tabular rows', 'x/y labels', 'main comparison or trend']
   if (primaryNeed === 'statistical_comparison') return ['raw values or summary plus uncertainty', 'groups/conditions', 'statistical claim to show']
   if (primaryNeed === 'heatmap_matrix') return ['numeric matrix', 'row/column labels', 'normalization or color scale meaning']
   if (primaryNeed === 'multi_panel_figure') return ['panel list', 'per-panel evidence/data', 'shared conclusion and panel order']
   if (primaryNeed === 'image_panel') return ['image paths or panel descriptions', 'annotation targets', 'scale/crop requirements']
-  if (route === 'diagram_spec_or_image_generation') {
-    return ['figure conclusion', 'key entities/nodes', 'causal or temporal relationships', 'preferred paper/venue style']
-  }
-  return ['compact nodes[]', 'optional edges[]', 'labels for each step']
+  return ['figure conclusion', 'key entities/nodes', 'causal or temporal relationships', 'preferred paper/venue style']
 }
 
 function buildResearchBriefRecommendation(
@@ -2718,56 +2429,6 @@ function buildResearchBriefRecommendation(
       'The analysis angle or data requirements are not yet explicit enough for rendering.'
     ],
     requiresUserConfirmation: true
-  }
-}
-
-function buildImagePolishRecommendation(
-  task: string,
-  figureNeed: ScientificFigureNeedClassification,
-  options: {
-    targetVenue?: string
-    researchBriefRecommended?: boolean
-    template?: ScientificPlottingTemplate
-  } = {}
-): ScientificPlottingImagePolishRecommendation | undefined {
-  const text = `${task} ${options.targetVenue ?? ''}`
-  const wantsPaperQuality = options.researchBriefRecommended === true
-    || hasCnsVenueSignal(text)
-    || /cns|paper|journal|publication|nature|science|cell|论文|文献|顶刊|期刊|顶会/i.test(text)
-  const wantsVisualEdit = /放大|局部|zoom|inset|callout|标注|annotation|说明|highlight|emphasis|美化|polish|refine|排版|拼接|multi[-\s]?panel|多\s*panel|多面板|子图|panel|summary figure|graphical abstract|图形摘要|解释|介绍/i.test(text)
-  const needsCompositionLayer = figureNeed.route !== 'controlled_plotting_renderer'
-    || figureNeed.primaryNeed === 'multi_panel_figure'
-    || figureNeed.primaryNeed === 'image_panel'
-    || figureNeed.primaryNeed === 'summary_figure'
-    || options.template === 'multi-panel'
-  if (!wantsPaperQuality && !wantsVisualEdit && !needsCompositionLayer) return undefined
-
-  return {
-    recommended: true,
-    reason: wantsVisualEdit
-      ? 'The figure needs visual emphasis or explanatory edits after controlled data rendering.'
-      : wantsPaperQuality
-        ? 'CNS/paper-level figures often need a final image-composition layer after exact data/chart rendering.'
-        : 'This figure type needs visual composition beyond a single controlled data plot.',
-    model: 'gpt-image-2',
-    fallbackModel: 'configured_model_router_image_model',
-    nextControlledTool: 'image_generation_plan',
-    followUpTools: ['image_generation_plan', 'image_generation_render'],
-    useWhen: [
-      'After scientific_plotting_render has produced exact data/chart panels.',
-      'When the figure needs zoomed points, inset views, callouts, explanatory labels, panel stitching, graphical abstracts, or CNS-style visual polish.',
-      'After Canvas review annotations request a visual edit that does not change data semantics.'
-    ],
-    preserve: [
-      'Do not change numeric values, axes, labels, legends, sample sizes, or statistical claims.',
-      'Use the controlled plot PNG/manifest as the visual and data source of truth.',
-      'Only modify composition, emphasis, callouts, annotations, local magnification, or final panel arrangement.'
-    ],
-    guardrails: [
-      'Use gpt-image-2 only as a final visual polishing layer, not as the source of data truth.',
-      'For pure data correction, rerun scientific_plotting_render instead of image_generation.',
-      'Keep original and polished artifacts as before/after versions on Canvas.'
-    ]
   }
 }
 
@@ -2863,7 +2524,8 @@ function buildSelectedSkillProfile(input: {
     /cns|nature|science|cell|paper[-\s]?level|multi[-\s]?panel|summary figure|graphical abstract|顶刊|论文图|多面板|图形摘要/i.test(context) ||
     input.figureNeed.primaryNeed === 'multi_panel_figure' ||
     input.figureNeed.primaryNeed === 'summary_figure'
-  const imageDeltaRelevant = input.figureNeed.route !== 'controlled_plotting_renderer' ||
+  const isControlledDataNeed = ['quantitative_chart', 'statistical_comparison', 'heatmap_matrix'].includes(input.figureNeed.primaryNeed)
+  const imageDeltaRelevant = !isControlledDataNeed ||
     (cnsRelevant && Boolean(input.request.dataSummary?.trim())) ||
     input.figureNeed.primaryNeed === 'mechanism_schematic' ||
     input.figureNeed.primaryNeed === 'model_architecture' ||
@@ -2880,7 +2542,7 @@ function buildSelectedSkillProfile(input: {
       ? 'paper-figure-cns-domain-v1'
       : imageDeltaRelevant
         ? 'mechanism-diagram-image-delta-v1'
-        : input.figureNeed.route === 'controlled_plotting_renderer'
+        : isControlledDataNeed
           ? 'controlled-data-plot-v1'
           : 'general-paper-figure-v1'
 
@@ -2975,7 +2637,7 @@ function buildResearchBriefFigureContract(
       `Target venue/style: ${request.targetVenue?.trim() || 'publication-ready CNS/domain style'}.`,
       'Use readable panel labels, conservative typography, explicit legends, and traceable captions.',
       'Keep raw data/statistical meaning unchanged across style repair.',
-      'Export artifact plus manifest so Canvas review can produce before/after revisions.'
+      'Export artifact plus manifest so VisualDocument review can produce before/after revisions.'
     ],
     reviewRisks: reviewRisksForFigureNeed(figureNeed.primaryNeed)
   }
@@ -3012,7 +2674,7 @@ function buildPaperFigureProductionPlan(
     dataRequirements: ['raw cohort table', 'group/outcome column if comparisons are needed', 'units and categorical coding'],
     statistics: ['n (%) for categorical variables', 'mean ± SD or median [IQR] for continuous variables', 'clearly defined tests if compared by group'],
     firstPassTool: 'table_generator',
-    canvasReview: false,
+    visualReview: false,
     notes: ['SciForge currently records this in the plan; a dedicated three-line table worker/template would improve parity with paper-figures.']
   })
 
@@ -3025,9 +2687,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'box-violin',
       dataRequirements: ['raw numeric values', 'group/outcome labels', 'unit of analysis', 'sample size per group'],
       statistics: ['box/violin/points', 'appropriate two-group or multi-group test', 'corrected significance labels when needed'],
-      firstPassTool: 'scientific_plotting_map_data',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Prefer box + jittered points for small/medium n; avoid bar-of-means as the only view.']
     })
   }
@@ -3041,9 +2702,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'heatmap',
       dataRequirements: ['numeric matrix or raw numeric columns', 'row/column labels', 'normalization/correlation method'],
       statistics: ['Spearman or Pearson correlation', 'diverging color scale centered at zero for correlations'],
-      firstPassTool: 'scientific_plotting_map_data',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Keep numeric labels and colorbar deterministic; image2 may only improve spacing/callouts.']
     })
   }
@@ -3057,9 +2717,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'kaplan-meier',
       dataRequirements: ['time-to-event column', 'event/censor indicator', 'grouping variable', 'risk-table time points'],
       statistics: ['Kaplan-Meier curve', 'numbers-at-risk table', 'log-rank p-value', 'hazard ratio if modeled'],
-      firstPassTool: 'scientific_plotting_map_data',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Current SciForge can approximate with line plots, but needs a dedicated Kaplan-Meier template for publication parity.']
     })
   }
@@ -3073,9 +2732,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'cox-forest',
       dataRequirements: ['model coefficient table', 'effect estimates', 'confidence intervals', 'reference categories'],
       statistics: ['Cox/logistic/linear model effect estimate', '95% CI', 'null reference line'],
-      firstPassTool: 'scientific_plotting_map_data',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Needs first-class forest/effect-size template; avoid using generic bar charts for adjusted effects.']
     })
   }
@@ -3089,9 +2747,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'roc',
       dataRequirements: ['true labels', 'predicted scores/probabilities', 'cross-validation splits if available'],
       statistics: ['ROC curve', 'AUC with uncertainty', 'cross-validation protocol'],
-      firstPassTool: 'scientific_plotting_map_data',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Current SciForge can draw a line curve if points are provided, but should add a dedicated ROC template with AUC metadata.']
     })
   }
@@ -3105,9 +2762,8 @@ function buildPaperFigureProductionPlan(
       recommendedTemplate: 'multi-panel',
       dataRequirements: ['approved component figure manifests', 'panel order', 'shared conclusion', 'caption/panel labels'],
       statistics: ['inherit statistics from component panels'],
-      firstPassTool: 'scientific_plotting_render',
-      polishTool: 'image_generation_plan',
-      canvasReview: true,
+      firstPassTool: 'scientific_visual_plan',
+      visualReview: true,
       notes: ['Render exact component panels first; use image2 only for panel stitching, callouts, and visual hierarchy.']
     })
   }
@@ -3139,7 +2795,7 @@ function buildPaperFigureProductionPlan(
         'Export each panel with artifact manifest and review score.'
       ],
       imagePolish: [
-        'Use image_generation_plan/render after exact panels exist; prefer gpt-image-2 and fall back to the configured Model Router image model if needed.',
+        'Use image_generation_prepare/render only after exact panels exist and let Model Router select the configured image generator.',
         'Preserve numbers, axes, labels, legends, sample sizes, and statistical claims.',
         'Use image2 for panel stitching, callouts, zoomed insets, explanation labels, and composition polish.'
       ],
@@ -3158,7 +2814,7 @@ function buildPaperFigureCompositionPlan(
   context: string,
   figureNeed: ScientificFigureNeedClassification
 ): ScientificPaperFigureCompositionPlan | undefined {
-  const figureAssets = assets.filter((asset) => asset.kind === 'figure' && asset.canvasReview)
+  const figureAssets = assets.filter((asset) => asset.kind === 'figure' && asset.visualReview)
   const needsPaperComposition = figureAssets.length >= 2
     || figureNeed.primaryNeed === 'multi_panel_figure'
     || figureNeed.primaryNeed === 'summary_figure'
@@ -3202,9 +2858,7 @@ function buildPaperFigureCompositionPlan(
     recommendedTemplate: asset.recommendedTemplate === 'three-line-table'
       ? 'multi-panel' as const
       : asset.recommendedTemplate,
-    firstPassTool: asset.firstPassTool === 'table_generator'
-      ? 'scientific_plotting_render' as const
-      : asset.firstPassTool,
+    firstPassTool: 'scientific_visual_plan' as const,
     requiredArtifact: 'png_manifest' as const,
     factLocks: [...lockedFacts],
     polishAllowedOperations: [...polishAllowedOperations]
@@ -3223,9 +2877,7 @@ function buildPaperFigureCompositionPlan(
     stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
     controlledSubfigures,
     image2Composition: {
-      preferredModel: 'gpt-image-2',
-      fallbackModel: 'configured_model_router_image_model',
-      nextControlledTool: 'image_generation_plan',
+      nextControlledTool: 'scientific_visual_plan',
       inputArtifacts,
       allowedOperations: [...compositionAllowedOperations],
       forbiddenOperations: [
@@ -3236,7 +2888,7 @@ function buildPaperFigureCompositionPlan(
       ],
       handoffPrompt: [
         'Compose only a delta visual polish layer for a paper-level multi-panel figure from the controlled subfigure PNG/manifest artifacts.',
-        'Prefer gpt-image-2; if unavailable, use the currently configured Model Router image model for panel stitching, callouts, zoomed insets, typography cleanup, and visual unification.',
+        'Use the Model Router image capability for panel stitching, callouts, zoomed insets, typography cleanup, and visual unification.',
         'Keep every controlled subfigure as the data source of truth and preserve all numeric/statistical semantics; do not generate replacement scientific data panels.',
         'Return a new composite artifact manifest and keep the original subfigures unchanged.'
       ].join(' '),
@@ -3258,8 +2910,8 @@ function buildPaperFigureCompositionPlan(
       lockedFacts: [...lockedFacts],
       handoffPrompt: deltaHandoffPrompt
     },
-    canvasReview: {
-      openInCanvas: true,
+    visualReview: {
+      openInVisualReview: true,
       preserveOriginalArtifacts: true,
       reviewPacketRequired: true,
       revisionPolicy: 'new_version_next_to_original'
@@ -3274,23 +2926,15 @@ function buildResearchBriefPromptSpec(
   request: ScientificPlottingResearchBriefRequest
 ): Extract<ScientificPlottingResearchBriefResult, { ok: true }>['promptSpecDraft'] {
   const literatureReady = candidatePapers.length > 0
-  const renderTool = figureNeed.route === 'controlled_plotting_renderer'
-    ? 'scientific_plotting_map_data'
-    : figureNeed.route === 'panel_layout_then_renderer'
-      ? 'scientific_plotting_map_data or image_generation_plan after panel contract confirmation'
-      : 'image_generation_plan or a Mermaid/diagram spec after confirmation'
+  const renderTool = 'scientific_visual_plan'
   const nextControlledTool = literatureReady ? renderTool : 'research_search'
-  const imagePolishRecommendation = buildImagePolishRecommendation(task, figureNeed, {
-    targetVenue: request.targetVenue,
-    researchBriefRecommended: true
-  })
   const fullPrompt = buildResearchBriefFullPrompt(task, figureNeed, candidatePapers, request, renderTool)
   return {
     task,
     figureNeed: figureNeed.primaryNeed,
     referencePapers: candidatePapers,
     visualPlan: visualPlanForFigureNeed(figureNeed.primaryNeed),
-    dataRequirements: requiredInputsForFigureNeed(figureNeed.primaryNeed, figureNeed.route),
+    dataRequirements: requiredInputsForFigureNeed(figureNeed.primaryNeed),
     styleGuidance: [
       `Prioritize ${request.targetVenue?.trim() || 'CNS/domain paper'} clarity over decorative layout.`,
       'Use reference papers for archetype and style signals, not as copied artwork.',
@@ -3298,17 +2942,13 @@ function buildResearchBriefPromptSpec(
     ],
     fullPrompt,
     codeGenerationPlan: {
-      target: figureNeed.route === 'controlled_plotting_renderer'
-        ? 'scientific_plotting_render_request'
-        : figureNeed.route === 'panel_layout_then_renderer'
-          ? 'panel_layout_spec'
-          : 'image_generation_recipe',
+      target: 'scientific_visual_plan_request',
       nextControlledTool: renderTool,
       notes: literatureReady
         ? [
             'Use the listed referencePapers as evidence and style anchors.',
-            'Generate only a controlled render request/recipe, not arbitrary shell or Python.',
-            'If visual polish is needed, render exact data panels first, then call image_generation_plan/image_generation_render with gpt-image-2 or the configured Model Router image model and the controlled plot artifacts as references.',
+            'Submit a structured route decision to scientific_visual_plan before any renderer.',
+            'Let the locked plan order deterministic, generative, or hybrid execution stages.',
             'After rendering, insert the artifact into Canvas for annotation and revision.'
           ]
         : [
@@ -3317,7 +2957,6 @@ function buildResearchBriefPromptSpec(
             'Call scientific_plotting_research_brief again with candidatePapers and the user analysis angle before rendering.'
           ]
     },
-    ...(imagePolishRecommendation ? { imagePolishRecommendation } : {}),
     nextControlledTool
   }
 }
@@ -3343,9 +2982,9 @@ function buildResearchBriefFullPrompt(
     `Target venue/style: ${request.targetVenue?.trim() || 'CNS/domain publication style'}.`,
     `Reference papers and figure evidence:\n${papers}`,
     `Visual plan:\n${visualPlanForFigureNeed(figureNeed.primaryNeed).map((item) => `- ${item}`).join('\n')}`,
-    `Data/content requirements:\n${requiredInputsForFigureNeed(figureNeed.primaryNeed, figureNeed.route).map((item) => `- ${item}`).join('\n')}`,
+    `Data/content requirements:\n${requiredInputsForFigureNeed(figureNeed.primaryNeed).map((item) => `- ${item}`).join('\n')}`,
     `Style requirements:\n- infer figure archetype, layout density, label style, palette, annotation conventions, and panel logic from the reference papers\n- do not copy exact copyrighted figure composition or data\n- keep labels concise and publication-readable`,
-    `Final image polish layer:\n- when callouts, zoomed insets, panel stitching, explanatory labels, or CNS-style composition are needed, use image_generation_plan after controlled data rendering; prefer gpt-image-2 and fall back to the configured Model Router image model if needed\n- preserve numeric data, axes, labels, legends, sample sizes, and statistical claims\n- keep the controlled plot artifacts as the source of truth and create before/after versions on Canvas`,
+    `Production route selection:\n- call scientific_visual_plan before any renderer\n- submit the model's rationale, reproducible inputs, and truth-locked elements\n- follow the locked deterministic, generative, or hybrid stages without cross-route fallback`,
     `Next controlled tool: ${candidatePapers.length ? renderTool : 'research_search first, then scientific_plotting_research_brief again'}.`
   ].join('\n\n')
 }
@@ -3385,7 +3024,7 @@ function confirmationQuestionsForFigureNeed(
     'What is the single figure conclusion the reader should remember?',
     'Which reference papers or figures should guide the archetype and visual style?'
   ]
-  if (figureNeed.route === 'controlled_plotting_renderer') {
+  if (['quantitative_chart', 'statistical_comparison', 'heatmap_matrix'].includes(figureNeed.primaryNeed)) {
     return [
       ...common,
       'What structured data, grouping, matrix, or uncertainty values should be rendered?',
@@ -3482,28 +3121,10 @@ function buildTemplateSelection(
   }
 }
 
-function buildScientificPlottingToolRoutingRecommendation(
-  task: string,
-  template: ScientificPlottingTemplate
-): { preferredTool: 'image_generation_plan'; reason: string; useWhen: string[] } | undefined {
-  if (template !== 'flowchart' && template !== 'schematic-grid') return undefined
-  const looksLikeVisualDiagram = /flow\s*chart|flowchart|workflow|pipeline|diagram|infographic|poster|cover|illustrat|流程图|流程|工作流|管线|示意图|信息图|宣传图|封面图|海报/i.test(task)
-  if (!looksLikeVisualDiagram) return undefined
-  return {
-    preferredTool: 'image_generation_plan',
-    reason: 'This is a semantic diagram request. Use scientific_plotting only to draft the structure; use image_generation_plan/image_generation_render for the final polished visual.',
-    useWhen: [
-      'Flowcharts, model architectures, workflows, mechanisms, and schematics need composition beyond Matplotlib boxes.',
-      'Use scientific_plotting output as a draft/spec, not as the final user-facing diagram.',
-      'The image model should choose layout, icons, visual grouping, typography, and polished composition.'
-    ]
-  }
-}
-
 function buildTemplateAdvice(
   selectedTemplate: ScientificPlottingTemplate | undefined,
   referenceProfile: ScientificPlottingReferenceProfile | undefined,
-  score: FigureStyleSimilarityScore | undefined
+  score: VisualStyleSimilarityMetric | undefined
 ): ScientificPlottingTemplateAdvice | undefined {
   if (!selectedTemplate) return undefined
   const messages: string[] = []
@@ -4331,7 +3952,7 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
     const maxNodes = template === 'flowchart' ? MAX_FLOWCHART_NODES : MAX_SCHEMATIC_NODES
     if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > maxNodes) {
       throw new Error(template === 'flowchart'
-        ? `flowchart data.nodes must include 1-${MAX_FLOWCHART_NODES} compact nodes. For dense prose-to-visual diagrams, use image_generation_plan/image_generation_render.`
+        ? `flowchart data.nodes must include 1-${MAX_FLOWCHART_NODES} compact nodes. For dense prose-to-visual diagrams, use image_generation_prepare/image_generation_render.`
         : `${template} data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
     }
     const labels: string[] = []
@@ -4342,7 +3963,7 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
       labels.push(node.label.trim())
     }
     if (template === 'flowchart' && labels.join(' ').length > MAX_FLOWCHART_LABEL_CHARS) {
-      throw new Error(`flowchart node labels must be compact and total at most ${MAX_FLOWCHART_LABEL_CHARS} characters. For long prose-to-visual diagrams, use image_generation_plan/image_generation_render.`)
+      throw new Error(`flowchart node labels must be compact and total at most ${MAX_FLOWCHART_LABEL_CHARS} characters. For long prose-to-visual diagrams, use image_generation_prepare/image_generation_render.`)
     }
     if (template === 'flowchart' && data.edges !== undefined) {
       if (!Array.isArray(data.edges)) throw new Error('flowchart data.edges must be an array when provided.')
@@ -4370,7 +3991,7 @@ function buildDiagramDraftHandoffForRender(
     kind: 'diagram_draft_handoff',
     draftRole: 'structure_only',
     sourceTemplate: request.template,
-    recommendedNextTools: ['image_generation_plan', 'image_generation_render'],
+    recommendedNextTools: ['image_generation_prepare', 'image_generation_render'],
     imageGenerationTask: [
       `Create a polished publication-style ${figureLabel}.`,
       'Use the provided draft structure as content guidance, but redesign the layout visually.',
@@ -4896,52 +4517,6 @@ function shapeStyleProfileMatchForResult(
   }
 }
 
-async function selectStyleProfilesForTransfer(input: {
-  workspaceRoot: string
-  referenceImagePath?: string
-  styleSpec?: FigureStyleSpec
-  styleSpecPath?: string
-  explicitStyleProfileId?: string
-  warnings: string[]
-}): Promise<ScientificPlottingStyleProfilesResult | undefined> {
-  if (input.explicitStyleProfileId?.trim()) {
-    const result = await listScientificPlottingStyleProfiles({
-      workspaceRoot: input.workspaceRoot,
-      profileId: input.explicitStyleProfileId
-    })
-    if (!result.ok) input.warnings.push(result.message)
-    return result
-  }
-  if (input.styleSpec) {
-    const result = await listScientificPlottingStyleProfiles({
-      workspaceRoot: input.workspaceRoot,
-      styleSpec: input.styleSpec,
-      topK: 3
-    })
-    if (!result.ok) input.warnings.push(result.message)
-    return result
-  }
-  if (input.styleSpecPath?.trim()) {
-    const result = await listScientificPlottingStyleProfiles({
-      workspaceRoot: input.workspaceRoot,
-      styleSpecPath: input.styleSpecPath,
-      topK: 3
-    })
-    if (!result.ok) input.warnings.push(result.message)
-    return result
-  }
-  if (input.referenceImagePath?.trim()) {
-    const result = await listScientificPlottingStyleProfiles({
-      workspaceRoot: input.workspaceRoot,
-      referencePath: input.referenceImagePath,
-      topK: 3
-    })
-    if (!result.ok) input.warnings.push(result.message)
-    return result
-  }
-  return undefined
-}
-
 async function resolveStyleSpecForProfileSelection(
   request: ScientificPlottingStyleProfilesRequest,
   workspaceRoot: string | undefined,
@@ -4974,7 +4549,7 @@ async function resolveStyleSpecForProfileSelection(
       warnings.push('workspaceRoot is required to inspect referencePath for profile matching.')
       return undefined
     }
-    const extracted = await extractFigureStyle({
+    const extracted = await extractVisualStyleProfile({
       workspaceRoot,
       sourcePath: request.referencePath,
       sourceType: 'image',
@@ -4984,7 +4559,7 @@ async function resolveStyleSpecForProfileSelection(
       warnings.push(`Could not inspect referencePath for profile matching: ${extracted.message}`)
       return undefined
     }
-    return extracted.spec
+    return figureStyleSpecFromVisualStyleProfile(extracted.profile)
   }
   return undefined
 }
@@ -5270,24 +4845,6 @@ function hashPrepareReferenceRequest(request: ScientificPlottingPrepareReference
   })
 }
 
-function hashStyleTransferRequest(request: ScientificPlottingStyleTransferRequest): string {
-  return hashStableJson({
-    task: request.task,
-    labels: request.labels,
-    templateHint: request.templateHint,
-    reference: request.reference,
-    styleSpec: request.styleSpec,
-    styleSpecPath: request.styleSpecPath,
-    styleProfileId: request.styleProfileId,
-    figureId: request.figureId,
-    outputDir: request.outputDir,
-    outputScale: request.outputScale,
-    autoRepair: request.autoRepair,
-    createReviewPacket: request.createReviewPacket,
-    dataDigest: hashStableJson(request.data)
-  })
-}
-
 function hashStableJson(value: unknown): string {
   const stable = JSON.stringify(value)
   return createHash('sha256').update(stable).digest('hex')
@@ -5444,7 +5001,7 @@ layout_style = style.get("layout") or {}
 plan_rc = {}
 palette = []
 try:
-    # The TypeScript side mirrors buildFigureStyleApplyPlan; this Python side
+    # The TypeScript side applies the VisualStyleProfile plotting adapter; this Python side
     # receives only concrete values and never evaluates user code.
     canvas = style.get("canvas") or {}
     palette_spec = style.get("palette") or {}

@@ -113,7 +113,6 @@ import {
   type PaperRadarWorkerService
 } from './services/paper-radar-worker-service'
 import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
-import { startLocalDrawioServer, stopLocalDrawioServer } from './drawio-local-server'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
@@ -139,7 +138,7 @@ import {
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import type { SciforgeCanvasMcpLaunchConfig } from './sciforge-canvas-mcp-config'
+import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
 import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
 import { syncExternalManagedGuiMcpConfig } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
@@ -321,7 +320,7 @@ function getPptMasterMcpLaunchConfig(): PptMasterMcpLaunchConfig {
   }
 }
 
-function getSciforgeCanvasMcpLaunchConfig(): SciforgeCanvasMcpLaunchConfig {
+function getVisualDocumentMcpLaunchConfig(): VisualDocumentMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
     execPath: process.execPath,
@@ -334,14 +333,6 @@ function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
     appPath: app.getAppPath(),
     execPath: process.execPath,
     isPackaged: app.isPackaged
-  }
-}
-
-function getLocalDrawioServerLaunchConfig() {
-  return {
-    appPath: app.getAppPath(),
-    resourcesPath: process.resourcesPath,
-    env: process.env
   }
 }
 
@@ -582,7 +573,7 @@ function getCodexRuntime(): CodexRuntimeService {
     bgcDiscoveryMcpLaunch: getBgcDiscoveryMcpLaunchConfig(),
     imageGenerationMcpLaunch: getImageGenerationMcpLaunchConfig(),
     pptMasterMcpLaunch: getPptMasterMcpLaunchConfig(),
-    sciforgeCanvasMcpLaunch: getSciforgeCanvasMcpLaunchConfig(),
+    visualDocumentMcpLaunch: getVisualDocumentMcpLaunchConfig(),
     computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
   })
   return codexRuntime
@@ -596,7 +587,22 @@ function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
     managedConfigDir: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-claude-code', 'config')
       : join(process.cwd(), '.claude-code-runtime', 'config'),
-    computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
+    managedMcp: {
+      scheduleMcp: { launch: getScheduleMcpLaunchConfig() },
+      researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
+      workflowMcp: { launch: getWorkflowMcpLaunchConfig() },
+      workspaceIntelMcp: { launch: getWorkspaceIntelMcpLaunchConfig() },
+      paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
+      writeAssistMcp: { launch: getWriteAssistMcpLaunchConfig() },
+      runtimeInspectorMcp: { launch: getRuntimeInspectorMcpLaunchConfig() },
+      scientificSkillsMcp: { launch: getScientificSkillsMcpLaunchConfig() },
+      scientificPlottingMcp: { launch: getScientificPlottingMcpLaunchConfig() },
+      bgcDiscoveryMcp: { launch: getBgcDiscoveryMcpLaunchConfig() },
+      imageGenerationMcp: { launch: getImageGenerationMcpLaunchConfig() },
+      pptMasterMcp: { launch: getPptMasterMcpLaunchConfig() },
+      visualDocumentMcp: { launch: getVisualDocumentMcpLaunchConfig() },
+      computerUseMcp: { launch: getComputerUseMcpLaunchConfig() }
+    }
   })
   return claudeCodeRuntime
 }
@@ -1682,15 +1688,6 @@ app.whenReady().then(async () => {
     return initial
   })
   traceStartup('settings load:done')
-  void startLocalDrawioServer(getLocalDrawioServerLaunchConfig()).then((result) => {
-    if (result.ok) {
-      console.info(`[sciforge draw.io] local editor listening at ${result.url}`)
-    } else {
-      console.warn('[sciforge draw.io] local editor assets unavailable:', result.checkedPaths.join(', '))
-    }
-  }).catch((error) => {
-    console.warn('[sciforge draw.io] failed to start local editor:', error)
-  })
   setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
   syncLoginItemSettings(initial)
@@ -1740,25 +1737,6 @@ app.whenReady().then(async () => {
       message: error instanceof Error ? error.message : String(error)
     })
   })
-  configureEvidenceDagUpdateQueue({
-    storagePath: evidenceDagQueuePath(app.getPath('userData')),
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
-    },
-    ensureProjectDagReady: async () => {
-      const settings = await store.load()
-      await ensureProjectDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('project-dag', message)
-      })
-    }
-  })
   codeNavigationService = new LspCodeNavigationService()
   const modelAuditRecorder = new ModelRequestAuditRecorder()
   const contextStateService = new RuntimeContextStateService()
@@ -1804,6 +1782,28 @@ app.whenReady().then(async () => {
       workspaceReferences: workspaceReferenceService,
       visibleContext: visibleContextService,
       goals: runtimeGoalService
+    }
+  })
+  configureEvidenceDagUpdateQueue({
+    storagePath: evidenceDagQueuePath(app.getPath('userData')),
+    maxConcurrency: 2,
+    maxAttempts: 5,
+    canRunBackground: () => !agentRuntimeHost.hasActiveTurns(),
+    ensureEvidenceDagReady: async () => {
+      const settings = await store.load()
+      await ensureEvidenceDagSidecar(settings, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('evidence-dag', message)
+      })
+    },
+    ensureProjectDagReady: async () => {
+      const settings = await store.load()
+      await ensureProjectDagSidecar(settings, {
+        userDataDir: app.getPath('userData'),
+        appRoot: app.getAppPath(),
+        log: (message) => logWarn('project-dag', message)
+      })
     }
   })
   evidenceArtifactLifecycle = new EvidenceArtifactLifecycle({
@@ -2190,7 +2190,6 @@ app.whenReady().then(async () => {
     pollWeixinInstall,
     resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
     openModelRouterConfigFile,
-    getLocalDrawioUrl: () => startLocalDrawioServer(getLocalDrawioServerLaunchConfig()),
     getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
     onRuntimeMcpConfigWritten: async () => {
@@ -2227,8 +2226,7 @@ app.whenReady().then(async () => {
     getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
     getImageGenerationMcpLaunchConfig,
-    getPptMasterMcpLaunchConfig,
-    getSciforgeCanvasMcpLaunchConfig
+    getPptMasterMcpLaunchConfig
   })
 
   if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
@@ -2299,9 +2297,6 @@ app.on('will-quit', () => {
   })
   void workspaceHtmlPreviewService.close().catch((error) => {
     console.warn('[sciforge] failed to stop HTML preview server:', error)
-  })
-  void stopLocalDrawioServer().catch((error) => {
-    console.warn('[sciforge draw.io] failed to stop local editor:', error)
   })
 })
 

@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
+import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   mergeModelRouterSettings,
@@ -29,6 +30,7 @@ const TEXT_REASONER_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY'
 const VISION_TRANSLATOR_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_VISION_API_KEY'
 const IMAGE_GENERATOR_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY'
 const SCIENTIFIC_TRANSLATOR_TOKEN_ENV = 'SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN'
+const MODEL_ROUTER_INSTANCE_ID_ENV = 'SCIFORGE_MODEL_ROUTER_INSTANCE_ID'
 const BLOCKED_INHERITED_WORKER_ENV_PREFIXES = [
   ...DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   ...MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -47,6 +49,7 @@ const LEGACY_MODEL_ROUTER_ENV_NAMES = [
 
 let modelRouterChild: ChildProcess | null = null
 let modelRouterLaunchSignature: string | null = null
+let modelRouterStatePath: string | null = null
 
 type ModelRouterProviderConfig = {
   provider: string
@@ -245,10 +248,15 @@ export async function ensureModelRouterSidecar(
     log?: (message: string) => void
   }
 ): Promise<void> {
+  const instanceId = randomUUID()
+  const launchEnv = {
+    ...(options.env ?? process.env),
+    [MODEL_ROUTER_INSTANCE_ID_ENV]: instanceId
+  }
   const launch = buildModelRouterSidecarLaunch(settings, {
     userDataDir: options.userDataDir,
     appRoot: options.appRoot,
-    env: options.env
+    env: launchEnv
   })
   if (!launch.ok) {
     options.log?.(launch.reason)
@@ -265,10 +273,12 @@ export async function ensureModelRouterSidecar(
     await stopModelRouterSidecar()
   }
 
+  await stopRecordedModelRouterSidecar(settings, options.userDataDir, options.log)
+
   const postStopLaunch = buildModelRouterSidecarLaunch(settings, {
     userDataDir: options.userDataDir,
     appRoot: options.appRoot,
-    env: options.env
+    env: launchEnv
   })
   if (!postStopLaunch.ok) {
     options.log?.(postStopLaunch.reason)
@@ -292,7 +302,15 @@ export async function ensureModelRouterSidecar(
     shell: useShell
   })
   modelRouterLaunchSignature = modelRouterManagedLaunchSignature(postStopLaunch.launch)
+  modelRouterStatePath = modelRouterSidecarStatePath(options.userDataDir)
   const child = modelRouterChild
+  if (child.pid) {
+    await writeFile(modelRouterStatePath, `${JSON.stringify({
+      pid: child.pid,
+      instanceId,
+      signature: modelRouterLaunchSignature
+    }, null, 2)}\n`, 'utf8')
+  }
   attachModelRouterChildLogging(child, options.log)
   child.once('error', (error) => {
     options.log?.(`Model Router sidecar failed to start: ${error.message}`)
@@ -359,6 +377,49 @@ export async function stopModelRouterSidecar(): Promise<void> {
     })
     child.kill('SIGTERM')
   })
+  if (modelRouterStatePath) {
+    await rm(modelRouterStatePath, { force: true })
+    modelRouterStatePath = null
+  }
+}
+
+function modelRouterSidecarStatePath(userDataDir: string): string {
+  return join(userDataDir, 'model-router', 'sidecar-state.json')
+}
+
+async function stopRecordedModelRouterSidecar(
+  settings: AppSettingsV1,
+  userDataDir: string,
+  log?: (message: string) => void
+): Promise<void> {
+  const statePath = modelRouterSidecarStatePath(userDataDir)
+  let state: { pid?: unknown; instanceId?: unknown }
+  try {
+    state = JSON.parse(await readFile(statePath, 'utf8')) as { pid?: unknown; instanceId?: unknown }
+  } catch {
+    return
+  }
+  const pid = typeof state.pid === 'number' && Number.isInteger(state.pid) && state.pid > 1 ? state.pid : 0
+  const instanceId = typeof state.instanceId === 'string' ? state.instanceId.trim() : ''
+  if (!pid || !instanceId) {
+    await rm(statePath, { force: true })
+    return
+  }
+  const router = getModelRouterSettings(settings)
+  const healthUrl = router.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health'
+  try {
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) })
+    const health = await response.json() as { instanceId?: unknown }
+    if (health.instanceId !== instanceId) {
+      await rm(statePath, { force: true })
+      return
+    }
+    process.kill(pid, 'SIGTERM')
+    log?.('Stopped a stale app-managed Model Router sidecar before launching the current runtime.')
+  } catch {
+    // A missing process or unreachable endpoint means the recorded sidecar is already gone.
+  }
+  await rm(statePath, { force: true })
 }
 
 function isModelRouterChildRunning(): boolean {

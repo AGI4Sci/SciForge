@@ -1918,6 +1918,9 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       developerInstructions: expect.stringContaining('explicitly asks to use the system proxy')
     }))
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      developerInstructions: expect.stringContaining('call `scientific_visual_plan` before any renderer')
+    }))
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'tool-request-1',
       tool: 'research_search',

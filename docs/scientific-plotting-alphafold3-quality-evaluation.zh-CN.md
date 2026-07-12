@@ -22,7 +22,7 @@
 
 1. 调用 `scientific_plotting_research_brief` 生成 AlphaFold 3 的论文图意图、figure conclusion、证据链、图型选择和 prompt 基础。
 2. 生成三类图：模型结构/机制图、benchmark 数据图、多 panel 综合图。
-3. 先生成 first render，再调用 `image_generation_plan/render`，固定 `gpt-image-2` 做视觉 polish。
+3. 先生成 first render，再调用 `image_generation_prepare/render`，由 Model Router 配置的图像模型做视觉 polish。
 4. 对 before/after 运行 review，输出相似度评分、warnings、人工观察和 contact sheet。
 
 ## 结果摘要
@@ -51,4 +51,4 @@
 2. 对严格数据图采用“代码/矢量重渲染 + 非数据 overlay”策略，不让图像模型直接重画柱、点、误差线和坐标轴。
 3. 将 multi-panel spec 标准化：每个 panel 绑定数据源、结论、图型、caption、锁定事实和允许修改范围。
 4. 在运行时策略中强制论文图流程：先 `scientific_plotting_research_brief`，再给用户确认图型/分析角度，最后生成 first render 和可选 polish。
-5. Canvas 审改回路应输出结构化修改意图，例如“换颜色”“放大局部”“加 callout”，并根据图型选择 scientific plotting 或 image-generation，而不是只把自由文本交给模型。
+5. VisualDocument 审改回路应输出结构化修改意图，例如“换颜色”“放大局部”“加 callout”，并根据图型选择 scientific plotting 或 image-generation，而不是只把自由文本交给模型。

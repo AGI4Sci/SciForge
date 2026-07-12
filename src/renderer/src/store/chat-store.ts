@@ -85,6 +85,7 @@ import {
 import { createNavigationActions } from './chat-store-navigation-actions'
 import { createThreadActions } from './chat-store-thread-actions'
 import { createMaintenanceActions } from './chat-store-maintenance-actions'
+import { createFocusActions, clearedAgentFocusState } from './chat-store-focus-actions'
 import { trackZustandSet } from '../lib/performance-monitor'
 
 export type { AppRoute, SettingsRouteSection } from './chat-store-types'
@@ -121,6 +122,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   threadSearch: '',
   showArchivedThreads: false,
   activeThreadId: null,
+  ...clearedAgentFocusState(),
   activeThreadGoal: null,
   activeThreadTodos: null,
   activeThreadContextState: null,
@@ -197,6 +199,8 @@ export const useChatStore = create<ChatState>((set, get) => {
     formatRuntimeError,
     shouldOpenSettingsForError
   }),
+
+  ...createFocusActions(trackedSet, get),
 
   ...createNavigationActions({ set: trackedSet, get, sseAbortRef }),
 

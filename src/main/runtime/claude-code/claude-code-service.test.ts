@@ -478,7 +478,7 @@ describe('ClaudeCodeRuntimeService', () => {
       settings: async () => settings(),
       storageRoot: await serviceRoot(),
       managedConfigDir: '/tmp/sciforge-claude-config',
-      computerUseMcpLaunch: computerUseLaunch,
+      managedMcp: { computerUseMcp: { launch: computerUseLaunch } },
       claudeAgentSdk: sdk
     })
 

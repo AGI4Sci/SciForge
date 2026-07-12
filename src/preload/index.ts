@@ -147,8 +147,6 @@ const api = {
     ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:image-generation-config', { workspaceRoot }),
-  buildSciforgeCanvasMcpConfig: (workspaceRoot) =>
-    ipcRenderer.invoke('mcp:sciforge-canvas-config', { workspaceRoot }),
   buildPptMasterMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:ppt-master-config', { workspaceRoot }),
   getScientificSkillsStatus: (workspaceRoot) =>
@@ -159,34 +157,28 @@ const api = {
     ipcRenderer.invoke('scientific-plotting:status', { workspaceRoot }),
   prepareScientificPlottingReference: (request) =>
     ipcRenderer.invoke('scientific-plotting:prepare-reference', request),
-  getSciforgeCanvasStatus: (workspaceRoot) =>
-    ipcRenderer.invoke('sciforge-canvas:status', { workspaceRoot }),
-  getLocalDrawioUrl: () =>
-    ipcRenderer.invoke('drawio:local-url'),
-  openSciforgeCanvas: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:open', request),
-  saveSciforgeCanvas: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:save', request),
-  saveSciforgeCanvasSelection: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:save-selection', request),
-  insertSciforgeCanvasArtifact: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:insert-artifact', request),
-  importRecentSciforgeCanvasArtifacts: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:import-recent-artifacts', request),
-  splitSciforgeCanvasArtifactComponents: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:split-artifact-components', request),
-  exportSciforgeCanvasReviewPacket: (request) =>
-    ipcRenderer.invoke('sciforge-canvas:export-review-packet', request),
-  extractFigureStyle: (request) =>
-    ipcRenderer.invoke('figure-style:extract', request),
-  extractFigureStyleReference: (request) =>
-    ipcRenderer.invoke('figure-style:extract-reference', request),
-  saveFigureStyleSpec: (request) =>
-    ipcRenderer.invoke('figure-style:save-spec', request),
-  evaluateFigureStyle: (request) =>
-    ipcRenderer.invoke('figure-style:evaluate', request),
-  reviewFigureStyle: (request) =>
-    ipcRenderer.invoke('figure-style:review', request),
+  getVisualDocumentStatus: (workspaceRoot) =>
+    ipcRenderer.invoke('visual-document:status', { workspaceRoot }),
+  openVisualDocument: (request) =>
+    ipcRenderer.invoke('visual-document:open', request),
+  insertVisualDocumentArtifact: (request) =>
+    ipcRenderer.invoke('visual-document:insert-artifact', request),
+  updateVisualDocumentContext: (request) =>
+    ipcRenderer.invoke('visual-document:update-context', request),
+  saveVisualDocumentAnnotations: (request) =>
+    ipcRenderer.invoke('visual-document:save-annotations', request),
+  exportVisualReviewPacket: (request) =>
+    ipcRenderer.invoke('visual-document:export-review-packet', request),
+  createVisualCandidateRevision: (request) =>
+    ipcRenderer.invoke('visual-document:create-candidate', request),
+  acceptVisualCandidateRevision: (request) =>
+    ipcRenderer.invoke('visual-document:accept-candidate', request),
+  rejectVisualCandidateRevision: (request) =>
+    ipcRenderer.invoke('visual-document:reject-candidate', request),
+  extractVisualStyleProfile: (request) =>
+    ipcRenderer.invoke('visual-style:extract-profile', request),
+  saveVisualStyleProfile: (request) =>
+    ipcRenderer.invoke('visual-style:save-profile', request),
   listSkills: (workspaceRoot) =>
     ipcRenderer.invoke('skill:list', { workspaceRoot }),
   saveSkillFile: (rootPath, skillName, content) =>
@@ -427,6 +419,7 @@ const api = {
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
   getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
   updateEvidenceDag: (input) => ipcRenderer.invoke('evidenceDag:update', input),
+  setEvidenceDagPriority: (input) => ipcRenderer.invoke('evidenceDag:priority', input),
   resolveEvidenceDagEvidencePreview: (input) =>
     ipcRenderer.invoke('evidenceDag:resolve-evidence-preview', input),
   getProjectDagView: (input) => ipcRenderer.invoke('projectDag:view', input),

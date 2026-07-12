@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "SciForge controlled image generation and canvas-based image editing MCP worker.",
+  "description": "SciForge controlled image generation and VisualDocument review MCP worker.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": true,

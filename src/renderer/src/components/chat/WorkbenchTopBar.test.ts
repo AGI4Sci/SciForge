@@ -110,6 +110,19 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
     expect(html).toContain('animate-pulse')
   })
 
+  it('marks deep child interactions that need the user', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'file',
+      onToggleRightPanelMode: vi.fn(),
+      childAgentCount: 3,
+      childAgentAttentionCount: 1,
+      onOpenChildAgents: vi.fn()
+    }))
+
+    expect(html).toContain('aria-label="1 child agent(s) need your attention"')
+    expect(html).toContain('bg-red-500')
+  })
+
   it('hides the side chat entry when the side conversation gate is unavailable', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,

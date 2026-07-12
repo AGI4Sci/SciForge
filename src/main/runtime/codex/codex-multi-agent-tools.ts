@@ -37,6 +37,11 @@ type ActiveRequest = {
   turnId?: string
 }
 
+type CachedMultiAgentRequest = {
+  promise: Promise<CodexAppServerDynamicToolCallResponse>
+  settled: boolean
+}
+
 export function createCodexMultiAgentToolBridge(
   options: CodexMultiAgentToolBridgeOptions
 ): CodexMultiAgentToolBridge {
@@ -46,6 +51,10 @@ export function createCodexMultiAgentToolBridge(
 export class CodexMultiAgentToolBridge {
   private readonly runtime: MultiAgentRuntime
   private readonly activeRequests = new Set<ActiveRequest>()
+  private readonly requestsByIdempotencyKey = new Map<
+    string,
+    CachedMultiAgentRequest
+  >()
 
   constructor(private readonly options: CodexMultiAgentToolBridgeOptions) {
     this.runtime = new MultiAgentRuntime({
@@ -102,6 +111,36 @@ export class CodexMultiAgentToolBridge {
     if (!request.threadId) return failedMultiAgentResponse('delegate_task requires threadId.')
     if (!request.turnId) return failedMultiAgentResponse('delegate_task requires turnId.')
 
+    // App-server can replay the same dynamic tool request while reconnecting.
+    // Reuse the original promise so one logical request cannot create two child
+    // runs. The turn is part of the key deliberately: restarting the parent
+    // creates a new, visible attempt instead of reviving an interrupted run.
+    const idempotencyKey = multiAgentRequestKey(request.threadId, request.turnId, request.requestId)
+    const existing = this.requestsByIdempotencyKey.get(idempotencyKey)
+    if (existing) return existing.promise
+
+    const execution = this.executeToolCall({
+      ...request,
+      threadId: request.threadId,
+      turnId: request.turnId
+    }, input)
+    const cachedRequest: CachedMultiAgentRequest = { promise: execution, settled: false }
+    this.requestsByIdempotencyKey.set(idempotencyKey, cachedRequest)
+    // Keep both successful and failed outcomes in the bounded settled cache.
+    // In-flight entries are never capacity-evicted, preserving exactly-once
+    // execution even when more than the settled cache limit run concurrently.
+    void execution.then(
+      () => this.settleCachedRequest(idempotencyKey, cachedRequest),
+      () => this.settleCachedRequest(idempotencyKey, cachedRequest)
+    )
+    return execution
+  }
+
+  private async executeToolCall(
+    request: CodexAppServerDynamicToolCallRequest & { threadId: string; turnId: string },
+    input: ReturnType<typeof parseSpawnAgentArguments>
+  ): Promise<CodexAppServerDynamicToolCallResponse> {
+
     const active = { controller: new AbortController(), threadId: request.threadId, turnId: request.turnId }
     this.activeRequests.add(active)
     try {
@@ -120,6 +159,22 @@ export class CodexMultiAgentToolBridge {
     }
   }
 
+  private settleCachedRequest(key: string, cachedRequest: CachedMultiAgentRequest): void {
+    if (this.requestsByIdempotencyKey.get(key) !== cachedRequest) return
+    cachedRequest.settled = true
+    this.trimSettledRequestCache()
+  }
+
+  private trimSettledRequestCache(): void {
+    const maxSettledEntries = 256
+    const settledKeys = [...this.requestsByIdempotencyKey.entries()]
+      .filter(([, request]) => request.settled)
+      .map(([key]) => key)
+    for (let index = 0; index < settledKeys.length - maxSettledEntries; index += 1) {
+      this.requestsByIdempotencyKey.delete(settledKeys[index])
+    }
+  }
+
   abortRequestsForTurn(threadId: string, turnId: string): number {
     let aborted = 0
     for (const request of this.activeRequests) {
@@ -134,6 +189,10 @@ export class CodexMultiAgentToolBridge {
   async child(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null> {
     return this.runtime.child(parentThreadId, childId)
   }
+}
+
+function multiAgentRequestKey(threadId: string, turnId: string, requestId: string | number): string {
+  return `${threadId}\u0000${turnId}\u0000${String(requestId)}`
 }
 
 export function codexChildFromMultiAgentRecord(

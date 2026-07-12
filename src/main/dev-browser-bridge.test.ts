@@ -355,11 +355,11 @@ describe('dev browser bridge server', () => {
       port: 0
     })
 
-    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn', 'sciforge-canvas:open'] as const) {
+    for (const channel of ['agentRuntime:connect', 'agentRuntime:startTurn', 'visual-document:open'] as const) {
       const response = await postJson('/invoke', {
         channel,
-        payload: channel === 'sciforge-canvas:open'
-          ? { workspaceRoot: '/tmp/workspace', canvasId: 'thread-test' }
+        payload: channel === 'visual-document:open'
+          ? { workspaceRoot: '/tmp/workspace', documentId: 'thread-test' }
           : { runtimeId: 'sciforge' }
       })
 

@@ -8,9 +8,7 @@ import {
   type ScientificPlottingRenderRequest,
   type ScientificPlottingResearchBriefRequest,
   type ScientificPlottingReviewPacketRequest,
-  type ScientificPlottingReviewRequest,
   type ScientificPlottingStyleProfilesRequest,
-  type ScientificPlottingStyleTransferRequest
 } from './types'
 import {
   createScientificPlottingResearchBrief,
@@ -18,12 +16,10 @@ import {
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
   mapScientificPlottingData,
-  planScientificPlotting,
   prepareScientificPlottingReference,
-  renderScientificPlot,
-  reviewScientificPlottingOutput,
-  runScientificPlottingStyleTransfer
+  renderScientificPlot
 } from './scientific-plotting-engine'
+import { planScientificVisual } from './scientific-visual-planner'
 import { SCIENTIFIC_PLOTTING_MCP_FLAG } from './contract'
 
 type McpLaunchOptions = {
@@ -43,6 +39,15 @@ const CONTROLLED_WRITE_ANNOTATIONS = {
   idempotentHint: false,
   openWorldHint: false
 } as const
+
+const controlledPlottingPlanSchema = z.object({
+  route: z.enum(['deterministic_plot', 'hybrid_composite']),
+  routeLocked: z.literal(true),
+  rationale: z.string().trim().min(1).max(2000),
+  reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
+  truthLockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
+  fallbackPolicy: z.literal('fail_closed')
+}).strict()
 
 function parseArgValue(argv: string[], flag: string): string | undefined {
   const index = argv.indexOf(flag)
@@ -205,33 +210,38 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     }
   })
 
-  server.registerTool('scientific_plotting_plan', {
-    title: 'Plan Scientific Plot',
-    description: `Plan a controlled scientific plot from user intent and choose the best template before rendering. ${TEMPLATE_SELECTION_DESCRIPTION} Does not emit executable shell or Python commands.`,
+  server.registerTool('scientific_visual_plan', {
+    title: 'Plan Scientific Visual',
+    description: 'Lock one general scientific-visual production route before rendering. The calling model must inspect the task and submit a structured decision. Choose deterministic_plot when exact data, axes, statistics, coordinates, or reproducibility dominate; choose generative_visual for conceptual or illustrative composition without data-bearing marks; choose hybrid_composite when deterministic truth layers and generated conceptual composition are both required. The returned route is fail-closed and cannot silently fall back to another route.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
-      task: z.string().trim().min(1),
-      templateHint: templateSchema.optional(),
-      styleSpec: z.unknown().optional(),
-      styleSpecPath: z.string().trim().max(4096).optional(),
-      styleProfileId: z.string().trim().max(160).optional(),
-      referencePath: z.string().trim().max(4096).optional()
+      task: z.string().trim().min(1).max(16000),
+      action: z.enum(['create', 'revision']).optional(),
+      visualDocumentId: z.string().trim().min(1).max(160).optional(),
+      reviewPacketPath: z.string().trim().min(1).max(4096).optional(),
+      sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64).optional(),
+      decision: z.object({
+        route: z.enum(['deterministic_plot', 'generative_visual', 'hybrid_composite']),
+        rationale: z.string().trim().min(1).max(2000),
+        reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).max(64),
+        truthLockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64)
+      }).strict()
     },
     annotations: READ_ONLY_ANNOTATIONS
-  }, async ({ workspaceRoot, task, templateHint, styleSpec, styleSpecPath, styleProfileId, referencePath }) => {
+  }, async ({ workspaceRoot, task, action, visualDocumentId, reviewPacketPath, sourceArtifacts, decision }) => {
     try {
-      const plan = await planScientificPlotting({
+      const plan = planScientificVisual({
         workspaceRoot: workspaceRoot?.trim() || options.workspaceRoot,
         task,
-        templateHint,
-        ...(styleSpec ? { styleSpec: styleSpec as never } : {}),
-        ...(styleSpecPath ? { styleSpecPath } : {}),
-        ...(styleProfileId ? { styleProfileId } : {}),
-        ...(referencePath ? { referencePath } : {})
+        ...(action ? { action } : {}),
+        ...(visualDocumentId ? { visualDocumentId } : {}),
+        ...(reviewPacketPath ? { reviewPacketPath } : {}),
+        ...(sourceArtifacts ? { sourceArtifacts } : {}),
+        decision
       })
-      return textResult(jsonSummary('Scientific plotting plan.', plan), { plan })
+      return textResult(jsonSummary('Scientific visual plan.', plan), { plan })
     } catch (error) {
-      return errorResult(`Failed to plan scientific plot: ${error instanceof Error ? error.message : String(error)}`)
+      return errorResult(`Failed to plan scientific visual: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 
@@ -240,6 +250,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     description: `Map structured data or tabular records into a controlled scientific_plotting_render request after choosing a template. ${TEMPLATE_SELECTION_DESCRIPTION} Does not render or write files.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
+      scientificVisualPlan: controlledPlottingPlanSchema,
       task: z.string().trim().min(1),
       data: z.unknown(),
       labels: z.object({
@@ -258,7 +269,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       figureId: z.string().trim().max(120).optional(),
       outputDir: z.string().trim().max(4096).optional(),
       outputScale: z.number().min(1).max(4).optional(),
-      canvasId: z.string().trim().max(120).optional(),
+      visualDocumentId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional(),
       autoRepair: z.object({
         enabled: z.boolean().optional(),
@@ -271,6 +282,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     try {
       const request: ScientificPlottingDataMappingRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        scientificVisualPlan: input.scientificVisualPlan,
         task: input.task,
         data: input.data,
         ...(input.labels ? { labels: input.labels } : {}),
@@ -283,7 +295,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         ...(input.figureId ? { figureId: input.figureId } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.outputScale ? { outputScale: input.outputScale } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
       }
@@ -301,9 +313,10 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_render', {
     title: 'Render Scientific Plot',
-    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} For flowchart/schematic-grid inputs, this tool returns a diagram draft handoff and the next step is image_generation_plan/image_generation_render. If unsure, call scientific_plotting_plan or scientific_plotting_map_data first.`,
+    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} Call scientific_visual_plan before choosing a rendering route; use this renderer only when its locked execution stages select it.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
+      scientificVisualPlan: controlledPlottingPlanSchema,
       template: templateSchema,
       data: z.unknown(),
       labels: z.object({
@@ -321,7 +334,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       reviewReferencePath: z.string().trim().max(4096).optional(),
       outputDir: z.string().trim().max(4096).optional(),
       outputScale: z.number().min(1).max(4).optional(),
-      canvasId: z.string().trim().max(120).optional(),
+      visualDocumentId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional(),
       autoRepair: z.object({
         enabled: z.boolean().optional(),
@@ -334,6 +347,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     try {
       const request: ScientificPlottingRenderRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        scientificVisualPlan: input.scientificVisualPlan,
         template: input.template,
         data: input.data,
         ...(input.labels ? { labels: input.labels } : {}),
@@ -345,7 +359,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.outputScale ? { outputScale: input.outputScale } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
       }
@@ -361,81 +375,9 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     }
   })
 
-  server.registerTool('scientific_plotting_style_transfer', {
-    title: 'Run Scientific Plotting Style Transfer',
-    description: `Run the v2 controlled paper-figure style-transfer workflow: prepare/reference-match, plan, map data, render, review, and write a review packet. ${TEMPLATE_SELECTION_DESCRIPTION}`,
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      task: z.string().trim().min(1),
-      data: z.unknown(),
-      labels: z.object({
-        title: z.string().trim().max(300).optional(),
-        x: z.string().trim().max(200).optional(),
-        y: z.string().trim().max(200).optional(),
-        legend: z.boolean().optional(),
-        panel: z.string().trim().max(16).optional()
-      }).strict().optional(),
-      templateHint: templateSchema.optional(),
-      reference: z.object({
-        sourcePath: z.string().trim().max(4096).optional(),
-        referencePath: z.string().trim().max(4096).optional(),
-        sourceType: z.enum(['image', 'pdf']).optional(),
-        page: z.number().int().min(1).max(5000).optional(),
-        cropBox: cropBoxSchema.optional(),
-        figureId: z.string().trim().max(120).optional(),
-        dpi: z.number().min(72).max(360).optional()
-      }).strict().optional(),
-      styleSpec: z.unknown().optional(),
-      styleSpecPath: z.string().trim().max(4096).optional(),
-      styleProfileId: z.string().trim().max(160).optional(),
-      figureId: z.string().trim().max(120).optional(),
-      outputDir: z.string().trim().max(4096).optional(),
-      outputScale: z.number().min(1).max(4).optional(),
-      canvasId: z.string().trim().max(120).optional(),
-      threadId: z.string().trim().max(120).optional(),
-      autoRepair: z.object({
-        enabled: z.boolean().optional(),
-        maxAttempts: z.union([z.literal(0), z.literal(1)]).optional(),
-        minOverall: z.number().min(0.5).max(0.98).optional()
-      }).strict().optional(),
-      createReviewPacket: z.boolean().optional()
-    },
-    annotations: CONTROLLED_WRITE_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ScientificPlottingStyleTransferRequest = {
-        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        task: input.task,
-        data: input.data,
-        ...(input.labels ? { labels: input.labels } : {}),
-        ...(input.templateHint ? { templateHint: input.templateHint } : {}),
-        ...(input.reference ? { reference: input.reference } : {}),
-        ...(input.styleSpec ? { styleSpec: input.styleSpec as never } : {}),
-        ...(input.styleSpecPath ? { styleSpecPath: input.styleSpecPath } : {}),
-        ...(input.styleProfileId ? { styleProfileId: input.styleProfileId } : {}),
-        ...(input.figureId ? { figureId: input.figureId } : {}),
-        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
-        ...(input.outputScale ? { outputScale: input.outputScale } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.autoRepair ? { autoRepair: input.autoRepair } : {}),
-        ...(input.createReviewPacket !== undefined ? { createReviewPacket: input.createReviewPacket } : {})
-      }
-      const result = await runScientificPlottingStyleTransfer(request)
-      return textResult(
-        result.ok
-          ? jsonSummary(`Scientific plotting style transfer: ${result.status}.`, result)
-          : jsonSummary(`Scientific plotting style transfer failed: ${result.status}.`, result),
-        { result }
-      )
-    } catch (error) {
-      return errorResult(`Failed to run scientific plotting style transfer: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
   server.registerTool('scientific_plotting_prepare_reference', {
     title: 'Prepare Scientific Plot Reference',
-    description: 'Crop a workspace image or PDF page into a PNG reference, then optionally extract FigureStyleSpec and template profile.',
+    description: 'Crop a workspace image or PDF page into a PNG reference, then optionally extract a VisualStyleProfile and template profile.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       sourcePath: z.string().trim().min(1).max(4096),
@@ -470,33 +412,6 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       )
     } catch (error) {
       return errorResult(`Failed to prepare scientific plotting reference: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
-  server.registerTool('scientific_plotting_review', {
-    title: 'Review Scientific Plot Style',
-    description: 'Compare a rendered output figure with a reference image and return interpretable style scores and repair suggestions.',
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      referencePath: z.string().trim().min(1).max(4096),
-      outputPath: z.string().trim().min(1).max(4096),
-      template: templateSchema.optional(),
-      minOverall: z.number().min(0.5).max(0.98).optional()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ScientificPlottingReviewRequest = {
-        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        referencePath: input.referencePath,
-        outputPath: input.outputPath,
-        ...(input.template ? { template: input.template } : {}),
-        ...(input.minOverall ? { minOverall: input.minOverall } : {})
-      }
-      const review = await reviewScientificPlottingOutput(request)
-      return textResult(jsonSummary('Scientific plotting style review.', review), { review })
-    } catch (error) {
-      return errorResult(`Failed to review scientific plot: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 

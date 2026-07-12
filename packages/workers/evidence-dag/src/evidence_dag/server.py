@@ -317,6 +317,14 @@ class Handler(BaseHTTPRequestHandler):
                                            "snapshot": snapshot.to_dict() if snapshot else None},
                                           summary=f"{len(g.nodes)} nodes / {len(g.edges)} edges",
                                           operation="graph", request_id=rid, started=started))
+            if action == "staging":
+                g = self.engine.provisional_graph(tid)
+                if g is None:
+                    raise KeyError(tid)
+                return self._send(200, ok({"summary": g.summary(), "graph": g.to_dict(),
+                                           "snapshot": None, "layer": "staging"},
+                                          summary=f"{len(g.nodes)} provisional nodes / {len(g.edges)} provisional edges",
+                                          operation="staging", request_id=rid, started=started))
             if action == "metrics":
                 return self._send(200, ok(self.engine.metrics(tid), operation="metrics", request_id=rid, started=started))
             if action == "analysis":

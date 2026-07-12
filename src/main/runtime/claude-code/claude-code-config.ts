@@ -12,8 +12,11 @@ import {
   type ApprovalPolicy,
   type SandboxMode
 } from '../../../shared/app-settings'
-import { buildClaudeCodeManagedGuiMcpServers } from '../../gui-mcp-registry'
-import type { ComputerUseMcpLaunchConfig } from '../../computer-use-mcp-config'
+import {
+  buildClaudeCodeManagedGuiMcpServers,
+  type GuiMcpRegistryInput
+} from '../../gui-mcp-registry'
+import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -51,7 +54,7 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   reasoningEffort?: string
   env?: NodeJS.ProcessEnv
   managedConfigDir?: string
-  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
+  managedMcp?: Omit<GuiMcpRegistryInput, 'settings'>
 }): Promise<ClaudeCodeSdkLaunchConfig> {
   const runtime = getClaudeRuntimeSettings(options.settings)
   const command = runtime.command.trim()
@@ -72,7 +75,7 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   })
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
   const pathToClaudeCodeExecutable = command === 'claude' ? undefined : command
-  const mcpServers = claudeCodeMcpServers(options.settings, options.computerUseMcpLaunch)
+  const mcpServers = claudeCodeMcpServers(options.settings, options.managedMcp)
   const reasoningOptions = claudeCodeReasoningOptions(options.reasoningEffort)
   const sdkOptions: ClaudeAgentSdkOptions = {
     cwd,
@@ -84,6 +87,15 @@ export async function prepareClaudeCodeSdkLaunch(options: {
     ...(options.sessionId ? { resume: options.sessionId } : {}),
     ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
     ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
+    ...(hasScientificVisualMcpServers(mcpServers)
+      ? {
+          systemPrompt: {
+            type: 'preset' as const,
+            preset: 'claude_code' as const,
+            append: SCIENTIFIC_VISUAL_RUNTIME_POLICY
+          }
+        }
+      : {}),
     ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {})
   }
   return {
@@ -98,15 +110,20 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   }
 }
 
+function hasScientificVisualMcpServers(
+  servers: NonNullable<ClaudeAgentSdkOptions['mcpServers']>
+): boolean {
+  return Object.prototype.hasOwnProperty.call(servers, 'scientific_plotting')
+    && Object.prototype.hasOwnProperty.call(servers, 'image_generation')
+}
+
 function claudeCodeMcpServers(
   settings: AppSettingsV1,
-  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
+  managedMcp: Omit<GuiMcpRegistryInput, 'settings'> = {}
 ): NonNullable<ClaudeAgentSdkOptions['mcpServers']> {
   return buildClaudeCodeManagedGuiMcpServers({
     settings,
-    computerUseMcp: computerUseMcpLaunch
-      ? { settings, launch: computerUseMcpLaunch }
-      : undefined
+    ...managedMcp
   })
 }
 

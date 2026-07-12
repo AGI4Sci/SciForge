@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 330" role="img" aria-labelledby="title desc">
+  <title id="title">SciForge Core Engine</title>
+  <desc id="desc">Four Core Engine modules in SciForge: Agent Runtime, Workflow and Automation Engine, Goal-Centered Research Memory, and Evidence and Governance Engine.</desc>
+  <defs>
+    <style>
+      .card { fill: #ffffff; stroke: #d6e0e7; stroke-width: 2; }
+      .ink { fill: #23313a; font-family: Inter, Arial, sans-serif; }
+      .muted { fill: #5d6f7a; font-family: Inter, Arial, sans-serif; }
+      .stroke { stroke: #23313a; stroke-width: 6; stroke-linecap: round; stroke-linejoin: round; }
+      .thin { stroke: #667985; stroke-width: 5; stroke-linecap: round; }
+    </style>
+    <linearGradient id="soft" x1="0" y1="45" x2="0" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="tealblue" x1="75" y1="54" x2="176" y2="160" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="goldteal" x1="148" y1="130" x2="214" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4B942"/>
+      <stop offset="1" stop-color="#18A999"/>
+    </linearGradient>
+    <linearGradient id="target" x1="90" y1="65" x2="165" y2="140" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#EF6F6C"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <linearGradient id="local" x1="83" y1="173" x2="173" y2="231" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4B942"/>
+      <stop offset="1" stop-color="#18A999"/>
+    </linearGradient>
+    <filter id="softShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#23313A" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+
+  <rect class="card" x="24" y="24" width="240" height="282" rx="18"/>
+  <rect class="card" x="288" y="24" width="240" height="282" rx="18"/>
+  <rect class="card" x="552" y="24" width="240" height="282" rx="18"/>
+  <rect class="card" x="816" y="24" width="220" height="282" rx="18"/>
+
+  <g transform="translate(38 18) scale(.74)">
+    <circle cx="128" cy="122" r="40" fill="url(#tealblue)" class="stroke"/>
+    <path d="M110 122h36M128 104v36" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+    <circle cx="128" cy="122" r="8" fill="#FFFFFF" stroke="#23313A" stroke-width="4"/>
+    <rect x="36" y="42" width="80" height="44" rx="14" fill="url(#soft)" class="stroke" filter="url(#softShadow)"/>
+    <text x="76" y="70" text-anchor="middle" class="ink" font-size="17" font-weight="700">Codex</text>
+    <rect x="140" y="42" width="80" height="44" rx="14" fill="#FFFFFF" class="stroke" filter="url(#softShadow)"/>
+    <text x="180" y="70" text-anchor="middle" class="ink" font-size="16" font-weight="700">Claude</text>
+    <rect x="88" y="188" width="80" height="44" rx="14" fill="#FFF7E6" class="stroke" filter="url(#softShadow)"/>
+    <text x="128" y="216" text-anchor="middle" class="ink" font-size="17" font-weight="700">Local</text>
+    <path d="M94 86l22 22M162 86l-22 22M128 162v26" fill="none" class="stroke"/>
+    <path d="M55 102c-12 10-19 25-19 42s7 32 19 42M201 102c12 10 19 25 19 42s-7 32-19 42" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round" opacity="0.72"/>
+  </g>
+  <text x="144" y="220" text-anchor="middle" class="ink" font-size="22" font-weight="700">Agent Runtime</text>
+  <text x="144" y="250" text-anchor="middle" class="muted" font-size="15">Routes tasks across Codex,</text>
+  <text x="144" y="270" text-anchor="middle" class="muted" font-size="15">Claude Code, and local runtimes.</text>
+
+  <g transform="translate(302 18) scale(.74)">
+    <rect x="40" y="53" width="64" height="50" rx="12" fill="url(#soft)" class="stroke"/>
+    <rect x="152" y="53" width="64" height="50" rx="12" fill="#FFFFFF" class="stroke"/>
+    <rect x="40" y="153" width="64" height="50" rx="12" fill="#FFFFFF" class="stroke"/>
+    <rect x="152" y="153" width="64" height="50" rx="12" fill="url(#goldteal)" class="stroke"/>
+    <path d="M104 78h48M184 103v50M152 178h-48M72 153v-50" fill="none" class="stroke"/>
+    <path d="M139 65l15 13-15 13M171 139l13 15 13-15M117 165l-15 13 15 13M85 117l-13-15-13 15" fill="none" class="stroke"/>
+    <circle cx="184" cy="178" r="18" fill="#FFFFFF" class="stroke"/>
+    <path d="M184 166v12l9 6" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M58 78h28M170 78h28M58 178h28" fill="none" class="thin"/>
+  </g>
+  <text x="408" y="214" text-anchor="middle" class="ink" font-size="21" font-weight="700">Workflow &amp;</text>
+  <text x="408" y="239" text-anchor="middle" class="ink" font-size="21" font-weight="700">Automation Engine</text>
+  <text x="408" y="267" text-anchor="middle" class="muted" font-size="15">Turns research protocols into</text>
+  <text x="408" y="287" text-anchor="middle" class="muted" font-size="15">automated pipelines.</text>
+
+  <g transform="translate(566 18) scale(.74)">
+    <path d="M64 39h103l25 25v153c0 9-7 16-16 16H64c-9 0-16-7-16-16V55c0-9 7-16 16-16Z" fill="url(#soft)" class="stroke"/>
+    <path d="M167 39v26h25" fill="#FFFFFF" class="stroke"/>
+    <circle cx="128" cy="101" r="37" fill="url(#target)" class="stroke"/>
+    <circle cx="128" cy="101" r="21" fill="#FFFFFF" class="stroke"/>
+    <circle cx="128" cy="101" r="8" fill="#18A999" class="stroke"/>
+    <path d="M86 162h84M86 184h57M86 206h70" fill="none" class="thin"/>
+    <circle cx="74" cy="162" r="5" fill="#18A999"/>
+    <circle cx="74" cy="184" r="5" fill="#F4B942"/>
+    <circle cx="74" cy="206" r="5" fill="#EF6F6C"/>
+  </g>
+  <text x="672" y="214" text-anchor="middle" class="ink" font-size="20" font-weight="700">Goal-Centered</text>
+  <text x="672" y="238" text-anchor="middle" class="ink" font-size="20" font-weight="700">Research Memory</text>
+  <text x="672" y="266" text-anchor="middle" class="muted" font-size="15">Preserves goals, decisions, and</text>
+  <text x="672" y="286" text-anchor="middle" class="muted" font-size="15">project state across sessions.</text>
+
+  <g transform="translate(827 18) scale(.74)">
+    <path d="M128 31l80 28v59c0 54-32 88-80 111-48-23-80-57-80-111V59l80-28Z" fill="url(#soft)" class="stroke"/>
+    <circle cx="128" cy="115" r="34" fill="url(#tealblue)" class="stroke"/>
+    <path d="M111 116l13 13 26-31" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="83" cy="74" r="10" fill="#F4B942" class="stroke"/>
+    <circle cx="173" cy="74" r="10" fill="#EF6F6C" class="stroke"/>
+    <circle cx="84" cy="168" r="10" fill="#7C5CFF" class="stroke"/>
+    <circle cx="173" cy="168" r="10" fill="#18A999" class="stroke"/>
+    <path d="M93 79l22 22M163 80l-22 22M94 164l22-25M162 164l-22-25" fill="none" stroke="#23313A" stroke-width="5" stroke-linecap="round"/>
+  </g>
+  <text x="926" y="214" text-anchor="middle" class="ink" font-size="20" font-weight="700">Evidence &amp;</text>
+  <text x="926" y="238" text-anchor="middle" class="ink" font-size="20" font-weight="700">Governance Engine</text>
+  <text x="926" y="266" text-anchor="middle" class="muted" font-size="15">Verifies provenance, evidence,</text>
+  <text x="926" y="286" text-anchor="middle" class="muted" font-size="15">and approval gates.</text>
+</svg>

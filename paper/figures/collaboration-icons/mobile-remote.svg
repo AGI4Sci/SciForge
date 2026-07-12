@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Mobile Remote</title>
+  <desc id="desc">A mobile remote supervision icon with approvals, alerts, and progress.</desc>
+  <defs>
+    <linearGradient id="phone" x1="74" y1="28" x2="182" y2="226" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E8F0F5"/>
+    </linearGradient>
+    <linearGradient id="check" x1="98" y1="89" x2="160" y2="151" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="70" y="28" width="116" height="200" rx="25" fill="url(#phone)" stroke="#23313A" stroke-width="8"/>
+  <path d="M111 52h34" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="128" cy="205" r="7" fill="#23313A"/>
+  <rect x="91" y="72" width="74" height="31" rx="9" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <path d="M103 88h29M144 88h8" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="128" cy="132" r="31" fill="url(#check)" stroke="#23313A" stroke-width="6"/>
+  <path d="M113 133l10 10 21-24" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M96 178h64" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <path d="M96 178h39" fill="none" stroke="#F4B942" stroke-width="6" stroke-linecap="round"/>
+  <path d="M192 72c12 8 20 22 20 37s-8 29-20 37M204 54c20 14 33 34 33 55s-13 41-33 55" fill="none" stroke="#18A999" stroke-width="7" stroke-linecap="round"/>
+</svg>

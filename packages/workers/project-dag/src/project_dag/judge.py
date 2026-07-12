@@ -12,6 +12,10 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
+from collections.abc import Iterator
 from typing import Any, Optional
 
 from .store import Store
@@ -76,6 +80,16 @@ Missing information must produce uncertain, never passed. Output STRICT JSON:
 }
 
 
+class JudgePreparationRequired(RuntimeError):
+    """Signals that a model response must be prepared outside a transaction."""
+
+    def __init__(self, task_type: str, payload: dict, vote_seed: int = 0) -> None:
+        super().__init__(f"model judgement requires preparation: {task_type}")
+        self.task_type = task_type
+        self.payload = payload
+        self.vote_seed = vote_seed
+
+
 def _parse_json(text: str) -> dict:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text)
@@ -89,24 +103,116 @@ class Judge:
     def __init__(self, llm: Any, store: Optional[Store] = None) -> None:
         self.llm = llm          # evidence_dag.llm.LLM protocol (chat())
         self.store = store
+        self._prepared: dict[str, dict] = {}
+        self._prepared_lock = threading.RLock()
+        self._local = threading.local()
 
-    def __call__(self, task_type: str, payload: dict, *, vote_seed: int = 0) -> dict:
+    @contextmanager
+    def model_calls_forbidden(self) -> Iterator[None]:
+        previous = bool(getattr(self._local, "model_calls_forbidden", False))
+        self._local.model_calls_forbidden = True
+        try:
+            yield
+        finally:
+            self._local.model_calls_forbidden = previous
+
+    @staticmethod
+    def _request(task_type: str, payload: dict, vote_seed: int = 0) -> tuple[str, str, str]:
         system = PROMPTS[task_type]
         user = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         key = hashlib.sha1(f"{task_type}|{vote_seed}|{user}".encode("utf-8")).hexdigest()
-        if self.store is not None:
-            cached = self.store.cache_get(key)
-            if cached is not None:
-                return json.loads(cached)
+        return key, system, user
+
+    def _invoke(self, task_type: str, payload: dict, vote_seed: int = 0) -> dict:
+        _, system, user = self._request(task_type, payload, vote_seed)
         if vote_seed:
             user += f'\n(vote {vote_seed})'
         raw = self.llm.chat(
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
             temperature=0.3 if vote_seed else 0.0)
-        out = _parse_json(raw)
+        return _parse_json(raw)
+
+    def __call__(self, task_type: str, payload: dict, *, vote_seed: int = 0) -> dict:
+        key, _, _ = self._request(task_type, payload, vote_seed)
+        with self._prepared_lock:
+            prepared = self._prepared.get(key)
+        if prepared is not None:
+            return dict(prepared)
         if self.store is not None:
-            self.store.cache_put(key, task_type, json.dumps(out, ensure_ascii=False))
+            with self.store.transaction_lock:
+                cached = self.store.cache_get(key)
+                if cached is not None:
+                    return json.loads(cached)
+                if bool(getattr(self._local, "model_calls_forbidden", False)):
+                    raise JudgePreparationRequired(task_type, payload, vote_seed)
+        out = self._invoke(task_type, payload, vote_seed)
+        if self.store is not None:
+            with self.store.transaction_lock:
+                self.store.cache_put(key, task_type, json.dumps(out, ensure_ascii=False))
+                # Outside the compiler's explicit atomic transaction, keep
+                # cache persistence as its own short write so later model calls
+                # do not inherit a transaction opened by cache_put.
+                self.store.conn.commit()
         return out
+
+    def warm_many(self, requests: list[tuple[str, dict, int]], *, workers: int = 4) -> list[dict]:
+        """Prepare model judgements without holding a SQLite write transaction.
+
+        Cache reads and the final cache flush are short serialized sections;
+        network calls run concurrently in between.  The in-memory prepared map
+        also guarantees the following compiler transaction cannot miss a
+        warmed response even if cache persistence is unavailable.
+        """
+        if not requests:
+            return []
+        unique: dict[str, tuple[str, dict, int]] = {}
+        for task_type, payload, vote_seed in requests:
+            key, _, _ = self._request(task_type, payload, vote_seed)
+            unique.setdefault(key, (task_type, payload, vote_seed))
+
+        resolved: dict[str, dict] = {}
+        lock = self.store.transaction_lock if self.store is not None else self._prepared_lock
+        with lock:
+            for key in unique:
+                with self._prepared_lock:
+                    prepared = self._prepared.get(key)
+                if prepared is not None:
+                    resolved[key] = prepared
+                    continue
+                if self.store is not None:
+                    cached = self.store.cache_get(key)
+                    if cached is not None:
+                        resolved[key] = json.loads(cached)
+
+        missing = [(key, request) for key, request in unique.items() if key not in resolved]
+
+        def invoke(item: tuple[str, tuple[str, dict, int]]) -> tuple[str, dict]:
+            key, (task_type, payload, vote_seed) = item
+            return key, self._invoke(task_type, payload, vote_seed)
+
+        if missing:
+            with ThreadPoolExecutor(max_workers=max(1, min(workers, len(missing)))) as executor:
+                for key, output in executor.map(invoke, missing):
+                    resolved[key] = output
+
+        with self._prepared_lock:
+            self._prepared.update({key: dict(value) for key, value in resolved.items()})
+        if self.store is not None and missing:
+            with self.store.transaction_lock:
+                try:
+                    for key, (task_type, _, _) in missing:
+                        self.store.cache_put(
+                            key, task_type, json.dumps(resolved[key], ensure_ascii=False))
+                    self.store.conn.commit()
+                except Exception:
+                    self.store.conn.rollback()
+                    raise
+
+        outputs = []
+        for task_type, payload, vote_seed in requests:
+            key, _, _ = self._request(task_type, payload, vote_seed)
+            outputs.append(dict(resolved[key]))
+        return outputs
 
     def entity_votes(self, payload: dict, n: int = 3) -> tuple[bool, float]:
         """N-vote majority for entity resolution. Returns (same, confidence)
@@ -127,13 +233,36 @@ class StubJudge:
     def __init__(self, handlers: Optional[dict] = None) -> None:
         self.handlers = handlers or {}
         self.calls: list[tuple[str, dict]] = []
+        self._prepared: dict[str, dict] = {}
+
+    @staticmethod
+    def _key(task_type: str, payload: dict, vote_seed: int = 0) -> str:
+        user = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha1(f"{task_type}|{vote_seed}|{user}".encode("utf-8")).hexdigest()
 
     def __call__(self, task_type: str, payload: dict, *, vote_seed: int = 0) -> dict:
+        prepared = self._prepared.get(self._key(task_type, payload, vote_seed))
+        if prepared is not None:
+            return dict(prepared)
         self.calls.append((task_type, payload))
         h = self.handlers.get(task_type)
         if h is None:
             raise KeyError(f"StubJudge: no handler for {task_type}")
         return h(payload)
+
+    def warm_many(self, requests: list[tuple[str, dict, int]], *, workers: int = 4) -> list[dict]:
+        del workers
+        outputs = []
+        for task_type, payload, vote_seed in requests:
+            key = self._key(task_type, payload, vote_seed)
+            if key not in self._prepared:
+                self.calls.append((task_type, payload))
+                handler = self.handlers.get(task_type)
+                if handler is None:
+                    raise KeyError(f"StubJudge: no handler for {task_type}")
+                self._prepared[key] = handler(payload)
+            outputs.append(dict(self._prepared[key]))
+        return outputs
 
     def entity_votes(self, payload: dict, n: int = 3) -> tuple[bool, float]:
         out = self("entity_same", payload)

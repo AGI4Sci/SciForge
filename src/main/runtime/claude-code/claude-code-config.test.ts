@@ -217,7 +217,7 @@ describe('claude-code config launch helpers', () => {
       text: 'hello',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
-      computerUseMcpLaunch: computerUseLaunch
+      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
     })
 
     expect(launch.sdkOptions.mcpServers).toMatchObject({
@@ -236,6 +236,27 @@ describe('claude-code config launch helpers', () => {
       }
     })
     expect(launch.sdkOptions.mcpServers).not.toHaveProperty('gui_computer_use')
+  })
+
+  it('injects scientific visual tools and the shared route policy into Claude tasks', async () => {
+    const launch = await prepareClaudeCodeSdkLaunch({
+      settings: settings(),
+      text: 'Beautify a paper figure.',
+      workspace: '/tmp/workspace',
+      managedConfigDir: '/tmp/claude-managed',
+      managedMcp: {
+        scientificPlottingMcp: { launch: computerUseLaunch },
+        imageGenerationMcp: { launch: computerUseLaunch }
+      }
+    })
+
+    expect(launch.sdkOptions.mcpServers).toHaveProperty('scientific_plotting')
+    expect(launch.sdkOptions.mcpServers).toHaveProperty('image_generation')
+    expect(launch.sdkOptions.systemPrompt).toMatchObject({
+      type: 'preset',
+      preset: 'claude_code',
+      append: expect.stringContaining('call `scientific_visual_plan` before any renderer')
+    })
   })
 
   it('rejects launch options when the text reasoner is incomplete', async () => {
@@ -267,7 +288,7 @@ describe('claude-code config launch helpers', () => {
       text: 'hello',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
-      computerUseMcpLaunch: computerUseLaunch
+      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
     })
 
     expect(launch.sdkOptions.mcpServers).toBeUndefined()
@@ -290,7 +311,7 @@ describe('claude-code config launch helpers', () => {
       text: 'hello',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
-      computerUseMcpLaunch: computerUseLaunch
+      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
     })
 
     expect(launch.sdkOptions.mcpServers).toBeUndefined()

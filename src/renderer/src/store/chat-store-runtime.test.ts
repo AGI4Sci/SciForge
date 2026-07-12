@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { dispatchAgentRuntimeEvent } from '../agent/agent-runtime-event-dispatcher'
 import type { ChatBlock } from '../agent/types'
-import { clearBusyWatchdog, resetBusyRecoveryAttempts, stopRuntimeThreadRefreshPoll } from './chat-store-schedulers'
+import {
+  clearBusyWatchdog,
+  resetBusyRecoveryAttempts,
+  stopRuntimeThreadRefreshPoll,
+  stopTurnCompletionPoll
+} from './chat-store-schedulers'
 
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
@@ -21,6 +26,7 @@ import {
   MAX_WATCHED_COMPLETION_NOTIFICATIONS,
   rememberPendingRemoteChannelMirror,
   takePendingRemoteChannelMirror,
+  syncTurnCompletionPoll,
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import type { ChatState, ChatStoreSet } from './chat-store-types'
@@ -28,6 +34,7 @@ import type { ChatState, ChatStoreSet } from './chat-store-types'
 afterEach(() => {
   clearBusyWatchdog()
   stopRuntimeThreadRefreshPoll()
+  stopTurnCompletionPoll()
   resetBusyRecoveryAttempts()
   vi.useRealTimers()
   registryMock.getProvider.mockReset()
@@ -62,7 +69,8 @@ function makeSinkHarness(overrides: Partial<ChatState> = {}): {
     threads: [],
     recoverActiveTurn: vi.fn(async () => true),
     refreshThreads: vi.fn(),
-    drainQueuedMessages: vi.fn()
+    drainQueuedMessages: vi.fn(),
+    drainQueuedMessagesForThread: vi.fn(async () => false)
   } as unknown as ChatState
   state = { ...state, ...overrides }
   const get = (): ChatState => state
@@ -78,6 +86,37 @@ function makeSinkHarness(overrides: Partial<ChatState> = {}): {
 }
 
 describe('thread event sink binding', () => {
+  it('drains a watched background thread when polling observes completion', async () => {
+    const drainQueuedMessagesForThread = vi.fn(async () => true)
+    const refreshThreads = vi.fn(async () => undefined)
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{ kind: 'assistant', id: 'done-a', text: 'done' }],
+        latestSeq: 4,
+        threadStatus: 'idle'
+      })),
+      rememberThreadRuntime: vi.fn()
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-b',
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { 'thread-a': true },
+      drainQueuedMessagesForThread,
+      refreshThreads,
+      threads: []
+    } as Partial<ChatState>)
+
+    syncTurnCompletionPoll(set, get)
+
+    await vi.waitFor(() => {
+      expect(drainQueuedMessagesForThread).toHaveBeenCalledWith('thread-a')
+    })
+    expect(getState().activeThreadId).toBe('thread-b')
+    expect(getState().watchTurnCompletion).toEqual({})
+    expect(refreshThreads).toHaveBeenCalled()
+  })
+
   it('requests an immediate thread refresh when a thread lifecycle event arrives', async () => {
     const refreshThreads = vi.fn(async () => undefined)
     const { set, get } = makeSinkHarness({

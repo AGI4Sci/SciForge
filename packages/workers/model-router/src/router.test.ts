@@ -177,6 +177,94 @@ test('image generations route through the configured image generator without exp
       n: 1,
     });
     assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
+
+    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
+    assert.equal(trace.schemaVersion, 'sciforge.model-router.image-generation-trace.v1');
+    assert.equal(trace.route, 'model-router.images.generations');
+    assert.equal(trace.profileId, 'default');
+    assert.equal(trace.role, 'imageGenerator');
+    assert.equal(trace.upstreamModel, 'image-model');
+    assert.equal(trace.status, 'completed');
+    assert.equal(typeof trace.latencyMs, 'number');
+    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
+    const traceText = JSON.stringify(trace);
+    assert.doesNotMatch(traceText, /Draw a cell diagram|generated-pixels|image-secret|image-provider|image\.example|base64|b64_json/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('image generation provider failures write a safe failed routing trace', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-failure-trace-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch([], [
+      Response.json({ error: { message: 'private upstream failure with image-secret' } }, { status: 503 }),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'private failure prompt' }),
+    });
+    assert.equal(response.status, 503);
+
+    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
+    assert.equal(trace.profileId, 'default');
+    assert.equal(trace.role, 'imageGenerator');
+    assert.equal(trace.upstreamModel, 'image-model');
+    assert.equal(trace.status, 'failed');
+    assert.equal(trace.errorSummary, 'provider_http_503');
+    assert.equal(typeof trace.latencyMs, 'number');
+    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
+    assert.doesNotMatch(JSON.stringify(trace), /private failure prompt|private upstream failure|image-secret|image-provider|image\.example/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('image generation provider timeouts write a safe failed routing trace', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-timeout-trace-'));
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: async () => {
+      throw new DOMException('private provider request timed out', 'AbortError');
+    },
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'private timeout prompt' }),
+    });
+    assert.equal(response.status, 500);
+    const body = await response.json() as Record<string, { code?: string }>;
+    assert.equal(body.error?.code, 'provider_exception_timeout');
+
+    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
+    assert.equal(trace.profileId, 'default');
+    assert.equal(trace.role, 'imageGenerator');
+    assert.equal(trace.upstreamModel, 'image-model');
+    assert.equal(trace.status, 'failed');
+    assert.equal(trace.errorSummary, 'provider_exception_timeout');
+    assert.equal(typeof trace.latencyMs, 'number');
+    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
+    assert.doesNotMatch(JSON.stringify(trace), /private timeout prompt|private provider request|image-secret|image-provider|image\.example/i);
   } finally {
     await server.close();
   }
@@ -1374,6 +1462,57 @@ test('pure text responses are routed only to the configured text reasoner', asyn
     assert.match(traceText, /"toolCount":\s*0/);
     assert.match(traceText, /"stopReason":\s*"stop"/);
     assert.match(traceText, /"latencyMs":\s*\d+/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('interactive responses preempt in-flight Evidence DAG provider work', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-dag-preemption-'));
+  let markBackgroundStarted!: () => void;
+  const backgroundStarted = new Promise<void>((resolve) => { markBackgroundStarted = resolve; });
+  let backgroundAborted = false;
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
+    const serialized = JSON.stringify(body.messages ?? []);
+    if (serialized.includes('background evidence extraction')) {
+      markBackgroundStarted();
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          backgroundAborted = true;
+          reject(new DOMException('preempted by interactive request', 'AbortError'));
+        }, { once: true });
+      });
+    }
+    return Response.json(chatCompletion('interactive answer'));
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl,
+  });
+
+  try {
+    const background = fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'background evidence extraction',
+        metadata: { source: 'evidence-dag', operation: 'extract-or-verify' },
+      }),
+    });
+    await backgroundStarted;
+    const interactive = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'interactive user request' }),
+    });
+    assert.equal(interactive.status, 200);
+    assert.equal(backgroundAborted, true);
+    assert.equal((await background).status, 500);
   } finally {
     await server.close();
   }
@@ -3334,6 +3473,171 @@ test('scientific file uploads are translated to evidence via the managed sci-mod
     assert.doesNotMatch(traceText, /sci-modality\.example|SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN|sci-modality-runtime-token/);
   } finally {
     await server.close();
+  }
+});
+
+test('only allowlisted protein FASTA, PDB/mmCIF, and SMILES files reach the scientific translator with an explicit modality', async () => {
+  const cases = [
+    { filename: 'sample.fasta', payload: '>protein\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ\n', modality: 'protein' },
+    { filename: 'sample.pdb', payload: 'ATOM      1  N   MET A   1      11.104  13.207   9.556  1.00 20.00           N\n', modality: 'protein_structure' },
+    { filename: 'sample.mmcif', payload: 'data_protein\nloop_\n_atom_site.group_PDB\n_atom_site.id\nATOM 1\n', modality: 'protein_structure' },
+    { filename: 'sample.smiles', payload: 'CC(=O)OC1=CC=CC=C1C(=O)O\n', modality: 'molecule' },
+  ] as const;
+
+  for (const entry of cases) {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), `sciforge-model-router-supported-${entry.modality}-`));
+    const uploadDir = join(workspaceRoot, '.sciforge', 'uploads', 'session-sci');
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(join(uploadDir, entry.filename), entry.payload);
+    const calls: CapturedFetch[] = [];
+    const server = await startModelRouterServer({
+      port: 0,
+      config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+      env: {
+        ...testEnv(),
+        SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
+      },
+      workspaceRoot,
+      fetchImpl: captureFetch(calls, [
+        Response.json({
+          ok: true,
+          data: { modality: entry.modality, model: `test-${entry.modality}`, summary: 'Safe expert evidence.' },
+        }),
+        chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'Done.' })),
+      ]),
+    });
+
+    try {
+      const response = await fetch(`${server.url}/v1/responses`, {
+        method: 'POST',
+        headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          model: 'sciforge-router',
+          input: [{
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Inspect this scientific object.' },
+              { type: 'input_object', ref: `.sciforge/uploads/session-sci/${entry.filename}`, mimeType: 'text/plain', title: entry.filename },
+            ],
+          }],
+        }),
+      });
+
+      assert.equal(response.status, 200, entry.filename);
+      assert.equal(calls.length, 2, entry.filename);
+      assert.match(calls[0]?.url ?? '', /\/modality\/translate$/);
+      assert.equal(calls[0]?.body.modality, entry.modality);
+      assert.equal(calls[0]?.body.payload, entry.payload);
+      assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+      assert.doesNotMatch(JSON.stringify(calls[1]?.body), new RegExp(entry.payload.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    } finally {
+      await server.close();
+    }
+  }
+});
+
+test('DNA, RNA, and nucleotide-ambiguous FASTA fail closed without calling translator or reasoner', async () => {
+  const cases = [
+    { filename: 'dna.fasta', payload: '>PRIVATE_DNA_RECORD\nACGTACGTACGTACGTACGT\n' },
+    { filename: 'rna.fa', payload: '>PRIVATE_RNA_RECORD\nAUGCAUGCAUGCAUGCAUGC\n' },
+    { filename: 'ambiguous.fasta', payload: '>PRIVATE_AMBIGUOUS_RECORD\nACGTNRYWSKMBDHVACGTN\n' },
+  ] as const;
+
+  for (const entry of cases) {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-nucleotide-fasta-'));
+    const uploadDir = join(workspaceRoot, '.sciforge', 'uploads', 'session-sci');
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(join(uploadDir, entry.filename), entry.payload);
+    const calls: CapturedFetch[] = [];
+    const server = await startModelRouterServer({
+      port: 0,
+      config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+      env: {
+        ...testEnv(),
+        SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
+      },
+      workspaceRoot,
+      fetchImpl: captureFetch(calls, []),
+    });
+
+    try {
+      const response = await fetch(`${server.url}/v1/responses`, {
+        method: 'POST',
+        headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          model: 'sciforge-router',
+          input: [{
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Inspect this FASTA.' },
+              { type: 'input_object', ref: `.sciforge/uploads/session-sci/${entry.filename}`, mimeType: 'text/plain', title: entry.filename },
+            ],
+          }],
+        }),
+      });
+
+      assert.equal(response.status, 415, entry.filename);
+      const body = await response.json() as Record<string, any>;
+      assert.equal(body.error?.code, 'scientific_modality_unsupported');
+      assert.match(body.error?.message ?? '', /raw object text was not sent/i);
+      assert.doesNotMatch(JSON.stringify(body), /PRIVATE_(?:DNA|RNA|AMBIGUOUS)_RECORD/);
+      assert.equal(calls.length, 0, entry.filename);
+    } finally {
+      await server.close();
+    }
+  }
+});
+
+test('protected VCF, BED, GFF, and MGF files fail closed without calling translator or reasoner', async () => {
+  const cases = [
+    { filename: 'variants.vcf', payload: '##fileformat=VCFv4.2\n#CHROM POS ID REF ALT\nPRIVATE_VCF_PAYLOAD\n' },
+    { filename: 'regions.bed', payload: 'chr1\t10\t20\tPRIVATE_BED_PAYLOAD\n' },
+    { filename: 'genes.gff', payload: 'chr1\tprivate\tgene\t1\t10\t.\t+\t.\tID=PRIVATE_GFF_PAYLOAD\n' },
+    { filename: 'spectrum.mgf', payload: 'BEGIN IONS\nTITLE=PRIVATE_MGF_PAYLOAD\n100.0 42\nEND IONS\n' },
+  ] as const;
+
+  for (const entry of cases) {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-unsupported-scientific-'));
+    const uploadDir = join(workspaceRoot, '.sciforge', 'uploads', 'session-sci');
+    await mkdir(uploadDir, { recursive: true });
+    await writeFile(join(uploadDir, entry.filename), entry.payload);
+    const calls: CapturedFetch[] = [];
+    const server = await startModelRouterServer({
+      port: 0,
+      config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+      env: {
+        ...testEnv(),
+        SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'sci-modality-runtime-token',
+      },
+      workspaceRoot,
+      fetchImpl: captureFetch(calls, []),
+    });
+
+    try {
+      const response = await fetch(`${server.url}/v1/responses`, {
+        method: 'POST',
+        headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({
+          model: 'sciforge-router',
+          input: [{
+            role: 'user',
+            content: [
+              { type: 'input_text', text: 'Inspect this scientific object.' },
+              { type: 'input_object', ref: `.sciforge/uploads/session-sci/${entry.filename}`, mimeType: 'text/plain', title: entry.filename },
+            ],
+          }],
+        }),
+      });
+
+      assert.equal(response.status, 415, entry.filename);
+      const body = await response.json() as Record<string, any>;
+      assert.equal(body.error?.code, 'scientific_modality_unsupported');
+      assert.match(body.error?.message ?? '', /raw object text was not sent/i);
+      assert.doesNotMatch(JSON.stringify(body), /PRIVATE_(?:VCF|BED|GFF|MGF)_PAYLOAD/);
+      assert.equal(calls.length, 0, entry.filename);
+    } finally {
+      await server.close();
+    }
   }
 });
 

@@ -1,16 +1,39 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas'
+import { createHash } from 'node:crypto'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   editFrameworkComponentsWithImage2,
-  editImageFromCanvasPacket,
+  editImageFromVisualReviewPacket,
   getImageGenerationStatus,
-  planImageGeneration,
-  renderImageGeneration,
+  planImageGeneration as planImageGenerationEngine,
+  renderImageGeneration as renderImageGenerationEngine,
+  reviewVisualArtifact,
   segmentImageGenerationComponents
 } from './image-generation-engine'
+
+function planImageGeneration(
+  request: Parameters<typeof planImageGenerationEngine>[0]
+) {
+  return planImageGenerationEngine({
+    ...request,
+    ...(!request.scientificVisualPlan && !request.creativeDirect ? { creativeDirect: true as const } : {})
+  })
+}
+
+function renderImageGeneration(
+  request: Parameters<typeof renderImageGenerationEngine>[0]
+) {
+  return renderImageGenerationEngine({
+    ...request,
+    recipe: {
+      ...request.recipe,
+      ...(!request.recipe.scientificVisualPlan && !request.recipe.creativeDirect ? { creativeDirect: true as const } : {})
+    }
+  })
+}
 
 let workspaceRoot = ''
 let previousAllowPlaceholder: string | undefined
@@ -67,20 +90,94 @@ afterEach(() => {
 })
 
 describe('image generation engine', () => {
+  const generativeScientificPlan = {
+    route: 'generative_visual' as const,
+    routeLocked: true as const,
+    rationale: 'The requested artifact explains scientific concepts rather than encoding numeric data.',
+    reproducibleInputs: [],
+    truthLockedElements: ['scientific labels and relationships'],
+    fallbackPolicy: 'fail_closed' as const
+  }
+
   it('reports a degraded placeholder provider when no Model Router image endpoint is configured', async () => {
     const status = await getImageGenerationStatus(workspaceRoot)
 
     expect(status.ok).toBe(true)
     expect(status.provider).toBe('placeholder')
     expect(status.configured).toBe(false)
-    expect(status.defaultModel).toBe('gpt-image-2')
+    expect(status.defaultModel).toBe('sciforge-router')
     expect(status.warnings.length).toBeGreaterThan(0)
+  })
+
+  it('fails closed when semantic visual review cannot reach Model Router vision', async () => {
+    const outputPath = join(workspaceRoot, 'review.png')
+    const canvas = createCanvas(256, 256)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+
+    const review = await reviewVisualArtifact({
+      workspaceRoot,
+      outputPath,
+      task: 'Review a publication figure.',
+      truthLockedElements: ['all labels remain legible']
+    })
+
+    expect(review).toMatchObject({ ok: false, status: 'vision_review_unavailable' })
+  })
+
+  it('uses Model Router vision for semantic overlap and legibility review', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const outputPath = join(workspaceRoot, 'broken-layout.png')
+    const canvas = createCanvas(256, 256)
+    const context = canvas.getContext('2d')
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, 256, 256)
+    context.fillStyle = '#111827'
+    context.fillRect(20, 20, 210, 210)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      output_text: JSON.stringify({
+        pass: false,
+        score: 0.12,
+        summary: 'Major elements overlap and labels are illegible.',
+        violations: ['Large overlapping shapes obscure the content.'],
+        repairInstructions: ['Rebuild the layout with non-overlapping regions.']
+      })
+    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    globalThis.fetch = fetchMock as typeof fetch
+
+    const review = await reviewVisualArtifact({
+      workspaceRoot,
+      outputPath,
+      task: 'Create a clean publication pipeline figure.',
+      truthLockedElements: ['pipeline stage labels']
+    })
+
+    expect(review).toMatchObject({
+      ok: true,
+      reviewedArtifactPath: outputPath,
+      reviewedArtifactHash: createHash('sha256').update(readFileSync(outputPath)).digest('hex'),
+      repairable: true,
+      semantic: {
+        pass: false,
+        violations: ['Large overlapping shapes obscure the content.']
+      },
+      score: { semantic: 0.12 }
+    })
+    if (!review.ok) throw new Error(review.message)
+    expect(Date.parse(review.reviewedAt)).not.toBeNaN()
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(String(fetchMock.mock.calls[0]?.[0])).toBe('http://127.0.0.1:3892/v1/responses')
+    const request = fetchMock.mock.calls[0]?.[1] as RequestInit
+    expect(String(request.body)).toContain('input_image')
   })
 
   it('plans semantic flowcharts from prose as image-generation work', async () => {
     const plan = await planImageGeneration({
       workspaceRoot,
-      task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator usage from a paper excerpt.'
+      task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator usage from a paper excerpt.',
+      scientificVisualPlan: generativeScientificPlan
     })
 
     expect(plan.ok).toBe(true)
@@ -91,8 +188,7 @@ describe('image generation engine', () => {
       suggestedBriefTool: 'scientific_plotting_research_brief',
       suggestedSearchTool: 'research_search'
     })
-    expect(plan.visualRouting.modelSelectionHint).toContain('prose-to-visual flowcharts')
-    expect(plan.visualRouting.useScientificPlottingWhen.join(' ')).toContain('structured numeric data charts')
+    expect(plan.scientificVisualPlan).toEqual(generativeScientificPlan)
     expect(plan.recipe.prompt).toContain('SciForge semantic visual brief')
     expect(plan.recipe.prompt).toContain('full-canvas composition')
   })
@@ -112,7 +208,8 @@ describe('image generation engine', () => {
     const plan = await planImageGeneration({
       workspaceRoot,
       task: 'A clean scientific cover-style illustration',
-      size: { width: 1280, height: 900 }
+      size: { width: 1280, height: 900 },
+      scientificVisualPlan: generativeScientificPlan
     })
 
     expect(plan.ok).toBe(true)
@@ -130,7 +227,8 @@ describe('image generation engine', () => {
         mode: 'text_to_image',
         prompt: '新建一张流程图，介绍 Transformer 框架和 Attention 数据流。',
         size: { width: 1024, height: 768 },
-        outputFormat: 'png'
+        outputFormat: 'png',
+        scientificVisualPlan: generativeScientificPlan
       }
     })
 
@@ -159,7 +257,8 @@ describe('image generation engine', () => {
           'Next controlled tool: research_search first, then scientific_plotting_research_brief again.'
         ].join('\n'),
         size: { width: 1024, height: 768 },
-        outputFormat: 'png'
+        outputFormat: 'png',
+        scientificVisualPlan: generativeScientificPlan
       }
     })
 
@@ -204,11 +303,14 @@ describe('image generation engine', () => {
       task: 'A Nature Methods scientific diagram of meiotic entry with labeled TF and kinase data traces',
       stylePreset: 'scientific_diagram',
       referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
-      size: { width: 768, height: 512 }
+      size: { width: 768, height: 512 },
+      scientificVisualPlan: generativeScientificPlan
     })
 
+    expect(plan.ok).toBe(true)
+    if (!plan.ok) throw new Error(plan.message)
     expect(plan.artifactPolicy).toContain('visual base layer')
-    expect(plan.canvasWorkflow.join(' ')).toMatch(/script all labels/)
+    expect(plan.visualReviewWorkflow.join(' ')).toMatch(/script all labels/)
     expect(plan.warnings.join(' ')).toMatch(/deterministic scripts/)
 
     const result = await renderImageGeneration({
@@ -236,6 +338,19 @@ describe('image generation engine', () => {
         role: 'visual_composition_base',
         deterministicOverlayRequired: true
       }
+    })
+  })
+
+  it('requires a locked unified visual plan for scientific image preparation', async () => {
+    const result = await planImageGenerationEngine({
+      workspaceRoot,
+      task: 'A scientific mechanism diagram explaining protein regulation'
+    })
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'scientific_visual_plan_required',
+      suggestedPlanTool: 'scientific_visual_plan'
     })
   })
 
@@ -274,6 +389,11 @@ describe('image generation engine', () => {
           allowedOperations: ['panel_stitching', 'callout_overlay', 'visual_unification'],
           lockedFacts: ['numeric values', 'axes labels', 'p-values'],
           handoffPrompt: 'Use visual delta polish only; do not replace scientific panels.'
+        },
+        scientificVisualPlan: {
+          ...generativeScientificPlan,
+          route: 'hybrid_composite',
+          reproducibleInputs: ['.sciforge/figures/benchmark.manifest.json']
         }
       }
     })
@@ -305,18 +425,18 @@ describe('image generation engine', () => {
     })
   })
 
-  it('records Canvas handoff metadata without mutating Canvas state directly', async () => {
+  it('records VisualDocument review metadata without mutating review state directly', async () => {
     process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
 
     const result = await renderImageGeneration({
       workspaceRoot,
-      imageId: 'canvas-handoff',
-      canvasId: 'canvas-123',
+      imageId: 'visual-review-handoff',
+      visualDocumentId: 'visual-document-123',
       threadId: 'thread-456',
-      insertToCanvas: true,
+      stageForVisualReview: true,
       recipe: {
         mode: 'text_to_image',
-        prompt: 'A Canvas handoff image',
+        prompt: 'A VisualDocument review image',
         size: { width: 512, height: 320 },
         outputFormat: 'png'
       }
@@ -325,14 +445,16 @@ describe('image generation engine', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.message)
     expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
-      canvasId: 'canvas-123',
-      threadId: 'thread-456'
+      visualDocumentId: 'visual-document-123',
+      threadId: 'thread-456',
+      stageForVisualReview: true
     })
     expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
-      canvasId: 'canvas-123',
-      threadId: 'thread-456'
+      visualDocumentId: 'visual-document-123',
+      threadId: 'thread-456',
+      stageForVisualReview: true
     })
-    expect(existsSync(join(workspaceRoot, '.sciforge/canvases/canvas-123'))).toBe(false)
+    expect(existsSync(join(workspaceRoot, '.sciforge/visual-documents/visual-document-123'))).toBe(false)
   })
 
   it('rejects output directories outside the workspace', async () => {
@@ -424,6 +546,33 @@ describe('image generation engine', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('fails closed on image provider errors without creating a substitute artifact', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    globalThis.fetch = vi.fn(async () => new Response(JSON.stringify({
+      error: { message: 'upstream unavailable' }
+    }), {
+      status: 503,
+      headers: { 'content-type': 'application/json' }
+    })) as unknown as typeof fetch
+
+    const result = await renderImageGeneration({
+      workspaceRoot,
+      imageId: 'provider-failure-no-fallback',
+      recipe: {
+        mode: 'text_to_image',
+        prompt: 'A conceptual landscape illustration',
+        size: { width: 512, height: 512 },
+        outputFormat: 'png'
+      }
+    })
+
+    expect(result).toMatchObject({ ok: false, status: 'provider_failed' })
+    expect(existsSync(join(workspaceRoot, '.sciforge/images/provider-failure-no-fallback.png'))).toBe(false)
+    expect(existsSync(join(workspaceRoot, '.sciforge/images/provider-failure-no-fallback.manifest.json'))).toBe(false)
+  })
+
   it('asks the image endpoint for unlabeled scientific base images', async () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
@@ -455,7 +604,8 @@ describe('image generation engine', () => {
         prompt: 'Scientific figure showing meiotic entry labels and quantitative data tracks',
         referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
         size: { width: 512, height: 512 },
-        outputFormat: 'png'
+        outputFormat: 'png',
+        scientificVisualPlan: generativeScientificPlan
       }
     })
 
@@ -544,41 +694,6 @@ describe('image generation engine', () => {
     })
   })
 
-  it('keeps recipe provider model metadata behind the Model Router public alias', async () => {
-    const pngBase64 =
-      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
-    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
-    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
-    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      expect(JSON.parse(String(init?.body ?? '{}'))).toMatchObject({
-        model: 'sciforge-router'
-      })
-      return new Response(JSON.stringify({
-        data: [{ b64_json: pngBase64 }]
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' }
-      })
-    })
-    globalThis.fetch = fetchMock as unknown as typeof fetch
-
-    const result = await renderImageGeneration({
-      workspaceRoot,
-      imageId: 'provider-model-behind-alias',
-      recipe: {
-        mode: 'text_to_image',
-        model: 'gpt-image-2',
-        prompt: 'A tiny generated image',
-        size: { width: 512, height: 512 },
-        outputFormat: 'png'
-      }
-    })
-
-    expect(result.ok).toBe(true)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
   it('retries the images endpoint with a text field for providers that do not accept prompt', async () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
@@ -633,7 +748,7 @@ describe('image generation engine', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ text: 'A tiny generated image' })
   })
 
-  it('keeps Canvas color edits source-preserving instead of running unrelated text-to-image generation', async () => {
+  it('keeps visual-review color edits source-preserving instead of running unrelated text-to-image generation', async () => {
     const sourcePath = join(workspaceRoot, 'source-diagram.png')
     const canvas = createCanvas(240, 160)
     const ctx = canvas.getContext('2d')
@@ -655,33 +770,40 @@ describe('image generation engine', () => {
     ctx.fillText('B', 170, 58)
     writeFileSync(sourcePath, canvas.toBuffer('image/png'))
 
-    const result = await editImageFromCanvasPacket({
+    const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
       imageId: 'color-edited-diagram',
       reviewPacket: {
-        version: 1,
-        canvasId: 'thread-test',
-        artifacts: [
-          {
-            shapeId: 'shape:diagram',
-            artifactKind: 'generated_image',
-            outputPath: 'source-diagram.png',
-            title: 'Diagram'
-          }
-        ],
-        modificationSuggestions: [
-          {
-            targetShapeId: 'shape:diagram',
-            annotationShapeId: 'shape:annotation',
-            instruction: '换个颜色'
-          }
-        ]
+        schemaVersion: 1,
+        documentId: 'visual-document-test',
+        sourceArtifact: {
+          kind: 'generated_image',
+          sourcePath: 'source-diagram.png',
+          workingCopyPath: 'source-diagram.png'
+        },
+        annotations: [{
+          id: 'annotation-color',
+          kind: 'box',
+          geometry: { kind: 'box', bounds: { x: 0.05, y: 0.1, width: 0.9, height: 0.7 } },
+          instruction: '换个颜色',
+          targetNodeIds: ['diagram-root'],
+          status: 'open'
+        }],
+        truthLocks: [{ description: 'Preserve labels A and B' }],
+        styleProfileRef: '.sciforge/visual-styles/manuscript-default.json'
       }
     })
 
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.message)
     expect(result.status).toBe('edited')
+    expect(result.intents).toHaveLength(1)
+    expect(result.intents[0]).toMatchObject({
+      annotationIds: ['annotation-color'],
+      targetNodeIds: ['diagram-root']
+    })
+    expect(result.intents[0]?.instruction).toContain('Preserve labels A and B')
+    expect(result.intents[0]?.instruction).toContain('.sciforge/visual-styles/manuscript-default.json')
     expect(result.outputs[0]?.provider).toBe('controlled-edit')
     expect(existsSync(result.outputs[0]!.outputPath)).toBe(true)
     expect(readFileSync(result.outputs[0]!.outputPath).equals(readFileSync(sourcePath))).toBe(false)
@@ -690,6 +812,15 @@ describe('image generation engine', () => {
     const output = await loadImage(result.outputs[0]!.outputPath)
     expect(output.width).toBe(240)
     expect(output.height).toBe(160)
+  })
+
+  it('rejects packets outside the VisualDocument review schema', async () => {
+    const result = await editImageFromVisualReviewPacket({
+      workspaceRoot,
+      reviewPacket: { schemaVersion: 0 }
+    })
+
+    expect(result).toMatchObject({ ok: false, status: 'invalid_packet' })
   })
 
   it('segments generated framework images into component assets and edits selected component IDs', async () => {

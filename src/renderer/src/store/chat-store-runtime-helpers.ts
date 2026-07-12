@@ -7,6 +7,7 @@ import type {
 import { normalizeUserMessageManagedBy } from '../agent/types'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import type { ChatState } from './chat-store-types'
+import { clearedAgentFocusState } from './chat-store-focus-actions'
 
 type ThreadDetailProviderLike = {
   getThreadDetail: (threadId: string) => Promise<{ blocks: ChatBlock[] }>
@@ -212,9 +213,14 @@ export function clearedThreadSelection(): Pick<
   | 'turnReasoningFirstAtByUserId'
   | 'turnReasoningLastAtByUserId'
   | 'inspectorSelectedId'
-  | 'queuedMessages'
+  | 'focusedAgentThreadId'
+  | 'focusedAgentRuntimeId'
+  | 'agentFocusLineage'
+  | 'agentFocusHistory'
+  | 'agentFocusHistoryIndex'
 > {
   return {
+    ...clearedAgentFocusState(),
     activeThreadId: null,
     activeThreadGoal: null,
     activeThreadTodos: null,
@@ -231,8 +237,7 @@ export function clearedThreadSelection(): Pick<
     turnDurationByUserId: {},
     turnReasoningFirstAtByUserId: {},
     turnReasoningLastAtByUserId: {},
-    inspectorSelectedId: null,
-    queuedMessages: []
+    inspectorSelectedId: null
   }
 }
 

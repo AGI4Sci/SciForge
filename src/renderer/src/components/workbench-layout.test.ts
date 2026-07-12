@@ -109,8 +109,8 @@ describe('shouldCloseRightPanelOnThreadChange', () => {
     expect(shouldCloseRightPanelOnThreadChange('file')).toBe(false)
   })
 
-  it('closes thread-bound right panels across thread changes', () => {
-    expect(shouldCloseRightPanelOnThreadChange('child-agents')).toBe(true)
+  it('keeps child agents open so the panel follows the newly focused thread', () => {
+    expect(shouldCloseRightPanelOnThreadChange('child-agents')).toBe(false)
   })
 
   it('keeps the web preview open across thread changes', () => {

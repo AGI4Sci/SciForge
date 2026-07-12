@@ -1,5 +1,5 @@
 import { AlertTriangle, ChevronDown, Loader2, Network, PanelRightClose, Play, RefreshCw, RotateCcw } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { AgentRuntimeId } from '@shared/app-settings'
 import type {
@@ -12,6 +12,7 @@ import type {
 import {
   handleEvidenceDagPreviewMessage
 } from './evidence-dag-preview-bridge'
+import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
 
 type Props = {
   activeThreadId: string | null
@@ -110,6 +111,17 @@ export function EvidenceDagPanel({
     ) : null,
     [requestedNodeId, runtimeId, threadId, view]
   )
+  const status = view?.status
+  const updatePanelPriority = useCallback((visible: boolean) => {
+    if (!threadId || !runtimeId || typeof window.sciforge?.setEvidenceDagPriority !== 'function') return
+    void window.sciforge.setEvidenceDagPriority({ runtimeId, threadId, visible }).catch(() => undefined)
+  }, [runtimeId, threadId])
+  const { signalNow: signalFramePriority } = useDagPanelPrioritySignal({
+    iframeRef,
+    dag: 'evidence',
+    status,
+    onPriorityChange: updatePanelPriority
+  })
 
   useEffect(() => {
     const nextNodeId = initialNodeId?.trim() || null
@@ -160,10 +172,11 @@ export function EvidenceDagPanel({
 
   useEffect(() => {
     const freshness = view?.status.freshness
-    if (freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty') return
-    const timer = setTimeout(() => setRequestNonce((current) => current + 1), 2_000)
-    return () => clearTimeout(timer)
-  }, [view?.status.freshness, view?.status.pendingCount])
+    if (freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty' &&
+        !(freshness === 'failed' && view?.status.nextAttemptAt)) return
+    const timer = setInterval(() => setRequestNonce((current) => current + 1), 2_000)
+    return () => clearInterval(timer)
+  }, [view?.status.freshness, view?.status.nextAttemptAt, view?.status.pendingCount])
 
   useEffect(() => {
     if (!frameUrl || !view) return
@@ -229,8 +242,6 @@ export function EvidenceDagPanel({
     })
   }
 
-  const status = view?.status
-
   return (
     <aside className={`ds-no-drag flex min-h-0 min-w-0 flex-col border-l border-ds-border bg-ds-sidebar ${className}`}>
       <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ds-border px-4 py-3">
@@ -289,6 +300,24 @@ export function EvidenceDagPanel({
               {t('dagWatermarks', { committed: status.committedWatermark || '—', desired: status.desiredWatermark })}
             </div>
           ) : null}
+          {status.progress ? (
+            <div className="mt-2" role="progressbar" aria-label={t(`dagProgressStage.${status.progress.stage}`)}
+              aria-valuemin={0} aria-valuemax={status.progress.totalItems}
+              {...(status.progress.completedItems > 0 ? { 'aria-valuenow': status.progress.completedItems } : {})}>
+              <div className="mb-1 flex items-center justify-between gap-3 text-[10.5px] text-ds-muted">
+                <span>{t(`dagProgressStage.${status.progress.stage}`)}</span>
+                <span>{status.progress.attempt ? t('dagProgressAttempt', { count: status.progress.attempt }) : t('dagProgressWaiting')}</span>
+              </div>
+              <div className="h-1.5 overflow-hidden rounded-full bg-ds-border">
+                {status.progress.completedItems > 0 ? (
+                  <div className="h-full rounded-full bg-sky-500 transition-[width] duration-500" style={{ width: `${Math.min(100, (status.progress.completedItems / Math.max(1, status.progress.totalItems)) * 100)}%` }} />
+                ) : (
+                  <div className="h-full w-1/3 animate-pulse rounded-full bg-sky-500" />
+                )}
+              </div>
+              {status.nextAttemptAt ? <div className="mt-1 text-[10.5px] text-amber-700">{t('dagProgressNextRetry', { time: new Date(status.nextAttemptAt).toLocaleTimeString() })}</div> : null}
+            </div>
+          ) : null}
           {status.lastError ? <div className="mt-1 break-words text-[11px] text-amber-700">{status.lastError}</div> : null}
           <details className="mt-2 text-[11px] text-ds-muted">
             <summary className="flex cursor-pointer list-none items-center gap-1"><ChevronDown className="h-3 w-3" />{t('dagAdvancedActions')}</summary>
@@ -302,8 +331,10 @@ export function EvidenceDagPanel({
         </div>
       ) : null}
 
-      <div className="relative min-h-0 flex-1 bg-ds-main">
-        {view && frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('rightPanelEvidenceDag')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={() => { if (requestedNodeId && initialNodeId?.trim() === requestedNodeId) onInitialNodeConsumed?.() }} /> : null}
+      {status ? <DagProgressiveLegend status={status} t={t} /> : null}
+
+      <div className="relative min-h-0 flex-1 bg-ds-main" data-dag-layer="committed">
+        {view && frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('rightPanelEvidenceDag')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" data-dag-layer="committed" sandbox="allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={() => { signalFramePriority(); if (requestedNodeId && initialNodeId?.trim() === requestedNodeId) onInitialNodeConsumed?.() }} /> : null}
         {previewError ? <div role="status" className="absolute left-3 right-3 top-3 z-10 rounded-lg border border-red-200 bg-red-50/95 px-3 py-2 text-[11.5px] text-red-800 shadow-sm">{previewError}</div> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('evidenceDagLoading')}</span></div> : null}
         {error ? (

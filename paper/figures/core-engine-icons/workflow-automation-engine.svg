@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Workflow and Automation Engine</title>
+  <desc id="desc">Reusable pipelines executed manually, on schedule, or by events.</desc>
+  <defs>
+    <linearGradient id="node" x1="47" y1="54" x2="210" y2="194" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="151" y1="133" x2="211" y2="202" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4B942"/>
+      <stop offset="1" stop-color="#18A999"/>
+    </linearGradient>
+  </defs>
+  <rect x="40" y="53" width="64" height="50" rx="12" fill="url(#node)" stroke="#23313A" stroke-width="7"/>
+  <rect x="152" y="53" width="64" height="50" rx="12" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <rect x="40" y="153" width="64" height="50" rx="12" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <rect x="152" y="153" width="64" height="50" rx="12" fill="url(#accent)" stroke="#23313A" stroke-width="7"/>
+  <path d="M104 78h48M184 103v50M152 178h-48M72 153v-50" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+  <path d="M139 65l15 13-15 13M171 139l13 15 13-15M117 165l-15 13 15 13M85 117l-13-15-13 15" fill="none" stroke="#23313A" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="184" cy="178" r="18" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <path d="M184 166v12l9 6" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M58 78h28M170 78h28M58 178h28" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+</svg>

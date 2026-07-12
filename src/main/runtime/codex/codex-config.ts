@@ -28,7 +28,7 @@ import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plottin
 import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
 import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
-import type { SciforgeCanvasMcpLaunchConfig } from '../../sciforge-canvas-mcp-config'
+import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
 import { internalSecretEnv } from '../../internal-http-secret'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -74,7 +74,7 @@ export async function prepareCodexAppServerLaunch(options: {
   bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
   imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
   pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
-  sciforgeCanvasMcpLaunch?: SciforgeCanvasMcpLaunchConfig
+  visualDocumentMcpLaunch?: VisualDocumentMcpLaunchConfig
 }): Promise<CodexAppServerLaunchConfig> {
   const runtime = getCodexRuntimeSettings(options.settings)
   const command = runtime.command.trim()

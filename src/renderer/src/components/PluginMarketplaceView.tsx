@@ -357,21 +357,6 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
     }
   },
   {
-    id: 'sciforge_canvas',
-    kind: 'mcp',
-    titleKey: 'pluginMcpSciforgeCanvasTitle',
-    descriptionKey: 'pluginMcpSciforgeCanvasDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildSciforgeCanvasMcpConfig !== 'function') {
-        throw new Error('SciForge Canvas MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildSciforgeCanvasMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
     id: 'ppt_master',
     kind: 'mcp',
     titleKey: 'pluginMcpPptMasterTitle',

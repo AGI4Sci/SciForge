@@ -85,7 +85,7 @@ const commonBrief = [
   `Reference paper: ${alphaFold3Paper.title}, ${alphaFold3Paper.venue} ${alphaFold3Paper.year}, DOI ${alphaFold3Paper.doi}.`,
   'Figure conclusion: AlphaFold 3 broadens structure prediction from single proteins to biomolecular interactions, while confidence and modality-specific limits must remain visible.',
   'Evidence logic: show input modality breadth, diffusion-based structure generation, benchmark gains with uncertainty, and explicit caveats for low-evidence or unusual complexes.',
-  'User analysis angle: evaluate whether SciForge first render is only a structured draft and whether gpt-image-2 polish improves Nature-style multi-panel readability without changing data facts.',
+  'User analysis angle: evaluate whether SciForge first render is only a structured draft and whether configured image-model polish improves Nature-style multi-panel readability without changing data facts.',
   'Do not copy any original Nature panel; use synthetic normalized values only for visual pipeline testing.'
 ].join('\n')
 
@@ -210,7 +210,7 @@ async function main() {
 
       const polish = await renderPolish(image.client, item, first)
       const review = first.ok && polish.ok
-        ? await reviewPair(scientific.client, first.outputPath, polish.outputPath, item.template ?? 'multi-panel')
+        ? await reviewPair(image.client, item, first.outputPath, polish.outputPath)
         : null
 
       summary.cases.push({
@@ -257,8 +257,17 @@ async function connectMcp(entry, flag, name) {
 }
 
 async function renderScientificFirst(client, item) {
+  const scientificVisualPlan = {
+    route: 'deterministic_plot',
+    routeLocked: true,
+    rationale: 'This artifact contains data-bearing marks whose values, labels, axes, and statistics must remain reproducible.',
+    reproducibleInputs: ['structured data', 'labels', 'template', 'style profile'],
+    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+    fallbackPolicy: 'fail_closed'
+  }
   const response = await callStructured(client, 'scientific_plotting_render', {
     workspaceRoot,
+    scientificVisualPlan,
     template: item.template,
     figureId: item.figureId,
     labels: item.labels,
@@ -277,11 +286,18 @@ async function renderScientificFirst(client, item) {
 async function renderImageFirst(client, item) {
   const recipe = {
     mode: 'text_to_image',
-    model: 'gpt-image-2',
     prompt: item.firstPrompt,
     size: item.size,
     stylePreset: 'nature-publication-schematic',
-    outputFormat: 'png'
+    outputFormat: 'png',
+    scientificVisualPlan: {
+      route: 'generative_visual',
+      routeLocked: true,
+      rationale: 'The architecture panel is a conceptual scientific visual.',
+      reproducibleInputs: [],
+      truthLockedElements: ['architecture entities', 'module relationships', 'paper facts'],
+      fallbackPolicy: 'fail_closed'
+    }
   }
   const response = await callStructured(client, 'image_generation_render', {
     workspaceRoot,
@@ -294,6 +310,16 @@ async function renderImageFirst(client, item) {
 
 async function renderPolish(client, item, first) {
   const referencePath = first.outputPath ? toWorkspaceRelative(first.outputPath) : undefined
+  const scientificVisualPlan = {
+    route: item.firstKind === 'scientific_plotting' ? 'hybrid_composite' : 'generative_visual',
+    routeLocked: true,
+    rationale: item.firstKind === 'scientific_plotting'
+      ? 'Preserve the deterministic scientific panel while adding a controlled visual composition layer.'
+      : 'Refine a conceptual scientific visual without introducing data-bearing marks.',
+    reproducibleInputs: referencePath ? [referencePath] : [],
+    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics', 'paper facts'],
+    fallbackPolicy: 'fail_closed'
+  }
   const prompt = [
     commonBrief,
     '',
@@ -304,12 +330,13 @@ async function renderPolish(client, item, first) {
     'Final output should be a single high-resolution PNG suitable for SciForge Canvas review.'
   ].join('\n')
 
-  const plan = await callStructured(client, 'image_generation_plan', {
+  const plan = await callStructured(client, 'image_generation_prepare', {
     workspaceRoot,
     task: prompt,
     modeHint: referencePath ? 'image_to_image' : 'text_to_image',
     size: item.size,
     stylePreset: 'nature-cns-polish',
+    scientificVisualPlan,
     ...(referencePath ? { referencePath } : {})
   }, 'plan', 60_000).catch((error) => ({
     ok: false,
@@ -319,10 +346,10 @@ async function renderPolish(client, item, first) {
 
   const recipe = {
     mode: referencePath ? 'image_to_image' : 'text_to_image',
-    model: 'gpt-image-2',
     prompt,
     size: item.size,
     stylePreset: 'nature-cns-polish',
+    scientificVisualPlan,
     ...(referencePath ? { referencePath } : {}),
     outputFormat: 'png'
   }
@@ -343,12 +370,13 @@ async function renderPolish(client, item, first) {
   }
 }
 
-async function reviewPair(client, referencePath, outputPath, template) {
-  return callStructured(client, 'scientific_plotting_review', {
+async function reviewPair(client, item, referencePath, outputPath) {
+  return callStructured(client, 'visual_artifact_review', {
     workspaceRoot,
     referencePath: toWorkspaceRelative(referencePath),
     outputPath: toWorkspaceRelative(outputPath),
-    template,
+    task: `Review the polished ${item.label} against the first controlled render. Preserve the scientific content while checking layout, overlap, clipping, label legibility, and visual relationships.`,
+    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics', 'paper facts'],
     minOverall: 0.72
   }, 'review', 60_000).catch((error) => ({
     ok: false,
@@ -381,7 +409,7 @@ function normalizeRenderResult(result) {
 function observeCase(item, first, polish, review) {
   const observations = []
   if (!first.ok) observations.push(`First render failed: ${first.status}${first.message ? ` — ${first.message}` : ''}.`)
-  if (!polish.ok) observations.push(`gpt-image-2 polish failed: ${polish.status}${polish.message ? ` — ${polish.message}` : ''}.`)
+  if (!polish.ok) observations.push(`Configured image-model polish failed: ${polish.status}${polish.message ? ` — ${polish.message}` : ''}.`)
   if (first.ok && polish.ok) observations.push('Before/after artifacts were produced for visual inspection.')
   const score = review?.score ?? review?.review?.score
   if (score && typeof score.overall === 'number') {
@@ -406,13 +434,13 @@ async function drawContactSheet(results, outputPath) {
   ctx.fillRect(0, 0, width, height)
   ctx.fillStyle = '#1f2937'
   ctx.font = 'bold 22px Arial'
-  ctx.fillText('AlphaFold 3 Nature Figure Quality Eval: first render vs gpt-image-2 polish', margin, 28)
+  ctx.fillText('AlphaFold 3 Nature Figure Quality Eval: first render vs configured image-model polish', margin, 28)
 
   for (let i = 0; i < results.length; i += 1) {
     const item = results[i]
     const y = margin + 26 + i * (cellH + labelH + margin)
     drawPanelLabel(ctx, margin, y, `${item.label} · First render`)
-    drawPanelLabel(ctx, margin * 2 + cellW, y, `${item.label} · gpt-image-2 polish`)
+    drawPanelLabel(ctx, margin * 2 + cellW, y, `${item.label} · image-model polish`)
     await drawImageOrPlaceholder(ctx, item.first?.outputPath, margin, y + labelH, cellW, cellH, item.first)
     await drawImageOrPlaceholder(ctx, item.polish?.outputPath, margin * 2 + cellW, y + labelH, cellW, cellH, item.polish)
   }
@@ -493,7 +521,7 @@ async function writeMarkdownSummary(path, summary) {
     `- Contact sheet: \`${relative(workspaceRoot, summary.contactSheetPath)}\``,
     `- Image provider: \`${summary.status.imageGeneration?.provider ?? 'unknown'}\`; configured: \`${summary.status.imageGeneration?.configured ?? 'unknown'}\`; default model: \`${summary.status.imageGeneration?.defaultModel ?? 'unknown'}\``,
     '',
-    '| Case | First render | gpt-image-2 polish | Review | Observations |',
+    '| Case | First render | image-model polish | Review | Observations |',
     '| --- | --- | --- | --- | --- |'
   ]
   for (const item of summary.cases) {
@@ -506,7 +534,7 @@ async function writeMarkdownSummary(path, summary) {
   lines.push('## Notes')
   lines.push('')
   lines.push('- Values are representative synthetic data for pipeline testing, not extracted Nature source data.')
-  lines.push('- `gpt-image-2` is used only as a visual polish step; it must not alter scientific facts or controlled numeric semantics.')
+  lines.push('- The Model Router image generator is used only as a visual polish step; it must not alter scientific facts or controlled numeric semantics.')
   lines.push('- If polish failed, inspect the provider status and error in `alphafold3-eval-results.json`.')
   await writeFile(path, lines.join('\n') + '\n')
 }

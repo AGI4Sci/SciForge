@@ -62,8 +62,8 @@ docs/R2_RELEASE.md
 ### Local acceptance launcher (contains a dev gateway key + local logs — not for upstream)
 /local-run/
 
-### Paper build artifacts
-paper/
+# ### Paper build artifacts
+# paper/
 
 ### Local end-to-end run artifacts
 temp/

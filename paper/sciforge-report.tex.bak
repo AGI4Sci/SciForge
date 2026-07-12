@@ -1,0 +1,312 @@
+% SciForge: A Multimodal Research-Native AI Workbench for Scientific Discovery
+% Technical Report Outline
+
+\documentclass[sn-basic,Numbered]{sn-jnl}
+\pdfminorversion=7
+
+% === Packages ===
+\usepackage{graphicx}
+\usepackage{multirow}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsthm}
+\usepackage{mathrsfs}
+\usepackage[title]{appendix}
+\usepackage{xcolor}
+\usepackage{textcomp}
+\usepackage{manyfoot}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{hyperref}
+
+\newcommand{\cmark}{\ensuremath{\checkmark}}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+\newcolumntype{C}[1]{>{\centering\arraybackslash}p{#1}}
+
+% === Metadata ===
+\title[SciForge: Multimodal Research-Native AI Workbench]{SciForge: A Multimodal Research-Native AI Workbench for Scientific Discovery}
+
+\author*[1]{\fnm{Author} \sur{Names}}\email{author@example.com}
+
+\affil*[1]{\orgdiv{Institute}, \orgname{University}, \orgaddress{\city{City}, \country{Country}}}
+
+% === Abstract keywords ===
+\abstract{
+Scientific work increasingly spans heterogeneous artifacts: papers, code, datasets, scientific file formats, model outputs, figures, manuscripts, and team decisions. General-purpose AI assistants can answer questions or operate tools, but they rarely preserve these objects as a coherent, long-running, and auditable research state. We present SciForge, a multimodal research-native AI workbench for scientific discovery. SciForge follows a local-first architecture in which the graphical interface is reserved for human judgment, while search, scientific parsing, model routing, workflow execution, plotting, writing, and presentation generation run as modular agent-accessible services. SciForge is built around three co-equal design pillars: (i) \emph{translate-then-reason} for \textbf{multimodal} input---scientific objects such as protein sequences, structures, molecules, and cell-omics data are routed through domain translators before the main agent reasons over provenance-rich evidence; (ii) \emph{evidence governance} for \textbf{auditable} traceability---every agent action, generated artifact, and manuscript claim is linked to its provenance chain; and (iii) \emph{team-governed execution} for \textbf{collaborative} research---with role-based approvals, cross-session handoffs, and shared review surfaces. The system combines a thin Desktop/Group/Mobile interaction layer, Research Applications for key human decisions, an Agent Runtime and Workflow Engine, a Scientific Model Router, and local scientific memory backed by reusable worker services. Compared with GUI workbenches, terminal workbenches, and API-based scientific agents, SciForge emphasizes an integrated local workspace, multimodal scientific evidence, modular capability reuse, and human-governed research automation.
+}
+
+\keywords{SciForge, AI workbench, scientific discovery, agentic workflow, evidence-aware AI, multimodal science, research automation}
+
+%% === BEGIN DOCUMENT ===
+\begin{document}
+
+\maketitle
+
+% ============================================================
+\section{Introduction}
+% ============================================================
+
+\subsection{Background and Motivation}
+
+Scientific discovery is becoming increasingly computational, multimodal, and collaborative. A single research project may move among scholarly papers, experimental protocols, command-line tools, notebooks, gene and variant files, protein sequences, three-dimensional structures, molecular records, single-cell matrices, generated figures, manuscript drafts, slide decks, and group decisions. These objects are not independent files. A manuscript claim may depend on a raw dataset, a preprocessing script, a model run, a visualization parameter, a literature passage, and a later human decision about whether the evidence is strong enough to use. As a result, the central bottleneck is no longer only access to models or tools, but the lack of a persistent environment that can organize scientific objects, agent actions, human decisions, and evidence traces as one coherent research state.
+
+Recent AI systems have demonstrated impressive capabilities for literature search, hypothesis generation, coding, experimentation, and scientific writing \cite{futureHousePlatform2025,googleCoScientist2025,sakanaAIScientist2024,agentLaboratory2025,paperQA2024}. At the same time, desktop and terminal-capable scientific workbenches show the importance of keeping execution close to local files, remote servers, and HPC environments \cite{anthropicClaudeScience2026,omicOSOverview2026,omicsClaw2026,operonGitHub2026,claudePrism2026}. However, most existing systems still emphasize either task-specific intelligence, conversational assistance, or local execution surfaces. They rarely treat the full research process as an \textbf{auditable}, \textbf{multimodal}, and \textbf{collaborative} workflow in which scientific data, agent reasoning, generated artifacts, and manuscript claims remain connected over time.
+
+This gap matters because scientific AI agents must satisfy three demands that are absent from general-purpose assistants. First, \textbf{multimodal} inputs are the norm: scientific files arrive in native representations poorly suited to direct prompting, including FASTA sequences, PDB or mmCIF structures, SMILES strings, variant files, and cell-omics tables. Second, \textbf{auditable} evidence is non-negotiable: researchers need to know which data, script, model, parameter, paper, or expert translation supported a conclusion; whether a figure matches the claim it is used to support; and when a proposed action requires human or principal-investigator approval. Third, \textbf{collaborative} governance is essential: scientific work involves team decisions, role-based approvals, cross-session handoffs, and shared review of claims and evidence. A stateless chat transcript addresses none of these demands.
+
+We present \emph{SciForge}, a multimodal research-native AI workbench for scientific discovery. SciForge is designed as a local-first operating environment for research rather than a wrapper around a single model. Its architecture is organized as five functional layers: (1) \textbf{User Interaction \& Collaboration} surfaces for desktop execution, group coordination, and mobile supervision; (2) \textbf{Research Applications} that surface literature triage, ideation, manuscript construction, artifact review, and presentation refinement as explicit human-judgment points; (3) a \textbf{Core Engine} combining agent runtime, workflow automation, goal-centered memory, and evidence governance; (4) a \textbf{Scientific Model Router} for modality detection and domain-expert translation; and (5) an \textbf{Infrastructure} layer providing local memory, modular workers, scientific connectors, and team synchronization. Three co-equal design pillars underpin this architecture: (i) \emph{translate-then-reason} for \textbf{multimodal} scientific input, where domain translators produce auditable evidence before main-agent reasoning; (ii) \emph{evidence governance} for \textbf{auditable} traceability, connecting every agent action, generated artifact, and manuscript claim to its provenance chain; and (iii) \emph{team-governed execution} for \textbf{collaborative} research, with role-based approvals, cross-session handoffs, and shared review surfaces.
+
+SciForge also adopts an AI-native interaction model in which routine execution is pushed into the agent runtime and workflow engine, while the user interface is reserved for decisions that genuinely require human judgment. Instead of asking researchers to micromanage every tool call, SciForge surfaces literature triage, research ideation, manuscript argument construction, artifact review, and presentation refinement as explicit judgment points. This design keeps researchers in control of scientific direction and approval while reducing the operational burden of repetitive search, execution, summarization, conversion, and formatting tasks.
+
+\subsection{Contributions}
+
+This report makes the following contributions.
+
+\begin{itemize}
+    \item We propose a \textbf{local-first, layered architecture} for a \textbf{research-native AI workbench} that unifies desktop execution, group collaboration, mobile supervision, scientific routing, core agent orchestration, research applications, and infrastructure services.
+    \item We introduce a \textbf{scientific multimodal router} based on \textbf{translate-then-reason}: scientific inputs are detected by modality, translated by \textbf{domain experts} into \textbf{auditable evidence}, and then passed to the main reasoning agent with provenance metadata.
+    \item We define a \textbf{Core Engine} that combines an \textbf{Agent Runtime}, \textbf{Workflow \& Automation Engine}, \textbf{Goal-Centered Research Memory}, and \textbf{Evidence \& Governance Engine} for long-running, cross-session, evidence-aware scientific work.
+\end{itemize}
+
+Rather than wrapping a general-purpose chatbot, SciForge treats each scientific interaction---literature triage, hypothesis refinement, manuscript drafting, artifact inspection, and presentation---as a first-class research task with dedicated judgment surfaces, evidence trails, and governance checkpoints. This keeps the human researcher in the loop where decisions matter while automating routine execution under the hood.
+
+% ============================================================
+\section{Related Work}
+% ============================================================
+
+\subsection{GUI-Based Scientific Workbenches}
+
+GUI-based scientific workbenches, including desktop and web applications, make AI assistance accessible through human-facing workspaces. Claude Science is the closest broad commercial reference: it is described as an AI workbench for scientists with desktop, local, SSH, and HPC-facing execution, scientific skills, specialist agents, generated artifacts, and reviewer agents for citations and calculations \cite{anthropicClaudeScience2026}. ClaudePrism focuses on the manuscript side of the workflow, combining a native desktop environment with local LaTeX compilation, Python environments, Claude Code sessions, and scientific writing skills \cite{claudePrism2026}. Web tools such as Elicit and Consensus provide polished interfaces for literature search, synthesis, and research-agent style review \cite{elicit2026,consensus2026}. These systems demonstrate the importance of usable research interfaces, but they are usually centered on one model family, one workflow domain, or one user session. SciForge instead treats the GUI as a thin layer for human judgment over a local, modular, multi-agent research substrate.
+
+\subsection{Terminal Workbenches}
+
+Terminal-oriented workbenches prioritize execution close to local files, remote servers, and HPC environments. OmicOS provides a Rust \texttt{omicos-core} binary that can run as a local daemon serving a browser UI or as \texttt{omicos cli}, with analysis code running in a shared IPython kernel and raw data remaining local \cite{omicOSOverview2026,omicOSServe2026,omicOSCLI2026}. OmicsClaw follows a local-first multi-omics design with CLI, TUI, desktop, web backend, and SSH remote execution surfaces over a shared agent loop \cite{omicsClaw2026}. Operon targets bioinformatics workflows across desktop and remote cluster environments, using persistent terminal sessions so jobs execute where data and schedulers live \cite{operonGitHub2026}. These systems are strong at local and remote execution, but they generally expose tools and workflows rather than a unified layer for multimodal scientific routing, research decision surfaces, team supervision, and manuscript-to-artifact continuity.
+
+\subsection{API and Research Agents}
+
+API-based and research-prototype agents explore more autonomous scientific reasoning. FutureHouse exposes agents for literature search, deep review, precedent search, and chemistry planning through a web/API platform \cite{futureHousePlatform2025}. Google's AI Co-Scientist studies multi-agent hypothesis generation, debate, and ranking for biomedical research \cite{googleCoScientist2025}. The AI Scientist and Agent Laboratory automate parts of the machine-learning research loop, including ideation, coding, experimentation, paper drafting, and review \cite{sakanaAIScientist2024,agentLaboratory2025}. Literature systems such as PaperQA2, OpenScholar, and ScholarQA focus on retrieval-augmented scientific question answering and literature synthesis \cite{paperQA2024,openScholar2024,scholarQA2025}. These systems demonstrate the power of specialized agents, but they are less focused on being a persistent local workbench where data, code, figures, decisions, and generated artifacts remain in one workspace.
+
+\begin{table}[ht!]
+\caption{High-level comparison of scientific AI system categories. A checkmark indicates first-class support as a primary design goal rather than incidental availability.}
+\label{tab:terminal_related_work}
+\scriptsize
+\centering
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}L{4.4cm} C{1.7cm} C{1.9cm} C{1.7cm} C{1.5cm}@{}}
+\toprule
+\textbf{Dimension} &
+\textbf{\shortstack{GUI\\WB}} &
+\textbf{\shortstack{Terminal\\WB}} &
+\textbf{\shortstack{API\\agent}} &
+\textbf{SciForge} \\
+\midrule
+Human-facing UI & \cmark &  & \cmark & \cmark \\
+Local/HPC execution &  & \cmark &  & \cmark \\
+Scientific tools & \cmark & \cmark & \cmark & \cmark \\
+Local-first workspace &  & \cmark &  & \cmark \\
+Multi-provider routing &  &  &  & \cmark \\
+Scientific multimodal routing &  &  &  & \cmark \\
+Human decision surfaces & \cmark &  &  & \cmark \\
+Team workspace sync &  &  &  & \cmark \\
+Modular worker services &  & \cmark &  & \cmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SciForge combines these categories rather than competing with only one of them. It keeps the usability of GUI workbenches, the locality and composability of terminal systems, and the task power of scientific agents, while adding a unified local workspace, multimodal scientific routing, and explicit human decision points for research artifacts.
+
+% ============================================================
+\section{System Architecture}
+% ============================================================
+
+\subsection{Overall Design Philosophy}
+
+SciForge is organized as a five-layer research operating environment rather than a single-purpose chat interface. \textbf{Layer~1---User Interaction \& Collaboration}---provides desktop, group, and mobile surfaces for local execution, team coordination, and lightweight supervision. \textbf{Layer~2---Research Applications}---surfaces literature triage, ideation, manuscript construction, artifact review, and presentation refinement as the primary human decision points. \textbf{Layer~3---Core Engine}---combines the Agent Runtime, Workflow \& Automation Engine, Goal-Centered Research Memory, and Evidence \& Governance Engine for long-running, evidence-aware execution. \textbf{Layer~4---Scientific Model Router}---detects modality, routes inputs to domain experts, and returns provenance-annotated evidence to the reasoning agent. \textbf{Layer~5---Infrastructure}---provides local scientific memory, modular worker capabilities, scientific connectors, and team workspace synchronization.
+
+SciForge follows three implementation principles that distinguish it from feature-heavy desktop software:
+
+\begin{enumerate}
+    \item \textbf{Thin GUI as human-judgment surface.} The graphical interface is justified only when interaction, inspection, annotation, comparison, or approval requires human judgment; otherwise the capability belongs to the background agent runtime.
+    \item \textbf{Non-interactive capabilities delegated via modular services.} Search, scientific parsing, plotting, literature monitoring, model routing, workflow execution, and presentation generation run as MCP-compatible tools, HTTP services, or worker processes rather than tightly coupled UI code \cite{anthropicMCP2024}. This keeps the application close to a thin interaction shell while tools evolve independently.
+    \item \textbf{Local-first, evidence-aware orchestration.} User data, project files, model traces, artifacts, and evidence graphs remain anchored to the research workspace. Remote collaboration and mobile access are control channels over the local workbench, not a replacement for local scientific state.
+\end{enumerate}
+
+\subsection{Layered Architecture}
+
+Figure~\ref{fig:sciforge_framework} summarizes SciForge as a layered workbench rather than a monolithic assistant. Requests enter through collaboration surfaces, flow into the Agent Runtime and Research Applications, invoke scientific routing and workflow automation when needed, and remain anchored by local memory, connectors, workers, and synchronization services.
+
+\begin{figure}[p]
+    \centering
+    \includegraphics[width=0.96\textwidth,height=0.78\textheight,keepaspectratio]{figures/SciForge_Framework.pdf}
+    \caption{SciForge system framework. The architecture organizes the workbench into user interaction and collaboration, Research Applications, Core Engine, Scientific Model Router, and Infrastructure layers. User requests flow from desktop, group, and mobile surfaces into the Agent Runtime, which coordinates research applications, workflow automation, scientific modality routing, multimodal evidence generation, and local-first infrastructure services.}
+    \label{fig:sciforge_framework}
+\end{figure}
+\clearpage
+
+\textbf{User interaction and collaboration (Layer~1).} The top layer provides three interaction surfaces unified by the same runtime semantics. Desktop execution keeps the agent close to local files, servers, and HPC environments. Group coordination enables team discussion, shared review, and cross-session handoff. Mobile supervision allows lightweight monitoring and approval of long-running work without requiring a full desktop client.
+
+\textbf{Research applications.} Research Applications are not general feature containers. They are the small set of surfaces where human judgment is expected: literature triage, research ideation, manuscript argument construction, visual artifact review, and presentation refinement. Background work such as search, plotting, PPT generation, and workflow execution is delegated to the runtime and workers.
+
+\textbf{Core engine and routing.} The Core Engine plans and executes work through the Agent Runtime, Workflow \& Automation Engine, Goal-Centered Research Memory, and Evidence \& Governance Engine. Scientific inputs are then adapted by the Scientific Model Router, which detects modality, chooses a provider or local expert, translates native scientific files into evidence, and returns traceable observations to the main reasoning agent.
+
+\textbf{Infrastructure.} The Infrastructure layer provides the durable substrate: Local Scientific Memory, Modular Capability System, Scientific Connectors, and Team Workspace Sync. It keeps project state, parsed artifacts, worker services, external scientific resources, and team updates close to the local workspace.
+
+\subsection{Key Technical Mechanisms}
+
+\textbf{Agent and workflow orchestration.} The Agent Runtime coordinates the main agent, delegated sub-agents, tool execution, workspace operations, MCP worker invocation, and long-running task recovery. The Workflow \& Automation Engine formalizes reusable pipelines with code, agent, tool, and approval nodes. Scheduled execution and Loop-style fixed protocol automation are treated as run modes of this engine, not separate architectural modules.
+
+\textbf{Scientific model routing.} The Model Router provides a unified invocation surface for OpenAI, Anthropic, DeepSeek, and local models. It standardizes request construction, provider selection, fallback behavior, error reporting, and graceful degradation. For scientific files, it recognizes extensions and metadata such as \texttt{.fasta}, \texttt{.pdb}, \texttt{.cif}, \texttt{.smi}, \texttt{.sdf}, \texttt{.mol}, \texttt{.vcf}, \texttt{.bed}, and \texttt{.seq}; when a scientific translator is configured, it routes the payload to domain experts before main-agent reasoning.
+
+\textbf{Translate-then-reason pipeline.} Raw scientific objects are not treated as ordinary prompt text. Protein sequences, protein structures, small molecules, and single-cell expression inputs are first translated by expert families such as Esm2Text, Prot2Text, BioT5, and C2S into concise textual evidence. Each output carries the modality, expert id, input reference, summary, and provenance metadata, allowing the main agent to reason over inspectable evidence rather than opaque scientific encodings.
+
+\textbf{Memory and evidence state.} Goal-Centered Research Memory preserves cross-session project state around goals, hypotheses, decisions, open questions, failed attempts, milestones, next actions, and user/project preferences. The Evidence \& Governance Engine captures provenance, claim--evidence links, quality gates, approval boundaries, and internal Evidence DAG structures. In the current implementation, multimodal translation caches store scientific and visual observations by content hash so repeated requests can reuse expert evidence without recomputing final conclusions.
+
+\textbf{Worker-based infrastructure.} Local Scientific Memory stores the substrate of research work: papers, datasets, parsed documents, scientific file manifests, embeddings, indexes, tool outputs, run metadata, and artifact caches. Modular capabilities are packaged as Skills, MCP servers, Plugins, HTTP services, or worker processes. Scientific Connectors normalize external resources such as papers, datasets, databases, APIs, instruments, notebooks, analysis scripts, reference managers, LIMS/ELN systems, and institutional storage. Team Workspace Sync distributes selected state, summaries, review packets, approval requests, and mobile supervision signals while keeping the underlying data anchored to the local project.
+
+% ============================================================
+\section{Research Applications}
+% ============================================================
+
+SciForge exposes Research Applications only where human judgment is valuable. Routine work is executed by agents, workflows, and workers; the application layer lets researchers inspect, choose, annotate, redirect, or approve the resulting research state.
+
+\begin{table}[ht!]
+\caption{Research Applications as human decision surfaces over background agent work.}
+\label{tab:research_applications}
+\scriptsize
+\centering
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.18}
+\begin{tabular}{@{}L{2.6cm} L{3.1cm} L{3.7cm} L{2.8cm}@{}}
+\toprule
+\textbf{Application} & \textbf{Human decision point} & \textbf{Background agent work} & \textbf{Research output} \\
+\midrule
+Literature Inbox
+& Accept, defer, reject, and route papers
+& Paper Radar monitors profiles, sources, keywords, rankings, and digests
+& Curated literature state for reading, ideation, and writing \\
+\addlinespace
+Research Ideation \& Decision
+& Select hypotheses, alternatives, risks, and next actions
+& Agents propose literature-grounded options and expose assumptions
+& Decision cards with rationale, evidence links, and task handoff \\
+\addlinespace
+Manuscript Workbench
+& Approve claims, wording, evidence use, and reviewer-facing arguments
+& Retrieval, annotation, drafting, inline completion, and source integration
+& Evidence-linked manuscript sections and annotated source context \\
+\addlinespace
+Artifact Review Canvas
+& Compare, annotate, approve, or return figures and visual artifacts
+& Scientific plotting, style transfer, review scoring, and conservative repair
+& Review packets, revision intent, figures, and visual evidence records \\
+\addlinespace
+Presentation Studio
+& Select storyline, slide emphasis, and final presentation structure
+& Source conversion, narrative organization, SVG generation, checks, and PPTX export
+& Research talks and group-meeting decks tied to project evidence \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This design keeps the interface small: applications are not separate automation engines, but review surfaces over agent-produced research artifacts. Paper scanning, scheduled execution, plotting, document conversion, and presentation generation remain background capabilities unless the researcher must make a decision.
+
+% ============================================================
+\section{Use Cases}
+% ============================================================
+
+\subsection{Multimodal Scientific Analysis}
+
+A researcher can provide a native scientific object, such as a protein sequence or structure, and ask for functional interpretation. SciForge first routes the file through the Scientific Model Router, translates the object into expert evidence, and then lets the main agent combine the translated evidence with literature search, project memory, and uncertainty notes. The result is not just an answer, but a structured rationale connected to the input file, expert translation, and follow-up tasks.
+
+\subsection{Literature-to-Manuscript Workflow}
+
+A research group can maintain a Literature Inbox profile for a research direction. Background agents monitor sources, rank papers, and surface digests; researchers triage the papers and route accepted items into Research Ideation \& Decision or the Manuscript Workbench. Claims, annotations, and paper evidence then accumulate into manuscript sections, allowing literature monitoring, argument construction, and writing to remain part of one project state.
+
+\subsection{Artifact-to-Presentation Workflow}
+
+After experiments or analysis runs, SciForge can generate candidate figures, reproduce selected paper styles, and package visual artifacts for review. Researchers compare and annotate these outputs in the Artifact Review Canvas, approve revisions, and send the accepted evidence into Presentation Studio. The final presentation is therefore linked to reviewed figures, narrative choices, and project evidence rather than being a detached slide export.
+
+% ============================================================
+\section{Discussion}
+% ============================================================
+
+\subsection{Design Trade-offs}
+
+SciForge deliberately favors local control, inspectable state, and modular capability boundaries over a single fully managed cloud service. This improves privacy, deployment flexibility, and laboratory control, but it also requires careful configuration of local models, worker services, scientific connectors, and storage. The same trade-off appears in the Scientific Model Router: domain expert translation improves modality handling and evidence quality, but expert coverage depends on the configured translators and available compute.
+
+The governance layer introduces another trade-off. Recording provenance, claim--evidence links, approvals, and artifact review history can make scientific work more auditable, but excessive trace capture may increase system complexity and user burden. SciForge therefore treats governance as a set of quality gates around high-impact outputs rather than as a requirement that every intermediate thought or tool call be surfaced to the user.
+
+\subsection{Limitations and Future Work}
+
+The current design is strongest for research workflows that can be represented through files, workers, literature sources, and reviewable artifacts. Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats; improving claim--evidence judging and quality gates; adding multilingual scientific writing support; strengthening team workspace synchronization; integrating with LIMS/ELN systems and laboratory instruments; and exploring reinforcement learning or feedback-driven improvement of agent behavior under human supervision.
+
+% ============================================================
+\section{Conclusion}
+% ============================================================
+
+SciForge presents a research-native AI workbench that brings together local execution, scientific multimodal routing, agent orchestration, workflow automation, research memory, and human-governed review surfaces. Its three design pillars---translate-then-reason for multimodal input, evidence governance for auditable traceability, and team-governed execution for collaborative research---ensure that native scientific objects become inspectable evidence, every claim carries a provenance chain, and research decisions remain shared and reviewable. By combining a local-first workspace with modular worker services and explicit research applications, SciForge aims to serve as an auditable, collaborative agent operating environment for everyday scientific discovery.
+
+\clearpage
+\begin{appendices}
+\renewcommand{\theHtable}{A.\arabic{table}}
+
+\section{Capability Differentiation}
+
+\begin{table}[ht!]
+\caption{Detailed capability differentiation of SciForge compared with common existing approaches.}
+\label{tab:capability_differentiation}
+\scriptsize
+\centering
+\setlength{\tabcolsep}{3pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}L{2.2cm} L{2.7cm} L{3.0cm} L{3.5cm}@{}}
+\toprule
+\textbf{Capability} & \textbf{Function} & \textbf{Typical approaches} & \textbf{SciForge differentiation} \\
+\midrule
+Model Router
+& Unified provider and model management
+& Single-provider lock-in or manual switching
+& Routes across OpenAI, Anthropic, DeepSeek, and local models with fallback and localizable deployment \\
+\addlinespace
+Scientific Pipeline
+& Convert scientific objects into agent-readable evidence
+& General LLMs receive raw scientific text or require manual preprocessing
+& Translate-then-reason with modality experts for sequences, structures, molecules, and cell data \\
+\addlinespace
+Agent Runtime
+& Coordinate agents, tools, commands, and long tasks
+& Single-session chat execution with limited delegation
+& Workspace-aware runtime with sub-agent delegation, MCP workers, plan recovery, and task continuation \\
+\addlinespace
+Workflow Engine
+& Automate repeatable research protocols
+& Scripts, cron jobs, and manual runbooks
+& Code, agent, tool, schedule, event, and approval nodes under one research workflow model \\
+\addlinespace
+Research Memory
+& Preserve project state across sessions
+& Chat history or document RAG
+& Goal-centered memory for hypotheses, decisions, failed attempts, milestones, next actions, and preferences \\
+\addlinespace
+Evidence Governance
+& Connect claims, artifacts, and approvals
+& Outputs remain detached from data, scripts, and review history
+& Evidence DAG structures, provenance records, quality gates, and approval boundaries \\
+\addlinespace
+Research Applications
+& Expose human judgment points
+& Generic chat and file views
+& Literature Inbox, Research Ideation \& Decision, Manuscript Workbench, Artifact Review Canvas, and Presentation Studio \\
+\bottomrule
+\end{tabular}
+\end{table}
+\clearpage
+
+\end{appendices}
+
+% ============================================================
+% Bibliography
+% ============================================================
+\bibliography{sn-bibliography}
+
+\end{document}

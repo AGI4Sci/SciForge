@@ -44,14 +44,14 @@ export type TimelineImageReference = {
   componentAssetPaths?: string[]
   artifactKind?: string
   sourceTool?: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   workspaceRoot?: string
   caption?: string
   source: 'attachment' | 'generated' | 'capture'
 }
 
-export type TimelineImageCanvasArtifact = {
+export type TimelineVisualReviewArtifact = {
   artifactKind: 'image' | 'generated_image' | 'edited_image' | 'scientific_plot' | 'ppt_slide' | 'ppt_export'
   outputPath?: string
   sourcePath?: string
@@ -75,12 +75,12 @@ export type TimelineImageCanvasArtifact = {
   title?: string
   caption?: string
   sourceTool?: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   workspaceRoot?: string
 }
 
-type TimelineCanvasArtifactReference = TimelineImageCanvasArtifact & {
+type TimelineVisualReviewArtifactReference = TimelineVisualReviewArtifact & {
   id?: string
   name?: string
   path?: string
@@ -98,7 +98,7 @@ type TimelineImageGalleryVariant = 'user' | 'tool' | 'conversation' | 'assistant
 
 type MarkdownImageArtifactContextValue = {
   images: TimelineImageReference[]
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }
 
 const MarkdownImageArtifactContext = createContext<MarkdownImageArtifactContextValue>({ images: [] })
@@ -208,8 +208,6 @@ function inferWorkspaceRootFromRecord(
   const pathCandidate = [
     'artifactManifestPath',
     'artifact_manifest_path',
-    'canvasDir',
-    'canvasPath',
     'assetFile',
     'manifestPath',
     'manifest_path',
@@ -237,8 +235,6 @@ function inferWorkspaceRootFromRecord(
   for (const key of [
     'artifactManifestPath',
     'artifact_manifest_path',
-    'canvasDir',
-    'canvasPath',
     'assetFile',
     'manifestPath',
     'manifest_path'
@@ -249,7 +245,7 @@ function inferWorkspaceRootFromRecord(
   return undefined
 }
 
-function readCanvasArtifactKind(raw: Record<string, unknown>): TimelineImageCanvasArtifact['artifactKind'] | undefined {
+function readVisualReviewArtifactKind(raw: Record<string, unknown>): TimelineVisualReviewArtifact['artifactKind'] | undefined {
   const value = readString(raw, 'artifactKind', 'artifact_kind')
   return value === 'image' ||
     value === 'generated_image' ||
@@ -262,7 +258,7 @@ function readCanvasArtifactKind(raw: Record<string, unknown>): TimelineImageCanv
 }
 
 function readImageArtifactKind(raw: Record<string, unknown>): TimelineImageReference['artifactKind'] | undefined {
-  const value = readCanvasArtifactKind(raw)
+  const value = readVisualReviewArtifactKind(raw)
   return value === 'image' || value === 'generated_image' || value === 'edited_image' || value === 'scientific_plot'
     ? value
     : undefined
@@ -302,7 +298,7 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
   const componentAssetPaths = readStringArray(raw, 'componentAssetPaths', 'component_asset_paths')
   const artifactKind = readImageArtifactKind(raw)
   const sourceTool = readString(raw, 'sourceTool', 'source_tool')
-  const canvasId = readString(raw, 'canvasId', 'canvas_id')
+  const visualDocumentId = readString(raw, 'visualDocumentId')
   const threadId = readString(raw, 'threadId', 'thread_id')
   const workspaceRoot = inferWorkspaceRootFromRecord(raw)
   const caption = readString(raw, 'caption')
@@ -339,7 +335,7 @@ function normalizeGeneratedFileReference(entry: unknown): TimelineImageReference
     ...(componentAssetPaths.length ? { componentAssetPaths } : {}),
     ...(artifactKind ? { artifactKind } : {}),
     ...(sourceTool ? { sourceTool } : {}),
-    ...(canvasId ? { canvasId } : {}),
+    ...(visualDocumentId ? { visualDocumentId } : {}),
     ...(threadId ? { threadId } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {}),
     ...(caption ? { caption } : {})
@@ -388,9 +384,9 @@ export function imageAttachmentsFromMeta(meta: RuntimeDisclosureMetadata | undef
 function maybeImageGenerationToolName(meta: Record<string, unknown> | undefined): boolean {
   const toolName = typeof meta?.toolName === 'string' ? meta.toolName.trim() : ''
   return toolName === 'image_generation_render' ||
-    toolName === 'image_generation_edit_from_canvas_packet' ||
+    toolName === 'image_generation_edit_from_visual_review_packet' ||
     toolName.endsWith('_image_generation_render') ||
-    toolName.endsWith('_image_generation_edit_from_canvas_packet')
+    toolName.endsWith('_image_generation_edit_from_visual_review_packet')
 }
 
 function maybeScientificPlottingToolName(meta: Record<string, unknown> | undefined): boolean {
@@ -443,13 +439,13 @@ function addUniqueImage(images: TimelineImageReference[], indexByKey: Map<string
   images.push(image)
 }
 
-function addUniqueCanvasArtifact(
-  artifacts: TimelineCanvasArtifactReference[],
+function addUniqueVisualReviewArtifact(
+  artifacts: TimelineVisualReviewArtifactReference[],
   indexByKey: Map<string, number>,
-  artifact: TimelineCanvasArtifactReference | null
+  artifact: TimelineVisualReviewArtifactReference | null
 ): void {
   if (!artifact) return
-  const key = canvasArtifactKey(artifact)
+  const key = visualReviewArtifactKey(artifact)
   const existing = indexByKey.get(key)
   if (existing !== undefined) {
     artifacts[existing] = { ...artifacts[existing], ...artifact }
@@ -494,7 +490,7 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
   const mimeType = readString(record, 'mimeType', 'type', 'mediaType') ?? fallback.mimeType
   const caption = readString(record, 'caption') ?? fallback.caption
   const sourceTool = readString(record, 'sourceTool', 'source_tool') ?? fallback.sourceTool ?? 'image_generation'
-  const canvasId = readString(record, 'canvasId', 'canvas_id') ?? fallback.canvasId
+  const visualDocumentId = readString(record, 'visualDocumentId') ?? fallback.visualDocumentId
   const threadId = readString(record, 'threadId', 'thread_id') ?? fallback.threadId
   const byteSize = readNumber(record, 'byteSize') ?? fallback.byteSize
   const width = readNumber(record, 'width') ?? fallback.width
@@ -530,7 +526,7 @@ function artifactImageFromRecord(record: Record<string, unknown>, fallback: Part
     ...(workspaceRoot ? { workspaceRoot } : {}),
     sourceTool,
     ...(caption ? { caption } : {}),
-    ...(canvasId ? { canvasId } : {}),
+    ...(visualDocumentId ? { visualDocumentId } : {}),
     ...(threadId ? { threadId } : {})
   }
   return isImageReference(image) ? image : null
@@ -590,7 +586,7 @@ function collectImageArtifactsFromValue(
   const artifactRecord = asRecord(artifact)
   if (artifactRecord) {
     addUniqueImage(images, indexByKey, artifactImageFromRecord(artifactRecord, {
-      canvasId: readString(record, 'canvasId', 'canvas_id'),
+      visualDocumentId: readString(record, 'visualDocumentId'),
       threadId: readString(record, 'threadId', 'thread_id'),
       sourceTool: readString(record, 'sourceTool', 'source_tool'),
       workspaceRoot: parentWorkspaceRoot
@@ -600,7 +596,7 @@ function collectImageArtifactsFromValue(
   const artifacts = record.artifacts
   if (Array.isArray(artifacts)) {
     const fallback = {
-      canvasId: readString(record, 'canvasId', 'canvas_id'),
+      visualDocumentId: readString(record, 'visualDocumentId'),
       threadId: readString(record, 'threadId', 'thread_id'),
       sourceTool: readString(record, 'sourceTool', 'source_tool'),
       workspaceRoot: parentWorkspaceRoot
@@ -619,12 +615,12 @@ function collectImageArtifactsFromValue(
   }
 }
 
-function canvasArtifactFromRecord(
+function visualReviewArtifactFromRecord(
   record: Record<string, unknown>,
-  fallback: Partial<TimelineCanvasArtifactReference> = {},
+  fallback: Partial<TimelineVisualReviewArtifactReference> = {},
   options: { pptMasterTool: boolean }
-): TimelineCanvasArtifactReference | null {
-  const explicitKind = readCanvasArtifactKind(record)
+): TimelineVisualReviewArtifactReference | null {
+  const explicitKind = readVisualReviewArtifactKind(record)
   const pptxPath = readString(record, 'pptxPath', 'pptx_path') ?? fallback.pptxPath
   const svgPath = readString(record, 'svgPath', 'svg_path') ?? fallback.svgPath
   const outputPath = readString(record, 'outputPath', 'output_path') ?? fallback.outputPath
@@ -644,7 +640,7 @@ function canvasArtifactFromRecord(
   const id = readString(record, 'id')
   const caption = readString(record, 'caption') ?? fallback.caption
   const sourceTool = readString(record, 'sourceTool', 'source_tool') ?? fallback.sourceTool ?? 'ppt_master'
-  const canvasId = readString(record, 'canvasId', 'canvas_id') ?? fallback.canvasId
+  const visualDocumentId = readString(record, 'visualDocumentId') ?? fallback.visualDocumentId
   const threadId = readString(record, 'threadId', 'thread_id') ?? fallback.threadId
   const inferredKind =
     explicitKind ??
@@ -684,37 +680,37 @@ function canvasArtifactFromRecord(
     ...(slideIndex !== undefined ? { slideIndex } : {}),
     ...(caption ? { caption } : {}),
     sourceTool,
-    ...(canvasId ? { canvasId } : {}),
+    ...(visualDocumentId ? { visualDocumentId } : {}),
     ...(threadId ? { threadId } : {}),
     ...(workspaceRoot ? { workspaceRoot } : {})
   }
 }
 
-function collectCanvasArtifactsFromValue(
+function collectVisualReviewArtifactsFromValue(
   value: unknown,
-  artifacts: TimelineCanvasArtifactReference[],
+  artifacts: TimelineVisualReviewArtifactReference[],
   indexByKey: Map<string, number>,
   options: { pptMasterTool: boolean },
   depth = 0
 ): void {
   if (depth > 5) return
   if (Array.isArray(value)) {
-    for (const entry of value) collectCanvasArtifactsFromValue(entry, artifacts, indexByKey, options, depth + 1)
+    for (const entry of value) collectVisualReviewArtifactsFromValue(entry, artifacts, indexByKey, options, depth + 1)
     return
   }
   const record = asRecord(value)
   if (!record) return
 
-  addUniqueCanvasArtifact(artifacts, indexByKey, canvasArtifactFromRecord(record, {}, options))
+  addUniqueVisualReviewArtifact(artifacts, indexByKey, visualReviewArtifactFromRecord(record, {}, options))
 
   for (const key of ['result', 'structuredContent', 'output', 'content', 'generatedFiles', 'outputs', 'artifact', 'artifacts']) {
     const nested = record[key]
-    if (nested !== undefined) collectCanvasArtifactsFromValue(nested, artifacts, indexByKey, options, depth + 1)
+    if (nested !== undefined) collectVisualReviewArtifactsFromValue(nested, artifacts, indexByKey, options, depth + 1)
   }
 
   if (typeof record.text === 'string') {
     for (const parsed of parseJsonValuesFromText(record.text)) {
-      collectCanvasArtifactsFromValue(parsed, artifacts, indexByKey, options, depth + 1)
+      collectVisualReviewArtifactsFromValue(parsed, artifacts, indexByKey, options, depth + 1)
     }
   }
 }
@@ -820,17 +816,17 @@ export function timelineImagesFromToolBlocks(blocks: TimelineToolImageBlock[]): 
   return images
 }
 
-export function timelineCanvasArtifactsFromToolBlock(block: TimelineToolImageBlock): TimelineImageCanvasArtifact[] {
-  const artifacts: TimelineCanvasArtifactReference[] = []
+export function timelineVisualReviewArtifactsFromToolBlock(block: TimelineToolImageBlock): TimelineVisualReviewArtifact[] {
+  const artifacts: TimelineVisualReviewArtifactReference[] = []
   const indexByKey = new Map<string, number>()
   const pptMasterTool = maybePptMasterExportToolName(block.meta)
 
-  collectCanvasArtifactsFromValue(block.meta, artifacts, indexByKey, { pptMasterTool })
+  collectVisualReviewArtifactsFromValue(block.meta, artifacts, indexByKey, { pptMasterTool })
   for (const parsed of parseJsonValuesFromText(block.detail)) {
-    collectCanvasArtifactsFromValue(parsed, artifacts, indexByKey, { pptMasterTool })
+    collectVisualReviewArtifactsFromValue(parsed, artifacts, indexByKey, { pptMasterTool })
   }
   for (const parsed of parseJsonValuesFromText(block.summary)) {
-    collectCanvasArtifactsFromValue(parsed, artifacts, indexByKey, { pptMasterTool })
+    collectVisualReviewArtifactsFromValue(parsed, artifacts, indexByKey, { pptMasterTool })
   }
 
   return artifacts.map(({ id: _id, name: _name, path: _path, byteSize: _byteSize, ...artifact }) => artifact)
@@ -939,7 +935,7 @@ function imageKey(image: TimelineImageReference): string {
   )
 }
 
-function canvasArtifactKey(artifact: TimelineCanvasArtifactReference | TimelineImageCanvasArtifact): string {
+function visualReviewArtifactKey(artifact: TimelineVisualReviewArtifactReference | TimelineVisualReviewArtifact): string {
   return (
     artifact.artifactManifestPath ||
     artifact.diagramLayerManifestPath ||
@@ -958,7 +954,7 @@ function canvasArtifactKey(artifact: TimelineCanvasArtifactReference | TimelineI
   )
 }
 
-function canvasArtifactTitle(artifact: TimelineImageCanvasArtifact): string {
+function visualReviewArtifactTitle(artifact: TimelineVisualReviewArtifact): string {
   const fromPath = [
     artifact.pptxPath,
     artifact.svgPath,
@@ -975,13 +971,13 @@ function canvasArtifactTitle(artifact: TimelineImageCanvasArtifact): string {
   return artifact.title || fromPath || (artifact.artifactKind === 'ppt_export' ? 'PPT export' : 'artifact')
 }
 
-function canvasArtifactSubtitle(artifact: TimelineImageCanvasArtifact): string {
+function visualReviewArtifactSubtitle(artifact: TimelineVisualReviewArtifact): string {
   if (artifact.artifactKind === 'ppt_export') return 'PPTX export'
   if (artifact.artifactKind === 'ppt_slide') return 'PPT slide'
   if (artifact.artifactKind === 'scientific_plot') return 'Scientific plot'
   if (artifact.artifactKind === 'generated_image') return 'Generated image'
   if (artifact.artifactKind === 'edited_image') return 'Edited image'
-  return 'Canvas artifact'
+  return 'Image artifact'
 }
 
 function imageTitle(image: TimelineImageReference): string {
@@ -993,7 +989,7 @@ function imagePath(image: TimelineImageReference): string | undefined {
   return image.absolutePath || image.path || image.outputPath || image.sourcePath || image.relativePath
 }
 
-function imageCanvasArtifact(image: TimelineImageReference, resolvedPath?: string): TimelineImageCanvasArtifact | null {
+function imageVisualReviewArtifact(image: TimelineImageReference, resolvedPath?: string): TimelineVisualReviewArtifact | null {
   const artifactKind = image.artifactKind === 'generated_image' ||
     image.artifactKind === 'edited_image' ||
     image.artifactKind === 'scientific_plot' ||
@@ -1017,7 +1013,7 @@ function imageCanvasArtifact(image: TimelineImageReference, resolvedPath?: strin
     title: imageTitle(image),
     caption: image.caption,
     sourceTool: image.sourceTool,
-    canvasId: image.canvasId,
+    visualDocumentId: image.visualDocumentId,
     threadId: image.threadId,
     workspaceRoot
   }
@@ -1208,14 +1204,14 @@ function TimelineImageTile({
   resolvedPath,
   failure,
   variant,
-  onOpenCanvas
+  onOpenVisualReview
 }: {
   image: TimelineImageReference
   previewUrl?: string
   resolvedPath?: string
   failure?: string
   variant: TimelineImageGalleryVariant
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
@@ -1235,8 +1231,8 @@ function TimelineImageTile({
   const canOpenOriginal = image.source !== 'capture' && Boolean(sourcePath || sourceUrl)
   const canDownload = Boolean(src)
   const canCopy = image.source !== 'capture' && Boolean(copyValue)
-  const canvasArtifact = image.source === 'capture' ? null : imageCanvasArtifact(image, resolvedPath)
-  const canOpenCanvas = Boolean(canvasArtifact && onOpenCanvas)
+  const reviewArtifact = image.source === 'capture' ? null : imageVisualReviewArtifact(image, resolvedPath)
+  const canOpenVisualReview = Boolean(reviewArtifact && onOpenVisualReview)
   const tileClass =
     variant === 'conversation' || variant === 'assistant'
       ? 'h-48 w-full overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm sm:h-56'
@@ -1271,8 +1267,8 @@ function TimelineImageTile({
   }
 
   const handlePrimaryOpen = (): void => {
-    if (canvasArtifact && onOpenCanvas) {
-      onOpenCanvas(canvasArtifact)
+    if (reviewArtifact && onOpenVisualReview) {
+      onOpenVisualReview(reviewArtifact)
       return
     }
     setPreviewOpen(true)
@@ -1325,9 +1321,9 @@ function TimelineImageTile({
         <button
           type="button"
           onClick={handlePrimaryOpen}
-          className={`block h-full w-full ${canOpenCanvas ? 'cursor-pointer' : 'cursor-zoom-in'} bg-ds-subtle`}
-          title={canOpenCanvas ? t('imageOpenCanvasReview') : t('imagePreviewOpen', { name: title })}
-          aria-label={canOpenCanvas ? t('imageOpenCanvasReview') : t('imagePreviewOpen', { name: title })}
+          className={`block h-full w-full ${canOpenVisualReview ? 'cursor-pointer' : 'cursor-zoom-in'} bg-ds-subtle`}
+          title={canOpenVisualReview ? t('imageOpenVisualReview') : t('imagePreviewOpen', { name: title })}
+          aria-label={canOpenVisualReview ? t('imageOpenVisualReview') : t('imagePreviewOpen', { name: title })}
         >
           <img src={src} alt={title} className="h-full w-full object-contain" loading="lazy" />
         </button>
@@ -1427,22 +1423,22 @@ function TimelineImageTile({
   )
 }
 
-function TimelineCanvasArtifactTile({
+function TimelineVisualReviewArtifactTile({
   artifact,
-  onOpenCanvas
+  onOpenVisualReview
 }: {
-  artifact: TimelineImageCanvasArtifact
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  artifact: TimelineVisualReviewArtifact
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const [copyState, setCopyState] = useState<ImageActionState>('idle')
   const [openState, setOpenState] = useState<ImageActionState>('idle')
-  const title = canvasArtifactTitle(artifact)
-  const subtitle = canvasArtifactSubtitle(artifact)
+  const title = visualReviewArtifactTitle(artifact)
+  const subtitle = visualReviewArtifactSubtitle(artifact)
   const sourcePath = artifact.pptxPath || artifact.svgPath || artifact.outputPath || artifact.sourcePath || artifact.previewPath || artifact.renderedPagePath
   const copyValue = artifact.artifactManifestPath || artifact.manifestPath || sourcePath
-  const canOpenCanvas = Boolean(onOpenCanvas)
+  const canOpenVisualReview = Boolean(onOpenVisualReview)
   const canOpenOriginal = Boolean(sourcePath) && artifact.artifactKind !== 'ppt_export'
   const iconButtonClass =
     'inline-flex h-7 w-7 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
@@ -1493,10 +1489,10 @@ function TimelineCanvasArtifactTile({
     <article className="group/artifact relative w-full max-w-2xl overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm">
       <button
         type="button"
-        onClick={() => onOpenCanvas?.(artifact)}
-        disabled={!canOpenCanvas}
-        title={t('artifactOpenCanvasReview')}
-        aria-label={t('artifactOpenCanvasReview')}
+        onClick={() => onOpenVisualReview?.(artifact)}
+        disabled={!canOpenVisualReview}
+        title={t('artifactOpenVisualReview')}
+        aria-label={t('artifactOpenVisualReview')}
         className="flex w-full min-w-0 items-center gap-3 p-3 text-left transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:hover:bg-transparent"
       >
         <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg border border-ds-border-muted bg-ds-subtle text-ds-muted">
@@ -1547,11 +1543,11 @@ function TimelineCanvasArtifactTile({
 export function TimelineImageGallery({
   images,
   variant,
-  onOpenCanvas
+  onOpenVisualReview
 }: {
   images: TimelineImageReference[]
   variant: TimelineImageGalleryVariant
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement | null {
   const previewState = usePreviewState(images)
   if (images.length === 0) return null
@@ -1576,7 +1572,7 @@ export function TimelineImageGallery({
             resolvedPath={previewState.paths[key]}
             failure={previewState.failures[key]}
             variant={variant}
-            onOpenCanvas={onOpenCanvas}
+            onOpenVisualReview={onOpenVisualReview}
           />
         )
       })}
@@ -1587,14 +1583,14 @@ export function TimelineImageGallery({
 export function TimelineImagesFromMeta({
   meta,
   variant,
-  onOpenCanvas
+  onOpenVisualReview
 }: {
   meta?: Record<string, unknown>
   variant: TimelineImageGalleryVariant
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement | null {
   const images = useMemo(() => timelineImagesFromMeta(meta), [meta])
-  return <TimelineImageGallery images={images} variant={variant} onOpenCanvas={onOpenCanvas} />
+  return <TimelineImageGallery images={images} variant={variant} onOpenVisualReview={onOpenVisualReview} />
 }
 
 export function TimelineVisualCapturePreview({
@@ -1613,14 +1609,14 @@ export function TimelineVisualCapturePreview({
 
 export function MarkdownImageArtifactProvider({
   images,
-  onOpenCanvas,
+  onOpenVisualReview,
   children
 }: {
   images: TimelineImageReference[]
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
   children: ReactNode
 }): ReactElement {
-  const value = useMemo(() => ({ images, onOpenCanvas }), [images, onOpenCanvas])
+  const value = useMemo(() => ({ images, onOpenVisualReview }), [images, onOpenVisualReview])
   return (
     <MarkdownImageArtifactContext.Provider value={value}>
       {children}
@@ -1630,18 +1626,18 @@ export function MarkdownImageArtifactProvider({
 
 export function TimelineImageResultsPanel({
   blocks,
-  onOpenCanvas
+  onOpenVisualReview
 }: {
   blocks: TimelineToolImageBlock[]
-  onOpenCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const images = useMemo(() => timelineImagesFromToolBlocks(blocks), [blocks])
   const artifacts = useMemo(() => {
-    const byKey = new Map<string, TimelineImageCanvasArtifact>()
+    const byKey = new Map<string, TimelineVisualReviewArtifact>()
     for (const block of blocks) {
-      for (const artifact of timelineCanvasArtifactsFromToolBlock(block)) {
-        byKey.set(canvasArtifactKey(artifact), artifact)
+      for (const artifact of timelineVisualReviewArtifactsFromToolBlock(block)) {
+        byKey.set(visualReviewArtifactKey(artifact), artifact)
       }
     }
     return [...byKey.values()]
@@ -1654,17 +1650,17 @@ export function TimelineImageResultsPanel({
       {images.length > 0 ? (
         <>
           <div className="text-[12px] font-semibold text-ds-faint">{t('generatedFilesTitle')}</div>
-          <TimelineImageGallery images={images} variant="conversation" onOpenCanvas={onOpenCanvas} />
+          <TimelineImageGallery images={images} variant="conversation" onOpenVisualReview={onOpenVisualReview} />
         </>
       ) : null}
       {artifacts.length > 0 ? (
         <div className="flex min-w-0 flex-col gap-2">
           <div className="text-[12px] font-semibold text-ds-faint">{t('generatedArtifactsTitle')}</div>
           {artifacts.map((artifact) => (
-            <TimelineCanvasArtifactTile
-              key={canvasArtifactKey(artifact)}
+            <TimelineVisualReviewArtifactTile
+              key={visualReviewArtifactKey(artifact)}
               artifact={artifact}
-              onOpenCanvas={onOpenCanvas}
+              onOpenVisualReview={onOpenVisualReview}
             />
           ))}
         </div>
@@ -1691,7 +1687,7 @@ export function AssistantMarkdownImage({
     }
     return isImageReference(base) ? base : null
   }, [alt, src])
-  const { images, onOpenCanvas } = useContext(MarkdownImageArtifactContext)
+  const { images, onOpenVisualReview } = useContext(MarkdownImageArtifactContext)
   const resolvedImage = useMemo(
     () => image ? resolveMarkdownImageReference(image, images) : null,
     [image, images]
@@ -1703,7 +1699,7 @@ export function AssistantMarkdownImage({
 
   return (
     <div className="my-3">
-      <TimelineImageGallery images={[resolvedImage]} variant="assistant" onOpenCanvas={onOpenCanvas} />
+      <TimelineImageGallery images={[resolvedImage]} variant="assistant" onOpenVisualReview={onOpenVisualReview} />
     </div>
   )
 }

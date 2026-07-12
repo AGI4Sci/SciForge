@@ -586,7 +586,7 @@ describe('chat-store-thread-actions queued messages', () => {
     })
   })
 
-  it('drops queued messages whose original thread no longer matches the active thread', async () => {
+  it('preserves queued messages whose original thread does not match the active thread', async () => {
     const { actions, state } = buildHarness()
     const sendMessage = vi.fn(async (_text, _mode, overrides) => {
       state.queuedMessages = state.queuedMessages.filter((message) => message.id !== overrides?.queued?.id)
@@ -605,8 +605,143 @@ describe('chat-store-thread-actions queued messages', () => {
 
     await actions.drainQueuedMessages()
 
-    expect(state.queuedMessages).toEqual([])
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-stale', threadId: 'thr_existing' })
+    ])
     expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('edits queued message content without dropping its routing metadata', () => {
+    const { actions, state } = buildHarness()
+    state.queuedMessages = [{
+      id: 'q-edit',
+      threadId: 'thr_existing',
+      runtimeId: 'sciforge',
+      text: 'old payload',
+      displayText: 'old display',
+      mode: 'agent'
+    }]
+
+    expect(actions.updateQueuedMessage('q-edit', '  revised follow-up  ')).toBe(true)
+    expect(state.queuedMessages).toEqual([{
+      id: 'q-edit',
+      threadId: 'thr_existing',
+      runtimeId: 'sciforge',
+      text: 'revised follow-up',
+      displayText: 'revised follow-up',
+      mode: 'agent'
+    }])
+    expect(actions.updateQueuedMessage('q-edit', '   ')).toBe(false)
+    expect(actions.updateQueuedMessage('missing', 'text')).toBe(false)
+  })
+
+  it('drains a completed background thread without mutating the active thread UI', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{ kind: 'assistant', id: 'a-running', text: 'still running' }],
+        latestSeq: 2,
+        threadStatus: 'running'
+      })),
+      rememberThreadRuntime: vi.fn(),
+      sendUserMessage: vi.fn(async () => ({
+        turnId: 'turn-a-follow-up',
+        threadId: 'thread-a',
+        userMessageItemId: 'user-a-follow-up'
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thread-b'
+    state.activeAgentRuntime = 'sciforge'
+    state.blocks = [{ kind: 'assistant', id: 'b-block', text: 'active B content' }]
+    state.busy = true
+    state.currentTurnId = 'turn-b'
+    state.threads = [
+      { ...thread('thread-a'), runtimeId: 'sciforge', workspace: '/workspace/a' },
+      { ...thread('thread-b'), runtimeId: 'sciforge', workspace: '/workspace/b' }
+    ]
+    state.queuedMessages = [{
+      id: 'q-a',
+      threadId: 'thread-a',
+      runtimeId: 'sciforge',
+      text: 'continue A in the background',
+      displayText: 'continue A in the background',
+      model: 'deepseek-v4-pro'
+    }]
+
+    await expect(actions.drainQueuedMessagesForThread('thread-a')).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thread-a',
+      expect.stringContaining('continue A in the background'),
+      expect.objectContaining({
+        workspace: '/workspace/a',
+        model: 'deepseek-v4-pro',
+        displayText: 'continue A in the background'
+      })
+    )
+    expect(state.activeThreadId).toBe('thread-b')
+    expect(state.blocks).toEqual([{ kind: 'assistant', id: 'b-block', text: 'active B content' }])
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('turn-b')
+    expect(state.queuedMessages).toEqual([])
+    expect(state.watchTurnCompletion).toMatchObject({ 'thread-a': true })
+  })
+
+  it('keeps a background queue when sending would hand the thread to another runtime', async () => {
+    const { actions, state } = buildHarness()
+    const provider = { sendUserMessage: vi.fn() }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thread-b'
+    state.activeAgentRuntime = 'codex'
+    state.threads = [
+      { ...thread('thread-a'), runtimeId: 'sciforge' },
+      { ...thread('thread-b'), runtimeId: 'codex' }
+    ]
+    state.queuedMessages = [{
+      id: 'q-a',
+      threadId: 'thread-a',
+      runtimeId: 'sciforge',
+      text: 'do not hand this off'
+    }]
+
+    await expect(actions.drainQueuedMessagesForThread('thread-a')).resolves.toBe(false)
+
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toEqual([expect.objectContaining({ id: 'q-a' })])
+  })
+
+  it('starts a background queued message at most once when completion polls overlap', async () => {
+    const { actions, state } = buildHarness()
+    const turn = deferred<{ turnId: string; threadId: string }>()
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 1, threadStatus: 'running' })),
+      rememberThreadRuntime: vi.fn(),
+      sendUserMessage: vi.fn(() => turn.promise)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thread-b'
+    state.activeAgentRuntime = 'sciforge'
+    state.threads = [
+      { ...thread('thread-a'), runtimeId: 'sciforge' },
+      { ...thread('thread-b'), runtimeId: 'sciforge' }
+    ]
+    state.queuedMessages = [{
+      id: 'q-a',
+      threadId: 'thread-a',
+      runtimeId: 'sciforge',
+      text: 'send exactly once'
+    }]
+
+    const firstDrain = actions.drainQueuedMessagesForThread('thread-a')
+    await Promise.resolve()
+    await expect(actions.drainQueuedMessagesForThread('thread-a')).resolves.toBe(false)
+    expect(provider.sendUserMessage).toHaveBeenCalledTimes(1)
+
+    turn.resolve({ turnId: 'turn-a-next', threadId: 'thread-a' })
+    await expect(firstDrain).resolves.toBe(true)
+    expect(provider.sendUserMessage).toHaveBeenCalledTimes(1)
+    expect(state.queuedMessages).toEqual([])
   })
 
   it('loads shared context state when selecting a thread', async () => {
@@ -663,12 +798,23 @@ describe('chat-store-thread-actions queued messages', () => {
     state.busy = false
     state.blocks = [{ kind: 'assistant', id: 'old-block', text: 'old thread' }]
     state.threads = [thread('thr_existing'), thread('thr_slow')]
+    state.queuedMessages = [{
+      id: 'q-existing',
+      text: 'stay with the original thread',
+      threadId: 'thr_existing'
+    }]
     state.unreadThreadIds = { thr_slow: true }
 
     const selecting = actions.selectThread('thr_slow')
 
     expect(state.activeThreadId).toBe('thr_slow')
+    expect(state.focusedAgentThreadId).toBe('thr_slow')
+    expect(state.agentFocusLineage.map((node) => node.threadId)).toEqual(['thr_slow'])
+    expect(state.agentFocusHistory.map((location) => location.threadId)).toEqual(['thr_slow'])
     expect(state.blocks).toEqual([])
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'q-existing', threadId: 'thr_existing' })
+    ])
     expect(state.unreadThreadIds).toEqual({})
     expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
 

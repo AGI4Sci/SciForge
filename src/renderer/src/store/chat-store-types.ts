@@ -156,6 +156,30 @@ export type SidePanelState = {
   activeSideId: string | null
 }
 
+/** A thread in the currently focused agent's root-to-leaf navigation path. */
+export type AgentFocusNode = {
+  threadId: string
+  parentThreadId: string | null
+  runtimeId?: AgentRuntimeId
+  title?: string
+}
+
+/** A browser-history entry for the agent shown in the center workbench. */
+export type AgentFocusLocation = {
+  threadId: string
+  runtimeId?: AgentRuntimeId
+  lineage: AgentFocusNode[]
+}
+
+export type FocusAgentThreadInput = {
+  threadId: string
+  parentThreadId?: string | null
+  runtimeId?: AgentRuntimeId
+  title?: string
+  /** Optional complete path for deep-linking an agent that is not attached yet. */
+  lineage?: AgentFocusNode[]
+}
+
 export type ChatState = {
   route: AppRoute
   settingsReturnRoute: Exclude<AppRoute, 'settings'>
@@ -174,6 +198,15 @@ export type ChatState = {
   threadSearch: string
   showArchivedThreads: boolean
   activeThreadId: string | null
+  /**
+   * Thread displayed in the center workbench. Unlike `activeThreadId`, this
+   * may be a descendant sub-agent and never changes the selected root chat.
+   */
+  focusedAgentThreadId: string | null
+  focusedAgentRuntimeId: AgentRuntimeId | null
+  agentFocusLineage: AgentFocusNode[]
+  agentFocusHistory: AgentFocusLocation[]
+  agentFocusHistoryIndex: number
   activeThreadGoal: ThreadGoal | null
   activeThreadTodos: ThreadTodoList | null
   activeThreadContextState: AgentRuntimeContextState | null
@@ -257,12 +290,19 @@ export type ChatState = {
   setShowArchivedThreads: (show: boolean) => void
   createThread: (options?: { workspaceRoot?: string; forceNew?: boolean }) => Promise<void>
   selectThread: (id: string) => Promise<void>
+  focusAgentThread: (target: FocusAgentThreadInput) => boolean
+  focusAgentBack: () => boolean
+  focusAgentForward: () => boolean
+  focusAgentParent: () => boolean
+  resetAgentFocus: (rootThreadId?: string | null) => void
   refreshActiveThreadContextState: (threadId?: string) => Promise<void>
   recoverActiveTurn: () => Promise<boolean>
   sendMessage: (text: string, mode?: string, overrides?: SendMessageOverrides) => Promise<boolean>
   reviewActiveThread: (target: ReviewTarget) => Promise<boolean>
   drainQueuedMessages: () => Promise<void>
+  drainQueuedMessagesForThread: (threadId: string) => Promise<boolean>
   removeQueuedMessage: (id: string) => void
+  updateQueuedMessage: (id: string, text: string) => boolean
   steerQueuedMessage: (id: string) => Promise<boolean>
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>

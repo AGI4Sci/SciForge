@@ -14,7 +14,6 @@ import {
   type WorkspaceFilePreviewReturnContext
 } from '../lib/workspace-file-preview'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
-import { FIGURE_STYLE_PANEL_PAGE_KEY } from './figure-style/figure-style-panel-state'
 
 const LEFT_PANEL_WIDTH_KEY = 'sciforge.layout.leftSidebarWidth'
 const LEFT_PANEL_COLLAPSED_KEY = 'sciforge.layout.leftSidebarCollapsed'
@@ -101,18 +100,13 @@ function persistBoolean(key: string, value: boolean): void {
 
 export function readStoredRightPanelMode(): RightPanelMode {
   const raw = readBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
-  if (raw === 'sciforge-canvas') {
-    writeBrowserStorageItem(FIGURE_STYLE_PANEL_PAGE_KEY, 'canvas')
-    writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, 'figure-style')
-    return 'figure-style'
-  }
-  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'figure-style'
+  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'visual-review'
     ? raw
     : null
 }
 
 export function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'figure-style') {
+  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'visual-review') {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
   } else {
     removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
@@ -120,7 +114,8 @@ export function persistRightPanelMode(mode: RightPanelMode): void {
 }
 
 export function shouldCloseRightPanelOnThreadChange(mode: RightPanelMode): boolean {
-  return mode === 'child-agents'
+  void mode
+  return false
 }
 
 export function projectDagReturnSelection(

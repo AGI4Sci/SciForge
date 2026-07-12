@@ -211,8 +211,6 @@ function createApi(): SciForgeApi {
       invoke('mcp:bgc-discovery-config', { workspaceRoot }),
     buildImageGenerationMcpConfig: (workspaceRoot) =>
       invoke('mcp:image-generation-config', { workspaceRoot }),
-    buildSciforgeCanvasMcpConfig: (workspaceRoot) =>
-      invoke('mcp:sciforge-canvas-config', { workspaceRoot }),
     buildPptMasterMcpConfig: (workspaceRoot) =>
       invoke('mcp:ppt-master-config', { workspaceRoot }),
     getScientificSkillsStatus: (workspaceRoot) =>
@@ -223,33 +221,28 @@ function createApi(): SciForgeApi {
       invoke('scientific-plotting:status', { workspaceRoot }),
     prepareScientificPlottingReference: (request) =>
       invoke('scientific-plotting:prepare-reference', request),
-    getSciforgeCanvasStatus: (workspaceRoot) =>
-      invoke('sciforge-canvas:status', { workspaceRoot }),
-    getLocalDrawioUrl: () => invoke('drawio:local-url'),
-    openSciforgeCanvas: (request) =>
-      invoke('sciforge-canvas:open', request),
-    saveSciforgeCanvas: (request) =>
-      invoke('sciforge-canvas:save', request),
-    saveSciforgeCanvasSelection: (request) =>
-      invoke('sciforge-canvas:save-selection', request),
-    insertSciforgeCanvasArtifact: (request) =>
-      invoke('sciforge-canvas:insert-artifact', request),
-    importRecentSciforgeCanvasArtifacts: (request) =>
-      invoke('sciforge-canvas:import-recent-artifacts', request),
-    splitSciforgeCanvasArtifactComponents: (request) =>
-      invoke('sciforge-canvas:split-artifact-components', request),
-    exportSciforgeCanvasReviewPacket: (request) =>
-      invoke('sciforge-canvas:export-review-packet', request),
-    extractFigureStyle: (request) =>
-      invoke('figure-style:extract', request),
-    extractFigureStyleReference: (request) =>
-      invoke('figure-style:extract-reference', request),
-    saveFigureStyleSpec: (request) =>
-      invoke('figure-style:save-spec', request),
-    evaluateFigureStyle: (request) =>
-      invoke('figure-style:evaluate', request),
-    reviewFigureStyle: (request) =>
-      invoke('figure-style:review', request),
+    getVisualDocumentStatus: (workspaceRoot) =>
+      invoke('visual-document:status', { workspaceRoot }),
+    openVisualDocument: (request) =>
+      invoke('visual-document:open', request),
+    insertVisualDocumentArtifact: (request) =>
+      invoke('visual-document:insert-artifact', request),
+    updateVisualDocumentContext: (request) =>
+      invoke('visual-document:update-context', request),
+    saveVisualDocumentAnnotations: (request) =>
+      invoke('visual-document:save-annotations', request),
+    exportVisualReviewPacket: (request) =>
+      invoke('visual-document:export-review-packet', request),
+    createVisualCandidateRevision: (request) =>
+      invoke('visual-document:create-candidate', request),
+    acceptVisualCandidateRevision: (request) =>
+      invoke('visual-document:accept-candidate', request),
+    rejectVisualCandidateRevision: (request) =>
+      invoke('visual-document:reject-candidate', request),
+    extractVisualStyleProfile: (request) =>
+      invoke('visual-style:extract-profile', request),
+    saveVisualStyleProfile: (request) =>
+      invoke('visual-style:save-profile', request),
     listSkills: (workspaceRoot) => invoke('skill:list', { workspaceRoot }),
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
@@ -396,6 +389,7 @@ function createApi(): SciForgeApi {
     getComputerUseStatus: () => invoke('computer-use:status'),
     getEvidenceDagView: (input) => invoke('evidenceDag:view', input),
     updateEvidenceDag: (input) => invoke('evidenceDag:update', input),
+    setEvidenceDagPriority: (input) => invoke('evidenceDag:priority', input),
     resolveEvidenceDagEvidencePreview: (input) =>
       invoke('evidenceDag:resolve-evidence-preview', input),
     getProjectDagView: (input) => invoke('projectDag:view', input),

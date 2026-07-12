@@ -6,26 +6,6 @@ export const IMAGE_GENERATION_MODES = [
 
 export type ImageGenerationMode = typeof IMAGE_GENERATION_MODES[number]
 
-export type ImageGenerationVisualRouting = {
-  useImageGenerationWhen: readonly string[]
-  useScientificPlottingWhen: readonly string[]
-  modelSelectionHint: string
-}
-
-export const IMAGE_GENERATION_VISUAL_ROUTING = {
-  useImageGenerationWhen: [
-    'semantic visuals from long prose or paper excerpts',
-    'creative or illustrative flowcharts, infographics, cover images, posters, diagrams, and concept art',
-    'visual storytelling where the model should choose layout, icons, typography, and composition'
-  ],
-  useScientificPlottingWhen: [
-    'structured numeric data charts',
-    'publication plots with explicit table/matrix/series data',
-    'compact controlled flowcharts only when nodes and edges are already explicit'
-  ],
-  modelSelectionHint: 'Use image_generation for prose-to-visual flowcharts/diagrams/infographics; use scientific_plotting only for structured data or explicit compact node-edge diagrams.'
-} as const satisfies ImageGenerationVisualRouting
-
 export const IMAGE_EDIT_MODES = [
   'inpaint',
   'replace',
@@ -427,7 +407,6 @@ export type ScientificImagePolishDeltaPlan = {
 export type ImageGenerationRecipe = {
   mode: ImageGenerationMode
   prompt: string
-  model?: string
   negativePrompt?: string
   size: ImageSize
   stylePreset?: string
@@ -442,6 +421,8 @@ export type ImageGenerationRecipe = {
   promptProfile?: 'default' | 'flowchart-light-v1' | 'framework-spec-v1' | 'framework-layered-draft-v1'
   scientificPolishDeltaPlan?: ScientificImagePolishDeltaPlan
   controlledSubfigureManifests?: string[]
+  scientificVisualPlan?: ScientificVisualPlanHandoff
+  creativeDirect?: true
 }
 
 export type ImageGenerationUsagePolicy = {
@@ -458,8 +439,8 @@ export type ImageEditIntent = {
   sourcePath: string
   instruction: string
   maskPath?: string
-  annotationShapeId?: string
-  targetShapeId?: string
+  annotationIds?: string[]
+  targetNodeIds?: string[]
   preserve?: Array<'composition' | 'identity' | 'text' | 'layout' | 'palette'>
   outputFormat?: ImageOutputFormat
 }
@@ -482,8 +463,16 @@ export type ImageGenerationStatus = {
     legacyRunnerEnv?: string
     legacyModelEnv?: string
   }
-  visualRouting: ImageGenerationVisualRouting
   warnings: string[]
+}
+
+export type ScientificVisualPlanHandoff = {
+  route: 'generative_visual' | 'hybrid_composite'
+  routeLocked: true
+  rationale: string
+  reproducibleInputs: string[]
+  truthLockedElements: string[]
+  fallbackPolicy: 'fail_closed'
 }
 
 export type ImageGenerationPlanRequest = {
@@ -494,47 +483,53 @@ export type ImageGenerationPlanRequest = {
   size?: Partial<ImageSize>
   stylePreset?: string
   referencePath?: string
-  canvasId?: string
-  threadId?: string
-  insertToCanvas?: boolean
+  scientificVisualPlan?: ScientificVisualPlanHandoff
+  creativeDirect?: true
 }
 
-export type ImageGenerationPlanResult = {
-  ok: true
-  task: string
-  recipe: ImageGenerationRecipe
-  suggestedRenderTool: 'image_generation_render'
-  suggestedReviewTool: 'image_generation_review'
-  upstreamResearchWorkflow?: {
-    recommended: boolean
-    reason: string
-    suggestedBriefTool: 'scientific_plotting_research_brief'
-    suggestedSearchTool: 'research_search'
-    promptRequirements: string[]
-  }
-  visualRouting: ImageGenerationVisualRouting
-  artifactPolicy: string
-  canvasWorkflow: string[]
-  requiresConfirmation?: boolean
-  confirmationSummary?: string
-  warnings: string[]
-}
+export type ImageGenerationPlanResult =
+  | {
+      ok: true
+      task: string
+      recipe: ImageGenerationRecipe
+      suggestedRenderTool: 'image_generation_render'
+      suggestedReviewTool: 'visual_artifact_review'
+      upstreamResearchWorkflow?: {
+        recommended: boolean
+        reason: string
+        suggestedBriefTool: 'scientific_plotting_research_brief'
+        suggestedSearchTool: 'research_search'
+        promptRequirements: string[]
+      }
+      scientificVisualPlan?: ScientificVisualPlanHandoff
+      artifactPolicy: string
+      visualReviewWorkflow: string[]
+      requiresConfirmation?: boolean
+      confirmationSummary?: string
+      warnings: string[]
+    }
+  | {
+      ok: false
+      status: 'scientific_visual_plan_required' | 'invalid_scientific_visual_plan'
+      message: string
+      suggestedPlanTool: 'scientific_visual_plan'
+      warnings: string[]
+    }
 
 export type ImageGenerationRenderRequest = {
   workspaceRoot: string
   recipe: ImageGenerationRecipe
   imageId?: string
   outputDir?: string
-  reviewReferencePath?: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
-  insertToCanvas?: boolean
+  stageForVisualReview?: boolean
 }
 
 export type ImageGenerationRenderResult =
   | {
       ok: true
-      status: 'rendered' | 'rendered_placeholder' | 'review_failed'
+      status: 'awaiting_review' | 'rendered_placeholder'
       workspaceRoot: string
       outputPath: string
       manifestPath: string
@@ -549,7 +544,6 @@ export type ImageGenerationRenderResult =
       componentBasePath?: string
       componentAssetPaths?: string[]
       provider: ImageGenerationProvider
-      review?: ImageGenerationReviewResult
       usagePolicy?: ImageGenerationUsagePolicy
       warnings: string[]
     }
@@ -557,51 +551,62 @@ export type ImageGenerationRenderResult =
       ok: false
       status: 'invalid_workspace' | 'invalid_request' | 'research_required' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
       message: string
-      upstreamResearchWorkflow?: ImageGenerationPlanResult['upstreamResearchWorkflow']
+      upstreamResearchWorkflow?: Extract<ImageGenerationPlanResult, { ok: true }>['upstreamResearchWorkflow']
       warnings?: string[]
     }
 
-export type ImageGenerationReviewRequest = {
+export type VisualArtifactReviewRequest = {
   workspaceRoot: string
   outputPath: string
+  task: string
+  truthLockedElements: string[]
   referencePath?: string
   minOverall?: number
 }
 
-export type ImageGenerationSimilarityScore = {
+export type VisualArtifactReviewScore = {
   overall: number
   dimensions: number
   nonEmpty: number
   background: number
   reference?: number
+  semantic: number
   warnings: string[]
 }
 
-export type ImageGenerationReviewResult =
+export type VisualArtifactReviewResult =
   | {
       ok: true
-      score: ImageGenerationSimilarityScore
+      reviewedArtifactPath: string
+      reviewedArtifactHash: string
+      reviewedAt: string
+      score: VisualArtifactReviewScore
+      semantic: {
+        pass: boolean
+        summary: string
+        violations: string[]
+        repairInstructions: string[]
+      }
       repairable: boolean
       warnings: string[]
     }
   | {
       ok: false
-      status: 'invalid_workspace' | 'image_unreadable' | 'reference_unreadable'
+      status: 'invalid_workspace' | 'image_unreadable' | 'reference_unreadable' | 'vision_review_unavailable' | 'vision_review_invalid'
       message: string
       warnings?: string[]
     }
 
-export type ImageGenerationEditFromCanvasPacketRequest = {
+export type ImageGenerationEditFromVisualReviewPacketRequest = {
   workspaceRoot: string
   reviewPacketPath?: string
   reviewPacket?: unknown
   outputDir?: string
   imageId?: string
-  canvasId?: string
   threadId?: string
 }
 
-export type ImageGenerationEditFromCanvasPacketResult =
+export type ImageGenerationEditFromVisualReviewPacketResult =
   | {
       ok: true
       status: 'edited' | 'edited_placeholder'
@@ -673,11 +678,11 @@ export type FrameworkLocalizedEditRequest = {
   blockIds?: string[]
   outputDir?: string
   imageId?: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   padding?: number
   editCanvasSize?: number
-  insertToCanvas?: boolean
+  stageForVisualReview?: boolean
 }
 
 export type FrameworkLocalizedEditResult =
@@ -698,7 +703,7 @@ export type FrameworkLocalizedEditResult =
       editedRegionPath: string
       contactSheetPath: string
       provider: ImageGenerationProvider
-      model?: string
+      routerModelAlias?: string
       warnings: string[]
     }
   | {
@@ -708,40 +713,18 @@ export type FrameworkLocalizedEditResult =
       warnings?: string[]
     }
 
-export type ImageGenerationReviewPacketRequest = {
-  workspaceRoot: string
-  manifestPaths: string[]
-  packetId?: string
-  outputDir?: string
-  title?: string
-}
-
-export type ImageGenerationReviewPacketResult =
-  | {
-      ok: true
-      packetPath: string
-      markdownPath: string
-      count: number
-      warnings: string[]
-    }
-  | {
-      ok: false
-      status: 'invalid_workspace' | 'invalid_request' | 'write_failed'
-      message: string
-      warnings?: string[]
-    }
-
 export type ImageGenerationManifest = {
   version: 1
   renderer: 'sciforge-image-generation-mcp'
   rendererVersion: string
-  tool: 'image_generation_render' | 'image_generation_edit_from_canvas_packet' | 'image_generation_segment_components' | 'image_generation_edit_components'
+  tool: 'image_generation_render' | 'image_generation_edit_from_visual_review_packet' | 'image_generation_segment_components' | 'image_generation_edit_components'
   createdAt: string
   requestHash: string
   workspaceRoot: string
   outputPath: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
+  stageForVisualReview?: boolean
   recipe?: ImageGenerationRecipe
   editIntent?: ImageEditIntent
   intent?: ImageDrawingIntent
@@ -760,7 +743,6 @@ export type ImageGenerationManifest = {
   lockedFacts?: string[]
   sourceControlledArtifacts?: string[]
   provider: ImageGenerationProvider
-  review?: ImageGenerationReviewResult
   usagePolicy?: ImageGenerationUsagePolicy
   warnings: string[]
 }

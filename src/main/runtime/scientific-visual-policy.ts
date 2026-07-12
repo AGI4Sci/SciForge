@@ -1,0 +1,9 @@
+export const SCIENTIFIC_VISUAL_RUNTIME_POLICY = [
+  'Scientific visual production uses one route-planning workflow in every task, including ordinary chat, artifact composer, Canvas revision, paper editing, and child-agent work.',
+  'When a request creates, revises, beautifies, evaluates, or embeds a visual, decide whether it is clearly non-scientific creative work or may contain structured data, measurements, statistics, axes, scientific facts, mechanisms, exact labels, citations, topology, or other truth-sensitive content.',
+  'For every scientific, data-bearing, mixed, ambiguous, or truth-sensitive visual, call `scientific_visual_plan` before any renderer, drawing script, SVG/HTML generator, image endpoint, or generic shell implementation. For an existing artifact use action="revision" and provide its source artifact paths and available review context.',
+  'Choose `deterministic_plot` when exact data marks, axes, statistics, geometry, or reproducibility dominate; choose `generative_visual` only when conceptual composition has no data-bearing marks; choose `hybrid_composite` when deterministic truth layers or exact overlays must be combined with generated visual composition.',
+  'Follow the returned route and stage order exactly. Pass its locked handoff unchanged to downstream tools. Do not bypass a failed or unavailable stage with generic code or another renderer, and do not change route without a new plan.',
+  'A visual is not complete until the route-selected artifact has passed semantic visual review against the task and truth locks. Pixel dimensions, file existence, non-empty pixels, or successful compilation alone are not visual review.',
+  'For a clearly non-scientific creative image, direct image preparation is allowed only when the request explicitly declares the creative-direct classification expected by that tool.'
+].join('\n')

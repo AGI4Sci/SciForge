@@ -8,7 +8,7 @@
 
 - 新增只读外部 skill catalog 项：`Paper Figures Data-First Workflow`，作为 CNS/领域绘图前的规划增强源。
 - `scientific_plotting_research_brief` 新增 `paperFigureProductionPlan`，在已知论文信息和原始数据时规划 baseline table、关键变量比较图、相关性热图、KM、生存/森林图、ROC、多 panel summary。
-- `paperFigureProductionPlan` 进一步新增 `compositionPlan`：明确论文级 figure 应先生成受控子图，再交给图像模型做 panel stitching、callout、局部放大和视觉统一，最后进入 Canvas 审改迭代。
+- `paperFigureProductionPlan` 进一步新增 `compositionPlan`：明确论文级 figure 应先生成受控子图，再交给图像模型做 panel stitching、callout、局部放大和视觉统一，最后进入 VisualDocument 审改迭代。
 - `box-violin` 与 `multi-panel` 内的 `box-violin` 支持 violin + box + jitter points + 组间显著性括号，用于更接近论文数据图。
 - 补充 targeted tests，确认 paper-figures catalog、paper-level plan、统计/多 panel 渲染能力可用。
 
@@ -37,12 +37,12 @@
 
 ## 下一步
 
-优先补专用统计模板和 paper-level figure report；随后执行“受控数据图 first render -> 图像模型拼版/美化 -> Canvas 审改 -> 新版本”的闭环测试，并用近年 CNS/Nature 论文的多 panel 图作为对照持续调参。
+优先补专用统计模板和 paper-level figure report；随后执行“受控数据图 first render -> 图像模型拼版/美化 -> VisualDocument 审改 -> 新版本”的闭环测试，并用近年 CNS/Nature 论文的多 panel 图作为对照持续调参。
 
 ## vNext 协议：Skill Selection + Image Delta Polish
 
-本轮进一步把“论文级绘图”拆成可审计的四段：`skill selection -> research brief -> controlled subfigures -> delta polish -> Canvas review`。`scientific_plotting_research_brief` 现在会返回 `selectedSkillProfile`，明确本次使用哪组只读 skill/profile。优先级固定为 `kdense -> cns -> domain -> image-delta`：K-Dense 作为出版级绘图基座，`nature-skills` 作为 CNS/Nature 工作流增强层，领域 skill 按论文内容补充，image-delta 只负责最后的视觉增量。
+本轮进一步把“论文级绘图”拆成可审计的四段：`skill selection -> research brief -> controlled subfigures -> delta polish -> VisualDocument review`。`scientific_plotting_research_brief` 现在会返回 `selectedSkillProfile`，明确本次使用哪组只读 skill/profile。优先级固定为 `kdense -> cns -> domain -> image-delta`：K-Dense 作为出版级绘图基座，`nature-skills` 作为 CNS/Nature 工作流增强层，领域 skill 按论文内容补充，image-delta 只负责最后的视觉增量。
 
 `paperFigureProductionPlan.compositionPlan` 新增 `imagePolishDeltaPlan`，模式固定为 `delta_only`。它会列出需要图像模型参与的 panel、允许的操作和必须锁定的科学事实。允许操作只包括 `panel_stitching`、`callout_overlay`、`zoom_inset`、`visual_unification`、`typography_cleanup`、`mechanism_visual_draft`；数值、坐标轴、legend、样本量、p 值、效应方向和论文结论必须保持不变。
 
-`@sciforge/image-generation` 也同步增加 guardrail：没有参考图、受控子图 manifest 或 research brief 证据的科学图仍会被拦截；带有 `imagePolishDeltaPlan` 的请求可进入图像模型，但 manifest 会标记为 `usagePolicy.role = visual_composition_base`，并记录 `lockedFacts` 与 `sourceControlledArtifacts`。这意味着图像模型输出只是拼版/标注/局部放大的视觉草稿，不是最终科学数据图；最终事实层仍以后续 deterministic overlay 和 Canvas review 为准。
+`@sciforge/image-generation` 也同步增加 guardrail：没有参考图、受控子图 manifest 或 research brief 证据的科学图仍会被拦截；带有 `imagePolishDeltaPlan` 的请求可进入图像模型，但 manifest 会标记为 `usagePolicy.role = visual_composition_base`，并记录 `lockedFacts` 与 `sourceControlledArtifacts`。这意味着图像模型输出只是拼版/标注/局部放大的视觉草稿，不是最终科学数据图；最终事实层仍以后续 deterministic overlay 和 VisualDocument review 为准。

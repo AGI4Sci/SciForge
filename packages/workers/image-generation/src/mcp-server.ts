@@ -4,22 +4,20 @@ import { z } from 'zod'
 import { IMAGE_DRAWING_INTENTS, IMAGE_EDIT_MODES, IMAGE_GENERATION_MCP_FLAG, IMAGE_GENERATION_MODES, IMAGE_OUTPUT_FORMATS } from './contract'
 import type {
   FrameworkLocalizedEditRequest,
-  ImageGenerationEditFromCanvasPacketRequest,
+  ImageGenerationEditFromVisualReviewPacketRequest,
   ImageGenerationPlanRequest,
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
-  ImageGenerationReviewPacketRequest,
   ImageGenerationSegmentComponentsRequest,
-  ImageGenerationReviewRequest
+  VisualArtifactReviewRequest
 } from './types'
 import {
-  createImageGenerationReviewPacket,
   editFrameworkComponentsWithImage2,
-  editImageFromCanvasPacket,
+  editImageFromVisualReviewPacket,
   getImageGenerationStatus,
   planImageGeneration,
   renderImageGeneration,
-  reviewImageGenerationOutput,
+  reviewVisualArtifact,
   segmentImageGenerationComponents
 } from './image-generation-engine'
 
@@ -84,7 +82,16 @@ const sizeSchema = z.object({
   height: z.number().int().min(128).max(4096)
 }).strict()
 
-const IMAGE_GENERATION_ROUTING_DESCRIPTION = 'Use image_generation for semantic/creative visual generation: flowcharts or diagrams from long prose, infographics, covers, posters, and illustrative scientific visuals. Use scientific_plotting only for structured numeric charts or explicit compact node-edge diagrams.'
+const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render generative image artifacts after route selection. Scientific visual routing is owned exclusively by scientific_visual_plan; this worker never switches to deterministic plotting or treats a fallback renderer as success.'
+
+const scientificVisualPlanSchema = z.object({
+  route: z.enum(['generative_visual', 'hybrid_composite']),
+  routeLocked: z.literal(true),
+  rationale: z.string().trim().min(1).max(2000),
+  reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64),
+  truthLockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+  fallbackPolicy: z.literal('fail_closed')
+}).strict()
 
 const scientificPolishDeltaPlanSchema = z.object({
   mode: z.literal('delta_only'),
@@ -100,8 +107,7 @@ const scientificPolishDeltaPlanSchema = z.object({
 
 const recipeSchema = z.object({
   mode: z.enum(IMAGE_GENERATION_MODES),
-  prompt: z.string().trim().min(1).max(16000).describe(IMAGE_GENERATION_ROUTING_DESCRIPTION),
-  model: z.string().trim().max(160).optional(),
+  prompt: z.string().trim().min(1).max(16000).describe(IMAGE_GENERATION_EXECUTION_DESCRIPTION),
   negativePrompt: z.string().trim().max(4000).optional(),
   size: sizeSchema,
   stylePreset: z.string().trim().max(160).optional(),
@@ -117,7 +123,9 @@ const recipeSchema = z.object({
   }).strict().optional(),
   promptProfile: z.enum(['default', 'flowchart-light-v1', 'framework-spec-v1', 'framework-layered-draft-v1']).optional(),
   scientificPolishDeltaPlan: scientificPolishDeltaPlanSchema.optional(),
-  controlledSubfigureManifests: z.array(z.string().trim().min(1).max(4096)).max(24).optional()
+  controlledSubfigureManifests: z.array(z.string().trim().min(1).max(4096)).max(24).optional(),
+  scientificVisualPlan: scientificVisualPlanSchema.optional(),
+  creativeDirect: z.literal(true).optional()
 }).strict()
 
 export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promise<boolean> {
@@ -131,7 +139,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_status', {
     title: 'Image Generation MCP Status',
-    description: `Report the controlled SciForge image generation provider status, visual routing guidance, and artifact policy. ${IMAGE_GENERATION_ROUTING_DESCRIPTION}`,
+    description: `Report the controlled SciForge image generation provider status and artifact policy. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION}`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional()
     },
@@ -145,9 +153,9 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     }
   })
 
-  server.registerTool('image_generation_plan', {
-    title: 'Plan Image Generation',
-    description: `Convert a user image request into a controlled image_generation_render recipe. ${IMAGE_GENERATION_ROUTING_DESCRIPTION} Does not write files. For scientific figures, plan generated rasters as visual composition/base layers only; final labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be overlaid by deterministic scripts such as scientific_plotting.`,
+  server.registerTool('image_generation_prepare', {
+    title: 'Prepare Generative Image',
+    description: `Convert an already-routed visual request into a controlled image_generation_render recipe. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} Does not write files. Supply either the locked plan returned by scientific_visual_plan or creativeDirect=true for a clearly non-scientific creative image; the two classifications are mutually exclusive.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(8000),
@@ -159,9 +167,8 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       }).strict().optional(),
       stylePreset: z.string().trim().max(160).optional(),
       referencePath: z.string().trim().max(4096).optional(),
-      canvasId: z.string().trim().max(120).optional(),
-      threadId: z.string().trim().max(120).optional(),
-      insertToCanvas: z.boolean().optional()
+      scientificVisualPlan: scientificVisualPlanSchema.optional(),
+      creativeDirect: z.literal(true).optional()
     },
     annotations: READ_ONLY_ANNOTATIONS
   }, async (input) => {
@@ -174,12 +181,14 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
         ...(input.size ? { size: input.size } : {}),
         ...(input.stylePreset ? { stylePreset: input.stylePreset } : {}),
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
-        ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.insertToCanvas !== undefined ? { insertToCanvas: input.insertToCanvas } : {})
+        ...(input.scientificVisualPlan ? { scientificVisualPlan: input.scientificVisualPlan } : {}),
+        ...(input.creativeDirect ? { creativeDirect: true as const } : {})
       }
       const plan = await planImageGeneration(request)
-      return textResult(jsonSummary('Image generation plan.', plan), { plan })
+      return textResult(
+        jsonSummary(plan.ok ? 'Generative image preparation.' : 'Generative image preparation blocked.', plan),
+        { plan }
+      )
     } catch (error) {
       return errorResult('Failed to plan image generation: ' + (error instanceof Error ? error.message : String(error)))
     }
@@ -187,16 +196,15 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_render', {
     title: 'Render Image Generation Artifact',
-    description: `Render a controlled image artifact from a structured recipe and write a SciForge artifact manifest for Canvas import. ${IMAGE_GENERATION_ROUTING_DESCRIPTION} For scientific figures, gpt-image-style providers are visual composition/base-image tools only; publication labels, axes, numeric data, citations, scale bars, molecular annotations, and other scientific claims must be added by deterministic scripts such as scientific_plotting.`,
+    description: `Render a controlled generative image artifact and write a SciForge artifact manifest for VisualDocument review. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} For scientific figures, generated pixels are visual composition/base layers only; publication labels, axes, numeric data, citations, scale bars, molecular annotations, and other locked claims require deterministic overlays.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       recipe: recipeSchema,
       imageId: z.string().trim().max(120).optional(),
       outputDir: z.string().trim().max(4096).optional(),
-      reviewReferencePath: z.string().trim().max(4096).optional(),
-      canvasId: z.string().trim().max(120).optional(),
+      visualDocumentId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional(),
-      insertToCanvas: z.boolean().optional()
+      stageForVisualReview: z.boolean().optional()
     },
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (input) => {
@@ -206,10 +214,9 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
         recipe: input.recipe as ImageGenerationRecipe,
         ...(input.imageId ? { imageId: input.imageId } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
-        ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
-        ...(input.insertToCanvas !== undefined ? { insertToCanvas: input.insertToCanvas } : {})
+        ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {})
       }
       const result = await renderImageGeneration(request)
       return textResult(
@@ -266,11 +273,11 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       instruction: z.string().trim().min(1).max(4000),
       outputDir: z.string().trim().max(4096).optional(),
       imageId: z.string().trim().max(120).optional(),
-      canvasId: z.string().trim().max(120).optional(),
+      visualDocumentId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional(),
       padding: z.number().min(0).max(256).optional(),
       editCanvasSize: z.number().int().min(128).max(2048).optional(),
-      insertToCanvas: z.boolean().optional()
+      stageForVisualReview: z.boolean().optional()
     },
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (input) => {
@@ -283,11 +290,11 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
         ...(input.blockIds?.length ? { blockIds: input.blockIds } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.imageId ? { imageId: input.imageId } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {}),
         ...(input.padding !== undefined ? { padding: input.padding } : {}),
         ...(input.editCanvasSize !== undefined ? { editCanvasSize: input.editCanvasSize } : {}),
-        ...(input.insertToCanvas !== undefined ? { insertToCanvas: input.insertToCanvas } : {})
+        ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {})
       }
       const result = await editFrameworkComponentsWithImage2(request)
       return textResult(
@@ -301,96 +308,66 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     }
   })
 
-  server.registerTool('image_generation_edit_from_canvas_packet', {
-    title: 'Edit Image From Canvas Review Packet',
-    description: 'Convert SciForge Canvas annotations into non-destructive image edit artifacts. Does not overwrite the original image.',
+  server.registerTool('image_generation_edit_from_visual_review_packet', {
+    title: 'Edit Image From Visual Review Packet',
+    description: 'Convert VisualDocument annotations into non-destructive image edit candidates. Does not overwrite the original image.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       reviewPacketPath: z.string().trim().max(4096).optional(),
       reviewPacket: z.unknown().optional(),
       outputDir: z.string().trim().max(4096).optional(),
       imageId: z.string().trim().max(120).optional(),
-      canvasId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional()
     },
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (input) => {
     try {
-      const request: ImageGenerationEditFromCanvasPacketRequest = {
+      const request: ImageGenerationEditFromVisualReviewPacketRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         ...(input.reviewPacketPath ? { reviewPacketPath: input.reviewPacketPath } : {}),
         ...(input.reviewPacket ? { reviewPacket: input.reviewPacket } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.imageId ? { imageId: input.imageId } : {}),
-        ...(input.canvasId ? { canvasId: input.canvasId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {})
       }
-      const result = await editImageFromCanvasPacket(request)
+      const result = await editImageFromVisualReviewPacket(request)
       return textResult(
         result.ok
-          ? jsonSummary('Edited image artifacts from Canvas packet: ' + result.status + '.', result)
-          : jsonSummary('Canvas image edit failed: ' + result.status + '.', result),
+          ? jsonSummary('Edited image candidates from visual-review packet: ' + result.status + '.', result)
+          : jsonSummary('Visual-review image edit failed: ' + result.status + '.', result),
         { result }
       )
     } catch (error) {
-      return errorResult('Failed to edit image from Canvas packet: ' + (error instanceof Error ? error.message : String(error)))
+      return errorResult('Failed to edit image from visual-review packet: ' + (error instanceof Error ? error.message : String(error)))
     }
   })
 
-  server.registerTool('image_generation_review', {
-    title: 'Review Image Generation Output',
-    description: 'Review a generated or edited image for basic quality and optional reference aspect similarity.',
+  server.registerTool('visual_artifact_review', {
+    title: 'Review Visual Artifact',
+    description: 'Use Model Router vision understanding to semantically review any route-produced visual against its task and truth locks. File existence, dimensions, and non-empty pixels are only supporting checks and cannot pass a visibly broken artifact.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       outputPath: z.string().trim().min(1).max(4096),
+      task: z.string().trim().min(1).max(16000),
+      truthLockedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
       referencePath: z.string().trim().max(4096).optional(),
       minOverall: z.number().min(0.5).max(0.98).optional()
     },
     annotations: READ_ONLY_ANNOTATIONS
   }, async (input) => {
     try {
-      const request: ImageGenerationReviewRequest = {
+      const request: VisualArtifactReviewRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         outputPath: input.outputPath,
+        task: input.task,
+        truthLockedElements: input.truthLockedElements,
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
         ...(input.minOverall ? { minOverall: input.minOverall } : {})
       }
-      const review = await reviewImageGenerationOutput(request)
-      return textResult(jsonSummary('Image generation review.', review), { review })
+      const review = await reviewVisualArtifact(request)
+      return textResult(jsonSummary('Semantic visual artifact review.', review), { review })
     } catch (error) {
       return errorResult('Failed to review image: ' + (error instanceof Error ? error.message : String(error)))
-    }
-  })
-
-  server.registerTool('image_generation_review_packet', {
-    title: 'Create Image Generation Review Packet',
-    description: 'Create a JSON and Markdown review packet from existing image generation manifests.',
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      manifestPaths: z.array(z.string().trim().min(1).max(4096)).min(1).max(30),
-      packetId: z.string().trim().max(120).optional(),
-      outputDir: z.string().trim().max(4096).optional(),
-      title: z.string().trim().max(240).optional()
-    },
-    annotations: CONTROLLED_WRITE_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ImageGenerationReviewPacketRequest = {
-        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        manifestPaths: input.manifestPaths,
-        ...(input.packetId ? { packetId: input.packetId } : {}),
-        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
-        ...(input.title ? { title: input.title } : {})
-      }
-      const packet = await createImageGenerationReviewPacket(request)
-      return textResult(
-        packet.ok
-          ? jsonSummary('Created image generation review packet.', packet)
-          : jsonSummary('Image generation review packet failed: ' + packet.status + '.', packet),
-        { packet }
-      )
-    } catch (error) {
-      return errorResult('Failed to create image generation review packet: ' + (error instanceof Error ? error.message : String(error)))
     }
   })
 

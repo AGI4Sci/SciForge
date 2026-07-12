@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Manuscript Workbench</title>
+  <desc id="desc">A manuscript page with citation links and a writing pen.</desc>
+  <defs>
+    <linearGradient id="paper" x1="60" y1="31" x2="184" y2="217" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="pen" x1="135" y1="126" x2="205" y2="197" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7C5CFF"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <path d="M67 33h86l36 36v145c0 10-8 18-18 18H67c-10 0-18-8-18-18V51c0-10 8-18 18-18Z" fill="url(#paper)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M153 34v35h35" fill="#FFFFFF" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M75 87h74M75 112h88M75 137h64M75 162h50" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="82" cy="191" r="10" fill="#18A999" stroke="#23313A" stroke-width="6"/>
+  <circle cx="123" cy="191" r="10" fill="#F4B942" stroke="#23313A" stroke-width="6"/>
+  <path d="M92 191h21" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <path d="M145 170l43-43 30 30-43 43-37 7 7-37Z" fill="url(#pen)" stroke="#23313A" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M188 127l30 30M145 170l30 30" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+</svg>

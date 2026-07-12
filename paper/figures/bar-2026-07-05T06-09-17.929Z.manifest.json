@@ -1,0 +1,133 @@
+{
+  "version": 1,
+  "renderer": "sciforge-scientific-plotting-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "scientific_plotting_render",
+  "template": "bar",
+  "referenceProfile": {
+    "kind": "schematic",
+    "recommendedTemplate": "schematic-grid",
+    "confidence": 0.66,
+    "detectedTraits": {
+      "aspect": "wide",
+      "background": "light",
+      "axes": "minimal",
+      "grid": "none",
+      "markDensity": "balanced",
+      "colorMode": "limited",
+      "panelGrid": "1x1",
+      "textSignals": [
+        "schematic-grid"
+      ]
+    },
+    "reasons": [
+      "Schematic reference emphasizes labeled regions and relationships rather than measured axes."
+    ],
+    "risks": [
+      "Semantic layout still needs human review because schematic matching is not a pixel-only problem."
+    ]
+  },
+  "templateAdvice": {
+    "selectedTemplate": "bar",
+    "referenceRecommendedTemplate": "schematic-grid",
+    "compatible": false,
+    "severity": "warning",
+    "messages": [
+      "Reference profile looks closer to schematic-grid than bar."
+    ],
+    "nextActions": [
+      "Try scientific_plotting_render with template=schematic-grid before manual style tuning."
+    ]
+  },
+  "styleProfileId": "nature-2020-numpy-fig1",
+  "styleProfile": {
+    "id": "nature-2020-numpy-fig1",
+    "name": "Nature 2020 NumPy Fig. 1",
+    "venue": "Nature",
+    "sourceLabel": "NumPy paper schematic smoke reference",
+    "description": "Clean explanatory schematic style with white background, minimal axes, muted blues/yellows, and compact labels.",
+    "recommendedTemplates": [
+      "schematic-grid",
+      "multi-panel",
+      "bar"
+    ],
+    "tags": [
+      "nature",
+      "numpy",
+      "schematic",
+      "software",
+      "light",
+      "minimal"
+    ],
+    "referenceProfile": {
+      "kind": "schematic",
+      "recommendedTemplate": "schematic-grid",
+      "confidence": 0.66,
+      "detectedTraits": {
+        "aspect": "wide",
+        "background": "light",
+        "axes": "minimal",
+        "grid": "none",
+        "markDensity": "balanced",
+        "colorMode": "limited",
+        "panelGrid": "1x1",
+        "textSignals": [
+          "schematic-grid"
+        ]
+      },
+      "reasons": [
+        "Schematic reference emphasizes labeled regions and relationships rather than measured axes."
+      ],
+      "risks": [
+        "Semantic layout still needs human review because schematic matching is not a pixel-only problem."
+      ]
+    },
+    "cautions": [
+      "Use for conceptual diagrams and software architecture figures.",
+      "Pixel similarity can under-score semantically correct schematics."
+    ]
+  },
+  "createdAt": "2026-07-05T06:09:25.354Z",
+  "requestHash": "6b2ad6962da763143df3872b9be824059cef23cebcf7ba36893be83ca598320b",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/bar-2026-07-05T06-09-17.929Z.png",
+  "attempts": [
+    {
+      "attempt": 1,
+      "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/bar-2026-07-05T06-09-17.929Z.png",
+      "repaired": false,
+      "rendererDiagnostics": {
+        "legendPlacement": "outside-right",
+        "barOrientation": "vertical",
+        "barColorMode": "series",
+        "categoryLabelRotation": 28,
+        "savefigPadInches": 0.035,
+        "typography": {
+          "titleSize": 6.9,
+          "labelSize": 7.2,
+          "tickSize": 6.2,
+          "legendSize": 6.2,
+          "panelSize": 7.8,
+          "publicationClampApplied": true
+        },
+        "layoutQuality": {
+          "legendItemCount": 1,
+          "legendColumnCount": 1,
+          "legendOutsidePlot": true,
+          "legendOverlapRisk": "none",
+          "textOverflowRisk": "medium",
+          "panelLabelAdjusted": false,
+          "warnings": [
+            "Title is long enough to require wrapping or a shorter caption-style title."
+          ]
+        },
+        "layoutNotes": [
+          "Clamped typography to conservative publication-size ranges.",
+          "Reserved extra y-axis headroom for error bars and panel labels.",
+          "Placed grouped bar legend outside the right edge to avoid covering data."
+        ]
+      },
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Protein Sequence Data</title>
+  <desc id="desc">Protein sequence data represented by a FASTA document and amino-acid chain tokens.</desc>
+  <defs>
+    <linearGradient id="paper" x1="48" y1="31" x2="180" y2="224" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="chain" x1="55" y1="143" x2="213" y2="179" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <path d="M61 31h88l36 36v151c0 10-8 18-18 18H61c-10 0-18-8-18-18V49c0-10 8-18 18-18Z" fill="url(#paper)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M149 31v36h36" fill="#FFFFFF" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <rect x="65" y="61" width="72" height="30" rx="9" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <text x="101" y="82" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" fill="#23313A">FASTA</text>
+  <path d="M69 114h80M69 134h62M69 194h78M69 212h50" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <path d="M72 162h112" fill="none" stroke="url(#chain)" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="72" cy="162" r="16" fill="#18A999" stroke="#23313A" stroke-width="6"/>
+  <circle cx="109" cy="162" r="16" fill="#F4B942" stroke="#23313A" stroke-width="6"/>
+  <circle cx="146" cy="162" r="16" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <circle cx="183" cy="162" r="16" fill="#7C5CFF" stroke="#23313A" stroke-width="6"/>
+  <text x="72" y="168" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">M</text>
+  <text x="109" y="168" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" fill="#23313A">K</text>
+  <text x="146" y="168" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" fill="#23313A">L</text>
+  <text x="183" y="168" text-anchor="middle" font-family="Inter, Arial, sans-serif" font-size="14" font-weight="700" fill="#FFFFFF">A</text>
+  <path d="M198 102c14 9 23 25 23 42s-9 33-23 42M211 82c21 15 34 37 34 62s-13 47-34 62" fill="none" stroke="#18A999" stroke-width="6" stroke-linecap="round"/>
+</svg>

@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Research Ideation and Decision</title>
+  <desc id="desc">Idea and decision cards for choosing research directions.</desc>
+  <defs>
+    <linearGradient id="bulb" x1="96" y1="32" x2="160" y2="111" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4B942"/>
+      <stop offset="1" stop-color="#18A999"/>
+    </linearGradient>
+    <linearGradient id="card" x1="45" y1="96" x2="210" y2="218" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+  </defs>
+  <path d="M128 31c-25 0-45 19-45 43 0 15 8 28 20 36 7 5 10 11 10 19h30c0-8 3-14 10-19 12-8 20-21 20-36 0-24-20-43-45-43Z" fill="url(#bulb)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M113 145h30M116 162h24" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+  <rect x="42" y="118" width="72" height="76" rx="12" fill="url(#card)" stroke="#23313A" stroke-width="7"/>
+  <rect x="142" y="118" width="72" height="76" rx="12" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M60 140h32M60 158h22" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <path d="M160 141l13 13 25-30" fill="none" stroke="#18A999" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M114 156h28" fill="none" stroke="#23313A" stroke-width="7" stroke-linecap="round"/>
+  <path d="M128 67v20M118 76h20" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round"/>
+</svg>

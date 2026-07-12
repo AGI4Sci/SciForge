@@ -157,16 +157,16 @@ import {
   type PptMasterMcpLaunchConfig
 } from './ppt-master-mcp-config'
 import {
-  buildSciforgeCanvasMcpArgs,
-  buildSciforgeCanvasLocalRuntimeMcpServerConfig,
-  buildSciforgeCanvasMcpJsonServerConfig,
-  GUI_SCIFORGE_CANVAS_MCP_DESCRIPTOR,
-  GUI_SCIFORGE_CANVAS_MCP_SERVER_NAME,
-  GUI_SCIFORGE_CANVAS_MCP_TIMEOUT_MS,
-  resolveSciforgeCanvasMcpCommand,
-  sciforgeCanvasMcpEnabledTools,
-  type SciforgeCanvasMcpLaunchConfig
-} from './sciforge-canvas-mcp-config'
+  buildVisualDocumentMcpArgs,
+  buildVisualDocumentLocalRuntimeMcpServerConfig,
+  GUI_VISUAL_DOCUMENT_MCP_DESCRIPTOR,
+  GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
+  GUI_VISUAL_DOCUMENT_MCP_TIMEOUT_MS,
+  RETIRED_GUI_VISUAL_DOCUMENT_MCP_SERVER_NAMES,
+  resolveVisualDocumentMcpCommand,
+  visualDocumentMcpEnabledTools,
+  type VisualDocumentMcpLaunchConfig
+} from './visual-document-mcp-config'
 import {
   managedGuiMcpNames,
   resolveLocalRuntimeMcpJsonPath,
@@ -237,9 +237,9 @@ export type GuiMcpRegistryInput = {
     settings?: AppSettingsV1
     launch: PptMasterMcpLaunchConfig
   }
-  sciforgeCanvasMcp?: {
+  visualDocumentMcp?: {
     settings?: AppSettingsV1
-    launch: SciforgeCanvasMcpLaunchConfig
+    launch: VisualDocumentMcpLaunchConfig
   }
   computerUseMcp?: {
     settings?: AppSettingsV1
@@ -263,7 +263,7 @@ export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
   GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
   GUI_IMAGE_GENERATION_MCP_DESCRIPTOR,
   GUI_PPT_MASTER_MCP_DESCRIPTOR,
-  GUI_SCIFORGE_CANVAS_MCP_DESCRIPTOR,
+  GUI_VISUAL_DOCUMENT_MCP_DESCRIPTOR,
   GUI_COMPUTER_USE_MCP_DESCRIPTOR
 ] as const
 
@@ -271,6 +271,7 @@ export function managedGuiMcpServerNames(): string[] {
   return [
     ...GUI_MCP_DESCRIPTORS.flatMap((descriptor) => managedGuiMcpNames(descriptor)),
     ...RETIRED_GUI_RESEARCH_MCP_SERVER_NAMES,
+    ...RETIRED_GUI_VISUAL_DOCUMENT_MCP_SERVER_NAMES,
     ...RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES
   ]
 }
@@ -301,7 +302,7 @@ export function buildCodexManagedGuiMcpServers(
   for (const server of existingServers) {
     servers.set(server.id, server)
   }
-  for (const server of codexServerConfigs(input)) {
+  for (const server of managedRuntimeServerConfigs(input, 'codex')) {
     if (!servers.has(server.id)) servers.set(server.id, server)
   }
   return [...servers.values()]
@@ -315,18 +316,26 @@ export function buildClaudeCodeManagedGuiMcpServers(input: GuiMcpRegistryInput =
   timeout: number
   alwaysLoad: true
 }> {
-  const settings = input.computerUseMcp?.settings ?? input.settings
-  if (!input.computerUseMcp || !settings || !isComputerUseMcpConfigured(settings, 'claude')) return {}
-  return {
-    [GUI_COMPUTER_USE_MCP_SERVER_NAME]: {
+  const servers: Record<string, {
+    type: 'stdio'
+    command: string
+    args: string[]
+    env: Record<string, string>
+    timeout: number
+    alwaysLoad: true
+  }> = {}
+  for (const server of managedRuntimeServerConfigs(input, 'claude')) {
+    if (!server.command || !server.args || !server.env || !server.timeoutMs) continue
+    servers[server.id] = {
       type: 'stdio',
-      command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),
-      args: buildComputerUseMcpArgs(input.computerUseMcp.launch),
-      env: computerUseMcpEnv(),
-      timeout: COMPUTER_USE_MCP_TIMEOUT_MS,
+      command: server.command,
+      args: server.args,
+      env: server.env,
+      timeout: server.timeoutMs,
       alwaysLoad: true
     }
   }
+  return servers
 }
 
 function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, LocalRuntimeServerBuilder]> {
@@ -453,14 +462,14 @@ function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, 
       )
     ])
   }
-  const sciforgeCanvasSettings = input.sciforgeCanvasMcp?.settings ?? settings
-  if (input.sciforgeCanvasMcp && sciforgeCanvasSettings) {
+  const visualDocumentSettings = input.visualDocumentMcp?.settings ?? settings
+  if (input.visualDocumentMcp && visualDocumentSettings) {
     builders.push([
-      GUI_SCIFORGE_CANVAS_MCP_SERVER_NAME,
-      () => buildSciforgeCanvasLocalRuntimeMcpServerConfig(
-        input.sciforgeCanvasMcp!.launch,
+      GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
+      () => buildVisualDocumentLocalRuntimeMcpServerConfig(
+        input.visualDocumentMcp!.launch,
         undefined,
-        sciforgeCanvasSettings.workspaceRoot
+        visualDocumentSettings.workspaceRoot
       )
     ])
   }
@@ -477,7 +486,10 @@ function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, 
   return builders
 }
 
-function codexServerConfigs(input: GuiMcpRegistryInput): GuiMcpRuntimeServerConfig[] {
+function managedRuntimeServerConfigs(
+  input: GuiMcpRegistryInput,
+  runtime: 'codex' | 'claude'
+): GuiMcpRuntimeServerConfig[] {
   const servers: GuiMcpRuntimeServerConfig[] = []
   const settings = input.settings
   const scheduleSettings = input.scheduleMcp?.settings ?? settings
@@ -633,22 +645,22 @@ function codexServerConfigs(input: GuiMcpRegistryInput): GuiMcpRuntimeServerConf
     )
     servers.push(runtimeServerConfigFromJson(GUI_PPT_MASTER_MCP_SERVER_NAME, config, GUI_PPT_MASTER_MCP_TIMEOUT_MS, pptMasterMcpEnabledTools()))
   }
-  const sciforgeCanvasSettings = input.sciforgeCanvasMcp?.settings ?? settings
-  if (input.sciforgeCanvasMcp && sciforgeCanvasSettings) {
+  const visualDocumentSettings = input.visualDocumentMcp?.settings ?? settings
+  if (input.visualDocumentMcp && visualDocumentSettings) {
     servers.push({
-      id: GUI_SCIFORGE_CANVAS_MCP_SERVER_NAME,
-      command: resolveSciforgeCanvasMcpCommand(input.sciforgeCanvasMcp.launch),
-      args: buildSciforgeCanvasMcpArgs(
-        input.sciforgeCanvasMcp.launch,
-        sciforgeCanvasSettings.workspaceRoot
+      id: GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
+      command: resolveVisualDocumentMcpCommand(input.visualDocumentMcp.launch),
+      args: buildVisualDocumentMcpArgs(
+        input.visualDocumentMcp.launch,
+        visualDocumentSettings.workspaceRoot
       ),
       env: { ELECTRON_RUN_AS_NODE: '1' },
-      timeoutMs: GUI_SCIFORGE_CANVAS_MCP_TIMEOUT_MS,
-      enabledTools: sciforgeCanvasMcpEnabledTools()
+      timeoutMs: GUI_VISUAL_DOCUMENT_MCP_TIMEOUT_MS,
+      enabledTools: visualDocumentMcpEnabledTools()
     })
   }
   const computerUseSettings = input.computerUseMcp?.settings ?? settings
-  if (input.computerUseMcp && computerUseSettings && isComputerUseMcpConfigured(computerUseSettings, 'codex')) {
+  if (input.computerUseMcp && computerUseSettings && isComputerUseMcpConfigured(computerUseSettings, runtime)) {
     servers.push({
       id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
       command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Desktop App</title>
+  <desc id="desc">A desktop research workbench icon with agent console and evidence nodes.</desc>
+  <defs>
+    <linearGradient id="screen" x1="64" y1="44" x2="192" y2="172" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="76" y1="74" x2="181" y2="147" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="45" y="44" width="166" height="126" rx="18" fill="url(#screen)" stroke="#23313A" stroke-width="8"/>
+  <path d="M45 133h166" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+  <path d="M108 170h40l8 30H100l8-30Z" fill="#DDE8EF" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M86 206h84" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+  <rect x="72" y="68" width="58" height="40" rx="10" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <path d="M84 84h28M84 96h18" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <path d="M158 80v17M158 129v15M134 112h17M165 112h19" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="158" cy="112" r="17" fill="url(#accent)" stroke="#23313A" stroke-width="6"/>
+  <circle cx="158" cy="112" r="5" fill="#FFFFFF"/>
+  <circle cx="92" cy="147" r="6" fill="#18A999"/>
+  <circle cx="111" cy="147" r="6" fill="#F4B942"/>
+  <circle cx="130" cy="147" r="6" fill="#EF6F6C"/>
+</svg>

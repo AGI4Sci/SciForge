@@ -60,7 +60,7 @@ import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mc
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import type { ImageGenerationMcpLaunchConfig } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
-import type { SciforgeCanvasMcpLaunchConfig } from './sciforge-canvas-mcp-config'
+import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
 import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
 import {
   buildLocalRuntimeManagedGuiMcpServers,
@@ -430,7 +430,7 @@ async function startLocalRuntimeChildOnce(
         homeDir: app.getPath('home')
       }
     },
-    sciforgeCanvasMcp: {
+    visualDocumentMcp: {
       settings,
       launch: {
         appPath: app.getAppPath(),
@@ -592,9 +592,9 @@ export async function syncGuiManagedLocalRuntimeConfig(
       settings: AppSettingsV1
       launch: PptMasterMcpLaunchConfig
     }
-    sciforgeCanvasMcp?: {
+    visualDocumentMcp?: {
       settings: AppSettingsV1
-      launch: SciforgeCanvasMcpLaunchConfig
+      launch: VisualDocumentMcpLaunchConfig
     }
     computerUseMcp?: {
       settings: AppSettingsV1
@@ -644,7 +644,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
     bgcDiscoveryMcp: options?.bgcDiscoveryMcp,
     imageGenerationMcp: options?.imageGenerationMcp,
     pptMasterMcp: options?.pptMasterMcp,
-    sciforgeCanvasMcp: options?.sciforgeCanvasMcp,
+    visualDocumentMcp: options?.visualDocumentMcp,
     computerUseMcp: options?.computerUseMcp
   })
   const hasEnabledManagedMcpServer = hasEnabledManagedGuiMcpServer(managedMcpServers)
@@ -691,7 +691,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
           options?.bgcDiscoveryMcp ||
           options?.imageGenerationMcp ||
           options?.pptMasterMcp ||
-          options?.sciforgeCanvasMcp ||
+          options?.visualDocumentMcp ||
           options?.computerUseMcp ||
           hasEnabledManagedMcpServer ||
           mcpSearch.enabled ||

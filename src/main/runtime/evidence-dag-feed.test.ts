@@ -6,6 +6,7 @@ import type { AgentRuntimeItem, AgentRuntimeThreadDetail } from '../../shared/ag
 import {
   EvidenceDagUpdateQueue,
   completedTurnItems,
+  evidenceTraceBatches,
   isEvidenceDagAutoFeedEnabled,
   isEvidenceDagFeedEnabled,
   toEvidenceDagTraceItems,
@@ -45,6 +46,21 @@ function ok(data: unknown): Response {
 }
 
 describe('Evidence DAG runtime feed', () => {
+  it('bounds oversized trace content and splits historical backfills below the service body cap', () => {
+    const batches = evidenceTraceBatches(Array.from({ length: 80 }, (_, index) => ({
+      id: `item-${index}`,
+      type: index % 2 ? 'message' : 'tool_result',
+      content: 'x'.repeat(80_000)
+    })))
+    expect(batches.length).toBeGreaterThan(1)
+    expect(batches.flat()).toHaveLength(80)
+    expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(64)
+    expect(Math.max(...batches.map((batch) => Buffer.byteLength(JSON.stringify(batch), 'utf8'))))
+      .toBeLessThan(160 * 1024)
+    expect(Math.max(...batches.flat().map((item) => String(item.content).length)))
+      .toBeLessThan(13_000)
+  })
+
   it('accepts trace-free Artifact lifecycle work only through the durable queue', async () => {
     const storagePath = await queuePath()
     const fetchImpl = vi.fn(async () => ok({
@@ -379,6 +395,118 @@ describe('Evidence DAG runtime feed', () => {
     await recovered.start()
     await vi.waitFor(() => expect(recoveredFetch).toHaveBeenCalledTimes(1))
     await vi.waitFor(async () => expect((await recovered.status('sciforge', 'thread-1')).state).toBe('fresh'))
+  })
+
+  it('runs independent sessions concurrently while preserving one in-flight job per session', async () => {
+    const releases = new Map<string, () => void>()
+    const started: string[] = []
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
+      started.push(body.threadId)
+      await new Promise<void>((resolve) => releases.set(body.threadId, resolve))
+      return ok({ snapshot: committedSnapshot(body.threadId, body.targetWatermark) })
+    }) as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath: await queuePath(),
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
+      fetchImpl,
+      maxConcurrency: 2
+    })
+    const first = await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'one' }]
+    })
+    const second = await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-2', targetWatermark: '11', reason: 'turn_committed',
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'two' }]
+    })
+
+    await vi.waitFor(() => expect(new Set(started)).toEqual(new Set(['sciforge:thread-1', 'sciforge:thread-2'])))
+    releases.get('sciforge:thread-1')?.()
+    releases.get('sciforge:thread-2')?.()
+    await expect(Promise.all([
+      queue.waitForSnapshot(first.jobId, 2_000),
+      queue.waitForSnapshot(second.jobId, 2_000)
+    ])).resolves.toHaveLength(2)
+  })
+
+  it('does not start background work while an interactive turn is active', async () => {
+    let interactive = true
+    const fetchImpl = vi.fn(async () => ok({ snapshot: committedSnapshot() })) as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath: await queuePath(),
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
+      fetchImpl,
+      canRunBackground: () => !interactive,
+      activityPollMs: 5
+    })
+    await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+    })
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchImpl).not.toHaveBeenCalled()
+    interactive = false
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1))
+  })
+
+  it('promotes the currently visible DAG ahead of ordinary queued work', async () => {
+    let interactive = true
+    const order: string[] = []
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
+      order.push(body.threadId)
+      return ok({ snapshot: committedSnapshot(body.threadId, body.targetWatermark) })
+    }) as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath: await queuePath(),
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
+      fetchImpl,
+      maxConcurrency: 1,
+      canRunBackground: () => !interactive,
+      activityPollMs: 5
+    })
+    await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'ordinary', targetWatermark: '10', reason: 'turn_committed', priority: 'normal',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'ordinary' }]
+    })
+    await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'visible', targetWatermark: '11', reason: 'turn_committed', priority: 'background',
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'visible' }]
+    })
+    await queue.prioritize('sciforge', 'visible')
+    interactive = false
+    await vi.waitFor(() => expect(order).toHaveLength(2))
+    expect(order[0]).toBe('sciforge:visible')
+  })
+
+  it('opens a retry circuit after the configured attempt limit and lets a human reset it', async () => {
+    const fetchImpl = vi.fn(async () => { throw new Error('router unavailable') }) as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath: await queuePath(),
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
+      fetchImpl,
+      retryBaseMs: 1,
+      retryMaxMs: 1,
+      maxAttempts: 2
+    })
+    await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+    })
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+    const stopped = await queue.status('sciforge', 'thread-1')
+    expect(stopped).toMatchObject({ state: 'failed', attempts: 2 })
+    expect(stopped).not.toHaveProperty('nextAttemptAt')
+
+    await expect(queue.waitForSnapshot(stopped.jobId!, 1_000)).rejects.toThrow('router unavailable')
+    await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '11', reason: 'manual_immediate', priority: 'immediate',
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'try again explicitly' }]
+    })
+    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4))
   })
 
   it('acknowledges redundant queued work when the same watermark is already committed', async () => {

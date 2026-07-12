@@ -105,6 +105,7 @@ describe('GUI MCP runtime registry', () => {
       'scientific_plotting',
       'image_generation',
       'ppt_master',
+      'visual_document',
       'sciforge_canvas',
       'gui_owl_computer_use',
       'gui_computer_use'
@@ -272,7 +273,7 @@ describe('GUI MCP runtime registry', () => {
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
       pptMasterMcp: { launch },
-      sciforgeCanvasMcp: { launch }
+      visualDocumentMcp: { launch }
     }) as Record<string, { args?: string[] }>
     const codex = buildCodexManagedGuiMcpServers({
       settings,
@@ -280,10 +281,10 @@ describe('GUI MCP runtime registry', () => {
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
       pptMasterMcp: { launch },
-      sciforgeCanvasMcp: { launch }
+      visualDocumentMcp: { launch }
     })
 
-    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'sciforge_canvas']) {
+    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
       expect(localRuntime[id]?.args).toEqual(expect.arrayContaining(['--workspace-root', '/tmp/project']))
       expect(codex.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
@@ -292,11 +293,18 @@ describe('GUI MCP runtime registry', () => {
 
     expect(codex.find((server) => server.id === 'scientific_plotting')?.enabledTools).toEqual(
       expect.arrayContaining([
-        'scientific_plotting_plan',
+        'scientific_visual_plan',
         'scientific_plotting_research_brief',
         'scientific_plotting_render'
       ])
     )
+    expect(codex.find((server) => server.id === 'visual_document')).toMatchObject({
+      args: expect.arrayContaining(['--sciforge-visual-document-mcp-server']),
+      enabledTools: expect.arrayContaining([
+        'sciforge_visual_document_save_annotations',
+        'sciforge_visual_document_accept_candidate'
+      ])
+    })
   })
 
   it('does not build a Claude Code MCP config without computer-use launch input', () => {
@@ -306,7 +314,7 @@ describe('GUI MCP runtime registry', () => {
   })
 
   it('keeps retired MCP servers out of generated runtime configs while still cleaning them from disk', () => {
-    for (const id of ['gui_computer_use', 'gui_research_memory']) {
+    for (const id of ['gui_computer_use', 'gui_research_memory', 'sciforge_canvas']) {
       const localRuntime = buildLocalRuntimeManagedGuiMcpServers({})[id]
       const codex = buildCodexManagedGuiMcpServers({}).find((server) => server.id === id)
       const claude = buildClaudeCodeManagedGuiMcpServers()[id]

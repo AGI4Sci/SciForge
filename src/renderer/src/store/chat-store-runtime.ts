@@ -662,6 +662,9 @@ export function syncTurnCompletionPoll(
         }
         return { watchTurnCompletion, unreadThreadIds }
       })
+      for (const id of doneIds) {
+        await getState().drainQueuedMessagesForThread(id)
+      }
       void getState().refreshThreads()
     }
   })

@@ -50,7 +50,7 @@ export type Modality =
 export const MODALITIES: readonly Modality[] = ['protein', 'protein_structure', 'molecule', 'single_cell'] as const;
 
 export interface ModalityTranslateRequest {
-  /** The raw scientific payload as text (FASTA, SMILES, expression matrix, peak list, …). */
+  /** The raw scientific payload as text (FASTA, PDB/mmCIF, SMILES, or single-cell expression/markers). */
   payload: string;
   /**
    * Which expert to use. Omit to let the service auto-detect from the payload.

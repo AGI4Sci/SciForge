@@ -43,6 +43,11 @@ import {
 } from '../../lib/content-zoom-shortcuts'
 import { registerVisibleContextVisualTarget } from '../../lib/visible-context'
 import {
+  readRightPanelContextState,
+  rememberRightPanelContextState,
+  type RememberedPdfViewState
+} from '../right-panel-context-state'
+import {
   preferNativePdfDragSelection,
   rotatedPdfTextBounds,
   slicedRotatedPdfTextBounds,
@@ -206,6 +211,8 @@ export type WritePdfViewerProps = {
   className?: string
   viewerRef?: RefObject<HTMLDivElement | null>
   visualContextComponentId?: string
+  /** Session-scoped identity used to restore page, zoom, search, and scroll after panel switching. */
+  viewStateKey?: string
   initialPage?: number
   initialScale?: number
   annotationOverlays?: WritePdfAnnotationOverlay[]
@@ -2112,6 +2119,7 @@ export function WritePdfViewer({
   className,
   viewerRef,
   visualContextComponentId,
+  viewStateKey,
   initialPage = 1,
   initialScale = DEFAULT_PDF_SCALE,
   annotationOverlays = [],
@@ -2126,6 +2134,9 @@ export function WritePdfViewer({
   onToggleAnnotations
 }: WritePdfViewerProps): ReactElement {
   const { t } = useTranslation('common')
+  const rememberedInitialView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
+  const restoredInitialPage = rememberedInitialView?.currentPage ?? initialPage
+  const restoredInitialScale = rememberedInitialView?.scale ?? initialScale
   const localViewerRef = useRef<HTMLDivElement | null>(null)
   const scrollerRef = useRef<HTMLDivElement | null>(null)
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
@@ -2136,16 +2147,18 @@ export function WritePdfViewer({
   const skipMouseUpSelectionSyncRef = useRef(false)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onQuoteSelectionRef = useRef(onQuoteSelection)
-  const currentPageRef = useRef(Math.max(1, Math.round(initialPage)))
+  const currentPageRef = useRef(Math.max(1, Math.round(restoredInitialPage)))
   const initialPageRef = useRef(initialPage)
   const activeFilePathRef = useRef(filePath)
+  const activeViewStateKeyRef = useRef(viewStateKey)
+  const viewStateKeyChanged = activeViewStateKeyRef.current !== viewStateKey
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [scale, setScale] = useState(() => normalizePdfScale(initialScale))
-  const [pageInput, setPageInput] = useState(String(Math.max(1, Math.round(initialPage))))
-  const [currentPage, setCurrentPage] = useState(Math.max(1, Math.round(initialPage)))
-  const [searchQuery, setSearchQuery] = useState('')
+  const [scale, setScale] = useState(() => normalizePdfScale(restoredInitialScale))
+  const [pageInput, setPageInput] = useState(String(Math.max(1, Math.round(restoredInitialPage))))
+  const [currentPage, setCurrentPage] = useState(Math.max(1, Math.round(restoredInitialPage)))
+  const [searchQuery, setSearchQuery] = useState(rememberedInitialView?.searchQuery ?? '')
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const [pageTexts, setPageTexts] = useState<PageText[]>([])
@@ -2202,10 +2215,12 @@ export function WritePdfViewer({
 
   useEffect(() => {
     let cancelled = false
+    const rememberedView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
     const pageToRestore = activeFilePathRef.current === filePath
       ? currentPageRef.current
-      : initialPageRef.current
+      : rememberedView?.currentPage ?? initialPageRef.current
     activeFilePathRef.current = filePath
+    activeViewStateKeyRef.current = viewStateKey
     setLoading(true)
     setError('')
     setPdfDocument(null)
@@ -2214,6 +2229,7 @@ export function WritePdfViewer({
     setCommittedSelectionRects([])
     setContextMenu(null)
     setLiveSelection(false)
+    setSearchQuery(rememberedView?.searchQuery ?? '')
     emitSelection(emptyPdfSelection({
       filePath,
       sourceTitle,
@@ -2256,20 +2272,35 @@ export function WritePdfViewer({
       cancelled = true
       void task.destroy()
     }
-  }, [data, dataBase64, emitSelection, filePath, mimeType, mtimeMs, size, sourceTitle, sourceUrl])
+  }, [data, dataBase64, emitSelection, filePath, mimeType, mtimeMs, size, sourceTitle, sourceUrl, viewStateKey])
 
   useEffect(() => {
     if (!pdfDocument) return
     const page = currentPageRef.current
     const frame = window.requestAnimationFrame(() => {
-      pageRefs.current.get(page)?.scrollIntoView({ block: 'start' })
+      const rememberedScrollTop = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scrollTop
+      if (rememberedScrollTop != null && scrollerRef.current) {
+        scrollerRef.current.scrollTop = rememberedScrollTop
+      } else {
+        pageRefs.current.get(page)?.scrollIntoView({ block: 'start' })
+      }
     })
     return () => window.cancelAnimationFrame(frame)
-  }, [pdfDocument])
+  }, [pdfDocument, viewStateKey])
 
   useEffect(() => {
-    setScale(normalizePdfScale(initialScale))
-  }, [filePath, initialScale, mtimeMs])
+    const rememberedScale = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scale
+    setScale(normalizePdfScale(rememberedScale ?? initialScale))
+  }, [filePath, initialScale, mtimeMs, viewStateKey])
+
+  useEffect(() => {
+    if (viewStateKeyChanged) return
+    rememberRightPanelContextState<RememberedPdfViewState>(viewStateKey, {
+      currentPage,
+      scale,
+      searchQuery
+    })
+  }, [currentPage, scale, searchQuery, viewStateKey, viewStateKeyChanged])
 
   useEffect(() => {
     return () => {
@@ -2342,6 +2373,13 @@ export function WritePdfViewer({
       updateCurrentPageFromScroll()
     })
   }, [updateCurrentPageFromScroll])
+
+  const handleScrollerScroll = useCallback((): void => {
+    schedulePageSync()
+    rememberRightPanelContextState<RememberedPdfViewState>(viewStateKey, {
+      scrollTop: scrollerRef.current?.scrollTop ?? 0
+    })
+  }, [schedulePageSync, viewStateKey])
 
   const searchMatches = useMemo(() => {
     return buildPdfSearchIndex(pageTexts, deferredSearchQuery)
@@ -2944,7 +2982,7 @@ export function WritePdfViewer({
         onContextMenu={openPdfContextMenu}
         onMouseUp={syncSelectionAfterMouseUp}
         onKeyUp={syncSelectionSoon}
-        onScroll={schedulePageSync}
+        onScroll={handleScrollerScroll}
       >
         {loading ? (
           <div className="flex h-full min-h-[320px] items-center justify-center gap-2 text-[13px] text-ds-muted">

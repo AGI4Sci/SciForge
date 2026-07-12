@@ -28,8 +28,8 @@ import {
   connectPhoneInstallPollPayloadSchema,
   evidenceDagUpdatePayloadSchema,
   evidenceDagViewPayloadSchema,
-  figureStyleExtractReferencePayloadSchema,
-  figureStyleSaveSpecPayloadSchema,
+  visualStyleExtractPayloadSchema,
+  visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
   projectDagGoalSavePayloadSchema,
   projectDagUpdatePayloadSchema,
@@ -41,7 +41,8 @@ import {
   settingsPatchSchema,
   shellOpenExternalUrlSchema,
   speechTranscriptionPayloadSchema,
-  sciforgeCanvasInsertArtifactPayloadSchema,
+  visualDocumentInsertArtifactPayloadSchema,
+  visualDocumentSaveAnnotationsPayloadSchema,
   skillListPayloadSchema,
   workspaceClipboardPastePayloadSchema,
   workspaceDirectoryCreatePayloadSchema,
@@ -179,78 +180,127 @@ describe('app-ipc-schemas', () => {
     expect(() => projectDagViewPayloadSchema.parse({ view: 'export' })).toThrow()
   })
 
-  it('accepts generated and edited image artifacts for SciForge Canvas insertion', () => {
-    expect(sciforgeCanvasInsertArtifactPayloadSchema.parse({
+  it('accepts strict VisualDocument artifacts and normalized review annotations', () => {
+    expect(visualDocumentInsertArtifactPayloadSchema.parse({
       workspaceRoot: ' /tmp/workspace ',
-      canvasId: ' thread-1 ',
-      artifactKind: 'generated_image',
-      outputPath: ' .sciforge/images/cover.png ',
+      documentId: ' thread-1 ',
+      kind: 'generated_image',
+      sourcePath: ' .sciforge/images/cover.png ',
       manifestPath: ' .sciforge/artifacts/cover.manifest.json '
     })).toMatchObject({
       workspaceRoot: '/tmp/workspace',
-      canvasId: 'thread-1',
-      artifactKind: 'generated_image',
-      outputPath: '.sciforge/images/cover.png',
+      documentId: 'thread-1',
+      kind: 'generated_image',
+      sourcePath: '.sciforge/images/cover.png',
       manifestPath: '.sciforge/artifacts/cover.manifest.json'
     })
 
-    expect(sciforgeCanvasInsertArtifactPayloadSchema.parse({
+    expect(visualDocumentInsertArtifactPayloadSchema.parse({
       workspaceRoot: '/tmp/workspace',
-      artifactKind: 'edited_image',
-      outputPath: '.sciforge/images/cover-v2.png'
-    }).artifactKind).toBe('edited_image')
+      kind: 'edited_image',
+      sourcePath: '.sciforge/images/cover-v2.png'
+    }).kind).toBe('edited_image')
+
+    expect(visualDocumentSaveAnnotationsPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      annotations: [{
+        geometry: { kind: 'box', bounds: { x: 0.1, y: 0.2, width: 0.5, height: 0.4 } },
+        instruction: ' Increase the whitespace. '
+      }]
+    }).annotations[0]?.instruction).toBe('Increase the whitespace.')
+
+    expect(() => visualDocumentSaveAnnotationsPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      annotations: [{
+        geometry: { kind: 'pin', point: { x: 1.2, y: 0.5 } },
+        instruction: 'Invalid coordinate'
+      }]
+    })).toThrow()
   })
 
-  it('accepts bounded Figure Style reference extraction payloads', () => {
-    expect(figureStyleExtractReferencePayloadSchema.parse({
+  it('accepts bounded visual style extraction payloads', () => {
+    expect(visualStyleExtractPayloadSchema.parse({
       workspaceRoot: ' /tmp/workspace ',
-      sourcePath: ' paper/main.pdf ',
-      sourceType: 'pdf',
-      page: 2,
-      dpi: 180,
-      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      sourcePath: ' figures/reference.png ',
+      sourceType: 'image',
+      sourceKind: 'reference',
+      scope: 'manuscript',
       figureId: ' Fig. 2A ',
       notes: ' Use only visual style. '
     })).toEqual({
       workspaceRoot: '/tmp/workspace',
-      sourcePath: 'paper/main.pdf',
-      sourceType: 'pdf',
-      page: 2,
-      dpi: 180,
-      cropBox: { unit: 'ratio', x: 0.1, y: 0.2, width: 0.7, height: 0.5 },
+      sourcePath: 'figures/reference.png',
+      sourceType: 'image',
+      sourceKind: 'reference',
+      scope: 'manuscript',
       figureId: 'Fig. 2A',
       notes: 'Use only visual style.'
     })
 
     expect(() =>
-      figureStyleExtractReferencePayloadSchema.parse({
+      visualStyleExtractPayloadSchema.parse({
         workspaceRoot: '/tmp/workspace',
-        sourcePath: 'paper/main.pdf',
-        cropBox: { unit: 'ratio', x: 0, y: 0, width: 0, height: 1 }
+        sourcePath: 'figure.png',
+        scope: 'global'
       })
     ).toThrow()
   })
 
-  it('accepts Figure Style spec save payloads with controlled artifact paths', () => {
-    expect(figureStyleSaveSpecPayloadSchema.parse({
+  it('accepts visual style profile saves with controlled artifact paths', () => {
+    const profile = {
+      version: 1 as const,
+      id: 'manuscript-default',
+      scope: 'manuscript' as const,
+      source: { type: 'reference', path: 'figures/reference.png' },
+      tokens: {
+        canvas: { width: 640, height: 420, aspectRatio: 1.52, background: '#ffffff' },
+        palette: { colors: ['#123456'], background: '#ffffff', ink: '#222222', accent: ['#123456'], colorMode: 'limited' as const },
+        typography: { fontFamily: 'Arial', axisSize: 8, labelSize: 9, titleSize: 11, weight: 'regular' as const },
+        strokes: { ink: '#222222', primaryWidth: 1.2, secondaryWidth: 0.6, lineCap: 'round' as const },
+        spacing: { margin: { left: 0.1, right: 0.1, top: 0.1, bottom: 0.1 }, gutter: 'balanced' as const, density: 'balanced' as const },
+        shapes: { fillMode: 'mixed' as const, shadow: 'none' as const }
+      },
+      semanticDescription: 'Calm, compact scientific visual language.',
+      confidence: { overall: 0.8, palette: 0.9, spacing: 0.7, plots: 0.5, typography: 0.4, generatedAssets: 0.3 }
+    }
+    expect(visualStyleSaveProfilePayloadSchema.parse({
       workspaceRoot: ' /tmp/workspace ',
-      path: ' .sciforge/figure-styles/style.json ',
-      spec: { version: 1 },
-      applyPlan: { plottingWorkflow: {} },
-      diagnostics: { warnings: [] }
+      path: ' .sciforge/visual-styles/manuscript-default.json ',
+      profile,
+      diagnostics: {
+        analyzedAt: '2026-07-12T00:00:00.000Z',
+        sampledPixels: 100,
+        foregroundRatio: 0.3,
+        darkPixelRatio: 0.2,
+        chromaRatio: 0.1,
+        warnings: []
+      }
     })).toEqual({
       workspaceRoot: '/tmp/workspace',
-      path: '.sciforge/figure-styles/style.json',
-      spec: { version: 1 },
-      applyPlan: { plottingWorkflow: {} },
-      diagnostics: { warnings: [] }
+      path: '.sciforge/visual-styles/manuscript-default.json',
+      profile,
+      diagnostics: {
+        analyzedAt: '2026-07-12T00:00:00.000Z',
+        sampledPixels: 100,
+        foregroundRatio: 0.3,
+        darkPixelRatio: 0.2,
+        chromaRatio: 0.1,
+        warnings: []
+      }
     })
 
     expect(() =>
-      figureStyleSaveSpecPayloadSchema.parse({
+      visualStyleSaveProfilePayloadSchema.parse({
         workspaceRoot: '/tmp/workspace',
-        spec: { version: 1 },
-        applyPlan: {}
+        profile: { ...profile, confidence: { ...profile.confidence, overall: 2 } },
+        diagnostics: {
+          analyzedAt: '2026-07-12T00:00:00.000Z',
+          sampledPixels: 100,
+          foregroundRatio: 0.3,
+          darkPixelRatio: 0.2,
+          chromaRatio: 0.1,
+          warnings: []
+        }
       })
     ).toThrow()
   })

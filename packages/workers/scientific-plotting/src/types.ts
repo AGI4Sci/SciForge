@@ -1,22 +1,120 @@
 export type FigureStyleSourceType = 'image' | 'pdf'
 
-export type FigureStyleExtractRequest = {
+export type VisualStyleScope = 'manuscript' | 'workspace' | 'artifact'
+
+export type VisualStyleSource =
+  | {
+      type: 'reference'
+      path: string
+      figureId?: string
+      notes?: string
+    }
+  | {
+      type: 'preset'
+      presetId: string
+    }
+  | {
+      type: 'inherited'
+      profileId: string
+    }
+  | {
+      type: 'current'
+      artifactPath?: string
+    }
+
+export type VisualStyleTokens = {
+  canvas: {
+    width: number
+    height: number
+    aspectRatio: number
+    background: string
+  }
+  palette: {
+    colors: string[]
+    background: string
+    ink: string
+    accent: string[]
+    colorMode: 'monochrome' | 'limited' | 'multi-hue'
+  }
+  typography: {
+    fontFamily: string
+    axisSize: number
+    labelSize: number
+    titleSize: number
+    weight: 'regular' | 'medium' | 'bold'
+  }
+  strokes: {
+    ink: string
+    primaryWidth: number
+    secondaryWidth: number
+    lineCap: 'butt' | 'round' | 'square' | 'unknown'
+  }
+  spacing: {
+    margin: {
+      left: number
+      right: number
+      top: number
+      bottom: number
+    }
+    gutter: 'compact' | 'balanced' | 'spacious'
+    density: 'sparse' | 'balanced' | 'dense'
+  }
+  shapes: {
+    fillMode: 'solid' | 'outlined' | 'mixed' | 'unknown'
+    cornerRadius?: number
+    borderWidth?: number
+    shadow: 'none' | 'subtle' | 'prominent' | 'unknown'
+  }
+  plots?: {
+    panelGrid: string
+    panelLabels: 'none' | 'A/B/C' | 'a/b/c' | 'numeric' | 'unknown'
+    axes: FigureStyleSpec['axes']
+    marks: FigureStyleSpec['marks']
+    annotations: FigureStyleSpec['annotations']
+    export: FigureStyleSpec['export']
+  }
+  generatedAssets?: {
+    visualTreatment: 'flat' | 'illustrative' | 'photorealistic' | 'mixed' | 'unknown'
+    backgroundTreatment: 'transparent' | 'solid' | 'textured' | 'unknown'
+    edgeTreatment: 'crisp' | 'soft' | 'mixed' | 'unknown'
+    detailLevel: 'sparse' | 'balanced' | 'rich' | 'unknown'
+  }
+}
+
+export type VisualStyleProfile = {
+  version: 1
+  id: string
+  scope: VisualStyleScope
+  source: VisualStyleSource
+  tokens: VisualStyleTokens
+  semanticDescription: string
+  confidence: {
+    overall: number
+    palette: number
+    spacing: number
+    plots: number
+    typography: number
+    generatedAssets: number
+  }
+}
+
+export type VisualStyleExtractRequest = {
   workspaceRoot: string
   sourcePath: string
   sourceType?: FigureStyleSourceType
+  sourceKind?: 'reference' | 'current'
+  scope?: VisualStyleScope
   figureId?: string
   notes?: string
 }
 
-export type FigureStyleSimilarityRequest = {
+export type VisualStyleSimilarityRequest = {
   workspaceRoot: string
   referencePath: string
   outputPath: string
 }
 
-export type FigureStyleReviewRequest = FigureStyleSimilarityRequest & {
-  minOverall?: number
-}
+export type VisualStyleReviewRequest = VisualStyleSimilarityRequest
 
 export type FigureStyleSpec = {
   version: 1
@@ -90,7 +188,7 @@ export type FigureStyleSpec = {
   }
 }
 
-export type FigureStyleExtractDiagnostics = {
+export type VisualStyleExtractDiagnostics = {
   analyzedAt: string
   sampledPixels: number
   foregroundRatio: number
@@ -99,16 +197,15 @@ export type FigureStyleExtractDiagnostics = {
   warnings: string[]
 }
 
-export type FigureStyleExtractResult =
+export type VisualStyleExtractResult =
   | {
       ok: true
-      spec: FigureStyleSpec
-      applyPlan: FigureStyleApplyPlan
-      diagnostics: FigureStyleExtractDiagnostics
+      profile: VisualStyleProfile
+      diagnostics: VisualStyleExtractDiagnostics
     }
   | { ok: false; message: string }
 
-export type FigureStyleSimilarityScore = {
+export type VisualStyleSimilarityMetric = {
   overall: number
   palette: number
   background: number
@@ -120,27 +217,27 @@ export type FigureStyleSimilarityScore = {
   warnings: string[]
 }
 
-export type FigureStyleSimilarityResult =
+export type VisualStyleSimilarityResult =
   | {
       ok: true
-      score: FigureStyleSimilarityScore
+      metric: VisualStyleSimilarityMetric
       diagnostics: {
-        reference: FigureStyleExtractDiagnostics
-        output: FigureStyleExtractDiagnostics
+        reference: VisualStyleExtractDiagnostics
+        output: VisualStyleExtractDiagnostics
       }
     }
   | { ok: false; message: string }
 
-export type FigureStyleReviewIssue = {
+export type VisualStyleReviewIssue = {
   id: 'background' | 'palette' | 'axes' | 'grid' | 'layout' | 'marks' | 'typography' | 'diagnostics'
   severity: 'info' | 'warning' | 'error'
-  metric?: keyof Omit<FigureStyleSimilarityScore, 'warnings'>
+  metric?: keyof Omit<VisualStyleSimilarityMetric, 'warnings'>
   score?: number
   message: string
   autoRepairable: boolean
 }
 
-export type FigureStyleAutoRepairPlan = {
+export type VisualStyleRepairSuggestion = {
   shouldRerender: boolean
   reason: string
   rcParamsPatch: Record<string, string | number | boolean>
@@ -149,33 +246,23 @@ export type FigureStyleAutoRepairPlan = {
   guardrails: string[]
 }
 
-export type FigureStyleReviewResult =
+export type VisualStyleReviewResult =
   | {
       ok: true
-      status: 'pass' | 'repairable' | 'manual_review'
-      score: FigureStyleSimilarityScore
-      issues: FigureStyleReviewIssue[]
-      autoRepair: FigureStyleAutoRepairPlan
+      metric: VisualStyleSimilarityMetric
+      issues: VisualStyleReviewIssue[]
+      repairSuggestion: VisualStyleRepairSuggestion
       diagnostics: {
-        reference: FigureStyleExtractDiagnostics
-        output: FigureStyleExtractDiagnostics
+        reference: VisualStyleExtractDiagnostics
+        output: VisualStyleExtractDiagnostics
       }
     }
   | { ok: false; message: string }
 
-export type FigureStyleApplyPlan = {
-  styleSpec: FigureStyleSpec
-  plottingWorkflow: {
-    recommendedSkills: string[]
-    recommendedLibraries: string[]
-    nextControlledTool: string
-    guardrails: string[]
-  }
-  matplotlibHints: {
-    rcParams: Record<string, string | number | boolean>
-    palette: string[]
-    layoutNotes: string[]
-  }
+export type MatplotlibStyleAdapter = {
+  rcParams: Record<string, string | number | boolean>
+  palette: string[]
+  layoutNotes: string[]
 }
 
 export const SCIENTIFIC_PLOTTING_TEMPLATES = [
@@ -209,11 +296,7 @@ export const SCIENTIFIC_FIGURE_NEEDS = [
 
 export type ScientificFigureNeed = typeof SCIENTIFIC_FIGURE_NEEDS[number]
 
-export type ScientificFigureRoute =
-  | 'controlled_plotting_renderer'
-  | 'diagram_spec_or_image_generation'
-  | 'panel_layout_then_renderer'
-  | 'needs_clarification'
+export type ScientificFigureRoute = 'needs_clarification'
 
 export type ScientificExternalSkillSourceKind = 'kdense' | 'cns' | 'domain' | 'general' | 'compat'
 
@@ -283,7 +366,7 @@ export type ScientificPaperFigureCompositionPlan = {
       | 'cox-forest'
       | 'roc'
       | 'image_generation_composition'
-    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan'
+    firstPassTool: 'scientific_visual_plan'
     requiredArtifact: 'png_manifest'
     factLocks: string[]
     polishAllowedOperations: Array<
@@ -298,9 +381,7 @@ export type ScientificPaperFigureCompositionPlan = {
     >
   }>
   image2Composition: {
-    preferredModel: 'gpt-image-2'
-    fallbackModel: 'configured_model_router_image_model'
-    nextControlledTool: 'image_generation_plan'
+    nextControlledTool: 'scientific_visual_plan'
     inputArtifacts: string[]
     allowedOperations: Array<
       | 'panel_stitching'
@@ -314,8 +395,8 @@ export type ScientificPaperFigureCompositionPlan = {
     outputContract: string[]
   }
   imagePolishDeltaPlan: ScientificPlottingImagePolishDeltaPlan
-  canvasReview: {
-    openInCanvas: true
+  visualReview: {
+    openInVisualReview: true
     preserveOriginalArtifacts: true
     reviewPacketRequired: true
     revisionPolicy: 'new_version_next_to_original'
@@ -340,9 +421,8 @@ export type ScientificPaperFigureProductionPlan = {
       | 'image_generation_composition'
     dataRequirements: string[]
     statistics: string[]
-    firstPassTool: 'scientific_plotting_render' | 'scientific_plotting_map_data' | 'image_generation_plan' | 'table_generator'
-    polishTool?: 'image_generation_plan'
-    canvasReview: boolean
+    firstPassTool: 'scientific_visual_plan' | 'table_generator'
+    visualReview: boolean
     notes: string[]
   }>
   handoff: {
@@ -367,18 +447,6 @@ export type ScientificPlottingSelectedSkillProfile = {
   readOnlyExternalSkills: true
 }
 
-export type ScientificPlottingImagePolishRecommendation = {
-  recommended: boolean
-  reason: string
-  model: 'gpt-image-2'
-  fallbackModel: 'configured_model_router_image_model'
-  nextControlledTool: 'image_generation_plan'
-  followUpTools: ['image_generation_plan', 'image_generation_render']
-  useWhen: string[]
-  preserve: string[]
-  guardrails: string[]
-}
-
 export type ScientificFigureNeedClassification = {
   primaryNeed: ScientificFigureNeed
   secondaryNeeds: ScientificFigureNeed[]
@@ -386,10 +454,7 @@ export type ScientificFigureNeedClassification = {
   route: ScientificFigureRoute
   routeReason: string
   domain: 'life-science' | 'chemistry' | 'materials' | 'ai-ml' | 'geo-climate' | 'general'
-  recommendedNextTool:
-    | 'scientific_plotting_map_data'
-    | 'scientific_plotting_research_brief'
-    | 'image_generation_plan'
+  recommendedNextTool: 'scientific_visual_plan'
   requiredInputs: string[]
   avoidTemplates: ScientificPlottingTemplate[]
   warnings: string[]
@@ -444,11 +509,10 @@ export type ScientificPlottingResearchBriefResult =
         styleGuidance: string[]
         fullPrompt: string
         codeGenerationPlan: {
-          target: 'scientific_plotting_render_request' | 'image_generation_recipe' | 'panel_layout_spec'
+          target: 'scientific_visual_plan_request'
           nextControlledTool: string
           notes: string[]
         }
-        imagePolishRecommendation?: ScientificPlottingImagePolishRecommendation
         nextControlledTool: string
       }
       confirmationCard: {
@@ -602,6 +666,15 @@ export type ScientificPlottingAutoRepairOptions = {
   minOverall?: number
 }
 
+export type ScientificPlottingVisualPlanHandoff = {
+  route: 'deterministic_plot' | 'hybrid_composite'
+  routeLocked: true
+  rationale: string
+  reproducibleInputs: string[]
+  truthLockedElements: string[]
+  fallbackPolicy: 'fail_closed'
+}
+
 export type ScientificPlottingStyleProfile = {
   id: string
   name: string
@@ -648,10 +721,10 @@ export type ScientificPlottingStyleProfilesResult =
       profileMatches?: ScientificPlottingStyleProfileMatch[]
       referenceProfile?: ScientificPlottingReferenceProfile
       recommendedNextTools: Array<
-        | 'scientific_plotting_plan'
+        | 'scientific_visual_plan'
         | 'scientific_plotting_map_data'
         | 'scientific_plotting_render'
-        | 'scientific_plotting_review'
+        | 'visual_artifact_review'
       >
       warnings: string[]
     }
@@ -709,9 +782,9 @@ export type ScientificPlottingReferenceManifest = {
     referencePath: string
     suggestedStyleProfileId?: string
     suggestedProfileTool: 'scientific_plotting_style_profiles'
-    suggestedPlanTool: 'scientific_plotting_plan'
+    suggestedPlanTool: 'scientific_visual_plan'
     suggestedRenderTool: 'scientific_plotting_render'
-    suggestedReviewTool: 'scientific_plotting_review'
+    suggestedReviewTool: 'visual_artifact_review'
     guardrails: string[]
   }
 }
@@ -756,6 +829,7 @@ export type ScientificPlottingPrepareReferenceResult =
 
 export type ScientificPlottingRenderRequest = {
   workspaceRoot: string
+  scientificVisualPlan: ScientificPlottingVisualPlanHandoff
   template: ScientificPlottingTemplate
   data: unknown
   labels?: ScientificPlottingLabels
@@ -772,7 +846,7 @@ export type ScientificPlottingRenderRequest = {
    * default publication profile is visually correct but needs more pixels.
    */
   outputScale?: number
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
@@ -781,7 +855,7 @@ export type ScientificPlottingDraftHandoff = {
   kind: 'diagram_draft_handoff'
   draftRole: 'structure_only'
   sourceTemplate: ScientificPlottingTemplate
-  recommendedNextTools: ['image_generation_plan', 'image_generation_render']
+  recommendedNextTools: ['image_generation_prepare', 'image_generation_render']
   imageGenerationTask: string
   promptGuidance: string[]
   draftSpec: {
@@ -808,6 +882,7 @@ export type ScientificPlottingPlanRequest = {
 
 export type ScientificPlottingDataMappingRequest = {
   workspaceRoot: string
+  scientificVisualPlan: ScientificPlottingVisualPlanHandoff
   task: string
   data: unknown
   labels?: ScientificPlottingLabels
@@ -820,7 +895,7 @@ export type ScientificPlottingDataMappingRequest = {
   figureId?: string
   outputDir?: string
   outputScale?: number
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
@@ -883,11 +958,6 @@ export type ScientificPlottingPlanResult =
       templateSelection: ScientificPlottingTemplateSelection
       templateGuides: ScientificPlottingTemplateGuide[]
       figureNeed?: ScientificFigureNeedClassification
-      toolRoutingRecommendation?: {
-        preferredTool: 'image_generation_plan'
-        reason: string
-        useWhen: string[]
-      }
       researchBriefRecommendation?: {
         recommended: boolean
         reason: string
@@ -895,7 +965,6 @@ export type ScientificPlottingPlanResult =
         useWhen: string[]
         requiresUserConfirmation: true
       }
-      imagePolishRecommendation?: ScientificPlottingImagePolishRecommendation
       externalSkillCatalog?: {
         recommendedSkillIds: string[]
         primarySources: ScientificExternalSkillSourceKind[]
@@ -969,12 +1038,12 @@ export type ScientificPlottingReviewRequest = {
 }
 
 export type ScientificPlottingReviewResult =
-  | (Extract<FigureStyleReviewResult, { ok: true }> & {
+  | (Extract<VisualStyleReviewResult, { ok: true }> & {
       template?: ScientificPlottingTemplate
       referenceProfile?: ScientificPlottingReferenceProfile
       templateAdvice?: ScientificPlottingTemplateAdvice
     })
-  | Extract<FigureStyleReviewResult, { ok: false }>
+  | Extract<VisualStyleReviewResult, { ok: false }>
 
 export type ScientificPlottingReviewPacketRequest = {
   workspaceRoot: string
@@ -991,8 +1060,8 @@ export type ScientificPlottingReviewPacketItem = {
   template: ScientificPlottingTemplate
   status: 'rendered' | 'repaired' | 'review_failed' | 'unknown'
   createdAt?: string
-  score?: FigureStyleSimilarityScore
-  reviewStatus?: 'pass' | 'repairable' | 'manual_review'
+  styleSimilarity?: VisualStyleSimilarityMetric
+  styleRepairSuggested: boolean
   repairAttempted: boolean
   attempts: number
   warnings: string[]
@@ -1014,9 +1083,7 @@ export type ScientificPlottingReviewPacket = {
     repaired: number
     reviewFailed: number
     needsAttention: number
-    pass: number
-    repairable: number
-    manualReview: number
+    styleRepairSuggested: number
     bestOverall?: number
     worstOverall?: number
     averageOverall?: number
@@ -1095,14 +1162,14 @@ export type ScientificPlottingManifest = {
       createdAt: string
   requestHash: string
   outputPath: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
   outputScale?: number
   artifactManifestPath?: string
   styleSpecPath?: string
   referencePath?: string
   attempts: ScientificPlottingAttempt[]
-  finalReview?: FigureStyleReviewResult
+  finalReview?: VisualStyleReviewResult
   warnings: string[]
 }
 
@@ -1134,95 +1201,5 @@ export type ScientificPlottingRenderResult =
       draftHandoff?: ScientificPlottingDraftHandoff
       stdoutTail?: string
       stderrTail?: string
-      warnings?: string[]
-    }
-
-export type ScientificPlottingStyleTransferReferenceInput = {
-  sourcePath?: string
-  referencePath?: string
-  sourceType?: 'image' | 'pdf'
-  page?: number
-  cropBox?: ScientificPlottingCropBox
-  figureId?: string
-  dpi?: number
-}
-
-export type ScientificPlottingStyleTransferRequest = {
-  workspaceRoot: string
-  task: string
-  data: unknown
-  labels?: ScientificPlottingLabels
-  templateHint?: ScientificPlottingTemplate
-  reference?: ScientificPlottingStyleTransferReferenceInput
-  styleSpec?: FigureStyleSpec
-  styleSpecPath?: string
-  styleProfileId?: string
-  figureId?: string
-  outputDir?: string
-  outputScale?: number
-  canvasId?: string
-  threadId?: string
-  autoRepair?: ScientificPlottingAutoRepairOptions
-  createReviewPacket?: boolean
-}
-
-export type ScientificPlottingStyleTransferManifest = {
-  version: 2
-  tool: 'scientific_plotting_style_transfer'
-  createdAt: string
-  requestHash: string
-  task: string
-  canvasId?: string
-  threadId?: string
-  outputScale?: number
-  referenceImagePath?: string
-  styleSpecPath?: string
-  selectedTemplate?: ScientificPlottingTemplate
-  selectedStyleProfileId?: string
-  outputPath?: string
-  renderManifestPath?: string
-  artifactManifestPath?: string
-  reviewStatus?: 'pass' | 'repairable' | 'manual_review'
-  reviewScore?: FigureStyleSimilarityScore
-  reviewPacketPath?: string
-  reviewPacketJsonPath?: string
-  warnings: string[]
-  guardrails: string[]
-}
-
-export type ScientificPlottingStyleTransferResult =
-  | {
-      ok: true
-      status: 'completed' | 'rendered' | 'review_failed'
-      referenceImagePath?: string
-      preparedReference?: Extract<ScientificPlottingPrepareReferenceResult, { ok: true }>
-      styleProfiles?: ScientificPlottingStyleProfilesResult
-      plan: ScientificPlottingPlanResult
-      mapping: ScientificPlottingDataMappingResult
-      render: ScientificPlottingRenderResult
-      reviewPacket?: ScientificPlottingReviewPacketResult
-      outputPath?: string
-      renderManifestPath?: string
-      artifactManifestPath?: string
-      styleTransferManifestPath: string
-      styleTransferManifest: ScientificPlottingStyleTransferManifest
-      warnings: string[]
-    }
-  | {
-      ok: false
-      status:
-        | 'invalid_request'
-        | 'invalid_workspace'
-        | 'reference_failed'
-        | 'mapping_failed'
-        | 'render_failed'
-        | 'review_packet_failed'
-      message: string
-      preparedReference?: ScientificPlottingPrepareReferenceResult
-      styleProfiles?: ScientificPlottingStyleProfilesResult
-      plan?: ScientificPlottingPlanResult
-      mapping?: ScientificPlottingDataMappingResult
-      render?: ScientificPlottingRenderResult
-      reviewPacket?: ScientificPlottingReviewPacketResult
       warnings?: string[]
     }

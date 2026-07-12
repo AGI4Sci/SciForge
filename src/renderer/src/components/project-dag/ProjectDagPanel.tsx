@@ -18,6 +18,7 @@ import {
 } from './project-dag-panel-state'
 import { handleProjectDagPreviewMessage } from './project-dag-preview-bridge'
 import { normalizeProjectDagGraphNodeId } from '../../lib/workspace-file-preview'
+import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
 
 type Props = {
   workspaceRoot?: string
@@ -189,6 +190,12 @@ export function ProjectDagPanel({
 
   const requestContext = useMemo(() => projectDagRequestContext(workspaceRoot), [workspaceRoot])
   const projectName = useMemo(() => projectDagWorkspaceName(workspaceRoot), [workspaceRoot])
+  const status = view?.status
+  const { signalNow: signalFramePriority } = useDagPanelPrioritySignal({
+    iframeRef,
+    dag: 'project',
+    status
+  })
 
   useEffect(() => {
     setRootGoalId(undefined)
@@ -301,7 +308,6 @@ export function ProjectDagPanel({
   const goalTitle = title.trim()
   const goalDescription = description.trim()
   const inlineError = commandError || (view ? loadError : null)
-  const status = view?.status
   const activeProgress = status?.progress ?? optimisticProgress
   const updateBusy = submitting || Boolean(activeProgress && activeProgress.stage !== 'retrying')
   const progressPercent = activeProgress ? projectDagProgressPercent(activeProgress) : 0
@@ -446,6 +452,7 @@ export function ProjectDagPanel({
           {inlineError ? <div role="status" className="mt-3 flex gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-800"><AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" /><span>{inlineError}</span></div> : null}
         </div>
       </details>
+      {status ? <DagProgressiveLegend status={status} t={t} /> : null}
       {activeProgress ? (
         <div
           role="status"
@@ -473,8 +480,8 @@ export function ProjectDagPanel({
           {status?.lastError ? <div className="mt-1 break-words text-[10.5px] text-amber-800">{status.lastError}</div> : null}
         </div>
       ) : null}
-      <div className="min-h-0 flex-1 bg-ds-main p-1 sm:p-1.5"><div className="relative h-full overflow-hidden rounded-md border border-ds-border bg-ds-surface sm:rounded-lg">
-        {frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('projectDagReviewSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={consumeInitialSelection} /> : null}
+      <div className="min-h-0 flex-1 bg-ds-main p-1 sm:p-1.5"><div className="relative h-full overflow-hidden rounded-md border border-ds-border bg-ds-surface sm:rounded-lg" data-dag-layer="committed">
+        {frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('projectDagReviewSurface')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" data-dag-layer="committed" sandbox="allow-clipboard-write allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={() => { signalFramePriority(); consumeInitialSelection() }} /> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('projectDagLoading')}</span></div> : null}
         {loadError && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main px-6"><div className="max-w-sm text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-3 text-[13px] font-semibold text-ds-ink">{t('projectDagLoadFailed')}</div><div className="mt-2 text-[12px] text-ds-muted">{loadError}</div><button type="button" onClick={() => setRequestNonce((current) => current + 1)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" />{t('projectDagRetry')}</button></div></div> : null}
       </div></div>

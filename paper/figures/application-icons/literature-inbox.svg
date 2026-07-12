@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Literature Inbox</title>
+  <desc id="desc">An inbox of papers with a ranking marker and search lens.</desc>
+  <defs>
+    <linearGradient id="tray" x1="44" y1="83" x2="212" y2="207" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="84" y1="54" x2="176" y2="138" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <path d="M57 103h142l20 87c3 13-7 25-20 25H57c-13 0-23-12-20-25l20-87Z" fill="url(#tray)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M75 141h28l13 18h24l13-18h28" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="75" y="44" width="88" height="105" rx="10" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M92 69h48M92 89h39M92 109h28" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="171" cy="78" r="25" fill="url(#accent)" stroke="#23313A" stroke-width="7"/>
+  <path d="M171 63l4 10 11 1-9 7 3 11-9-6-9 6 3-11-9-7 11-1 4-10Z" fill="#FFFFFF"/>
+  <circle cx="177" cy="139" r="18" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M190 152l22 22" fill="none" stroke="#23313A" stroke-width="8" stroke-linecap="round"/>
+</svg>

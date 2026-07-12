@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Evidence and Governance Engine</title>
+  <desc id="desc">Evidence lineage, verification gates, and approval control in one assurance engine.</desc>
+  <defs>
+    <linearGradient id="shield" x1="62" y1="34" x2="194" y2="220" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="94" y1="77" x2="164" y2="151" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <path d="M128 31l80 28v59c0 54-32 88-80 111-48-23-80-57-80-111V59l80-28Z" fill="url(#shield)" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <circle cx="128" cy="115" r="34" fill="url(#accent)" stroke="#23313A" stroke-width="7"/>
+  <path d="M111 116l13 13 26-31" fill="none" stroke="#FFFFFF" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="83" cy="74" r="10" fill="#F4B942" stroke="#23313A" stroke-width="5"/>
+  <circle cx="173" cy="74" r="10" fill="#EF6F6C" stroke="#23313A" stroke-width="5"/>
+  <circle cx="84" cy="168" r="10" fill="#7C5CFF" stroke="#23313A" stroke-width="5"/>
+  <circle cx="173" cy="168" r="10" fill="#18A999" stroke="#23313A" stroke-width="5"/>
+  <path d="M93 79l22 22M163 80l-22 22M94 164l22-25M162 164l-22-25" fill="none" stroke="#23313A" stroke-width="5" stroke-linecap="round"/>
+  <path d="M101 196h54" fill="none" stroke="#23313A" stroke-width="7" stroke-linecap="round"/>
+  <path d="M111 180h34" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+</svg>

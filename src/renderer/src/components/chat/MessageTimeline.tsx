@@ -13,7 +13,7 @@ import { ReviewPlanCard, ReviewSummaryCard, TurnChangeSummary, WorkMetaRow } fro
 import {
   TimelineImageResultsPanel,
   timelineImagesFromToolBlocks,
-  type TimelineImageCanvasArtifact
+  type TimelineVisualReviewArtifact
 } from './message-timeline-media'
 import { ProcessSectionRow, groupProcessSections } from './message-timeline-process'
 import { AnimatedWorkLogo } from './AnimatedWorkLogo'
@@ -56,7 +56,7 @@ type Props = {
   turnDurationByUserIdOverride?: Record<string, number>
   turnReasoningFirstAtByUserIdOverride?: Record<string, number>
   turnReasoningLastAtByUserIdOverride?: Record<string, number>
-  onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
 }
 
 const TURN_PAGE_SIZE = 18
@@ -122,7 +122,7 @@ export function MessageTimeline({
   turnDurationByUserIdOverride,
   turnReasoningFirstAtByUserIdOverride,
   turnReasoningLastAtByUserIdOverride,
-  onOpenImageArtifactInCanvas
+  onOpenImageArtifactInVisualReview
 }: Props): ReactElement {
   const renderStartedAt = performanceMonitor.now()
   const { t } = useTranslation('common')
@@ -152,7 +152,7 @@ export function MessageTimeline({
   )
   const stableOnBuildPlan = useStableOptionalCallback(onBuildPlan)
   const stableOnOpenPlan = useStableOptionalCallback(onOpenPlan)
-  const stableOnOpenImageArtifactInCanvas = useStableOptionalCallback(onOpenImageArtifactInCanvas)
+  const stableOnOpenImageArtifactInVisualReview = useStableOptionalCallback(onOpenImageArtifactInVisualReview)
   const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
@@ -281,7 +281,7 @@ export function MessageTimeline({
                 planActionsBusy={planActionsBusy}
                 onBuildPlan={stableOnBuildPlan}
                 onOpenPlan={stableOnOpenPlan}
-                onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
+                onOpenImageArtifactInVisualReview={stableOnOpenImageArtifactInVisualReview}
                 onContinueScientificObject={stableOnContinueScientificObject}
                 viewportRef={containerRef}
               />
@@ -317,7 +317,7 @@ export function MessageTimeline({
             liveReasoningMeta={liveReasoningMeta}
             live={live}
             devPreviewCard={devPreviewCard}
-            onOpenImageArtifactInCanvas={stableOnOpenImageArtifactInCanvas}
+            onOpenImageArtifactInVisualReview={stableOnOpenImageArtifactInVisualReview}
             onContinueScientificObject={stableOnContinueScientificObject}
             viewportRef={containerRef}
             liveStartedAtMs={
@@ -353,7 +353,7 @@ function MessageTurn({
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
-  onOpenImageArtifactInCanvas,
+  onOpenImageArtifactInVisualReview,
   onContinueScientificObject,
   viewportRef
 }: {
@@ -369,7 +369,7 @@ function MessageTurn({
   planActionsBusy?: boolean
   onBuildPlan?: () => void
   onOpenPlan?: () => void
-  onOpenImageArtifactInCanvas?: (artifact: TimelineImageCanvasArtifact) => void
+  onOpenImageArtifactInVisualReview?: (artifact: TimelineVisualReviewArtifact) => void
   onContinueScientificObject?: (prompt: string) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
@@ -475,7 +475,7 @@ function MessageTurn({
           key={block.id}
           block={block}
           markdownImages={block.kind === 'assistant' ? turnArtifactImages : undefined}
-          onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+          onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
         />
       ))}
 
@@ -483,11 +483,11 @@ function MessageTurn({
         <MessageBubble
           block={{ kind: 'assistant', id: 'live-assistant', text: liveContent }}
           markdownImages={turnArtifactImages}
-          onOpenImageArtifactInCanvas={onOpenImageArtifactInCanvas}
+          onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
         />
       ) : null}
 
-      <TimelineImageResultsPanel blocks={toolResultImageBlocks} onOpenCanvas={onOpenImageArtifactInCanvas} />
+      <TimelineImageResultsPanel blocks={toolResultImageBlocks} onOpenVisualReview={onOpenImageArtifactInVisualReview} />
 
       <TimelineScientificObjectsPanel
         blocks={isProcessing ? [] : turn.blocks}
@@ -546,7 +546,7 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.planActionsBusy === next.planActionsBusy &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&
-  prev.onOpenImageArtifactInCanvas === next.onOpenImageArtifactInCanvas &&
+  prev.onOpenImageArtifactInVisualReview === next.onOpenImageArtifactInVisualReview &&
   prev.onContinueScientificObject === next.onContinueScientificObject &&
   prev.viewportRef === next.viewportRef
 ))

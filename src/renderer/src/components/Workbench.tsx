@@ -2,7 +2,7 @@ import type { ReactElement } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
-import { ArrowLeft, ArrowRight, Bot, Eye } from 'lucide-react'
+import { ArrowLeft, ArrowRight, Bot, CircleAlert, Eye } from 'lucide-react'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
@@ -18,12 +18,13 @@ import {
 import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
 import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import type { ClipboardImageReadResult } from '@shared/workspace-file'
-import type { AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
-import type { AgentProviderCapabilities, AttachmentReference, ChatBlock } from '../agent/types'
+import type { AgentRuntimeChild, AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
+import type { AgentProviderCapabilities, AttachmentReference, ChatBlock, NormalizedThread } from '../agent/types'
 import type { LocalRuntimeInfoJson, LocalRuntimeSkillJson } from '../agent/local-runtime-contract'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { useChatStore } from '../store/chat-store'
+import { selectFocusedAgentSurface } from '../store/chat-store-focus-actions'
 import {
   remoteChannelThreadBindingsFromChannels,
   deriveRemoteChannelThreadStatusKind,
@@ -38,7 +39,7 @@ import { Sidebar } from './chat/Sidebar'
 import { WorkbenchTopBar, type RightPanelMode } from './chat/WorkbenchTopBar'
 import { ActiveRemoteBindingDetails } from './chat/RemoteBindingDetailsPill'
 import { MessageTimeline } from './chat/MessageTimeline'
-import type { TimelineImageCanvasArtifact } from './chat/message-timeline-media'
+import type { TimelineVisualReviewArtifact } from './chat/message-timeline-media'
 import {
   FloatingComposer,
   type ComposerCommentReference,
@@ -56,6 +57,9 @@ import {
   filterDirectChildAgents,
   useThreadChildren
 } from './chat/ChildAgentsPanel'
+import { AgentFocusNavigation } from './chat/AgentFocusNavigation'
+import { FocusedAgentWorkbench } from './chat/FocusedAgentWorkbench'
+import { useChildAgentAttention } from './chat/use-child-agent-attention'
 import type { FileTreeInitialDirectory } from './chat/ChatFileTreePanel'
 import {
   RemoteGuardDetailView,
@@ -96,10 +100,7 @@ import { PROJECT_DAG_SETUP_EVENT } from './project-dag/project-dag-panel-state'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
 import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availability'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
-import {
-  buildImageGenerationDisplayText,
-  buildImageGenerationWorkflowPrompt
-} from '../lib/image-generation-chat'
+import { buildImageGenerationWorkflowPrompt } from '../lib/image-generation-chat'
 import { useKeyboardShortcutSettings } from '../lib/keyboard-shortcut-settings'
 import {
   isPluginInstalled,
@@ -135,7 +136,6 @@ import {
   buildAnchoredCommentContextPrompt,
   type AnchoredCommentPromptReference
 } from '../lib/anchored-comment-chat'
-import type { FigureStylePanelPage } from './figure-style/figure-style-panel-state'
 import {
   ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT,
   AnchoredCommentsLayer,
@@ -190,8 +190,8 @@ const PaperRadarPanel = lazy(() =>
 const TerminalPanel = lazy(() =>
   import('./terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
 )
-const FigureStylePanel = lazy(() =>
-  import('./figure-style/FigureStylePanel').then((module) => ({ default: module.FigureStylePanel }))
+const VisualReviewPanel = lazy(() =>
+  import('./visual-review/VisualReviewPanel').then((module) => ({ default: module.VisualReviewPanel }))
 )
 
 function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): string {
@@ -214,8 +214,8 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'Project DAG'
     case 'checkpoints':
       return 'Git checkpoints'
-    case 'figure-style':
-      return 'Figure style'
+    case 'visual-review':
+      return 'Visual review'
     case 'plan':
       return 'Plan'
     case 'sdd-ai':
@@ -223,109 +223,6 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
     default:
       return String(mode)
   }
-}
-
-const CANVAS_DISPLAY_IMAGE_PATH_RE = /\.(?:png|jpe?g|webp|svg)(?:[?#].*)?$/i
-const PPTX_PATH_RE = /\.pptx(?:[?#].*)?$/i
-
-function isCanvasDisplayImagePath(value: string | undefined): boolean {
-  return Boolean(value?.trim() && CANVAS_DISPLAY_IMAGE_PATH_RE.test(value.trim()))
-}
-
-function isPptxPath(value: string | undefined): boolean {
-  return Boolean(value?.trim() && PPTX_PATH_RE.test(value.trim()))
-}
-
-function normalizeCanvasArtifactPath(value: string | undefined): string | null {
-  const normalized = value?.trim()
-  return normalized ? normalized.replace(/\\/g, '/').replace(/\/+$/g, '') : null
-}
-
-function decodeDrawioMeta(value: string | undefined): Record<string, unknown> | null {
-  if (!value?.trim()) return null
-  try {
-    const normalized = value.replace(/-/g, '+').replace(/_/g, '/')
-    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=')
-    const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0))
-    return asRecord(JSON.parse(new TextDecoder().decode(bytes)))
-  } catch {
-    return null
-  }
-}
-
-function drawioSnapshotContainsCanvasArtifact(
-  snapshot: Record<string, unknown>,
-  candidates: Set<string>,
-  options?: { requireDisplayPreview?: boolean }
-): boolean {
-  const diagramXml = typeof snapshot.diagramXml === 'string' ? snapshot.diagramXml : ''
-  if (!diagramXml) return false
-  const pattern = /<mxCell\b[^>]*\bsciforgeMeta="([^"]+)"/g
-  let match: RegExpExecArray | null
-  while ((match = pattern.exec(diagramXml))) {
-    const meta = decodeDrawioMeta(match[1])
-    const artifact = asRecord(meta?.sciforgeArtifact)
-    if (!artifact) continue
-    for (const key of ['outputPath', 'sourcePath', 'previewPath', 'renderedPagePath', 'manifestPath', 'svgPath', 'pptxPath']) {
-      const normalized = normalizeCanvasArtifactPath(artifact[key] as string | undefined)
-      if (!normalized || !candidates.has(normalized)) continue
-      if (!options?.requireDisplayPreview) return true
-      const previewCandidates = [
-        artifact.previewPath as string | undefined,
-        artifact.renderedPagePath as string | undefined,
-        artifact.svgPath as string | undefined,
-        artifact.outputPath as string | undefined,
-        artifact.sourcePath as string | undefined
-      ]
-      const hasDisplayPreview = previewCandidates.some((path) => {
-        if (!normalizeCanvasArtifactPath(path)) return false
-        return artifact.artifactKind === 'ppt_export' ? isCanvasDisplayImagePath(path) : true
-      })
-      if (hasDisplayPreview && meta?.sciforgeCanvasPlaceholder !== true) return true
-    }
-  }
-  return false
-}
-
-function snapshotContainsCanvasArtifact(
-  snapshot: unknown,
-  candidates: string[],
-  options?: { requireDisplayPreview?: boolean }
-): boolean {
-  const wanted = new Set(candidates.map(normalizeCanvasArtifactPath).filter((value): value is string => Boolean(value)))
-  if (wanted.size === 0 || !snapshot || typeof snapshot !== 'object') return false
-  const snapshotRecord = snapshot as Record<string, unknown>
-  if (snapshotRecord.engine === 'drawio') {
-    return drawioSnapshotContainsCanvasArtifact(snapshotRecord, wanted, options)
-  }
-  const store = (snapshot as { store?: unknown }).store
-  if (!store || typeof store !== 'object') return false
-  for (const record of Object.values(store as Record<string, unknown>)) {
-    if (!record || typeof record !== 'object') continue
-    const meta = (record as { meta?: unknown }).meta
-    if (!meta || typeof meta !== 'object') continue
-    const artifact = (meta as { sciforgeArtifact?: unknown }).sciforgeArtifact
-    if (!artifact || typeof artifact !== 'object') continue
-    for (const key of ['outputPath', 'sourcePath', 'previewPath', 'renderedPagePath', 'manifestPath', 'svgPath', 'pptxPath']) {
-      const normalized = normalizeCanvasArtifactPath((artifact as Record<string, unknown>)[key] as string | undefined)
-      if (!normalized || !wanted.has(normalized)) continue
-      if (!options?.requireDisplayPreview) return true
-      const artifactRecord = artifact as Record<string, unknown>
-      const previewCandidates = [
-        artifactRecord.previewPath as string | undefined,
-        artifactRecord.renderedPagePath as string | undefined,
-        artifactRecord.svgPath as string | undefined,
-        artifactRecord.outputPath as string | undefined,
-        artifactRecord.sourcePath as string | undefined
-      ]
-      const hasDisplayPreview = previewCandidates.some((path) => {
-        if (!normalizeCanvasArtifactPath(path)) return false
-        return artifactRecord.artifactKind === 'ppt_export' ? isCanvasDisplayImagePath(path) : true
-      })
-      if (hasDisplayPreview && (meta as { sciforgeCanvasPlaceholder?: unknown }).sciforgeCanvasPlaceholder !== true) return true
-    }
-  }
-  return false
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -337,59 +234,15 @@ function stringField(record: Record<string, unknown> | null, key: string): strin
   return typeof value === 'string' && value.trim() ? value.trim() : undefined
 }
 
-function parseJsonRecord(text: string | undefined): Record<string, unknown> | null {
-  if (!text?.trim()) return null
-  try {
-    return asRecord(JSON.parse(text))
-  } catch {
-    return null
+function visualDocumentIdForArtifact(contextId: string, path: string): string {
+  const normalized = `${contextId}:${path.replace(/\\/g, '/')}`
+  let hash = 0x811c9dc5
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
   }
-}
-
-function findNestedRecordWithCanvasInsert(value: unknown, depth = 0): Record<string, unknown> | null {
-  if (depth > 5) return null
-  const record = asRecord(value)
-  if (!record) return null
-  if (stringField(record, 'canvasId') || stringField(record, 'canvas_id')) return record
-  for (const nested of Object.values(record)) {
-    if (Array.isArray(nested)) {
-      for (const item of nested) {
-        const found = findNestedRecordWithCanvasInsert(item, depth + 1)
-        if (found) return found
-      }
-      continue
-    }
-    const found = findNestedRecordWithCanvasInsert(nested, depth + 1)
-    if (found) return found
-  }
-  return null
-}
-
-function latestCanvasInsertRequestFromBlocks(blocks: ChatBlock[]): {
-  key: string
-  canvasId: string
-  workspaceRoot?: string
-  focusShapeId?: string
-} | null {
-  for (let index = blocks.length - 1; index >= 0; index -= 1) {
-    const block = blocks[index]
-    if (block.kind !== 'tool' || block.status !== 'success') continue
-    const toolName = stringField(block.meta ?? null, 'toolName') || block.summary
-    if (!toolName.replace(/[\s-]+/g, '_').includes('sciforge_canvas_insert_artifact')) continue
-    const detailRecord = parseJsonRecord(block.detail)
-    const result = findNestedRecordWithCanvasInsert(block.meta) || findNestedRecordWithCanvasInsert(detailRecord)
-    const canvasId = stringField(result, 'canvasId') || stringField(result, 'canvas_id')
-    if (!canvasId) continue
-    const workspaceRoot = stringField(result, 'workspaceRoot') || stringField(result, 'workspace_root')
-    const focusShapeId = stringField(result, 'shapeId') || stringField(result, 'shape_id')
-    return {
-      key: `${block.id}:${canvasId}:${focusShapeId ?? ''}`,
-      canvasId,
-      ...(workspaceRoot ? { workspaceRoot } : {}),
-      ...(focusShapeId ? { focusShapeId } : {})
-    }
-  }
-  return null
+  const name = path.replace(/\\/g, '/').split('/').pop()?.replace(/[^a-zA-Z0-9._-]+/g, '-') || 'visual'
+  return `visual-${contextId.replace(/[^a-zA-Z0-9._-]+/g, '-').slice(0, 48)}-${name.slice(0, 48)}-${(hash >>> 0).toString(16)}`
 }
 
 type PendingSddPlanTarget = {
@@ -701,7 +554,16 @@ export function Workbench(): ReactElement {
     threadSearch,
     showArchivedThreads,
     activeThreadId,
+    focusedAgentThreadId,
+    focusedAgentRuntimeId,
+    agentFocusLineage,
+    agentFocusHistory,
+    agentFocusHistoryIndex,
     selectThread,
+    focusAgentThread,
+    focusAgentBack,
+    focusAgentForward,
+    focusAgentParent,
     createThread,
     blocks,
     liveReasoning,
@@ -739,6 +601,7 @@ export function Workbench(): ReactElement {
     watchTurnCompletion,
     unreadThreadIds,
     removeQueuedMessage,
+    updateQueuedMessage,
     steerQueuedMessage,
     interrupt,
     probeRuntime,
@@ -754,6 +617,7 @@ export function Workbench(): ReactElement {
     deleteThread,
     spawnSideConversation,
     sendSideMessage,
+    attachSideConversation,
     openSideConversationDraft,
     selectSideConversation,
     setSidePanelOpen,
@@ -767,7 +631,16 @@ export function Workbench(): ReactElement {
       threadSearch: s.threadSearch,
       showArchivedThreads: s.showArchivedThreads,
       activeThreadId: s.activeThreadId,
+      focusedAgentThreadId: s.focusedAgentThreadId,
+      focusedAgentRuntimeId: s.focusedAgentRuntimeId,
+      agentFocusLineage: s.agentFocusLineage,
+      agentFocusHistory: s.agentFocusHistory,
+      agentFocusHistoryIndex: s.agentFocusHistoryIndex,
       selectThread: s.selectThread,
+      focusAgentThread: s.focusAgentThread,
+      focusAgentBack: s.focusAgentBack,
+      focusAgentForward: s.focusAgentForward,
+      focusAgentParent: s.focusAgentParent,
       createThread: s.createThread,
       blocks: s.blocks,
       liveReasoning: s.liveReasoning,
@@ -805,6 +678,7 @@ export function Workbench(): ReactElement {
       watchTurnCompletion: s.watchTurnCompletion,
       unreadThreadIds: s.unreadThreadIds,
       removeQueuedMessage: s.removeQueuedMessage,
+      updateQueuedMessage: s.updateQueuedMessage,
       steerQueuedMessage: s.steerQueuedMessage,
       interrupt: s.interrupt,
       probeRuntime: s.probeRuntime,
@@ -820,6 +694,7 @@ export function Workbench(): ReactElement {
       deleteThread: s.deleteThread,
       spawnSideConversation: s.spawnSideConversation,
       sendSideMessage: s.sendSideMessage,
+      attachSideConversation: s.attachSideConversation,
       openSideConversationDraft: s.openSideConversationDraft,
       selectSideConversation: s.selectSideConversation,
       setSidePanelOpen: s.setSidePanelOpen,
@@ -829,6 +704,7 @@ export function Workbench(): ReactElement {
       codeWorkspaceRoots: s.codeWorkspaceRoots
     }))
   )
+  const focusedAgentSurface = useChatStore(useShallow(selectFocusedAgentSurface))
   const [input, setInput] = useState('')
   const [mode, setMode] = useState<'plan' | 'agent'>('agent')
   const [composerReasoningEffort, setComposerReasoningEffort] =
@@ -972,6 +848,51 @@ export function Workbench(): ReactElement {
     () => threads.find((thread) => thread.id === activeThreadId) ?? null,
     [activeThreadId, threads]
   )
+  const focusedThreadId = focusedAgentSurface?.threadId ?? activeThreadId
+  const focusedRuntimeId = focusedAgentSurface?.runtimeId ?? focusedAgentRuntimeId ?? activeThread?.runtimeId
+  const focusedSide = focusedAgentSurface?.source === 'side' && focusedThreadId
+    ? sideConversations[focusedThreadId] ?? null
+    : null
+  const focusedChild = useMemo<AgentRuntimeChild | null>(() => {
+    if (!focusedSide || !focusedThreadId) return null
+    return {
+      id: focusedThreadId,
+      runtimeId: focusedSide.runtimeId ?? focusedRuntimeId ?? activeAgentRuntime,
+      parentThreadId: focusedSide.parentThreadId,
+      kind: 'thread',
+      status: focusedSide.error ? 'failed' : focusedSide.busy ? 'running' : 'completed',
+      name: focusedSide.title,
+      openAsThreadRef: {
+        runtimeId: focusedSide.runtimeId ?? focusedRuntimeId ?? activeAgentRuntime,
+        threadId: focusedThreadId,
+        relation: 'side',
+        title: focusedSide.title
+      }
+    }
+  }, [activeAgentRuntime, focusedRuntimeId, focusedSide, focusedThreadId])
+  const focusedPanelThread = useMemo<NormalizedThread | null>(() => {
+    if (!focusedSide || !focusedThreadId) return activeThread
+    return {
+      id: focusedThreadId,
+      title: focusedSide.title,
+      updatedAt: focusedSide.createdAt,
+      model: focusedSide.model,
+      mode: 'agent',
+      status: focusedSide.busy ? 'running' : 'idle',
+      runtimeId: focusedSide.runtimeId ?? focusedRuntimeId,
+      relation: 'side',
+      parentThreadId: focusedSide.parentThreadId,
+      workspace: activeThread?.workspace
+    }
+  }, [activeThread, focusedRuntimeId, focusedSide, focusedThreadId])
+  const childAgentAttention = useChildAgentAttention({
+    rootThreadId: activeThreadId,
+    rootLabel: activeThread?.title,
+    runtimeId: activeThread?.runtimeId,
+    runtimeReady: runtimeConnection === 'ready',
+    childRefreshKey,
+    unreadThreadIds
+  })
   const remoteThreadBindings = useMemo(
     () => remoteChannelThreadBindingsFromChannels(remoteChannels),
     [remoteChannels]
@@ -979,6 +900,16 @@ export function Workbench(): ReactElement {
   const queuedThreadIds = useMemo(
     () => new Set(queuedMessages.map((message) => message.threadId?.trim() ?? '').filter(Boolean)),
     [queuedMessages]
+  )
+  const activeQueuedMessages = useMemo(
+    () => activeThreadId
+      ? queuedMessages.filter(
+          (message) =>
+            (!message.threadId || message.threadId === activeThreadId) &&
+            (!message.runtimeId || !activeThread?.runtimeId || message.runtimeId === activeThread.runtimeId)
+        )
+      : [],
+    [activeThread?.runtimeId, activeThreadId, queuedMessages]
   )
   const activeRemoteBinding = activeThreadId
     ? remoteThreadBindings.get(activeThreadId) ?? null
@@ -1070,24 +1001,37 @@ export function Workbench(): ReactElement {
     0
   )
   const threadChildrenState = useThreadChildren({
-    activeThreadId,
-    activeRuntimeId: activeThread?.runtimeId,
+    activeThreadId: focusedThreadId,
+    activeRuntimeId: focusedRuntimeId,
     childRefreshKey,
     runtimeReady: runtimeConnection === 'ready',
-    busy
+    busy: focusedAgentSurface?.busy ?? busy
   })
   const visibleThreadChildren = useMemo(
     () => filterDirectChildAgents(
       threadChildrenState.children,
-      activeThreadId,
-      activeThread?.runtimeId
+      focusedThreadId,
+      focusedRuntimeId
     ),
-    [activeThread?.runtimeId, activeThreadId, threadChildrenState.children]
+    [focusedRuntimeId, focusedThreadId, threadChildrenState.children]
   )
   const childAgentCount = visibleThreadChildren.length
   const childAgentRunningCount = visibleThreadChildren.reduce(
     (count, child) => count + (child.status === 'running' || child.status === 'queued' ? 1 : 0),
     0
+  )
+  const focusNavigationLineage = useMemo(
+    () => agentFocusLineage.map((node) => {
+      const side = sideConversations[node.threadId]
+      return {
+        threadId: node.threadId,
+        label: node.title?.trim() || side?.title || node.threadId,
+        ...(side
+          ? { status: side.error ? 'failed' as const : side.busy ? 'running' as const : 'completed' as const }
+          : {})
+      }
+    }),
+    [agentFocusLineage, sideConversations]
   )
   const {
     beginLeftResize,
@@ -1122,6 +1066,88 @@ export function Workbench(): ReactElement {
     route,
     workspaceRoot
   })
+  const [childPanelFocusRequest, setChildPanelFocusRequest] = useState<{
+    childId: string | null
+    key: number
+  }>({ childId: null, key: 0 })
+
+  const openChildInFocus = useCallback(async (child: AgentRuntimeChild): Promise<boolean> => {
+    const threadId = child.openAsThreadRef?.threadId?.trim()
+    if (!threadId) return false
+    const parentThreadId = child.parentThreadId?.trim() || focusedThreadId || activeThreadId
+    if (!parentThreadId) return false
+    if (!useChatStore.getState().sideConversations[threadId]) {
+      await attachSideConversation({
+        threadId,
+        parentThreadId,
+        runtimeId: child.openAsThreadRef?.runtimeId ?? child.runtimeId,
+        title: child.name?.trim() || child.label?.trim() || child.id,
+        model: focusedAgentSurface?.model || activeThread?.model || composerModel,
+        source: 'child_agent'
+      })
+    }
+    return focusAgentThread({
+      threadId,
+      parentThreadId,
+      runtimeId: child.openAsThreadRef?.runtimeId ?? child.runtimeId,
+      title: child.name?.trim() || child.label?.trim() || child.id
+    })
+  }, [
+    activeThread?.model,
+    activeThreadId,
+    attachSideConversation,
+    composerModel,
+    focusAgentThread,
+    focusedAgentSurface?.model,
+    focusedThreadId
+  ])
+
+  const openPrimaryChildAttention = useCallback(async (): Promise<void> => {
+    const target = childAgentAttention.summary.primaryTarget
+    if (!target) {
+      setRightPanelMode('child-agents')
+      return
+    }
+    const lineage = target.path.map((node, index) => ({
+      threadId: node.threadId,
+      parentThreadId: index > 0 ? target.path[index - 1]?.threadId ?? null : null,
+      ...(index === target.path.length - 1 ? { runtimeId: target.runtimeId } : {}),
+      title: node.label
+    }))
+    if (target.threadId) {
+      if (!useChatStore.getState().sideConversations[target.threadId]) {
+        await attachSideConversation({
+          threadId: target.threadId,
+          parentThreadId: target.parentThreadId,
+          runtimeId: target.runtimeId,
+          title: target.label,
+          model: activeThread?.model || composerModel,
+          source: 'child_agent'
+        })
+      }
+      focusAgentThread({
+        threadId: target.threadId,
+        parentThreadId: target.parentThreadId,
+        runtimeId: target.runtimeId,
+        title: target.label,
+        lineage
+      })
+    } else {
+      const parent = target.path[target.path.length - 1]
+      if (parent) {
+        focusAgentThread({ threadId: parent.threadId, title: parent.label, lineage })
+      }
+    }
+    setChildPanelFocusRequest({ childId: target.threadId ? null : target.childId, key: Date.now() })
+    setRightPanelMode('child-agents')
+  }, [
+    activeThread?.model,
+    attachSideConversation,
+    childAgentAttention.summary.primaryTarget,
+    composerModel,
+    focusAgentThread,
+    setRightPanelMode
+  ])
   const [projectDagReturnTarget, setProjectDagReturnTarget] = useState<{
     claimId?: string
     nodeId?: string
@@ -1136,12 +1162,10 @@ export function Workbench(): ReactElement {
     )
   }, [activeThreadId])
   const [fileTreeInitialDirectory, setFileTreeInitialDirectory] = useState<FileTreeInitialDirectory | null>(null)
-  const [figureStylePanelRequest, setFigureStylePanelRequest] = useState<{
-    page: FigureStylePanelPage
+  const [visualReviewRequest, setVisualReviewRequest] = useState<{
+    documentId: string
     refreshKey: number
-    canvasId?: string
     workspaceRoot?: string
-    focusShapeId?: string
   } | null>(null)
   const {
     activeGuiPlan,
@@ -1169,25 +1193,7 @@ export function Workbench(): ReactElement {
       await useChatStore.getState().refreshThreads()
     }
   })
-  const activeSciforgeCanvasId = activeThreadId ? `thread-${activeThreadId}` : undefined
-  const lastCanvasInsertRefreshRef = useRef('')
-
-  useEffect(() => {
-    const request = latestCanvasInsertRequestFromBlocks(timelineBlocks)
-    if (!request) return
-    const key = `${activeThreadId ?? ''}:${request.key}`
-    if (lastCanvasInsertRefreshRef.current === key) return
-    lastCanvasInsertRefreshRef.current = key
-    setFigureStylePanelRequest({
-      page: 'canvas',
-      refreshKey: Date.now(),
-      canvasId: request.canvasId,
-      workspaceRoot: request.workspaceRoot || activeThread?.workspace || workspaceRoot,
-      focusShapeId: request.focusShapeId
-    })
-    setRightSidebarWidth((width) => Math.max(width, 560))
-    setRightPanelMode('figure-style')
-  }, [activeThread?.workspace, activeThreadId, setRightPanelMode, setRightSidebarWidth, timelineBlocks, workspaceRoot])
+  const activeVisualDocumentId = activeThreadId ? `visual-${activeThreadId}` : 'visual-default'
 
   useEffect(() => {
     setVisibleContextShell({
@@ -2196,13 +2202,10 @@ export function Workbench(): ReactElement {
       !activeSddDraft &&
       !activeThreadIsRemoteChannel
     const prepareChatMessage = async (): Promise<{ text: string; displayText?: string } | null> => {
-      const userVisibleText = isImageGenerationIntent
-        ? buildImageGenerationDisplayText(v || emptyDisplayText || messageText)
-        : v || emptyDisplayText
+      const userVisibleText = v || emptyDisplayText
       const runtimeMessageText = isImageGenerationIntent
         ? buildImageGenerationWorkflowPrompt(messageText, {
             workspaceRoot: normalizeWorkspaceRoot(activeThread?.workspace || workspaceRoot) || undefined,
-            ...(activeSciforgeCanvasId ? { canvasId: activeSciforgeCanvasId } : {}),
             ...(activeThreadId ? { threadId: activeThreadId } : {})
           })
         : messageText
@@ -2397,10 +2400,10 @@ export function Workbench(): ReactElement {
     })
   }
 
-  const sendCanvasReviewRequest = async (text: string): Promise<void> => {
+  const sendVisualReviewRequest = async (text: string): Promise<void> => {
     const trimmed = text.trim()
     if (!trimmed) return
-    const displayText = '请根据我在画布上的标注生成修改版。'
+    const displayText = '请根据图片批注生成候选修改版，完成后让我对比确认。'
     setRoute('chat')
     setMode('agent')
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
@@ -2411,84 +2414,49 @@ export function Workbench(): ReactElement {
     if (!sent) setInput(displayText)
   }
 
-  const openImageArtifactInCanvas = async (artifact: TimelineImageCanvasArtifact): Promise<void> => {
+  const openImageArtifactInVisualReview = async (artifact: TimelineVisualReviewArtifact): Promise<void> => {
     const root = artifact.workspaceRoot || activeThread?.workspace || workspaceRoot
-    const canvasId = artifact.canvasId || activeSciforgeCanvasId
-    const sourcePath = artifact.outputPath || artifact.sourcePath || artifact.previewPath || artifact.renderedPagePath || artifact.svgPath || artifact.pptxPath
-    if (!root?.trim() || !canvasId || !sourcePath?.trim()) {
-      setError(t('canvasArtifactReviewUnavailable'))
+    const sourcePath = [
+      artifact.outputPath,
+      artifact.sourcePath,
+      artifact.previewPath,
+      artifact.renderedPagePath,
+      artifact.svgPath
+    ].find((path) => path?.trim() && /\.(?:png|jpe?g|webp|svg)(?:[?#].*)?$/i.test(path))
+    if (!root?.trim() || !sourcePath?.trim()) {
+      setError(t('visualReviewArtifactUnavailable'))
       return
     }
 
+    const contextId = artifact.threadId || activeThreadId || 'default'
+    const documentId = artifact.visualDocumentId || visualDocumentIdForArtifact(contextId, sourcePath)
     try {
-      const opened = await window.sciforge.openSciforgeCanvas({ workspaceRoot: root, canvasId })
-      if (!opened.ok) {
-        setError(opened.message)
-        return
-      }
-      const candidates = [
-        artifact.outputPath,
-        artifact.sourcePath,
-        artifact.previewPath,
-        artifact.renderedPagePath,
-        artifact.manifestPath,
-        artifact.artifactManifestPath,
-        artifact.svgPath,
-        artifact.pptxPath
-      ]
-        .filter((value): value is string => Boolean(value?.trim()))
-      let focusShapeId: string | undefined
-      if (!snapshotContainsCanvasArtifact(opened.snapshot, candidates, {
-        requireDisplayPreview: artifact.artifactKind === 'ppt_export'
-      })) {
-        const outputPath = artifact.artifactKind === 'ppt_export' && !isCanvasDisplayImagePath(artifact.outputPath)
-          ? undefined
-          : artifact.outputPath
-        const sourceDisplayPath = artifact.artifactKind === 'ppt_export' && !isCanvasDisplayImagePath(artifact.sourcePath)
-          ? undefined
-          : artifact.sourcePath
-        const pptxPath = artifact.pptxPath ||
-          (artifact.artifactKind === 'ppt_export'
-            ? [artifact.outputPath, artifact.sourcePath, sourcePath].find(isPptxPath)
-            : undefined)
-        const result = await window.sciforge.insertSciforgeCanvasArtifact({
+      const opened = await window.sciforge.openVisualDocument({ workspaceRoot: root, documentId })
+      if (!opened.document.artifact) {
+        const kind = artifact.artifactKind === 'scientific_plot'
+          ? 'scientific_plot'
+          : artifact.artifactKind === 'generated_image'
+            ? 'generated_image'
+            : artifact.artifactKind === 'edited_image'
+              ? 'edited_image'
+              : artifact.artifactKind === 'ppt_slide' || artifact.artifactKind === 'ppt_export'
+                ? 'presentation_slide'
+                : 'image'
+        await window.sciforge.insertVisualDocumentArtifact({
           workspaceRoot: root,
-          canvasId,
-          artifactKind: artifact.artifactKind,
-          ...(outputPath ? { outputPath } : {}),
-          ...(artifact.artifactKind !== 'ppt_export' && !outputPath ? { outputPath: sourcePath } : {}),
-          ...(sourceDisplayPath ? { sourcePath: sourceDisplayPath } : {}),
-          ...(artifact.previewPath ? { previewPath: artifact.previewPath } : {}),
-          ...(artifact.renderedPagePath ? { renderedPagePath: artifact.renderedPagePath } : {}),
-          ...(artifact.artifactManifestPath || artifact.manifestPath ? { manifestPath: artifact.artifactManifestPath || artifact.manifestPath } : {}),
-          ...(artifact.diagramSpecPath ? { diagramSpecPath: artifact.diagramSpecPath } : {}),
-          ...(artifact.frameworkDesignPlanPath ? { frameworkDesignPlanPath: artifact.frameworkDesignPlanPath } : {}),
-          ...(artifact.diagramLayerManifestPath ? { diagramLayerManifestPath: artifact.diagramLayerManifestPath } : {}),
-          ...(artifact.fastSamSegmentationPath ? { fastSamSegmentationPath: artifact.fastSamSegmentationPath } : {}),
-          ...(artifact.fastSamBoxlibPath ? { fastSamBoxlibPath: artifact.fastSamBoxlibPath } : {}),
-          ...(artifact.fastSamPreviewPath ? { fastSamPreviewPath: artifact.fastSamPreviewPath } : {}),
-          ...(artifact.frameworkComponentManifestPath ? { frameworkComponentManifestPath: artifact.frameworkComponentManifestPath } : {}),
-          ...(artifact.componentBasePath ? { componentBasePath: artifact.componentBasePath } : {}),
-          ...(artifact.componentAssetPaths?.length ? { componentAssetPaths: artifact.componentAssetPaths } : {}),
-          ...(artifact.projectPath ? { projectPath: artifact.projectPath } : {}),
-          ...(artifact.svgPath ? { svgPath: artifact.svgPath } : {}),
-          ...(pptxPath ? { pptxPath } : {}),
-          ...(artifact.slideIndex !== undefined ? { slideIndex: artifact.slideIndex } : {}),
+          documentId,
+          kind,
+          sourcePath,
+          ...(artifact.artifactManifestPath || artifact.manifestPath
+            ? { manifestPath: artifact.artifactManifestPath || artifact.manifestPath }
+            : {}),
           ...(artifact.title ? { title: artifact.title } : {}),
-          ...(artifact.caption ? { caption: artifact.caption } : {}),
-          sourceTool: artifact.sourceTool || (artifact.artifactKind === 'ppt_export' || artifact.artifactKind === 'ppt_slide' ? 'ppt_master' : 'image_generation'),
-          placement: 'below',
-          margin: 56
+          ...(artifact.caption ? { caption: artifact.caption } : {})
         })
-        if (!result.ok) {
-          setError(result.message)
-          return
-        }
-        focusShapeId = result.shapeId
       }
-      setFigureStylePanelRequest({ page: 'canvas', refreshKey: Date.now(), canvasId, workspaceRoot: root, focusShapeId })
-      setRightSidebarWidth((width) => Math.max(width, 560))
-      setRightPanelMode('figure-style')
+      setVisualReviewRequest({ documentId, refreshKey: Date.now(), workspaceRoot: root })
+      setRightSidebarWidth((width) => Math.max(width, 760))
+      setRightPanelMode('visual-review')
     } catch (error) {
       setError(error instanceof Error ? error.message : String(error))
     }
@@ -2717,8 +2685,9 @@ export function Workbench(): ReactElement {
                 composerReasoningEffort={assistantReasoningEffort}
                 setComposerModel={setAssistantModel}
                 setComposerReasoningEffort={setAssistantReasoningEffort}
-                queuedMessages={queuedMessages}
+                queuedMessages={activeQueuedMessages}
                 removeQueuedMessage={removeQueuedMessage}
+                updateQueuedMessage={updateQueuedMessage}
                 steerQueuedMessage={steerQueuedMessage}
                 fileReferenceEnabled={Boolean(normalizeWorkspaceRoot(activeSddDraft.workspaceRoot))}
                 fileReferences={composerFileReferences}
@@ -2745,11 +2714,14 @@ export function Workbench(): ReactElement {
               />
             ) : rightPanelMode === 'child-agents' ? (
               <ChildAgentsPanel
-                activeThreadId={activeThreadId}
-                activeThread={activeThread}
+                activeThreadId={focusedThreadId}
+                activeThread={focusedPanelThread}
                 children={visibleThreadChildren}
                 loading={threadChildrenState.loading}
                 error={threadChildrenState.error}
+                focusChildId={childPanelFocusRequest.childId}
+                focusChildRequestKey={childPanelFocusRequest.key}
+                onOpenChildInFocus={(child) => { void openChildInFocus(child) }}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
               />
@@ -2807,18 +2779,23 @@ export function Workbench(): ReactElement {
                 onCollapse={closeRightPanel}
                 onRestored={() => useChatStore.getState().refreshThreads()}
               />
-            ) : rightPanelMode === 'figure-style' ? (
-              <FigureStylePanel
-                workspaceRoot={figureStylePanelRequest?.workspaceRoot || activeThread?.workspace || workspaceRoot}
-                canvasId={figureStylePanelRequest?.canvasId || activeSciforgeCanvasId}
+            ) : rightPanelMode === 'visual-review' ? (
+              <VisualReviewPanel
+                workspaceRoot={visualReviewRequest?.workspaceRoot || activeThread?.workspace || workspaceRoot}
+                documentId={visualReviewRequest?.documentId || activeVisualDocumentId}
                 className="h-full max-h-full w-full"
                 onCollapse={closeRightPanel}
-                onCanvasReviewRequest={(text) => {
-                  void sendCanvasReviewRequest(text)
+                onSendReviewRequest={(text) => {
+                  void sendVisualReviewRequest(text)
                 }}
-                preferredPage={figureStylePanelRequest?.page}
-                canvasRefreshKey={figureStylePanelRequest?.refreshKey}
-                canvasFocusShapeId={figureStylePanelRequest?.focusShapeId}
+                refreshKey={visualReviewRequest?.refreshKey}
+                onAccepted={() => {
+                  void sendMessage(
+                    '我已在人类审改页面接受候选图片。请重新编译所有引用该图片的文档，并检查最终输出中的裁切、重叠、标签可读性和引用是否正确。',
+                    'agent',
+                    { displayText: '已接受图片，请重新编译并检查最终文档。' }
+                  )
+                }}
               />
             ) : rightPanelMode === 'plan' ? (
               <PlanPanel
@@ -2976,7 +2953,7 @@ export function Workbench(): ReactElement {
                 </div>
                 <div className="chat-topbar-actions flex min-w-0 flex-wrap items-center justify-end gap-2 self-start">
                   {!remoteGuardChannel ? <ThreadTargetSelector /> : null}
-                  {busy ? (
+                  {(focusedAgentSurface?.busy ?? busy) ? (
                     <span className="inline-flex shrink-0 rounded-full bg-amber-500/16 px-2.5 py-1 text-[11.5px] font-semibold text-amber-950 dark:text-amber-100">
                       {t('running')}
                     </span>
@@ -2993,7 +2970,14 @@ export function Workbench(): ReactElement {
                     sideChatRunningCount={currentSideRunningCount}
                     sideChatOpen={sidePanel.open}
                     childAgentCount={childAgentCount}
-                    childAgentRunningCount={childAgentRunningCount}
+                    childAgentRunningCount={Math.max(
+                      childAgentRunningCount,
+                      childAgentAttention.summary.counts.running
+                    )}
+                    childAgentAttentionCount={
+                      childAgentAttention.summary.counts.waitingUserInput +
+                      childAgentAttention.summary.counts.waitingApproval
+                    }
                     childAgentsOpen={rightPanelMode === 'child-agents'}
                     sideChatEnabled={Boolean(activeThreadId) && sideConversationsSupported}
                     onOpenChildAgents={() => toggleTopBarRightPanelMode('child-agents')}
@@ -3004,6 +2988,51 @@ export function Workbench(): ReactElement {
                 </div>
               </div>
             </header>
+            {!remoteGuardChannel && (focusNavigationLineage.length > 1 || agentFocusHistory.length > 1) ? (
+              <AgentFocusNavigation
+                lineage={focusNavigationLineage}
+                canGoBack={agentFocusHistoryIndex > 0}
+                canGoForward={
+                  agentFocusHistoryIndex >= 0 &&
+                  agentFocusHistoryIndex < agentFocusHistory.length - 1
+                }
+                onBack={() => { focusAgentBack() }}
+                onForward={() => { focusAgentForward() }}
+                onUp={() => { focusAgentParent() }}
+                onNavigateTo={(threadId, index) => {
+                  const node = agentFocusLineage[index]
+                  focusAgentThread({
+                    threadId,
+                    parentThreadId: node?.parentThreadId,
+                    runtimeId: node?.runtimeId,
+                    title: node?.title,
+                    lineage: agentFocusLineage.slice(0, index + 1)
+                  })
+                }}
+              />
+            ) : null}
+            {!remoteGuardChannel && (
+              childAgentAttention.summary.counts.waitingUserInput +
+              childAgentAttention.summary.counts.waitingApproval
+            ) > 0 ? (
+              <button
+                type="button"
+                onClick={() => { void openPrimaryChildAttention() }}
+                className="ds-no-drag mx-3 mt-1 flex shrink-0 items-center gap-2 rounded-lg border border-amber-400/30 bg-amber-500/10 px-3 py-2 text-left text-[12px] font-medium text-amber-950 transition hover:bg-amber-500/15 dark:text-amber-100"
+              >
+                <CircleAlert className="h-4 w-4 shrink-0" strokeWidth={2} aria-hidden="true" />
+                <span className="min-w-0 flex-1 truncate">
+                  {t('sidebarChildrenNeedsAttention', {
+                    count:
+                      childAgentAttention.summary.counts.waitingUserInput +
+                      childAgentAttention.summary.counts.waitingApproval
+                  })}
+                </span>
+                <span className="shrink-0 text-[11px] font-semibold underline-offset-2 hover:underline">
+                  {t('sidebarChildrenLocateAttention')}
+                </span>
+              </button>
+            ) : null}
             {remoteGuardChannel ? (
               <RemoteGuardDetailView
                 channel={remoteGuardChannel}
@@ -3013,6 +3042,18 @@ export function Workbench(): ReactElement {
               />
             ) : (
               <>
+                <FocusedAgentWorkbench
+                  child={focusedChild}
+                  side={focusedSide}
+                  workspaceRoot={activeSkillWorkspace || workspaceRoot}
+                  runtimeConnection={runtimeConnection}
+                  composerPickList={composerPickList}
+                  composerModelGroups={composerModelGroups}
+                  activeAgentRuntime={focusedRuntimeId ?? activeAgentRuntime}
+                  runtimeCapabilities={runtimeCapabilities}
+                />
+                {!focusedChild ? (
+                  <>
                 <MessageTimeline
                   blocks={timelineBlocks}
                   liveReasoning={timelineLiveReasoning}
@@ -3027,7 +3068,7 @@ export function Workbench(): ReactElement {
                   planActionsBusy={busy}
                   onBuildPlan={() => void buildGuiPlan()}
                   onOpenPlan={openGuiPlanPanel}
-                  onOpenImageArtifactInCanvas={openImageArtifactInCanvas}
+                  onOpenImageArtifactInVisualReview={openImageArtifactInVisualReview}
                   devPreviewCard={
                     showDevPreviewCard ? (
                       <DevPreviewLaunchCard
@@ -3092,8 +3133,9 @@ export function Workbench(): ReactElement {
                     onPreviewFileReference={previewComposerFileReference}
                     onRemoveFileReference={removeComposerFileReference}
                     onRemoveCommentReference={removeComposerCommentReference}
-                    queuedMessages={queuedMessages}
+                    queuedMessages={activeQueuedMessages}
                     onRemoveQueuedMessage={removeQueuedMessage}
+                    onEditQueuedMessage={(id, text) => void updateQueuedMessage(id, text)}
                     onSteerQueuedMessage={(id) => void steerQueuedMessage(id)}
                     onInterrupt={(options) => void interrupt(options)}
                     onPlanCommand={() => void handleGuiPlanCommand()}
@@ -3110,6 +3152,8 @@ export function Workbench(): ReactElement {
                     }}
                   />
                 </div>
+                  </>
+                ) : null}
                 {terminalOpen ? (
                   <div className="ds-no-drag flex w-full shrink-0 flex-col px-0 pb-0">
                     <div

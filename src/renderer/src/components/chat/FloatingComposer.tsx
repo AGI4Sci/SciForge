@@ -147,6 +147,7 @@ type Props = {
   modelPickerMode?: 'select' | 'combobox'
   queuedMessages: QueuedComposerMessage[]
   onRemoveQueuedMessage: (id: string) => void
+  onEditQueuedMessage?: (id: string, text: string) => void
   onSteerQueuedMessage?: (id: string) => void
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean
@@ -672,6 +673,7 @@ export function FloatingComposer({
   modelPickerMode = 'select',
   queuedMessages,
   onRemoveQueuedMessage,
+  onEditQueuedMessage,
   onSteerQueuedMessage,
   attachments = EMPTY_ATTACHMENTS,
   attachmentUploadEnabled = false,
@@ -1755,6 +1757,7 @@ export function FloatingComposer({
       <FloatingComposerQueuedMessages
         messages={queuedMessages}
         onRemove={onRemoveQueuedMessage}
+        onEdit={onEditQueuedMessage}
         onSteer={onSteerQueuedMessage}
       />
 

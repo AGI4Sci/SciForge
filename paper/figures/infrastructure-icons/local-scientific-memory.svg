@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Local Scientific Memory</title>
+  <desc id="desc">Persistent local memory for scientific artifacts, semantic indexes, traces, and recoverable project state.</desc>
+  <defs>
+    <linearGradient id="soft" x1="48" y1="37" x2="208" y2="221" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="index" x1="92" y1="77" x2="168" y2="155" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <filter id="shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#23313A" flood-opacity="0.10"/>
+    </filter>
+  </defs>
+  <path d="M50 62c0-18 35-32 78-32s78 14 78 32v124c0 20-35 36-78 36s-78-16-78-36V62Z" fill="url(#soft)" stroke="#23313A" stroke-width="8"/>
+  <ellipse cx="128" cy="62" rx="78" ry="32" fill="#FFFFFF" stroke="#23313A" stroke-width="8"/>
+  <path d="M50 103c0 18 35 32 78 32s78-14 78-32M50 145c0 18 35 32 78 32s78-14 78-32" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="128" cy="121" r="35" fill="url(#index)" stroke="#23313A" stroke-width="7" filter="url(#shadow)"/>
+  <circle cx="128" cy="121" r="13" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <path d="M128 86v22M128 134v22M93 121h22M141 121h22M104 97l15 15M137 130l15 15M152 97l-15 15M119 130l-15 15" fill="none" stroke="#FFFFFF" stroke-width="6" stroke-linecap="round"/>
+  <path d="M79 187h34M143 187h34" fill="none" stroke="#23313A" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="68" cy="187" r="7" fill="#F4B942" stroke="#23313A" stroke-width="5"/>
+  <circle cx="128" cy="187" r="7" fill="#18A999" stroke="#23313A" stroke-width="5"/>
+  <circle cx="188" cy="187" r="7" fill="#EF6F6C" stroke="#23313A" stroke-width="5"/>
+</svg>

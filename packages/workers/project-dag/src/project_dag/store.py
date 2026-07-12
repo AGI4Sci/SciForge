@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
 import time
 import uuid
 from typing import Any, Iterable, Optional
@@ -365,6 +366,10 @@ class Store:
         if parent:
             os.makedirs(parent, exist_ok=True)
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
+        # One connection is shared by the HTTP worker threads.  Long-running
+        # model preparation must happen outside this lock; only short SQLite
+        # snapshots/transactions are serialized through it.
+        self.transaction_lock = threading.RLock()
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")

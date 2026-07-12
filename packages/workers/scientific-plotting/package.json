@@ -20,8 +20,9 @@
     ".": "./src/index.ts",
     "./contract": "./src/contract.ts",
     "./mcp-server": "./src/mcp-server.ts",
-    "./figure-style-extractor": "./src/figure-style-extractor.ts",
+    "./visual-style-extractor": "./src/visual-style-extractor.ts",
     "./scientific-plotting-engine": "./src/scientific-plotting-engine.ts",
+    "./scientific-visual-planner": "./src/scientific-visual-planner.ts",
     "./scientific-skills-index": "./src/scientific-skills-index.ts",
     "./scientific-skills-installer": "./src/scientific-skills-installer.ts",
     "./service": "./src/service.ts"

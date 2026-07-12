@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Scientific Connectors</title>
+  <desc id="desc">Domain adapters that connect SciForge to scientific files, databases, APIs, instruments, and software ecosystems.</desc>
+  <defs>
+    <linearGradient id="hub" x1="87" y1="82" x2="170" y2="169" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#7C5CFF"/>
+    </linearGradient>
+    <linearGradient id="soft" x1="43" y1="40" x2="214" y2="219" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+  </defs>
+  <circle cx="128" cy="128" r="43" fill="url(#hub)" stroke="#23313A" stroke-width="8"/>
+  <path d="M128 85v-31M128 171v31M85 128H54M171 128h31M98 98L76 76M158 98l22-22M98 158l-22 22M158 158l22 22" fill="none" stroke="#23313A" stroke-width="7" stroke-linecap="round"/>
+  <circle cx="128" cy="128" r="14" fill="#FFFFFF" stroke="#23313A" stroke-width="6"/>
+  <rect x="98" y="23" width="60" height="41" rx="10" fill="url(#soft)" stroke="#23313A" stroke-width="7"/>
+  <path d="M113 43h30" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <path d="M56 48h33l12 12v45H56V48Z" fill="#FFFFFF" stroke="#23313A" stroke-width="7" stroke-linejoin="round"/>
+  <path d="M89 48v12h12M68 75h22M68 91h17" fill="none" stroke="#667985" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="205" cy="66" r="24" fill="#FFF7E6" stroke="#23313A" stroke-width="7"/>
+  <path d="M194 66h22M205 55v22" fill="none" stroke="#F4B942" stroke-width="7" stroke-linecap="round"/>
+  <rect x="23" y="104" width="44" height="48" rx="10" fill="#F8FBFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M35 120h20M35 135h20" fill="none" stroke="#18A999" stroke-width="5" stroke-linecap="round"/>
+  <rect x="189" y="104" width="44" height="48" rx="10" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M201 137c7-20 16-20 23 0M204 126h16" fill="none" stroke="#7C5CFF" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M98 192h60v22c0 10-13 18-30 18s-30-8-30-18v-22Z" fill="#FFFFFF" stroke="#23313A" stroke-width="7" stroke-linejoin="round"/>
+  <ellipse cx="128" cy="192" rx="30" ry="12" fill="#E7F0F7" stroke="#23313A" stroke-width="7"/>
+  <circle cx="56" cy="200" r="24" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M45 205c8-27 14-27 22 0M50 192h12" fill="none" stroke="#18A999" stroke-width="5" stroke-linecap="round"/>
+  <circle cx="200" cy="200" r="24" fill="#F8FBFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M190 200h20M200 190v20" fill="none" stroke="#3B82F6" stroke-width="6" stroke-linecap="round"/>
+</svg>

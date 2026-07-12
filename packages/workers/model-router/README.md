@@ -33,6 +33,14 @@ export SCIFORGE_SCIMODALITY_SERVICE_TOKEN=...
 Do not configure app runtimes to call these workers or provider APIs directly. If a translator
 worker is unset, Model Router degrades or falls back according to its own routing policy.
 
+Scientific routing distinguishes **protected** files from **translatable** files. Protected
+scientific formats are never inlined into the text reasoner. Only FASTA protein sequences,
+PDB/mmCIF structures, and SMILES files are sent to the managed scientific
+translator with an explicit modality. Other protected formats such as VCF, BED, GFF, and MGF
+return `scientific_modality_unsupported` without sending raw contents to either upstream service.
+Ambiguous `.fasta` and `.fa` uploads are classified locally and conservatively: only a clearly
+protein sequence is translated, while DNA/RNA or nucleotide-ambiguous content fails closed.
+
 `SCIFORGE_MODEL_ROUTER_CONFIG=/path/to/router.config.json` can provide the same `ModelRouterConfig` shape exported by `src/router.ts`. Relative profile `traceRoot` values resolve under `SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT` or the platform state-data default, never under the workspace. Public UI and audits should show only the router alias/profile/role readiness; provider URLs, API keys, and raw model slugs remain private router configuration.
 
 ## Trace Audit

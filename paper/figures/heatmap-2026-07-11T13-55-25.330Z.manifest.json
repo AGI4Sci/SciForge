@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "renderer": "sciforge-scientific-plotting-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "scientific_plotting_render",
+  "template": "heatmap",
+  "referenceProfile": {
+    "kind": "matrix",
+    "recommendedTemplate": "heatmap",
+    "confidence": 0.46,
+    "detectedTraits": {
+      "aspect": "wide",
+      "background": "light",
+      "axes": "measured",
+      "grid": "none",
+      "markDensity": "balanced",
+      "colorMode": "limited",
+      "panelGrid": "1x1",
+      "textSignals": [
+        "heatmap"
+      ]
+    },
+    "reasons": [
+      "Text hint suggests heatmap."
+    ],
+    "risks": [
+      "No external reference image or StyleSpec was provided; profile is based on the default SciForge style."
+    ]
+  },
+  "templateAdvice": {
+    "selectedTemplate": "heatmap",
+    "referenceRecommendedTemplate": "heatmap",
+    "compatible": true,
+    "severity": "info",
+    "messages": [],
+    "nextActions": [
+      "Proceed with controlled rendering and visual review."
+    ]
+  },
+  "createdAt": "2026-07-11T13:55:33.751Z",
+  "requestHash": "97d87298f0256bd4146d9fb443374dc6c86648f72ca6ed1310beb2a1263e46ae",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/heatmap-2026-07-11T13-55-25.330Z.png",
+  "attempts": [
+    {
+      "attempt": 1,
+      "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/heatmap-2026-07-11T13-55-25.330Z.png",
+      "repaired": false,
+      "rendererDiagnostics": {
+        "fontFallback": {
+          "cjk": null
+        },
+        "categoryLabelRotation": 36,
+        "savefigPadInches": 0.035,
+        "typography": {
+          "titleSize": 6.9,
+          "labelSize": 7.2,
+          "tickSize": 6.2,
+          "legendSize": 6.2,
+          "panelSize": 7.8,
+          "publicationClampApplied": true
+        },
+        "layoutQuality": {
+          "legendItemCount": 0,
+          "legendColumnCount": 0,
+          "legendOutsidePlot": false,
+          "legendOverlapRisk": "none",
+          "textOverflowRisk": "medium",
+          "panelLabelAdjusted": false,
+          "warnings": [
+            "Title is long enough to require wrapping or a shorter caption-style title."
+          ]
+        },
+        "layoutNotes": [
+          "Clamped typography to conservative publication-size ranges."
+        ]
+      },
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Modular Capability System</title>
+  <desc id="desc">Extensible Skills, MCP servers, and Plugins that package reusable scientific capabilities.</desc>
+  <defs>
+    <linearGradient id="tealblue" x1="45" y1="47" x2="183" y2="183" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+    <linearGradient id="goldteal" x1="98" y1="104" x2="215" y2="214" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F4B942"/>
+      <stop offset="1" stop-color="#18A999"/>
+    </linearGradient>
+  </defs>
+  <path d="M56 42h53c9 0 16 7 16 16v19c0 6 5 11 11 11s11-5 11-11V58c0-9 7-16 16-16h37c9 0 16 7 16 16v52c0 9-7 16-16 16h-19c-6 0-11 5-11 11s5 11 11 11h19c9 0 16 7 16 16v36c0 9-7 16-16 16h-52c-9 0-16-7-16-16v-19c0-6-5-11-11-11s-11 5-11 11v19c0 9-7 16-16 16H56c-9 0-16-7-16-16v-52c0-9 7-16 16-16h19c6 0 11-5 11-11s-5-11-11-11H56c-9 0-16-7-16-16V58c0-9 7-16 16-16Z" fill="#FFFFFF" stroke="#23313A" stroke-width="8" stroke-linejoin="round"/>
+  <path d="M56 42h53c9 0 16 7 16 16v19c0 6 5 11 11 11s11-5 11-11V58c0-9 7-16 16-16h37c9 0 16 7 16 16v52c0 9-7 16-16 16h-19c-6 0-11 5-11 11s5 11 11 11h19c9 0 16 7 16 16v36c0 9-7 16-16 16h-52c-9 0-16-7-16-16v-19c0-6-5-11-11-11s-11 5-11 11v19c0 9-7 16-16 16H56c-9 0-16-7-16-16v-52c0-9 7-16 16-16h19c6 0 11-5 11-11s-5-11-11-11H56c-9 0-16-7-16-16V58c0-9 7-16 16-16Z" fill="url(#tealblue)" opacity="0.18"/>
+  <rect x="68" y="66" width="48" height="38" rx="10" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <rect x="146" y="66" width="48" height="38" rx="10" fill="#FFF7E6" stroke="#23313A" stroke-width="7"/>
+  <rect x="68" y="152" width="48" height="38" rx="10" fill="#F8FBFF" stroke="#23313A" stroke-width="7"/>
+  <rect x="146" y="152" width="48" height="38" rx="10" fill="url(#goldteal)" stroke="#23313A" stroke-width="7"/>
+  <path d="M92 104v48M116 85h30M170 104v48M116 171h30" fill="none" stroke="#23313A" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="92" cy="85" r="8" fill="#18A999"/>
+  <circle cx="170" cy="85" r="8" fill="#3B82F6"/>
+  <circle cx="92" cy="171" r="8" fill="#7C5CFF"/>
+  <circle cx="170" cy="171" r="8" fill="#FFFFFF" stroke="#23313A" stroke-width="5"/>
+  <path d="M161 171h18M170 162v18" fill="none" stroke="#23313A" stroke-width="5" stroke-linecap="round"/>
+</svg>

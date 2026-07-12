@@ -158,38 +158,56 @@ import type {
   VisibleContextSnapshot
 } from './visible-context'
 import type {
-  FigureStyleExtractRequest,
-  FigureStyleExtractReferenceRequest,
-  FigureStyleExtractReferenceResult,
-  FigureStyleExtractResult,
-  FigureStyleReviewRequest,
-  FigureStyleReviewResult,
-  FigureStyleSaveSpecRequest,
-  FigureStyleSaveSpecResult,
-  FigureStyleSimilarityRequest,
-  FigureStyleSimilarityResult
-} from './figure-style'
+  VisualStyleExtractRequest,
+  VisualStyleExtractResult,
+  VisualStyleSaveProfileRequest,
+  VisualStyleSaveProfileResult
+} from './visual-style'
 import type {
   ScientificPlottingPrepareReferenceRequest,
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
 } from './scientific-plotting'
 import type {
-  SciforgeCanvasInsertArtifactRequest,
-  SciforgeCanvasInsertArtifactResult,
-  SciforgeCanvasImportRecentArtifactsRequest,
-  SciforgeCanvasImportRecentArtifactsResult,
-  SciforgeCanvasOpenRequest,
-  SciforgeCanvasOpenResult,
-  SciforgeCanvasReviewPacketRequest,
-  SciforgeCanvasReviewPacketResult,
-  SciforgeCanvasSaveRequest,
-  SciforgeCanvasSaveResult,
-  SciforgeCanvasSelectionSaveRequest,
-  SciforgeCanvasSplitArtifactComponentsRequest,
-  SciforgeCanvasSplitArtifactComponentsResult,
-  SciforgeCanvasStatusResult
-} from './sciforge-canvas'
+  VisualDocument,
+  VisualDocumentCreateCandidateRequest,
+  VisualDocumentCreateCandidateResult,
+  VisualDocumentExportReviewPacketRequest,
+  VisualDocumentExportReviewPacketResult,
+  VisualDocumentInsertArtifactRequest,
+  VisualDocumentInsertArtifactResult,
+  VisualDocumentOpenRequest,
+  VisualDocumentOpenResult,
+  VisualDocumentRevisionDecisionRequest,
+  VisualDocumentRevisionDecisionResult,
+  VisualDocumentSaveAnnotationsRequest,
+  VisualDocumentSaveAnnotationsResult,
+  VisualDocumentStatusResult,
+  VisualDocumentUpdateContextRequest,
+  VisualDocumentUpdateContextResult,
+  VisualReviewAnnotation,
+  VisualReviewPacket
+} from '../../packages/workers/visual-document/src/types'
+export type {
+  VisualDocument,
+  VisualDocumentCreateCandidateRequest,
+  VisualDocumentCreateCandidateResult,
+  VisualDocumentExportReviewPacketRequest,
+  VisualDocumentExportReviewPacketResult,
+  VisualDocumentInsertArtifactRequest,
+  VisualDocumentInsertArtifactResult,
+  VisualDocumentOpenRequest,
+  VisualDocumentOpenResult,
+  VisualDocumentRevisionDecisionRequest,
+  VisualDocumentRevisionDecisionResult,
+  VisualDocumentSaveAnnotationsRequest,
+  VisualDocumentSaveAnnotationsResult,
+  VisualDocumentStatusResult,
+  VisualDocumentUpdateContextRequest,
+  VisualDocumentUpdateContextResult,
+  VisualReviewAnnotation,
+  VisualReviewPacket
+}
 import type {
   ResearchCard,
   ResearchCardArchiveInput,
@@ -311,22 +329,6 @@ export type BgcDiscoveryMcpConfigResult =
 export type ImageGenerationMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
-export type SciforgeCanvasMcpConfigResult =
-  | { ok: true; config: Record<string, unknown> }
-  | { ok: false; message: string }
-export type LocalDrawioUrlResult =
-  | {
-      ok: true
-      url: string
-      assetRoot: string
-      source: 'env' | 'project' | 'resources'
-      port: number
-    }
-  | {
-      ok: false
-      message: string
-      checkedPaths: string[]
-    }
 export type PptMasterMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -496,6 +498,26 @@ export type DagUpdateProgress = {
   updatedAt?: string
   attempt?: number
 }
+export type DagProgressiveNodeStage = 'collected' | 'extracting' | 'pending_verification' | 'committed'
+export type DagProgressiveViewStatus = {
+  /** True when the desktop inferred lifecycle state from a legacy status response. */
+  inferred?: boolean
+  /** Durable graph currently eligible for provenance and audit operations. */
+  committed: {
+    nodeCount: number
+    edgeCount: number
+    snapshotDigest?: string
+  }
+  /** Ephemeral work layered over the durable graph while an update is running. */
+  staging?: {
+    overlayId?: string
+    collectedCount: number
+    extractingCount: number
+    pendingVerificationCount: number
+    temporaryEdgeCount: number
+    updatedAt?: string
+  }
+}
 export type DagPanelStatus = {
   freshness: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'paused' | 'degraded'
   pendingCount: number
@@ -512,6 +534,8 @@ export type DagPanelStatus = {
   degradedReason?: string
   nextAttemptAt?: string
   progress?: DagUpdateProgress
+  /** Optional progressive rendering metadata; older DAG services may omit it. */
+  progressiveView?: DagProgressiveViewStatus
   scope?: {
     includedSessions: string[]
     excludedSessions: string[]
@@ -529,6 +553,11 @@ export type EvidenceDagUpdateRequest = {
   operation?: 'update' | 'rebuild'
   rebuildKind?: 'schema_upgrade' | 'corruption_recovery' | 'reinterpretation'
   rebuildRationale?: string
+}
+export type EvidenceDagPriorityRequest = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  visible: boolean
 }
 export type EvidenceDagUpdateResult = {
   url: string
@@ -1030,7 +1059,6 @@ export type SciForgeApi = {
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
   buildImageGenerationMcpConfig: (workspaceRoot?: string) => Promise<ImageGenerationMcpConfigResult>
-  buildSciforgeCanvasMcpConfig: (workspaceRoot?: string) => Promise<SciforgeCanvasMcpConfigResult>
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>
   installScientificSkills: (request: ScientificSkillsInstallRequest) => Promise<ScientificSkillsInstallResult>
@@ -1038,32 +1066,31 @@ export type SciForgeApi = {
   prepareScientificPlottingReference: (
     request: ScientificPlottingPrepareReferenceRequest
   ) => Promise<ScientificPlottingPrepareReferenceResult>
-  getSciforgeCanvasStatus: (workspaceRoot?: string) => Promise<SciforgeCanvasStatusResult>
-  getLocalDrawioUrl: () => Promise<LocalDrawioUrlResult>
-  openSciforgeCanvas: (request: SciforgeCanvasOpenRequest) => Promise<SciforgeCanvasOpenResult>
-  saveSciforgeCanvas: (request: SciforgeCanvasSaveRequest) => Promise<SciforgeCanvasSaveResult>
-  saveSciforgeCanvasSelection: (
-    request: SciforgeCanvasSelectionSaveRequest
-  ) => Promise<SciforgeCanvasSaveResult>
-  insertSciforgeCanvasArtifact: (
-    request: SciforgeCanvasInsertArtifactRequest
-  ) => Promise<SciforgeCanvasInsertArtifactResult>
-  importRecentSciforgeCanvasArtifacts: (
-    request: SciforgeCanvasImportRecentArtifactsRequest
-  ) => Promise<SciforgeCanvasImportRecentArtifactsResult>
-  splitSciforgeCanvasArtifactComponents: (
-    request: SciforgeCanvasSplitArtifactComponentsRequest
-  ) => Promise<SciforgeCanvasSplitArtifactComponentsResult>
-  exportSciforgeCanvasReviewPacket: (
-    request: SciforgeCanvasReviewPacketRequest
-  ) => Promise<SciforgeCanvasReviewPacketResult>
-  extractFigureStyle: (request: FigureStyleExtractRequest) => Promise<FigureStyleExtractResult>
-  extractFigureStyleReference: (
-    request: FigureStyleExtractReferenceRequest
-  ) => Promise<FigureStyleExtractReferenceResult>
-  saveFigureStyleSpec: (request: FigureStyleSaveSpecRequest) => Promise<FigureStyleSaveSpecResult>
-  evaluateFigureStyle: (request: FigureStyleSimilarityRequest) => Promise<FigureStyleSimilarityResult>
-  reviewFigureStyle: (request: FigureStyleReviewRequest) => Promise<FigureStyleReviewResult>
+  getVisualDocumentStatus: (workspaceRoot?: string) => Promise<VisualDocumentStatusResult>
+  openVisualDocument: (request: VisualDocumentOpenRequest) => Promise<VisualDocumentOpenResult>
+  insertVisualDocumentArtifact: (
+    request: VisualDocumentInsertArtifactRequest
+  ) => Promise<VisualDocumentInsertArtifactResult>
+  updateVisualDocumentContext: (
+    request: VisualDocumentUpdateContextRequest
+  ) => Promise<VisualDocumentUpdateContextResult>
+  saveVisualDocumentAnnotations: (
+    request: VisualDocumentSaveAnnotationsRequest
+  ) => Promise<VisualDocumentSaveAnnotationsResult>
+  exportVisualReviewPacket: (
+    request: VisualDocumentExportReviewPacketRequest
+  ) => Promise<VisualDocumentExportReviewPacketResult>
+  createVisualCandidateRevision: (
+    request: VisualDocumentCreateCandidateRequest
+  ) => Promise<VisualDocumentCreateCandidateResult>
+  acceptVisualCandidateRevision: (
+    request: VisualDocumentRevisionDecisionRequest
+  ) => Promise<VisualDocumentRevisionDecisionResult>
+  rejectVisualCandidateRevision: (
+    request: VisualDocumentRevisionDecisionRequest
+  ) => Promise<VisualDocumentRevisionDecisionResult>
+  extractVisualStyleProfile: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
+  saveVisualStyleProfile: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
@@ -1263,6 +1290,7 @@ export type SciForgeApi = {
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
   getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
   updateEvidenceDag: (input: EvidenceDagUpdateRequest) => Promise<EvidenceDagUpdateResult>
+  setEvidenceDagPriority: (input: EvidenceDagPriorityRequest) => Promise<DagPanelStatus>
   resolveEvidenceDagEvidencePreview: (
     input: EvidenceDagEvidencePreviewResolveRequest
   ) => Promise<EvidenceDagEvidencePreviewResolveResult>

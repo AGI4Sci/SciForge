@@ -63,12 +63,15 @@ describe('preload agentRuntime bridge', () => {
   it('exposes Evidence DAG update IPC', async () => {
     const api = exposedApi as {
       updateEvidenceDag(payload: unknown): Promise<unknown>
+      setEvidenceDagPriority(payload: unknown): Promise<unknown>
     }
     const payload = { runtimeId: 'codex', threadId: 'thread-1' }
 
     await api.updateEvidenceDag(payload)
+    await api.setEvidenceDagPriority({ ...payload, visible: true })
 
     expect(invoke).toHaveBeenCalledWith('evidenceDag:update', payload)
+    expect(invoke).toHaveBeenCalledWith('evidenceDag:priority', { ...payload, visible: true })
   })
 
   it('exposes Project DAG panel IPC', async () => {
@@ -90,14 +93,30 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('projectDag:save-goal', goalPayload)
   })
 
-  it('exposes the local draw.io URL IPC', async () => {
-    const api = exposedApi as {
-      getLocalDrawioUrl(): Promise<unknown>
+  it('does not expose the removed draw.io runtime API', () => {
+    expect(exposedApi).not.toHaveProperty('getLocalDrawioUrl')
+  })
+
+  it('exposes the unified VisualDocument lifecycle without legacy canvas methods', async () => {
+    const api = exposedApi as Record<string, ((payload: unknown) => Promise<unknown>) | undefined>
+    const calls = [
+      ['openVisualDocument', 'visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1' }],
+      ['insertVisualDocumentArtifact', 'visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }],
+      ['updateVisualDocumentContext', 'visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }],
+      ['saveVisualDocumentAnnotations', 'visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }],
+      ['exportVisualReviewPacket', 'visual-document:export-review-packet', { workspaceRoot: '/tmp/project' }],
+      ['createVisualCandidateRevision', 'visual-document:create-candidate', { workspaceRoot: '/tmp/project', candidatePath: '/tmp/candidate.png', summary: 'Improved layout' }],
+      ['acceptVisualCandidateRevision', 'visual-document:accept-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }],
+      ['rejectVisualCandidateRevision', 'visual-document:reject-candidate', { workspaceRoot: '/tmp/project', revisionId: 'revision-1' }]
+    ] as const
+
+    for (const [method, channel, payload] of calls) {
+      await api[method]?.(payload)
+      expect(invoke).toHaveBeenCalledWith(channel, payload)
     }
+    await api.getVisualDocumentStatus?.('/tmp/project')
+    expect(invoke).toHaveBeenCalledWith('visual-document:status', { workspaceRoot: '/tmp/project' })
 
-    await api.getLocalDrawioUrl()
-
-    expect(invoke).toHaveBeenCalledWith('drawio:local-url')
   })
 
   it('exposes real file paths from picked or dropped files', () => {

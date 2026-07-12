@@ -53,7 +53,10 @@ class ProjectWorkflow:
         self.store = store
         self.reader = reader
         self.compiler = compiler
-        self._lock = threading.RLock()
+        # Only protects short queue-claim/status transitions. Compilation uses
+        # Compiler's project-key lock, so model preparation is not serialized
+        # across unrelated projects.
+        self._queue_lock = threading.RLock()
         self.recover()
 
     # ------------------------------------------------------------ persistence
@@ -210,7 +213,7 @@ class ProjectWorkflow:
             if registered is None:
                 raise ValueError(f"missing committed envelope for {entry['threadId']}")
             envelopes[entry["threadId"]] = json.loads(registered["envelope"])
-        with self._lock:
+        with self._queue_lock, self.store.transaction_lock:
             self.store.x("BEGIN IMMEDIATE")
             try:
                 for entry in vector:
@@ -293,7 +296,7 @@ class ProjectWorkflow:
 
     # --------------------------------------------------------------- worker
     def process_next(self, project_key: Optional[str] = None) -> Optional[dict]:
-        with self._lock:
+        with self._queue_lock, self.store.transaction_lock:
             t = now_iso()
             args: tuple[Any, ...] = (t,)
             where = ("status IN ('queued','failed','interrupted')"
@@ -319,43 +322,44 @@ class ProjectWorkflow:
         vector = _loads(job["desired_vector"], [])
         scope = _loads(job["captured_scope"], {})
         try:
-            result = self.compiler.compile(
-                "scheduled", scope["includedSessions"], project_key=job["project_key"],
-                evidence_vector=vector,
-            )
-            if result.get("skipped"):
-                raise RuntimeError(result.get("reason", "compiler busy"))
-            if result["stats"].get("errors"):
-                raise RuntimeError(canonical_json(result["diff"]["errors"]))
-            snapshot = self._commit_project_snapshot(
-                job["project_key"], vector, scope, result, job["autonomy_mode"])
+            with self.compiler.compile_transaction(
+                    "scheduled", scope["includedSessions"], project_key=job["project_key"],
+                    evidence_vector=vector) as result:
+                if result.get("skipped"):
+                    raise RuntimeError(result.get("reason", "compiler busy"))
+                if result["stats"].get("errors"):
+                    raise RuntimeError(canonical_json(result["diff"]["errors"]))
+                snapshot = self._commit_project_snapshot(
+                    job["project_key"], vector, scope, result, job["autonomy_mode"])
         except Exception as exc:
-            self.store.conn.rollback()
-            failed_at = now_iso()
-            self.store.x(
-                "UPDATE project_update_job SET status='failed',last_error=?,finished_at=?,updated_at=?,"
-                "next_attempt_at=? WHERE id=?",
-                (str(exc), failed_at, failed_at,
-                 _retry_at(attempt, UPDATE_RETRY_BASE_SECONDS), job["id"]),
-            )
-            self.store.conn.commit()
+            with self.store.transaction_lock:
+                self.store.conn.rollback()
+                failed_at = now_iso()
+                self.store.x(
+                    "UPDATE project_update_job SET status='failed',last_error=?,finished_at=?,updated_at=?,"
+                    "next_attempt_at=? WHERE id=?",
+                    (str(exc), failed_at, failed_at,
+                     _retry_at(attempt, UPDATE_RETRY_BASE_SECONDS), job["id"]),
+                )
+                self.store.conn.commit()
             raise
 
-        current = self.store.q1(
-            "SELECT request_version FROM project_update_job WHERE id=?", (job["id"],))
-        superseded = current is not None and int(current["request_version"]) != generation
-        status = "queued" if superseded else "done"
-        self.store.x(
-            "UPDATE project_update_job SET status=?,finished_at=?,updated_at=?,next_attempt_at=NULL"
-            " WHERE id=?",
-            (status, now_iso(), now_iso(), job["id"]),
-        )
-        self.store.conn.commit()
+        with self.store.transaction_lock:
+            current = self.store.q1(
+                "SELECT request_version FROM project_update_job WHERE id=?", (job["id"],))
+            superseded = current is not None and int(current["request_version"]) != generation
+            status = "queued" if superseded else "done"
+            self.store.x(
+                "UPDATE project_update_job SET status=?,finished_at=?,updated_at=?,next_attempt_at=NULL"
+                " WHERE id=?",
+                (status, now_iso(), now_iso(), job["id"]),
+            )
+            self.store.conn.commit()
         return {"job": self.job(job["id"]), "snapshot": snapshot, "compile": result}
 
     def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
         """Make a failed/interrupted compiler job immediately eligible again."""
-        with self._lock:
+        with self._queue_lock, self.store.transaction_lock:
             job = self.store.q1("SELECT * FROM project_update_job WHERE id=?", (job_id,))
             if job is None:
                 raise KeyError(job_id)
@@ -685,7 +689,7 @@ class ProjectWorkflow:
 
     def process_next_audit(self, project_key: Optional[str] = None) -> Optional[dict]:
         """Run one eligible P3 job; P2 workers never call this from snapshot commit."""
-        with self._lock:
+        with self._queue_lock, self.store.transaction_lock:
             t = now_iso()
             p2_args: tuple[Any, ...] = (t,)
             p2_where = (
@@ -837,7 +841,7 @@ class ProjectWorkflow:
 
     def retry_audit(self, audit_id: str, *, actor: str = "human") -> dict:
         """Bypass a failed job's backoff without creating a synchronous audit path."""
-        with self._lock:
+        with self._queue_lock, self.store.transaction_lock:
             audit = self.store.q1("SELECT * FROM audit_run WHERE id=?", (audit_id,))
             if audit is None:
                 raise KeyError(audit_id)

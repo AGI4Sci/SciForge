@@ -1,0 +1,99 @@
+\begin{thebibliography}{19}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{{#1}}
+\providecommand{\urlprefix}{URL }
+\providecommand{\doi}[1]{\url{https://doi.org/#1}}
+\providecommand{\eprint}[2][]{\url{#2}}
+ \bibcommenthead
+
+\bibitem[{{Allen Institute for AI}(2025)}]{scholarQA2025}
+{Allen Institute for AI} (2025) {Ai2 ScholarQA}. Available at
+  \url{https://allenai.org/blog/ai2-scholarqa} (accessed 4 July 2026)
+
+\bibitem[{{Anthropic}(2024)}]{anthropicMCP2024}
+{Anthropic} (2024) {Introducing the Model Context Protocol}. Available at
+  \url{https://www.anthropic.com/news/model-context-protocol} (accessed 4 July
+  2026)
+
+\bibitem[{{Anthropic}(2026)}]{anthropicClaudeScience2026}
+{Anthropic} (2026) {Claude Science: An AI Workbench for Scientists}. Available
+  at \url{https://www.anthropic.com/news/claude-science-ai-workbench} (accessed
+  4 July 2026)
+
+\bibitem[{Asai et~al.(2024)}]{openScholar2024}
+Asai A, et~al (2024) {OpenScholar: Synthesizing Scientific Literature with
+  Retrieval-Augmented Language Models}. Preprint at
+  \url{https://arxiv.org/abs/2411.14199}
+
+\bibitem[{{ClaudePrism Contributors}(2026)}]{claudePrism2026}
+{ClaudePrism Contributors} (2026) {ClaudePrism: Desktop Workspace for
+  Scientific Writing}. Available at
+  \url{https://github.com/delibae/claude-prism} (accessed 4 July 2026)
+
+\bibitem[{{Consensus}(2026)}]{consensus2026}
+{Consensus} (2026) {Consensus Research Agent}. Available at
+  \url{https://help.consensus.app/en/articles/12641232-research-agent}
+  (accessed 4 July 2026)
+
+\bibitem[{{Elicit}(2026)}]{elicit2026}
+{Elicit} (2026) {Elicit Research Agent}. Available at \url{https://elicit.com/}
+  (accessed 4 July 2026)
+
+\bibitem[{{FutureHouse}(2024)}]{paperQA2024}
+{FutureHouse} (2024) {PaperQA2: Retrieval-Augmented Generative Agent for
+  Scientific Research}. Preprint at \url{https://arxiv.org/abs/2409.13740}
+
+\bibitem[{{FutureHouse}(2025)}]{futureHousePlatform2025}
+{FutureHouse} (2025) {Launching FutureHouse Platform AI Agents}. Available at
+  \url{https://www.futurehouse.org/news/launching-futurehouse-platform-ai-agents}
+  (accessed 4 July 2026)
+
+\bibitem[{{Google Research}(2025)}]{googleCoScientist2025}
+{Google Research} (2025) {Accelerating Scientific Breakthroughs with an AI
+  Co-Scientist}. Available at
+  \url{https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/}
+  (accessed 4 July 2026)
+
+\bibitem[{Lu et~al.(2024)Lu, Lu, Lange, Foerster, Clune, and
+  Ha}]{sakanaAIScientist2024}
+Lu C, Lu C, Lange RT, et~al (2024) {The AI Scientist: Towards Fully Automated
+  Open-Ended Scientific Discovery}. Preprint at
+  \url{https://arxiv.org/abs/2408.06292}
+
+\bibitem[{{OmicOS}(2026{\natexlab{a}})}]{omicOSOverview2026}
+{OmicOS} (2026{\natexlab{a}}) {OmicOS Overview}. Available at
+  \url{https://docs.omicos.cn/zh/part1/01-overview.html} (accessed 4 July 2026)
+
+\bibitem[{{OmicOS}(2026{\natexlab{b}})}]{omicOSCLI2026}
+{OmicOS} (2026{\natexlab{b}}) {Starting OmicOS CLI}. Available at
+  \url{https://docs.omicos.cn/zh/part1/08-starting-cli.html} (accessed 4 July
+  2026)
+
+\bibitem[{{OmicOS}(2026{\natexlab{c}})}]{omicOSServe2026}
+{OmicOS} (2026{\natexlab{c}}) {Starting OmicOS Serve}. Available at
+  \url{https://docs.omicos.cn/zh/part1/07-starting-serve.html} (accessed 4 July
+  2026)
+
+\bibitem[{{OmicsClaw Contributors}(2026)}]{omicsClaw2026}
+{OmicsClaw Contributors} (2026) {OmicsClaw: Local-First Multi-Omics Research
+  Assistant}. Available at \url{https://github.com/TianGzlab/OmicsClaw}
+  (accessed 4 July 2026)
+
+\bibitem[{Schmidgall et~al.(2025)}]{agentLaboratory2025}
+Schmidgall S, et~al (2025) {Agent Laboratory: Using LLM Agents as Research
+  Assistants}. Preprint at \url{https://arxiv.org/abs/2501.04227}
+
+\bibitem[{{Swarup Lab}(2026)}]{operonGitHub2026}
+{Swarup Lab} (2026) {Operon: AI-Powered IDE for Bioinformatics}. Available at
+  \url{https://github.com/swaruplab/operon} (accessed 4 July 2026)
+
+\bibitem[{Yang et~al.(2026)}]{vcbench2026}
+Yang K, et~al (2026) Benchmarking virtual cell models for in-the-wild
+  perturbation response. arXiv preprint arXiv:260427646v1 ArXiv:2604.27646v1
+
+\bibitem[{Zhang et~al.(2026)Zhang, Duan, and Gao}]{MCFST2025}
+Zhang Z, Duan H, Gao X (2026) {MCFST}: Spatial domain identification method
+  based on multi-view graph convolutional network and graph fusion network.
+  Bioinformatics \doi{10.1093/bioinformatics/btag469}
+
+\end{thebibliography}

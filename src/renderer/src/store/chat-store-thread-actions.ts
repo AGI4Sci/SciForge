@@ -34,6 +34,7 @@ import {
 } from '@shared/app-settings'
 import type { AgentRuntimeContextState, AgentRuntimeFileReference } from '@shared/agent-runtime-contract'
 import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage } from './chat-store-types'
+import { resetAgentFocusState } from './chat-store-focus-actions'
 import {
   activeRemoteChannel,
   remoteChannelThreadBindingsFromChannels,
@@ -203,6 +204,7 @@ type StoreActionContext = {
 }
 
 let drainingQueuedMessages = false
+const backgroundQueueDrains = new Set<string>()
 
 function resolveDraftWorkspaceRoot(
   state: ChatState,
@@ -345,9 +347,22 @@ function snapshotLooksStaleForCurrentTurn(
   return false
 }
 
+export function queuedMessageMatchesThread(
+  message: Pick<QueuedUserMessage, 'threadId' | 'runtimeId'>,
+  threadId: string | null,
+  runtimeId?: string
+): boolean {
+  if (!threadId) return false
+  if (message.threadId && message.threadId !== threadId) return false
+  // Thread ids are the primary routing key. A missing runtime id in a freshly
+  // hydrated thread must not make an otherwise matching queue disappear.
+  if (message.runtimeId && runtimeId && message.runtimeId !== runtimeId) return false
+  return true
+}
+
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'drainQueuedMessages' | 'removeQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'updateQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
   let selectThreadRequestSeq = 0
 
   return {
@@ -570,6 +585,9 @@ export function createThreadActions(
       remoteGuardChannelId: null,
       error: null
     })
+    if (selectionChanged) {
+      set(resetAgentFocusState(get(), id))
+    }
     syncTurnCompletionPoll(set, get)
     try {
       rememberProviderThreadRuntime(p, id, get().threads)
@@ -614,8 +632,7 @@ export function createThreadActions(
         turnDurationByUserId,
         turnReasoningFirstAtByUserId: {},
         turnReasoningLastAtByUserId: {},
-        inspectorSelectedId: null,
-        queuedMessages: []
+        inspectorSelectedId: null
       })
       publishRemoteChannelActiveThreadContext(get(), id)
       syncTurnCompletionPoll(set, get)
@@ -623,7 +640,11 @@ export function createThreadActions(
       sseAbortRef.current = ac
       const sink = buildThreadEventSink(set, get, { threadId: id, signal: ac.signal, sinceSeq: latestSeq })
       subscribeThreadEventsWithRecovery(p, id, latestSeq, sink, ac.signal, get)
-      if (busy) armBusyWatchdog(set, get)
+      if (busy) {
+        armBusyWatchdog(set, get)
+      } else {
+        void get().drainQueuedMessages()
+      }
     } catch (e) {
       if (!isCurrentSelection()) return
       set({
@@ -641,21 +662,22 @@ export function createThreadActions(
     try {
       while (true) {
         const state = get()
-        const queuedMessages = state.queuedMessages.filter((message) => !message.guiPlan)
-        if (queuedMessages.length !== state.queuedMessages.length) {
-          set({ queuedMessages })
-        }
-        const next = queuedMessages[0]
-        if (!next || state.busy) return
-        if (
-          (next.threadId && next.threadId !== state.activeThreadId) ||
-          (next.runtimeId && state.threads.find((thread) => thread.id === state.activeThreadId)?.runtimeId !== next.runtimeId)
-        ) {
+        const activeThread = state.threads.find((thread) => thread.id === state.activeThreadId)
+        const activeQueuedMessages = state.queuedMessages.filter(
+          (message) =>
+            queuedMessageMatchesThread(message, state.activeThreadId, activeThread?.runtimeId)
+        )
+        const stalePlanIds = new Set(
+          activeQueuedMessages.filter((message) => message.guiPlan).map((message) => message.id)
+        )
+        if (stalePlanIds.size > 0) {
           set((s) => ({
-            queuedMessages: s.queuedMessages.filter((message) => message.id !== next.id)
+            queuedMessages: s.queuedMessages.filter((message) => !stalePlanIds.has(message.id))
           }))
           continue
         }
+        const next = activeQueuedMessages[0]
+        if (!next || state.busy) return
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
         if (!started) return
       }
@@ -664,10 +686,104 @@ export function createThreadActions(
     }
   },
 
+  drainQueuedMessagesForThread: async (threadId) => {
+    const targetThreadId = threadId.trim()
+    if (!targetThreadId || backgroundQueueDrains.has(targetThreadId)) return false
+    const initialState = get()
+    if (initialState.runtimeConnection !== 'ready' || initialState.activeThreadId === targetThreadId) {
+      return false
+    }
+    const thread = initialState.threads.find((item) => item.id === targetThreadId)
+    const queued = initialState.queuedMessages.find(
+      (message) =>
+        !message.guiPlan &&
+        queuedMessageMatchesThread(message, targetThreadId, thread?.runtimeId)
+    )
+    if (!thread || !queued) return false
+
+    // The provider hands a thread off when its runtime differs from the
+    // globally selected runtime. A background continuation must never change
+    // runtime or session identity behind the user's back.
+    const targetRuntimeId = queued.runtimeId ?? thread.runtimeId
+    if (!targetRuntimeId || targetRuntimeId !== initialState.activeAgentRuntime) return false
+    // Remote-channel sends also require mirroring and governance side effects
+    // owned by the foreground send path. Keep them queued until selected.
+    if (remoteChannelForThread(initialState, targetThreadId)) return false
+
+    backgroundQueueDrains.add(targetThreadId)
+    try {
+      const provider = getProvider()
+      rememberProviderThreadRuntime(provider, targetThreadId, initialState.threads)
+      const settings = await rendererRuntimeClient.getSettings()
+      const latestState = get()
+      const latestQueued = latestState.queuedMessages.find((message) => message.id === queued.id)
+      if (
+        !latestQueued ||
+        latestState.activeThreadId === targetThreadId ||
+        latestState.activeAgentRuntime !== targetRuntimeId
+      ) {
+        return false
+      }
+      const runtimeText = buildCodeRuntimePrompt(settings, latestQueued.text)
+      const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
+        ...(latestQueued.mode ? { mode: latestQueued.mode } : {}),
+        ...(thread.workspace ? { workspace: thread.workspace } : {}),
+        ...(thread.title ? { title: thread.title } : {}),
+        ...(latestQueued.model ? { model: latestQueued.model } : {}),
+        ...(latestQueued.reasoningEffort ? { reasoningEffort: latestQueued.reasoningEffort } : {}),
+        ...(latestQueued.remoteTargetId ? { remoteTargetId: latestQueued.remoteTargetId } : {}),
+        ...(latestQueued.governanceProfile ? { governanceProfile: latestQueued.governanceProfile } : {}),
+        displayText: latestQueued.displayText ?? latestQueued.text,
+        ...(latestQueued.attachmentIds?.length ? { attachmentIds: latestQueued.attachmentIds } : {}),
+        ...(latestQueued.fileReferences?.length ? { fileReferences: latestQueued.fileReferences } : {})
+      })
+      const deliveredThreadId = turnHandle.threadId?.trim() || targetThreadId
+      set((state) => ({
+        queuedMessages: state.queuedMessages.filter((message) => message.id !== queued.id)
+      }))
+      if (turnHandle.userMessageItemId && latestQueued.modelLabel) {
+        rememberTurnModel(deliveredThreadId, turnHandle.userMessageItemId, latestQueued.modelLabel)
+      }
+      watchBackgroundThreadCompletion(set, get, deliveredThreadId)
+      return true
+    } catch (error) {
+      if (structuredRuntimeErrorCode(error) === 'turn_in_progress') {
+        watchBackgroundThreadCompletion(set, get, targetThreadId)
+      }
+      if (typeof window !== 'undefined' && typeof window.sciforge?.logError === 'function') {
+        void window.sciforge.logError('queued-message', 'Failed to drain a background queued message', {
+          message: error instanceof Error ? error.message : String(error),
+          threadId: targetThreadId,
+          queuedMessageId: queued.id
+        }).catch(() => undefined)
+      }
+      return false
+    } finally {
+      backgroundQueueDrains.delete(targetThreadId)
+    }
+  },
+
   removeQueuedMessage: (id) =>
     set((s) => ({
       queuedMessages: s.queuedMessages.filter((message) => message.id !== id)
     })),
+
+  updateQueuedMessage: (id, text) => {
+    const trimmedText = text.trim()
+    if (!trimmedText || !get().queuedMessages.some((message) => message.id === id)) return false
+    set((s) => ({
+      queuedMessages: s.queuedMessages.map((message) =>
+        message.id === id
+          ? {
+              ...message,
+              text: trimmedText,
+              ...(message.displayText != null ? { displayText: trimmedText } : {})
+            }
+          : message
+      )
+    }))
+    return true
+  },
 
   steerQueuedMessage: async (id) => {
     const state = get()

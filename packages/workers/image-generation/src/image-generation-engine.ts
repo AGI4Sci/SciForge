@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
-import { IMAGE_GENERATION_VISUAL_ROUTING } from './types'
 import type {
   DiagramLayer,
   DiagramLayerBounds,
@@ -26,8 +25,8 @@ import type {
   FrameworkSemanticLayer,
   ImageEditIntent,
   ImageDrawingIntent,
-  ImageGenerationEditFromCanvasPacketRequest,
-  ImageGenerationEditFromCanvasPacketResult,
+  ImageGenerationEditFromVisualReviewPacketRequest,
+  ImageGenerationEditFromVisualReviewPacketResult,
   ImageGenerationManifest,
   ImageGenerationPlanRequest,
   ImageGenerationPlanResult,
@@ -37,18 +36,15 @@ import type {
   ImageGenerationRenderResult,
   ImageGenerationSegmentComponentsRequest,
   ImageGenerationSegmentComponentsResult,
-  ImageGenerationReviewPacketRequest,
-  ImageGenerationReviewPacketResult,
-  ImageGenerationReviewRequest,
-  ImageGenerationReviewResult,
+  VisualArtifactReviewRequest,
+  VisualArtifactReviewResult,
   ImageGenerationStatus,
   ImageGenerationUsagePolicy,
-  ImageGenerationVisualRouting,
   ImageSize
 } from './types'
 
 const RENDERER_VERSION = '0.1.0'
-const DEFAULT_IMAGE_MODEL = 'gpt-image-2'
+const DEFAULT_MODEL_ROUTER_ALIAS = 'sciforge-router'
 const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNER'
 const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
 const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
@@ -76,9 +72,6 @@ const SCIENTIFIC_BASE_IMAGE_USAGE_POLICY: ImageGenerationUsagePolicy = {
   overlayToolchain: 'script_or_scientific_plotting',
   warning: SCIENTIFIC_BASE_IMAGE_WARNING
 }
-const SCIENTIFIC_IMAGE_REQUEST_PATTERN =
-  /\b(scientific|figure|diagram|schematic|plot|chart|data|axis|axes|legend|label|labels|pathway|mechanism|molecular|protein|rna|dna|chromatin|meiosis|kinase|cell|cells|gene|genes|p-?value|pmid|citation|scale\s*bar|equation|manuscript|publication)\b/i
-
 type ProviderRenderInput = {
   workspaceRoot: string
   outputPath: string
@@ -94,22 +87,6 @@ type ProviderRenderResult = {
   warnings: string[]
 }
 
-type ReviewPacketArtifact = {
-  artifactKind?: string
-  outputPath?: string
-  sourcePath?: string
-  path?: string
-  shapeId?: string
-  title?: string
-}
-
-type ReviewPacketSuggestion = {
-  instruction?: string
-  targetShapeId?: string
-  annotationShapeId?: string
-  artifactKind?: string
-}
-
 export async function getImageGenerationStatus(workspaceRoot?: string): Promise<ImageGenerationStatus> {
   const root = normalizeWorkspaceRoot(workspaceRoot)
   const warnings: string[] = []
@@ -119,7 +96,7 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
     ok: true,
     provider,
     configured: provider === 'image-endpoint',
-    defaultModel: imageModel(),
+    defaultModel: modelRouterAlias(),
     supportedModes: ['text_to_image', 'image_to_image', 'variation'],
     supportedEditModes: ['inpaint', 'replace', 'erase', 'outpaint', 'upscale', 'style_transfer'],
     outputDir: root ? join(root, IMAGE_DIR) : IMAGE_DIR,
@@ -133,10 +110,9 @@ export async function getImageGenerationStatus(workspaceRoot?: string): Promise<
       legacyRunnerEnv: FASTSAM_RUNNER_ENV,
       legacyModelEnv: FASTSAM_MODEL_ENV
     },
-    visualRouting: imageGenerationVisualRouting(),
     warnings: [
       ...(provider === 'placeholder'
-        ? ['No image model is configured. Other SciForge features are unaffected, but text-to-image and Canvas image edits require configuring an image model first.']
+        ? ['No image model is configured. Other SciForge features are unaffected, but text-to-image and visual-review image edits require configuring an image model first.']
         : []),
       ...warnings
     ]
@@ -177,13 +153,37 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
           confirmation: { status: 'required' as const },
           promptProfile: 'framework-layered-draft-v1' as const
         }
-      : {})
+      : {}),
+    ...(request.scientificVisualPlan ? { scientificVisualPlan: request.scientificVisualPlan } : {}),
+    ...(request.creativeDirect ? { creativeDirect: true as const } : {})
   }
   const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(task)
   if (upstreamResearchWorkflow?.recommended) {
     warnings.push(upstreamResearchWorkflow.reason)
   }
+  if (Boolean(request.scientificVisualPlan) === Boolean(request.creativeDirect)) {
+    return {
+      ok: false,
+      status: 'scientific_visual_plan_required',
+      message: 'Image preparation requires exactly one route classification: a locked scientific_visual_plan or creativeDirect=true for clearly non-scientific creative work.',
+      suggestedPlanTool: 'scientific_visual_plan',
+      warnings: [...warnings, 'No renderer fallback is allowed until the visual route is explicitly classified.']
+    }
+  }
   const usagePolicy = scientificUsagePolicyForRecipe(recipe)
+  if (request.scientificVisualPlan && (
+    request.scientificVisualPlan.routeLocked !== true
+    || request.scientificVisualPlan.fallbackPolicy !== 'fail_closed'
+    || !['generative_visual', 'hybrid_composite'].includes(request.scientificVisualPlan.route)
+  )) {
+    return {
+      ok: false,
+      status: 'invalid_scientific_visual_plan',
+      message: 'Image generation accepts only a route-locked generative_visual or hybrid_composite plan with fail_closed fallback policy.',
+      suggestedPlanTool: 'scientific_visual_plan',
+      warnings
+    }
+  }
   pushUsagePolicyWarning(warnings, usagePolicy)
   void workspaceRoot
   return {
@@ -191,30 +191,22 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     task,
     recipe,
     suggestedRenderTool: 'image_generation_render',
-    suggestedReviewTool: 'image_generation_review',
+    suggestedReviewTool: 'visual_artifact_review',
     ...(upstreamResearchWorkflow ? { upstreamResearchWorkflow } : {}),
-    visualRouting: imageGenerationVisualRouting(),
+    ...(request.scientificVisualPlan ? { scientificVisualPlan: request.scientificVisualPlan } : {}),
     artifactPolicy: usagePolicy
-      ? 'Render writes a PNG visual base layer plus .sciforge/artifacts/*.generated-image.artifact.json for Canvas import; publication labels and data must be added by deterministic scripts.'
-      : 'Render writes PNG output plus .sciforge/artifacts/*.generated-image.artifact.json for Canvas import.',
-    canvasWorkflow: [
+      ? 'Render writes a PNG visual base layer plus .sciforge/artifacts/*.generated-image.artifact.json for VisualDocument review; publication labels and data must be added by deterministic scripts.'
+      : 'Render writes PNG output plus .sciforge/artifacts/*.generated-image.artifact.json for VisualDocument review.',
+    visualReviewWorkflow: [
       'Run image_generation_render with the planned recipe.',
-      'Import the generated artifact into SciForge Canvas.',
-      'Use Canvas annotations for non-destructive edits.',
-      'Run image_generation_edit_from_canvas_packet to create a new before/after artifact.',
+      'Stage the generated artifact in its VisualDocument.',
+      'Use visual-review annotations for non-destructive edits.',
+      'Run image_generation_edit_from_visual_review_packet to create a new before/after candidate.',
       ...(usagePolicy ? ['For scientific figures, script all labels, axes, data traces, citations, scale bars, and molecular annotations after rendering the base image.'] : [])
     ],
     requiresConfirmation: Boolean(frameworkDesignPlan),
     ...(frameworkDesignPlan ? { confirmationSummary: frameworkDesignPlan.confirmationSummary } : {}),
     warnings
-  }
-}
-
-function imageGenerationVisualRouting(): ImageGenerationVisualRouting {
-  return {
-    useImageGenerationWhen: [...IMAGE_GENERATION_VISUAL_ROUTING.useImageGenerationWhen],
-    useScientificPlottingWhen: [...IMAGE_GENERATION_VISUAL_ROUTING.useScientificPlottingWhen],
-    modelSelectionHint: IMAGE_GENERATION_VISUAL_ROUTING.modelSelectionHint
   }
 }
 
@@ -224,6 +216,14 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const recipe = normalizeRecipe(request.recipe, warnings)
     const usagePolicy = scientificUsagePolicyForRecipe(recipe)
+    if (Boolean(recipe.scientificVisualPlan) === Boolean(recipe.creativeDirect)) {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: 'Image rendering requires exactly one route classification: a locked scientific_visual_plan or creativeDirect=true.',
+        warnings: ['No cross-route or unclassified renderer fallback is allowed.']
+      }
+    }
     pushUsagePolicyWarning(warnings, usagePolicy)
     const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(recipe.prompt)
     if (upstreamResearchWorkflow?.recommended && !hasResearchEvidenceForRecipe(recipe)) {
@@ -252,11 +252,6 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const outputPath = join(outputDir, imageId + '.' + (recipe.outputFormat ?? 'png'))
     const providerResult = await renderWithProvider({ workspaceRoot, outputPath, recipe })
     warnings.push(...providerResult.warnings)
-    const review = await reviewImageGenerationOutput({
-      workspaceRoot,
-      outputPath,
-      ...(request.reviewReferencePath ? { referencePath: request.reviewReferencePath } : {})
-    })
     const manifestPath = join(outputDir, imageId + '.manifest.json')
     const diagramSpecPath = recipe.intent === 'framework_diagram' && recipe.diagramSpec
       ? join(outputDir, imageId + '.diagram-spec.json')
@@ -311,8 +306,9 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       requestHash: hashValue({ recipe }),
       workspaceRoot,
       outputPath,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
+      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
       recipe,
       ...(recipe.intent ? { intent: recipe.intent } : {}),
       ...(diagramSpecPath ? { diagramSpecPath } : {}),
@@ -332,7 +328,6 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
       ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
       provider: providerResult.provider,
-      review,
       ...(usagePolicy ? { usagePolicy } : {}),
       warnings
     }
@@ -359,16 +354,16 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       componentBasePath: componentArtifacts?.componentBasePath,
       componentAssetPaths: componentArtifacts?.componentAssetPaths,
       promptProfile: recipe.promptProfile,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
+      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
       ...(usagePolicy ? { usagePolicy } : {}),
       ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
       ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
-      review
     })
     return {
       ok: true,
-      status: providerResult.placeholder ? 'rendered_placeholder' : review.ok ? 'rendered' : 'review_failed',
+      status: providerResult.placeholder ? 'rendered_placeholder' : 'awaiting_review',
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -385,7 +380,6 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
       ...(componentArtifacts?.componentAssetPaths.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       provider: providerResult.provider,
-      review,
       ...(usagePolicy ? { usagePolicy } : {}),
       warnings
     }
@@ -399,7 +393,9 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
   }
 }
 
-function buildUpstreamResearchWorkflow(task: string): ImageGenerationPlanResult['upstreamResearchWorkflow'] | undefined {
+function buildUpstreamResearchWorkflow(
+  task: string
+): Extract<ImageGenerationPlanResult, { ok: true }>['upstreamResearchWorkflow'] | undefined {
   if (!requiresPaperGroundedPrompt(task)) return undefined
   return {
     recommended: true,
@@ -442,7 +438,7 @@ function enhanceImageGenerationPrompt(prompt: string, stylePreset?: string): str
     '- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.',
     '- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.',
     ...(style ? [`- Style preset: ${style}.`] : []),
-    '- Output: one self-contained high-resolution PNG-style figure suitable for review on SciForge Canvas.'
+    '- Output: one self-contained high-resolution PNG-style figure suitable for VisualDocument review.'
   ].join('\n')
 }
 
@@ -549,7 +545,7 @@ function buildFrameworkDiagramSpec(task: string, size: ImageSize): FrameworkDiag
     checklist: [
       'All required modules are visible.',
       'Inputs, core mechanism, and outputs are distinguishable.',
-      'The figure can be refined in Canvas using layer metadata.'
+      'The figure can be refined through VisualDocument review using the structured layer metadata.'
     ]
   }
 }
@@ -988,7 +984,6 @@ export async function editFrameworkComponentsWithImage2(
       outputPath: editOutputPath,
       recipe: {
         mode: 'text_to_image',
-        model: imageModel(),
         prompt: editPrompt,
         size: editSize,
         outputFormat: 'png',
@@ -1021,8 +1016,9 @@ export async function editFrameworkComponentsWithImage2(
       requestHash: hashValue({ request, target }),
       workspaceRoot,
       outputPath,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
+      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
       editIntent: {
         mode: 'replace',
         sourcePath: sourceImagePath,
@@ -1048,8 +1044,9 @@ export async function editFrameworkComponentsWithImage2(
       componentBasePath: manifest.componentBasePath,
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
       title: request.instruction.slice(0, 90) || imageId,
-      ...(request.canvasId ? { canvasId: request.canvasId } : {}),
-      ...(request.threadId ? { threadId: request.threadId } : {})
+      ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
+      ...(request.threadId ? { threadId: request.threadId } : {}),
+      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {})
     })
     return {
       ok: true,
@@ -1068,7 +1065,7 @@ export async function editFrameworkComponentsWithImage2(
       editedRegionPath,
       contactSheetPath,
       provider: providerResult.provider,
-      model: imageModel(),
+      routerModelAlias: modelRouterAlias(),
       warnings
     }
   } catch (error) {
@@ -2222,105 +2219,27 @@ function extnameForPath(path: string): string {
   return index >= 0 ? path.slice(index) : ''
 }
 
-function extractComponentEditRequestFromPacket(
-  packet: unknown,
-  workspaceRoot: string,
-  request: ImageGenerationEditFromCanvasPacketRequest,
-  warnings: string[]
-): FrameworkLocalizedEditRequest | undefined {
-  type SelectedFrameworkComponentRef = {
-    componentId?: string
-    blockId?: string
-    manifestPath?: string
-  }
-  const record = asRecord(packet)
-  const selectedShapes = Array.isArray(record.selectedShapes) ? record.selectedShapes.map(asRecord) : []
-  const packetSelectedComponents: SelectedFrameworkComponentRef[] = Array.isArray(record.selectedComponents)
-    ? record.selectedComponents.map(asRecord).filter(Boolean).map((component) => ({
-        componentId: stringValue(component.componentId),
-        blockId: stringValue(component.parentBlockId),
-        manifestPath: stringValue(component.frameworkComponentManifestPath)
-      }))
-    : []
-  const selectedComponents = selectedShapes
-    .map((shape) => asRecord(shape.meta))
-    .filter(Boolean)
-    .map((meta): SelectedFrameworkComponentRef => ({
-      componentId: stringValue(meta.componentId) ?? stringValue(meta.sciforgeFrameworkComponentId),
-      blockId: stringValue(meta.parentBlockId),
-      manifestPath: stringValue(meta.frameworkComponentManifestPath) ?? stringValue(meta.sciforgeFrameworkComponentManifestPath)
-    }))
-    .concat(packetSelectedComponents)
-    .filter((item) => Boolean((item.componentId || item.blockId) && item.manifestPath))
-  if (!selectedComponents.length) return undefined
-  const manifestPath = selectedComponents[0]?.manifestPath
-  if (!manifestPath) return undefined
-  const suggestions = Array.isArray(record.modificationSuggestions) ? record.modificationSuggestions.map(asRecord) : []
-  const instruction = suggestions.map((suggestion) => stringValue(suggestion.instruction)).find(Boolean) ??
-    'Redraw the selected framework component(s) while keeping the rest of the figure unchanged.'
-  try {
-    ensureInsideWorkspace(workspaceRoot, isAbsolute(manifestPath) ? resolve(manifestPath) : resolve(workspaceRoot, manifestPath))
-  } catch (error) {
-    warnings.push('Skipped framework component edit outside workspace: ' + (error instanceof Error ? error.message : String(error)))
-    return undefined
-  }
-  return {
-    workspaceRoot,
-    componentManifestPath: manifestPath,
-    componentIds: [...new Set(selectedComponents.map((item) => item.componentId).filter((id): id is string => Boolean(id)))],
-    blockIds: [...new Set(selectedComponents.map((item) => item.blockId).filter((id): id is string => Boolean(id)))],
-    instruction,
-    ...(request.outputDir ? { outputDir: request.outputDir } : {}),
-    ...(request.imageId ? { imageId: request.imageId } : {}),
-    ...(request.canvasId ? { canvasId: request.canvasId } : {}),
-    ...(request.threadId ? { threadId: request.threadId } : {})
-  }
-}
-
-
-export async function editImageFromCanvasPacket(
-  request: ImageGenerationEditFromCanvasPacketRequest
-): Promise<ImageGenerationEditFromCanvasPacketResult> {
+export async function editImageFromVisualReviewPacket(
+  request: ImageGenerationEditFromVisualReviewPacketRequest
+): Promise<ImageGenerationEditFromVisualReviewPacketResult> {
   const warnings: string[] = []
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const packet = await loadReviewPacket(request, workspaceRoot)
-    const componentEditRequest = extractComponentEditRequestFromPacket(packet, workspaceRoot, request, warnings)
-    if (componentEditRequest) {
-      const componentEdit = await editFrameworkComponentsWithImage2(componentEditRequest)
-      if (componentEdit.ok) {
-        return {
-          ok: true,
-          status: componentEdit.status,
-          intents: [{
-            mode: 'replace',
-            sourcePath: componentEdit.sourceImagePath,
-            instruction: componentEditRequest.instruction,
-            preserve: ['layout', 'composition']
-          }],
-          outputs: [{
-            workspaceRoot,
-            outputPath: componentEdit.outputPath,
-            manifestPath: componentEdit.manifestPath,
-            artifactManifestPath: componentEdit.artifactManifestPath,
-            provider: componentEdit.provider
-          }],
-          warnings: [...warnings, ...componentEdit.warnings]
-        }
-      }
-      warnings.push(componentEdit.message)
-    }
     const packetRecord = asRecord(packet)
-    const packetCanvasId = stringValue(packetRecord.canvasId)
-    const packetThreadId = stringValue(packetRecord.threadId)
-    const canvasId = request.canvasId ?? packetCanvasId
-    const threadId = request.threadId ?? packetThreadId
+    if (packetRecord.schemaVersion !== 1 || !packetRecord.sourceArtifact || !Array.isArray(packetRecord.annotations)) {
+      throw new ReviewPacketError('Expected a VisualDocument review packet with schemaVersion, sourceArtifact, and annotations.')
+    }
+    const packetVisualDocumentId = stringValue(packetRecord.documentId)
+    if (!packetVisualDocumentId) throw new ReviewPacketError('VisualDocument review packet documentId is required.')
+    const visualDocumentId = packetVisualDocumentId
+    const threadId = request.threadId
     const intents = extractEditIntents(packet, workspaceRoot, warnings)
     if (intents.length === 0) {
       return {
         ok: false,
         status: 'no_edit_targets',
-        message: 'No image edit targets were found in the Canvas review packet.',
+        message: 'No image edit targets were found in the visual-review packet.',
         warnings
       }
     }
@@ -2340,22 +2259,20 @@ export async function editImageFromCanvasPacket(
       pushUsagePolicyWarning(warnings, usagePolicy)
       const providerResult = await renderWithProvider({ workspaceRoot, outputPath, editIntent: intent })
       warnings.push(...providerResult.warnings)
-      const review = await reviewImageGenerationOutput({ workspaceRoot, outputPath, referencePath: intent.sourcePath })
       const manifestPath = join(outputDir, imageId + '.manifest.json')
       const manifest: ImageGenerationManifest = {
         version: 1,
         renderer: 'sciforge-image-generation-mcp',
         rendererVersion: RENDERER_VERSION,
-        tool: 'image_generation_edit_from_canvas_packet',
+        tool: 'image_generation_edit_from_visual_review_packet',
         createdAt: new Date().toISOString(),
         requestHash: hashValue({ intent }),
         workspaceRoot,
         outputPath,
-        ...(canvasId ? { canvasId } : {}),
+        ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
         editIntent: intent,
         provider: providerResult.provider,
-        review,
         ...(usagePolicy ? { usagePolicy } : {}),
         warnings
       }
@@ -2369,10 +2286,9 @@ export async function editImageFromCanvasPacket(
         manifestPath,
         sourcePath: intent.sourcePath,
         title: intent.instruction.slice(0, 90) || imageId,
-        ...(canvasId ? { canvasId } : {}),
+        ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
-        ...(usagePolicy ? { usagePolicy } : {}),
-        review
+        ...(usagePolicy ? { usagePolicy } : {})
       })
       outputs.push({ workspaceRoot, outputPath, manifestPath, artifactManifestPath, provider: providerResult.provider })
     }
@@ -2393,7 +2309,7 @@ export async function editImageFromCanvasPacket(
   }
 }
 
-export async function reviewImageGenerationOutput(request: ImageGenerationReviewRequest): Promise<ImageGenerationReviewResult> {
+export async function reviewVisualArtifact(request: VisualArtifactReviewRequest): Promise<VisualArtifactReviewResult> {
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const outputPath = await resolveWorkspacePath(workspaceRoot, request.outputPath)
@@ -2412,18 +2328,41 @@ export async function reviewImageGenerationOutput(request: ImageGenerationReview
       referenceScore = Math.max(0, 1 - Math.min(1, Math.abs(outputRatio - referenceRatio) / Math.max(referenceRatio, 0.01)))
       if (referenceScore < 0.75) warnings.push('Output aspect ratio differs from the reference image.')
     }
-    const overall = clamp01((sizeScore + nonEmptyScore + (referenceScore ?? 1)) / (referenceScore === undefined ? 2 : 3))
+    const visualReview = await requestModelRouterVisualReview({
+      outputPath,
+      task: request.task,
+      truthLockedElements: request.truthLockedElements,
+      ...(request.referencePath
+        ? { referencePath: await resolveWorkspacePath(workspaceRoot, request.referencePath) }
+        : {})
+    })
+    if (!visualReview.ok) return visualReview
+    const basicOverall = clamp01((sizeScore + nonEmptyScore + (referenceScore ?? 1)) / (referenceScore === undefined ? 2 : 3))
+    const overall = clamp01(basicOverall * 0.35 + visualReview.score * 0.65)
+    warnings.push(...visualReview.violations)
+    const repairable = !visualReview.pass || overall < (request.minOverall ?? 0.72)
+    const reviewedArtifactHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
     return {
       ok: true,
+      reviewedArtifactPath: outputPath,
+      reviewedArtifactHash,
+      reviewedAt: new Date().toISOString(),
       score: {
         overall,
         dimensions: sizeScore,
         nonEmpty: nonEmptyScore,
         background: nonEmptyScore,
         ...(referenceScore !== undefined ? { reference: referenceScore } : {}),
+        semantic: visualReview.score,
         warnings
       },
-      repairable: overall < (request.minOverall ?? 0.72),
+      semantic: {
+        pass: visualReview.pass,
+        summary: visualReview.summary,
+        violations: visualReview.violations,
+        repairInstructions: visualReview.repairInstructions
+      },
+      repairable,
       warnings
     }
   } catch (error) {
@@ -2435,48 +2374,165 @@ export async function reviewImageGenerationOutput(request: ImageGenerationReview
   }
 }
 
-export async function createImageGenerationReviewPacket(
-  request: ImageGenerationReviewPacketRequest
-): Promise<ImageGenerationReviewPacketResult> {
-  const warnings: string[] = []
-  try {
-    const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
-    if (request.manifestPaths.length === 0) {
-      return { ok: false, status: 'invalid_request', message: 'manifestPaths must contain at least one manifest path.' }
+type ModelRouterVisualReview =
+  | {
+      ok: true
+      pass: boolean
+      score: number
+      summary: string
+      violations: string[]
+      repairInstructions: string[]
     }
-    const outputDir = await resolveOutputDir(workspaceRoot, request.outputDir ?? join('.sciforge', 'image-review-packets'))
-    await mkdir(outputDir, { recursive: true })
-    const packetId = slugForId(request.packetId ?? 'image-review-' + new Date().toISOString())
-    const items: unknown[] = []
-    for (const manifestPath of request.manifestPaths) {
-      try {
-        const resolvedManifest = await resolveWorkspacePath(workspaceRoot, manifestPath)
-        items.push(JSON.parse(await readFile(resolvedManifest, 'utf8')))
-      } catch (error) {
-        warnings.push('Could not read manifest ' + manifestPath + ': ' + (error instanceof Error ? error.message : String(error)))
+  | {
+      ok: false
+      status: 'vision_review_unavailable' | 'vision_review_invalid'
+      message: string
+      warnings?: string[]
+    }
+
+async function requestModelRouterVisualReview(input: {
+  outputPath: string
+  referencePath?: string
+  task: string
+  truthLockedElements: string[]
+}): Promise<ModelRouterVisualReview> {
+  const endpoint = configuredModelRouterImageEndpoint()
+  if (!endpoint) {
+    return {
+      ok: false,
+      status: 'vision_review_unavailable',
+      message: 'Semantic visual review requires the local SciForge Model Router.'
+    }
+  }
+  try {
+    const content: Array<Record<string, unknown>> = [
+      {
+        type: 'input_text',
+        text: [
+          'Review this visual artifact as a strict scientific publication figure reviewer.',
+          `Task: ${input.task.trim().slice(0, 8000)}`,
+          `Truth-locked elements: ${JSON.stringify(input.truthLockedElements.slice(0, 64))}`,
+          'Inspect semantic correctness and visible quality, including overlap, clipping, illegible text, broken connectors, hierarchy, whitespace, alignment, contrast, and whether the artifact actually satisfies the task.',
+          'Return JSON only with: {"pass":boolean,"score":number,"summary":string,"violations":string[],"repairInstructions":string[]}.',
+          'A severe overlap, clipping, unreadable label, invented or missing locked fact, or visibly broken layout must set pass=false.'
+        ].join('\n')
+      },
+      {
+        type: 'input_image',
+        image_url: await imageDataUrl(input.outputPath),
+        mime_type: imageMimeType(input.outputPath)
+      }
+    ]
+    if (input.referencePath) {
+      content.push({
+        type: 'input_text',
+        text: 'Reference image for style/composition comparison:'
+      }, {
+        type: 'input_image',
+        image_url: await imageDataUrl(input.referencePath),
+        mime_type: imageMimeType(input.referencePath)
+      })
+    }
+    const response = await fetch(endpoint.baseUrl + '/responses', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: 'Bearer ' + endpoint.apiKey
+      },
+      body: JSON.stringify({
+        model: endpoint.model,
+        input: [{ role: 'user', content }]
+      })
+    })
+    const payload = await parseProviderJson(response, 'Model Router visual review')
+    if (!response.ok) {
+      return {
+        ok: false,
+        status: 'vision_review_unavailable',
+        message: providerHttpError('Model Router visual review', response.status, payload)
       }
     }
-    const packet = {
-      version: 1,
-      tool: 'image_generation_review_packet',
-      createdAt: new Date().toISOString(),
-      title: request.title ?? 'Image generation review packet',
-      items,
-      warnings
+    const text = responseOutputText(payload)
+    const parsed = parseVisualReviewJson(text)
+    if (!parsed) {
+      return {
+        ok: false,
+        status: 'vision_review_invalid',
+        message: 'Model Router visual review returned an invalid semantic review payload.'
+      }
     }
-    const packetPath = join(outputDir, packetId + '.json')
-    const markdownPath = join(outputDir, packetId + '.md')
-    await writeJson(packetPath, packet)
-    await writeFile(markdownPath, renderReviewPacketMarkdown(packet.title, items, warnings), 'utf8')
-    return { ok: true, packetPath, markdownPath, count: items.length, warnings }
+    return parsed
   } catch (error) {
     return {
       ok: false,
-      status: error instanceof WorkspaceError ? 'invalid_workspace' : 'write_failed',
-      message: error instanceof Error ? error.message : String(error),
-      warnings
+      status: 'vision_review_unavailable',
+      message: error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+async function imageDataUrl(path: string): Promise<string> {
+  const bytes = await readFile(path)
+  return `data:${imageMimeType(path)};base64,${bytes.toString('base64')}`
+}
+
+function imageMimeType(path: string): string {
+  const lower = path.toLowerCase()
+  if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
+  if (lower.endsWith('.webp')) return 'image/webp'
+  return 'image/png'
+}
+
+function responseOutputText(payload: Record<string, any>): string {
+  if (typeof payload.output_text === 'string') return payload.output_text
+  const chunks: string[] = []
+  for (const item of Array.isArray(payload.output) ? payload.output : []) {
+    for (const content of Array.isArray(item?.content) ? item.content : []) {
+      const value = typeof content?.text === 'string'
+        ? content.text
+        : typeof content?.output_text === 'string'
+          ? content.output_text
+          : ''
+      if (value) chunks.push(value)
+    }
+  }
+  return chunks.join('\n')
+}
+
+function parseVisualReviewJson(text: string): Extract<ModelRouterVisualReview, { ok: true }> | null {
+  const candidate = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')
+  let value: unknown
+  try {
+    value = JSON.parse(candidate)
+  } catch {
+    const match = candidate.match(/\{[\s\S]*\}/)
+    if (!match) return null
+    try {
+      value = JSON.parse(match[0])
+    } catch {
+      return null
+    }
+  }
+  const record = asRecord(value)
+  if (typeof record.pass !== 'boolean' || typeof record.score !== 'number' || !Number.isFinite(record.score)) return null
+  const summary = stringValue(record.summary)
+  if (!summary) return null
+  const violations = stringArray(record.violations)
+  const repairInstructions = stringArray(record.repairInstructions)
+  return {
+    ok: true,
+    pass: record.pass,
+    score: clamp01(record.score),
+    summary,
+    violations,
+    repairInstructions
+  }
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)
+    : []
 }
 
 function providerKind(): 'image-endpoint' | 'placeholder' {
@@ -2508,7 +2564,7 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
   }
   if (!allowPlaceholderProvider()) {
     throw new ProviderNotConfiguredError(
-      'Image model is not configured. Configure an image model in Settings before using text-to-image generation or Canvas image edits.'
+      'Image model is not configured. Configure an image model in Settings before using text-to-image generation or visual-review image edits.'
     )
   }
   await renderPlaceholder(input)
@@ -2536,7 +2592,7 @@ async function renderControlledImageEdit(input: ProviderRenderInput): Promise<Pr
     ctx.putImageData(imageData, 0, 0)
     warnings.push('Applied a source-preserving controlled color edit; layout, text, and composition were kept from the original image.')
   } else {
-    warnings.push('Canvas image edit kept the source image unchanged because this edit is not yet mapped to a safe source-preserving transform.')
+    warnings.push('Visual-review image edit kept the source image unchanged because this edit is not yet mapped to a safe source-preserving transform.')
   }
 
   await writeFile(input.outputPath, canvas.toBuffer('image/png'))
@@ -2646,7 +2702,7 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         apiKey: endpoint.apiKey,
         // The local Model Router exposes one public model alias. Recipe model
         // metadata describes the internal generator, but must never bypass the
-        // Router's alias validation (for example by sending `gpt-image-2`).
+        // Router alias validation. Provider model selection stays inside Model Router.
         model: endpoint.model,
         prompt,
         size,
@@ -2701,8 +2757,8 @@ function isAllowedLocalModelRouterHost(hostname: string): boolean {
   return normalized === '127.0.0.1' || normalized === 'localhost' || normalized === '::1'
 }
 
-function imageModel(): string {
-  return process.env.SCIFORGE_IMAGE_MODEL?.trim() || DEFAULT_IMAGE_MODEL
+function modelRouterAlias(): string {
+  return process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL?.trim() || DEFAULT_MODEL_ROUTER_ALIAS
 }
 
 async function renderWithImageEndpoint(
@@ -2934,7 +2990,6 @@ function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): Ima
   return {
     mode: recipe.mode ?? 'text_to_image',
     prompt,
-    ...(recipe.model?.trim() ? { model: recipe.model.trim() } : {}),
     ...(recipe.negativePrompt?.trim() ? { negativePrompt: recipe.negativePrompt.trim() } : {}),
     size: normalizeSize(recipe.size, warnings),
     ...(recipe.stylePreset?.trim() ? { stylePreset: recipe.stylePreset.trim() } : {}),
@@ -2950,7 +3005,9 @@ function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): Ima
     ...(recipe.scientificPolishDeltaPlan ? { scientificPolishDeltaPlan: normalizeScientificPolishDeltaPlan(recipe.scientificPolishDeltaPlan) } : {}),
     ...(recipe.controlledSubfigureManifests?.length
       ? { controlledSubfigureManifests: recipe.controlledSubfigureManifests.map((item) => item.trim()).filter(Boolean).slice(0, 24) }
-      : {})
+      : {}),
+    ...(recipe.scientificVisualPlan ? { scientificVisualPlan: recipe.scientificVisualPlan } : {}),
+    ...(recipe.creativeDirect ? { creativeDirect: true as const } : {})
   }
 }
 
@@ -2963,16 +3020,12 @@ function scientificUsagePolicyForRecipe(recipe: ImageGenerationRecipe | undefine
       sourceControlledArtifacts: recipe.controlledSubfigureManifests ?? []
     }
   }
-  return isScientificImageRequest([recipe.prompt, recipe.stylePreset]) ? SCIENTIFIC_BASE_IMAGE_USAGE_POLICY : undefined
+  return recipe.scientificVisualPlan ? SCIENTIFIC_BASE_IMAGE_USAGE_POLICY : undefined
 }
 
 function scientificUsagePolicyForEditIntent(intent: ImageEditIntent | undefined): ImageGenerationUsagePolicy | undefined {
-  if (!intent) return undefined
-  return isScientificImageRequest([intent.instruction]) ? SCIENTIFIC_BASE_IMAGE_USAGE_POLICY : undefined
-}
-
-function isScientificImageRequest(values: Array<string | undefined>): boolean {
-  return values.some((value) => SCIENTIFIC_IMAGE_REQUEST_PATTERN.test(value ?? ''))
+  void intent
+  return undefined
 }
 
 function pushUsagePolicyWarning(warnings: string[], usagePolicy: ImageGenerationUsagePolicy | undefined): void {
@@ -3069,8 +3122,9 @@ async function writeImageArtifactManifest(input: {
   manifestPath: string
   sourcePath?: string
   referencePath?: string
-  canvasId?: string
+  visualDocumentId?: string
   threadId?: string
+  stageForVisualReview?: boolean
   usagePolicy?: ImageGenerationUsagePolicy
   title: string
   intent?: ImageDrawingIntent
@@ -3088,7 +3142,6 @@ async function writeImageArtifactManifest(input: {
   promptProfile?: ImageGenerationRecipe['promptProfile']
   lockedFacts?: string[]
   sourceControlledArtifacts?: string[]
-  review?: ImageGenerationReviewResult
 }): Promise<string> {
   const artifactsDir = join(input.workspaceRoot, ARTIFACT_DIR)
   await mkdir(artifactsDir, { recursive: true })
@@ -3103,8 +3156,9 @@ async function writeImageArtifactManifest(input: {
     path: input.outputPath,
     outputPath: input.outputPath,
     manifestPath: input.manifestPath,
-    ...(input.canvasId ? { canvasId: input.canvasId } : {}),
+    ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
+    ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {}),
     ...(input.sourcePath ? { sourcePath: input.sourcePath } : {}),
     ...(input.referencePath ? { referencePath: input.referencePath } : {}),
     ...(input.intent ? { intent: input.intent } : {}),
@@ -3123,8 +3177,7 @@ async function writeImageArtifactManifest(input: {
     ...(input.lockedFacts?.length ? { lockedFacts: input.lockedFacts } : {}),
     ...(input.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: input.sourceControlledArtifacts } : {}),
     title: input.title,
-    ...(input.usagePolicy ? { usagePolicy: input.usagePolicy } : {}),
-    ...(input.review?.ok ? { reviewScore: input.review.score } : {})
+    ...(input.usagePolicy ? { usagePolicy: input.usagePolicy } : {})
   })
   return artifactManifestPath
 }
@@ -3134,7 +3187,7 @@ async function writeJson(path: string, value: unknown): Promise<void> {
   await writeFile(path, JSON.stringify(value, null, 2) + '\n', 'utf8')
 }
 
-async function loadReviewPacket(request: ImageGenerationEditFromCanvasPacketRequest, workspaceRoot: string): Promise<unknown> {
+async function loadReviewPacket(request: ImageGenerationEditFromVisualReviewPacketRequest, workspaceRoot: string): Promise<unknown> {
   if (request.reviewPacket) return request.reviewPacket
   if (!request.reviewPacketPath?.trim()) throw new Error('reviewPacket or reviewPacketPath is required.')
   const packetPath = await resolveWorkspacePath(workspaceRoot, request.reviewPacketPath)
@@ -3143,32 +3196,50 @@ async function loadReviewPacket(request: ImageGenerationEditFromCanvasPacketRequ
 
 function extractEditIntents(packet: unknown, workspaceRoot: string, warnings: string[]): ImageEditIntent[] {
   const record = asRecord(packet)
-  const artifacts = Array.isArray(record.artifacts) ? record.artifacts.map(asRecord) : []
-  const suggestions = Array.isArray(record.modificationSuggestions) ? record.modificationSuggestions.map(asRecord) : []
-  const intents: ImageEditIntent[] = []
-  for (const suggestion of suggestions) {
-    const targetShapeId = typeof suggestion.targetShapeId === 'string' ? suggestion.targetShapeId : undefined
-    const target = artifacts.find((artifact) => typeof artifact.shapeId === 'string' && artifact.shapeId === targetShapeId)
-      ?? artifacts.find((artifact) => isImageArtifactKind(String(artifact.artifactKind ?? '')))
-    if (!target) continue
-    const sourcePath = stringValue(target.outputPath) ?? stringValue(target.sourcePath) ?? stringValue(target.path)
-    if (!sourcePath) continue
-    const instruction = stringValue(suggestion.instruction) ?? 'Apply the canvas annotation as a non-destructive image edit.'
-    try {
-      ensureInsideWorkspace(workspaceRoot, isAbsolute(sourcePath) ? resolve(sourcePath) : resolve(workspaceRoot, sourcePath))
-      intents.push({
-        mode: 'replace',
-        sourcePath,
-        instruction,
-        ...(typeof suggestion.annotationShapeId === 'string' ? { annotationShapeId: suggestion.annotationShapeId } : {}),
-        ...(targetShapeId ? { targetShapeId } : {}),
-        preserve: ['composition', 'layout']
-      })
-    } catch (error) {
-      warnings.push('Skipped image edit target outside workspace: ' + (error instanceof Error ? error.message : String(error)))
-    }
+  if (record.schemaVersion !== 1) {
+    warnings.push('Skipped unsupported VisualDocument review packet schema.')
+    return []
   }
-  return intents
+  const artifact = asRecord(record.sourceArtifact)
+  if (!isImageArtifactKind(String(artifact.kind ?? ''))) {
+    warnings.push('VisualDocument review packet does not target an image artifact.')
+    return []
+  }
+  const sourcePath = stringValue(artifact.workingCopyPath) ?? stringValue(artifact.sourcePath)
+  const annotations = Array.isArray(record.annotations)
+    ? record.annotations.map(asRecord).filter((annotation) => annotation.status !== 'resolved')
+    : []
+  if (!sourcePath || annotations.length === 0) return []
+  try {
+    ensureInsideWorkspace(workspaceRoot, isAbsolute(sourcePath) ? resolve(sourcePath) : resolve(workspaceRoot, sourcePath))
+  } catch (error) {
+    warnings.push('Skipped image edit target outside workspace: ' + (error instanceof Error ? error.message : String(error)))
+    return []
+  }
+  const truthLocks = Array.isArray(record.truthLocks)
+    ? record.truthLocks.map(asRecord).map((lock) => stringValue(lock.description)).filter((value): value is string => Boolean(value))
+    : []
+  const styleProfileRef = stringValue(record.styleProfileRef)
+  const annotationInstructions = annotations.map((annotation, index) => {
+    const instruction = stringValue(annotation.instruction) ?? 'Apply this visual-review annotation.'
+    return `${index + 1}. annotation=${stringValue(annotation.id) ?? `annotation-${index + 1}`} region=${JSON.stringify(annotation.geometry ?? null)} instruction=${instruction}`
+  })
+  const instruction = [
+    'Create one non-destructive candidate that applies every human visual-review annotation to the source image.',
+    ...annotationInstructions,
+    ...(truthLocks.length ? [`Preserve these truth-locked elements exactly: ${truthLocks.join('; ')}`] : []),
+    ...(styleProfileRef ? [`Use the VisualStyleProfile at ${styleProfileRef} as the style constraint.`] : [])
+  ].join('\n')
+  return [{
+    mode: 'replace',
+    sourcePath,
+    instruction,
+    annotationIds: annotations.map((annotation, index) => stringValue(annotation.id) ?? `annotation-${index + 1}`),
+    targetNodeIds: [...new Set(annotations.flatMap((annotation) => (
+      Array.isArray(annotation.targetNodeIds) ? annotation.targetNodeIds.map(stringValue).filter((value): value is string => Boolean(value)) : []
+    )))],
+    preserve: ['composition', 'layout']
+  }]
 }
 
 function isImageArtifactKind(kind: string): boolean {
@@ -3197,20 +3268,6 @@ async function scoreNonEmpty(path: string): Promise<number> {
     max = Math.max(max, luminance)
   }
   return clamp01((max - min) / 64)
-}
-
-function renderReviewPacketMarkdown(title: string, items: unknown[], warnings: string[]): string {
-  const lines = ['# ' + title, '', 'Items: ' + items.length, '']
-  if (warnings.length) {
-    lines.push('## Warnings', '', ...warnings.map((warning) => '- ' + warning), '')
-  }
-  lines.push('## Manifests', '')
-  for (const item of items) {
-    const record = asRecord(item)
-    lines.push('- ' + (stringValue(record.outputPath) ?? stringValue(record.path) ?? 'unknown output'))
-  }
-  lines.push('')
-  return lines.join('\n')
 }
 
 async function pathExists(path: string): Promise<boolean> {
@@ -3242,6 +3299,7 @@ function clamp01(value: number): number {
 class WorkspaceError extends Error {}
 class ProviderError extends Error {}
 class ProviderNotConfiguredError extends ProviderError {}
+class ReviewPacketError extends Error {}
 
 function renderErrorStatus(
   error: unknown
@@ -3254,8 +3312,9 @@ function renderErrorStatus(
 
 function editErrorStatus(
   error: unknown
-): Extract<ImageGenerationEditFromCanvasPacketResult, { ok: false }>['status'] {
+): Extract<ImageGenerationEditFromVisualReviewPacketResult, { ok: false }>['status'] {
   if (error instanceof WorkspaceError) return 'invalid_workspace'
+  if (error instanceof ReviewPacketError || error instanceof SyntaxError) return 'invalid_packet'
   if (error instanceof ProviderNotConfiguredError) return 'provider_not_configured'
   if (error instanceof ProviderError) return 'provider_failed'
   return 'write_failed'

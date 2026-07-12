@@ -3,20 +3,40 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { describe, expect, it } from 'vitest'
-import type { FigureStyleSpec } from './types'
+import type { FigureStyleSpec, ScientificPlottingVisualPlanHandoff } from './types'
 import {
   buildScientificFigureNeedClassification,
   createScientificPlottingResearchBrief,
   createScientificPlottingReviewPacket,
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
-  mapScientificPlottingData,
+  mapScientificPlottingData as mapScientificPlottingDataEngine,
   planScientificPlotting,
   prepareScientificPlottingReference,
-  renderScientificPlot,
-  reviewScientificPlottingOutput,
-  runScientificPlottingStyleTransfer
+  renderScientificPlot as renderScientificPlotEngine,
+  reviewScientificPlottingOutput
 } from './scientific-plotting-engine'
+
+const CONTROLLED_PLOT_PLAN: ScientificPlottingVisualPlanHandoff = {
+  route: 'deterministic_plot',
+  routeLocked: true,
+  rationale: 'Test exercises the controlled deterministic plotting route.',
+  reproducibleInputs: ['test fixture data'],
+  truthLockedElements: ['all fixture values and labels'],
+  fallbackPolicy: 'fail_closed'
+}
+
+function mapScientificPlottingData(
+  request: Omit<Parameters<typeof mapScientificPlottingDataEngine>[0], 'scientificVisualPlan'>
+) {
+  return mapScientificPlottingDataEngine({ ...request, scientificVisualPlan: CONTROLLED_PLOT_PLAN })
+}
+
+function renderScientificPlot(
+  request: Omit<Parameters<typeof renderScientificPlotEngine>[0], 'scientificVisualPlan'>
+) {
+  return renderScientificPlotEngine({ ...request, scientificVisualPlan: CONTROLLED_PLOT_PLAN })
+}
 
 async function tempWorkspace(): Promise<string> {
   const root = join(tmpdir(), `scientific-plotting-${Date.now()}-${Math.random().toString(16).slice(2)}`)
@@ -124,6 +144,20 @@ function referenceStyleSpec(figureId: string): FigureStyleSpec {
 }
 
 describe('scientific plotting engine', () => {
+  it('fails closed when deterministic mapping bypasses scientific_visual_plan', async () => {
+    const result = await mapScientificPlottingDataEngine({
+      workspaceRoot: '/tmp',
+      task: 'Draw a data plot.',
+      data: { categories: ['A'], values: [1] }
+    } as never)
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'invalid_request',
+      missingInputs: ['scientificVisualPlan']
+    })
+  })
+
   it('plans a controlled attention map without executable commands', async () => {
     await expect(planScientificPlotting({
       task: 'Draw an attention heatmap from a token-by-token attention matrix.'
@@ -144,15 +178,11 @@ describe('scientific plotting engine', () => {
       recommendedTemplate: 'attention-map',
       controlledTool: 'scientific_plotting_research_brief',
       figureNeed: expect.objectContaining({
-        recommendedNextTool: 'scientific_plotting_research_brief'
+        recommendedNextTool: 'scientific_visual_plan'
       }),
       researchBriefRecommendation: expect.objectContaining({
         recommended: true,
         nextControlledTool: 'scientific_plotting_research_brief'
-      }),
-      imagePolishRecommendation: expect.objectContaining({
-        model: 'gpt-image-2',
-        nextControlledTool: 'image_generation_plan'
       })
     })
   })
@@ -197,10 +227,6 @@ describe('scientific plotting engine', () => {
       ok: true,
       recommendedTemplate: 'flowchart',
       controlledTool: 'scientific_plotting_research_brief',
-      toolRoutingRecommendation: expect.objectContaining({
-        preferredTool: 'image_generation_plan',
-        reason: expect.stringContaining('semantic diagram')
-      }),
       researchBriefRecommendation: expect.objectContaining({
         recommended: true,
         nextControlledTool: 'scientific_plotting_research_brief'
@@ -233,7 +259,8 @@ describe('scientific plotting engine', () => {
       controlledTool: 'scientific_plotting_research_brief',
       figureNeed: expect.objectContaining({
         primaryNeed: 'model_architecture',
-        route: 'diagram_spec_or_image_generation'
+        route: 'needs_clarification',
+        recommendedNextTool: 'scientific_visual_plan'
       })
     })
 
@@ -247,7 +274,8 @@ describe('scientific plotting engine', () => {
       controlledTool: 'scientific_plotting_render',
       figureNeed: expect.objectContaining({
         primaryNeed: 'statistical_comparison',
-        route: 'controlled_plotting_renderer'
+        route: 'needs_clarification',
+        recommendedNextTool: 'scientific_visual_plan'
       })
     })
     if (cellLineStatsPlan.ok) {
@@ -265,7 +293,6 @@ describe('scientific plotting engine', () => {
     if (plainBarPlan.ok) {
       expect(plainBarPlan.externalSkillCatalog?.recommendedSkillIds).not.toContain('nature-figure')
       expect(plainBarPlan.externalSkillCatalog?.primarySources).not.toContain('cns')
-      expect(plainBarPlan.imagePolishRecommendation).toBeUndefined()
     }
 
     const annotatedBarPlan = await planScientificPlotting({
@@ -274,12 +301,7 @@ describe('scientific plotting engine', () => {
     expect(annotatedBarPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'bar',
-      controlledTool: 'scientific_plotting_render',
-      imagePolishRecommendation: expect.objectContaining({
-        model: 'gpt-image-2',
-        nextControlledTool: 'image_generation_plan',
-        preserve: expect.arrayContaining([expect.stringContaining('Do not change numeric values')])
-      })
+      controlledTool: 'scientific_plotting_render'
     })
     if (annotatedBarPlan.ok) {
       expect(annotatedBarPlan.researchBriefRecommendation).toBeUndefined()
@@ -292,10 +314,6 @@ describe('scientific plotting engine', () => {
       ok: true,
       recommendedTemplate: 'flowchart',
       controlledTool: 'scientific_plotting_research_brief',
-      toolRoutingRecommendation: expect.objectContaining({
-        preferredTool: 'image_generation_plan',
-        reason: expect.stringContaining('semantic diagram')
-      }),
       researchBriefRecommendation: expect.objectContaining({
         recommended: true
       })
@@ -310,8 +328,8 @@ describe('scientific plotting engine', () => {
 
     expect(proseNeed).toMatchObject({
       domain: 'ai-ml',
-      route: 'diagram_spec_or_image_generation',
-      recommendedNextTool: 'scientific_plotting_research_brief',
+      route: 'needs_clarification',
+      recommendedNextTool: 'scientific_visual_plan',
       avoidTemplates: ['flowchart']
     })
     expect(['method_flow', 'model_architecture']).toContain(proseNeed.primaryNeed)
@@ -328,8 +346,8 @@ describe('scientific plotting engine', () => {
       controlledTool: 'scientific_plotting_research_brief',
       figureNeed: expect.objectContaining({
         primaryNeed: 'mechanism_schematic',
-        route: 'diagram_spec_or_image_generation',
-        recommendedNextTool: 'scientific_plotting_research_brief'
+        route: 'needs_clarification',
+        recommendedNextTool: 'scientific_visual_plan'
       }),
       researchBriefRecommendation: expect.objectContaining({
         nextControlledTool: 'scientific_plotting_research_brief',
@@ -366,7 +384,7 @@ describe('scientific plotting engine', () => {
       targetVenue: 'Nature',
       figureNeed: expect.objectContaining({
         primaryNeed: 'mechanism_schematic',
-        recommendedNextTool: 'scientific_plotting_research_brief'
+        recommendedNextTool: 'scientific_visual_plan'
       }),
       figureContract: expect.objectContaining({
         archetype: 'mechanism_schematic',
@@ -379,15 +397,11 @@ describe('scientific plotting engine', () => {
         readOnlyExternalSkills: true
       }),
       promptSpecDraft: expect.objectContaining({
-        nextControlledTool: expect.stringContaining('image_generation'),
+        nextControlledTool: 'scientific_visual_plan',
         fullPrompt: expect.stringContaining('Reference papers and figure evidence'),
-        imagePolishRecommendation: expect.objectContaining({
-          model: 'gpt-image-2',
-          fallbackModel: 'configured_model_router_image_model',
-          nextControlledTool: 'image_generation_plan'
-        }),
         codeGenerationPlan: expect.objectContaining({
-          target: 'image_generation_recipe',
+          target: 'scientific_visual_plan_request',
+          nextControlledTool: 'scientific_visual_plan',
           notes: expect.arrayContaining([expect.stringContaining('referencePapers')])
         }),
         referencePapers: expect.arrayContaining([
@@ -409,15 +423,13 @@ describe('scientific plotting engine', () => {
         scope: 'paper_level',
         sourceWorkflow: 'paper_figures_data_first_v1',
         handoff: expect.objectContaining({
-          imagePolish: expect.arrayContaining([expect.stringContaining('gpt-image-2')])
+          imagePolish: expect.arrayContaining([expect.stringContaining('Model Router')])
         }),
         compositionPlan: expect.objectContaining({
           sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1',
           stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
           image2Composition: expect.objectContaining({
-            preferredModel: 'gpt-image-2',
-            fallbackModel: 'configured_model_router_image_model',
-            nextControlledTool: 'image_generation_plan',
+            nextControlledTool: 'scientific_visual_plan',
             allowedOperations: expect.arrayContaining([
               'panel_stitching',
               'callout_overlay',
@@ -445,7 +457,7 @@ describe('scientific plotting engine', () => {
             ]),
             handoffPrompt: expect.stringContaining('Do not redraw, replace, or reinterpret scientific data panels')
           }),
-          canvasReview: expect.objectContaining({
+          visualReview: expect.objectContaining({
             preserveOriginalArtifacts: true,
             revisionPolicy: 'new_version_next_to_original'
           })
@@ -535,8 +547,8 @@ describe('scientific plotting engine', () => {
         selectedSkillIds: expect.arrayContaining(['image-delta-polish'])
       }),
       figureNeed: expect.objectContaining({
-        route: 'diagram_spec_or_image_generation',
-        recommendedNextTool: 'scientific_plotting_research_brief'
+        route: 'needs_clarification',
+        recommendedNextTool: 'scientific_visual_plan'
       }),
       literatureStrategy: expect.objectContaining({
         nextControlledTool: 'research_search',
@@ -547,8 +559,8 @@ describe('scientific plotting engine', () => {
         nextControlledTool: 'research_search',
         fullPrompt: expect.stringContaining('No reference papers confirmed yet'),
         codeGenerationPlan: expect.objectContaining({
-          target: 'image_generation_recipe',
-          nextControlledTool: expect.stringContaining('image_generation'),
+          target: 'scientific_visual_plan_request',
+          nextControlledTool: 'scientific_visual_plan',
           notes: expect.arrayContaining([expect.stringContaining('Do not render yet')])
         })
       })
@@ -1075,7 +1087,7 @@ describe('scientific plotting engine', () => {
         status: 'diagram_requires_image_generation',
         draftHandoff: expect.objectContaining({
           kind: 'diagram_draft_handoff',
-          recommendedNextTools: ['image_generation_plan', 'image_generation_render'],
+          recommendedNextTools: ['image_generation_prepare', 'image_generation_render'],
           draftSpec: expect.objectContaining({
             template: 'flowchart',
             nodes: expect.arrayContaining([
@@ -1487,7 +1499,7 @@ describe('scientific plotting engine', () => {
         ok: true,
         template: 'line',
         templateAdvice: expect.any(Object),
-        score: {
+        metric: {
           overall: expect.any(Number),
           palette: expect.any(Number),
           background: expect.any(Number),
@@ -1633,9 +1645,10 @@ describe('scientific plotting engine', () => {
               template: 'bar',
               outputPath: result.outputPath,
               manifestPath: result.manifestPath,
-              score: {
+              styleSimilarity: {
                 overall: expect.any(Number)
               },
+              styleRepairSuggested: expect.any(Boolean),
               recommendedActions: expect.any(Array)
             }
           ],
@@ -1815,9 +1828,9 @@ describe('scientific plotting engine', () => {
         styleSpecPath: result.styleSpecPath,
         nextWorkflow: {
           referencePath: result.croppedImagePath,
-          suggestedPlanTool: 'scientific_plotting_plan',
+          suggestedPlanTool: 'scientific_visual_plan',
           suggestedRenderTool: 'scientific_plotting_render',
-          suggestedReviewTool: 'scientific_plotting_review'
+          suggestedReviewTool: 'visual_artifact_review'
         }
       })
       const manifest = JSON.parse(await readFile(result.referenceManifestPath, 'utf8')) as {
@@ -1853,133 +1866,6 @@ describe('scientific plotting engine', () => {
       })
       expect(manifest.styleProfileMatches?.[0]?.profileId).toBe(manifest.recommendedStyleProfile?.id)
       expect(manifest.styleProfileMatches?.[0]?.score).toBeGreaterThan(0.4)
-    } finally {
-      await rm(workspace, { recursive: true, force: true })
-    }
-  })
-
-  it('runs the v2 controlled style-transfer workflow with artifacts and review packet', async () => {
-    const workspace = await tempWorkspace()
-    try {
-      await writeSyntheticReferenceImage(join(workspace, 'reference.png'))
-      const result = await runScientificPlottingStyleTransfer({
-        workspaceRoot: workspace,
-        task: 'Use the reference paper style to draw a benchmark comparison bar chart.',
-        figureId: 'v2-style-transfer-smoke',
-        reference: {
-          sourcePath: 'reference.png',
-          figureId: 'v2-reference',
-          cropBox: {
-            unit: 'ratio',
-            x: 0,
-            y: 0,
-            width: 1,
-            height: 1
-          }
-        },
-        labels: {
-          title: 'Benchmark comparison',
-          x: 'Model',
-          y: 'Score',
-          panel: 'V2'
-        },
-        data: {
-          rows: [
-            { model: 'Baseline', score: 0.61 },
-            { model: 'SciForge', score: 0.78 },
-            { model: 'Ablated', score: 0.69 }
-          ]
-        }
-      })
-
-      expect(result).toMatchObject({
-        ok: true,
-        status: 'completed',
-        preparedReference: {
-          status: 'prepared',
-          recommendedStyleProfile: {
-            id: expect.any(String)
-          }
-        },
-        plan: {
-          ok: true
-        },
-        mapping: {
-          ok: true,
-          selectedTemplate: 'bar'
-        },
-        render: {
-          ok: true
-        },
-        reviewPacket: {
-          ok: true
-        },
-        styleTransferManifest: {
-          version: 2,
-          tool: 'scientific_plotting_style_transfer',
-          selectedTemplate: 'bar'
-        }
-      })
-      if (!result.ok) return
-      const reviewPacket = result.reviewPacket
-      expect(reviewPacket?.ok).toBe(true)
-      if (!reviewPacket?.ok) return
-      await expect(stat(result.referenceImagePath!)).resolves.toBeTruthy()
-      await expect(stat(result.outputPath!)).resolves.toBeTruthy()
-      await expect(stat(result.renderManifestPath!)).resolves.toBeTruthy()
-      await expect(stat(reviewPacket.packetPath)).resolves.toBeTruthy()
-      await expect(stat(result.styleTransferManifestPath)).resolves.toBeTruthy()
-      const manifest = JSON.parse(await readFile(result.styleTransferManifestPath, 'utf8')) as {
-        version?: number
-        requestHash?: string
-        outputPath?: string
-        renderManifestPath?: string
-        reviewPacketPath?: string
-      }
-      expect(manifest.version).toBe(2)
-      expect(manifest.requestHash).toMatch(/^[a-f0-9]{64}$/)
-      expect(manifest.outputPath).toBe(result.outputPath)
-      expect(manifest.renderManifestPath).toBe(result.renderManifestPath)
-      expect(manifest.reviewPacketPath).toBe(reviewPacket.packetPath)
-    } finally {
-      await rm(workspace, { recursive: true, force: true })
-    }
-  }, 90_000)
-
-  it('fails style transfer fast for an unknown explicit style profile', async () => {
-    const workspace = await tempWorkspace()
-    try {
-      const result = await runScientificPlottingStyleTransfer({
-        workspaceRoot: workspace,
-        task: 'Draw a paper-style benchmark line chart.',
-        figureId: 'unknown-profile-style-transfer',
-        styleProfileId: 'not-a-real-style-profile',
-        labels: {
-          title: 'Unknown profile',
-          x: 'Step',
-          y: 'Score'
-        },
-        data: {
-          series: [
-            {
-              name: 'SciForge',
-              x: [1, 2, 3],
-              y: [0.2, 0.4, 0.7]
-            }
-          ]
-        }
-      })
-
-      expect(result).toMatchObject({
-        ok: false,
-        status: 'invalid_request',
-        message: 'Unknown scientific plotting style profile: not-a-real-style-profile.',
-        styleProfiles: {
-          ok: false,
-          status: 'not_found'
-        }
-      })
-      expect(result.warnings?.join(' ')).toContain('not-a-real-style-profile')
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }

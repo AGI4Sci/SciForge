@@ -885,6 +885,7 @@ describe('FloatingComposer capability controls', () => {
         onComposerModelChange: () => undefined,
         queuedMessages: [{ id: 'q-1', text: 'follow up after this' }],
         onRemoveQueuedMessage: () => undefined,
+        onEditQueuedMessage: () => undefined,
         onSteerQueuedMessage: () => undefined,
         onSend: () => undefined,
         onInterrupt: () => undefined,
@@ -895,6 +896,8 @@ describe('FloatingComposer capability controls', () => {
     )
 
     expect(html).toContain('follow up after this')
+    expect(html).not.toContain('max-w-[360px] truncate')
+    expect(html).toContain('Edit queued message')
     expect(html).toContain('Inject this queued message into the current run')
     expect(html).toContain('Remove queued message')
   })

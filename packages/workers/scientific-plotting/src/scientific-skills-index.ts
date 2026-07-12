@@ -145,8 +145,8 @@ export type ScientificSkillPlanResult = {
     nextControlledTool: string
     styleReference?: {
       detected: boolean
-      extractionTool: 'figure-style:extract'
-      outputArtifact: 'FigureStyleSpec v1'
+      extractionTool: 'visual-style:extract-profile'
+      outputArtifact: 'VisualStyleProfile v1'
       acceptedSourceTypes: Array<'image' | 'pdf'>
       nextControlledTool: string
       guardrails: string[]
@@ -861,7 +861,7 @@ function buildNextSciForgeActions(styleReferenceTask: boolean): string[] {
   ]
   if (!styleReferenceTask) return actions
   return [
-    'If the user provided a reference paper or figure image, call the controlled figure-style:extract IPC/tool first to produce FigureStyleSpec v1.',
+    'If the user provided a reference paper or figure image, call the controlled visual-style:extract-profile IPC/tool first to produce VisualStyleProfile v1.',
     ...actions
   ]
 }
@@ -892,7 +892,7 @@ function buildPlottingWorkflow(
   ]
   if (styleReferenceTask) {
     dataFigureHints.unshift(
-      'For paper-style matching, extract a FigureStyleSpec from a user-provided reference figure image before generating the new plot.'
+      'For paper-style matching, extract a VisualStyleProfile from a user-provided reference figure image before generating the new plot.'
     )
   }
   return {
@@ -906,14 +906,14 @@ function buildPlottingWorkflow(
       ? {
           styleReference: {
             detected: true,
-            extractionTool: 'figure-style:extract' as const,
-            outputArtifact: 'FigureStyleSpec v1' as const,
+            extractionTool: 'visual-style:extract-profile' as const,
+            outputArtifact: 'VisualStyleProfile v1' as const,
             acceptedSourceTypes: ['image' as const, 'pdf' as const],
             nextControlledTool: 'SciForge DataFigure Engine',
             guardrails: [
               'Use the reference only for style guidance; do not copy original data, labels, or protected figure content.',
               'Prefer a cropped figure panel image for v1.3; PDF extraction should degrade to an image-crop request.',
-              'Store the FigureStyleSpec next to generated artifacts for audit and reproducibility.'
+              'Store the VisualStyleProfile next to generated artifacts for audit and reproducibility.'
             ]
           }
         }

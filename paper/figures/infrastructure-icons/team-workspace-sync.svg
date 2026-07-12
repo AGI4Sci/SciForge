@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Team Workspace Sync</title>
+  <desc id="desc">Synchronization of shared project context, group discussions, task state, review packets, and mobile supervision.</desc>
+  <defs>
+    <linearGradient id="workspace" x1="45" y1="51" x2="214" y2="210" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#F8FBFF"/>
+      <stop offset="1" stop-color="#E7F0F7"/>
+    </linearGradient>
+    <linearGradient id="sync" x1="77" y1="73" x2="184" y2="184" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#18A999"/>
+      <stop offset="1" stop-color="#3B82F6"/>
+    </linearGradient>
+  </defs>
+  <rect x="47" y="47" width="162" height="146" rx="17" fill="url(#workspace)" stroke="#23313A" stroke-width="8"/>
+  <path d="M47 78h162" fill="none" stroke="#23313A" stroke-width="8"/>
+  <circle cx="70" cy="63" r="5" fill="#EF6F6C"/>
+  <circle cx="88" cy="63" r="5" fill="#F4B942"/>
+  <circle cx="106" cy="63" r="5" fill="#18A999"/>
+  <path d="M83 113h36M83 135h54M83 157h32" fill="none" stroke="#667985" stroke-width="6" stroke-linecap="round"/>
+  <circle cx="65" cy="113" r="6" fill="#18A999"/>
+  <circle cx="65" cy="135" r="6" fill="#3B82F6"/>
+  <circle cx="65" cy="157" r="6" fill="#F4B942"/>
+  <circle cx="162" cy="126" r="24" fill="url(#sync)" stroke="#23313A" stroke-width="7"/>
+  <path d="M151 126l8 8 16-20" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M54 207c14 16 39 26 68 26 31 0 58-12 71-30" fill="none" stroke="#18A999" stroke-width="7" stroke-linecap="round"/>
+  <path d="M185 224l9-22-23 4" fill="none" stroke="#18A999" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M202 45c-14-15-39-24-68-24-30 0-56 10-70 27" fill="none" stroke="#3B82F6" stroke-width="7" stroke-linecap="round"/>
+  <path d="M72 27l-10 22 23-3" fill="none" stroke="#3B82F6" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="43" cy="204" r="19" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M34 207c4-8 14-8 18 0M37 198h12" fill="none" stroke="#667985" stroke-width="5" stroke-linecap="round"/>
+  <rect x="190" y="183" width="36" height="54" rx="9" fill="#FFFFFF" stroke="#23313A" stroke-width="7"/>
+  <path d="M202 195h12M202 215h12" fill="none" stroke="#667985" stroke-width="5" stroke-linecap="round"/>
+</svg>

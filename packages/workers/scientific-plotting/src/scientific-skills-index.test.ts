@@ -314,7 +314,7 @@ describe('scientific skills index', () => {
     expect(JSON.stringify(plan)).not.toContain('npx ')
   })
 
-  it('plans a controlled figure style extraction workflow for reference-paper aesthetics', async () => {
+  it('plans a controlled visual style profile workflow for reference-paper aesthetics', async () => {
     const root = await tempDir()
     await writeSkill(root, 'scientific-visualization', [
       '---',
@@ -347,14 +347,14 @@ describe('scientific skills index', () => {
       detected: true,
       styleReference: {
         detected: true,
-        extractionTool: 'figure-style:extract',
-        outputArtifact: 'FigureStyleSpec v1',
+        extractionTool: 'visual-style:extract-profile',
+        outputArtifact: 'VisualStyleProfile v1',
         nextControlledTool: 'SciForge DataFigure Engine'
       }
     })
     expect(plan.plottingWorkflow?.styleReference?.acceptedSourceTypes).toEqual(['image', 'pdf'])
-    expect(plan.plottingWorkflow?.dataFigureHints.join(' ')).toContain('FigureStyleSpec')
-    expect(plan.nextSciForgeActions.join(' ')).toContain('figure-style:extract')
+    expect(plan.plottingWorkflow?.dataFigureHints.join(' ')).toContain('VisualStyleProfile')
+    expect(plan.nextSciForgeActions.join(' ')).toContain('visual-style:extract-profile')
     expect(plan.plottingWorkflow?.styleReference?.guardrails.join(' ')).toContain('do not copy original data')
   })
 

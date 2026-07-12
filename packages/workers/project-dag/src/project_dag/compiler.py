@@ -10,24 +10,28 @@ Phases (mirrors the construction plan, adapted to content-addressed ids):
   6  incremental reconcile (relabel affected subgraph)
   7  orphan pool + run stats/diff
 
-Each session commits as ONE SQLite transaction together with its watermark:
-a crash mid-compile loses at most the in-flight session, never leaves a
-half-promoted state.
+Model judgements are prepared before the write phase. Graph mutations,
+watermarks, and the immutable Project Snapshot then commit as one short SQLite
+transaction, so readers never observe a half-promoted state.
 """
 from __future__ import annotations
 
 import difflib
 import json
+import os
 import re
 import threading
+from contextlib import contextmanager, nullcontext
+from collections.abc import Iterator
 from typing import Any, Optional
 
-from .judge import Judge
+from .judge import Judge, JudgePreparationRequired
 from .reader import SessionReader, source_ancestors, source_quality, supporting_subgraph
 from .reconcile import incremental_reconcile
 from .store import Store, new_id, now_iso
 
-_LOCK = threading.Lock()
+_PROJECT_LOCKS: dict[tuple[str, str], threading.Lock] = {}
+_PROJECT_LOCKS_GUARD = threading.Lock()
 
 AUTO_THRESHOLD = 0.85
 REVIEW_THRESHOLD = 0.60
@@ -93,19 +97,159 @@ class Compiler:
         self.review_threshold = review_threshold
 
     # ------------------------------------------------------------------ entry
-    def compile(self, trigger: str = "scheduled", scope: Any = "all",
-                *, project_key: str,
-                evidence_vector: Optional[list[dict]] = None) -> dict:
-        if not _LOCK.acquire(blocking=False):
-            return {"skipped": True, "reason": "compile already running"}
+    def _project_lock(self, project_key: str) -> threading.Lock:
+        key = (os.path.abspath(self.store.db_path), project_key)
+        with _PROJECT_LOCKS_GUARD:
+            return _PROJECT_LOCKS.setdefault(key, threading.Lock())
+
+    @contextmanager
+    def compile_transaction(self, trigger: str = "scheduled", scope: Any = "all",
+                            *, project_key: str,
+                            evidence_vector: Optional[list[dict]] = None) -> Iterator[dict]:
+        """Parallel model preparation followed by one short serial commit.
+
+        Different projects prepare concurrently.  The per-project lock rejects
+        duplicate work for one project, while ``Store.transaction_lock`` only
+        covers mutation plus immutable Project Snapshot insertion.
+        """
+        lock = self._project_lock(project_key)
+        if not lock.acquire(blocking=False):
+            yield {"skipped": True, "reason": "compile already running for project"}
+            return
         try:
-            return self._compile(trigger, scope, project_key=project_key,
-                                 evidence_vector=evidence_vector)
-        except Exception as exc:
-            self._mark_running_failed(exc)
-            raise
+            self._prepare_judgements(scope, project_key=project_key,
+                                     evidence_vector=evidence_vector)
+            while True:
+                preparation: Optional[JudgePreparationRequired] = None
+                with self.store.transaction_lock:
+                    try:
+                        forbid = getattr(self.judge, "model_calls_forbidden", None)
+                        guard = forbid() if callable(forbid) else nullcontext()
+                        with guard:
+                            result = self._compile(
+                                trigger, scope, project_key=project_key,
+                                evidence_vector=evidence_vector)
+                    except JudgePreparationRequired as required:
+                        self.store.conn.rollback()
+                        preparation = required
+                    except Exception as exc:
+                        self._mark_running_failed(exc)
+                        raise
+                    else:
+                        try:
+                            yield result
+                        except Exception as exc:
+                            self._mark_running_failed(exc)
+                            raise
+                        finally:
+                            # The workflow normally commits graph + immutable
+                            # snapshot inside the context. Any unfinished
+                            # transaction is never allowed to leak.
+                            if self.store.conn.in_transaction:
+                                self.store.conn.rollback()
+                        return
+                assert preparation is not None
+                warm_many = getattr(self.judge, "warm_many", None)
+                if not callable(warm_many):
+                    raise preparation
+                warm_many([(
+                    preparation.task_type, preparation.payload,
+                    preparation.vote_seed,
+                )])
         finally:
-            _LOCK.release()
+            lock.release()
+
+    def _prepare_judgements(self, scope: Any, *, project_key: str,
+                            evidence_vector: Optional[list[dict]]) -> None:
+        """Warm input-stable compiler judgements before BEGIN IMMEDIATE.
+
+        Distillation and Goal rematching dominate normal P2 latency and depend
+        only on committed inputs. Entity votes are derived from those prepared
+        distill outputs and the committed entity index. Dynamic claim matching
+        remains in the serial phase because earlier insertions can change its
+        candidate IDs; correctness takes precedence over speculative replay.
+        """
+        warm_many = getattr(self.judge, "warm_many", None)
+        if not callable(warm_many):
+            return
+        with self.store.transaction_lock:
+            goals = self.store.active_goals(project_key=project_key, scoped=True)
+            goal_view = [{
+                "id": goal["root_id"], "title": goal["title"],
+                "description": goal["description"] or "",
+            } for goal in goals]
+            requests: list[tuple[str, dict, int]] = []
+            for claim in self.store.q(
+                    "SELECT * FROM claim WHERE project_key=? AND t_invalid IS NULL"
+                    " AND needs_regoal=1 ORDER BY id", (project_key,)):
+                requests.append(("goal_match", {
+                    "claim": {
+                        "id": claim["id"], "statement": claim["statement"],
+                        "claim_type": claim["claim_type"],
+                        "current_goal_id": claim["goal_id"],
+                    },
+                    "active_goals": goal_view,
+                }, 0))
+
+            session_ids = (self.reader.list_sessions() if scope == "all" else list(scope))
+            expected = {
+                entry["threadId"]: entry["digest"] for entry in (evidence_vector or [])
+            }
+            if evidence_vector is not None and set(session_ids) != set(expected):
+                raise ValueError("compile scope must exactly match the captured evidence vector")
+            distill_inputs: list[dict] = []
+            for session_id in session_ids:
+                try:
+                    delta = self.reader.delta(
+                        session_id, self.store.get_watermark(project_key, session_id),
+                        expected.get(session_id))
+                except (OSError, ValueError, KeyError):
+                    continue
+                if delta is None:
+                    continue
+                for node_id in delta.new_claim_ids:
+                    node = delta.graph.nodes[node_id]
+                    subgraph = supporting_subgraph(delta.graph, node_id)
+                    payload = {
+                        "claim": node.content,
+                        "subgraph": subgraph,
+                        "active_goals": goal_view,
+                    }
+                    distill_inputs.append(payload)
+                    requests.append(("distill", payload, 0))
+
+        outputs = warm_many(requests)
+        distill_outputs = outputs[-len(distill_inputs):] if distill_inputs else []
+        entity_requests: list[tuple[str, dict, int]] = []
+        with self.store.transaction_lock:
+            live_entities = self.store.q("SELECT * FROM entity WHERE merged_into IS NULL")
+            for output in distill_outputs:
+                context = output.get("statement", "")
+                for name in output.get("mentioned_entities", []):
+                    if not isinstance(name, str) or not name.strip():
+                        continue
+                    pool: list[tuple[float, dict]] = []
+                    exact = False
+                    for entity in live_entities:
+                        aliases = [entity["canonical_name"]] + json.loads(entity["aliases"])
+                        if any(_norm(alias) == _norm(name) for alias in aliases):
+                            exact = True
+                            break
+                        similarity = max((_sim(name, alias) for alias in aliases), default=0.0)
+                        if similarity >= 0.55:
+                            pool.append((similarity, entity))
+                    if exact:
+                        continue
+                    pool.sort(key=lambda item: -item[0])
+                    for _, entity in pool[:3]:
+                        payload = {
+                            "name": name, "candidate": entity["canonical_name"],
+                            "candidate_aliases": json.loads(entity["aliases"]),
+                            "context": context,
+                        }
+                        entity_requests.extend(
+                            ("entity_same", payload, vote_seed) for vote_seed in range(3))
+        warm_many(entity_requests)
 
     def _mark_running_failed(self, exc: Exception) -> None:
         stats = json.dumps({"errors": 1}, ensure_ascii=False)
@@ -177,6 +321,13 @@ class Compiler:
                 st.set_watermark(project_key, sid, delta.dag_hash, delta.all_node_ids)
                 st.x(f"RELEASE SAVEPOINT {savepoint}")
                 diff["sessions"].append(sid)
+            except JudgePreparationRequired:
+                # This is control flow, not a bad session. The transaction
+                # wrapper rolls back the optimistic attempt, prepares the
+                # missing response without a write lock, then retries.
+                st.x(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                st.x(f"RELEASE SAVEPOINT {savepoint}")
+                raise
             except Exception as exc:               # noqa: BLE001 — session must roll back whole
                 st.x(f"ROLLBACK TO SAVEPOINT {savepoint}")
                 st.x(f"RELEASE SAVEPOINT {savepoint}")
@@ -664,13 +815,23 @@ class Compiler:
 
         relation, target, conf = "new", None, 1.0
         if pool:
+            # Model-facing aliases keep preparation cache keys stable when an
+            # earlier candidate in the same batch was inserted by a rolled-back
+            # optimistic compile attempt with a different generated row id.
+            target_aliases = {
+                f"candidate_{index}": candidate["id"]
+                for index, candidate in enumerate(pool)
+            }
             m = self.judge("claim_equiv", {
                 "new": statement,
-                "pool": [{"id": c["id"], "statement": c["statement"]} for c in pool]})
+                "pool": [
+                    {"id": alias, "statement": candidate["statement"]}
+                    for alias, candidate in zip(target_aliases, pool)
+                ]})
             relation = m.get("relation", "new")
-            target = m.get("target")
+            target = target_aliases.get(m.get("target"))
             conf = float(m.get("confidence", 0.0))
-            if target is not None and target not in {c["id"] for c in pool}:
+            if m.get("target") is not None and target is None:
                 relation, target = "new", None
 
         if relation == "equivalent" and target and conf >= self.auto_threshold:
