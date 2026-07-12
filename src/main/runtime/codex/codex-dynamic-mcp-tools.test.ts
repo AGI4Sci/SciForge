@@ -89,6 +89,174 @@ describe('Codex dynamic MCP tool bridge', () => {
     ])
   })
 
+  it('isolates an items tuple schema while keeping valid tools available', async () => {
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'healthy result' }] }))
+    const bridge = createCodexDynamicMcpToolBridge({
+      servers: [{ id: 'mixed-tools', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'bad_tuple',
+          description: 'Must be unavailable.',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              reviewEvidence: {
+                type: 'object',
+                properties: {
+                  violations: { type: 'array', items: [] }
+                }
+              }
+            },
+            privateValue: 'DO_NOT_LEAK_SCHEMA_VALUE'
+          }
+        }, {
+          name: 'healthy_tool',
+          description: 'Must remain callable.',
+          inputSchema: {
+            type: 'object',
+            properties: { query: { type: 'string' } }
+          }
+        }],
+        callTool
+      })
+    })
+
+    await expect(bridge.dynamicTools()).resolves.toEqual([{
+      type: 'function',
+      name: 'healthy_tool',
+      description: 'Must remain callable.',
+      inputSchema: {
+        type: 'object',
+        properties: { query: { type: 'string' } }
+      }
+    }])
+    // Re-enumeration must not flood the bounded diagnostic history.
+    await bridge.dynamicTools()
+    await expect(bridge.callTool({
+      requestId: 'healthy-after-invalid-schema',
+      tool: 'healthy_tool',
+      arguments: { query: 'evidence' }
+    })).resolves.toEqual({
+      contentItems: [{ type: 'inputText', text: 'healthy result' }],
+      success: true
+    })
+    expect(callTool).toHaveBeenCalledWith(
+      { name: 'healthy_tool', arguments: { query: 'evidence' } },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+    )
+    expect(bridge.lifecycleEvents()).toEqual([
+      expect.objectContaining({
+        event: 'tool_unavailable',
+        reason: 'invalid_input_schema',
+        toolName: 'bad_tuple',
+        diagnosticCode: 'schema_items_not_object'
+      })
+    ])
+    expect(JSON.stringify(bridge.lifecycleEvents())).not.toContain('DO_NOT_LEAK_SCHEMA_VALUE')
+    expect(JSON.stringify(bridge.lifecycleEvents())).not.toContain('violations')
+  })
+
+  it('rejects an explicit non-object input schema without exposing its value', async () => {
+    const bridge = createCodexDynamicMcpToolBridge({
+      servers: [{ id: 'non-object', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'bad_root',
+          inputSchema: 'PRIVATE_NON_OBJECT_SCHEMA'
+        }]
+      })
+    })
+
+    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    expect(bridge.lifecycleEvents()).toEqual([
+      expect.objectContaining({
+        event: 'tool_unavailable',
+        toolName: 'bad_root',
+        diagnosticCode: 'schema_root_not_object'
+      })
+    ])
+    expect(JSON.stringify(bridge.lifecycleEvents())).not.toContain('PRIVATE_NON_OBJECT_SCHEMA')
+  })
+
+  it('rejects a JSON Schema whose root explicitly describes a non-object', async () => {
+    const bridge = createCodexDynamicMcpToolBridge({
+      servers: [{ id: 'array-root', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'bad_array_root',
+          inputSchema: { type: 'array', items: { type: 'string' } }
+        }]
+      })
+    })
+
+    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    expect(bridge.lifecycleEvents()).toEqual([
+      expect.objectContaining({
+        event: 'tool_unavailable',
+        toolName: 'bad_array_root',
+        diagnosticCode: 'schema_root_not_object'
+      })
+    ])
+  })
+
+  it('rejects nested non-object property schemas without leaking private fields', async () => {
+    const bridge = createCodexDynamicMcpToolBridge({
+      servers: [{ id: 'nested-invalid', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'bad_nested',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              privateCredential: 'PRIVATE_NESTED_SCHEMA_VALUE'
+            }
+          }
+        }]
+      })
+    })
+
+    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    expect(bridge.lifecycleEvents()).toEqual([
+      expect.objectContaining({
+        event: 'tool_unavailable',
+        toolName: 'bad_nested',
+        diagnosticCode: 'schema_property_not_object'
+      })
+    ])
+    const diagnostics = JSON.stringify(bridge.lifecycleEvents())
+    expect(diagnostics).not.toContain('privateCredential')
+    expect(diagnostics).not.toContain('PRIVATE_NESTED_SCHEMA_VALUE')
+  })
+
+  it('keeps unavailable-tool lifecycle diagnostics bounded, deduplicated, and path/schema safe', async () => {
+    const tools = Array.from({ length: 60 }, (_, index) => ({
+      name: `bad_/private/schema-${index}`,
+      inputSchema: {
+        type: 'object',
+        properties: {
+          [`/Users/private/research/schema-${index}`]: 'DO_NOT_EXPOSE_SCHEMA_OR_PATH'
+        }
+      }
+    }))
+    const bridge = createCodexDynamicMcpToolBridge({
+      servers: [{ id: '/private/mcp/server', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({ tools })
+    })
+
+    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    await bridge.dynamicTools()
+    const diagnostics = bridge.toolUnavailableDiagnostics()
+    expect(diagnostics).toHaveLength(50)
+    expect(new Set(diagnostics.map((item) => `${item.toolName}:${item.diagnosticCode}`)).size).toBe(50)
+    expect(diagnostics.every((item) => item.event === 'tool_unavailable')).toBe(true)
+    expect(diagnostics.every((item) => item.reason === 'invalid_input_schema')).toBe(true)
+    const serialized = JSON.stringify(diagnostics)
+    expect(serialized).not.toContain('/private/')
+    expect(serialized).not.toContain('/Users/')
+    expect(serialized).not.toContain('DO_NOT_EXPOSE_SCHEMA_OR_PATH')
+    expect(serialized).not.toContain('properties')
+  })
+
   it('reconnects when an MCP connection closes while loading the tool catalog', async () => {
     const firstClose = vi.fn(async () => undefined)
     const firstListTools = vi.fn(async () => {

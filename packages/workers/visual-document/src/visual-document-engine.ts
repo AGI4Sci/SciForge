@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto'
+import { loadImage } from '@napi-rs/canvas'
 import { constants } from 'node:fs'
 import {
   access,
@@ -45,6 +46,15 @@ import { canonicalPath, resolveOpenTargetPath } from './workspace-paths.js'
 const DEFAULT_DOCUMENT_ID = 'default'
 const DEFAULT_CANVAS = { width: 1200, height: 800, background: '#ffffff' }
 const DEFAULT_MANUSCRIPT_STYLE_REF = '.sciforge/visual-styles/manuscript-default.json'
+const DECODABLE_RASTER_EXTENSIONS = new Set([
+  '.avif',
+  '.bmp',
+  '.gif',
+  '.jpeg',
+  '.jpg',
+  '.png',
+  '.webp'
+])
 
 function safeId(raw: string | undefined, fallback = DEFAULT_DOCUMENT_ID): string {
   const id = (raw?.trim() || fallback).replace(/[^a-zA-Z0-9._-]+/g, '-')
@@ -209,6 +219,21 @@ function extensionFor(path: string): string {
   return /^\.[a-z0-9]{1,12}$/.test(extension) ? extension : '.bin'
 }
 
+async function dimensionsFromRasterArtifact(path: string): Promise<{ width: number; height: number } | null> {
+  const extension = extname(path).toLowerCase()
+  if (!DECODABLE_RASTER_EXTENSIONS.has(extension)) return null
+  try {
+    const image = await loadImage(path)
+    const dimensions = { width: image.width, height: image.height }
+    assertFinitePositive(dimensions.width, 'candidate raster width')
+    assertFinitePositive(dimensions.height, 'candidate raster height')
+    return dimensions
+  } catch (error) {
+    const detail = error instanceof Error ? ` ${error.message}` : ''
+    throw new Error(`Could not decode candidate raster image dimensions.${detail}`)
+  }
+}
+
 function rootArtifactNode(artifact: VisualArtifact): VisualNode {
   return {
     id: `artifact-${artifact.id}`,
@@ -239,10 +264,13 @@ export async function openOrCreateVisualDocument(
   const workspaceRoot = await ensureWorkspace(request.workspaceRoot)
   const documentId = safeId(request.documentId)
   const paths = documentPaths(workspaceRoot, documentId)
-  await ensureDirectories(paths)
   if (await exists(paths.documentPath)) {
     return { ok: true, status: 'opened', workspaceRoot, document: await readDocument(paths.documentPath), paths }
   }
+  if (request.createIfMissing === false) {
+    throw new Error(`VisualDocument does not exist: ${documentId}.`)
+  }
+  await ensureDirectories(paths)
 
   const createdAt = now()
   const canvas = { ...DEFAULT_CANVAS, ...request.canvas }
@@ -455,6 +483,9 @@ export async function createVisualCandidateRevision(
   const revisionId = randomUUID()
   const artifactPath = join(paths.revisionsDir, revisionId, `candidate${extensionFor(candidateSourcePath)}`)
   await atomicCopy(candidateSourcePath, artifactPath)
+  const rasterDimensions = await dimensionsFromRasterArtifact(artifactPath)
+  const width = rasterDimensions?.width ?? request.width ?? document.artifact.width
+  const height = rasterDimensions?.height ?? request.height ?? document.artifact.height
   const createdAt = now()
   const revision: VisualRevision = {
     id: revisionId,
@@ -462,8 +493,8 @@ export async function createVisualCandidateRevision(
     basedOnHash: document.artifact.workingCopyHash,
     artifactPath,
     artifactHash: candidateHash,
-    ...(request.width ?? document.artifact.width ? { width: request.width ?? document.artifact.width } : {}),
-    ...(request.height ?? document.artifact.height ? { height: request.height ?? document.artifact.height } : {}),
+    ...(width ? { width } : {}),
+    ...(height ? { height } : {}),
     summary,
     reviewEvidence: request.reviewEvidence,
     createdAt

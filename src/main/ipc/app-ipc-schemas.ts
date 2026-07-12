@@ -1582,6 +1582,7 @@ export const visualDocumentStatusPayloadSchema = z.object({
 export const visualDocumentOpenPayloadSchema = z.object({
   workspaceRoot: trimmedString(MAX_PATH_LENGTH),
   documentId: visualDocumentIdSchema.optional(),
+  createIfMissing: z.boolean().optional(),
   canvas: z.object({
     width: z.number().finite().positive().max(100_000).optional(),
     height: z.number().finite().positive().max(100_000).optional(),
@@ -1658,8 +1659,8 @@ export const visualDocumentCreateCandidatePayloadSchema = z.object({
     semantic: z.object({
       pass: z.literal(true),
       summary: trimmedString(4_000),
-      violations: z.tuple([]),
-      repairInstructions: z.tuple([])
+      violations: z.array(z.string().max(2_000)).max(0),
+      repairInstructions: z.array(z.string().max(2_000)).max(0)
     }).strict(),
     repairable: z.literal(false),
     warnings: z.array(z.string().max(2_000)).max(100)

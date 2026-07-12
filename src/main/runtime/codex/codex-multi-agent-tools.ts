@@ -147,6 +147,7 @@ export class CodexMultiAgentToolBridge {
       const record = await this.runtime.runChild({
         parentThreadId: request.threadId,
         parentTurnId: request.turnId,
+        requestId: String(request.requestId),
         label: input.label,
         prompt: input.prompt,
         workspace: input.workspace,

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
@@ -32,6 +32,7 @@ import type {
 } from './app-server/request-registry'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
 import type { CodexDynamicMcpClient } from './codex-dynamic-mcp-tools'
+import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
 
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
@@ -2062,6 +2063,52 @@ describe('CodexRuntimeService compatibility operations', () => {
     queued.close()
   })
 
+  it('replays a persisted multi-agent app-server request after service restart without creating another child', async () => {
+    const client = controllableClient()
+    const storageRoot = await tempRoot()
+    const store = new FileMultiAgentStore(join(storageRoot, 'multi-agent-child-runs'))
+    await store.upsert({
+      contractVersion: 1,
+      id: 'persisted-child',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      requestId: 'persisted-app-server-request',
+      prompt: 'Run once before restart',
+      status: 'completed',
+      summary: 'persisted child result',
+      usage: { promptTokens: 1, completionTokens: 2, totalTokens: 3 },
+      transcript: [],
+      createdAt: '2026-07-12T00:00:00.000Z',
+      startedAt: '2026-07-12T00:00:01.000Z',
+      updatedAt: '2026-07-12T00:00:02.000Z',
+      finishedAt: '2026-07-12T00:00:02.000Z'
+    })
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const restartedService = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(restartedService.connect()).resolves.toMatchObject({ ok: true })
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'persisted-app-server-request',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: 'delegate_task',
+      arguments: { prompt: 'Run once before restart' }
+    })).resolves.toEqual({
+      contentItems: [{ type: 'inputText', text: 'persisted child result' }],
+      success: true
+    })
+    expect(client.startThread).not.toHaveBeenCalled()
+    expect(await store.list()).toHaveLength(1)
+  })
+
   it('keeps delegate_task disabled in persisted Codex child threads after restart', async () => {
     const client = controllableClient()
     const storageRoot = await tempRoot()
@@ -2187,6 +2234,125 @@ describe('CodexRuntimeService compatibility operations', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
     )
+  })
+
+  it('advertises and executes the approved read-before-edit workspace patch tool without shell', async () => {
+    const client = controllableClient()
+    const storageRoot = await tempRoot()
+    const workspaceRoot = join(storageRoot, 'workspace')
+    await mkdir(workspaceRoot, { recursive: true })
+    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const mcpClient: CodexDynamicMcpClient = {
+      listTools: vi.fn(async () => ({
+        tools: [{
+          name: 'gui_workspace_read',
+          description: 'Read workspace file.',
+          inputSchema: {
+            type: 'object',
+            properties: { path: { type: 'string' }, workspaceRoot: { type: 'string' } },
+            required: ['path']
+          }
+        }]
+      })),
+      callTool: vi.fn(async ({ arguments: args }) => ({
+        content: [{ type: 'text', text: 'read-ok' }],
+        structuredContent: {
+          ok: true,
+          kind: 'text',
+          workspaceRoot: args.workspaceRoot,
+          relativePath: args.path,
+          content: await readFile(join(String(args.workspaceRoot), String(args.path)), 'utf8'),
+          truncated: false
+        }
+      })),
+      close: vi.fn(async () => undefined)
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => ({ ...settings(), workspaceRoot }),
+      sink: { send: vi.fn() },
+      storageRoot,
+      managedMcpServers: [{ id: 'gui_workspace_intel', command: '/bin/workspace-intel' }],
+      mcpClientFactory: async () => mcpClient,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(service.startThread({ threadId: 'gui-thread', workspace: workspaceRoot })).resolves.toMatchObject({ ok: true })
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      dynamicTools: expect.arrayContaining([expect.objectContaining({
+        name: 'gui_workspace_apply_patch',
+        inputSchema: {
+          type: 'object',
+          properties: { path: expect.any(Object), patch: expect.any(Object) },
+          required: ['path', 'patch'],
+          additionalProperties: false
+        }
+      })]),
+      developerInstructions: expect.stringContaining('instead of Python')
+    }))
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'read-before-patch',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_read',
+      arguments: { path: 'notes.txt' }
+    })).resolves.toMatchObject({ success: true })
+
+    const patchResult = pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'patch-request',
+      callId: 'patch-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_apply_patch',
+      arguments: {
+        path: 'notes.txt',
+        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta\n+beta edited\n gamma\n*** End Patch'
+      }
+    })
+    await vi.waitFor(() => expect(service.pendingServerRequests()).toEqual([
+      expect.objectContaining({ kind: 'approval', method: 'item/fileChange/requestApproval' })
+    ]))
+    const approvalId = service.pendingServerRequests()[0]!.requestId
+    await expect(service.resolveApproval({ requestId: approvalId, decision: 'allowed' })).resolves.toEqual({ ok: true })
+    await expect(patchResult).resolves.toMatchObject({ success: true })
+    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'patch-without-reread',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_apply_patch',
+      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta twice' }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [expect.objectContaining({ text: expect.stringContaining('read-before-edit guard') })]
+    })
+
+    await pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'read-before-denied-patch',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_read',
+      arguments: { path: 'notes.txt' }
+    })
+    const deniedPatch = pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'denied-patch',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_apply_patch',
+      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+must not be written' }
+    })
+    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
+    await service.resolveApproval({
+      requestId: service.pendingServerRequests()[0]!.requestId,
+      decision: 'denied'
+    })
+    await expect(deniedPatch).resolves.toMatchObject({ success: false })
+    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
   })
 
   it('does not inject a workspace root into visible-context or visual-capture dynamic MCP calls', async () => {

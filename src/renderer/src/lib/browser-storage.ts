@@ -42,11 +42,14 @@ export function readBrowserStorageItem(key: string): string | null {
   }
 }
 
-export function writeBrowserStorageItem(key: string, value: string): void {
+export function writeBrowserStorageItem(key: string, value: string): boolean {
   try {
-    browserStorage()?.setItem(key, value)
+    const storage = browserStorage()
+    if (!storage) return false
+    storage.setItem(key, value)
+    return true
   } catch {
-    /* ignore persistence failures */
+    return false
   }
 }
 

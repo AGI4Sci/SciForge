@@ -1385,7 +1385,7 @@ describe('registerAppIpcHandlers', () => {
     const sender = createSender(911)
     const requests = [
       ['visual-document:status', { workspaceRoot: '/tmp/project' }, handlers.getVisualDocumentStatus],
-      ['visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1' }, handlers.openVisualDocument],
+      ['visual-document:open', { workspaceRoot: '/tmp/project', documentId: 'figure-1', createIfMissing: false }, handlers.openVisualDocument],
       ['visual-document:insert-artifact', { workspaceRoot: '/tmp/project', kind: 'image', sourcePath: '/tmp/figure.png' }, handlers.insertVisualDocumentArtifact],
       ['visual-document:update-context', { workspaceRoot: '/tmp/project', styleProfileRef: 'paper-style' }, handlers.updateVisualDocumentContext],
       ['visual-document:save-annotations', { workspaceRoot: '/tmp/project', annotations: [] }, handlers.saveVisualDocumentAnnotations],

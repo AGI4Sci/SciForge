@@ -93,6 +93,7 @@ import { RuntimeBanner } from './RuntimeBanner'
 import {
   CODE_PANEL_PREFERRED,
   projectDagReturnSelection,
+  readStoredRightPanelContext,
   useWorkbenchLayout
 } from './workbench-layout'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
@@ -597,12 +598,14 @@ export function Workbench(): ReactElement {
     sendMessage,
     reviewActiveThread,
     queuedMessages,
+    chatSessionPersistenceDegraded,
     activeThreadTodos,
     watchTurnCompletion,
     unreadThreadIds,
     removeQueuedMessage,
     updateQueuedMessage,
     steerQueuedMessage,
+    retryQueuedMessage,
     interrupt,
     probeRuntime,
     composerModel,
@@ -674,12 +677,14 @@ export function Workbench(): ReactElement {
       sendMessage: s.sendMessage,
       reviewActiveThread: s.reviewActiveThread,
       queuedMessages: s.queuedMessages,
+      chatSessionPersistenceDegraded: s.chatSessionPersistenceDegraded,
       activeThreadTodos: s.activeThreadTodos,
       watchTurnCompletion: s.watchTurnCompletion,
       unreadThreadIds: s.unreadThreadIds,
       removeQueuedMessage: s.removeQueuedMessage,
       updateQueuedMessage: s.updateQueuedMessage,
       steerQueuedMessage: s.steerQueuedMessage,
+      retryQueuedMessage: s.retryQueuedMessage,
       interrupt: s.interrupt,
       probeRuntime: s.probeRuntime,
       composerModel: s.composerModel,
@@ -898,7 +903,10 @@ export function Workbench(): ReactElement {
     [remoteChannels]
   )
   const queuedThreadIds = useMemo(
-    () => new Set(queuedMessages.map((message) => message.threadId?.trim() ?? '').filter(Boolean)),
+    () => new Set(queuedMessages
+      .filter((message) => !message.deliveryAttempt?.journalOnly || message.deliveryAttempt.restored || message.sendFailure)
+      .map((message) => message.threadId?.trim() ?? '')
+      .filter(Boolean)),
     [queuedMessages]
   )
   const activeQueuedMessages = useMemo(
@@ -906,7 +914,8 @@ export function Workbench(): ReactElement {
       ? queuedMessages.filter(
           (message) =>
             (!message.threadId || message.threadId === activeThreadId) &&
-            (!message.runtimeId || !activeThread?.runtimeId || message.runtimeId === activeThread.runtimeId)
+            (!message.runtimeId || !activeThread?.runtimeId || message.runtimeId === activeThread.runtimeId) &&
+            (!message.deliveryAttempt?.journalOnly || message.deliveryAttempt.restored || Boolean(message.sendFailure))
         )
       : [],
     [activeThread?.runtimeId, activeThreadId, queuedMessages]
@@ -1033,10 +1042,28 @@ export function Workbench(): ReactElement {
     }),
     [agentFocusLineage, sideConversations]
   )
+  const activeVisualDocumentId = activeThreadId ? `visual-${activeThreadId}` : 'visual-default'
+  const [visualReviewRequest, setVisualReviewRequest] = useState<{
+    documentId: string
+    refreshKey: number
+    workspaceRoot?: string
+    restored?: boolean
+  } | null>(() => {
+    const restored = readStoredRightPanelContext()
+    return restored?.mode === 'visual-review' && restored.visualDocumentId
+      ? {
+          documentId: restored.visualDocumentId,
+          refreshKey: 0,
+          restored: true,
+          ...(restored.workspaceRoot ? { workspaceRoot: restored.workspaceRoot } : {})
+        }
+      : null
+  })
   const {
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
+    discardRightPanelResource,
     canNavigateRightPanelBack,
     canNavigateRightPanelForward,
     filePreviewReturnContext,
@@ -1064,8 +1091,67 @@ export function Workbench(): ReactElement {
     latestAutoOpenDevPreviewUrl,
     latestDevPreviewUrl,
     route,
-    workspaceRoot
+    workspaceRoot,
+    contextValidationReady: runtimeConnection === 'ready',
+    visualDocumentId: visualReviewRequest?.documentId ?? activeVisualDocumentId
   })
+  const restoredFilePreviewTargetRef = useRef(filePreviewTarget)
+  useEffect(() => {
+    const target = restoredFilePreviewTargetRef.current
+    if (runtimeConnection !== 'ready' || !target) return
+    restoredFilePreviewTargetRef.current = null
+    const targetWorkspaceRoot = target.workspaceRoot || workspaceRoot
+    if (!targetWorkspaceRoot || typeof window.sciforge?.readWorkspaceFile !== 'function') {
+      discardRightPanelResource('file', target.path)
+      return
+    }
+    let cancelled = false
+    void window.sciforge.readWorkspaceFile({
+      path: target.path,
+      workspaceRoot: targetWorkspaceRoot
+    }).then((result) => {
+      if (cancelled || result.ok) return
+      discardRightPanelResource('file', target.path)
+    }).catch(() => {
+      if (cancelled) return
+      discardRightPanelResource('file', target.path)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [discardRightPanelResource, runtimeConnection, workspaceRoot])
+
+  useEffect(() => {
+    if (runtimeConnection !== 'ready' || !visualReviewRequest?.restored) return
+    if (rightPanelMode !== 'visual-review') {
+      setVisualReviewRequest(null)
+      return
+    }
+    const targetWorkspaceRoot = visualReviewRequest.workspaceRoot || workspaceRoot
+    if (!targetWorkspaceRoot || typeof window.sciforge?.openVisualDocument !== 'function') {
+      setVisualReviewRequest(null)
+      discardRightPanelResource('visual-review', visualReviewRequest.documentId)
+      return
+    }
+    let cancelled = false
+    void window.sciforge.openVisualDocument({
+      workspaceRoot: targetWorkspaceRoot,
+      documentId: visualReviewRequest.documentId,
+      createIfMissing: false
+    }).then(() => {
+      if (cancelled) return
+      setVisualReviewRequest((current) => current
+        ? { ...current, restored: false }
+        : null)
+    }).catch(() => {
+      if (cancelled) return
+      setVisualReviewRequest(null)
+      discardRightPanelResource('visual-review', visualReviewRequest.documentId)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [discardRightPanelResource, rightPanelMode, runtimeConnection, visualReviewRequest, workspaceRoot])
   const [childPanelFocusRequest, setChildPanelFocusRequest] = useState<{
     childId: string | null
     key: number
@@ -1162,11 +1248,6 @@ export function Workbench(): ReactElement {
     )
   }, [activeThreadId])
   const [fileTreeInitialDirectory, setFileTreeInitialDirectory] = useState<FileTreeInitialDirectory | null>(null)
-  const [visualReviewRequest, setVisualReviewRequest] = useState<{
-    documentId: string
-    refreshKey: number
-    workspaceRoot?: string
-  } | null>(null)
   const {
     activeGuiPlan,
     buildGuiPlan,
@@ -1193,8 +1274,6 @@ export function Workbench(): ReactElement {
       await useChatStore.getState().refreshThreads()
     }
   })
-  const activeVisualDocumentId = activeThreadId ? `visual-${activeThreadId}` : 'visual-default'
-
   useEffect(() => {
     setVisibleContextShell({
       activeThreadId,
@@ -2689,6 +2768,7 @@ export function Workbench(): ReactElement {
                 removeQueuedMessage={removeQueuedMessage}
                 updateQueuedMessage={updateQueuedMessage}
                 steerQueuedMessage={steerQueuedMessage}
+                retryQueuedMessage={retryQueuedMessage}
                 fileReferenceEnabled={Boolean(normalizeWorkspaceRoot(activeSddDraft.workspaceRoot))}
                 fileReferences={composerFileReferences}
                 onAddFileReference={addComposerFileReference}
@@ -3134,9 +3214,11 @@ export function Workbench(): ReactElement {
                     onRemoveFileReference={removeComposerFileReference}
                     onRemoveCommentReference={removeComposerCommentReference}
                     queuedMessages={activeQueuedMessages}
+                    queuedMessagesPersistenceDegraded={chatSessionPersistenceDegraded}
                     onRemoveQueuedMessage={removeQueuedMessage}
                     onEditQueuedMessage={(id, text) => void updateQueuedMessage(id, text)}
                     onSteerQueuedMessage={(id) => void steerQueuedMessage(id)}
+                    onRetryQueuedMessage={(id) => void retryQueuedMessage(id)}
                     onInterrupt={(options) => void interrupt(options)}
                     onPlanCommand={() => void handleGuiPlanCommand()}
                     onReviewCommand={(target) => void reviewActiveThread(target)}

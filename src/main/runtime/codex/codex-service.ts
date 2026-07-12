@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
@@ -95,13 +96,19 @@ import {
   type CodexDynamicMcpClient,
   type CodexDynamicMcpReleaseReason,
   type CodexDynamicMcpServerConfig,
-  type CodexDynamicMcpToolBridge
+  type CodexDynamicMcpToolBridge,
+  type CodexDynamicMcpToolUnavailableDiagnostic
 } from './codex-dynamic-mcp-tools'
 import {
   codexChildFromMultiAgentRecord,
   createCodexMultiAgentToolBridge,
   type CodexMultiAgentToolBridge
 } from './codex-multi-agent-tools'
+import {
+  canonicalWorkspaceFileKey,
+  CODEX_WORKSPACE_APPLY_PATCH_TOOL_NAME,
+  CodexWorkspacePatchTool
+} from './codex-workspace-patch-tool'
 import type {
   MultiAgentExecutorInput,
   MultiAgentExecutorResult,
@@ -217,6 +224,12 @@ const CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS = [
   'Give each child a concise label and a self-contained prompt; do not use it for trivial work or as a substitute for doing the main task.',
   'Treat the tool result as the child agent answer, the same way you would read an assistant response.'
 ].join('\n')
+const CODEX_WORKSPACE_PATCH_DEVELOPER_INSTRUCTIONS = [
+  'SciForge provides `gui_workspace_apply_patch` for safe in-process edits of one existing workspace file.',
+  'Before calling it, read the same file in the current turn with `gui_workspace_read` so the patch is based on fresh bytes.',
+  'Use `gui_workspace_apply_patch` instead of Python, shell redirection, sed, perl, or whole-file rewrite scripts when a bounded text patch is sufficient.',
+  'The patch tool requires explicit user approval and rejects add, delete, rename, multi-file, context-free, and ambiguous-context patches.'
+].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
 const MAX_CODEX_THREAD_TITLE_LENGTH = 80
 const CODEX_PLACEHOLDER_THREAD_TITLES = new Set([
@@ -247,6 +260,7 @@ export class CodexRuntimeService {
   private readonly eventStore: CodexEventStore | null
   private readonly usageStore: CodexUsageStore | null
   private dynamicMcpBridge: CodexDynamicMcpToolBridge | null = null
+  private readonly workspacePatchTool = new CodexWorkspacePatchTool()
   private multiAgentBridge: CodexMultiAgentToolBridge | null = null
   private readonly multiAgentChildThreadIds = new Set<string>()
   private usageBackfillPromise: Promise<void> | null = null
@@ -261,6 +275,11 @@ export class CodexRuntimeService {
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private readonly workspaceReadKeys = new Set<string>()
+  private readonly pendingWorkspacePatchApprovals = new Map<string, {
+    request: CodexAppServerPendingRequest
+    resolve: (allowed: boolean) => void
+  }>()
 
   constructor(private readonly options: CodexRuntimeServiceOptions) {
     this.threadStore = options.storageRoot ? new CodexThreadStore({ rootDir: options.storageRoot }) : null
@@ -815,11 +834,23 @@ export class CodexRuntimeService {
   }
 
   pendingServerRequests(): CodexAppServerPendingRequest[] {
-    return this.client?.pendingServerRequests() ?? []
+    const clientPending = typeof this.client?.pendingServerRequests === 'function'
+      ? this.client.pendingServerRequests()
+      : []
+    return [
+      ...clientPending,
+      ...[...this.pendingWorkspacePatchApprovals.values()].map((entry) => entry.request)
+    ]
   }
 
   async resolveApproval(input: CodexAppServerResolveApprovalInput): Promise<CodexTurnMutationResult> {
     try {
+      const local = this.pendingWorkspacePatchApprovals.get(String(input.requestId))
+      if (local) {
+        this.pendingWorkspacePatchApprovals.delete(String(input.requestId))
+        local.resolve(input.decision === 'allowed' || input.decision === 'allowed_for_session')
+        return { ok: true }
+      }
       if (!this.client) throw new Error('No Codex app-server request is pending.')
       this.client.resolveApproval(input)
       return { ok: true }
@@ -861,6 +892,8 @@ export class CodexRuntimeService {
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
+    this.cancelWorkspacePatchApprovals()
+    this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
     await dynamicMcpBridge?.close(reason)
     if (client) await client.stop()
@@ -887,6 +920,8 @@ export class CodexRuntimeService {
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
+    this.cancelWorkspacePatchApprovals()
+    this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
     await dynamicMcpBridge?.close('runtime_disconnected').catch(() => undefined)
     if (!client) return
@@ -1026,6 +1061,10 @@ export class CodexRuntimeService {
     return this.hasDynamicMcpServersConfigured()
   }
 
+  dynamicMcpToolDiagnostics(): CodexDynamicMcpToolUnavailableDiagnostic[] {
+    return this.dynamicMcpBridge?.toolUnavailableDiagnostics() ?? []
+  }
+
   private hasDynamicMcpServersConfigured(): boolean {
     return this.dynamicMcpBridge?.hasConfiguredServers() ?? codexDynamicMcpServers(this.options).length > 0
   }
@@ -1037,6 +1076,7 @@ export class CodexRuntimeService {
     const current = settings ?? await this.options.settings()
     const includeMultiAgent = options.includeMultiAgent !== false
     return [
+      ...this.workspacePatchTool.dynamicTools(),
       ...(includeMultiAgent ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? [] : []),
       ...(await this.dynamicMcpBridge?.dynamicTools() ?? [])
     ]
@@ -1046,15 +1086,19 @@ export class CodexRuntimeService {
     request: CodexAppServerDynamicToolCallRequest
   ): Promise<CodexAppServerDynamicToolCallResponse> {
     const settings = await this.options.settings()
+    const contextualRequest = await this.requestWithGuiThreadContext(request)
+    if (this.workspacePatchTool.canHandle(contextualRequest)) {
+      return this.handleWorkspacePatchToolCall(contextualRequest, settings)
+    }
     const multiAgentBridge = this.ensureCodexMultiAgentBridge(settings)
-    if (multiAgentBridge?.canHandle(request)) {
-      if (await this.isMultiAgentChildThread(request.threadId)) {
+    if (multiAgentBridge?.canHandle(contextualRequest)) {
+      if (await this.isMultiAgentChildThread(contextualRequest.threadId)) {
         return {
           contentItems: [{ type: 'inputText', text: 'delegate_task is disabled inside child agents.' }],
           success: false
         }
       }
-      return multiAgentBridge.callTool(await this.requestWithGuiThreadContext(request))
+      return multiAgentBridge.callTool(contextualRequest)
     }
     const bridge = this.dynamicMcpBridge
     if (!bridge) {
@@ -1064,7 +1108,12 @@ export class CodexRuntimeService {
       }
     }
     try {
-      return await bridge.callTool(await this.requestWithThreadWorkspace(request))
+      const workspaceRequest = await this.requestWithThreadWorkspace(contextualRequest)
+      const response = await bridge.callTool(workspaceRequest)
+      if (response.success && workspaceIntelToolNameForRequest(workspaceRequest) === 'gui_workspace_read') {
+        await this.rememberWorkspaceRead(workspaceRequest)
+      }
+      return response
     } catch (error) {
       const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
       return {
@@ -1083,13 +1132,12 @@ export class CodexRuntimeService {
     const toolName = workspaceIntelToolNameForRequest(request)
     if (!toolName || !WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS.has(toolName)) return request
     const args = dynamicToolArgumentsRecord(request.arguments)
-    if (!args || stringValue(args.workspaceRoot).trim()) return request
+    if (!args) return request
 
     const threadId = stringValue(request.threadId).trim()
-    if (!threadId) return request
-    const storedThread = await this.findStoredThread(threadId)
-    const workspaceRoot = storedThread?.workspace?.trim()
-    if (!workspaceRoot) return request
+    const storedThread = threadId ? await this.findStoredThread(threadId) : null
+    const settings = await this.options.settings()
+    const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
 
     return {
       ...request,
@@ -1098,6 +1146,97 @@ export class CodexRuntimeService {
         workspaceRoot
       }
     }
+  }
+
+  private async rememberWorkspaceRead(request: CodexAppServerDynamicToolCallRequest): Promise<void> {
+    const threadId = stringValue(request.threadId).trim()
+    const turnId = stringValue(request.turnId).trim()
+    const args = dynamicToolArgumentsRecord(request.arguments)
+    const workspaceRoot = stringValue(args?.workspaceRoot).trim()
+    const path = stringValue(args?.path).trim()
+    if (!threadId || !turnId || !workspaceRoot || !path) return
+    try {
+      const canonicalPath = await canonicalWorkspaceFileKey({ workspaceRoot, path })
+      this.workspaceReadKeys.add(workspaceReadKey(threadId, turnId, canonicalPath))
+      while (this.workspaceReadKeys.size > 1_024) {
+        const oldest = this.workspaceReadKeys.values().next().value
+        if (oldest === undefined) break
+        this.workspaceReadKeys.delete(oldest)
+      }
+    } catch {
+      // Only a successful canonical read can satisfy read-before-edit.
+    }
+  }
+
+  private async handleWorkspacePatchToolCall(
+    request: CodexAppServerDynamicToolCallRequest,
+    settings: AppSettingsV1
+  ): Promise<CodexAppServerDynamicToolCallResponse> {
+    const threadId = stringValue(request.threadId).trim()
+    const turnId = stringValue(request.turnId).trim()
+    if (!threadId || !turnId) return failedDynamicToolCall('gui_workspace_apply_patch requires threadId and turnId.')
+    const args = dynamicToolArgumentsRecord(request.arguments)
+    const path = stringValue(args?.path).trim()
+    const patch = stringValue(args?.patch)
+    if (!path || !patch.trim()) return failedDynamicToolCall('gui_workspace_apply_patch requires path and patch.')
+    const runtime = getCodexRuntimeSettings(settings)
+    if (runtime.sandboxMode === 'read-only') {
+      return failedDynamicToolCall('gui_workspace_apply_patch is blocked by the read-only sandbox.')
+    }
+    if (runtime.approvalPolicy === 'never') {
+      return failedDynamicToolCall('gui_workspace_apply_patch is blocked because approvals are disabled.')
+    }
+    const storedThread = await this.findStoredThread(threadId)
+    const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
+    let canonicalPath: string
+    try {
+      canonicalPath = await canonicalWorkspaceFileKey({ workspaceRoot, path })
+    } catch (error) {
+      return failedDynamicToolCall(error instanceof Error ? error.message : String(error))
+    }
+    const readKey = workspaceReadKey(threadId, turnId, canonicalPath)
+    if (!this.workspaceReadKeys.has(readKey)) {
+      return failedDynamicToolCall(
+        `read-before-edit guard blocked ${path}; call gui_workspace_read for this file in the current turn before applying a patch.`
+      )
+    }
+    const approved = await this.requestWorkspacePatchApproval(request, path)
+    if (!approved) return failedDynamicToolCall(`User denied the patch for ${path}.`)
+    const response = await this.workspacePatchTool.apply({ workspaceRoot, path, patch })
+    if (response.success) this.workspaceReadKeys.delete(readKey)
+    return response
+  }
+
+  private async requestWorkspacePatchApproval(
+    request: CodexAppServerDynamicToolCallRequest,
+    path: string
+  ): Promise<boolean> {
+    const approvalId = workspacePatchApprovalId(request)
+    if (this.pendingWorkspacePatchApprovals.has(approvalId)) return false
+    let resolveApproval!: (allowed: boolean) => void
+    const decision = new Promise<boolean>((resolve) => { resolveApproval = resolve })
+    const pending: CodexAppServerPendingRequest = {
+      requestId: approvalId,
+      method: 'item/fileChange/requestApproval',
+      kind: 'approval',
+      threadId: request.threadId,
+      turnId: request.turnId,
+      itemId: request.callId || approvalId,
+      summary: `Apply a bounded patch to ${path}`,
+      params: { toolName: CODEX_WORKSPACE_APPLY_PATCH_TOOL_NAME }
+    }
+    this.pendingWorkspacePatchApprovals.set(approvalId, { request: pending, resolve: resolveApproval })
+    try {
+      await this.publishPendingServerRequest(pending)
+      return await decision
+    } finally {
+      this.pendingWorkspacePatchApprovals.delete(approvalId)
+    }
+  }
+
+  private cancelWorkspacePatchApprovals(): void {
+    for (const entry of this.pendingWorkspacePatchApprovals.values()) entry.resolve(false)
+    this.pendingWorkspacePatchApprovals.clear()
   }
 
   private async requestWithGuiThreadContext(
@@ -2589,7 +2728,9 @@ function baseThreadParams(
     approvalPolicy: mapApprovalPolicy(runtime.approvalPolicy),
     sandbox: mapThreadSandboxMode(runtime.sandboxMode),
     config: codexAppServerThreadReasoningConfig(),
-    ...(dynamicDeveloperInstructions(dynamicMcp) ? { developerInstructions: dynamicDeveloperInstructions(dynamicMcp) } : {}),
+    ...(dynamicDeveloperInstructions({ ...dynamicMcp, workspacePatchConfigured: true })
+      ? { developerInstructions: dynamicDeveloperInstructions({ ...dynamicMcp, workspacePatchConfigured: true }) }
+      : {}),
     ...(dynamicTools ? { dynamicTools } : {})
   }
 }
@@ -2597,11 +2738,32 @@ function baseThreadParams(
 function dynamicDeveloperInstructions(input: {
   specializedMcpConfigured?: boolean
   multiAgentConfigured?: boolean
+  workspacePatchConfigured?: boolean
 }): string {
   return [
+    input.workspacePatchConfigured ? CODEX_WORKSPACE_PATCH_DEVELOPER_INSTRUCTIONS : '',
     input.specializedMcpConfigured ? CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS : '',
     input.multiAgentConfigured ? CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS : ''
   ].filter(Boolean).join('\n\n')
+}
+
+function workspaceReadKey(threadId: string, turnId: string, canonicalPath: string): string {
+  return `${threadId}\u0000${turnId}\u0000${canonicalPath}`
+}
+
+function workspacePatchApprovalId(request: CodexAppServerDynamicToolCallRequest): string {
+  const digest = createHash('sha256')
+    .update(`${request.threadId ?? ''}\u0000${request.turnId ?? ''}\u0000${String(request.requestId)}`)
+    .digest('hex')
+    .slice(0, 24)
+  return `workspace-patch-${digest}`
+}
+
+function failedDynamicToolCall(message: string): CodexAppServerDynamicToolCallResponse {
+  return {
+    success: false,
+    contentItems: [{ type: 'inputText', text: message }]
+  }
 }
 
 function codexModelRouterThreadParams(

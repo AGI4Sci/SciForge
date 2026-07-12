@@ -13,6 +13,13 @@ export async function readIncomingMessageBody(
   request: IncomingMessage,
   limitBytes: number,
 ): Promise<string> {
+  return (await readIncomingMessageBodyBytes(request, limitBytes)).toString('utf8');
+}
+
+export async function readIncomingMessageBodyBytes(
+  request: IncomingMessage,
+  limitBytes: number,
+): Promise<Buffer> {
   assertPositiveLimit(limitBytes);
   const declaredLength = contentLength(request.headers);
   if (declaredLength !== null && declaredLength > limitBytes) {
@@ -29,7 +36,7 @@ export async function readIncomingMessageBody(
     }
     chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString('utf8');
+  return Buffer.concat(chunks);
 }
 
 function contentLength(headers: IncomingHttpHeaders): number | null {

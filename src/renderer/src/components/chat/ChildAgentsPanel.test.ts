@@ -17,6 +17,13 @@ const labels: Record<string, string> = {
   sidebarChildrenViewNested: 'View child agents',
   sidebarChildrenOpenInFocus: 'Open in focus workspace',
   sidebarChildrenAttempt: 'attempt {{current}}/{{total}}',
+  sidebarChildrenAttemptLabel: 'Attempt',
+  sidebarChildrenShowAttemptHistory: 'Show {{count}} earlier attempt(s)',
+  sidebarChildrenHideAttemptHistory: 'Hide earlier attempts',
+  sidebarChildrenParentTurn: 'Parent turn',
+  sidebarChildrenStartedAt: 'Started',
+  sidebarChildrenChildId: 'Child ID',
+  sidebarChildrenAbortedNotice: 'This attempt was cancelled and does not continue in the background.',
   sidebarChildrenDetail: 'details',
   sidebarChildrenCloseDetail: 'Close child details',
   sidebarChildrenStatus: 'Status',
@@ -464,8 +471,36 @@ describe('ChildAgentsPanelView', () => {
     expect(html.match(/>clone-repo</g)).toHaveLength(1)
   })
 
-  it('labels distinct retries as attempts instead of making them look duplicated', () => {
+  it('collapses distinct retries under the latest active attempt by default', () => {
     const html = renderView({
+      children: [
+        child({
+          id: 'reader-first',
+          name: 'read-ending',
+          parentTurnId: 'turn-before-interrupt',
+          status: 'aborted',
+          createdAt: '2026-07-12T01:00:00.000Z'
+        }),
+        child({
+          id: 'reader-restarted',
+          name: 'read-ending',
+          parentTurnId: 'turn-after-restart',
+          status: 'running',
+          createdAt: '2026-07-12T01:01:00.000Z'
+        })
+      ]
+    })
+
+    expect(html).toContain('read-ending · attempt 2/2')
+    expect(html).not.toContain('read-ending · attempt 1/2')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('aria-label="Show 1 earlier attempt(s)"')
+    expect(html.match(/role="tab"/g)).toHaveLength(1)
+  })
+
+  it('keeps an explicitly selected historical attempt visible and marks it aborted', () => {
+    const html = renderView({
+      selectedChildId: 'reader-first',
       children: [
         child({
           id: 'reader-first',
@@ -486,7 +521,13 @@ describe('ChildAgentsPanelView', () => {
 
     expect(html).toContain('read-ending · attempt 1/2')
     expect(html).toContain('read-ending · attempt 2/2')
+    expect(html).toContain('aria-expanded="true"')
     expect(html.match(/role="tab"/g)).toHaveLength(2)
+    expect(html).toContain('Aborted')
+    expect(html).toContain('This attempt was cancelled and does not continue in the background.')
+    expect(html).toContain('turn-before-interrupt')
+    expect(html).toContain('reader-first')
+    expect(html).toContain('Attempt')
   })
 
   it('does not group same-name children with different prompts as retries', () => {
@@ -498,6 +539,7 @@ describe('ChildAgentsPanelView', () => {
     })
 
     expect(html).not.toContain('attempt')
+    expect(html.match(/role="tab"/g)).toHaveLength(2)
   })
 
   it('renders bounded breadcrumb navigation and a drill-down action in the same panel', () => {

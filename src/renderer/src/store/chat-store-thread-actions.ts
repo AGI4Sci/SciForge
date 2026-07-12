@@ -317,6 +317,56 @@ function blocksContainUserText(blocks: ChatBlock[], text: string): boolean {
     blocks.some((block) => block.kind === 'user' && userBlockText(block) === normalizedText)
 }
 
+function snapshotEndsWithUserMessage(
+  blocks: ChatBlock[],
+  userMessageId: string,
+  text: string
+): boolean {
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index]
+    if (!block || block.kind === 'system' || block.kind === 'compaction') continue
+    return block.kind === 'user' && (
+      block.id === userMessageId || userBlockText(block) === text.trim()
+    )
+  }
+  return false
+}
+
+function snapshotAttemptedUserMessageState(
+  blocks: ChatBlock[],
+  userMessageId: string,
+  text: string,
+  attemptedAt?: number
+): 'absent' | 'pending' | 'answered' {
+  const normalizedText = text.trim()
+  let matchedIndex = -1
+  for (const [index, block] of blocks.entries()) {
+    if (block.kind !== 'user') continue
+    if (block.id === userMessageId) {
+      matchedIndex = index
+      continue
+    }
+    if (userBlockText(block) !== normalizedText || attemptedAt === undefined) continue
+    const createdAt = Date.parse(block.createdAt ?? '')
+    // Runtime and renderer clocks can differ slightly. A bounded tolerance
+    // still distinguishes this attempt from an old identical instruction.
+    if (Number.isFinite(createdAt) && createdAt >= attemptedAt - 60_000) matchedIndex = index
+  }
+  if (matchedIndex < 0 && snapshotEndsWithUserMessage(blocks, userMessageId, normalizedText)) {
+    for (let index = blocks.length - 1; index >= 0; index -= 1) {
+      const block = blocks[index]
+      if (block?.kind === 'user' && (block.id === userMessageId || userBlockText(block) === normalizedText)) {
+        matchedIndex = index
+        break
+      }
+    }
+  }
+  if (matchedIndex < 0) return 'absent'
+  return blocks.slice(matchedIndex + 1).some((block) => block.kind === 'assistant')
+    ? 'answered'
+    : 'pending'
+}
+
 function snapshotLooksStaleForCurrentTurn(
   state: ChatState,
   snapshotBlocks: ChatBlock[],
@@ -362,7 +412,7 @@ export function queuedMessageMatchesThread(
 
 export function createThreadActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'updateQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
+): Pick<ChatState, 'createThread' | 'refreshActiveThreadContextState' | 'recoverActiveTurn' | 'selectThread' | 'drainQueuedMessages' | 'drainQueuedMessagesForThread' | 'removeQueuedMessage' | 'updateQueuedMessage' | 'retryQueuedMessage' | 'steerQueuedMessage' | 'sendMessage' | 'reviewActiveThread'> {
   let selectThreadRequestSeq = 0
 
   return {
@@ -677,7 +727,12 @@ export function createThreadActions(
           continue
         }
         const next = activeQueuedMessages[0]
-        if (!next || state.busy) return
+        // A failed send is an ordering barrier. Later scientific instructions
+        // must not overtake it while the user decides whether to retry/remove.
+        if (
+          !next || next.sendFailure || next.restoredAttachmentWarning ||
+          next.deliveryAttempt || state.busy
+        ) return
         const started = await get().sendMessage(next.text, next.mode, { queued: next })
         if (!started) return
       }
@@ -696,10 +751,12 @@ export function createThreadActions(
     const thread = initialState.threads.find((item) => item.id === targetThreadId)
     const queued = initialState.queuedMessages.find(
       (message) =>
-        !message.guiPlan &&
         queuedMessageMatchesThread(message, targetThreadId, thread?.runtimeId)
     )
-    if (!thread || !queued) return false
+    if (
+      !thread || !queued || queued.guiPlan || queued.sendFailure ||
+      queued.restoredAttachmentWarning || queued.deliveryAttempt
+    ) return false
 
     // The provider hands a thread off when its runtime differs from the
     // globally selected runtime. A background continuation must never change
@@ -711,6 +768,7 @@ export function createThreadActions(
     if (remoteChannelForThread(initialState, targetThreadId)) return false
 
     backgroundQueueDrains.add(targetThreadId)
+    let deliveryStartedAt: number | undefined
     try {
       const provider = getProvider()
       rememberProviderThreadRuntime(provider, targetThreadId, initialState.threads)
@@ -724,6 +782,23 @@ export function createThreadActions(
       ) {
         return false
       }
+      const startedAt = Date.now()
+      deliveryStartedAt = startedAt
+      set((state) => ({
+        queuedMessages: state.queuedMessages.map((message) =>
+          message.id === queued.id
+            ? {
+                ...message,
+                deliveryAttempt: {
+                  startedAt,
+                  userBlockId: queued.id,
+                  attemptedText: latestQueued.text,
+                  attemptedDisplayText: latestQueued.displayText ?? latestQueued.text
+                }
+              }
+            : message
+        )
+      }))
       const runtimeText = buildCodeRuntimePrompt(settings, latestQueued.text)
       const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
         ...(latestQueued.mode ? { mode: latestQueued.mode } : {}),
@@ -748,7 +823,28 @@ export function createThreadActions(
       return true
     } catch (error) {
       if (structuredRuntimeErrorCode(error) === 'turn_in_progress') {
+        set((state) => ({
+          queuedMessages: state.queuedMessages.map((message) => {
+            if (message.id !== queued.id) return message
+            const { deliveryAttempt: _deliveryAttempt, ...retryable } = message
+            return retryable
+          })
+        }))
         watchBackgroundThreadCompletion(set, get, targetThreadId)
+      } else {
+        set((state) => ({
+          queuedMessages: state.queuedMessages.map((message) => {
+            if (message.id !== queued.id) return message
+            return {
+              ...message,
+              sendFailure: {
+                userBlockId: queued.id,
+                message: formatRuntimeError(error),
+                ...(deliveryStartedAt !== undefined ? { attemptedAt: deliveryStartedAt } : {})
+              }
+            }
+          })
+        }))
       }
       if (typeof window !== 'undefined' && typeof window.sciforge?.logError === 'function') {
         void window.sciforge.logError('queued-message', 'Failed to drain a background queued message', {
@@ -770,7 +866,11 @@ export function createThreadActions(
 
   updateQueuedMessage: (id, text) => {
     const trimmedText = text.trim()
-    if (!trimmedText || !get().queuedMessages.some((message) => message.id === id)) return false
+    const queued = get().queuedMessages.find((message) => message.id === id)
+    // Once a payload crossed the delivery boundary, its text is immutable.
+    // Editing would destroy the identity used to distinguish resend from
+    // continuation after an uncertain provider response.
+    if (!trimmedText || !queued || queued.sendFailure || queued.deliveryAttempt) return false
     set((s) => ({
       queuedMessages: s.queuedMessages.map((message) =>
         message.id === id
@@ -783,6 +883,108 @@ export function createThreadActions(
       )
     }))
     return true
+  },
+
+  retryQueuedMessage: async (id) => {
+    const state = get()
+    const queued = state.queuedMessages.find((message) => message.id === id)
+    if (
+      (!queued?.sendFailure && !queued?.restoredAttachmentWarning &&
+        !queued?.deliveryAttempt?.restored) ||
+      !state.activeThreadId
+    ) return false
+    const activeThread = state.threads.find((thread) => thread.id === state.activeThreadId)
+    if (
+      state.runtimeConnection !== 'ready' ||
+      state.busy ||
+      !queuedMessageMatchesThread(queued, state.activeThreadId, activeThread?.runtimeId)
+    ) {
+      set({ error: state.busy
+        ? i18n.t('common:runtimeActiveTurn')
+        : i18n.t('common:runtimeActionNeedsConnection') })
+      return false
+    }
+
+    if (queued.restoredAttachmentWarning && !queued.sendFailure && !queued.deliveryAttempt?.restored) {
+      const { restoredAttachmentWarning: _warning, ...retryable } = queued
+      return get().sendMessage(queued.text, queued.mode, { queued: retryable })
+    }
+
+    const p = getProvider()
+    const threadId = state.activeThreadId
+    try {
+      rememberProviderThreadRuntime(p, threadId, state.threads)
+      const detail = await p.getThreadDetail(threadId)
+      if (get().activeThreadId !== threadId) return false
+      const blocks = hydrateBlockModelLabels(threadId, detail.blocks)
+      const running = threadSnapshotHasTurnEvidence(
+        blocks,
+        detail.latestTurnId,
+        detail.latestUserMessageId
+      ) && threadSnapshotLooksRunning(blocks, detail.threadStatus)
+      set({
+        blocks: settleStalePendingBlocksWhenIdle(blocks, running),
+        lastSeq: detail.latestSeq,
+        busy: running,
+        currentTurnId: running ? detail.latestTurnId ?? null : null,
+        currentTurnUserId: running
+          ? detail.latestUserMessageId ?? findLatestUserBlockId(blocks)
+          : null
+      })
+      if (running) {
+        set({ error: i18n.t('common:runtimeActiveTurn') })
+        return false
+      }
+
+      const sendFailure = queued.sendFailure
+      const recoveryUserBlockId = queued.deliveryAttempt?.userBlockId ?? sendFailure?.userBlockId ?? queued.id
+      const attemptedDisplayText = queued.deliveryAttempt?.attemptedDisplayText ??
+        queued.deliveryAttempt?.attemptedText ?? queued.displayText ?? queued.text
+      const persistedUserState = snapshotAttemptedUserMessageState(
+        blocks,
+        recoveryUserBlockId,
+        attemptedDisplayText,
+        sendFailure?.attemptedAt ?? queued.deliveryAttempt?.startedAt
+      )
+      const {
+        sendFailure: _sendFailure,
+        restoredAttachmentWarning: _restoredAttachmentWarning,
+        deliveryAttempt: _deliveryAttempt,
+        ...retryable
+      } = queued
+      if (persistedUserState === 'absent') {
+        return get().sendMessage(queued.text, queued.mode, { queued: retryable })
+      }
+      if (persistedUserState === 'answered') {
+        set((current) => ({
+          queuedMessages: current.queuedMessages.filter((message) => message.id !== queued.id),
+          error: null
+        }))
+        return true
+      }
+
+      // The original user item is already part of the runtime transcript.
+      // Sending it again would duplicate the scientific instruction. Start a
+      // continuation turn instead and omit attachments already present there.
+      const {
+        attachmentIds: _attachmentIds,
+        attachments: _attachments,
+        fileReferences: _fileReferences,
+        guiPlan: _guiPlan,
+        ...continuationBase
+      } = retryable
+      const recoveryPrompt = i18n.t('common:failedSendRecoveryPrompt')
+      return get().sendMessage(recoveryPrompt, queued.mode, {
+        queued: {
+          ...continuationBase,
+          text: recoveryPrompt,
+          displayText: i18n.t('common:failedSendRecoveryDisplay')
+        }
+      })
+    } catch (error) {
+      set({ error: formatRuntimeError(error) })
+      return false
+    }
   },
 
   steerQueuedMessage: async (id) => {
@@ -964,6 +1166,33 @@ export function createThreadActions(
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
+    const deliveryAttempt: NonNullable<QueuedUserMessage['deliveryAttempt']> = {
+      startedAt: now,
+      userBlockId,
+      attemptedText: messageText,
+      attemptedDisplayText: displayText,
+      ...(!queued ? { journalOnly: true } : {})
+    }
+    const directDeliveryJournal: QueuedUserMessage = {
+      id: userBlockId,
+      ...(activeThreadId ? { threadId: activeThreadId, targetThreadId: activeThreadId } : {}),
+      ...(threadSnap?.runtimeId ? { runtimeId: threadSnap.runtimeId } : {}),
+      text: messageText,
+      ...(displayText ? { displayText } : {}),
+      ...(mode ? { mode } : {}),
+      sourceRoute,
+      ...(overrides?.workspaceRoot ? { workspaceRoot: overrides.workspaceRoot } : {}),
+      ...(requestedGovernanceProfile ? { governanceProfile: requestedGovernanceProfile } : {}),
+      ...(composerModel ? { model: composerModel } : {}),
+      ...(userModelChip ? { modelLabel: userModelChip } : {}),
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+      ...(remoteTargetId ? { remoteTargetId } : {}),
+      ...(overrides?.guiPlan ? { guiPlan: overrides.guiPlan } : {}),
+      ...(attachmentIds.length ? { attachmentIds } : {}),
+      ...(attachments.length ? { attachments } : {}),
+      ...(fileReferences.length ? { fileReferences } : {}),
+      deliveryAttempt
+    }
     const previousBlocks = get().blocks
     const previousActiveThreadId = get().activeThreadId
     const previousLastSeq = get().lastSeq
@@ -1004,7 +1233,15 @@ export function createThreadActions(
       error: null,
       currentTurnUserId: userBlockId,
       turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
-      queuedMessages: queued ? s.queuedMessages.filter((message) => message.id !== queued.id) : s.queuedMessages
+      queuedMessages: queued
+        ? s.queuedMessages.map((message) =>
+            message.id === queued.id
+              ? { ...message, deliveryAttempt }
+              : message
+          )
+        : activeThreadId
+          ? [...s.queuedMessages, directDeliveryJournal]
+          : s.queuedMessages
     }))
     if (!activeThreadId) {
       try {
@@ -1062,7 +1299,20 @@ export function createThreadActions(
             threads:
               createdThread && !s.threads.some((thread) => thread.id === createdThread.id)
                 ? [createdThread, ...s.threads]
-                : s.threads
+                : s.threads,
+            ...(!queued ? {
+              queuedMessages: [
+                ...s.queuedMessages,
+                {
+                  ...directDeliveryJournal,
+                  threadId,
+                  targetThreadId: threadId,
+                  ...(createdThread?.runtimeId || reusableThread?.runtimeId
+                    ? { runtimeId: createdThread?.runtimeId ?? reusableThread?.runtimeId }
+                    : {})
+                }
+              ]
+            } : {})
           }))
         } else {
           set((s) => ({
@@ -1102,6 +1352,7 @@ export function createThreadActions(
     sseAbortRef.current?.abort()
     sseAbortRef.current = null
     clearBusyWatchdog()
+    let turnAccepted = false
     try {
       if (!activeThreadId) throw new Error('Failed to resolve target thread id.')
       const previousThreadId = activeThreadId
@@ -1140,6 +1391,10 @@ export function createThreadActions(
         ...(attachmentIds.length ? { attachmentIds } : {}),
         ...(fileReferences.length ? { fileReferences } : {})
       })
+      turnAccepted = true
+      set((state) => ({
+        queuedMessages: state.queuedMessages.filter((message) => message.id !== userBlockId)
+      }))
       const deliveredThreadId = turnHandle.threadId?.trim() || previousThreadId
       const deliveredThreadChanged = deliveredThreadId !== previousThreadId
       const subscribedRuntimeId = runtimeSwitchExpected
@@ -1280,11 +1535,43 @@ export function createThreadActions(
         message: e instanceof Error ? e.message : String(e),
         threadId: failedThreadId
       }).catch(() => undefined)
+      if (turnAccepted) {
+        // A turn handle is the delivery boundary. Failures in mirroring,
+        // renaming, subscription setup, or thread refresh must not turn a
+        // successfully accepted prompt into a retryable send.
+        if (failedThreadId && get().activeThreadId !== failedThreadId) {
+          watchBackgroundThreadCompletion(set, get, failedThreadId)
+          await get().refreshThreads().catch(() => undefined)
+          return true
+        }
+        set({ error: formatRuntimeError(e) })
+        await get().recoverActiveTurn()
+        return true
+      }
       if (failedThreadId && get().activeThreadId !== failedThreadId) {
-        await get().refreshThreads()
+        // The user may switch threads while the provider call is in flight.
+        // Keep the durable journal visible and retryable on its original
+        // thread; never strand a journalOnly entry until the next restart.
+        set((state) => ({
+          queuedMessages: state.queuedMessages.map((message) => {
+            if (message.id !== userBlockId) return message
+            const attempt = message.deliveryAttempt ?? deliveryAttempt
+            const { journalOnly: _journalOnly, ...visibleAttempt } = attempt
+            return {
+              ...message,
+              deliveryAttempt: visibleAttempt,
+              sendFailure: {
+                userBlockId,
+                message: formatRuntimeError(e),
+                attemptedAt: attempt.startedAt
+              }
+            }
+          })
+        }))
+        await get().refreshThreads().catch(() => undefined)
         return false
       }
-      if (structuredRuntimeErrorCode(e) === 'turn_in_progress') {
+      if (structuredRuntimeErrorCode(e) === 'turn_in_progress' && queued) {
         set({
           blocks: previousBlocks,
           busy: false,
@@ -1301,11 +1588,33 @@ export function createThreadActions(
         await get().refreshThreads()
         return false
       }
+      const failedMessageId = queued?.id ?? userBlockId
+      const { journalOnly: _journalOnly, ...visibleDeliveryAttempt } = deliveryAttempt
+      const failedMessage: QueuedUserMessage = {
+        ...(queued ?? directDeliveryJournal),
+        id: failedMessageId,
+        ...(failedThreadId ? { threadId: failedThreadId, targetThreadId: failedThreadId } : {}),
+        deliveryAttempt: visibleDeliveryAttempt,
+        sendFailure: {
+          userBlockId,
+          message: formatRuntimeError(e),
+          attemptedAt: now
+        }
+      }
+      const retryQueue = previousQueuedMessages.some((message) => message.id === failedMessageId)
+        ? previousQueuedMessages.map((message) => message.id === failedMessageId ? failedMessage : message)
+        : [...previousQueuedMessages, failedMessage]
       set({
-        error: formatRuntimeError(e),
+        blocks: previousBlocks,
+        error: i18n.t('common:failedSendRetryRequired', { message: formatRuntimeError(e) }),
         busy: false,
-        currentTurnId: null,
-        queuedMessages: previousQueuedMessages,
+        currentTurnId: previousCurrentTurnId,
+        currentTurnUserId: previousCurrentTurnUserId,
+        turnStartedAtByUserId: previousTurnStartedAtByUserId,
+        turnDurationByUserId: previousTurnDurationByUserId,
+        turnReasoningFirstAtByUserId: previousTurnReasoningFirstAtByUserId,
+        turnReasoningLastAtByUserId: previousTurnReasoningLastAtByUserId,
+        queuedMessages: retryQueue,
         ...(shouldOpenSettingsForError(e)
           ? { route: 'settings' as const, settingsSection: 'agents' as const }
           : {})

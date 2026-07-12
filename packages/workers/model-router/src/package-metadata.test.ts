@@ -17,7 +17,7 @@ test('manifest exposes model-router worker diagnostics metadata without private 
   );
   assert.equal(
     modelRouterManifest.tools
-      .filter((tool) => tool.id !== 'model_router_image_generations')
+      .filter((tool) => !['model_router_image_generations', 'model_router_image_edits'].includes(tool.id))
       .every((tool) => tool.sideEffects.includes('filesystem')),
     true
   );

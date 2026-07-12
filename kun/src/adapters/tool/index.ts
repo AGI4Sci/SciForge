@@ -1,4 +1,5 @@
 export * from './bash.js'
+export * from './apply-patch.js'
 export * from './capability-registry.js'
 export * from './create-plan-tool.js'
 export * from './delegation-tool-provider.js'

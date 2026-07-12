@@ -57,6 +57,78 @@ describe('scientific visual planner', () => {
     ])
   })
 
+  it('routes an annotated generative revision directly through non-destructive packet editing', () => {
+    const result = planScientificVisual({
+      task: 'Apply the reviewer annotations to the existing conceptual figure.',
+      action: 'revision',
+      visualDocumentId: 'visual-1',
+      reviewPacketPath: '.sciforge/visual-documents/visual-1/review-packet.json',
+      sourceArtifacts: ['figures/existing.png'],
+      decision: {
+        route: 'generative_visual',
+        rationale: 'The requested changes are conceptual and localized.',
+        reproducibleInputs: [],
+        truthLockedElements: ['unannotated pixels', 'labels', 'relationships']
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.execution.stages).toMatchObject([
+      {
+        id: 'edit_visual',
+        tool: 'image_generation_edit_from_visual_review_packet',
+        consumes: expect.arrayContaining(['reviewPacketPath', 'sourceArtifacts', 'truthLockedElements'])
+      },
+      { id: 'review_visual', tool: 'visual_artifact_review' }
+    ])
+    expect(result.execution.stages.map((stage) => stage.tool)).not.toContain('image_generation_render')
+    expect(result.execution.stages.map((stage) => stage.tool)).not.toContain('image_generation_prepare')
+  })
+
+  it('routes an annotated hybrid revision through the same packet-edit workflow', () => {
+    const result = planScientificVisual({
+      task: 'Restyle one annotated conceptual region while preserving exact plotted values.',
+      action: 'revision',
+      reviewPacketPath: '.sciforge/visual-documents/visual-2/review-packet.json',
+      sourceArtifacts: ['figures/mixed-figure.png'],
+      decision: {
+        route: 'hybrid_composite',
+        rationale: 'The raster mixes exact scientific marks with conceptual composition.',
+        reproducibleInputs: ['data/results.csv'],
+        truthLockedElements: ['plot values', 'axis labels', 'unannotated regions']
+      }
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.execution.stages.map((stage) => stage.tool)).toEqual([
+      'image_generation_edit_from_visual_review_packet',
+      'visual_artifact_review'
+    ])
+  })
+
+  it.each(['generative_visual', 'hybrid_composite'] as const)(
+    'fails closed when a %s revision omits the visual review packet',
+    (route) => {
+      expect(planScientificVisual({
+        task: 'Revise an existing raster.',
+        action: 'revision',
+        sourceArtifacts: ['figures/existing.png'],
+        decision: {
+          route,
+          rationale: 'The requested revision needs semantic image editing.',
+          reproducibleInputs: route === 'hybrid_composite' ? ['data/results.csv'] : [],
+          truthLockedElements: ['source content outside annotated regions']
+        }
+      })).toEqual({
+        ok: false,
+        status: 'invalid_decision',
+        message: `reviewPacketPath is required for action=revision and route=${route}; annotated raster revisions must use the non-destructive visual-review edit workflow.`
+      })
+    }
+  )
+
   it('orders deterministic truth before generated composition for hybrid work', () => {
     const result = planScientificVisual({
       task: 'Combine exact benchmark plots with a conceptual architecture overview.',

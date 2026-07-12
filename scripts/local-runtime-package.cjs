@@ -1,5 +1,5 @@
 const { spawnSync } = require('node:child_process')
-const { existsSync, rmSync } = require('node:fs')
+const { existsSync, readFileSync, rmSync, statSync, writeFileSync } = require('node:fs')
 const { join, resolve } = require('node:path')
 
 const PROJECT_ROOT = resolve(__dirname, '..')
@@ -25,6 +25,9 @@ const LOCAL_RUNTIME_REQUIRED_PATHS = [
 ]
 
 const LOCAL_RUNTIME_SQLITE_MODULE_PATH = 'kun/node_modules/better-sqlite3'
+const ROOT_SQLITE_MODULE_PATH = 'node_modules/better-sqlite3'
+const ROOT_SQLITE_ADDON_PATH = `${ROOT_SQLITE_MODULE_PATH}/build/Release/better_sqlite3.node`
+const ELECTRON_NATIVE_STAMP_PATH = `${ROOT_SQLITE_MODULE_PATH}/.sciforge-electron-abi.json`
 
 function assertExists(path, label) {
   if (!existsSync(path)) {
@@ -66,6 +69,161 @@ function runNpm(args, options = {}) {
   }
 }
 
+function electronNativeTarget(projectRoot = PROJECT_ROOT) {
+  const electronPackage = JSON.parse(readFileSync(
+    join(projectRoot, 'node_modules', 'electron', 'package.json'),
+    'utf8'
+  ))
+  const sqlitePackage = JSON.parse(readFileSync(
+    join(projectRoot, ROOT_SQLITE_MODULE_PATH, 'package.json'),
+    'utf8'
+  ))
+  return {
+    electronVersion: String(electronPackage.version || '').trim(),
+    betterSqliteVersion: String(sqlitePackage.version || '').trim(),
+    platform: process.platform,
+    arch: process.arch
+  }
+}
+
+function sqliteAddonFingerprint(projectRoot = PROJECT_ROOT) {
+  const addonPath = join(projectRoot, ROOT_SQLITE_ADDON_PATH)
+  if (!existsSync(addonPath)) return null
+  const stats = statSync(addonPath)
+  return { size: stats.size, mtimeMs: stats.mtimeMs }
+}
+
+function electronNativeStampMatches(stamp, target, fingerprint) {
+  return Boolean(
+    stamp &&
+    fingerprint &&
+    stamp.electronVersion === target.electronVersion &&
+    stamp.betterSqliteVersion === target.betterSqliteVersion &&
+    stamp.platform === target.platform &&
+    stamp.arch === target.arch &&
+    stamp.addon?.size === fingerprint.size &&
+    stamp.addon?.mtimeMs === fingerprint.mtimeMs
+  )
+}
+
+function readElectronNativeStamp(projectRoot = PROJECT_ROOT) {
+  try {
+    return JSON.parse(readFileSync(join(projectRoot, ELECTRON_NATIVE_STAMP_PATH), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+function resolveElectronExecutable(projectRoot = PROJECT_ROOT) {
+  const electronEntry = require.resolve('electron', { paths: [projectRoot] })
+  return require(electronEntry)
+}
+
+function verifyElectronNativeSqlite(projectRoot = PROJECT_ROOT, options = {}) {
+  const target = electronNativeTarget(projectRoot)
+  const sqliteModulePath = join(projectRoot, ROOT_SQLITE_MODULE_PATH)
+  assertExists(join(sqliteModulePath, 'package.json'), 'root better-sqlite3 dependency')
+  assertExists(join(projectRoot, ROOT_SQLITE_ADDON_PATH), 'better-sqlite3 native addon')
+  const electronExecutable = options.electronExecutable || resolveElectronExecutable(projectRoot)
+  const runner = options.spawnSync || spawnSync
+  const verificationProgram = [
+    "const Database = require(process.argv[1])",
+    "const db = new Database(':memory:')",
+    "db.prepare('SELECT 1 AS ok').get()",
+    'db.close()',
+    "process.stdout.write(JSON.stringify({ modules: process.versions.modules }))"
+  ].join(';')
+  const result = runner(electronExecutable, ['-e', verificationProgram, sqliteModulePath], {
+    cwd: projectRoot,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' },
+    encoding: 'utf8',
+    stdio: 'pipe'
+  })
+  const stderr = String(result.stderr || '').trim()
+  const stdout = String(result.stdout || '').trim()
+  if (result.error || result.status !== 0) {
+    const detail = stderr || stdout || result.error?.message || `exit status ${result.status}`
+    throw new Error(
+      `better-sqlite3 is not loadable by Electron ${target.electronVersion} ` +
+      `(${target.platform}-${target.arch}). ${detail}`
+    )
+  }
+  let runtimeModules = ''
+  try {
+    runtimeModules = String(JSON.parse(stdout).modules || '')
+  } catch {
+    throw new Error(`Electron native verification returned invalid output: ${stdout || '(empty)'}`)
+  }
+  return { ...target, runtimeModules }
+}
+
+function writeElectronNativeStamp(projectRoot, verification) {
+  const addon = sqliteAddonFingerprint(projectRoot)
+  if (!addon) throw new Error('better-sqlite3 native addon disappeared after verification')
+  writeFileSync(join(projectRoot, ELECTRON_NATIVE_STAMP_PATH), `${JSON.stringify({
+    ...verification,
+    addon,
+    verifiedAt: new Date().toISOString()
+  }, null, 2)}\n`, 'utf8')
+}
+
+function ensureElectronNativeSqlite(projectRoot = PROJECT_ROOT, options = {}) {
+  const target = electronNativeTarget(projectRoot)
+  const fingerprint = sqliteAddonFingerprint(projectRoot)
+  if (
+    !options.forceRebuild &&
+    electronNativeStampMatches(readElectronNativeStamp(projectRoot), target, fingerprint)
+  ) {
+    return { ...target, skipped: true }
+  }
+
+  if (!options.forceRebuild) {
+    try {
+      const verification = verifyElectronNativeSqlite(projectRoot, options)
+      writeElectronNativeStamp(projectRoot, verification)
+      return { ...verification, skipped: false, rebuilt: false }
+    } catch {
+      // A Node-ABI install is expected after npm ci. Rebuild below for Electron.
+    }
+  }
+
+  runNpm(['rebuild', 'better-sqlite3'], {
+    cwd: projectRoot,
+    label: `npm rebuild better-sqlite3 for Electron ${target.electronVersion}`,
+    env: {
+      ...process.env,
+      npm_config_runtime: 'electron',
+      npm_config_target: target.electronVersion,
+      npm_config_arch: target.arch,
+      npm_config_disturl: 'https://electronjs.org/headers'
+    }
+  })
+  const verification = verifyElectronNativeSqlite(projectRoot, options)
+  writeElectronNativeStamp(projectRoot, verification)
+  return { ...verification, skipped: false, rebuilt: true }
+}
+
+function prepareElectronNativeSqlite(projectRoot = PROJECT_ROOT) {
+  try {
+    const result = ensureElectronNativeSqlite(projectRoot)
+    if (result.rebuilt) {
+      console.log(
+        `[local-runtime-package] rebuilt better-sqlite3 for Electron ${result.electronVersion} ` +
+        `(ABI ${result.runtimeModules}, ${result.platform}-${result.arch})`
+      )
+    }
+    return true
+  } catch (error) {
+    console.warn(
+      '[local-runtime-package] better-sqlite3 Electron ABI preparation failed; ' +
+      'SciForge Runtime will keep using the JSONL fallback. ' +
+      `Run \`npm run rebuild:electron-native\` for a strict retry. ` +
+      `${error instanceof Error ? error.message : String(error)}`
+    )
+    return false
+  }
+}
+
 function hasProjectLocalRuntimeInstall(projectRoot = PROJECT_ROOT) {
   return LOCAL_RUNTIME_INSTALL_REQUIRED_PATHS.every((path) => existsSync(join(projectRoot, path)))
 }
@@ -97,6 +255,7 @@ function ensureProjectLocalRuntimeInstall(projectRoot = PROJECT_ROOT) {
 
 function buildProjectLocalRuntime(projectRoot = PROJECT_ROOT) {
   ensureProjectLocalRuntimeInstall(projectRoot)
+  prepareElectronNativeSqlite(projectRoot)
   runNpm(['--prefix', 'kun', 'run', 'build'], {
     cwd: projectRoot,
     label: 'npm --prefix kun run build'
@@ -131,6 +290,10 @@ function validateBundledLocalRuntime(appRoot) {
     join(appRoot, 'node_modules', 'better-sqlite3', 'package.json'),
     'root better-sqlite3 dependency'
   )
+  assertExists(
+    join(appRoot, ROOT_SQLITE_ADDON_PATH),
+    'root better-sqlite3 native addon'
+  )
 }
 
 function printUsage() {
@@ -140,6 +303,8 @@ function printUsage() {
     'Commands:',
     '  ensure                       install local runtime dependencies when required',
     '  build                        ensure dependencies and build local runtime dist',
+    '  rebuild-electron-native      rebuild and verify better-sqlite3 for Electron',
+    '  verify-electron-native       verify better-sqlite3 under Electron-as-Node',
     '  prune-packed <appRoot>       prune bundled local runtime dependencies under app.asar.unpacked',
     '  validate-packed <appRoot>    validate bundled local runtime files'
   ].join('\n'))
@@ -153,6 +318,23 @@ function runCli(argv = process.argv.slice(2)) {
   }
   if (command === 'build') {
     buildProjectLocalRuntime()
+    return
+  }
+  if (command === 'rebuild-electron-native') {
+    const result = ensureElectronNativeSqlite(PROJECT_ROOT, { forceRebuild: true })
+    console.log(
+      `[local-runtime-package] better-sqlite3 verified for Electron ${result.electronVersion} ` +
+      `(ABI ${result.runtimeModules}, ${result.platform}-${result.arch})`
+    )
+    return
+  }
+  if (command === 'verify-electron-native') {
+    const result = verifyElectronNativeSqlite(PROJECT_ROOT)
+    writeElectronNativeStamp(PROJECT_ROOT, result)
+    console.log(
+      `[local-runtime-package] better-sqlite3 verified for Electron ${result.electronVersion} ` +
+      `(ABI ${result.runtimeModules}, ${result.platform}-${result.arch})`
+    )
     return
   }
   if (command === 'prune-packed') {
@@ -189,6 +371,12 @@ exports.npmCommand = npmCommand
 exports.runNpm = runNpm
 exports.hasProjectLocalRuntimeInstall = hasProjectLocalRuntimeInstall
 exports.removeProjectLocalRuntimeSqlite = removeProjectLocalRuntimeSqlite
+exports.electronNativeTarget = electronNativeTarget
+exports.sqliteAddonFingerprint = sqliteAddonFingerprint
+exports.electronNativeStampMatches = electronNativeStampMatches
+exports.verifyElectronNativeSqlite = verifyElectronNativeSqlite
+exports.ensureElectronNativeSqlite = ensureElectronNativeSqlite
+exports.prepareElectronNativeSqlite = prepareElectronNativeSqlite
 exports.ensureProjectLocalRuntimeInstall = ensureProjectLocalRuntimeInstall
 exports.buildProjectLocalRuntime = buildProjectLocalRuntime
 exports.prunePackedLocalRuntimeDependencies = prunePackedLocalRuntimeDependencies

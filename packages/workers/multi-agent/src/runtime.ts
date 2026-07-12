@@ -44,6 +44,7 @@ export class MultiAgentRuntimeError extends Error {
 export type RunChildInput = {
   parentThreadId: string
   parentTurnId: string
+  requestId?: string
   label?: string
   prompt: string
   workspace?: string
@@ -79,6 +80,14 @@ export class MultiAgentRuntime {
 
   async runChild(input: RunChildInput): Promise<MultiAgentChildRunRecord> {
     const normalized = normalizeRunChildInput(input)
+    if (normalized.requestId) {
+      const replayed = await this.options.store.findByRequest(
+        normalized.parentThreadId,
+        normalized.parentTurnId,
+        normalized.requestId
+      )
+      if (replayed) return normalizeRuntimeView(replayed, this.activeChildIds)
+    }
     await this.assertCanStart(normalized.parentThreadId, normalized.parentTurnId)
     const executor = this.options.executor
     if (!executor) {
@@ -91,6 +100,7 @@ export class MultiAgentRuntime {
       id,
       parentThreadId: normalized.parentThreadId,
       parentTurnId: normalized.parentTurnId,
+      requestId: normalized.requestId,
       label: normalized.label,
       prompt: normalized.prompt,
       workspace: normalized.workspace,
@@ -363,6 +373,7 @@ function normalizeRunChildInput(input: RunChildInput): Required<Pick<RunChildInp
     parentThreadId,
     parentTurnId,
     prompt,
+    requestId: trimOptional(input.requestId),
     label: trimOptional(input.label),
     workspace: trimOptional(input.workspace),
     model: trimOptional(input.model),

@@ -15,7 +15,7 @@ import {
 } from './visual-document-engine.js'
 import { VISUAL_ARTIFACT_KINDS, type VisualDocumentSaveAnnotationsRequest } from './types.js'
 
-type LaunchOptions = { workspaceRoot?: string }
+export type VisualDocumentMcpServerOptions = { workspaceRoot?: string }
 
 const READ_ONLY = {
   readOnlyHint: true,
@@ -31,14 +31,14 @@ const CONTROLLED_WRITE = {
   openWorldHint: false
 } as const
 
-function parseOptions(argv: string[]): LaunchOptions | null {
+function parseOptions(argv: string[]): VisualDocumentMcpServerOptions | null {
   if (!argv.includes(SCIFORGE_VISUAL_DOCUMENT_MCP_FLAG)) return null
   const index = argv.indexOf('--workspace-root')
   const workspaceRoot = index >= 0 ? argv[index + 1]?.trim() : undefined
   return workspaceRoot ? { workspaceRoot } : {}
 }
 
-function workspaceRootFor(input: string | undefined, options: LaunchOptions): string {
+function workspaceRootFor(input: string | undefined, options: VisualDocumentMcpServerOptions): string {
   const root = input?.trim() || options.workspaceRoot
   if (!root) throw new Error('workspaceRoot is required.')
   return root
@@ -70,9 +70,51 @@ const geometrySchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('freehand'), points: z.array(pointSchema).min(2).max(5000) }).strict()
 ])
 
+export const visualDocumentCreateCandidateInputSchema = {
+  workspaceRoot: z.string().trim().min(1).optional(),
+  documentId: z.string().trim().max(120).optional(),
+  candidatePath: z.string().trim().min(1).max(4096),
+  summary: z.string().trim().min(1).max(4000),
+  reviewEvidence: z.object({
+    tool: z.literal('visual_artifact_review'),
+    ok: z.literal(true),
+    reviewedArtifactPath: z.string().trim().min(1).max(4096),
+    reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
+    reviewedAt: z.string().datetime(),
+    score: z.object({
+      overall: z.number().min(0).max(1),
+      dimensions: z.number().min(0).max(1),
+      nonEmpty: z.number().min(0).max(1),
+      background: z.number().min(0).max(1),
+      reference: z.number().min(0).max(1).optional(),
+      semantic: z.number().min(0).max(1),
+      warnings: z.array(z.string().max(2000)).max(100)
+    }).strict(),
+    semantic: z.object({
+      pass: z.literal(true),
+      summary: z.string().trim().min(1).max(4000),
+      violations: z.array(z.string().max(2000)).max(0),
+      repairInstructions: z.array(z.string().max(2000)).max(0)
+    }).strict(),
+    repairable: z.literal(false),
+    warnings: z.array(z.string().max(2000)).max(100)
+  }).strict(),
+  expectedBaseHash: z.string().trim().length(64).optional(),
+  width: z.number().positive().optional(),
+  height: z.number().positive().optional()
+}
+
 export async function runVisualDocumentMcpServerFromArgv(argv: string[]): Promise<boolean> {
   const options = parseOptions(argv)
   if (!options) return false
+  const server = createVisualDocumentMcpServer(options)
+  await server.connect(new StdioServerTransport())
+  return true
+}
+
+export function createVisualDocumentMcpServer(
+  options: VisualDocumentMcpServerOptions = {}
+): McpServer {
   const server = new McpServer({ name: 'sciforge-visual-document', version: '1.0.0' })
 
   server.registerTool('sciforge_visual_document_status', {
@@ -210,40 +252,8 @@ export async function runVisualDocumentMcpServerFromArgv(argv: string[]): Promis
 
   server.registerTool('sciforge_visual_document_create_candidate', {
     title: 'Create Visual Candidate Revision',
-    description: 'Stage a generated revision for human comparison without changing the source artifact. Requires hash-bound evidence from a passing visual_artifact_review with no pending repairs.',
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      documentId: z.string().trim().max(120).optional(),
-      candidatePath: z.string().trim().min(1).max(4096),
-      summary: z.string().trim().min(1).max(4000),
-      reviewEvidence: z.object({
-        tool: z.literal('visual_artifact_review'),
-        ok: z.literal(true),
-        reviewedArtifactPath: z.string().trim().min(1).max(4096),
-        reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
-        reviewedAt: z.string().datetime(),
-        score: z.object({
-          overall: z.number().min(0).max(1),
-          dimensions: z.number().min(0).max(1),
-          nonEmpty: z.number().min(0).max(1),
-          background: z.number().min(0).max(1),
-          reference: z.number().min(0).max(1).optional(),
-          semantic: z.number().min(0).max(1),
-          warnings: z.array(z.string().max(2000)).max(100)
-        }).strict(),
-        semantic: z.object({
-          pass: z.literal(true),
-          summary: z.string().trim().min(1).max(4000),
-          violations: z.tuple([]),
-          repairInstructions: z.tuple([])
-        }).strict(),
-        repairable: z.literal(false),
-        warnings: z.array(z.string().max(2000)).max(100)
-      }).strict(),
-      expectedBaseHash: z.string().trim().length(64).optional(),
-      width: z.number().positive().optional(),
-      height: z.number().positive().optional()
-    },
+    description: 'Stage a generated revision for human comparison without changing the source artifact. Requires hash-bound evidence from a passing visual_artifact_review with no pending repairs. Raster dimensions are decoded from the candidate file; width and height hints apply only to non-raster artifacts.',
+    inputSchema: visualDocumentCreateCandidateInputSchema,
     annotations: CONTROLLED_WRITE
   }, async (input) => {
     try {
@@ -287,6 +297,5 @@ export async function runVisualDocumentMcpServerFromArgv(argv: string[]): Promis
     })
   }
 
-  await server.connect(new StdioServerTransport())
-  return true
+  return server
 }

@@ -46,6 +46,33 @@ export type QueuedUserMessage = {
   attachments?: AttachmentReference[]
   fileReferences?: AgentRuntimeFileReference[]
   /**
+   * A send that did not return a turn handle. These entries are deliberately
+   * excluded from automatic queue draining: the runtime may already have
+   * persisted the user item before rejecting turn startup, so retry must first
+   * inspect the thread and choose between resend and continuation.
+   */
+  sendFailure?: {
+    userBlockId: string
+    message: string
+    /** Delivery start time used to reconcile a persisted user item after failure. */
+    attemptedAt?: number
+  }
+  /** Require explicit confirmation before retrying restored attachment ids. */
+  restoredAttachmentWarning?: string
+  /** Durable send journal used to reconcile a crash at the delivery boundary. */
+  deliveryAttempt?: {
+    startedAt: number
+    /** Immutable optimistic user id for the payload that crossed the delivery boundary. */
+    userBlockId: string
+    /** Immutable payload identity; queued text may only change before this exists. */
+    attemptedText: string
+    attemptedDisplayText?: string
+    /** Hide a normal direct send journal until it is restored or fails. */
+    journalOnly?: boolean
+    /** True only after the journal has been restored by a new renderer. */
+    restored?: boolean
+  }
+  /**
    * Optional GUI plan context forwarded to the runtime. The renderer
    * attaches it for plan/refine turns so the runtime can advertise
    * the native `create_plan` tool and gate the write to the reserved
@@ -231,6 +258,8 @@ export type ChatState = {
   composerPickList: string[]
   composerModelGroups: ModelProviderModelGroup[]
   queuedMessages: QueuedUserMessage[]
+  /** True when only the bounded recovery outbox, rather than the full session, is durable. */
+  chatSessionPersistenceDegraded: boolean
   watchTurnCompletion: Record<string, boolean>
   unreadThreadIds: Record<string, boolean>
   /**
@@ -303,6 +332,7 @@ export type ChatState = {
   drainQueuedMessagesForThread: (threadId: string) => Promise<boolean>
   removeQueuedMessage: (id: string) => void
   updateQueuedMessage: (id: string, text: string) => boolean
+  retryQueuedMessage: (id: string) => Promise<boolean>
   steerQueuedMessage: (id: string) => Promise<boolean>
   rewindAndResend: (userBlockId: string, newText: string) => Promise<void>
   interrupt: (options?: { discard?: boolean }) => Promise<void>

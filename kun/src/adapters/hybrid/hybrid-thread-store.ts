@@ -995,7 +995,19 @@ async function pathExists(path: string): Promise<boolean> {
   }
 }
 
-function warnSqlite(action: string, error: unknown): void {
+export function sqliteFallbackWarning(
+  action: string,
+  error: unknown,
+  runtimeModules = process.versions.modules ?? 'unknown'
+): string {
   const message = error instanceof Error ? error.message : String(error)
-  console.warn(`[sciforge-runtime] hybrid sqlite ${action} failed; using JSONL fallback: ${message}`)
+  const abiHint = /NODE_MODULE_VERSION|compiled against a different Node\.js version/i.test(message)
+    ? ` Native addon ABI mismatch (runtime ABI ${runtimeModules}). ` +
+      'From the SciForge project root run `npm run rebuild:electron-native`, then restart the app.'
+    : ''
+  return `[sciforge-runtime] hybrid sqlite ${action} failed; using JSONL fallback: ${message}${abiHint}`
+}
+
+function warnSqlite(action: string, error: unknown): void {
+  console.warn(sqliteFallbackWarning(action, error))
 }

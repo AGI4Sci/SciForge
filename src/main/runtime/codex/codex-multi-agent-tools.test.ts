@@ -1,5 +1,8 @@
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
-import { InMemoryMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
+import { FileMultiAgentStore, InMemoryMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
 import {
   CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
   createCodexMultiAgentToolBridge
@@ -171,6 +174,86 @@ describe('Codex multi-agent dynamic tools', () => {
     await expect(bridge.callTool(request)).resolves.toMatchObject({ success: false })
     await expect(bridge.callTool(request)).resolves.toMatchObject({ success: false })
     expect(executor).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses the persisted child result after the main/app-server bridge restarts', async () => {
+    const storeRoot = await mkdtemp(join(tmpdir(), 'sciforge-codex-multi-agent-restart-'))
+    try {
+      const firstExecutor = vi.fn(async () => ({ summary: 'settled before restart' }))
+      const request = {
+        requestId: 'request-across-process-restart',
+        threadId: 'parent-thread',
+        turnId: 'parent-turn',
+        tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+        arguments: { label: 'reader', prompt: 'Read exactly once' }
+      }
+      const firstBridge = createCodexMultiAgentToolBridge({
+        storeRoot,
+        executor: firstExecutor
+      })
+      await expect(firstBridge.callTool(request)).resolves.toMatchObject({
+        success: true,
+        contentItems: [{ type: 'inputText', text: 'settled before restart' }]
+      })
+
+      const replayExecutor = vi.fn(async () => ({ summary: 'must not run after restart' }))
+      const restartedBridge = createCodexMultiAgentToolBridge({
+        storeRoot,
+        executor: replayExecutor
+      })
+      await expect(restartedBridge.callTool(request)).resolves.toMatchObject({
+        success: true,
+        contentItems: [{ type: 'inputText', text: 'settled before restart' }]
+      })
+
+      expect(firstExecutor).toHaveBeenCalledTimes(1)
+      expect(replayExecutor).not.toHaveBeenCalled()
+      const records = await new FileMultiAgentStore(storeRoot).list()
+      expect(records).toHaveLength(1)
+      expect(records[0]).toMatchObject({
+        requestId: 'request-across-process-restart',
+        status: 'completed',
+        summary: 'settled before restart'
+      })
+    } finally {
+      await rm(storeRoot, { recursive: true, force: true })
+    }
+  })
+
+  it('reuses a persisted in-flight child identity after restart instead of spawning a duplicate', async () => {
+    const store = new InMemoryMultiAgentStore()
+    await store.upsert({
+      contractVersion: 1,
+      id: 'child-before-restart',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      requestId: 'request-in-flight-before-restart',
+      prompt: 'Continue existing child',
+      status: 'running',
+      usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+      transcript: [],
+      createdAt: '2026-07-12T00:00:00.000Z',
+      startedAt: '2026-07-12T00:00:01.000Z',
+      updatedAt: '2026-07-12T00:00:02.000Z'
+    })
+    const executor = vi.fn(async () => ({ summary: 'must not spawn duplicate' }))
+    const restartedBridge = createCodexMultiAgentToolBridge({ store, executor })
+
+    await expect(restartedBridge.callTool({
+      requestId: 'request-in-flight-before-restart',
+      threadId: 'parent-thread',
+      turnId: 'parent-turn',
+      tool: CODEX_MULTI_AGENT_FLAT_TOOL_NAME,
+      arguments: { prompt: 'Continue existing child' }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [{
+        type: 'inputText',
+        text: 'multi-agent child run is no longer active in this runtime process'
+      }]
+    })
+    expect(executor).not.toHaveBeenCalled()
+    expect(await store.list()).toHaveLength(1)
   })
 
   it('rejects empty prompts without starting a child run', async () => {

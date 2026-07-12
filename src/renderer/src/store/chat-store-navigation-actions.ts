@@ -292,6 +292,46 @@ export function createNavigationActions(
       } catch {
         /* refreshThreads sets state */
       }
+      // A renderer reload restores the selected thread id before the runtime is
+      // connected. Rehydrate that transcript once the bridge returns instead
+      // of leaving the user on an empty new-conversation surface.
+      const restoredActiveThreadId = get().activeThreadId
+      if (
+        restoredActiveThreadId &&
+        get().blocks.length === 0 &&
+        !get().busy &&
+        get().runtimeConnection === 'ready'
+      ) {
+        try {
+          await withRuntimeProbeTimeout(
+            get().selectThread(restoredActiveThreadId),
+            'Restored thread'
+          )
+          const restoredState = get()
+          const restoredThreadExists = (restoredState.threads ?? []).some(
+            (thread) => thread.id === restoredActiveThreadId
+          )
+          if (
+            restoredState.activeThreadId === restoredActiveThreadId &&
+            !restoredThreadExists &&
+            restoredState.blocks.length === 0 &&
+            restoredState.error
+          ) {
+            set({
+              ...clearedThreadSelection(),
+              error: i18n.t('common:restoredThreadUnavailable')
+            })
+          }
+        } catch {
+          // Session restoration is optional. A stale/missing thread or a slow
+          // runtime must never keep the renderer on its startup surface.
+          set({
+            ...clearedThreadSelection(),
+            runtimeConnection: 'ready',
+            error: i18n.t('common:restoredThreadUnavailable')
+          })
+        }
+      }
       syncRuntimeThreadRefreshPoll(get)
       if (get().activeThreadId && stateHasRecoverableActiveTurn(get())) {
         await get().recoverActiveTurn()
@@ -702,6 +742,9 @@ export function createNavigationActions(
             get().blocks.length > 0 ||
             Boolean((get().liveAssistant ?? '').trim()) ||
             Boolean((get().liveReasoning ?? '').trim()) ||
+            (get().queuedMessages ?? []).some((message) =>
+              message.threadId === activeId || message.targetThreadId === activeId
+            ) ||
             stateHasRecoverableActiveTurn(get())
           )
         const shouldClearSelection =

@@ -1,7 +1,7 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import type {
   DiagramLayer,
@@ -24,6 +24,7 @@ import type {
   FrameworkRegion,
   FrameworkSemanticLayer,
   ImageEditIntent,
+  ImageEditRegion,
   ImageDrawingIntent,
   ImageGenerationEditFromVisualReviewPacketRequest,
   ImageGenerationEditFromVisualReviewPacketResult,
@@ -56,6 +57,12 @@ const DEFAULT_SIZE: ImageSize = { width: 1024, height: 1024 }
 const MAX_IMAGE_SIZE = 4096
 const MIN_IMAGE_SIZE = 128
 const IMAGE_SIZE_GRANULARITY = 16
+const EDIT_MASK_CONTEXT_FRACTION = 0.04
+const EDIT_MASK_MIN_CONTEXT_PIXELS = 16
+const EDIT_MASK_MAX_CONTEXT_PIXELS = 128
+const PROTECTED_PIXEL_MAX_CHANNEL_DELTA = 24
+const PROTECTED_PIXEL_MEAN_CHANNEL_DELTA = 10
+const MAX_PROTECTED_REGION_DRIFT_FRACTION = 0.02
 const ARTIFACT_DIR = '.sciforge/artifacts'
 const IMAGE_DIR = '.sciforge/images'
 const LOCAL_MODEL_ROUTER_BASE_URL_ERROR =
@@ -2234,7 +2241,7 @@ export async function editImageFromVisualReviewPacket(
     if (!packetVisualDocumentId) throw new ReviewPacketError('VisualDocument review packet documentId is required.')
     const visualDocumentId = packetVisualDocumentId
     const threadId = request.threadId
-    const intents = extractEditIntents(packet, workspaceRoot, warnings)
+    const intents = extractEditIntents(packet, workspaceRoot, warnings, request.maskPath)
     if (intents.length === 0) {
       return {
         ok: false,
@@ -2562,6 +2569,11 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
       throw new ProviderError(error instanceof Error ? error.message : String(error))
     }
   }
+  if (input.editIntent?.sourcePath) {
+    throw new ProviderNotConfiguredError(
+      'This visual-review instruction requires an image-edit capable model. Configure an image model in Settings; semantic image edits never fall back to copying or placeholder rendering.'
+    )
+  }
   if (!allowPlaceholderProvider()) {
     throw new ProviderNotConfiguredError(
       'Image model is not configured. Configure an image model in Settings before using text-to-image generation or visual-review image edits.'
@@ -2578,6 +2590,7 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
 async function renderControlledImageEdit(input: ProviderRenderInput): Promise<ProviderRenderResult | null> {
   const intent = input.editIntent
   if (!intent?.sourcePath) return null
+  if (intent.mode !== 'style_transfer' || !isColorEditInstruction(intent.instruction)) return null
 
   const sourcePath = await resolveWorkspacePath(input.workspaceRoot, intent.sourcePath)
   const source = await loadImage(sourcePath)
@@ -2585,21 +2598,15 @@ async function renderControlledImageEdit(input: ProviderRenderInput): Promise<Pr
   const ctx = canvas.getContext('2d')
   ctx.drawImage(source, 0, 0)
 
-  const warnings: string[] = []
-  if (isColorEditInstruction(intent.instruction)) {
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-    applyControlledColorEdit(imageData.data, intent.instruction)
-    ctx.putImageData(imageData, 0, 0)
-    warnings.push('Applied a source-preserving controlled color edit; layout, text, and composition were kept from the original image.')
-  } else {
-    warnings.push('Visual-review image edit kept the source image unchanged because this edit is not yet mapped to a safe source-preserving transform.')
-  }
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
+  applyControlledColorEdit(imageData.data, intent.instruction)
+  ctx.putImageData(imageData, 0, 0)
 
   await writeFile(input.outputPath, canvas.toBuffer('image/png'))
   return {
     provider: 'controlled-edit',
     placeholder: false,
-    warnings
+    warnings: ['Applied a source-preserving controlled color edit; layout, text, and composition were kept from the original image.']
   }
 }
 
@@ -2694,11 +2701,17 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
   const prompt = input.recipe
     ? providerPromptForRecipe(input.recipe)
     : providerPromptForEditIntent(input.editIntent)
-  const size = input.recipe?.size ?? DEFAULT_SIZE
+  const editSourcePath = input.editIntent?.sourcePath
+    ? await resolveWorkspacePath(input.workspaceRoot, input.editIntent.sourcePath)
+    : undefined
+  const editSource = editSourcePath ? await loadImage(editSourcePath) : undefined
+  const size = input.recipe?.size ?? (editSource
+    ? { width: editSource.width, height: editSource.height }
+    : DEFAULT_SIZE)
   const errors: string[] = []
   for (const candidateBaseUrl of imageEndpointBaseUrlCandidates(endpoint.baseUrl)) {
     try {
-      await renderWithImageEndpoint(candidateBaseUrl, {
+      const providerInput = {
         apiKey: endpoint.apiKey,
         // The local Model Router exposes one public model alias. Recipe model
         // metadata describes the internal generator, but must never bypass the
@@ -2707,13 +2720,239 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         prompt,
         size,
         outputPath: input.outputPath
-      })
+      }
+      if (input.editIntent?.sourcePath && editSourcePath) {
+        const maskPath = input.editIntent.maskPath
+          ? await resolveWorkspacePath(input.workspaceRoot, input.editIntent.maskPath)
+          : undefined
+        const generatedMask = maskPath || !input.editIntent.selectedRegions?.length
+          ? undefined
+          : createVisualReviewEditMask(editSource!.width, editSource!.height, input.editIntent.selectedRegions)
+        await renderWithImageEditEndpoint(candidateBaseUrl, {
+          ...providerInput,
+          sourcePath: editSourcePath,
+          maskPath,
+          generatedMask
+        })
+        await compositeImageEditWithMask(editSourcePath, input.outputPath, { maskPath, generatedMask })
+        await assertImageEditChangedPixels(editSourcePath, input.outputPath, { maskPath, generatedMask })
+      } else {
+        await renderWithImageEndpoint(candidateBaseUrl, providerInput)
+      }
       return
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error))
     }
   }
   throw new ProviderError(errors.find(Boolean) ?? 'Image provider did not return an image.')
+}
+
+async function renderWithImageEditEndpoint(
+  baseUrl: string,
+  input: {
+    apiKey: string
+    model: string
+    prompt: string
+    size: ImageSize
+    outputPath: string
+    sourcePath: string
+    maskPath?: string
+    generatedMask?: File
+  }
+): Promise<void> {
+  const form = new FormData()
+  form.set('model', input.model)
+  form.set('prompt', [
+    input.prompt,
+    '',
+    'Edit the supplied source image in place. Apply only the requested changes and preserve all unmentioned content, labels, geometry, and visual identity.'
+  ].join('\n'))
+  form.set('size', input.size.width + 'x' + input.size.height)
+  form.set('n', '1')
+  form.set('input_fidelity', 'high')
+  form.set('quality', 'high')
+  form.set('image', await imageFileForForm(input.sourcePath))
+  if (input.maskPath) form.set('mask', await imageFileForForm(input.maskPath))
+  else if (input.generatedMask) form.set('mask', input.generatedMask)
+
+  const response = await fetch(baseUrl + '/images/edits', {
+    method: 'POST',
+    headers: { authorization: 'Bearer ' + input.apiKey },
+    body: form
+  })
+  const payload = await parseProviderJson(response, 'Image edit endpoint')
+  if (!response.ok) throw new ProviderError(providerHttpError('Image edit endpoint', response.status, payload))
+  const first = payload.data?.[0]
+  if (await writeProviderImage(first, input.outputPath)) return
+  throw new ProviderError('Image edit endpoint response did not include b64_json or a data URL.')
+}
+
+async function imageFileForForm(path: string): Promise<File> {
+  const bytes = await readFile(path)
+  return new File([new Uint8Array(bytes)], basename(path), { type: imageMimeType(path) })
+}
+
+async function compositeImageEditWithMask(
+  sourcePath: string,
+  outputPath: string,
+  mask?: { maskPath?: string; generatedMask?: File }
+): Promise<void> {
+  const maskImage = await loadImageEditMask(mask)
+  if (!maskImage) return
+  const [source, providerOutput] = await Promise.all([loadImage(sourcePath), loadImage(outputPath)])
+  if (providerOutput.width !== source.width || providerOutput.height !== source.height) {
+    await unlink(outputPath).catch(() => undefined)
+    throw new ProviderError(
+      `Image edit provider returned ${providerOutput.width}x${providerOutput.height}; expected the source size ${source.width}x${source.height}. No candidate was created.`
+    )
+  }
+  if (maskImage.width !== source.width || maskImage.height !== source.height) {
+    await unlink(outputPath).catch(() => undefined)
+    throw new ProviderError(
+      `Image edit mask is ${maskImage.width}x${maskImage.height}; expected the source size ${source.width}x${source.height}. No candidate was created.`
+    )
+  }
+  const sourceCanvas = createCanvas(source.width, source.height)
+  const providerCanvas = createCanvas(providerOutput.width, providerOutput.height)
+  const maskCanvas = createCanvas(maskImage.width, maskImage.height)
+  const sourceContext = sourceCanvas.getContext('2d')
+  const providerContext = providerCanvas.getContext('2d')
+  const maskContext = maskCanvas.getContext('2d')
+  sourceContext.drawImage(source, 0, 0)
+  providerContext.drawImage(providerOutput, 0, 0)
+  maskContext.drawImage(maskImage, 0, 0)
+  const sourceImageData = sourceContext.getImageData(0, 0, source.width, source.height)
+  const providerPixels = providerContext.getImageData(0, 0, providerOutput.width, providerOutput.height).data
+  const maskPixels = maskContext.getImageData(0, 0, maskImage.width, maskImage.height).data
+  for (let index = 0; index < sourceImageData.data.length; index += 4) {
+    const preservedWeight = maskPixels[index + 3] / 255
+    const editedWeight = 1 - preservedWeight
+    for (let channel = 0; channel < 4; channel += 1) {
+      sourceImageData.data[index + channel] = Math.round(
+        sourceImageData.data[index + channel] * preservedWeight + providerPixels[index + channel] * editedWeight
+      )
+    }
+  }
+  sourceContext.putImageData(sourceImageData, 0, 0)
+  await writeFile(outputPath, sourceCanvas.toBuffer('image/png'))
+}
+
+async function loadImageEditMask(
+  mask?: { maskPath?: string; generatedMask?: File }
+): Promise<Awaited<ReturnType<typeof loadImage>> | undefined> {
+  if (mask?.maskPath) return loadImage(mask.maskPath)
+  if (mask?.generatedMask) return loadImage(Buffer.from(await mask.generatedMask.arrayBuffer()))
+  return undefined
+}
+
+function createVisualReviewEditMask(width: number, height: number, regions: ImageEditRegion[]): File {
+  const canvas = createCanvas(width, height)
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#000000'
+  context.fillRect(0, 0, width, height)
+  const padding = Math.max(
+    EDIT_MASK_MIN_CONTEXT_PIXELS,
+    Math.min(EDIT_MASK_MAX_CONTEXT_PIXELS, Math.round(Math.min(width, height) * EDIT_MASK_CONTEXT_FRACTION))
+  )
+  for (const region of regions) {
+    const bounds = editRegionPixelBounds(region, width, height)
+    if (!bounds) continue
+    const left = Math.max(0, Math.floor(bounds.left - padding))
+    const top = Math.max(0, Math.floor(bounds.top - padding))
+    const right = Math.min(width, Math.ceil(bounds.right + padding))
+    const bottom = Math.min(height, Math.ceil(bounds.bottom + padding))
+    if (right > left && bottom > top) context.clearRect(left, top, right - left, bottom - top)
+  }
+  const bytes = canvas.toBuffer('image/png')
+  return new File([new Uint8Array(bytes)], 'visual-review-mask.png', { type: 'image/png' })
+}
+
+function editRegionPixelBounds(
+  region: ImageEditRegion,
+  width: number,
+  height: number
+): { left: number; top: number; right: number; bottom: number } | undefined {
+  if (region.kind === 'box') {
+    return {
+      left: region.bounds.x * width,
+      top: region.bounds.y * height,
+      right: (region.bounds.x + region.bounds.width) * width,
+      bottom: (region.bounds.y + region.bounds.height) * height
+    }
+  }
+  const points = region.kind === 'pin'
+    ? [region.point]
+    : region.kind === 'arrow'
+      ? [region.from, region.to]
+      : region.points
+  if (!points.length) return undefined
+  const xs = points.map((point) => point.x * width)
+  const ys = points.map((point) => point.y * height)
+  return {
+    left: Math.min(...xs),
+    top: Math.min(...ys),
+    right: Math.max(...xs),
+    bottom: Math.max(...ys)
+  }
+}
+
+async function assertImageEditChangedPixels(
+  sourcePath: string,
+  outputPath: string,
+  mask?: { maskPath?: string; generatedMask?: File }
+): Promise<void> {
+  const [source, output] = await Promise.all([loadImage(sourcePath), loadImage(outputPath)])
+  if (source.width !== output.width || source.height !== output.height) {
+    await unlink(outputPath).catch(() => undefined)
+    throw new ProviderError(
+      `Image edit provider returned ${output.width}x${output.height}; expected the source size ${source.width}x${source.height}. No candidate was created.`
+    )
+  }
+  const sourceCanvas = createCanvas(source.width, source.height)
+  const outputCanvas = createCanvas(output.width, output.height)
+  const sourceContext = sourceCanvas.getContext('2d')
+  const outputContext = outputCanvas.getContext('2d')
+  sourceContext.drawImage(source, 0, 0)
+  outputContext.drawImage(output, 0, 0)
+  const sourcePixels = sourceContext.getImageData(0, 0, source.width, source.height).data
+  const outputPixels = outputContext.getImageData(0, 0, output.width, output.height).data
+  if (Buffer.from(sourcePixels).equals(Buffer.from(outputPixels))) {
+    await unlink(outputPath).catch(() => undefined)
+    throw new ProviderError('Image edit provider returned a pixel-identical result; no candidate was created.')
+  }
+  const maskImage = await loadImageEditMask(mask)
+  if (!maskImage) return
+  if (maskImage.width !== source.width || maskImage.height !== source.height) {
+    await unlink(outputPath).catch(() => undefined)
+    throw new ProviderError(
+      `Image edit mask is ${maskImage.width}x${maskImage.height}; expected the source size ${source.width}x${source.height}. No candidate was created.`
+    )
+  }
+  const maskCanvas = createCanvas(maskImage.width, maskImage.height)
+  const maskContext = maskCanvas.getContext('2d')
+  maskContext.drawImage(maskImage, 0, 0)
+  const maskPixels = maskContext.getImageData(0, 0, maskImage.width, maskImage.height).data
+  let protectedPixels = 0
+  let materiallyChangedProtectedPixels = 0
+  for (let index = 0; index < maskPixels.length; index += 4) {
+    if (maskPixels[index + 3] < 250) continue
+    protectedPixels += 1
+    const redDelta = Math.abs(sourcePixels[index] - outputPixels[index])
+    const greenDelta = Math.abs(sourcePixels[index + 1] - outputPixels[index + 1])
+    const blueDelta = Math.abs(sourcePixels[index + 2] - outputPixels[index + 2])
+    const alphaDelta = Math.abs(sourcePixels[index + 3] - outputPixels[index + 3])
+    const maxDelta = Math.max(redDelta, greenDelta, blueDelta, alphaDelta)
+    const meanDelta = (redDelta + greenDelta + blueDelta + alphaDelta) / 4
+    if (maxDelta >= PROTECTED_PIXEL_MAX_CHANNEL_DELTA && meanDelta >= PROTECTED_PIXEL_MEAN_CHANNEL_DELTA) {
+      materiallyChangedProtectedPixels += 1
+    }
+  }
+  const driftFraction = protectedPixels ? materiallyChangedProtectedPixels / protectedPixels : 0
+  if (driftFraction <= MAX_PROTECTED_REGION_DRIFT_FRACTION) return
+  await unlink(outputPath).catch(() => undefined)
+  throw new ProviderError(
+    `Image edit changed ${(driftFraction * 100).toFixed(1)}% of mask-protected pixels; the maximum allowed material drift is ${(MAX_PROTECTED_REGION_DRIFT_FRACTION * 100).toFixed(1)}%. No candidate was created.`
+  )
 }
 
 function configuredModelRouterImageEndpoint(): { apiKey: string; baseUrl: string; model: string } | null {
@@ -3194,7 +3433,12 @@ async function loadReviewPacket(request: ImageGenerationEditFromVisualReviewPack
   return JSON.parse(await readFile(packetPath, 'utf8'))
 }
 
-function extractEditIntents(packet: unknown, workspaceRoot: string, warnings: string[]): ImageEditIntent[] {
+function extractEditIntents(
+  packet: unknown,
+  workspaceRoot: string,
+  warnings: string[],
+  explicitMaskPath?: string
+): ImageEditIntent[] {
   const record = asRecord(packet)
   if (record.schemaVersion !== 1) {
     warnings.push('Skipped unsupported VisualDocument review packet schema.')
@@ -3220,8 +3464,14 @@ function extractEditIntents(packet: unknown, workspaceRoot: string, warnings: st
     ? record.truthLocks.map(asRecord).map((lock) => stringValue(lock.description)).filter((value): value is string => Boolean(value))
     : []
   const styleProfileRef = stringValue(record.styleProfileRef)
+  const requestedInstructions = annotations.map((annotation) => (
+    stringValue(annotation.instruction) ?? 'Apply this visual-review annotation.'
+  ))
+  const selectedRegions = annotations
+    .map((annotation) => normalizedReviewRegion(annotation.geometry))
+    .filter((region): region is ImageEditRegion => Boolean(region))
   const annotationInstructions = annotations.map((annotation, index) => {
-    const instruction = stringValue(annotation.instruction) ?? 'Apply this visual-review annotation.'
+    const instruction = requestedInstructions[index] ?? 'Apply this visual-review annotation.'
     return `${index + 1}. annotation=${stringValue(annotation.id) ?? `annotation-${index + 1}`} region=${JSON.stringify(annotation.geometry ?? null)} instruction=${instruction}`
   })
   const instruction = [
@@ -3231,15 +3481,63 @@ function extractEditIntents(packet: unknown, workspaceRoot: string, warnings: st
     ...(styleProfileRef ? [`Use the VisualStyleProfile at ${styleProfileRef} as the style constraint.`] : [])
   ].join('\n')
   return [{
-    mode: 'replace',
+    mode: requestedInstructions.every(isColorEditInstruction) ? 'style_transfer' : 'replace',
     sourcePath,
     instruction,
+    ...(explicitMaskPath?.trim() ? { maskPath: explicitMaskPath.trim() } : {}),
+    ...(selectedRegions.length ? { selectedRegions } : {}),
     annotationIds: annotations.map((annotation, index) => stringValue(annotation.id) ?? `annotation-${index + 1}`),
     targetNodeIds: [...new Set(annotations.flatMap((annotation) => (
       Array.isArray(annotation.targetNodeIds) ? annotation.targetNodeIds.map(stringValue).filter((value): value is string => Boolean(value)) : []
     )))],
     preserve: ['composition', 'layout']
   }]
+}
+
+function normalizedReviewRegion(value: unknown): ImageEditRegion | undefined {
+  const geometry = asRecord(value)
+  if (geometry.kind === 'box') {
+    const bounds = asRecord(geometry.bounds)
+    const x = normalizedCoordinate(bounds.x)
+    const y = normalizedCoordinate(bounds.y)
+    const width = finiteNumber(bounds.width)
+    const height = finiteNumber(bounds.height)
+    if (x === undefined || y === undefined || width === undefined || height === undefined || width <= 0 || height <= 0) return undefined
+    return {
+      kind: 'box',
+      bounds: { x, y, width: Math.min(1 - x, width), height: Math.min(1 - y, height) }
+    }
+  }
+  if (geometry.kind === 'pin') {
+    const point = normalizedPoint(geometry.point)
+    return point ? { kind: 'pin', point } : undefined
+  }
+  if (geometry.kind === 'arrow') {
+    const from = normalizedPoint(geometry.from)
+    const to = normalizedPoint(geometry.to)
+    return from && to ? { kind: 'arrow', from, to } : undefined
+  }
+  if (geometry.kind === 'freehand' && Array.isArray(geometry.points)) {
+    const points = geometry.points.map(normalizedPoint).filter((point): point is { x: number; y: number } => Boolean(point))
+    return points.length ? { kind: 'freehand', points } : undefined
+  }
+  return undefined
+}
+
+function normalizedPoint(value: unknown): { x: number; y: number } | undefined {
+  const point = asRecord(value)
+  const x = normalizedCoordinate(point.x)
+  const y = normalizedCoordinate(point.y)
+  return x === undefined || y === undefined ? undefined : { x, y }
+}
+
+function normalizedCoordinate(value: unknown): number | undefined {
+  const number = finiteNumber(value)
+  return number === undefined ? undefined : clamp01(number)
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
 }
 
 function isImageArtifactKind(kind: string): boolean {

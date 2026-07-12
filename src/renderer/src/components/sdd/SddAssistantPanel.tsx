@@ -32,6 +32,7 @@ type Props = {
   removeQueuedMessage: (id: string) => void
   updateQueuedMessage: (id: string, text: string) => boolean
   steerQueuedMessage: (id: string) => Promise<boolean>
+  retryQueuedMessage: (id: string) => Promise<boolean>
   fileReferenceEnabled?: boolean
   fileReferences?: ComposerFileReference[]
   onAddFileReference?: (reference: ComposerFileReference) => void
@@ -69,6 +70,7 @@ export function SddAssistantPanel({
   removeQueuedMessage,
   updateQueuedMessage,
   steerQueuedMessage,
+  retryQueuedMessage,
   fileReferenceEnabled = false,
   fileReferences = [],
   onAddFileReference,
@@ -213,6 +215,7 @@ export function SddAssistantPanel({
           onRemoveQueuedMessage={removeQueuedMessage}
           onEditQueuedMessage={(id, text) => void updateQueuedMessage(id, text)}
           onSteerQueuedMessage={(id) => void steerQueuedMessage(id)}
+          onRetryQueuedMessage={(id) => void retryQueuedMessage(id)}
           fileReferenceEnabled={fileReferenceEnabled}
           fileReferences={fileReferences}
           onAddFileReference={onAddFileReference}

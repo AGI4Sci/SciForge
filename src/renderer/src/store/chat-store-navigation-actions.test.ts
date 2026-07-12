@@ -38,6 +38,17 @@ function thread(id: string, runtimeId?: AgentRuntimeId): NormalizedThread {
   }
 }
 
+function deferred<T>(): {
+  promise: Promise<T>
+  resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
+}
+
 function sideConversation(threadId: string, parentThreadId: string): ChatState['sideConversations'][string] {
   return {
     threadId,
@@ -777,6 +788,123 @@ describe('chat-store-navigation-actions probeRuntime', () => {
     expect(provider.connect).toHaveBeenCalledTimes(1)
     expect(state.refreshThreads).toHaveBeenCalledTimes(1)
     expect(state.error).toBeNull()
+  })
+
+  it('rehydrates the persisted active thread after the runtime bridge reconnects', async () => {
+    const provider = {
+      connect: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'offline',
+      error: 'bridge disconnected',
+      runtimeErrorDetail: 'bridge disconnected',
+      activeThreadId: 'persisted-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      watchTurnCompletion: {},
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(async () => undefined),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(state.refreshThreads).toHaveBeenCalledTimes(1)
+    expect(state.selectThread).toHaveBeenCalledWith('persisted-thread')
+    expect(state.activeThreadId).toBe('persisted-thread')
+    expect(state.runtimeConnection).toBe('ready')
+  })
+
+  it('fails open when a persisted active thread no longer exists', async () => {
+    const provider = { connect: vi.fn(async () => undefined) }
+    registryMock.getProvider.mockReturnValue(provider)
+    const state = {
+      runtimeConnection: 'offline',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: 'deleted-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      threads: [],
+      queuedMessages: [{ id: 'kept-q', threadId: 'deleted-thread', text: 'preserve me' }],
+      watchTurnCompletion: {},
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(async () => {
+        state.error = 'thread not found'
+      }),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    await actions.probeRuntime('background')
+
+    expect(state.activeThreadId).toBeNull()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({ id: 'kept-q', text: 'preserve me' })
+    ])
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toMatch(/previous conversation|上次会话/i)
+  })
+
+  it('times out a late persisted-thread read without taking the runtime offline', async () => {
+    vi.useFakeTimers()
+    const provider = { connect: vi.fn(async () => undefined) }
+    registryMock.getProvider.mockReturnValue(provider)
+    const lateThread = deferred<void>()
+    const state = {
+      runtimeConnection: 'offline',
+      error: null,
+      runtimeErrorDetail: null,
+      activeThreadId: 'slow-restored-thread',
+      blocks: [],
+      busy: false,
+      currentTurnId: null,
+      threads: [thread('slow-restored-thread', 'sciforge')],
+      queuedMessages: [],
+      watchTurnCompletion: {},
+      loadComposerModels: vi.fn(),
+      refreshThreads: vi.fn(async () => undefined),
+      selectThread: vi.fn(() => lateThread.promise),
+      recoverActiveTurn: vi.fn(async () => false)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({ set, get: () => state, sseAbortRef: { current: null } })
+    state.probeRuntime = actions.probeRuntime
+
+    const task = actions.probeRuntime('background')
+    await vi.advanceTimersByTimeAsync(8_000)
+    await task
+
+    expect(state.activeThreadId).toBeNull()
+    expect(state.runtimeConnection).toBe('ready')
+    expect(state.error).toMatch(/previous conversation|上次会话/i)
+
+    lateThread.resolve()
+    await Promise.resolve()
+    expect(state.activeThreadId).toBeNull()
   })
 })
 

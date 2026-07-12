@@ -4,6 +4,7 @@ import { useShallow } from 'zustand/react/shallow'
 import {
   Bot,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   CircleAlert,
   CircleHelp,
@@ -240,6 +241,59 @@ export type ChildAgentAttemptInfo = {
   total: number
 }
 
+export type ChildAgentAttemptGroup = {
+  key: string
+  primary: AgentRuntimeChild
+  attempts: AgentRuntimeChild[]
+}
+
+function normalizedAttemptPart(value: string | undefined): string {
+  return value?.trim().replace(/\s+/g, ' ').toLocaleLowerCase() ?? ''
+}
+
+function childAgentAttemptGroupKey(child: AgentRuntimeChild): string {
+  const name = normalizedAttemptPart(child.name || child.label)
+  const prompt = normalizedAttemptPart(child.prompt)
+  const scope = `${child.runtimeId}\u0000${child.parentThreadId}`
+  if (!name || !prompt) return `child\u0000${scope}\u0000${child.id}`
+  return `task\u0000${scope}\u0000${name}\u0000${prompt}`
+}
+
+function isActiveChildAttempt(child: AgentRuntimeChild): boolean {
+  return child.status === 'running' || child.status === 'queued'
+}
+
+/**
+ * Group only retries of the same logical task. The prompt is part of the
+ * identity so two same-name children with different assignments stay separate.
+ * Each group promotes its newest active attempt, or otherwise its newest
+ * attempt, while retaining the full chronological history.
+ */
+export function childAgentAttemptGroups(
+  children: readonly AgentRuntimeChild[]
+): ChildAgentAttemptGroup[] {
+  const grouped = new Map<string, AgentRuntimeChild[]>()
+  for (const child of children) {
+    const key = childAgentAttemptGroupKey(child)
+    grouped.set(key, [...(grouped.get(key) ?? []), child])
+  }
+
+  const groups = [...grouped.entries()].map(([key, group]) => {
+    const attempts = [...group].sort((a, b) => {
+      const byTime = childCreatedTime(a) - childCreatedTime(b)
+      return byTime || a.id.localeCompare(b.id)
+    })
+    const active = attempts.filter(isActiveChildAttempt)
+    return {
+      key,
+      primary: active.at(-1) ?? attempts.at(-1)!,
+      attempts
+    }
+  })
+
+  return groups.sort((a, b) => compareChildAgents(a.primary, b.primary))
+}
+
 /**
  * Identify real retries without collapsing them. Repeated native/event records
  * have already been removed by filterDirectChildAgents; records that remain
@@ -249,26 +303,12 @@ export type ChildAgentAttemptInfo = {
 export function childAgentAttemptInfo(
   children: readonly AgentRuntimeChild[]
 ): Map<string, ChildAgentAttemptInfo> {
-  const groups = new Map<string, AgentRuntimeChild[]>()
-  for (const child of children) {
-    const name = (child.name?.trim() || child.label?.trim() || '').toLocaleLowerCase()
-    const prompt = child.prompt?.trim().replace(/\s+/g, ' ').toLocaleLowerCase() ?? ''
-    if (!name || !prompt) continue
-    const key = `${child.runtimeId}\u0000${name}\u0000${prompt}`
-    groups.set(key, [...(groups.get(key) ?? []), child])
-  }
-
   const attempts = new Map<string, ChildAgentAttemptInfo>()
-  for (const group of groups.values()) {
-    if (group.length < 2) continue
-    const ordered = [...group].sort((a, b) => {
-      const aTime = childCreatedTime(a)
-      const bTime = childCreatedTime(b)
-      return aTime - bTime || a.id.localeCompare(b.id)
-    })
-    ordered.forEach((child, index) => attempts.set(child.id, {
+  for (const group of childAgentAttemptGroups(children)) {
+    if (group.attempts.length < 2) continue
+    group.attempts.forEach((child, index) => attempts.set(child.id, {
       current: index + 1,
-      total: ordered.length
+      total: group.attempts.length
     }))
   }
   return attempts
@@ -295,16 +335,19 @@ function childStatusOrder(status: AgentRuntimeChildStatus): number {
 }
 
 export function sortChildAgents(children: readonly AgentRuntimeChild[]): AgentRuntimeChild[] {
-  return [...children].sort((a, b) => {
-    const byStatus = childStatusOrder(a.status) - childStatusOrder(b.status)
-    if (byStatus !== 0) return byStatus
-    const parsedATime = Date.parse(a.updatedAt ?? a.startedAt ?? a.createdAt ?? '')
-    const parsedBTime = Date.parse(b.updatedAt ?? b.startedAt ?? b.createdAt ?? '')
-    const aTime = Number.isFinite(parsedATime) ? parsedATime : 0
-    const bTime = Number.isFinite(parsedBTime) ? parsedBTime : 0
-    if (aTime !== bTime) return bTime - aTime
-    return childAgentShortName(a).localeCompare(childAgentShortName(b))
-  })
+  return [...children].sort(compareChildAgents)
+}
+
+function compareChildAgents(a: AgentRuntimeChild, b: AgentRuntimeChild): number {
+  const byStatus = childStatusOrder(a.status) - childStatusOrder(b.status)
+  if (byStatus !== 0) return byStatus
+  const parsedATime = Date.parse(a.updatedAt ?? a.startedAt ?? a.createdAt ?? '')
+  const parsedBTime = Date.parse(b.updatedAt ?? b.startedAt ?? b.createdAt ?? '')
+  const aTime = Number.isFinite(parsedATime) ? parsedATime : 0
+  const bTime = Number.isFinite(parsedBTime) ? parsedBTime : 0
+  if (aTime !== bTime) return bTime - aTime
+  const byName = childAgentShortName(a).localeCompare(childAgentShortName(b))
+  return byName || a.id.localeCompare(b.id)
 }
 
 export function preferredChildAgentId(
@@ -415,6 +458,23 @@ export function formatChildUsage(child: AgentRuntimeChild, t: ChildAgentTFunctio
 
 function childDetailText(value: string | undefined, fallback: string): string {
   return value?.trim() || fallback
+}
+
+function childIdFragment(value: string | undefined): string {
+  const id = value?.trim() ?? ''
+  if (!id) return '—'
+  return id.length > 14 ? `${id.slice(0, 8)}…${id.slice(-4)}` : id
+}
+
+export function formatChildTimestamp(child: AgentRuntimeChild): string {
+  const raw = child.createdAt ?? child.startedAt ?? child.updatedAt ?? child.completedAt
+  if (!raw) return '—'
+  const parsed = new Date(raw)
+  if (!Number.isFinite(parsed.getTime())) return raw
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short'
+  }).format(parsed)
 }
 
 function childOpenThreadId(child: AgentRuntimeChild | null | undefined): string {
@@ -734,12 +794,15 @@ function childTranscriptSegments(blocks: ChatBlock[]): ChildTranscriptSegment[] 
 
 function ChildAgentOverview({
   child,
+  attempt,
   t
 }: {
   child: AgentRuntimeChild
+  attempt?: ChildAgentAttemptInfo
   t: ChildAgentTFunction
 }): ReactElement {
   const name = childAgentShortName(child)
+  const parentTurnId = child.parentTurnId?.trim()
 
   return (
     <div
@@ -761,6 +824,34 @@ function ChildAgentOverview({
           </div>
         </div>
       </div>
+
+      <dl className="mt-2 grid grid-cols-[auto,minmax(0,1fr)] gap-x-2 gap-y-1 border-t border-ds-border-muted pt-2 text-[10.5px] leading-4 text-ds-faint">
+        {attempt ? (
+          <>
+            <dt>{t('sidebarChildrenAttemptLabel')}</dt>
+            <dd>{t('sidebarChildrenAttempt', attempt)}</dd>
+          </>
+        ) : null}
+        <dt>{t('sidebarChildrenParentTurn')}</dt>
+        <dd className="truncate font-mono" title={parentTurnId || undefined}>
+          {childIdFragment(parentTurnId)}
+        </dd>
+        <dt>{t('sidebarChildrenStartedAt')}</dt>
+        <dd className="truncate" title={child.createdAt ?? child.startedAt ?? child.updatedAt}>
+          {formatChildTimestamp(child)}
+        </dd>
+        <dt>{t('sidebarChildrenChildId')}</dt>
+        <dd className="truncate font-mono" title={child.id}>{childIdFragment(child.id)}</dd>
+      </dl>
+
+      {child.status === 'aborted' ? (
+        <div
+          className="mt-2 rounded-md border border-red-400/25 bg-red-500/8 px-2 py-1.5 text-[11px] leading-4 text-red-700 dark:text-red-300"
+          role="status"
+        >
+          {t('sidebarChildrenAbortedNotice')}
+        </div>
+      ) : null}
 
       {visibleChildSummary(child.summary) ? (
         <div className="mt-2 line-clamp-2 whitespace-pre-wrap text-[12px] leading-5 text-ds-muted">
@@ -1113,9 +1204,24 @@ export function ChildAgentsPanelView({
   t
 }: ChildAgentsPanelViewProps): ReactElement {
   const directChildren = sortChildAgents(filterDirectChildAgents(children, activeThreadId, activeRuntimeId))
-  const selectedChild = directChildren.find((child) => child.id === selectedChildId) ?? directChildren[0] ?? null
+  const attemptGroups = childAgentAttemptGroups(directChildren)
+  const [expandedAttemptGroups, setExpandedAttemptGroups] = useState<Set<string>>(() => new Set())
+  const isAttemptGroupExpanded = (group: ChildAgentAttemptGroup): boolean =>
+    expandedAttemptGroups.has(group.key) || (
+      Boolean(selectedChildId) &&
+      selectedChildId !== group.primary.id &&
+      group.attempts.some((child) => child.id === selectedChildId)
+    )
+  const presentationChildren = attemptGroups.flatMap((group) => {
+    if (!isAttemptGroupExpanded(group)) return [group.primary]
+    const history = group.attempts
+      .filter((child) => child.id !== group.primary.id)
+      .reverse()
+    return [group.primary, ...history]
+  })
+  const selectedChild = presentationChildren.find((child) => child.id === selectedChildId) ?? presentationChildren[0] ?? null
   const attemptsByChildId = childAgentAttemptInfo(directChildren)
-  const runningCount = directChildren.filter((child) => child.status === 'running' || child.status === 'queued').length
+  const runningCount = attemptGroups.filter((group) => group.attempts.some(isActiveChildAttempt)).length
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null)
   const transcriptScrollKey = useMemo(() => {
     if (!selectedChild) return ''
@@ -1160,7 +1266,7 @@ export function ChildAgentsPanelView({
           {loading ? <Loader2 className="h-4 w-4 animate-spin text-ds-faint" strokeWidth={2} /> : null}
         </div>
         <div className="grid grid-cols-2 gap-2 px-4 pb-3">
-          <ChildAgentStat label={t('sidebarChildren')} value={directChildren.length} />
+          <ChildAgentStat label={t('sidebarChildren')} value={attemptGroups.length} />
           <ChildAgentStat label={t('sidebarChildrenActive')} value={runningCount} />
         </div>
         {navigationPath.length > 0 ? (
@@ -1199,38 +1305,80 @@ export function ChildAgentsPanelView({
             })}
           </nav>
         ) : null}
-        {directChildren.length > 0 ? (
+        {attemptGroups.length > 0 ? (
           <div
             role="tablist"
             aria-label={t('sidebarChildren')}
             className="flex min-w-0 gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {directChildren.map((child) => {
-              const name = childAgentShortName(child)
-              const attempt = attemptsByChildId.get(child.id)
-              const displayName = attempt
-                ? `${name} · ${t('sidebarChildrenAttempt', attempt)}`
-                : name
-              const active = selectedChild?.id === child.id
+            {attemptGroups.map((group) => {
+              const expanded = isAttemptGroupExpanded(group)
+              const displayedAttempts = expanded
+                ? [
+                    group.primary,
+                    ...group.attempts.filter((child) => child.id !== group.primary.id).reverse()
+                  ]
+                : [group.primary]
               return (
-                <button
-                  key={child.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  title={`${displayName}\n${childAgentStatusLabel(child.status, t)}`}
-                  onClick={() => onSelectChild(child.id)}
-                  className={`inline-flex h-9 max-w-44 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition ${
-                    active
-                      ? 'border-accent/45 bg-accent/10 text-ds-ink shadow-sm'
-                      : 'border-ds-border-muted bg-ds-card/72 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
-                  }`}
-                >
-                  <span className={active ? 'text-accent' : 'text-ds-faint'}>
-                    <ChildAgentStatusIcon status={child.status} className="h-3.5 w-3.5" />
-                  </span>
-                  <span className="min-w-0 truncate">{displayName}</span>
-                </button>
+                <div key={group.key} role="presentation" className="inline-flex shrink-0 items-center gap-1">
+                  {displayedAttempts.map((child) => {
+                    const name = childAgentShortName(child)
+                    const attempt = attemptsByChildId.get(child.id)
+                    const displayName = attempt
+                      ? `${name} · ${t('sidebarChildrenAttempt', attempt)}`
+                      : name
+                    const active = selectedChild?.id === child.id
+                    return (
+                      <button
+                        key={child.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={active}
+                        title={`${displayName}\n${childAgentStatusLabel(child.status, t)}\n${t('sidebarChildrenParentTurn')}: ${child.parentTurnId ?? '—'}\n${t('sidebarChildrenChildId')}: ${child.id}`}
+                        onClick={() => onSelectChild(child.id)}
+                        className={`inline-flex h-9 max-w-44 shrink-0 items-center gap-1.5 rounded-full border px-3 text-[12px] font-medium transition ${
+                          active
+                            ? 'border-accent/45 bg-accent/10 text-ds-ink shadow-sm'
+                            : 'border-ds-border-muted bg-ds-card/72 text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
+                        }`}
+                      >
+                        <span className={active ? 'text-accent' : 'text-ds-faint'}>
+                          <ChildAgentStatusIcon status={child.status} className="h-3.5 w-3.5" />
+                        </span>
+                        <span className="min-w-0 truncate">{displayName}</span>
+                      </button>
+                    )
+                  })}
+                  {group.attempts.length > 1 ? (
+                    <button
+                      type="button"
+                      aria-expanded={expanded}
+                      aria-label={expanded
+                        ? t('sidebarChildrenHideAttemptHistory', { count: group.attempts.length - 1 })
+                        : t('sidebarChildrenShowAttemptHistory', { count: group.attempts.length - 1 })}
+                      title={expanded
+                        ? t('sidebarChildrenHideAttemptHistory', { count: group.attempts.length - 1 })
+                        : t('sidebarChildrenShowAttemptHistory', { count: group.attempts.length - 1 })}
+                      onClick={() => {
+                        setExpandedAttemptGroups((current) => {
+                          const next = new Set(current)
+                          if (expanded) next.delete(group.key)
+                          else next.add(group.key)
+                          return next
+                        })
+                        if (expanded && selectedChildId !== group.primary.id &&
+                          group.attempts.some((child) => child.id === selectedChildId)) {
+                          onSelectChild(group.primary.id)
+                        }
+                      }}
+                      className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-ds-border-muted bg-ds-card/72 text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                    >
+                      {expanded
+                        ? <ChevronDown className="h-3.5 w-3.5" strokeWidth={1.9} />
+                        : <ChevronRight className="h-3.5 w-3.5" strokeWidth={1.9} />}
+                    </button>
+                  ) : null}
+                </div>
               )
             })}
           </div>
@@ -1306,7 +1454,7 @@ export function ChildAgentsPanelView({
               />
             ) : (
             <div ref={transcriptScrollRef} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-3 py-3">
-              <ChildAgentOverview child={selectedChild} t={t} />
+              <ChildAgentOverview child={selectedChild} attempt={attemptsByChildId.get(selectedChild.id)} t={t} />
               <ChildAgentTranscriptTimeline child={selectedChild} state={transcriptState} t={t} />
             </div>
             )}

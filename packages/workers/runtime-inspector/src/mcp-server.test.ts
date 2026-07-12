@@ -33,6 +33,7 @@ test('serves runtime inspector tools, structured errors, and resources over MCP'
   await writeFile(join(repo, 'tracked.txt'), 'initial\n', 'utf8')
   await mkdir(join(repo, 'src'), { recursive: true })
   await writeFile(join(repo, 'src', 'index.ts'), 'export const value = 1\n', 'utf8')
+  await writeFile(join(repo, 'report.tex'), '\\title{SciForge}\n', 'utf8')
   await git(repo, ['add', 'tracked.txt'])
   await git(repo, ['commit', '-m', 'initial'])
   const repoRealPath = await realpath(repo)
@@ -69,6 +70,7 @@ test('serves runtime inspector tools, structured errors, and resources over MCP'
   assert.ok(toolNames.includes('gui_git_status'))
   assert.ok(toolNames.includes('gui_runtime_health'))
   assert.ok(toolNames.includes('gui_lsp_query'))
+  assert.ok(toolNames.includes('gui_completion_check'))
 
   const status = await client.callTool({
     name: 'gui_git_status',
@@ -91,6 +93,20 @@ test('serves runtime inspector tools, structured errors, and resources over MCP'
   assert.equal(lsp.isError, undefined)
   assert.equal(asRecord(lsp.structuredContent).ok, true)
   assert.equal(asRecord(asRecord(lsp.structuredContent).result).contents, 'fake hover')
+
+  const completion = await client.callTool({
+    name: 'gui_completion_check',
+    arguments: {
+      files: [{
+        path: 'report.tex',
+        required: [{ pattern: 'SciForge' }],
+        forbidden: [{ pattern: 'PLACEHOLDER', blocking: false }]
+      }]
+    }
+  })
+  assert.equal(completion.isError, undefined)
+  assert.equal(asRecord(completion.structuredContent).passed, true)
+  assert.equal(asRecord(asRecord(completion.structuredContent).boundaries).shellExecution, 'disabled')
 
   const templates = await client.listResourceTemplates()
   assert.ok(templates.resourceTemplates.some((template) => template.uriTemplate === GIT_DIFF_RESOURCE_URI_TEMPLATE))

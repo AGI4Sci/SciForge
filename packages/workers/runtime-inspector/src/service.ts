@@ -87,6 +87,13 @@ import {
   type RuntimePortsResult
 } from './contract.js'
 import { RuntimeInspectorLspService } from './lsp-session.js'
+import {
+  CompletionCheckError,
+  CompletionChecksInputSchema,
+  runCompletionChecks,
+  type CompletionChecksInput,
+  type CompletionChecksResult
+} from './completion-checks.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -642,6 +649,29 @@ export class RuntimeInspectorService {
         ? await resolveExistingPath(parsed.data.workspace_root)
         : this.workspaceRoot
       return this.lsp.status(workspaceRoot, parsed.data.include_dependency_probe === true)
+    })
+  }
+
+  async completionChecks(input: CompletionChecksInput): Promise<CompletionChecksResult> {
+    const parsed = CompletionChecksInputSchema.safeParse(input)
+    if (!parsed.success) return this.invalidRequest(parsed.error.message)
+
+    return this.capture(async () => {
+      const workspaceRoot = await this.resolveWorkspaceRoot(parsed.data.workspace_root)
+      try {
+        return await runCompletionChecks(parsed.data, workspaceRoot)
+      } catch (error) {
+        if (error instanceof CompletionCheckError) {
+          throw serviceError(
+            error.code,
+            error.message,
+            error.code === 'file_read_failed',
+            error.suggestion,
+            error.details
+          )
+        }
+        throw error
+      }
     })
   }
 

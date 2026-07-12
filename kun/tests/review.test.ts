@@ -100,6 +100,15 @@ describe('review tool-use guidance', () => {
       'Do not reread equivalent content'
     )
   })
+
+  it('advertises the in-process apply_patch capability without shell probing', () => {
+    expect(SCIFORGE_RUNTIME_SYSTEM_PROMPT).toContain(
+      '`edit`/`apply_patch`/`write` for file mutations'
+    )
+    expect(SCIFORGE_RUNTIME_SYSTEM_PROMPT).toContain(
+      'never probe for or invoke a shell `apply_patch`/`patch` binary'
+    )
+  })
 })
 
 describe('review target prompt resolution', () => {

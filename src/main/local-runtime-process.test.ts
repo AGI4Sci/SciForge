@@ -794,7 +794,7 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
         SCIFORGE_MODEL_ROUTER_IMAGE_MODEL: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
       },
       trustScope: 'user',
-      timeoutMs: 120000
+      timeoutMs: 600000
     })
   })
 

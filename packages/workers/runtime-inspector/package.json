@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Read-only SciForge Git, LSP, and runtime diagnostics MCP worker.",
+  "description": "Read-only SciForge Git, LSP, runtime diagnostics, and saved-file completion-check MCP worker.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,

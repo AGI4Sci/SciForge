@@ -26,6 +26,11 @@ export interface MultiAgentStore {
   upsert(record: MultiAgentChildRunRecord): Promise<void>
   list(options?: ListChildRunsOptions): Promise<MultiAgentChildRunRecord[]>
   get(parentThreadId: string, childId: string): Promise<MultiAgentChildRunRecord | null>
+  findByRequest(
+    parentThreadId: string,
+    parentTurnId: string,
+    requestId: string
+  ): Promise<MultiAgentChildRunRecord | null>
   readTranscript(
     parentThreadId: string,
     childId: string,
@@ -86,6 +91,15 @@ export class FileMultiAgentStore implements MultiAgentStore {
     }
     const records = await this.list({ parentThreadId })
     return records.find((record) => record.id === childId) ?? null
+  }
+
+  async findByRequest(
+    parentThreadId: string,
+    parentTurnId: string,
+    requestId: string
+  ): Promise<MultiAgentChildRunRecord | null> {
+    const records = await this.list({ parentThreadId, parentTurnId })
+    return records.find((record) => record.requestId === requestId) ?? null
   }
 
   async readTranscript(
@@ -163,6 +177,15 @@ export class InMemoryMultiAgentStore implements MultiAgentStore {
     return record?.parentThreadId === parentThreadId ? record : null
   }
 
+  async findByRequest(
+    parentThreadId: string,
+    parentTurnId: string,
+    requestId: string
+  ): Promise<MultiAgentChildRunRecord | null> {
+    const records = await this.list({ parentThreadId, parentTurnId })
+    return records.find((record) => record.requestId === requestId) ?? null
+  }
+
   async readTranscript(
     parentThreadId: string,
     childId: string,
@@ -232,4 +255,3 @@ function isTransientRenameError(error: unknown): boolean {
   const code = (error as NodeJS.ErrnoException).code
   return code === 'EPERM' || code === 'EACCES' || code === 'EBUSY' || code === 'ENOTEMPTY'
 }
-

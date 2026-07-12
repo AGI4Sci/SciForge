@@ -23,9 +23,17 @@ export type ScientificVisualPlanRequest = {
   decision: ScientificVisualDecision
 }
 
+export type ScientificVisualExecutionTool =
+  | 'scientific_plotting_map_data'
+  | 'scientific_plotting_render'
+  | 'image_generation_prepare'
+  | 'image_generation_render'
+  | 'image_generation_edit_from_visual_review_packet'
+  | 'visual_artifact_review'
+
 export type ScientificVisualExecutionStage = {
   id: string
-  tool: string
+  tool: ScientificVisualExecutionTool
   purpose: string
   consumes: string[]
   produces: string[]
@@ -79,6 +87,14 @@ export function planScientificVisual(request: ScientificVisualPlanRequest): Scie
   ) {
     return invalidDecision(`decision.reproducibleInputs is required for route=${decision.route}.`)
   }
+  const reviewPacketPath = request.reviewPacketPath?.trim()
+  if (
+    action === 'revision' &&
+    decision.route !== 'deterministic_plot' &&
+    !reviewPacketPath
+  ) {
+    return invalidDecision(`reviewPacketPath is required for action=revision and route=${decision.route}; annotated raster revisions must use the non-destructive visual-review edit workflow.`)
+  }
 
   return {
     ok: true,
@@ -87,7 +103,7 @@ export function planScientificVisual(request: ScientificVisualPlanRequest): Scie
     context: {
       ...(request.workspaceRoot?.trim() ? { workspaceRoot: request.workspaceRoot.trim() } : {}),
       ...(request.visualDocumentId?.trim() ? { visualDocumentId: request.visualDocumentId.trim() } : {}),
-      ...(request.reviewPacketPath?.trim() ? { reviewPacketPath: request.reviewPacketPath.trim() } : {}),
+      ...(reviewPacketPath ? { reviewPacketPath } : {}),
       sourceArtifacts: uniqueNonEmpty(request.sourceArtifacts ?? [])
     },
     decision,
@@ -97,7 +113,7 @@ export function planScientificVisual(request: ScientificVisualPlanRequest): Scie
       fallbackPolicy: 'fail_closed'
     },
     routeLocked: true,
-    execution: { route: decision.route, stages: executionStages(decision.route) },
+    execution: { route: decision.route, stages: executionStages(decision.route, action) },
     failPolicy: {
       mode: 'fail_closed',
       crossRouteFallback: false,
@@ -126,12 +142,36 @@ function invalidDecision(message: string): ScientificVisualPlanResult {
   return { ok: false, status: 'invalid_decision', message }
 }
 
-function executionStages(route: ScientificVisualRoute): ScientificVisualExecutionStage[] {
+function executionStages(
+  route: ScientificVisualRoute,
+  action: 'create' | 'revision'
+): ScientificVisualExecutionStage[] {
   if (route === 'deterministic_plot') {
     return [
       stage('map_data', 'scientific_plotting_map_data', 'Map declared reproducible inputs into a controlled render request.', ['reproducibleInputs', 'truthLockedElements'], ['controlledRenderRequest']),
       stage('render_plot', 'scientific_plotting_render', 'Render the exact data-backed scientific plot.', ['controlledRenderRequest'], ['plotArtifact', 'plotManifest']),
       stage('review_plot', 'visual_artifact_review', 'Semantically inspect the rendered artifact against the task and locked scientific truth.', ['plotArtifact', 'plotManifest', 'task', 'truthLockedElements'], ['reviewResult'])
+    ]
+  }
+  if (action === 'revision') {
+    const artifactName = route === 'generative_visual' ? 'editedArtifact' : 'editedCompositeArtifact'
+    const manifestName = route === 'generative_visual' ? 'editedManifest' : 'editedCompositeManifest'
+    const reviewStageId = route === 'generative_visual' ? 'review_visual' : 'review_composite'
+    return [
+      stage(
+        route === 'generative_visual' ? 'edit_visual' : 'edit_composite',
+        'image_generation_edit_from_visual_review_packet',
+        'Apply the structured annotations and normalized masks to the existing raster without redrawing or overwriting the source.',
+        ['reviewPacketPath', 'sourceArtifacts', 'task', 'reproducibleInputs', 'truthLockedElements'],
+        [artifactName, manifestName]
+      ),
+      stage(
+        reviewStageId,
+        'visual_artifact_review',
+        'Semantically inspect the non-destructive candidate against its source, annotations, and locked truth before staging it for human acceptance.',
+        [artifactName, manifestName, 'reviewPacketPath', 'sourceArtifacts', 'task', 'truthLockedElements'],
+        ['reviewResult']
+      )
     ]
   }
   if (route === 'generative_visual') {
@@ -150,6 +190,6 @@ function executionStages(route: ScientificVisualRoute): ScientificVisualExecutio
   ]
 }
 
-function stage(id: string, tool: string, purpose: string, consumes: string[], produces: string[]): ScientificVisualExecutionStage {
+function stage(id: string, tool: ScientificVisualExecutionTool, purpose: string, consumes: string[], produces: string[]): ScientificVisualExecutionStage {
   return { id, tool, purpose, consumes, produces, truthLocked: true }
 }

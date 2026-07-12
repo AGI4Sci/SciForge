@@ -23,6 +23,7 @@ type Props = {
 
 const CANDIDATE_POLL_MS = 1_500
 const CANDIDATE_WAIT_TIMEOUT_MS = 5 * 60_000
+const CANDIDATE_WATCH_TIMEOUT_MS = 30 * 60_000
 
 function storedAnnotationToUi(annotation: StoredVisualReviewAnnotation): VisualReviewAnnotation {
   const common = {
@@ -74,6 +75,9 @@ export function buildVisualRevisionRequest(input: {
     `审改包：${input.packetPath}`,
     '先读取审改包中的结构化批注、归一化区域、语义节点、truth locks 和 styleProfileRef。',
     '必须先调用 scientific_visual_plan，action="revision"；由模型根据事实敏感性选择 deterministic_plot、generative_visual 或 hybrid_composite，并严格执行锁定路线。',
+    '必须逐项执行计划返回的 execution.stages；当阶段指定 image_generation_edit_from_visual_review_packet 时，直接传入当前审改包，禁止改用 image_generation_render 重绘整图。',
+    '审改包是人类确认的输入：禁止改写批注文字、几何区域或状态，也禁止为了重试而导出更改过的审改包。',
+    '若锁定路线为 generative_visual 或 hybrid_composite，必须直接调用 image_generation_edit_from_visual_review_packet 并传入上述审改包；禁止用 image_generation_prepare 或 image_generation_render 替代，因为它们会重新生成整张图而不是按标注局部修改。',
     '只修改批注目标；未标注区域、精确标签、数据、连线关系和 truth locks 必须保持不变。',
     '生成后调用 visual_artifact_review 做语义视觉检查；发现重叠、裁切、不可读文字、错误关系或锁定事实变化时，应在同一路线内修复后重新检查。',
     '禁止覆盖源 artifact，也禁止调用 accept 工具。检查通过且 repairable=false 后，调用 sciforge_visual_document_create_candidate；reviewEvidence 必须等于 { tool: "visual_artifact_review", ...review结果 }，系统会核验候选路径和文件哈希。',
@@ -118,6 +122,7 @@ export function VisualReviewPanel({
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [awaitingCandidate, setAwaitingCandidate] = useState(false)
+  const [watchingCandidate, setWatchingCandidate] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
 
   const activeCandidate = useMemo(() => document?.revisions.find(
@@ -164,6 +169,7 @@ export function VisualReviewPanel({
           '候选修改版本'
         ))
         setAwaitingCandidate(false)
+        setWatchingCandidate(false)
       } else {
         setCandidate(null)
       }
@@ -180,17 +186,21 @@ export function VisualReviewPanel({
   }, [load, refreshKey])
 
   useEffect(() => {
-    if (!awaitingCandidate) return undefined
+    if (!watchingCandidate) return undefined
     const timer = window.setInterval(() => void load(true), CANDIDATE_POLL_MS)
-    const timeout = window.setTimeout(() => {
+    const waitTimeout = window.setTimeout(() => {
       setAwaitingCandidate(false)
-      setMessage('候选版本仍未生成。你可以查看对话中的执行状态，随后点击刷新。')
+      setMessage('候选版本仍在生成；面板会在后台继续检查，完成后自动进入前后对比。')
     }, CANDIDATE_WAIT_TIMEOUT_MS)
+    const watchTimeout = window.setTimeout(() => {
+      setWatchingCandidate(false)
+    }, CANDIDATE_WATCH_TIMEOUT_MS)
     return () => {
       window.clearInterval(timer)
-      window.clearTimeout(timeout)
+      window.clearTimeout(waitTimeout)
+      window.clearTimeout(watchTimeout)
     }
-  }, [awaitingCandidate, load])
+  }, [load, watchingCandidate])
 
   const requestRevision = useCallback(async (nextAnnotations: VisualReviewAnnotation[]) => {
     const persistable = nextAnnotations.filter((annotation) => annotation.comment.trim())
@@ -216,6 +226,7 @@ export function VisualReviewPanel({
         packetPath: exported.packetPath
       }))
       setAwaitingCandidate(true)
+      setWatchingCandidate(true)
       setMessage('已发送修改请求；候选版本生成后会自动进入前后对比。')
     } catch (error) {
       setMessage(error instanceof Error ? error.message : String(error))
@@ -234,6 +245,7 @@ export function VisualReviewPanel({
         revisionId: activeCandidate.id
       })
       setCandidate(null)
+      setWatchingCandidate(false)
       setMessage('候选版本已拒绝，源图没有改变。')
       await load(true)
     } catch (error) {
@@ -253,6 +265,7 @@ export function VisualReviewPanel({
         revisionId: activeCandidate.id
       })
       setCandidate(null)
+      setWatchingCandidate(false)
       setMessage('已接受候选版本并原子替换源图；旧版本已保存在修订备份中。')
       setDocument(result.document)
       onAccepted?.(result.document)

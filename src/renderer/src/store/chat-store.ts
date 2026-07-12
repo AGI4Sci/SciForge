@@ -87,6 +87,7 @@ import { createThreadActions } from './chat-store-thread-actions'
 import { createMaintenanceActions } from './chat-store-maintenance-actions'
 import { createFocusActions, clearedAgentFocusState } from './chat-store-focus-actions'
 import { trackZustandSet } from '../lib/performance-monitor'
+import { persistChatSession, readPersistedChatSession } from './chat-session-persistence'
 
 export type { AppRoute, SettingsRouteSection } from './chat-store-types'
 export { REMOTE_CHANNEL_COMPOSER_MODEL_IDS } from './chat-store-helpers'
@@ -101,6 +102,7 @@ const sseAbortRef = {
   }
 }
 let composerModelLoadPromise: Promise<void> | null = null
+const restoredChatSession = readPersistedChatSession()
 
 export const useChatStore = create<ChatState>((set, get) => {
   const trackedSet = trackZustandSet<ChatState>('chat', set)
@@ -121,7 +123,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   threads: [],
   threadSearch: '',
   showArchivedThreads: false,
-  activeThreadId: null,
+  activeThreadId: restoredChatSession.activeThreadId,
   ...clearedAgentFocusState(),
   activeThreadGoal: null,
   activeThreadTodos: null,
@@ -146,7 +148,8 @@ export const useChatStore = create<ChatState>((set, get) => {
   composerModel: '',
   composerPickList: mergeComposerPickList(false, []),
   composerModelGroups: [],
-  queuedMessages: [],
+  queuedMessages: restoredChatSession.queuedMessages,
+  chatSessionPersistenceDegraded: restoredChatSession.persistenceDegraded,
   watchTurnCompletion: {},
   unreadThreadIds: {},
   sideConversations: {},
@@ -209,6 +212,24 @@ export const useChatStore = create<ChatState>((set, get) => {
   ...createMaintenanceActions({ set: trackedSet, get, sseAbortRef })
   }
 })
+
+const unsubscribeChatSessionPersistence = useChatStore.subscribe((state, previousState) => {
+  if (
+    state.activeThreadId === previousState.activeThreadId &&
+    state.queuedMessages === previousState.queuedMessages
+  ) return
+  const result = persistChatSession({
+    activeThreadId: state.activeThreadId,
+    queuedMessages: state.queuedMessages
+  })
+  if (state.chatSessionPersistenceDegraded !== result.degraded) {
+    useChatStore.setState({ chatSessionPersistenceDegraded: result.degraded })
+  }
+})
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => unsubscribeChatSessionPersistence())
+}
 
 if (import.meta.env.DEV && typeof document !== 'undefined') {
   const publishDevState = (): void => {

@@ -165,7 +165,31 @@ describe('electron-builder local runtime packaging', () => {
     expect(existsSync(sqliteModule)).toBe(false)
   })
 
+  it('uses an Electron ABI stamp only while the native addon fingerprint matches', () => {
+    const target = {
+      electronVersion: '34.5.8',
+      betterSqliteVersion: '12.10.0',
+      platform: 'darwin',
+      arch: 'arm64'
+    }
+    const fingerprint = { size: 1234, mtimeMs: 5678 }
+    const stamp = { ...target, runtimeModules: '132', addon: fingerprint }
+
+    expect(localRuntimePackage.electronNativeStampMatches(stamp, target, fingerprint)).toBe(true)
+    expect(localRuntimePackage.electronNativeStampMatches(
+      stamp,
+      { ...target, electronVersion: '35.0.0' },
+      fingerprint
+    )).toBe(false)
+    expect(localRuntimePackage.electronNativeStampMatches(
+      stamp,
+      target,
+      { ...fingerprint, size: fingerprint.size + 1 }
+    )).toBe(false)
+  })
+
   it('includes local runtime dependencies in the packaged app', () => {
+    expect(builderConfig.npmRebuild).toBe(true)
     expect(builderConfig.files).toEqual(expect.arrayContaining([
       'kun/dist/**/*',
       'kun/package.json',
@@ -176,6 +200,7 @@ describe('electron-builder local runtime packaging', () => {
       '**/kun/dist/**/*',
       '**/kun/package*.json',
       '**/kun/node_modules/**/*',
+      '**/node_modules/better-sqlite3/**/*',
       '**/node_modules/node-pty/**/*'
     ]))
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
@@ -291,6 +316,10 @@ describe('electron-builder local runtime packaging', () => {
       touch(join(unpackedRoot, relativePath))
     }
     touch(join(unpackedRoot, 'node_modules/better-sqlite3/package.json'))
+    touch(join(
+      unpackedRoot,
+      'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+    ))
 
     expect(() => afterPack._internals.validateBundledLocalRuntime(context)).not.toThrow()
 
@@ -468,6 +497,8 @@ describe('root package workspace contracts', () => {
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')
     expect(rootPackage.scripts).toMatchObject({
       'build:local-runtime': 'node ./scripts/local-runtime-package.cjs build',
+      'rebuild:electron-native': 'node ./scripts/local-runtime-package.cjs rebuild-electron-native',
+      'verify:electron-native': 'node ./scripts/local-runtime-package.cjs verify-electron-native',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
       'paper-radar:start': 'npm --workspace @sciforge/paper-radar run start',

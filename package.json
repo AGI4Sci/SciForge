@@ -39,6 +39,8 @@
     "dev": "npm run build:local-runtime && electron-vite dev",
     "build": "npm run build:local-runtime && electron-vite build",
     "build:local-runtime": "node ./scripts/local-runtime-package.cjs build",
+    "rebuild:electron-native": "node ./scripts/local-runtime-package.cjs rebuild-electron-native",
+    "verify:electron-native": "node ./scripts/local-runtime-package.cjs verify-electron-native",
     "lint": "eslint .",
     "test": "vitest run",
     "test:watch": "vitest",

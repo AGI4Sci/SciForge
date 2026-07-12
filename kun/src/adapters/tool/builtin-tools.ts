@@ -6,7 +6,7 @@ import type {
   ToolsOptions
 } from './builtin-tool-types.js'
 import { createBashLocalTool } from './builtin-bash-tool.js'
-import { createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
+import { createApplyPatchLocalTool, createEditLocalTool, createWriteLocalTool } from './builtin-file-tools.js'
 import { createReadLocalTool } from './builtin-read-tool.js'
 import { createFindLocalTool, createGrepLocalTool, createLsLocalTool } from './builtin-search-tools.js'
 
@@ -28,6 +28,8 @@ export function createBuiltinLocalTool(
       return createBashLocalTool(options.bash)
     case 'edit':
       return createEditLocalTool(options.edit)
+    case 'apply_patch':
+      return createApplyPatchLocalTool(options.applyPatch)
     case 'write':
       return createWriteLocalTool(options.write)
     case 'grep':
@@ -52,6 +54,7 @@ export function buildBuiltinLocalTools(options: BuiltinLocalToolsOptions = {}): 
     createReadLocalTool(options.read),
     createBashLocalTool(options.bash),
     createEditLocalTool(options.edit),
+    createApplyPatchLocalTool(options.applyPatch),
     createWriteLocalTool(options.write),
     createGrepLocalTool(options.grep),
     createFindLocalTool(options.find),
@@ -68,6 +71,7 @@ export function buildCodingBuiltinLocalTools(options: BuiltinLocalToolsOptions =
     createReadLocalTool(options.read),
     createBashLocalTool(options.bash),
     createEditLocalTool(options.edit),
+    createApplyPatchLocalTool(options.applyPatch),
     createWriteLocalTool(options.write)
   ]
 }
@@ -96,6 +100,7 @@ export function buildBuiltinLocalToolRecord(
     read: createReadLocalTool(options.read),
     bash: createBashLocalTool(options.bash),
     edit: createEditLocalTool(options.edit),
+    apply_patch: createApplyPatchLocalTool(options.applyPatch),
     write: createWriteLocalTool(options.write),
     grep: createGrepLocalTool(options.grep),
     find: createFindLocalTool(options.find),

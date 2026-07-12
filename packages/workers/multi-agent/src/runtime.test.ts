@@ -244,6 +244,44 @@ test('runtime enforces maxChildren per parent turn without exhausting later turn
   assert.equal(third.status, 'completed')
 })
 
+test('runtime reuses a persisted request before budget checks or executor startup', async () => {
+  const store = new InMemoryMultiAgentStore()
+  const firstExecutor = async () => ({ summary: 'persisted result' })
+  const firstRuntime = new MultiAgentRuntime({
+    config: { maxParallel: 1, maxChildren: 1 },
+    store,
+    idGenerator: () => 'child-persisted',
+    executor: firstExecutor
+  })
+  const first = await firstRuntime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    requestId: 'request-1',
+    prompt: 'Run once'
+  })
+
+  let replayExecutorCalls = 0
+  const restartedRuntime = new MultiAgentRuntime({
+    config: { maxParallel: 0, maxChildren: 0 },
+    store,
+    executor: async () => {
+      replayExecutorCalls += 1
+      return { summary: 'must not execute' }
+    }
+  })
+  const replayed = await restartedRuntime.runChild({
+    parentThreadId: 'thread-1',
+    parentTurnId: 'turn-1',
+    requestId: 'request-1',
+    prompt: 'A replay may carry different arguments'
+  })
+
+  assert.equal(replayed.id, first.id)
+  assert.equal(replayed.summary, 'persisted result')
+  assert.equal(replayExecutorCalls, 0)
+  assert.equal((await store.list()).length, 1)
+})
+
 test('runtime diagnostics hide stale persisted active records after restart', async () => {
   const store = new InMemoryMultiAgentStore()
   await store.upsert(MultiAgentChildRunRecord.parse({

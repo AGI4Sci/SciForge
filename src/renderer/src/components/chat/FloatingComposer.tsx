@@ -146,9 +146,11 @@ type Props = {
   hideModelPicker?: boolean
   modelPickerMode?: 'select' | 'combobox'
   queuedMessages: QueuedComposerMessage[]
+  queuedMessagesPersistenceDegraded?: boolean
   onRemoveQueuedMessage: (id: string) => void
   onEditQueuedMessage?: (id: string, text: string) => void
   onSteerQueuedMessage?: (id: string) => void
+  onRetryQueuedMessage?: (id: string) => void
   attachments?: AttachmentReference[]
   attachmentUploadEnabled?: boolean
   attachmentUploadBusy?: boolean
@@ -672,9 +674,11 @@ export function FloatingComposer({
   hideModelPicker = false,
   modelPickerMode = 'select',
   queuedMessages,
+  queuedMessagesPersistenceDegraded = false,
   onRemoveQueuedMessage,
   onEditQueuedMessage,
   onSteerQueuedMessage,
+  onRetryQueuedMessage,
   attachments = EMPTY_ATTACHMENTS,
   attachmentUploadEnabled = false,
   attachmentUploadBusy = false,
@@ -1756,9 +1760,11 @@ export function FloatingComposer({
     >
       <FloatingComposerQueuedMessages
         messages={queuedMessages}
+        persistenceDegraded={queuedMessagesPersistenceDegraded}
         onRemove={onRemoveQueuedMessage}
         onEdit={onEditQueuedMessage}
         onSteer={onSteerQueuedMessage}
+        onRetry={onRetryQueuedMessage}
       />
 
       <div className="relative">

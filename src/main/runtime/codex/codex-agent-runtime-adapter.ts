@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import type {
   AgentRuntimeCapabilities,
   AgentRuntimeChild,
@@ -239,13 +240,25 @@ type CodexMcpState = {
   researchConfigured: boolean
   computerUseConfigured: boolean
   subagents: AgentSubagentSettingsV1
+  toolUnavailableDiagnostics: CodexMcpToolUnavailableDiagnostic[]
+}
+
+type CodexMcpToolUnavailableDiagnostic = {
+  at: string
+  event: 'tool_unavailable'
+  serverId: string
+  namespace: string
+  reason: 'invalid_input_schema'
+  toolName: string
+  diagnosticCode: string
 }
 
 const emptyCodexMcpState: CodexMcpState = {
   mcpConfigured: false,
   researchConfigured: false,
   computerUseConfigured: false,
-  subagents: normalizeAgentCapabilitySettings(undefined).subagents
+  subagents: normalizeAgentCapabilitySettings(undefined).subagents,
+  toolUnavailableDiagnostics: []
 }
 
 function serviceMcpState(service: CodexRuntimeService, settings?: AppSettingsV1): CodexMcpState {
@@ -261,7 +274,8 @@ function serviceMcpState(service: CodexRuntimeService, settings?: AppSettingsV1)
     mcpConfigured,
     researchConfigured,
     computerUseConfigured,
-    subagents: normalizeAgentCapabilitySettings(settings?.agentCapabilities).subagents
+    subagents: normalizeAgentCapabilitySettings(settings?.agentCapabilities).subagents,
+    toolUnavailableDiagnostics: codexMcpToolUnavailableDiagnostics(service)
   }
 }
 
@@ -353,7 +367,7 @@ function codexCapabilities(state: CodexMcpState = emptyCodexMcpState): AgentRunt
             maxParallel: state.subagents.maxParallel,
             maxChildren: state.subagents.maxChildRuns
           },
-      diagnostics: { available: false, reason: 'Codex tool diagnostics are not exposed through this service yet.' }
+      diagnostics: { available: true }
     },
     controls: {
       interrupt: true,
@@ -410,6 +424,7 @@ function codexRuntimeInfo(state: CodexMcpState = emptyCodexMcpState): Record<str
         configuredServers: configuredMcpToolCount,
         connectedServers: 0,
         toolCount: caps.tools.mcp.toolCount ?? 0,
+        unavailableToolCount: state.toolUnavailableDiagnostics.length,
         computerUse: {
           enabled: state.computerUseConfigured,
           available: state.computerUseConfigured
@@ -480,6 +495,10 @@ function codexToolDiagnostics(state: CodexMcpState = emptyCodexMcpState): Record
   }
   return {
     mcpServers,
+    mcpLifecycle: {
+      toolUnavailableCount: state.toolUnavailableDiagnostics.length,
+      toolUnavailable: state.toolUnavailableDiagnostics
+    },
     webProviders: [],
     skills: {
       enabled: false,
@@ -487,6 +506,41 @@ function codexToolDiagnostics(state: CodexMcpState = emptyCodexMcpState): Record
       skills: []
     }
   }
+}
+
+function codexMcpToolUnavailableDiagnostics(service: CodexRuntimeService): CodexMcpToolUnavailableDiagnostic[] {
+  if (typeof service.dynamicMcpToolDiagnostics !== 'function') return []
+  const diagnostics = service.dynamicMcpToolDiagnostics()
+  if (!Array.isArray(diagnostics)) return []
+  return diagnostics.slice(-50).flatMap((value) => {
+    const record = recordValue(value)
+    const at = stringValue(record.at).slice(0, 64)
+    const serverId = safeDiagnosticIdentifier(record.serverId, 64)
+    const namespace = safeDiagnosticIdentifier(record.namespace, 64)
+    const toolName = safeDiagnosticIdentifier(record.toolName, 128)
+    const diagnosticCode = safeDiagnosticIdentifier(record.diagnosticCode, 64)
+    if (!at || !serverId || !namespace || !toolName || !diagnosticCode) return []
+    return [{
+      at,
+      event: 'tool_unavailable' as const,
+      serverId,
+      namespace,
+      reason: 'invalid_input_schema' as const,
+      toolName,
+      diagnosticCode
+    }]
+  })
+}
+
+function safeDiagnosticIdentifier(value: unknown, maxLength: number): string {
+  const raw = stringValue(value)
+  if (/[\\/]/.test(raw)) {
+    return `redacted_${createHash('sha256').update(raw).digest('hex').slice(0, 12)}`.slice(0, maxLength)
+  }
+  return raw
+    .replace(/[^A-Za-z0-9_.:-]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, maxLength)
 }
 
 function coreCapability(state: { available?: boolean; reason?: string; degraded?: boolean } | undefined): Record<string, unknown> {

@@ -23,10 +23,17 @@ When a render request includes `visualDocumentId` / `threadId`, the worker recor
 those fields in the image manifest and artifact manifest so the VisualDocument
 worker can stage the artifact through the single review workflow.
 
-The unified revision path is: export a VisualDocument review packet, render one
-non-destructive candidate, run `visual_artifact_review`, bind its artifact path,
+The unified revision path is: export a VisualDocument review packet, call
+`scientific_visual_plan` with `action="revision"`, execute
+`image_generation_edit_from_visual_review_packet` to create one non-destructive
+candidate from the packet's annotations and normalized masks, run
+`visual_artifact_review`, bind its artifact path,
 SHA-256 hash, and timestamp to the candidate revision, then wait for explicit
 human acceptance before replacing the source.
+
+`image_generation_prepare` and `image_generation_render` are creation tools.
+They must not replace packet-based editing for an annotated existing raster,
+including when the locked route is `hybrid_composite`.
 
 ## Diagram planning behavior
 

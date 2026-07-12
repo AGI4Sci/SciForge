@@ -194,6 +194,124 @@ test('image generations route through the configured image generator without exp
   }
 });
 
+test('image edits proxy authenticated multipart input through the configured image generator and write a safe trace', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-edits-'));
+  const calls: CapturedFetch[] = [];
+  const outputBase64 = Buffer.from('edited-output-pixels').toString('base64');
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      Response.json({ created: 2, data: [{ b64_json: outputBase64 }] }),
+    ]),
+  });
+
+  try {
+    const inputPixels = 'private-source-image-pixels';
+    const maskPixels = 'private-mask-image-pixels';
+    const form = new FormData();
+    form.set('model', 'sciforge-router');
+    form.set('prompt', 'Repair the disconnected arrow without changing the rest.');
+    form.set('size', '1024x1024');
+    form.set('n', '1');
+    form.set('quality', 'high');
+    form.set('input_fidelity', 'high');
+    form.set('image', new Blob([inputPixels], { type: 'image/png' }), 'private-source.png');
+    form.set('mask', new Blob([maskPixels], { type: 'image/png' }), 'private-mask.png');
+
+    const response = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      created: 2,
+      data: [{ b64_json: outputBase64 }],
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://image.example/v1/images/edits');
+    assert.equal(calls[0]?.headers.authorization, 'Bearer image-secret');
+    assert.equal(calls[0]?.headers['content-type'], undefined, 'fetch must generate the multipart boundary');
+    assert.deepEqual(calls[0]?.body, {
+      model: 'image-model',
+      prompt: 'Repair the disconnected arrow without changing the rest.',
+      size: '1024x1024',
+      n: '1',
+      quality: 'high',
+      input_fidelity: 'high',
+      image: {
+        name: 'private-source.png',
+        type: 'image/png',
+        size: Buffer.byteLength(inputPixels),
+        text: inputPixels,
+      },
+      mask: {
+        name: 'private-mask.png',
+        type: 'image/png',
+        size: Buffer.byteLength(maskPixels),
+        text: maskPixels,
+      },
+    });
+
+    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
+    assert.equal(trace.route, 'model-router.images.edits');
+    assert.equal(trace.wireApi, 'images.edits');
+    assert.equal(trace.status, 'completed');
+    const traceText = JSON.stringify(trace);
+    assert.doesNotMatch(traceText, /Repair the disconnected arrow|private-source|private-mask|image-secret|image-provider|image\.example|pixels|base64|b64_json/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('image edits require runtime auth, multipart input, and the public router model alias', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-edits-validation-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, []),
+  });
+
+  try {
+    const unauthorized = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      body: imageEditForm('sciforge-router'),
+    });
+    assert.equal(unauthorized.status, 401);
+
+    const wrongContentType = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router' }),
+    });
+    assert.equal(wrongContentType.status, 400);
+
+    const wrongModel = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: imageEditForm('upstream-private-model'),
+    });
+    assert.equal(wrongModel.status, 400);
+    const body = await wrongModel.json() as Record<string, { code?: string }>;
+    assert.equal(body.error?.code, 'unregistered_model');
+    assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
 test('image generation provider failures write a safe failed routing trace', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-failure-trace-'));
   const server = await startModelRouterServer({
@@ -1086,6 +1204,7 @@ test('healthz reports provider readiness without leaking private bindings', asyn
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
+      'model_router_image_edits',
       'text_reasoning',
       'image_generation',
       'vision_translation',
@@ -1133,6 +1252,7 @@ test('healthz blocks missing provider credentials without leaking binding names'
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
+      'model_router_image_edits',
       'text_reasoning',
       'image_generation',
       'vision_translation',
@@ -3541,6 +3661,10 @@ test('DNA, RNA, and nucleotide-ambiguous FASTA fail closed without calling trans
     { filename: 'dna.fasta', payload: '>PRIVATE_DNA_RECORD\nACGTACGTACGTACGTACGT\n' },
     { filename: 'rna.fa', payload: '>PRIVATE_RNA_RECORD\nAUGCAUGCAUGCAUGCAUGC\n' },
     { filename: 'ambiguous.fasta', payload: '>PRIVATE_AMBIGUOUS_RECORD\nACGTNRYWSKMBDHVACGTN\n' },
+    {
+      filename: 'mixed.fasta',
+      payload: '>protein_record\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ\n>PRIVATE_DNA_RECORD\nACGTACGTACGTACGTACGT\n',
+    },
   ] as const;
 
   for (const entry of cases) {
@@ -4840,17 +4964,47 @@ function runtimeHeaders(extra: Record<string, string> = {}): Record<string, stri
   };
 }
 
+function imageEditForm(model: string): FormData {
+  const form = new FormData();
+  form.set('model', model);
+  form.set('prompt', 'Edit this image.');
+  form.set('image', new Blob(['input-pixels'], { type: 'image/png' }), 'input.png');
+  return form;
+}
+
 function captureFetch(calls: CapturedFetch[], responses: Response[]): typeof fetch {
   return async (url, init) => {
     calls.push({
       url: String(url),
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
-      body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>,
+      body: await capturedRequestBody(init?.body),
     });
     const response = responses.shift();
     assert.ok(response, `Unexpected fetch call to ${url}`);
     return response;
   };
+}
+
+async function capturedRequestBody(body: BodyInit | null | undefined): Promise<Record<string, unknown>> {
+  if (body instanceof FormData) {
+    const captured: Record<string, unknown> = {};
+    for (const [name, value] of body.entries()) {
+      const normalized = typeof value === 'string'
+        ? value
+        : {
+            name: value.name,
+            type: value.type,
+            size: value.size,
+            text: await value.text(),
+          };
+      const existing = captured[name];
+      captured[name] = existing === undefined
+        ? normalized
+        : Array.isArray(existing) ? [...existing, normalized] : [existing, normalized];
+    }
+    return captured;
+  }
+  return JSON.parse(String(body ?? '{}')) as Record<string, unknown>;
 }
 
 function parseSseEvents(body: string): Array<Record<string, any>> {

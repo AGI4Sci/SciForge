@@ -14,6 +14,7 @@ test('file store persists child runs and filters by parent thread, turn, and sta
       id: 'child-a',
       parentThreadId: 'thread-1',
       parentTurnId: 'turn-1',
+      requestId: 'request-a',
       status: 'completed',
       transcript: [
         { id: 'a-user', kind: 'user_message', text: 'prompt' },
@@ -41,6 +42,8 @@ test('file store persists child runs and filters by parent thread, turn, and sta
     assert.equal(await store.get('thread-2', 'child-a'), null)
     const child = await store.get('thread-1', 'child-a')
     assert.equal(child?.id, 'child-a')
+    assert.equal((await store.findByRequest('thread-1', 'turn-1', 'request-a'))?.id, 'child-a')
+    assert.equal(await store.findByRequest('thread-1', 'turn-2', 'request-a'), null)
 
     const page = await store.readTranscript('thread-1', 'child-a', { offset: 1, limit: 1 })
     assert.equal(page?.total, 2)
@@ -60,6 +63,7 @@ function record(input: {
   id: string
   parentThreadId: string
   parentTurnId: string
+  requestId?: string
   status: MultiAgentChildRunRecordType['status']
   transcript?: MultiAgentChildRunRecordType['transcript']
 }): MultiAgentChildRunRecordType {
@@ -67,6 +71,7 @@ function record(input: {
     id: input.id,
     parentThreadId: input.parentThreadId,
     parentTurnId: input.parentTurnId,
+    requestId: input.requestId,
     prompt: `Prompt for ${input.id}`,
     status: input.status,
     transcript: input.transcript ?? [],
@@ -74,4 +79,3 @@ function record(input: {
     updatedAt: `2026-06-27T00:00:0${input.id.slice(-1)}.000Z`
   })
 }
-

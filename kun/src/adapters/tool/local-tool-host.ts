@@ -29,7 +29,7 @@ import {
 import { sandboxBlockForTool, type SandboxBlock } from './sandbox-policy.js'
 import { redactSensitiveString } from '../../shared/redact-sensitive.js'
 
-const FILE_PATH_POLICY_TOOL_NAMES = new Set(['read', 'write', 'edit', 'list', 'glob', 'grep'])
+const FILE_PATH_POLICY_TOOL_NAMES = new Set(['read', 'write', 'edit', 'apply_patch', 'list', 'glob', 'grep'])
 const RATE_LIMIT_PAYLOAD_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls'])
 const REMOTE_EXECUTOR_MCP_SERVER_ID = 'remote_executor'
 

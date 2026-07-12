@@ -29,6 +29,7 @@ import { createThreadActions, publishRemoteChannelActiveThreadContext } from './
 import { clearPendingRemoteChannelMirrors, takePendingRemoteChannelMirror } from './chat-store-runtime'
 import { composerReferenceFromWorkspaceReference } from '../lib/workspace-reference-composer'
 import { PLAN_REGISTRY_STORAGE_KEY, useGuiPlanStore } from '../plan/plan-store'
+import { normalizePersistedQueuedMessages } from './chat-session-persistence'
 
 function thread(id: string): NormalizedThread {
   return {
@@ -433,7 +434,11 @@ describe('chat-store-thread-actions queued messages', () => {
     }
     const provider = {
       createThread: vi.fn(async () => createdThread),
-      sendUserMessage: vi.fn(async () => ({
+      sendUserMessage: vi.fn(async (
+        _threadId: string,
+        _text: string,
+        _options?: Record<string, unknown>
+      ) => ({
         threadId: 'thr_created_in_draft_workspace',
         turnId: 'turn-1',
         userMessageItemId: 'runtime-user-1'
@@ -635,6 +640,27 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(actions.updateQueuedMessage('missing', 'text')).toBe(false)
   })
 
+  it('keeps attempted payload identity immutable after delivery becomes uncertain', () => {
+    const { actions, state } = buildHarness()
+    state.queuedMessages = [{
+      id: 'q-uncertain',
+      threadId: 'thr_existing',
+      text: 'original scientific instruction',
+      deliveryAttempt: {
+        startedAt: 1_725_000_000_000,
+        userBlockId: 'u-original',
+        attemptedText: 'original scientific instruction',
+        restored: true
+      }
+    }]
+
+    expect(actions.updateQueuedMessage('q-uncertain', 'different instruction')).toBe(false)
+    expect(state.queuedMessages[0]).toEqual(expect.objectContaining({
+      text: 'original scientific instruction',
+      deliveryAttempt: expect.objectContaining({ attemptedText: 'original scientific instruction' })
+    }))
+  })
+
   it('drains a completed background thread without mutating the active thread UI', async () => {
     const { actions, state } = buildHarness()
     const provider = {
@@ -666,7 +692,14 @@ describe('chat-store-thread-actions queued messages', () => {
       runtimeId: 'sciforge',
       text: 'continue A in the background',
       displayText: 'continue A in the background',
-      model: 'deepseek-v4-pro'
+      model: 'deepseek-v4-pro',
+      governanceProfile: 'write',
+      attachmentIds: ['attachment-a'],
+      fileReferences: [{
+        path: '/workspace/a/evidence.csv',
+        relativePath: 'evidence.csv',
+        name: 'evidence.csv'
+      }]
     }]
 
     await expect(actions.drainQueuedMessagesForThread('thread-a')).resolves.toBe(true)
@@ -677,7 +710,10 @@ describe('chat-store-thread-actions queued messages', () => {
       expect.objectContaining({
         workspace: '/workspace/a',
         model: 'deepseek-v4-pro',
-        displayText: 'continue A in the background'
+        displayText: 'continue A in the background',
+        governanceProfile: 'write',
+        attachmentIds: ['attachment-a'],
+        fileReferences: [expect.objectContaining({ relativePath: 'evidence.csv' })]
       })
     )
     expect(state.activeThreadId).toBe('thread-b')
@@ -735,6 +771,12 @@ describe('chat-store-thread-actions queued messages', () => {
 
     const firstDrain = actions.drainQueuedMessagesForThread('thread-a')
     await Promise.resolve()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        id: 'q-a',
+        deliveryAttempt: expect.objectContaining({ startedAt: expect.any(Number) })
+      })
+    ])
     await expect(actions.drainQueuedMessagesForThread('thread-a')).resolves.toBe(false)
     expect(provider.sendUserMessage).toHaveBeenCalledTimes(1)
 
@@ -1099,6 +1141,351 @@ describe('chat-store-thread-actions queued messages', () => {
     ])
     expect(state.currentTurnUserId).toBe('runtime-user-1')
     expect(Object.keys(state.turnStartedAtByUserId)).toEqual(['runtime-user-1'])
+  })
+
+  it('rolls back an unaccepted optimistic user block and preserves a manual retry', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      sendUserMessage: vi.fn(async () => {
+        throw new Error('tool schema rejected before turn startup')
+      })
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+
+    await expect(actions.sendMessage('preserve this scientific instruction')).resolves.toBe(false)
+
+    expect(state.blocks).toEqual([])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnUserId).toBeNull()
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        threadId: 'thr_existing',
+        text: 'preserve this scientific instruction',
+        sendFailure: expect.objectContaining({
+          userBlockId: expect.stringMatching(/^u-/),
+          message: 'tool schema rejected before turn startup'
+        })
+      })
+    ])
+    expect(state.error).toContain('tool schema rejected before turn startup')
+  })
+
+  it('does not automatically drain a failed-send recovery entry', async () => {
+    const { actions, state } = buildHarness()
+    const sendMessage = vi.fn(async () => true)
+    state.busy = false
+    state.sendMessage = sendMessage as unknown as ChatState['sendMessage']
+    state.queuedMessages = [{
+      id: 'retry-1',
+      threadId: 'thr_existing',
+      text: 'do not resend automatically',
+      sendFailure: { userBlockId: 'u-1', message: 'runtime unavailable' }
+    }, {
+      id: 'q-later',
+      threadId: 'thr_existing',
+      text: 'must not overtake the failed send'
+    }]
+
+    await actions.drainQueuedMessages()
+
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(state.queuedMessages).toHaveLength(2)
+  })
+
+  it('does not automatically drain restored attachments and retries only after confirmation', async () => {
+    const { actions, state } = buildHarness()
+    const sendMessage = vi.fn(async () => true)
+    state.busy = false
+    state.sendMessage = sendMessage as unknown as ChatState['sendMessage']
+    state.queuedMessages = [{
+      id: 'restored-attachment',
+      threadId: 'thr_existing',
+      text: 'inspect the restored image',
+      attachmentIds: ['attachment-1'],
+      restoredAttachmentWarning: 'confirm the restored attachment'
+    }, {
+      id: 'q-later',
+      threadId: 'thr_existing',
+      text: 'must not overtake the attachment'
+    }]
+
+    await actions.drainQueuedMessages()
+    expect(sendMessage).not.toHaveBeenCalled()
+
+    await expect(actions.retryQueuedMessage('restored-attachment')).resolves.toBe(true)
+    expect(sendMessage).toHaveBeenCalledWith(
+      'inspect the restored image',
+      undefined,
+      { queued: expect.not.objectContaining({ restoredAttachmentWarning: expect.anything() }) }
+    )
+  })
+
+  it('retries the original text when the failed send was not persisted', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [],
+        latestSeq: 4,
+        threadStatus: 'idle'
+      })),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-retry',
+        userMessageItemId: 'runtime-user-retry'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.queuedMessages = [{
+      id: 'retry-1',
+      threadId: 'thr_existing',
+      text: 'run the missing analysis',
+      sendFailure: { userBlockId: 'u-missing', message: 'startup failed' }
+    }]
+
+    await expect(actions.retryQueuedMessage('retry-1')).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'run the missing analysis',
+      expect.objectContaining({ displayText: 'run the missing analysis' })
+    )
+    expect(state.queuedMessages).toEqual([])
+  })
+
+  it('continues an orphaned persisted user item instead of duplicating its text', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{
+          kind: 'user' as const,
+          id: 'runtime-orphan',
+          text: '[runtime prefix] original request',
+          meta: { displayText: 'original request' }
+        }],
+        latestSeq: 8,
+        latestUserMessageId: 'runtime-orphan',
+        threadStatus: 'idle'
+      })),
+      sendUserMessage: vi.fn(async (
+        _threadId: string,
+        _text: string,
+        _options?: Record<string, unknown>
+      ) => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-recovery',
+        userMessageItemId: 'runtime-user-recovery'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.queuedMessages = [{
+      id: 'retry-orphan',
+      threadId: 'thr_existing',
+      text: 'original request',
+      displayText: 'original request',
+      attachmentIds: ['already-persisted'],
+      sendFailure: { userBlockId: 'u-optimistic', message: 'startup failed' }
+    }]
+
+    await expect(actions.retryQueuedMessage('retry-orphan')).resolves.toBe(true)
+
+    const sentText = provider.sendUserMessage.mock.calls[0]?.[1]
+    const sentOptions = provider.sendUserMessage.mock.calls[0]?.[2]
+    expect(sentText).toContain('preceding user message')
+    expect(sentText).not.toBe('original request')
+    expect(sentOptions).not.toHaveProperty('attachmentIds')
+    expect(state.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'runtime-orphan', text: '[runtime prefix] original request' }),
+      expect.objectContaining({ id: 'runtime-user-recovery' })
+    ]))
+    expect(state.queuedMessages).toEqual([])
+  })
+
+  it('reconciles a restored direct-send journal instead of duplicating an accepted user item', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{
+          kind: 'user' as const,
+          id: 'runtime-accepted-queue',
+          text: 'run this exactly once'
+        }],
+        latestSeq: 9,
+        latestUserMessageId: 'runtime-accepted-queue',
+        threadStatus: 'idle'
+      })),
+      sendUserMessage: vi.fn(async (
+        _threadId: string,
+        _text: string,
+        _options?: Record<string, unknown>
+      ) => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-continuation',
+        userMessageItemId: 'runtime-recovery'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.queuedMessages = [{
+      id: 'q-crash-window',
+      threadId: 'thr_existing',
+      text: 'run this exactly once',
+      deliveryAttempt: {
+        startedAt: 1_725_000_000_000,
+        userBlockId: 'q-crash-window',
+        attemptedText: 'run this exactly once',
+        journalOnly: true,
+        restored: true
+      }
+    }]
+
+    await expect(actions.retryQueuedMessage('q-crash-window')).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledTimes(1)
+    expect(provider.sendUserMessage.mock.calls[0]?.[1]).toContain('preceding user message')
+    expect(provider.sendUserMessage.mock.calls[0]?.[1]).not.toBe('run this exactly once')
+    expect(state.queuedMessages).toEqual([])
+  })
+
+  it('journals a direct idle send before the provider boundary and resends only when restart reconciliation finds it absent', async () => {
+    const first = buildHarness()
+    first.state.busy = false
+    first.state.error = null
+    const firstProvider = {
+      sendUserMessage: vi.fn(() => new Promise<never>(() => undefined)),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(firstProvider)
+
+    void first.actions.sendMessage('direct crash-window instruction')
+    await vi.waitFor(() => expect(firstProvider.sendUserMessage).toHaveBeenCalledTimes(1))
+
+    expect(first.state.queuedMessages).toEqual([expect.objectContaining({
+      text: 'direct crash-window instruction',
+      deliveryAttempt: expect.objectContaining({
+        attemptedText: 'direct crash-window instruction',
+        journalOnly: true
+      })
+    })])
+    const restored = normalizePersistedQueuedMessages(first.state.queuedMessages, true)
+    expect(restored[0]?.deliveryAttempt?.restored).toBe(true)
+
+    const second = buildHarness()
+    second.state.busy = false
+    second.state.error = null
+    second.state.queuedMessages = restored
+    const secondProvider = {
+      getThreadDetail: vi.fn(async () => ({ blocks: [], latestSeq: 0, threadStatus: 'idle' })),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-after-restart',
+        userMessageItemId: 'runtime-direct-after-restart'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(secondProvider)
+
+    await expect(second.actions.retryQueuedMessage(restored[0]!.id)).resolves.toBe(true)
+    expect(secondProvider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_existing',
+      'direct crash-window instruction',
+      expect.objectContaining({ displayText: 'direct crash-window instruction' })
+    )
+    expect(second.state.queuedMessages).toEqual([])
+  })
+
+  it('removes a completed restored direct-send journal when an assistant reply follows the user item', async () => {
+    const { actions, state } = buildHarness()
+    const startedAt = 1_725_000_000_000
+    const provider = {
+      getThreadDetail: vi.fn(async () => ({
+        blocks: [{
+          kind: 'user' as const,
+          id: 'runtime-accepted-complete',
+          text: 'run this completed task once',
+          createdAt: new Date(startedAt + 1_000).toISOString()
+        }, {
+          kind: 'assistant' as const,
+          id: 'runtime-completed-answer',
+          text: 'Completed result',
+          createdAt: new Date(startedAt + 2_000).toISOString()
+        }],
+        latestSeq: 11,
+        latestUserMessageId: 'runtime-accepted-complete',
+        threadStatus: 'idle'
+      })),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-continuation-after-complete',
+        userMessageItemId: 'runtime-recovery-after-complete'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.queuedMessages = [{
+      id: 'q-completed-crash-window',
+      threadId: 'thr_existing',
+      text: 'run this completed task once',
+      deliveryAttempt: {
+        startedAt,
+        userBlockId: 'q-completed-crash-window',
+        attemptedText: 'run this completed task once',
+        journalOnly: true,
+        restored: true
+      }
+    }]
+
+    await expect(actions.retryQueuedMessage('q-completed-crash-window')).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).not.toHaveBeenCalled()
+    expect(state.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'runtime-accepted-complete' }),
+      expect.objectContaining({ id: 'runtime-completed-answer' })
+    ]))
+    expect(state.queuedMessages).toEqual([])
+  })
+
+  it('does not create a retry entry when the provider accepted the turn before a refresh failed', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_existing',
+        turnId: 'turn-accepted',
+        userMessageItemId: 'runtime-user-accepted'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.refreshThreads = vi.fn(async () => {
+      throw new Error('sidebar refresh failed')
+    })
+    state.recoverActiveTurn = vi.fn(async () => true)
+
+    await expect(actions.sendMessage('accepted exactly once')).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledTimes(1)
+    expect(state.queuedMessages).toEqual([])
+    expect(state.recoverActiveTurn).toHaveBeenCalled()
   })
 
   it('keeps the GUI conversation stable when switching runtime on the same thread id', async () => {

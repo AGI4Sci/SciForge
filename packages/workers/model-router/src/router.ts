@@ -26,7 +26,7 @@ import {
   modelRouterManifest,
   type ModelRouterUpstreamDiagnostic,
 } from './manifest';
-import { readIncomingMessageBody } from './http-body';
+import { readIncomingMessageBody, readIncomingMessageBodyBytes } from './http-body';
 import { hygienizeChatProviderBody } from './request-hygiene';
 import { redactTraceText, redactUserVisibleText } from './trace-redaction';
 
@@ -412,6 +412,19 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         });
         return sendJson(response, 200, result);
       }
+      if (request.method === 'POST' && url.pathname === '/v1/images/edits') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const form = await readMultipartForm(request);
+        const result = await routeImageEditRequest(form, {
+          config: options.config,
+          env,
+          fetchImpl,
+          workspaceRoot,
+          traceDataRoot,
+          request,
+        });
+        return sendJson(response, 200, result);
+      }
       if (
         request.method === 'POST' &&
         (url.pathname === '/v1/messages' || url.pathname === '/api/cc/v1/messages')
@@ -674,48 +687,108 @@ export async function startModelRouterServer(
   };
 }
 
-async function routeImageGenerationRequest(
-  body: unknown,
-  context: {
-    config: ModelRouterConfig;
-    env: Record<string, string | undefined>;
-    fetchImpl: typeof fetch;
-    workspaceRoot: string;
-    traceDataRoot: string;
-    request: IncomingMessage;
-  },
-): Promise<JsonObject> {
+type ImageRouteContext = {
+  config: ModelRouterConfig;
+  env: Record<string, string | undefined>;
+  fetchImpl: typeof fetch;
+  workspaceRoot: string;
+  traceDataRoot: string;
+  request: IncomingMessage;
+};
+
+type ResolvedImageRoute = {
+  profileId: string;
+  profile: ModelRouterProfile;
+  provider: ModelRouterProviderConfig;
+  secret: string;
+};
+
+async function routeImageGenerationRequest(body: unknown, context: ImageRouteContext): Promise<JsonObject> {
   if (!isRecord(body)) {
     throw routerError(400, 'invalid_request', 'Image generation request body must be a JSON object.');
   }
-  const profileId = requestedProfileId(body, context.request, context.config);
+  const route = resolveImageRoute(body, context);
+  return routeImageProviderRequest({
+    context,
+    route,
+    operation: 'generations',
+    providerRequest: {
+      url: providerImageGenerationsUrl(route.provider.baseUrl),
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${route.secret}`,
+      },
+      body: JSON.stringify({
+        ...body,
+        model: route.provider.model,
+      }),
+    },
+  });
+}
+
+async function routeImageEditRequest(form: FormData, context: ImageRouteContext): Promise<JsonObject> {
+  const model = requiredMultipartText(form, 'model');
+  const prompt = requiredMultipartText(form, 'prompt');
+  const images = requiredMultipartFiles(form, 'image');
+  const mask = optionalMultipartFile(form, 'mask');
+  const route = resolveImageRoute({ model }, context);
+  const providerForm = new FormData();
+  providerForm.set('model', route.provider.model);
+  providerForm.set('prompt', prompt);
+  copyOptionalMultipartText(form, providerForm, 'size');
+  copyOptionalMultipartText(form, providerForm, 'n');
+  copyOptionalMultipartText(form, providerForm, 'quality');
+  copyOptionalMultipartText(form, providerForm, 'input_fidelity');
+  for (const image of images) appendMultipartFile(providerForm, 'image', image);
+  if (mask) appendMultipartFile(providerForm, 'mask', mask);
+  return routeImageProviderRequest({
+    context,
+    route,
+    operation: 'edits',
+    providerRequest: {
+      url: providerImageEditsUrl(route.provider.baseUrl),
+      headers: { authorization: `Bearer ${route.secret}` },
+      body: providerForm,
+    },
+  });
+}
+
+function resolveImageRoute(request: Record<string, unknown>, context: ImageRouteContext): ResolvedImageRoute {
+  const profileId = requestedProfileId(request, context.request, context.config);
   const profile = context.config.profiles[profileId];
   if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
-  validateRequestedModel(body.model, context.config.publicModelAlias);
+  validateRequestedModel(request.model, context.config.publicModelAlias);
   const provider = profile.imageGenerator;
   if (!provider) {
     throw routerError(503, 'image_generator_not_configured', 'Model Router image generation is not configured.', 'imageGenerator');
   }
   validateProviderConfig(provider, 'imageGenerator');
-  const secret = secretForProvider(provider, context.env, 'imageGenerator');
+  return {
+    profileId,
+    profile,
+    provider,
+    secret: secretForProvider(provider, context.env, 'imageGenerator'),
+  };
+}
+
+async function routeImageProviderRequest(options: {
+  context: ImageRouteContext;
+  route: ResolvedImageRoute;
+  operation: 'generations' | 'edits';
+  providerRequest: { url: string; headers: Record<string, string>; body: string | FormData };
+}): Promise<JsonObject> {
+  const { context, route, operation, providerRequest } = options;
   const requestId = makeId('img');
-  const trace = createTraceContext(context.workspaceRoot, context.traceDataRoot, profile.traceRoot, requestId);
+  const trace = createTraceContext(context.workspaceRoot, context.traceDataRoot, route.profile.traceRoot, requestId);
   const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
   const startedAt = Date.now();
-  const providerBody = {
-    ...body,
-    model: provider.model,
-  };
   try {
     let response: Response;
     try {
-      response = await context.fetchImpl(providerImageGenerationsUrl(provider.baseUrl), {
+      response = await context.fetchImpl(providerRequest.url, {
         method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${secret}`,
-        },
-        body: JSON.stringify(providerBody),
+        headers: providerRequest.headers,
+        body: providerRequest.body,
       });
     } catch (error) {
       const errorSummary = providerExceptionSummary(error, 'fetch_failed');
@@ -724,34 +797,35 @@ async function routeImageGenerationRequest(
     if (!response.ok) {
       const errorText = await response.text().catch(() => '');
       const errorSummary = `provider_http_${response.status}`;
-      throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, provider, secret, errorText), 'imageGenerator');
+      throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, route.provider, route.secret, errorText), 'imageGenerator');
     }
     let payload: unknown;
     try {
       payload = await response.json();
     } catch {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image generation response.', 'imageGenerator');
+      throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image response.', 'imageGenerator');
     }
     if (isProviderErrorPayload(payload)) {
-      throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image generation response.', 'imageGenerator');
+      throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image response.', 'imageGenerator');
     }
     if (!isRecord(payload)) {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
+      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
     }
     const jsonPayload = jsonValueField(payload);
     if (!isRecord(jsonPayload)) {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image generation response.', 'imageGenerator');
+      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
     }
     const result = await normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl);
     await writeImageGenerationTrace({
       trace,
       requestId,
-      profileId,
+      profileId: route.profileId,
       workspaceRoot: context.workspaceRoot,
       publicModelAlias,
-      provider,
+      provider: route.provider,
       latencyMs: Date.now() - startedAt,
       status: 'completed',
+      operation,
     });
     return result;
   } catch (error) {
@@ -759,16 +833,56 @@ async function routeImageGenerationRequest(
     await writeImageGenerationTrace({
       trace,
       requestId,
-      profileId,
+      profileId: route.profileId,
       workspaceRoot: context.workspaceRoot,
       publicModelAlias,
-      provider,
+      provider: route.provider,
       latencyMs: Date.now() - startedAt,
       status: 'failed',
       errorSummary: normalized.code,
+      operation,
     });
     throw error;
   }
+}
+
+function requiredMultipartText(form: FormData, name: string): string {
+  const value = form.get(name);
+  if (typeof value !== 'string' || !value.trim()) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string.`);
+  }
+  return value;
+}
+
+function copyOptionalMultipartText(source: FormData, target: FormData, name: string): void {
+  const value = source.get(name);
+  if (value === null) return;
+  if (typeof value !== 'string' || !value.trim()) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string when provided.`);
+  }
+  target.set(name, value);
+}
+
+function requiredMultipartFiles(form: FormData, name: string): Blob[] {
+  const values = form.getAll(name);
+  if (!values.length || values.some((value) => typeof value === 'string' || value.size <= 0)) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must contain a non-empty file.`);
+  }
+  return values as Blob[];
+}
+
+function optionalMultipartFile(form: FormData, name: string): Blob | undefined {
+  const value = form.get(name);
+  if (value === null) return undefined;
+  if (typeof value === 'string' || value.size <= 0) {
+    throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must contain a non-empty file when provided.`);
+  }
+  return value;
+}
+
+function appendMultipartFile(form: FormData, name: string, file: Blob): void {
+  const fileName = stringField((file as Blob & { name?: unknown }).name) ?? `${name}.png`;
+  form.append(name, file, fileName);
 }
 
 async function normalizeImageGenerationPayload(
@@ -1789,18 +1903,27 @@ async function isUnambiguousProteinFasta(absolutePath: string): Promise<boolean>
     const lines = bytes.toString('utf8').split(/\r?\n/);
     const firstContentLine = lines.findIndex((line) => line.trim().length > 0);
     if (firstContentLine < 0 || !lines[firstContentLine]?.trimStart().startsWith('>')) return false;
-    const sequenceLines: string[] = [];
+    const records: string[] = [];
+    let sequenceLines: string[] = [];
     for (const line of lines.slice(firstContentLine + 1)) {
       const trimmed = line.trim();
-      if (trimmed.startsWith('>')) break;
+      if (trimmed.startsWith('>')) {
+        records.push(sequenceLines.join(''));
+        sequenceLines = [];
+        continue;
+      }
       if (trimmed) sequenceLines.push(trimmed);
     }
-    const sequence = sequenceLines.join('').replace(/\s+/g, '').toUpperCase();
+    records.push(sequenceLines.join(''));
     // EFILPQ are canonical amino-acid symbols outside the IUPAC nucleotide alphabet. Requiring at
-    // least one of them prevents DNA/RNA and ambiguity-only sequences from being labeled protein.
-    return sequence.length >= 10
-      && /^[ACDEFGHIKLMNPQRSTVWY]+$/.test(sequence)
-      && /[EFILPQ]/.test(sequence);
+    // least one in every record prevents DNA/RNA, ambiguity-only, and mixed multi-record FASTA
+    // files from being labeled as protein based only on their first record.
+    return records.length > 0 && records.every((record) => {
+      const sequence = record.replace(/\s+/g, '').toUpperCase();
+      return sequence.length >= 10
+        && /^[ACDEFGHIKLMNPQRSTVWY]+$/.test(sequence)
+        && /[EFILPQ]/.test(sequence);
+    });
   } catch {
     return false;
   }
@@ -2464,6 +2587,10 @@ function providerImageGenerationsUrl(baseUrl: string): string {
   return buildProviderEndpointUrl(baseUrl, 'images/generations');
 }
 
+function providerImageEditsUrl(baseUrl: string): string {
+  return buildProviderEndpointUrl(baseUrl, 'images/edits');
+}
+
 function buildProviderEndpointUrl(baseUrl: string, path: string): string {
   const normalized = trimUrlPathEnd(baseUrl);
   if (!normalized) return `/v1/${path}`;
@@ -2482,7 +2609,7 @@ function buildProviderEndpointUrl(baseUrl: string, path: string): string {
 function stripKnownProviderEndpointPath(baseUrl: string): string {
   const split = splitUrlSuffix(baseUrl);
   const lower = split.path.toLowerCase();
-  for (const path of ['chat/completions', 'images/generations', 'responses', 'messages']) {
+  for (const path of ['chat/completions', 'images/generations', 'images/edits', 'responses', 'messages']) {
     if (lower.endsWith(`/${path}`)) {
       return `${split.path.slice(0, -path.length).replace(/\/+$/, '')}${split.suffix}`;
     }
@@ -3588,19 +3715,21 @@ async function writeImageGenerationTrace(options: {
   latencyMs: number;
   status: 'completed' | 'failed';
   errorSummary?: string;
+  operation: 'generations' | 'edits';
 }) {
+  const route = `model-router.images.${options.operation}`;
   const audit = compactObject({
     schemaVersion: 'sciforge.model-router.image-generation-trace.v1',
     traceId: options.trace.traceId,
     requestId: options.requestId,
-    route: 'model-router.images.generations',
+    route,
     profileId: options.profileId,
     workspaceId: hashForTrace(options.workspaceRoot),
     publicModelAlias: options.publicModelAlias,
     role: 'imageGenerator',
     upstreamModel: options.provider.model,
     providerBindingSha256: providerBindingHash(options.provider),
-    wireApi: 'images.generations',
+    wireApi: `images.${options.operation}`,
     latencyMs: Math.max(0, Math.round(options.latencyMs)),
     status: options.status,
     errorSummary: options.errorSummary,
@@ -3610,7 +3739,7 @@ async function writeImageGenerationTrace(options: {
   await writeTraceJson(options.trace, 'final-routing-summary.json', compactObject({
     schemaVersion: 'sciforge.model-router.final-routing-summary.v1',
     requestId: options.requestId,
-    route: 'model-router.images.generations',
+    route,
     profileId: options.profileId,
     role: 'imageGenerator',
     upstreamModel: options.provider.model,
@@ -3772,6 +3901,27 @@ async function readJson(request: IncomingMessage): Promise<unknown> {
   const body = await readIncomingMessageBody(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
   if (!body) return {};
   return JSON.parse(body) as unknown;
+}
+
+async function readMultipartForm(request: IncomingMessage): Promise<FormData> {
+  const contentType = stringField(request.headers['content-type']);
+  if (!contentType?.toLowerCase().startsWith('multipart/form-data;')) {
+    throw routerError(400, 'invalid_request', 'Image edit requests must use multipart/form-data.');
+  }
+  const body = await readIncomingMessageBodyBytes(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
+  try {
+    const parsed = new Request('http://127.0.0.1/v1/images/edits', {
+      method: 'POST',
+      headers: { 'content-type': contentType },
+      // Node's Buffer is backed by ArrayBufferLike, while the DOM Request
+      // constructor requires an ArrayBuffer-backed BodyInit. Copying here also
+      // prevents the parser from retaining the pooled Buffer allocation.
+      body: Uint8Array.from(body).buffer,
+    });
+    return await parsed.formData();
+  } catch {
+    throw routerError(400, 'invalid_request', 'Image edit multipart body could not be parsed.');
+  }
 }
 
 function sendCors(response: ServerResponse) {

@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createHash } from 'node:crypto'
+import { createCanvas } from '@napi-rs/canvas'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   acceptVisualCandidateRevision,
@@ -41,7 +42,7 @@ async function seededDocument(documentId = 'figure') {
   return { root, sourcePath, inserted }
 }
 
-function passingReviewEvidence(path: string, content: string) {
+function passingReviewEvidence(path: string, content: string | Uint8Array) {
   return {
     tool: 'visual_artifact_review' as const,
     ok: true as const,
@@ -67,6 +68,18 @@ function passingReviewEvidence(path: string, content: string) {
   }
 }
 
+async function writePng(path: string, width: number, height: number): Promise<Uint8Array> {
+  const canvas = createCanvas(width, height)
+  const context = canvas.getContext('2d')
+  context.fillStyle = '#ffffff'
+  context.fillRect(0, 0, width, height)
+  context.fillStyle = '#123456'
+  context.fillRect(0, 0, Math.max(1, width / 2), Math.max(1, height / 2))
+  const bytes = canvas.toBuffer('image/png')
+  await writeFile(path, bytes)
+  return bytes
+}
+
 describe('VisualDocument engine', () => {
   it('creates only VisualDocument JSON storage without editor snapshots', async () => {
     const root = await workspace()
@@ -82,6 +95,18 @@ describe('VisualDocument engine', () => {
     const persisted = JSON.parse(await readFile(created.paths.documentPath, 'utf8'))
     expect(persisted).toEqual(created.document)
     expect(JSON.stringify(persisted)).not.toMatch(/drawio|tldraw|xml/i)
+  })
+
+  it('does not create a missing document when a restore probe opens existing-only', async () => {
+    const root = await workspace()
+    const documentPath = join(root, '.sciforge', 'visual-documents', 'deleted-review', 'document.json')
+
+    await expect(openOrCreateVisualDocument({
+      workspaceRoot: root,
+      documentId: 'deleted-review',
+      createIfMissing: false
+    })).rejects.toThrow('VisualDocument does not exist')
+    await expect(access(documentPath)).rejects.toThrow()
   })
 
   it('inherits the manuscript visual style unless the caller explicitly disables it', async () => {
@@ -172,7 +197,7 @@ describe('VisualDocument engine', () => {
 
   it('stages and rejects a candidate without modifying the source', async () => {
     const { root, sourcePath, inserted } = await seededDocument()
-    const candidatePath = join(root, 'candidate.png')
+    const candidatePath = join(root, 'candidate.bin')
     await writeFile(candidatePath, 'candidate')
     const staged = await createVisualCandidateRevision({
       workspaceRoot: root,
@@ -196,7 +221,7 @@ describe('VisualDocument engine', () => {
 
   it('refuses candidate evidence that is not bound to the reviewed file', async () => {
     const { root } = await seededDocument()
-    const candidatePath = join(root, 'candidate.png')
+    const candidatePath = join(root, 'candidate.bin')
     await writeFile(candidatePath, 'candidate')
     await expect(createVisualCandidateRevision({
       workspaceRoot: root,
@@ -217,7 +242,7 @@ describe('VisualDocument engine', () => {
 
   it('atomically accepts a candidate, backs up the source, and records history', async () => {
     const { root, sourcePath } = await seededDocument()
-    const candidatePath = join(root, 'candidate.png')
+    const candidatePath = join(root, 'candidate.svg')
     await writeFile(candidatePath, 'accepted content')
     const staged = await createVisualCandidateRevision({
       workspaceRoot: root,
@@ -241,9 +266,27 @@ describe('VisualDocument engine', () => {
     expect(accepted.revision.status).toBe('accepted')
   })
 
+  it('derives raster candidate dimensions from its bytes instead of trusting caller hints', async () => {
+    const { root } = await seededDocument()
+    const candidatePath = join(root, 'candidate.png')
+    const candidateBytes = await writePng(candidatePath, 1920, 1440)
+
+    const staged = await createVisualCandidateRevision({
+      workspaceRoot: root,
+      documentId: 'figure',
+      candidatePath,
+      summary: 'Keep the raster at its actual aspect ratio',
+      reviewEvidence: passingReviewEvidence(candidatePath, candidateBytes),
+      width: 1200,
+      height: 800
+    })
+
+    expect(staged.revision).toMatchObject({ width: 1920, height: 1440 })
+  })
+
   it('fails closed when the source changed outside SciForge', async () => {
     const { root, sourcePath } = await seededDocument()
-    const candidatePath = join(root, 'candidate.png')
+    const candidatePath = join(root, 'candidate.bin')
     await writeFile(candidatePath, 'candidate')
     const staged = await createVisualCandidateRevision({
       workspaceRoot: root,

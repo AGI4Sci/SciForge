@@ -117,8 +117,8 @@ export type VisualCandidateReviewEvidence = {
   semantic: {
     pass: true
     summary: string
-    violations: []
-    repairInstructions: []
+    violations: string[]
+    repairInstructions: string[]
   }
   repairable: false
   warnings: string[]
@@ -152,6 +152,7 @@ export type VisualDocumentPaths = {
 export type VisualDocumentOpenRequest = {
   workspaceRoot: string
   documentId?: string
+  createIfMissing?: boolean
   canvas?: Partial<VisualCanvas>
   styleProfileRef?: string | null
 }

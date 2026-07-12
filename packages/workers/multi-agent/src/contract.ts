@@ -94,6 +94,7 @@ export const MultiAgentChildRunRecord = z
     id: z.string().min(1),
     parentThreadId: z.string().min(1),
     parentTurnId: z.string().min(1),
+    requestId: z.string().min(1).optional(),
     label: z.string().min(1).optional(),
     prompt: z.string().min(1),
     workspace: z.string().min(1).optional(),

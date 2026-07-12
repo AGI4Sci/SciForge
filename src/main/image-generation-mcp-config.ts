@@ -25,7 +25,10 @@ const COMPONENT_SEGMENTATION_RUNNER_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_RUNNE
 const COMPONENT_SEGMENTATION_MODEL_ENV = 'SCIFORGE_COMPONENT_SEGMENTATION_MODEL_PATH'
 const FASTSAM_RUNNER_ENV = 'SCIFORGE_FASTSAM_RUNNER'
 const FASTSAM_MODEL_ENV = 'SCIFORGE_FASTSAM_MODEL_PATH'
-export const GUI_IMAGE_GENERATION_MCP_TIMEOUT_MS = 120_000
+// High-fidelity image generation and masked edits routinely exceed two minutes.
+// Keep one server-level budget for every image tool so creation and revision use
+// the same runtime path without model-specific timeout exceptions.
+export const GUI_IMAGE_GENERATION_MCP_TIMEOUT_MS = 600_000
 export const GUI_IMAGE_GENERATION_MCP_LAUNCH_FLAG = IMAGE_GENERATION_MCP_FLAG
 
 export type ImageGenerationMcpLaunchConfig = ManagedGuiMcpLaunchConfig

@@ -212,7 +212,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_visual_plan', {
     title: 'Plan Scientific Visual',
-    description: 'Lock one general scientific-visual production route before rendering. The calling model must inspect the task and submit a structured decision. Choose deterministic_plot when exact data, axes, statistics, coordinates, or reproducibility dominate; choose generative_visual for conceptual or illustrative composition without data-bearing marks; choose hybrid_composite when deterministic truth layers and generated conceptual composition are both required. The returned route is fail-closed and cannot silently fall back to another route.',
+    description: 'Lock one general scientific-visual production route before rendering. The calling model must inspect the task and submit a structured decision. Choose deterministic_plot when exact data, axes, statistics, coordinates, or reproducibility dominate; choose generative_visual for conceptual or illustrative composition without data-bearing marks; choose hybrid_composite when deterministic truth layers and generated conceptual composition are both required. For action=revision on an existing raster, provide reviewPacketPath; generative and hybrid revisions are then locked to image_generation_edit_from_visual_review_packet and must not substitute image_generation_render. The returned route is fail-closed and cannot silently fall back to another route.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(16000),

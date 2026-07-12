@@ -315,6 +315,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       workspaceRoot: z.string().trim().min(1).optional(),
       reviewPacketPath: z.string().trim().max(4096).optional(),
       reviewPacket: z.unknown().optional(),
+      maskPath: z.string().trim().max(4096).optional(),
       outputDir: z.string().trim().max(4096).optional(),
       imageId: z.string().trim().max(120).optional(),
       threadId: z.string().trim().max(120).optional()
@@ -326,6 +327,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         ...(input.reviewPacketPath ? { reviewPacketPath: input.reviewPacketPath } : {}),
         ...(input.reviewPacket ? { reviewPacket: input.reviewPacket } : {}),
+        ...(input.maskPath ? { maskPath: input.maskPath } : {}),
         ...(input.outputDir ? { outputDir: input.outputDir } : {}),
         ...(input.imageId ? { imageId: input.imageId } : {}),
         ...(input.threadId ? { threadId: input.threadId } : {})

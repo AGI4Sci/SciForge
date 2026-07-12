@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { HybridSessionStore, HybridThreadStore } from '../src/adapters/hybrid/index.js'
+import { sqliteFallbackWarning } from '../src/adapters/hybrid/hybrid-thread-store.js'
 import { makeUserItem } from '../src/domain/item.js'
 import { appendTurnItem, createTurnRecord, startTurn } from '../src/domain/turn.js'
 import { createThreadRecord } from '../src/domain/thread.js'
@@ -18,6 +19,18 @@ describe('HybridThreadStore', () => {
   let dataDir = ''
   let openStores: HybridThreadStore[] = []
   let sqliteAvailable = false
+
+  it('adds an actionable Electron rebuild hint for native ABI mismatches', () => {
+    const warning = sqliteFallbackWarning(
+      'initialize',
+      new Error('compiled against a different Node.js version using NODE_MODULE_VERSION 127'),
+      '132'
+    )
+
+    expect(warning).toContain('using JSONL fallback')
+    expect(warning).toContain('runtime ABI 132')
+    expect(warning).toContain('npm run rebuild:electron-native')
+  })
 
   beforeEach(async () => {
     dataDir = await mkdtemp(join(tmpdir(), 'kun-hybrid-'))

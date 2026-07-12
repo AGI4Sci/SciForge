@@ -68,6 +68,48 @@ describe('createCodexAgentRuntimeAdapter', () => {
     })
   })
 
+  it('surfaces bounded path-safe dynamic MCP unavailable-tool lifecycle diagnostics', async () => {
+    const adapter = createCodexAgentRuntimeAdapter({
+      isMcpConfigured: () => true,
+      isResearchMcpConfigured: () => false,
+      isComputerUseMcpConfigured: () => false,
+      dynamicMcpToolDiagnostics: () => [{
+        at: '2026-07-12T00:00:00.000Z',
+        event: 'tool_unavailable',
+        serverId: '/private/mcp/server',
+        namespace: 'mcp_private',
+        reason: 'invalid_input_schema',
+        toolName: '/Users/private/schema-tool',
+        diagnosticCode: 'schema_property_not_object',
+        schema: { private: 'DO_NOT_LEAK' }
+      }]
+    } as never)
+
+    const caps = await adapter.capabilities({ settings: {} as never })
+    expect(caps.tools.diagnostics).toEqual({ available: true })
+
+    const diagnostics = await adapter.auxiliary!({ settings: {} as never }, {
+      runtimeId: 'codex',
+      operation: 'getToolDiagnostics'
+    })
+    expect(diagnostics).toMatchObject({
+      mcpLifecycle: {
+        toolUnavailableCount: 1,
+        toolUnavailable: [{
+          event: 'tool_unavailable',
+          reason: 'invalid_input_schema',
+          serverId: expect.stringMatching(/^redacted_[a-f0-9]{12}$/),
+          namespace: 'mcp_private',
+          toolName: expect.stringMatching(/^redacted_[a-f0-9]{12}$/),
+          diagnosticCode: 'schema_property_not_object'
+        }]
+      }
+    })
+    expect(JSON.stringify(diagnostics)).not.toContain('/private/')
+    expect(JSON.stringify(diagnostics)).not.toContain('/Users/')
+    expect(JSON.stringify(diagnostics)).not.toContain('DO_NOT_LEAK')
+  })
+
   it('honors shared subagent capability settings', async () => {
     const adapter = createCodexAgentRuntimeAdapter({} as never)
 

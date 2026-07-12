@@ -1,5 +1,6 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useChatStore } from './store/chat-store'
+import { clearPersistedActiveThread } from './store/chat-session-persistence'
 import { supportsDesktopTitleBar, WindowsTitleBar } from './components/WindowsTitleBar'
 
 const Workbench = lazy(() =>
@@ -15,11 +16,35 @@ const InitialSetupDialog = lazy(() =>
 )
 
 export function RouteFallback(): React.ReactElement {
+  const [timedOut, setTimedOut] = useState(false)
+  useEffect(() => {
+    const timeout = window.setTimeout(() => setTimedOut(true), 10_000)
+    return () => window.clearTimeout(timeout)
+  }, [])
+
+  const reload = (): void => window.location.reload()
+  const resetAndReload = (): void => {
+    clearPersistedActiveThread()
+    window.location.reload()
+  }
+
   return (
     <div className="flex h-full min-h-0 items-center justify-center bg-ds-main text-ds-muted">
       <div className="inline-flex items-center gap-2 rounded-[8px] border border-ds-border-muted bg-ds-card px-3 py-2 text-[12px] font-medium shadow-sm">
         <span className="h-2 w-2 animate-pulse rounded-full bg-accent" aria-hidden />
-        <span>Restoring workspace...</span>
+        <div>
+          <span>{timedOut ? 'Workspace loading is taking longer than expected.' : 'Restoring workspace...'}</span>
+          {timedOut ? (
+            <div className="mt-2 flex flex-wrap items-center justify-center gap-2">
+              <button type="button" className="rounded-full bg-ds-hover px-3 py-1" onClick={reload}>
+                Retry
+              </button>
+              <button type="button" className="rounded-full bg-ds-hover px-3 py-1" onClick={resetAndReload}>
+                Open without restored session
+              </button>
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   )

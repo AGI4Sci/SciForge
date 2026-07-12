@@ -39,6 +39,7 @@ import {
   createRuntimeInspectorService,
   type RuntimeInspectorService
 } from './service.js'
+import { CompletionChecksInputSchema } from './completion-checks.js'
 
 type RuntimeInspectorToolResult = CallToolResult & {
   content: Array<{ type: 'text'; text: string }>
@@ -129,6 +130,12 @@ export function createRuntimeInspectorMcpServer(
     inputSchema: LspQueryInputSchema,
     annotations: readOnlyAnnotations('Run LSP query')
   }, async (args, extra) => resultToToolResult(await service.lspQuery(args, { signal: extra.signal }), 'lsp query'))
+
+  server.registerTool('gui_completion_check', {
+    description: 'Run configurable, read-only completion checks against bounded saved workspace files: required/forbidden text or regex, capture equality, file existence, and LaTeX log thresholds. This tool never runs shell commands or modifies documents.',
+    inputSchema: CompletionChecksInputSchema,
+    annotations: readOnlyAnnotations('Check task completion')
+  }, async (args) => resultToToolResult(await service.completionChecks(args), 'completion checks'))
 
   registerRuntimeInspectorResources(server, service)
   return server
@@ -287,6 +294,9 @@ function renderSuccessSummary(result: Exclude<RuntimeInspectorAnyResult, Runtime
   if ('lifecycleBoundary' in result) return `Local runtime status is ${result.health.status}; process control is not exposed.`
   if ('lifecycle' in result) return `LSP status is ${result.status}; ${result.lifecycle.activeSessionCount} session(s) active.`
   if ('operation' in result && 'unsavedBufferPolicy' in result) return `LSP ${result.operation} completed.`
+  if ('findings' in result && 'passed' in result) {
+    return `Completion checks ${result.passed ? 'passed' : 'failed'}: ${result.summary.blockingFindings} blocking and ${result.summary.nonBlockingFindings} non-blocking finding(s).`
+  }
   if ('transport' in result) return `Runtime inspector ${result.version} is available over ${result.transport}.`
   return `${label} completed.`
 }

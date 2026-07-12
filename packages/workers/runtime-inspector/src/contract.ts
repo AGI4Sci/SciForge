@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { CompletionChecksResult } from './completion-checks.js'
 
 export const RUNTIME_INSPECTOR_MCP_SERVER_NAME = 'sciforge-runtime-inspector'
 export const RUNTIME_INSPECTOR_MCP_SERVER_VERSION = '0.1.0'
@@ -41,7 +42,8 @@ export const RuntimeInspectorToolNames = [
   'gui_runtime_model_router_status',
   'gui_runtime_status',
   'gui_lsp_status',
-  'gui_lsp_query'
+  'gui_lsp_query',
+  'gui_completion_check'
 ] as const
 
 export type RuntimeInspectorToolName = typeof RuntimeInspectorToolNames[number]
@@ -72,6 +74,7 @@ export type RuntimeInspectorErrorCode =
   | 'language_server_missing'
   | 'unsupported_language'
   | 'file_not_found'
+  | 'file_read_failed'
   | 'lsp_request_failed'
   | 'lsp_request_timeout'
   | 'lsp_session_closed'
@@ -114,6 +117,7 @@ export const RuntimeInspectorErrorCodeSchema = z.enum([
   'language_server_missing',
   'unsupported_language',
   'file_not_found',
+  'file_read_failed',
   'lsp_request_failed',
   'lsp_request_timeout',
   'lsp_session_closed',
@@ -504,6 +508,7 @@ export type RuntimeInspectorAnyResult =
   | RuntimeLocalStatusResult
   | LspStatusResult
   | LspQueryResult
+  | CompletionChecksResult
   | RuntimeInspectorDiagnosticsResult
 
 export function gitCheckpointResourceUri(checkpointId: string): string {

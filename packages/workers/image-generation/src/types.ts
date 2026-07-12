@@ -439,11 +439,18 @@ export type ImageEditIntent = {
   sourcePath: string
   instruction: string
   maskPath?: string
+  selectedRegions?: ImageEditRegion[]
   annotationIds?: string[]
   targetNodeIds?: string[]
   preserve?: Array<'composition' | 'identity' | 'text' | 'layout' | 'palette'>
   outputFormat?: ImageOutputFormat
 }
+
+export type ImageEditRegion =
+  | { kind: 'box'; bounds: { x: number; y: number; width: number; height: number } }
+  | { kind: 'pin'; point: { x: number; y: number } }
+  | { kind: 'arrow'; from: { x: number; y: number }; to: { x: number; y: number } }
+  | { kind: 'freehand'; points: Array<{ x: number; y: number }> }
 
 export type ImageGenerationStatus = {
   ok: true
@@ -601,6 +608,7 @@ export type ImageGenerationEditFromVisualReviewPacketRequest = {
   workspaceRoot: string
   reviewPacketPath?: string
   reviewPacket?: unknown
+  maskPath?: string
   outputDir?: string
   imageId?: string
   threadId?: string

@@ -58,6 +58,7 @@ test('publishes stable tool names and encoded resource URIs', () => {
   assert.ok(RuntimeInspectorToolNames.includes('gui_git_status'))
   assert.ok(RuntimeInspectorToolNames.includes('gui_runtime_status'))
   assert.ok(RuntimeInspectorToolNames.includes('gui_lsp_query'))
+  assert.ok(RuntimeInspectorToolNames.includes('gui_completion_check'))
   assert.equal(gitCheckpointResourceUri('turn 1'), 'git://checkpoint/turn%201')
   assert.equal(gitDiffResourceUri('src/app file.ts'), 'git://diff/src/app%20file.ts')
 })

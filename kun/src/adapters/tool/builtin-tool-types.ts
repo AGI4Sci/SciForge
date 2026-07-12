@@ -89,11 +89,12 @@ export type ReadClassification = {
 
 export const COMPACT_RESOURCE_FILE_NAMES = new Set(['AGENTS.md', 'AGENTS.MD', 'CLAUDE.md', 'CLAUDE.MD'])
 
-export type BuiltinToolName = 'read' | 'bash' | 'edit' | 'write' | 'grep' | 'find' | 'ls'
+export type BuiltinToolName = 'read' | 'bash' | 'edit' | 'apply_patch' | 'write' | 'grep' | 'find' | 'ls'
 export const allBuiltinToolNames: Set<BuiltinToolName> = new Set([
   'read',
   'bash',
   'edit',
+  'apply_patch',
   'write',
   'grep',
   'find',
@@ -120,6 +121,9 @@ export type WriteLocalToolOptions = {
 export type EditLocalToolOptions = {
   operations?: EditLocalToolOperations
 }
+export type ApplyPatchLocalToolOptions = {
+  operations?: EditLocalToolOperations
+}
 
 export type GrepLocalToolOptions = {
   defaultLimit?: number
@@ -144,6 +148,7 @@ export type BuiltinLocalToolsOptions = {
   bash?: BashLocalToolOptions
   write?: WriteLocalToolOptions
   edit?: EditLocalToolOptions
+  applyPatch?: ApplyPatchLocalToolOptions
   grep?: GrepLocalToolOptions
   find?: FindLocalToolOptions
   ls?: LsLocalToolOptions

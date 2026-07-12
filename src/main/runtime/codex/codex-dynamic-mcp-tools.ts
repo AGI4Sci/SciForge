@@ -77,7 +77,7 @@ export type CodexDynamicMcpReleaseReason =
 
 export type CodexDynamicMcpLifecycleEvent = {
   at: string
-  event: 'request_aborted' | 'server_closed'
+  event: 'request_aborted' | 'server_closed' | 'tool_unavailable'
   serverId: string
   namespace: string
   reason: CodexDynamicMcpReleaseReason
@@ -86,12 +86,34 @@ export type CodexDynamicMcpLifecycleEvent = {
   turnId?: string
   toolName?: string
   activeRequestCount?: number
+  diagnosticCode?: CodexDynamicMcpSchemaDiagnosticCode
+}
+
+export type CodexDynamicMcpSchemaDiagnosticCode =
+  | 'schema_root_not_object'
+  | 'schema_properties_not_object'
+  | 'schema_property_not_object'
+  | 'schema_items_not_object'
+  | 'schema_additional_properties_invalid'
+  | 'schema_too_deep'
+  | 'schema_too_complex'
+  | 'provider_schema_invalid'
+
+export type CodexDynamicMcpToolUnavailableDiagnostic = {
+  at: string
+  event: 'tool_unavailable'
+  serverId: string
+  namespace: string
+  reason: 'invalid_input_schema'
+  toolName: string
+  diagnosticCode: CodexDynamicMcpSchemaDiagnosticCode
 }
 
 type CatalogTool = McpToolDescriptor & {
   originalName: string
   dynamicName: string
   flatName?: string
+  providerSafeInputSchema: Record<string, unknown>
 }
 
 type ActiveMcpRequest = {
@@ -111,9 +133,12 @@ type ServerState = {
   catalogPromise?: Promise<CatalogTool[]>
   activeRequests: Set<ActiveMcpRequest>
   lifecycleEvents: CodexDynamicMcpLifecycleEvent[]
+  unavailableToolDiagnostics: Map<string, CodexDynamicMcpToolUnavailableDiagnostic>
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
+const MAX_LIFECYCLE_EVENTS_PER_SERVER = 50
+const MAX_UNAVAILABLE_TOOL_DIAGNOSTICS_PER_SERVER = 50
 
 export function createCodexDynamicMcpToolBridge(
   options: CodexDynamicMcpToolBridgeOptions
@@ -142,7 +167,8 @@ export class CodexDynamicMcpToolBridge {
           },
           namespace,
           activeRequests: new Set<ActiveMcpRequest>(),
-          lifecycleEvents: []
+          lifecycleEvents: [],
+          unavailableToolDiagnostics: new Map<string, CodexDynamicMcpToolUnavailableDiagnostic>()
         }
         this.statesByNamespace.set(namespace, state)
         return state
@@ -155,6 +181,10 @@ export class CodexDynamicMcpToolBridge {
 
   lifecycleEvents(): CodexDynamicMcpLifecycleEvent[] {
     return this.states.flatMap((state) => state.lifecycleEvents)
+  }
+
+  toolUnavailableDiagnostics(): CodexDynamicMcpToolUnavailableDiagnostic[] {
+    return this.states.flatMap((state) => [...state.unavailableToolDiagnostics.values()])
   }
 
   abortRequestsForTurn(
@@ -183,7 +213,7 @@ export class CodexDynamicMcpToolBridge {
         type: 'function',
         name: tool.flatName ?? tool.dynamicName,
         description: tool.description || tool.title || `MCP tool ${tool.originalName}`,
-        inputSchema: providerSafeToolInputSchema(tool.inputSchema)
+        inputSchema: tool.providerSafeInputSchema
       }))
     } finally {
       mainPerformanceMonitor.sample('main.codex.dynamicMcp.tools.duration', mainPerformanceMonitor.now() - startedAt, {
@@ -374,11 +404,19 @@ export class CodexDynamicMcpToolBridge {
       return tools
         .filter((tool) => !enabled.size || enabled.has(tool.name))
         .filter((tool) => tool.name.trim().length > 0)
-        .map((tool) => ({
-          ...tool,
-          originalName: tool.name,
-          dynamicName: uniqueDynamicName(slug(tool.name), tool.name, usedNames, 128)
-        }))
+        .flatMap((tool) => {
+          const providerSchema = providerSafeToolInputSchemaResult(tool.inputSchema)
+          if (!providerSchema.ok) {
+            this.recordUnavailableTool(state, tool.name, providerSchema.code)
+            return []
+          }
+          return [{
+            ...tool,
+            originalName: tool.name,
+            dynamicName: uniqueDynamicName(slug(tool.name), tool.name, usedNames, 128),
+            providerSafeInputSchema: providerSchema.schema
+          }]
+        })
     } finally {
       mainPerformanceMonitor.sample('main.codex.dynamicMcp.catalog.load.duration', mainPerformanceMonitor.now() - startedAt, {
         serverId: state.config.id,
@@ -464,14 +502,57 @@ export class CodexDynamicMcpToolBridge {
   ): void {
     state.lifecycleEvents.push({
       at: new Date().toISOString(),
-      serverId: state.config.id,
+      serverId: safeDiagnosticIdentifier(state.config.id, 64, state.namespace),
       namespace: state.namespace,
       ...event
     })
-    if (state.lifecycleEvents.length > 50) {
-      state.lifecycleEvents.splice(0, state.lifecycleEvents.length - 50)
+    if (state.lifecycleEvents.length > MAX_LIFECYCLE_EVENTS_PER_SERVER) {
+      state.lifecycleEvents.splice(0, state.lifecycleEvents.length - MAX_LIFECYCLE_EVENTS_PER_SERVER)
     }
   }
+
+  private recordUnavailableTool(
+    state: ServerState,
+    toolName: string,
+    diagnosticCode: CodexDynamicMcpSchemaDiagnosticCode
+  ): void {
+    const boundedToolName = safeDiagnosticIdentifier(toolName, 128, 'unknown_tool')
+    const key = `${boundedToolName}:${diagnosticCode}`
+    if (state.unavailableToolDiagnostics.has(key)) return
+    mainPerformanceMonitor.count('main.codex.dynamicMcp.toolUnavailable', 1, {
+      serverId: safeDiagnosticIdentifier(state.config.id, 64, state.namespace),
+      diagnosticCode
+    })
+    const diagnostic: CodexDynamicMcpToolUnavailableDiagnostic = {
+      at: new Date().toISOString(),
+      event: 'tool_unavailable',
+      serverId: safeDiagnosticIdentifier(state.config.id, 64, state.namespace),
+      namespace: state.namespace,
+      reason: 'invalid_input_schema',
+      toolName: boundedToolName,
+      diagnosticCode
+    }
+    state.unavailableToolDiagnostics.set(key, diagnostic)
+    while (state.unavailableToolDiagnostics.size > MAX_UNAVAILABLE_TOOL_DIAGNOSTICS_PER_SERVER) {
+      const oldest = state.unavailableToolDiagnostics.keys().next().value
+      if (oldest === undefined) break
+      state.unavailableToolDiagnostics.delete(oldest)
+    }
+    this.recordLifecycleEvent(state, {
+      event: diagnostic.event,
+      reason: diagnostic.reason,
+      toolName: diagnostic.toolName,
+      diagnosticCode: diagnostic.diagnosticCode
+    })
+  }
+}
+
+function safeDiagnosticIdentifier(value: string, maxLength: number, fallback: string): string {
+  if (/[\\/]/.test(value)) {
+    return `redacted_${createHash('sha256').update(value).digest('hex').slice(0, 12)}`.slice(0, maxLength)
+  }
+  const normalized = value.trim().replace(/[^A-Za-z0-9_.:-]+/g, '_').replace(/^_+|_+$/g, '')
+  return (normalized || fallback).slice(0, maxLength)
 }
 
 async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<CodexDynamicMcpClient> {
@@ -786,14 +867,72 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-function providerSafeToolInputSchema(value: unknown): Record<string, unknown> {
+type ProviderSafeToolInputSchemaResult =
+  | { ok: true; schema: Record<string, unknown> }
+  | { ok: false; code: CodexDynamicMcpSchemaDiagnosticCode }
+
+function providerSafeToolInputSchemaResult(value: unknown): ProviderSafeToolInputSchemaResult {
+  const sourceIssue = validateInputSchemaStructure(value)
+  if (sourceIssue) return { ok: false, code: sourceIssue }
   const sanitized = sanitizeJsonSchemaRecord(value)
-  return {
+  const schema = {
     properties: {},
     ...sanitized,
     type: 'object',
     ...(asRecord(sanitized.properties) ? { properties: sanitized.properties } : {})
   }
+  const providerIssue = validateInputSchemaStructure(schema, { requireRoot: true })
+  return providerIssue
+    ? { ok: false, code: 'provider_schema_invalid' }
+    : { ok: true, schema }
+}
+
+function validateInputSchemaStructure(
+  value: unknown,
+  options: { requireRoot?: boolean } = {}
+): CodexDynamicMcpSchemaDiagnosticCode | null {
+  // MCP descriptors historically omitted inputSchema for no-argument tools.
+  // Preserve that compatibility by advertising an empty object schema.
+  if (value === undefined && !options.requireRoot) return null
+  const root = asRecord(value)
+  if (!root) return 'schema_root_not_object'
+  if (root.type !== undefined && root.type !== 'object') return 'schema_root_not_object'
+  const budget = { nodes: 0 }
+  return validateSchemaNode(root, budget, 0)
+}
+
+function validateSchemaNode(
+  schema: Record<string, unknown>,
+  budget: { nodes: number },
+  depth: number
+): CodexDynamicMcpSchemaDiagnosticCode | null {
+  if (depth > 32) return 'schema_too_deep'
+  budget.nodes += 1
+  if (budget.nodes > 10_000) return 'schema_too_complex'
+
+  if (schema.properties !== undefined) {
+    const properties = asRecord(schema.properties)
+    if (!properties) return 'schema_properties_not_object'
+    for (const property of Object.values(properties)) {
+      const propertySchema = asRecord(property)
+      if (!propertySchema) return 'schema_property_not_object'
+      const issue = validateSchemaNode(propertySchema, budget, depth + 1)
+      if (issue) return issue
+    }
+  }
+  if (schema.items !== undefined) {
+    const items = asRecord(schema.items)
+    if (!items) return 'schema_items_not_object'
+    const issue = validateSchemaNode(items, budget, depth + 1)
+    if (issue) return issue
+  }
+  if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') {
+    const additional = asRecord(schema.additionalProperties)
+    if (!additional) return 'schema_additional_properties_invalid'
+    const issue = validateSchemaNode(additional, budget, depth + 1)
+    if (issue) return issue
+  }
+  return null
 }
 
 const SAFE_JSON_SCHEMA_KEYS = new Set([

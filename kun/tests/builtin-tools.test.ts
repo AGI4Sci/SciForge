@@ -14,6 +14,7 @@ import {
   createToolDefinition,
   createAllToolDefinitions,
   createAllTools,
+  createApplyPatchTool,
   createEditTool,
   createEditToolDefinition,
   createFindTool,
@@ -200,7 +201,9 @@ describe('Local runtime built-in tools', () => {
   })
 
   it('exposes pi-style coding and read-only tool groups', () => {
-    expect(buildCodingBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
+    expect(buildCodingBuiltinLocalTools().map((tool) => tool.name)).toEqual([
+      'read', 'bash', 'edit', 'apply_patch', 'write'
+    ])
     expect(buildReadOnlyBuiltinLocalTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
   })
 
@@ -212,7 +215,9 @@ describe('Local runtime built-in tools', () => {
       ls: { defaultLimit: 1 },
       bash: { defaultTimeoutSeconds: 5 }
     })
-    expect(Object.keys(toolRecord).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'])
+    expect(Object.keys(toolRecord).sort()).toEqual([
+      'apply_patch', 'bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'
+    ])
 
     await writeFile(join(workspace, 'limited.txt'), 'one\ntwo\nthree\n', 'utf8')
     const customHost = new LocalToolHost({ tools: [toolRecord.read, toolRecord.ls] })
@@ -228,20 +233,29 @@ describe('Local runtime built-in tools', () => {
     expect(defaultFindLocalToolOperations).toEqual({})
     expect(defaultGrepLocalToolOperations).toEqual({})
     expect(defaultLsLocalToolOperations.readdir).toBeTypeOf('function')
-    expect(createCodingTools().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
+    expect(createCodingTools().map((tool) => tool.name)).toEqual([
+      'read', 'bash', 'edit', 'apply_patch', 'write'
+    ])
     expect(createReadOnlyTools().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
-    expect(createCodingToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'bash', 'edit', 'write'])
+    expect(createCodingToolDefinitions().map((tool) => tool.name)).toEqual([
+      'read', 'bash', 'edit', 'apply_patch', 'write'
+    ])
     expect(createReadOnlyToolDefinitions().map((tool) => tool.name)).toEqual(['read', 'grep', 'find', 'ls'])
     const allTools = createAllTools()
     const allDefinitions = createAllToolDefinitions()
-    expect(Object.keys(allTools).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'])
-    expect(Object.keys(allDefinitions).sort()).toEqual(['bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'])
+    expect(Object.keys(allTools).sort()).toEqual([
+      'apply_patch', 'bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'
+    ])
+    expect(Object.keys(allDefinitions).sort()).toEqual([
+      'apply_patch', 'bash', 'edit', 'find', 'grep', 'ls', 'read', 'write'
+    ])
     expect(createReadTool).toBe(createReadLocalTool)
     expect(createReadToolDefinition).toBe(createReadLocalTool)
     expect(createWriteTool).toBeTypeOf('function')
     expect(createWriteToolDefinition).toBeTypeOf('function')
     expect(createEditTool).toBeTypeOf('function')
     expect(createEditToolDefinition).toBeTypeOf('function')
+    expect(createApplyPatchTool).toBeTypeOf('function')
     expect(createFindTool).toBeTypeOf('function')
     expect(createFindToolDefinition).toBeTypeOf('function')
     expect(createGrepTool).toBeTypeOf('function')
@@ -845,6 +859,160 @@ describe('Local runtime built-in tools', () => {
     const disk = await readFile(join(workspace, 'windows.txt'), 'utf8')
     expect(disk).toContain('\r\n')
     expect(disk).toBe('alpha\r\ngamma\r\n')
+  })
+
+  it('applies a unified diff through the in-process apply_patch tool', async () => {
+    await writeFile(join(workspace, 'patch-target.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
+    const output = await executeTool(host, workspace, 'apply_patch', {
+      path: 'patch-target.txt',
+      patch: [
+        '--- a/patch-target.txt',
+        '+++ b/patch-target.txt',
+        '@@ -1,3 +1,3 @@',
+        ' alpha',
+        '-beta',
+        '+delta',
+        ' gamma',
+        ''
+      ].join('\n')
+    })
+
+    expect(output).toMatchObject({
+      relative_path: 'patch-target.txt',
+      hunks: 1,
+      first_changed_line: 2
+    })
+    await expect(readFile(join(workspace, 'patch-target.txt'), 'utf8'))
+      .resolves.toBe('alpha\ndelta\ngamma\n')
+  })
+
+  it('blocks apply_patch paths that escape the workspace', async () => {
+    const result = await host.execute(
+      {
+        callId: 'call_apply_patch_escape',
+        toolName: 'apply_patch',
+        arguments: {
+          path: '../escape-patch.txt',
+          patch: '@@ -1 +1 @@\n-old\n+new\n'
+        }
+      },
+      buildContext(workspace)
+    )
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      toolName: 'apply_patch',
+      isError: true,
+      output: { error: expect.stringContaining('escapes the workspace root') }
+    })
+  })
+
+  it('enforces per-turn file path policy for apply_patch', async () => {
+    await writeFile(join(workspace, 'denied.txt'), 'old\n', 'utf8')
+    const context: ToolHostContext = {
+      ...buildContext(workspace),
+      filePathPolicy: { allowPaths: ['allowed.txt'] }
+    }
+    const result = await host.execute({
+      callId: 'call_apply_patch_path_policy',
+      toolName: 'apply_patch',
+      arguments: {
+        path: 'denied.txt',
+        patch: '@@ -1 +1 @@\n-old\n+new\n'
+      }
+    }, context)
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      toolName: 'apply_patch',
+      isError: true,
+      output: { code: 'file_path_policy_denied' }
+    })
+    await expect(readFile(join(workspace, 'denied.txt'), 'utf8')).resolves.toBe('old\n')
+  })
+
+  it('leaves the file unchanged when apply_patch context does not match', async () => {
+    const target = join(workspace, 'patch-conflict.txt')
+    await writeFile(target, 'current\n', 'utf8')
+    const result = await host.execute(
+      {
+        callId: 'call_apply_patch_conflict',
+        toolName: 'apply_patch',
+        arguments: {
+          path: 'patch-conflict.txt',
+          patch: '@@ -1 +1 @@\n-stale\n+replacement\n'
+        }
+      },
+      buildContext(workspace)
+    )
+
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      toolName: 'apply_patch',
+      isError: true,
+      output: { error: expect.stringContaining('context mismatch') }
+    })
+    await expect(readFile(target, 'utf8')).resolves.toBe('current\n')
+  })
+
+  it('serializes concurrent apply_patch calls for the same file', async () => {
+    const target = join(workspace, 'patch-serial.txt')
+    await writeFile(target, 'alpha\n', 'utf8')
+    const order: string[] = []
+    const patchTool = createApplyPatchTool({
+      operations: {
+        readFile: async (path) => {
+          const content = await readFile(path, 'utf8')
+          order.push(`read:${content.trim()}`)
+          await new Promise((resolve) => setTimeout(resolve, 20))
+          return content
+        },
+        writeFile: async (path, content) => {
+          order.push(`write:${content.trim()}`)
+          await writeFile(path, content, 'utf8')
+        }
+      }
+    })
+    const patchHost = new LocalToolHost({ tools: [patchTool] })
+    const first = patchHost.execute({
+      callId: 'call_apply_patch_first',
+      toolName: 'apply_patch',
+      arguments: {
+        path: 'patch-serial.txt',
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: patch-serial.txt',
+          '@@',
+          '-alpha',
+          '+beta',
+          '*** End Patch'
+        ].join('\n')
+      }
+    }, buildContext(workspace))
+    await Promise.resolve()
+    const second = patchHost.execute({
+      callId: 'call_apply_patch_second',
+      toolName: 'apply_patch',
+      arguments: {
+        path: 'patch-serial.txt',
+        patch: [
+          '*** Begin Patch',
+          '*** Update File: patch-serial.txt',
+          '@@',
+          '-beta',
+          '+gamma',
+          '*** End Patch'
+        ].join('\n')
+      }
+    }, buildContext(workspace))
+
+    const results = await Promise.all([first, second])
+    expect(results.map((result) => result.item)).toEqual([
+      expect.objectContaining({ kind: 'tool_result', isError: false }),
+      expect.objectContaining({ kind: 'tool_result', isError: false })
+    ])
+    expect(order).toEqual(['read:alpha', 'write:beta', 'read:beta', 'write:gamma'])
+    await expect(readFile(target, 'utf8')).resolves.toBe('gamma\n')
   })
 
   it('reports pi-style read truncation hints for oversized first lines', async () => {
