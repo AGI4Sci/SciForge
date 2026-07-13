@@ -1786,9 +1786,32 @@ app.whenReady().then(async () => {
   })
   configureEvidenceDagUpdateQueue({
     storagePath: evidenceDagQueuePath(app.getPath('userData')),
-    maxConcurrency: 2,
+    // Evidence extraction performs several LLM-backed verification passes.
+    // Serializing jobs avoids a startup recovery stampede against one Model Router.
+    maxConcurrency: 1,
     maxAttempts: 5,
     canRunBackground: () => !agentRuntimeHost.hasActiveTurns(),
+    resolveProjectContext: async ({ runtimeId, threadId }) => {
+      if (runtimeId !== 'sciforge' && runtimeId !== 'codex' && runtimeId !== 'claude') return undefined
+      const detailWorkspace = await agentRuntimeHost.readThread({
+        runtimeId,
+        threadId
+      }).then((detail) => detail.workspace?.trim()).catch(() => undefined)
+      const workspaceRoot = detailWorkspace || await agentRuntimeHost.listThreads({
+        runtimeId,
+        limit: 1_000,
+        includeArchived: true,
+        includeSide: true
+      }).then((threads) => threads.find((thread) => thread.id === threadId)?.workspace?.trim())
+        .catch(() => undefined)
+      if (!workspaceRoot) return undefined
+      return {
+        projectKey: workspaceRoot,
+        workspaceRoot,
+        projectRoot: workspaceRoot,
+        includedSessions: [`${runtimeId}:${threadId}`]
+      }
+    },
     ensureEvidenceDagReady: async () => {
       const settings = await store.load()
       await ensureEvidenceDagSidecar(settings, {

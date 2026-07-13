@@ -63,6 +63,7 @@ export type CodexChatBlock =
 export type CodexThreadDetail = {
   blocks: CodexChatBlock[]
   latestSeq: number
+  workspace?: string
   threadStatus?: string
   latestTurnId?: string
   latestUserMessageId?: string

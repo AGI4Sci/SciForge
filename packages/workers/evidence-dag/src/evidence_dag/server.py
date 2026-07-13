@@ -20,7 +20,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from . import __version__
 from .llm import ModelRouterLLM
-from .service import Engine
+from .service import Engine, ReviewDecisionConflict
 
 SERVICE_ID = "evidence-dag-engine"
 _UI_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "ui", "index.html")
@@ -435,6 +435,27 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 return self._send(200, ok(result, operation="artifacts.events.ack",
                                           request_id=rid, started=started))
+            review_match = re.fullmatch(
+                r"/threads/([^/]+)/reviews/([^/]+)/decision", path,
+            )
+            if review_match:
+                thread_id = unquote(review_match.group(1))
+                packet_id = unquote(review_match.group(2))
+                result = self.engine.record_review_decision(
+                    thread_id,
+                    packet_id,
+                    action=str(body.get("action") or ""),
+                    expected_snapshot_digest=str(body.get("expectedSnapshotDigest") or ""),
+                    actor=str(body.get("actor") or ""),
+                    rationale=str(body.get("rationale") or ""),
+                    idempotency_key=body.get("idempotencyKey"),
+                    correlation_id=body.get("correlationId"),
+                )
+                return self._send(200, ok(
+                    result,
+                    summary=f"Review decision {result['decision']['action']} recorded",
+                    operation="reviews.decision", request_id=rid, started=started,
+                ))
             artifact_match = re.fullmatch(r"/artifacts/([^/]+)/(resolve|confirm-rebind)", path)
             if artifact_match:
                 artifact_id = unquote(artifact_match.group(1))
@@ -476,6 +497,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, err("INVALID_ARGUMENT", str(exc), operation=action or "post", request_id=rid, started=started))
         except KeyError as exc:
             return self._send(404, err("NOT_FOUND", f"not found: {exc}", operation=action or "post", request_id=rid, started=started))
+        except ReviewDecisionConflict as exc:
+            return self._send(409, err(
+                "SNAPSHOT_CONFLICT", str(exc), operation="reviews.decision",
+                request_id=rid, started=started,
+            ))
         except RuntimeError as exc:
             return self._send(503, err("UNAVAILABLE", str(exc), retryable=True, operation=action or "post", request_id=rid, started=started))
         except Exception as exc:  # noqa: BLE001

@@ -124,9 +124,23 @@ def run_a0(graph: ThreadGraph) -> list[Assessment]:
     return assessments
 
 
-def run_a1(graph: ThreadGraph, *, threshold: float, verifier_version: str) -> list[Assessment]:
+def run_a1(
+    graph: ThreadGraph,
+    *,
+    threshold: float,
+    verifier_version: str,
+    target_edge_ids: Optional[set[str]] = None,
+) -> list[Assessment]:
+    """Assess semantic edges, optionally restricted to the current delta.
+
+    Passing ``None`` retains the public full-audit behavior.  The incremental
+    compiler passes the set of newly introduced edge ids so A1 cost is tied to
+    semantic change instead of total thread history.
+    """
     assessments: list[Assessment] = []
     for edge in graph.edges.values():
+        if target_edge_ids is not None and edge.id not in target_edge_ids:
+            continue
         if edge.rel not in {EdgeRel.SUPPORTS, EdgeRel.CONTRADICTS}:
             continue
         if edge.nli_score is None:
@@ -143,9 +157,18 @@ def run_a1(graph: ThreadGraph, *, threshold: float, verifier_version: str) -> li
     return assessments
 
 
-def run_a2(graph: ThreadGraph, llm: LLM, *, reviewer_version: str) -> list[Assessment]:
+def run_a2(
+    graph: ThreadGraph,
+    llm: LLM,
+    *,
+    reviewer_version: str,
+    target_ids: Optional[set[str]] = None,
+) -> list[Assessment]:
+    """Run adversarial review only for policy-selected semantic targets."""
     assessments: list[Assessment] = []
     for node in graph.nodes.values():
+        if target_ids is not None and node.id not in target_ids:
+            continue
         if node.type not in {NodeType.CLAIM, NodeType.FINDING, NodeType.ASSUMPTION}:
             continue
         path = graph.provenance_path(node.id)

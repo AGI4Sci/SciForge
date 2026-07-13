@@ -143,6 +143,7 @@ import {
   anchoredCommentStore,
   type AnchoredCommentsAddToConversationDetail
 } from './anchored-comments'
+import { scheduleMolecularMolstarPrewarm } from '../workspace-preview/molecular-prewarm'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -550,6 +551,9 @@ function base64ToFile(dataBase64: string, name: string, mimeType: string): File 
 
 export function Workbench(): ReactElement {
   const { t } = useTranslation('common')
+
+  useEffect(() => scheduleMolecularMolstarPrewarm(), [])
+
   const {
     threads,
     threadSearch,

@@ -132,12 +132,23 @@ type QueueFile = {
   recoveryWarning?: string
 }
 
+function projectCoordinationSessions(job: EvidenceQueueJob): string[] {
+  return job.projectContext?.updateReason === 'manual_immediate'
+    ? job.projectContext.includedSessions ?? [job.engineThreadId]
+    : [job.engineThreadId]
+}
+
 export type EvidenceDagQueueCoordinatorOptions = {
   storagePath: string
   env?: Record<string, string | undefined>
   fetchImpl?: typeof fetch
   ensureEvidenceDagReady?: () => Promise<void>
   ensureProjectDagReady?: () => Promise<void>
+  resolveProjectContext?: (input: {
+    runtimeId: string
+    threadId: string
+    engineThreadId: string
+  }) => Promise<EvidenceDagProjectContext | undefined>
   now?: () => Date
   retryBaseMs?: number
   retryMaxMs?: number
@@ -162,10 +173,36 @@ const SUCCEEDED_JOB_HISTORY_LIMIT = 50
 // Keep each extraction prompt small enough to produce a provisional graph
 // quickly. The HTTP service permits ~1 MiB, but approaching that ceiling makes
 // model latency and timeout risk much worse for historical backfills.
-const EVIDENCE_TRACE_BATCH_BYTES = 128 * 1024
+// One /updates call performs extraction plus per-edge verification before it
+// returns headers. Keep historical backfill batches comfortably below Node's
+// default ~300s response-header timeout so each batch can commit independently.
+const EVIDENCE_TRACE_BATCH_BYTES = 48 * 1024
 const EVIDENCE_TRACE_BATCH_ITEMS = 64
 const EVIDENCE_MESSAGE_CONTENT_LIMIT = 12_000
 const EVIDENCE_TOOL_CONTENT_LIMIT = 8_000
+
+class MissingEvidenceDagProjectContextError extends Error {
+  constructor() {
+    super('Evidence DAG update requires workspaceRoot and projectKey; retry after the thread is attached to a workspace.')
+    this.name = 'MissingEvidenceDagProjectContextError'
+  }
+}
+
+function completeProjectContext(
+  context: EvidenceDagProjectContext | undefined
+): EvidenceDagProjectContext | undefined {
+  if (!context) return undefined
+  const projectKey = context.projectKey?.trim()
+  const workspaceRoot = context.workspaceRoot?.trim()
+  if (!projectKey || !workspaceRoot) return undefined
+  return {
+    ...context,
+    projectKey,
+    workspaceRoot,
+    ...(context.projectRoot?.trim() ? { projectRoot: context.projectRoot.trim() } : {}),
+    ...(context.project?.trim() ? { project: context.project.trim() } : {})
+  }
+}
 
 type EvidenceTraceReference = {
   kind: 'url' | 'doi' | 'citation' | 'file'
@@ -259,6 +296,12 @@ export function evidenceTraceBatches(trace: readonly EngineTraceItem[]): EngineT
   }
   if (batch.length > 0) batches.push(batch)
   return batches
+}
+
+function evidenceBatchWatermark(targetWatermark: string, index: number, batchCount: number): string {
+  return index === batchCount - 1
+    ? targetWatermark
+    : `${targetWatermark}:batch:${index + 1}/${batchCount}`
 }
 
 function recordMeta(record: Record<string, unknown>): Record<string, unknown> {
@@ -568,7 +611,49 @@ export class EvidenceDagUpdateQueue {
     await this.exclusive(async () => {
       await this.loadUnlocked()
     })
+    await this.recoverMissingProjectContexts()
     this.schedule(0)
+  }
+
+  private async recoverMissingProjectContexts(): Promise<void> {
+    const legacyJobs = await this.exclusive(async () => this.jobs
+      .filter((job) => job.status !== 'succeeded' && !completeProjectContext(job.projectContext))
+      .map((job) => structuredClone(job)))
+    for (const legacyJob of legacyJobs) {
+      let resolved: EvidenceDagProjectContext | undefined
+      try {
+        resolved = completeProjectContext(await this.options.resolveProjectContext?.({
+          runtimeId: legacyJob.runtimeId,
+          threadId: legacyJob.threadId,
+          engineThreadId: legacyJob.engineThreadId
+        }))
+      } catch {
+        resolved = undefined
+      }
+      await this.exclusive(async () => {
+        const current = this.jobs.find((job) => job.id === legacyJob.id)
+        if (!current || current.status === 'succeeded' || completeProjectContext(current.projectContext)) return
+        if (resolved) {
+          current.projectContext = resolved
+          current.coordinateProject = true
+          if (current.status === 'queued') {
+            current.attempts = 0
+            current.nextAttemptAt = undefined
+            current.lastError = undefined
+          } else if (!current.nextAttemptAt) {
+            // Repair terminal legacy jobs without waking every historical
+            // backfill at startup. An explicit update is the recovery boundary.
+            current.lastError = 'Project context recovered; retry this Evidence DAG update manually.'
+          }
+        } else {
+          current.status = 'retrying'
+          current.nextAttemptAt = undefined
+          current.lastError = new MissingEvidenceDagProjectContextError().message
+        }
+        current.updatedAt = this.now().toISOString()
+        await this.persistUnlocked()
+      })
+    }
   }
 
   async enqueue(input: EnqueueEvidenceDagUpdateInput): Promise<EnqueueEvidenceDagUpdateResult> {
@@ -579,6 +664,8 @@ export class EvidenceDagUpdateQueue {
     const runtimeId = input.runtimeId.trim()
     const threadId = input.threadId.trim()
     if (!runtimeId || !threadId) throw new Error('Evidence DAG update requires runtimeId and threadId.')
+    const projectContext = completeProjectContext(input.projectContext)
+    if (!projectContext) throw new MissingEvidenceDagProjectContextError()
     const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
     const targetWatermark = input.targetWatermark?.trim() || trace[trace.length - 1]?.id
     if (!targetWatermark) throw new Error('Evidence DAG update requires a target watermark.')
@@ -602,19 +689,17 @@ export class EvidenceDagUpdateQueue {
         if (PRIORITY_WEIGHT[input.priority ?? 'normal'] > PRIORITY_WEIGHT[existing.priority]) {
           existing.priority = input.priority ?? 'normal'
         }
-        existing.projectContext = input.projectContext ?? existing.projectContext
+        const wasRetrying = existing.status === 'retrying'
+        existing.projectContext = projectContext
         existing.coordinateProject = existing.coordinateProject ||
-          (input.coordinateProject ?? Boolean(input.projectContext))
+          (input.coordinateProject ?? true)
         existing.rebuildRationale = input.rebuildRationale ?? existing.rebuildRationale
         existing.status = 'queued'
-        if (
-          existing.nextAttemptAt === undefined &&
-          existing.attempts >= Math.max(1, Math.floor(this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS)) &&
-          (input.reason === 'manual_immediate' || Boolean(input.rebuild))
-        ) {
+        if (wasRetrying && (input.reason === 'manual_immediate' || Boolean(input.rebuild))) {
           // An explicit user action is the recovery boundary for an open
-          // circuit. Without resetting the counter, the coalesced job gets one
-          // attempt beyond the cap and immediately opens the circuit again.
+          // circuit, including a retry whose backoff timer has not fired yet.
+          // Without resetting the counter, a coalesced job can immediately
+          // reopen the circuit after its repaired project context is submitted.
           existing.attempts = 0
         }
         existing.nextAttemptAt = undefined
@@ -634,8 +719,8 @@ export class EvidenceDagUpdateQueue {
         priority: input.priority ?? 'normal',
         rebuild: Boolean(input.rebuild),
         rebuildRationale: input.rebuildRationale,
-        projectContext: input.projectContext,
-        coordinateProject: input.coordinateProject ?? Boolean(input.projectContext),
+        projectContext,
+        coordinateProject: input.coordinateProject ?? true,
         phase: 'evidence',
         status: 'queued',
         attempts: 0,
@@ -754,8 +839,7 @@ export class EvidenceDagUpdateQueue {
       })
       if (!job) throw new Error(`Durable DAG job ${jobId} is no longer available.`)
       if (job.snapshot && (!requireProjectCommit || job.status === 'succeeded')) return job.snapshot
-      const maxAttempts = Math.max(1, Math.floor(this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
-      if (job.status === 'retrying' && !job.nextAttemptAt && job.attempts >= maxAttempts) {
+      if (job.status === 'retrying' && !job.nextAttemptAt) {
         throw new Error(job.lastError ?? 'Automatic Evidence DAG retry limit reached.')
       }
       if (Date.now() - startedAt >= timeoutMs) {
@@ -816,10 +900,11 @@ export class EvidenceDagUpdateQueue {
       const job = await this.takeNextJob()
       if (!job) return
       try {
-        if (job.phase === 'evidence') {
-          const snapshot = await this.submitEvidence(job)
+        const preparedJob = await this.withRequiredProjectContext(job)
+        if (preparedJob.phase === 'evidence') {
+          const snapshot = await this.submitEvidence(preparedJob)
           await this.exclusive(async () => {
-            const current = this.jobs.find((candidate) => candidate.id === job.id)
+            const current = this.jobs.find((candidate) => candidate.id === preparedJob.id)
             if (!current) return
             current.snapshot = snapshot
             current.phase = current.coordinateProject ? 'project' : 'evidence'
@@ -830,13 +915,33 @@ export class EvidenceDagUpdateQueue {
             await this.persistUnlocked()
           })
         } else {
-          await this.submitProjectSnapshot(job)
-          await this.markSucceeded(job.id)
+          await this.submitProjectSnapshot(preparedJob)
+          await this.markSucceeded(preparedJob.id)
         }
       } catch (error) {
         await this.markRetry(job.id, error)
       }
     }
+  }
+
+  private async withRequiredProjectContext(job: EvidenceQueueJob): Promise<EvidenceQueueJob> {
+    const existing = completeProjectContext(job.projectContext)
+    if (existing) return { ...job, projectContext: existing }
+    const resolved = completeProjectContext(await this.options.resolveProjectContext?.({
+      runtimeId: job.runtimeId,
+      threadId: job.threadId,
+      engineThreadId: job.engineThreadId
+    }))
+    if (!resolved) throw new MissingEvidenceDagProjectContextError()
+    return this.exclusive(async () => {
+      const current = this.jobs.find((candidate) => candidate.id === job.id)
+      if (!current) throw new Error(`Durable DAG job ${job.id} is no longer available.`)
+      current.projectContext = resolved
+      current.coordinateProject = true
+      current.updatedAt = this.now().toISOString()
+      await this.persistUnlocked()
+      return structuredClone(current)
+    })
   }
 
   private async takeNextJob(): Promise<EvidenceQueueJob | null> {
@@ -874,7 +979,7 @@ export class EvidenceDagUpdateQueue {
 
   private projectDependenciesReady(job: EvidenceQueueJob): boolean {
     if (job.phase !== 'project') return true
-    const included = new Set(job.projectContext?.includedSessions ?? [job.engineThreadId])
+    const included = new Set(projectCoordinationSessions(job))
     return !this.jobs.some((candidate) =>
       candidate.id !== job.id && candidate.phase === 'evidence' &&
       candidate.status !== 'succeeded' && included.has(candidate.engineThreadId)
@@ -897,8 +1002,34 @@ export class EvidenceDagUpdateQueue {
     if (!serviceUrl || !apiKey) throw new Error('Evidence DAG service is not configured.')
     const batches = evidenceTraceBatches(job.trace)
     let snapshot: EvidenceSnapshot | undefined
-    for (const [index, trace] of batches.entries()) {
-      const finalBatch = index === batches.length - 1
+    let startIndex = 0
+    if (job.reason === 'recovery') {
+      const status = objectRecord(await requestServiceData(
+        serviceUrl,
+        apiKey,
+        `/updates/status?threadId=${encodeURIComponent(job.engineThreadId)}`,
+        { method: 'GET', cache: 'no-store' },
+        this.fetchImpl(),
+        this.timeoutMs(env)
+      ).catch(() => undefined))
+      const committed = objectRecord(status?.snapshot)
+      if (committed) {
+        try {
+          const candidate = canonicalSnapshot(committed)
+          const committedBatchIndex = batches.findIndex((_, index) => (
+            candidate.inputWatermark === evidenceBatchWatermark(job.targetWatermark, index, batches.length)
+          ))
+          if (committedBatchIndex >= 0) {
+            snapshot = candidate
+            startIndex = committedBatchIndex + 1
+          }
+        } catch {
+          // A missing or older snapshot simply falls back to replaying from batch one.
+        }
+      }
+    }
+    for (let index = startIndex; index < batches.length; index += 1) {
+      const trace = batches[index]!
       const data = objectRecord(await requestServiceData(
         serviceUrl,
         apiKey,
@@ -907,9 +1038,7 @@ export class EvidenceDagUpdateQueue {
           method: 'POST',
           body: JSON.stringify({
           threadId: job.engineThreadId,
-          targetWatermark: finalBatch
-            ? job.targetWatermark
-            : `${job.targetWatermark}:batch:${index + 1}/${batches.length}`,
+          targetWatermark: evidenceBatchWatermark(job.targetWatermark, index, batches.length),
           reason: job.reason,
           priority: job.priority,
           trace,
@@ -947,7 +1076,7 @@ export class EvidenceDagUpdateQueue {
     const evidenceServiceUrl = evidenceDagServiceUrlFromEnv(env)
     const evidenceApiKey = evidenceDagApiKeyFromEnv(env)
     if (!evidenceServiceUrl || !evidenceApiKey) throw new Error('Evidence DAG service is not configured.')
-    const includedSessions = job.projectContext.includedSessions ?? [job.engineThreadId]
+    const includedSessions = projectCoordinationSessions(job)
     const evidenceSnapshots = await Promise.all(includedSessions.map(async (threadId) => {
       if (threadId === job.snapshot?.threadId) return job.snapshot
       const status = objectRecord(await requestServiceData(
@@ -1066,7 +1195,7 @@ export class EvidenceDagUpdateQueue {
       const delay = Math.min(cap, base * 2 ** Math.max(0, job.attempts - 1))
       job.status = 'retrying'
       job.lastError = errorMessage(error)
-      job.nextAttemptAt = job.attempts >= maxAttempts
+      job.nextAttemptAt = error instanceof MissingEvidenceDagProjectContextError || job.attempts >= maxAttempts
         ? undefined
         : new Date(this.now().getTime() + delay).toISOString()
       job.updatedAt = this.now().toISOString()
@@ -1247,7 +1376,10 @@ export async function enqueueProjectFresh(
     ...session,
     reason: 'manual_immediate',
     priority: 'immediate',
-    projectContext: input.projectContext,
+    projectContext: {
+      ...input.projectContext,
+      updateReason: input.projectContext.updateReason ?? 'manual_immediate'
+    },
     coordinateProject: index === 0
   })))
   return { jobs, coordinatorJobId: jobs[0]!.jobId }

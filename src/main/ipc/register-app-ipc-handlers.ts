@@ -610,6 +610,24 @@ async function evidenceDagThreadUpdateSource(
   return { detail, items }
 }
 
+async function evidenceDagThreadWorkspaceRoot(
+  input: { runtimeId: AgentRuntimeId; threadId: string },
+  detail: AgentRuntimeThreadDetail,
+  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
+): Promise<string | undefined> {
+  const detailWorkspace = detail.workspace?.trim()
+  if (detailWorkspace) return detailWorkspace
+  if (!agentRuntime) return undefined
+  const threads = await agentRuntime.listThreads({
+    limit: 1_000,
+    includeArchived: true,
+    includeSide: true
+  })
+  return threads.find((thread) =>
+    thread.runtimeId === input.runtimeId && thread.id === input.threadId
+  )?.workspace?.trim() || undefined
+}
+
 function projectDagWorkspaceScopeKey(value: string | undefined): string {
   const normalized = (value ?? '').trim().replace(/[\\/]+$/, '').replace(/\\/g, '/')
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized
@@ -967,6 +985,39 @@ function projectDagStatusQuery(input: {
   if (input.project) query.set('project', input.project)
   const serialized = query.toString()
   return serialized ? `?${serialized}` : ''
+}
+
+function projectDagUpdateIdentity(input: {
+  workspaceRoot?: string
+  projectRoot?: string
+  project?: string
+  sessions?: string[]
+  scope?: 'all' | string[]
+}): {
+  projectKey: string
+  workspaceRoot?: string
+  projectRoot?: string
+} {
+  const workspaceRoot = input.workspaceRoot?.trim() || input.projectRoot?.trim()
+  const projectRoot = input.projectRoot?.trim() || workspaceRoot
+  const projectKey = workspaceRoot || projectRoot || input.project?.trim()
+  const hasExplicitSessionScope = Boolean(
+    input.sessions?.some((session) => session.trim()) ||
+    (Array.isArray(input.scope) && input.scope.some((session) => session.trim()))
+  )
+  if (!projectKey) {
+    throw new Error('Project DAG update requires workspaceRoot, projectRoot, or project.')
+  }
+  if (!workspaceRoot && !hasExplicitSessionScope) {
+    throw new Error(
+      'Project DAG update requires workspaceRoot/projectRoot unless an explicit session scope is provided.'
+    )
+  }
+  return {
+    projectKey,
+    ...(workspaceRoot ? { workspaceRoot } : {}),
+    ...(projectRoot ? { projectRoot } : {})
+  }
 }
 
 function evidenceDagAuditRunForGate(audit: unknown): EvidenceDagAuditForGate {
@@ -3111,10 +3162,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('evidenceDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('evidenceDag:update', evidenceDagUpdatePayloadSchema, payload)
     const { detail, items } = await evidenceDagThreadUpdateSource(input, agentRuntime)
-    const workspaceRoot = detail.workspace?.trim()
-    const includedSessions = workspaceRoot
-      ? await projectDagSessionScopeForWorkspace({ workspaceRoot }, agentRuntime)
-      : undefined
+    const workspaceRoot = await evidenceDagThreadWorkspaceRoot(input, detail, agentRuntime)
+    const includedSessions = [evidenceDagThreadId(input.runtimeId, input.threadId)]
     const queued = await enqueueEvidenceDagUpdate({
       runtimeId: input.runtimeId,
       threadId: input.threadId,
@@ -3292,6 +3341,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('projectDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:update', projectDagUpdatePayloadSchema, payload)
+    const projectIdentity = projectDagUpdateIdentity(input)
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
@@ -3369,10 +3419,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }
     }))
     const staleEvidence = evidenceStates.filter((item) => !item.snapshot)
+    if (staleEvidence.length > 0 && !projectIdentity.workspaceRoot) {
+      throw new Error(
+        'Project DAG update requires workspaceRoot/projectRoot to refresh stale Evidence sessions.'
+      )
+    }
     const projectContext = {
-      projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project,
-      workspaceRoot: input.workspaceRoot,
-      projectRoot: input.projectRoot,
+      ...projectIdentity,
       project: input.project,
       includedSessions,
       excludedSessions,

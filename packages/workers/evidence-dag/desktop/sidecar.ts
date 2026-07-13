@@ -20,7 +20,10 @@ const MODEL_ROUTER_API_KEY_ENV = 'EDAG_MODEL_ROUTER_API_KEY'
 const MODEL_ROUTER_MODEL_ENV = 'EDAG_MODEL_ROUTER_MODEL'
 const MODEL_ROUTER_TIMEOUT_S_ENV = 'EDAG_MODEL_ROUTER_TIMEOUT_S'
 const MODEL_ROUTER_MAX_ATTEMPTS_ENV = 'EDAG_MODEL_ROUTER_MAX_ATTEMPTS'
-const DEFAULT_MODEL_ROUTER_TIMEOUT_S = '45'
+// Evidence extraction and verification can legitimately take longer than an
+// interactive chat response. Keep this aligned with ModelRouterLLM's default
+// and below the desktop queue's 10-minute request budget.
+const DEFAULT_MODEL_ROUTER_TIMEOUT_S = '180'
 const DEFAULT_MODEL_ROUTER_MAX_ATTEMPTS = '1'
 const DEFAULT_READY_TIMEOUT_MS = 45_000
 const EVIDENCE_DAG_RUNTIME_TOKEN_BYTES = 32

@@ -247,6 +247,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         ok: true as const,
         detail: {
           latestSeq: 4,
+          workspace: '/workspace/molclaw',
           latestTurnId: 'turn-2',
           threadStatus: 'completed',
           blocks: [
@@ -263,6 +264,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
     const detail = await adapter.readThread({ settings: {} as never }, { runtimeId: 'codex', threadId: 'thread-1' })
 
     expect(detail.latestTurnId).toBe('turn-2')
+    expect(detail.workspace).toBe('/workspace/molclaw')
     expect(detail.turns?.map((turn) => turn.id)).toEqual(['turn-1', 'turn-2'])
     expect(detail.turns?.find((turn) => turn.id === 'turn-1')?.items?.map((item) => item.text)).toEqual(['Q1', 'R1'])
     expect(detail.turns?.find((turn) => turn.id === 'turn-2')?.items?.map((item) => item.text)).toEqual(['Q2', 'R2'])

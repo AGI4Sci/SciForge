@@ -123,6 +123,280 @@ class AssessmentResult(str, Enum):
     OVERRIDDEN = "overridden"
 
 
+class HumanReviewLevel(str, Enum):
+    NONE = "none"
+    OPTIONAL = "optional"
+    RECOMMENDED = "recommended"
+    REQUIRED = "required"
+
+
+class HumanReviewStatus(str, Enum):
+    NOT_NEEDED = "not_needed"
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    DEFERRED = "deferred"
+    EXPIRED = "expired"
+
+
+class HumanReviewActorType(str, Enum):
+    RULE = "rule"
+    MODEL = "model"
+    HUMAN = "human"
+
+
+class HumanReviewAuthority(str, Enum):
+    ADVISORY = "advisory"
+    AUTOMATIC = "automatic"
+    BLOCKING = "blocking"
+    OVERRIDE = "override"
+
+
+def _field(value: dict[str, Any], camel: str, snake: str, default: Any = None) -> Any:
+    if camel in value:
+        return value[camel]
+    if snake in value:
+        return value[snake]
+    return default
+
+
+@dataclass(frozen=True)
+class HumanReviewChecker:
+    actor_type: HumanReviewActorType
+    actor: str
+    method: str
+    authority: HumanReviewAuthority
+
+    def __post_init__(self) -> None:
+        if not self.actor.strip() or not self.method.strip():
+            raise ValueError("human review checker actor and method are required")
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "actorType": self.actor_type.value,
+            "actor": self.actor,
+            "method": self.method,
+            "authority": self.authority.value,
+        }
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "HumanReviewChecker":
+        if not isinstance(value, dict):
+            raise ValueError("human review checker must be an object")
+        authority = str(value.get("authority", "advisory"))
+        # Early development builds emitted these names. Keep them readable,
+        # but only the canonical four values are written by current code.
+        authority = {
+            "recommendation_only": "advisory",
+            "policy_advisory": "advisory",
+            "policy_gate": "blocking",
+            "snapshot_gate": "blocking",
+            "human_override": "override",
+            "human_decision": "override",
+        }.get(authority, authority)
+        return cls(
+            actor_type=HumanReviewActorType(
+                _field(value, "actorType", "actor_type", "rule")
+            ),
+            actor=str(value.get("actor", "")).strip(),
+            method=str(value.get("method", "")).strip(),
+            authority=HumanReviewAuthority(authority),
+        )
+
+
+@dataclass(frozen=True)
+class HumanReviewReason:
+    code: str
+    message: str
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.code.strip() or not self.message.strip():
+            raise ValueError("human review reason code and message are required")
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"code": self.code, "message": self.message}
+        if self.source_type:
+            result["sourceType"] = self.source_type
+        if self.source_id:
+            result["sourceId"] = self.source_id
+        return result
+
+    @classmethod
+    def from_value(cls, value: Any) -> "HumanReviewReason":
+        if isinstance(value, str):
+            normalized = re.sub(r"[^a-z0-9]+", "_", value.strip().lower()).strip("_")
+            return cls(code=normalized or "legacy_reason", message=value.strip() or "Legacy review reason")
+        if not isinstance(value, dict):
+            raise ValueError("human review reason must be a string or object")
+        return cls(
+            code=str(value.get("code", "")).strip(),
+            message=str(value.get("message", "")).strip(),
+            source_type=_field(value, "sourceType", "source_type"),
+            source_id=_field(value, "sourceId", "source_id"),
+        )
+
+
+@dataclass(frozen=True)
+class HumanReview:
+    level: HumanReviewLevel
+    score: float
+    status: HumanReviewStatus
+    reasons: tuple[HumanReviewReason, ...]
+    blocking: bool
+    policy_version: str
+    computed_at: str
+    checker: HumanReviewChecker
+    review_packet_id: Optional[str] = None
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.score <= 1.0:
+            raise ValueError("human review score must be in [0,1]")
+        if not self.policy_version.strip() or not self.computed_at.strip():
+            raise ValueError("human review policyVersion and computedAt are required")
+        if self.level == HumanReviewLevel.NONE and self.status != HumanReviewStatus.NOT_NEEDED:
+            raise ValueError("human review level=none requires status=not_needed")
+        if self.blocking and self.level != HumanReviewLevel.REQUIRED:
+            raise ValueError("only required human review may be blocking")
+        if self.status in {
+            HumanReviewStatus.APPROVED, HumanReviewStatus.REJECTED, HumanReviewStatus.DEFERRED,
+        } and (not self.reviewed_by or not self.reviewed_at):
+            raise ValueError("completed human review requires reviewedBy and reviewedAt")
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "level": self.level.value,
+            "score": self.score,
+            "status": self.status.value,
+            "reasons": [reason.to_dict() for reason in self.reasons],
+            "blocking": self.blocking,
+            "policyVersion": self.policy_version,
+            "computedAt": self.computed_at,
+            "checker": self.checker.to_dict(),
+        }
+        if self.review_packet_id:
+            result["reviewPacketId"] = self.review_packet_id
+        if self.reviewed_by:
+            result["reviewedBy"] = self.reviewed_by
+        if self.reviewed_at:
+            result["reviewedAt"] = self.reviewed_at
+        return result
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "HumanReview":
+        if not isinstance(value, dict):
+            raise ValueError("humanReview must be an object")
+        reasons = value.get("reasons") or []
+        if not isinstance(reasons, list):
+            raise ValueError("humanReview.reasons must be an array")
+        return cls(
+            level=HumanReviewLevel(value.get("level", "none")),
+            score=float(value.get("score", 0.0)),
+            status=HumanReviewStatus(value.get("status", "not_needed")),
+            reasons=tuple(HumanReviewReason.from_value(reason) for reason in reasons),
+            blocking=bool(value.get("blocking", False)),
+            review_packet_id=_field(value, "reviewPacketId", "review_packet_id"),
+            policy_version=str(_field(value, "policyVersion", "policy_version", "human-review.v1")),
+            computed_at=str(_field(value, "computedAt", "computed_at", "unknown")),
+            reviewed_by=_field(value, "reviewedBy", "reviewed_by"),
+            reviewed_at=_field(value, "reviewedAt", "reviewed_at"),
+            checker=HumanReviewChecker.from_dict(value.get("checker") or {
+                "actorType": "rule", "actor": "legacy-human-review-checker",
+                "method": "legacy-import", "authority": "advisory",
+            }),
+        )
+
+
+@dataclass(frozen=True)
+class ReviewPacket:
+    review_packet_id: str
+    level: HumanReviewLevel
+    score: float
+    status: HumanReviewStatus
+    reasons: tuple[HumanReviewReason, ...]
+    blocking: bool
+    policy_version: str
+    computed_at: str
+    target_ids: tuple[str, ...]
+    assessment_ids: tuple[str, ...]
+    checker: HumanReviewChecker
+    question: Optional[str] = None
+    machine_checks: tuple[dict[str, Any], ...] = ()
+    delta: Optional[dict[str, Any]] = None
+    blast_radius: Optional[dict[str, Any]] = None
+    recommended_action: Optional[str] = None
+    options: tuple[dict[str, Any], ...] = ()
+    reviewed_by: Optional[str] = None
+    reviewed_at: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        if not self.review_packet_id.strip() or not 0.0 <= self.score <= 1.0:
+            raise ValueError("review packet id and score are invalid")
+        if self.blocking and self.level != HumanReviewLevel.REQUIRED:
+            raise ValueError("only required review packets may be blocking")
+
+    def to_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {
+            "reviewPacketId": self.review_packet_id,
+            "level": self.level.value,
+            "score": self.score,
+            "status": self.status.value,
+            "reasons": [reason.to_dict() for reason in self.reasons],
+            "blocking": self.blocking,
+            "policyVersion": self.policy_version,
+            "computedAt": self.computed_at,
+            "targetIds": list(self.target_ids),
+            "assessmentIds": list(self.assessment_ids),
+            "checker": self.checker.to_dict(),
+        }
+        for key, value in (
+            ("question", self.question),
+            ("machineChecks", list(self.machine_checks) if self.machine_checks else None),
+            ("delta", self.delta),
+            ("blastRadius", self.blast_radius),
+            ("recommendedAction", self.recommended_action),
+            ("options", list(self.options) if self.options else None),
+            ("reviewedBy", self.reviewed_by),
+            ("reviewedAt", self.reviewed_at),
+        ):
+            if value is not None:
+                result[key] = value
+        return result
+
+    @classmethod
+    def from_dict(cls, value: dict[str, Any]) -> "ReviewPacket":
+        reasons = value.get("reasons") or []
+        if not isinstance(reasons, list):
+            raise ValueError("review packet reasons must be an array")
+        return cls(
+            review_packet_id=str(_field(value, "reviewPacketId", "review_packet_id", "")),
+            level=HumanReviewLevel(value.get("level", "optional")),
+            score=float(value.get("score", 0.0)),
+            status=HumanReviewStatus(value.get("status", "pending")),
+            reasons=tuple(HumanReviewReason.from_value(reason) for reason in reasons),
+            blocking=bool(value.get("blocking", False)),
+            policy_version=str(_field(value, "policyVersion", "policy_version", "human-review.v1")),
+            computed_at=str(_field(value, "computedAt", "computed_at", "unknown")),
+            target_ids=tuple(_field(value, "targetIds", "target_ids", ()) or ()),
+            assessment_ids=tuple(_field(value, "assessmentIds", "assessment_ids", ()) or ()),
+            checker=HumanReviewChecker.from_dict(value.get("checker") or {
+                "actorType": "rule", "actor": "legacy-human-review-checker",
+                "method": "legacy-import", "authority": "advisory",
+            }),
+            question=value.get("question"),
+            machine_checks=tuple(_field(value, "machineChecks", "machine_checks", ()) or ()),
+            delta=value.get("delta"),
+            blast_radius=_field(value, "blastRadius", "blast_radius"),
+            recommended_action=_field(value, "recommendedAction", "recommended_action"),
+            options=tuple(value.get("options") or ()),
+            reviewed_by=_field(value, "reviewedBy", "reviewed_by"),
+            reviewed_at=_field(value, "reviewedAt", "reviewed_at"),
+        )
+
+
 def normalize(text: str) -> str:
     """Whitespace/case-normalized text used only for semantic identity."""
     return re.sub(r"\s+", " ", (text or "").strip().lower())
@@ -347,6 +621,7 @@ class Assessment:
     target_digest: str
     created_at: str
     rationale: Optional[str] = None
+    human_review: Optional[HumanReview] = None
 
     def __post_init__(self) -> None:
         if not 0.0 <= self.confidence <= 1.0:
@@ -369,6 +644,8 @@ class Assessment:
         }
         if self.rationale:
             result["rationale"] = self.rationale
+        if self.human_review is not None:
+            result["humanReview"] = self.human_review.to_dict()
         return result
 
     @classmethod
@@ -379,6 +656,9 @@ class Assessment:
             result=AssessmentResult(d["result"]), actor=d["actor"], method=d["method"],
             confidence=float(d["confidence"]), target_digest=d["targetDigest"],
             created_at=d["createdAt"], rationale=d.get("rationale"),
+            human_review=HumanReview.from_dict(
+                _field(d, "humanReview", "human_review")
+            ) if _field(d, "humanReview", "human_review") is not None else None,
         )
 
 

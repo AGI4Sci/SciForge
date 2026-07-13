@@ -245,13 +245,46 @@ class Engine:
     def graph(self, project_key: str) -> dict:
         latest = self.workflow.latest_snapshot(project_key)
         if latest:
-            return {**latest["graph"], "snapshot": {
+            graph = json.loads(json.dumps(latest["graph"]))
+            packets = self.workflow.review_packets(project_key, latest["digest"])
+            packet_by_id = {packet["id"]: packet for packet in packets}
+
+            def overlay(review: Any) -> None:
+                if not isinstance(review, dict):
+                    return
+                packet = packet_by_id.get(review.get("reviewPacketId"))
+                if not packet:
+                    return
+                review["status"] = packet["status"]
+                review["blocking"] = bool(
+                    packet.get("blocking") and packet["status"] in {
+                        "pending", "rejected", "deferred",
+                    })
+                review["updatedAt"] = packet.get("updatedAt", review.get("updatedAt"))
+                if packet.get("completedAt"):
+                    review["completedAt"] = packet["completedAt"]
+
+            for collection in ("goals", "claims", "decisions"):
+                for node in graph.get(collection) or []:
+                    overlay(node.get("humanReview"))
+            for review in graph.get("humanReviews") or []:
+                overlay(review)
+            assessments = json.loads(json.dumps(latest.get("assessments") or []))
+            for assessment in assessments:
+                overlay(assessment.get("humanReview"))
+            graph["assessments"] = assessments
+            graph["reviewPackets"] = packets
+            graph["humanReview"] = self.workflow.human_review_summary(
+                project_key, latest["digest"])
+            return {**graph, "snapshot": {
                 key: latest[key] for key in (
                     "projectKey", "version", "digest", "goalVersion", "evidenceVector",
                     "excludedSessions", "isolatedSessions", "createdAt", "status")
             }}
         return {"goals": self.goal_tree(project_key), "claims": [], "evidence": [],
                 "entities": [], "edges": [], "origins": [], "decisions": [],
+                "assessments": [], "humanReviews": [], "reviewPackets": [],
+                "humanReview": self.workflow.human_review_summary(project_key),
                 "snapshot": None}
 
     def analysis(self, project_key: str, goal_id: Optional[str] = None,
@@ -301,6 +334,16 @@ class Engine:
             checkpoints=payload.get("checkpoints"),
             allow_agent_critical_override=payload.get("allowAgentCriticalOverride"),
             actor=payload.get("actorId", "human"),
+        )
+
+    def record_review_result(self, project_key: str, packet_id: str,
+                             payload: dict) -> dict:
+        return self.workflow.record_review_result(
+            project_key=project_key, packet_id=packet_id,
+            action=payload["action"], actor_id=payload.get("actorId", "human"),
+            rationale=payload.get("rationale", "Human review disposition"),
+            confidence=float(payload.get("confidence", 1.0)),
+            expected_snapshot_digest=payload.get("expectedSnapshotDigest"),
         )
 
     # --------------------------------------------------------------- helpers

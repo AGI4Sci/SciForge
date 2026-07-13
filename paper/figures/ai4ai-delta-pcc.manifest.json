@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "renderer": "sciforge-scientific-plotting-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "scientific_plotting_render",
+  "template": "line",
+  "referenceProfile": {
+    "kind": "unknown",
+    "recommendedTemplate": "bar",
+    "confidence": 0.24,
+    "detectedTraits": {
+      "aspect": "wide",
+      "background": "light",
+      "axes": "measured",
+      "grid": "none",
+      "markDensity": "balanced",
+      "colorMode": "limited",
+      "panelGrid": "1x1",
+      "textSignals": []
+    },
+    "reasons": [
+      "Visible measured axes indicate a chart even when light grid lines are not detected."
+    ],
+    "risks": [
+      "No external reference image or StyleSpec was provided; profile is based on the default SciForge style."
+    ]
+  },
+  "templateAdvice": {
+    "selectedTemplate": "line",
+    "referenceRecommendedTemplate": "bar",
+    "compatible": true,
+    "severity": "info",
+    "messages": [],
+    "nextActions": [
+      "Proceed with controlled rendering and visual review."
+    ]
+  },
+  "createdAt": "2026-07-12T14:19:54.362Z",
+  "requestHash": "dede9ba99b832c7bad54c3738e5180d6d4534b5a1de86b4c5179b8bcf2d1b0df",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/ai4ai-delta-pcc.png",
+  "attempts": [
+    {
+      "attempt": 1,
+      "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/ai4ai-delta-pcc.png",
+      "repaired": false,
+      "rendererDiagnostics": {
+        "fontFallback": {
+          "cjk": null
+        },
+        "legendPlacement": "inside",
+        "savefigPadInches": 0.035,
+        "typography": {
+          "titleSize": 6.9,
+          "labelSize": 7.2,
+          "tickSize": 6.2,
+          "legendSize": 6.2,
+          "panelSize": 7.8,
+          "publicationClampApplied": true
+        },
+        "layoutQuality": {
+          "legendItemCount": 1,
+          "legendColumnCount": 1,
+          "legendOutsidePlot": false,
+          "legendOverlapRisk": "none",
+          "textOverflowRisk": "none",
+          "panelLabelAdjusted": false,
+          "warnings": []
+        },
+        "layoutNotes": [
+          "Clamped typography to conservative publication-size ranges."
+        ]
+      },
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

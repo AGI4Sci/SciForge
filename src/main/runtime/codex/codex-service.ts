@@ -3025,9 +3025,11 @@ function threadDetail(thread: Record<string, unknown>): CodexThreadDetail {
   const blocks = dedupeThreadBlocks(turns.flatMap((turn) => turnBlocks(turn)))
   const latestTurn = latestTurnRecord(thread, turns)
   const latestUserMessageId = [...blocks].reverse().find((block) => block.kind === 'user')?.id
+  const workspace = stringValue(thread.cwd)
   return {
     blocks,
     latestSeq: blocks.length,
+    ...(workspace ? { workspace } : {}),
     threadStatus: stringValue(thread.status) || stringValue(latestTurn?.status),
     latestTurnId: stringValue(latestTurn?.id),
     latestUserMessageId

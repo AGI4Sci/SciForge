@@ -182,6 +182,11 @@ class Handler(BaseHTTPRequestHandler):
             return engine.workflow.findings(self._project_key(query), query.get("status"))
         if method == "GET" and parts == ["reviews"]:
             return engine.workflow.reviews(self._project_key(query), query.get("status", "open"))
+        if method == "POST" and len(parts) == 3 and parts[0] == "reviews" \
+                and parts[2] == "decision":
+            body = self._body()
+            return engine.record_review_result(
+                self._project_key(query, body), parts[1], body)
         if method == "GET" and parts == ["attention"]:
             return engine.workflow.attention(self._project_key(query), query.get("snapshotDigest"))
         if method == "GET" and parts == ["assessments"]:

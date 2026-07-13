@@ -437,7 +437,7 @@
   "composerSteerPlaceholder": "继续输入，发送后会注入到当前运行…",
   "composerQueuePlaceholder": "继续输入，发送后会在当前回复结束后依次发送…",
   "composerPlanPlaceholder": "先拆解目标、列步骤、评估改动，再进入执行…",
-  "composerSlashHint": "输入 / 打开命令",
+  "composerSlashHint": "↑/↓ 历史输入 · 输入 / 打开命令",
   "workingDirectory": "工作目录",
   "emptyHeroTitle": "开始一个新对话",
   "emptyHeroSub": "选择一个任务，或直接输入你的问题",

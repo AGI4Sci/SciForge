@@ -89,6 +89,7 @@ const themeSchema = z.enum(['system', 'light', 'dark'])
 const uiFontScaleSchema = z.enum(['small', 'medium', 'large'])
 const agentRuntimeIdSchema = z.enum(['sciforge', 'codex', 'claude'])
 const agentRuntimeThreadRelationSchema = z.string().trim().pipe(z.enum(['primary', 'fork', 'side']))
+const agentRuntimeThreadSidebarVisibilitySchema = z.string().trim().pipe(z.enum(['main', 'side', 'hidden']))
 const agentRuntimeUsageGroupBySchema = z.string().trim().pipe(z.enum(['day', 'model', 'thread']))
 const agentRuntimeAuxiliaryOperationSchema = z.enum(AGENT_RUNTIME_AUXILIARY_OPERATIONS)
 const agentRuntimeAuxiliaryRuntimeIdRequiredOperations = new Set<AgentRuntimeAuxiliaryOperation>(
@@ -159,7 +160,12 @@ export const agentRuntimeStartThreadPayloadSchema = z.object({
   workspace: defaultPathSchema,
   title: z.string().trim().max(200).optional(),
   mode: z.string().trim().max(64).optional(),
-  model: z.string().trim().max(128).optional()
+  model: z.string().trim().max(128).optional(),
+  relation: agentRuntimeThreadRelationSchema.optional(),
+  parentThreadId: optionalTrimmedString(MAX_ID_LENGTH),
+  parentTurnId: optionalTrimmedString(MAX_ID_LENGTH),
+  threadSource: optionalTrimmedString(MAX_ID_LENGTH),
+  sidebarVisibility: agentRuntimeThreadSidebarVisibilitySchema.optional()
 }).strict()
 
 export const agentRuntimeReadThreadPayloadSchema = z.object({

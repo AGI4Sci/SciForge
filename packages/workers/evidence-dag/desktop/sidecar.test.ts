@@ -32,7 +32,7 @@ describe('Evidence DAG sidecar launch', () => {
     expect(result.launch.env.EDAG_MODEL_ROUTER_BASE_URL).toBe('http://127.0.0.1:3892/v1')
     expect(result.launch.env.EDAG_MODEL_ROUTER_API_KEY).toBe('router-runtime-key')
     expect(result.launch.env.EDAG_MODEL_ROUTER_MODEL).toBe('sciforge-router')
-    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('45')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('180')
     expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('1')
     expect(result.launch.env.SCIFORGE_EVIDENCE_DAG_API_KEY).toMatch(/^edag-/)
     expect(result.launch.env.EDAG_LLM_BASE_URL).toBeUndefined()

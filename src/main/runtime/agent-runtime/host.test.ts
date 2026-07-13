@@ -3127,7 +3127,10 @@ describe('AgentRuntimeHost', () => {
         trace: [
           { id: 'u1', type: 'message', role: 'user', content: 'question' },
           { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-        ]
+        ],
+        projectKey: '/tmp/workspace',
+        workspaceRoot: '/tmp/workspace',
+        projectRoot: '/tmp/workspace'
       })
     }))
     expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')

@@ -1012,6 +1012,111 @@ class WorkflowTests(unittest.TestCase):
         self.assertTrue(any(f["finding_type"].startswith("adversarial_")
                             for f in self.engine.workflow.findings(self.project)))
 
+    def test_default_checkpointed_policy_queues_and_records_human_review_packet(self):
+        self.assertEqual(self.engine.workflow.policy(self.project)["autonomy_mode"],
+                         "checkpointed")
+        self.engine.configure_policy(self.project, {
+            "autonomyMode": "checkpointed", "checkpoints": ["claim_fragile"],
+            "actorId": "research-lead",
+        })
+        snapshot = write_snapshot(
+            self.sessions, "review-session", [("fragile conclusion", "single source")],
+            node_status=NodeStatus.FRAGILE,
+        )
+        vector = [{"threadId": snapshot["threadId"], "digest": snapshot["digest"]}]
+        self.engine.enqueue_update({
+            "projectKey": self.project, "evidenceVector": vector,
+            "evidenceSnapshots": [snapshot],
+            "capturedScope": {"includedSessions": [snapshot["threadId"]],
+                              "excludedSessions": [], "isolatedSessions": []},
+            "reason": "manual_immediate", "priority": 5,
+        })
+        self.engine.process_updates(self.project)
+
+        graph_view = self.engine.graph(self.project)
+        packet = graph_view["reviewPackets"][0]
+        claim = graph_view["claims"][0]
+        self.assertEqual(packet["status"], "pending")
+        self.assertEqual(packet["recommendedAction"], "request_evidence")
+        self.assertEqual(claim["humanReview"]["reviewPacketId"], packet["id"])
+        self.assertEqual(graph_view["humanReview"]["pendingCount"], 1)
+        self.assertIn(packet["id"], {
+            review["id"] for review in self.engine.workflow.reviews(self.project)
+        })
+        with self.assertRaisesRegex(ValueError, "snapshot changed"):
+            self.engine.record_review_result(self.project, packet["id"], {
+                "action": "approve", "actorId": "research-lead",
+                "rationale": "This UI is displaying an obsolete snapshot.",
+                "expectedSnapshotDigest": "project:stale",
+            })
+
+        audit_job = self.engine.enqueue_audit({
+            "projectKey": self.project, "targetDigest": graph_view["snapshot"]["digest"],
+            "level": "L2", "reason": "review_gate_test", "priority": 20,
+        })
+        audit = self.engine.process_audits(self.project)["audit"]
+        self.assertEqual(audit["id"], audit_job["id"])
+        blocked_release = self.engine.workflow.create_release(
+            project_key=self.project,
+            project_snapshot_digest=graph_view["snapshot"]["digest"],
+            audit_digest=audit["digest"], created_by="research-lead",
+            output_artifacts=[], requested_status="certified",
+        )
+        self.assertEqual(blocked_release["certification_status"], "blocked")
+
+        requested = self.engine.record_review_result(self.project, packet["id"], {
+            "action": "request_evidence", "actorId": "research-lead",
+            "rationale": "Collect an independent source before final approval.",
+        })
+        self.assertEqual(requested["status"], "pending")
+        self.assertEqual(self.engine.graph(self.project)["humanReview"]["gateStatus"], "pending")
+
+        approved = self.engine.record_review_result(self.project, packet["id"], {
+            "action": "approve", "actorId": "research-lead",
+            "rationale": "The limitation is understood and accepted.",
+        })
+        self.assertEqual(approved["status"], "approved")
+        updated = self.engine.graph(self.project)
+        self.assertEqual(updated["reviewPackets"][0]["status"], "approved")
+        self.assertEqual(updated["claims"][0]["humanReview"]["status"], "approved")
+        self.assertEqual(updated["humanReview"]["gateStatus"], "approved")
+        decisions = self.engine.store.q(
+            "SELECT * FROM decision_event WHERE review_id=? ORDER BY created_at,id",
+            (packet["id"],))
+        self.assertEqual({decision["action"] for decision in decisions},
+                         {"request_evidence", "endorse"})
+        self.assertTrue(all(decision["decided_by"] == "human" for decision in decisions))
+        event = self.engine.store.q1(
+            "SELECT * FROM domain_event WHERE project_key=?"
+            " AND event_type='HumanReviewResultRecorded'", (self.project,))
+        self.assertIsNotNone(event)
+        certified_release = self.engine.workflow.create_release(
+            project_key=self.project,
+            project_snapshot_digest=graph_view["snapshot"]["digest"],
+            audit_digest=audit["digest"], created_by="research-lead",
+            output_artifacts=[], requested_status="certified",
+        )
+        self.assertEqual(certified_release["certification_status"], "certified")
+
+        for action, expected in (("reject", "rejected"), ("defer", "deferred")):
+            review_id = f"review_packet_test_{action}"
+            review_payload = {
+                **packet, "id": review_id, "status": "pending",
+                "snapshotDigest": graph_view["snapshot"]["digest"],
+            }
+            self.engine.store.x(
+                "INSERT INTO review (id,project_key,subject_id,review_type,checkpoint,status,"
+                "payload,created_at) VALUES (?,?,?,'human_review_packet','human','open',?,?)",
+                (review_id, self.project, review_id, json.dumps(review_payload),
+                 "2026-07-13T00:00:00Z"),
+            )
+            self.engine.store.conn.commit()
+            result = self.engine.record_review_result(self.project, review_id, {
+                "action": action, "actorId": "research-lead",
+                "rationale": f"Human chose to {action} this packet.",
+            })
+            self.assertEqual(result["status"], expected)
+
     @staticmethod
     def _capture_error(errors, fn, *args):
         try:

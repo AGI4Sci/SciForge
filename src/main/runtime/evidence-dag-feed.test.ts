@@ -45,6 +45,14 @@ function ok(data: unknown): Response {
   return new Response(JSON.stringify({ ok: true, data }), { status: 200 })
 }
 
+function projectContext() {
+  return {
+    projectKey: '/workspace/molclaw',
+    workspaceRoot: '/workspace/molclaw',
+    projectRoot: '/workspace/molclaw'
+  }
+}
+
 describe('Evidence DAG runtime feed', () => {
   it('bounds oversized trace content and splits historical backfills below the service body cap', () => {
     const batches = evidenceTraceBatches(Array.from({ length: 80 }, (_, index) => ({
@@ -56,7 +64,7 @@ describe('Evidence DAG runtime feed', () => {
     expect(batches.flat()).toHaveLength(80)
     expect(Math.max(...batches.map((batch) => batch.length))).toBeLessThanOrEqual(64)
     expect(Math.max(...batches.map((batch) => Buffer.byteLength(JSON.stringify(batch), 'utf8'))))
-      .toBeLessThan(160 * 1024)
+      .toBeLessThan(64 * 1024)
     expect(Math.max(...batches.flat().map((item) => String(item.content).length)))
       .toBeLessThan(13_000)
   })
@@ -78,13 +86,13 @@ describe('Evidence DAG runtime feed', () => {
 
     const queued = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', items: [], targetWatermark: '41',
-      reason: 'artifact_changed', priority: 'background'
+      reason: 'artifact_changed', priority: 'background', projectContext: projectContext()
     })
-    await expect(queue.waitForJob(queued.jobId, 2_000)).resolves.toMatchObject({ version: 2 })
+    await expect(queue.waitForSnapshot(queued.jobId, 2_000)).resolves.toMatchObject({ version: 2 })
     expect(fetchImpl).toHaveBeenCalledTimes(1)
     await expect(queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', items: [], targetWatermark: '41',
-      reason: 'manual_immediate', priority: 'immediate'
+      reason: 'manual_immediate', priority: 'immediate', projectContext: projectContext()
     })).rejects.toThrow('no visible trace items')
   })
 
@@ -207,6 +215,14 @@ describe('Evidence DAG runtime feed', () => {
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1))
   })
 
+  it('rejects new durable work without the project scope required by the compiler', async () => {
+    const queue = new EvidenceDagUpdateQueue({ storagePath: await queuePath() })
+    await expect(queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+    })).rejects.toThrow('requires workspaceRoot and projectKey')
+  })
+
   it('coalesces a thread and never lowers a numeric desired watermark', async () => {
     vi.useFakeTimers()
     const queue = new EvidenceDagUpdateQueue({
@@ -214,14 +230,14 @@ describe('Evidence DAG runtime feed', () => {
       env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
       fetchImpl: vi.fn(async () => ok({ snapshot: committedSnapshot() }))
     })
-    const newer = await queue.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '694', reason: 'turn_committed', items: [{ id: 'new', kind: 'assistant_message', text: 'new' }] })
-    const older = await queue.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '690', reason: 'turn_committed', items: [{ id: 'old', kind: 'assistant_message', text: 'old' }] })
+    const newer = await queue.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '694', reason: 'turn_committed', items: [{ id: 'new', kind: 'assistant_message', text: 'new' }], projectContext: projectContext() })
+    const older = await queue.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '690', reason: 'turn_committed', items: [{ id: 'old', kind: 'assistant_message', text: 'old' }], projectContext: projectContext() })
     expect(older.coalesced).toBe(true)
     expect(older.jobId).toBe(newer.jobId)
     expect(older.desiredWatermark).toBe('694')
   })
 
-  it('uses the same Project /updates queue after an Evidence snapshot commit', async () => {
+  it('notifies the Project queue with only the changed Evidence snapshot', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = []
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -268,10 +284,9 @@ describe('Evidence DAG runtime feed', () => {
       body: {
         reason: 'evidence_snapshot_committed',
         priority: 1,
-        capturedScope: { includedSessions: ['sciforge:thread-1', 'sciforge:thread-2'] },
+        capturedScope: { includedSessions: ['sciforge:thread-1'] },
         evidenceVector: [
-          { threadId: 'sciforge:thread-1', digest: 'sha256:10' },
-          { threadId: 'sciforge:thread-2', digest: 'sha256:8' }
+          { threadId: 'sciforge:thread-1', digest: 'sha256:10' }
         ]
       }
     })
@@ -320,7 +335,7 @@ describe('Evidence DAG runtime feed', () => {
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate', priority: 'immediate',
       items: [{ id: 'a1', kind: 'assistant_message', text: 'answer one' }],
       projectContext: {
-        projectKey: 'project-1', includedSessions: ['sciforge:thread-1', 'sciforge:thread-2'],
+        projectKey: 'project-1', workspaceRoot: '/workspace/molclaw', includedSessions: ['sciforge:thread-1', 'sciforge:thread-2'],
         updateReason: 'manual_immediate'
       }
     })
@@ -366,7 +381,7 @@ describe('Evidence DAG runtime feed', () => {
     const job = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate',
       items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }],
-      projectContext: { projectKey: 'project-1', includedSessions: ['sciforge:thread-1'] }
+      projectContext: { projectKey: 'project-1', workspaceRoot: '/workspace/molclaw', includedSessions: ['sciforge:thread-1'] }
     })
     await expect(queue.waitForJob(job.jobId, 5_000)).resolves.toMatchObject({ digest: 'sha256:10' })
     expect(statusReads).toBe(3)
@@ -380,7 +395,7 @@ describe('Evidence DAG runtime feed', () => {
       fetchImpl: vi.fn(async () => { throw new Error('router unavailable') }),
       retryBaseMs: 60_000
     })
-    await failing.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed', items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }] })
+    await failing.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed', items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }], projectContext: projectContext(), coordinateProject: false })
     await vi.waitFor(async () => expect((await failing.status('sciforge', 'thread-1')).state).toBe('failed'))
     const persisted = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: Array<Record<string, unknown>> }
     persisted.jobs[0] = { ...persisted.jobs[0], status: 'running', nextAttemptAt: undefined }
@@ -395,6 +410,126 @@ describe('Evidence DAG runtime feed', () => {
     await recovered.start()
     await vi.waitFor(() => expect(recoveredFetch).toHaveBeenCalledTimes(1))
     await vi.waitFor(async () => expect((await recovered.status('sciforge', 'thread-1')).state).toBe('fresh'))
+  })
+
+  it('repairs a legacy open-circuit job without creating a startup retry storm', async () => {
+    const storagePath = await queuePath()
+    await writeFile(storagePath, JSON.stringify({
+      version: 1,
+      jobs: [{
+        id: 'legacy-job', runtimeId: 'sciforge', threadId: 'thread-1', engineThreadId: 'sciforge:thread-1',
+        trace: [{ id: 'a1', type: 'message', role: 'assistant', content: 'answer' }],
+        targetWatermark: '10', reason: 'turn_committed', priority: 'background', rebuild: false,
+        coordinateProject: false, phase: 'evidence', status: 'retrying', attempts: 5,
+        createdAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z',
+        lastError: 'workspaceRoot and projectKey are required'
+      }]
+    }), 'utf8')
+    const calls: string[] = []
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath,
+      env: {
+        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://evidence.test', SCIFORGE_EVIDENCE_DAG_API_KEY: 'evidence-key',
+        SCIFORGE_PROJECT_DAG_SERVICE_URL: 'http://project.test', SCIFORGE_PROJECT_DAG_API_KEY: 'project-key'
+      },
+      resolveProjectContext: async () => ({ ...projectContext(), includedSessions: ['sciforge:thread-1'] }),
+      fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input)
+        calls.push(url)
+        if (url === 'http://evidence.test/updates') return ok({ snapshot: committedSnapshot() })
+        if (url === 'http://project.test/updates') return ok({ id: 'project-job' })
+        if (url.startsWith('http://project.test/updates/status')) {
+          return ok({ state: 'fresh', pending: 0, committedSnapshot: {
+            evidenceVector: [{ threadId: 'sciforge:thread-1', digest: 'sha256:10' }]
+          } })
+        }
+        throw new Error(`Unexpected request: ${url}`)
+      })
+    })
+    await queue.start()
+    await expect(queue.status('sciforge', 'thread-1')).resolves.toMatchObject({
+      state: 'failed',
+      attempts: 5,
+      lastError: 'Project context recovered; retry this Evidence DAG update manually.'
+    })
+    expect(calls).toEqual([])
+
+    const repaired = await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate',
+      priority: 'immediate', items: [{ id: 'a2', kind: 'assistant_message', text: 'retry' }],
+      projectContext: projectContext()
+    })
+    await expect(queue.waitForJob(repaired.jobId, 2_000)).resolves.toMatchObject({ digest: 'sha256:10' })
+    expect(calls).toContain('http://evidence.test/updates')
+    expect(calls).toContain('http://project.test/updates')
+  })
+
+  it('resumes an interrupted historical backfill after its committed batch watermark', async () => {
+    const storagePath = await queuePath()
+    const trace = Array.from({ length: 8 }, (_, index) => ({
+      id: `item-${index}`,
+      type: 'message',
+      role: 'assistant',
+      content: 'x'.repeat(10_000)
+    }))
+    expect(evidenceTraceBatches(trace)).toHaveLength(2)
+    await writeFile(storagePath, JSON.stringify({
+      version: 1,
+      jobs: [{
+        id: 'recovery-job', runtimeId: 'sciforge', threadId: 'thread-1', engineThreadId: 'sciforge:thread-1',
+        trace, targetWatermark: '10', reason: 'manual_immediate', priority: 'immediate', rebuild: false,
+        projectContext: projectContext(), coordinateProject: false, phase: 'evidence', status: 'running', attempts: 1,
+        createdAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z'
+      }]
+    }), 'utf8')
+    const postedWatermarks: string[] = []
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath,
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://evidence.test', SCIFORGE_EVIDENCE_DAG_API_KEY: 'key' },
+      fetchImpl: vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes('/updates/status')) {
+          return ok({ snapshot: committedSnapshot('sciforge:thread-1', '10:batch:1/2') })
+        }
+        const body = JSON.parse(String(init?.body)) as { targetWatermark: string }
+        postedWatermarks.push(body.targetWatermark)
+        return ok({ snapshot: committedSnapshot('sciforge:thread-1', body.targetWatermark) })
+      })
+    })
+
+    await queue.start()
+    await vi.waitFor(async () => expect((await queue.status('sciforge', 'thread-1')).state).toBe('fresh'))
+    expect(postedWatermarks).toEqual(['10'])
+  })
+
+  it('resets a scheduled retry when a manual update supplies the missing legacy context', async () => {
+    const storagePath = await queuePath()
+    await writeFile(storagePath, JSON.stringify({
+      version: 1,
+      jobs: [{
+        id: 'legacy-job', runtimeId: 'sciforge', threadId: 'thread-1', engineThreadId: 'sciforge:thread-1',
+        trace: [{ id: 'a1', type: 'message', role: 'assistant', content: 'old' }],
+        targetWatermark: '9', reason: 'turn_committed', priority: 'background', rebuild: false,
+        coordinateProject: false, phase: 'evidence', status: 'retrying', attempts: 3,
+        createdAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z',
+        nextAttemptAt: '2099-01-01T00:00:00.000Z', lastError: 'workspaceRoot and projectKey are required'
+      }]
+    }), 'utf8')
+    const fetchImpl = vi.fn(async () => {
+      const persisted = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: Array<{ attempts: number }> }
+      expect(persisted.jobs[0]?.attempts).toBe(1)
+      return ok({ snapshot: committedSnapshot('sciforge:thread-1', '10') })
+    }) as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath,
+      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://evidence.test', SCIFORGE_EVIDENCE_DAG_API_KEY: 'key' },
+      fetchImpl
+    })
+    const repaired = await queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate',
+      priority: 'immediate', coordinateProject: false, projectContext: projectContext(),
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'new' }]
+    })
+    await expect(queue.waitForSnapshot(repaired.jobId, 2_000)).resolves.toMatchObject({ inputWatermark: '10' })
   })
 
   it('runs independent sessions concurrently while preserving one in-flight job per session', async () => {
@@ -414,11 +549,11 @@ describe('Evidence DAG runtime feed', () => {
     })
     const first = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
-      items: [{ id: 'a1', kind: 'assistant_message', text: 'one' }]
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'one' }], projectContext: projectContext()
     })
     const second = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-2', targetWatermark: '11', reason: 'turn_committed',
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'two' }]
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'two' }], projectContext: projectContext()
     })
 
     await vi.waitFor(() => expect(new Set(started)).toEqual(new Set(['sciforge:thread-1', 'sciforge:thread-2'])))
@@ -442,7 +577,7 @@ describe('Evidence DAG runtime feed', () => {
     })
     await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
-      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }], projectContext: projectContext()
     })
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(fetchImpl).not.toHaveBeenCalled()
@@ -468,11 +603,11 @@ describe('Evidence DAG runtime feed', () => {
     })
     await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'ordinary', targetWatermark: '10', reason: 'turn_committed', priority: 'normal',
-      items: [{ id: 'a1', kind: 'assistant_message', text: 'ordinary' }]
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'ordinary' }], projectContext: projectContext()
     })
     await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'visible', targetWatermark: '11', reason: 'turn_committed', priority: 'background',
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'visible' }]
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'visible' }], projectContext: projectContext()
     })
     await queue.prioritize('sciforge', 'visible')
     interactive = false
@@ -492,7 +627,7 @@ describe('Evidence DAG runtime feed', () => {
     })
     await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
-      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }], projectContext: projectContext()
     })
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(2))
     await new Promise((resolve) => setTimeout(resolve, 20))
@@ -504,7 +639,7 @@ describe('Evidence DAG runtime feed', () => {
     await expect(queue.waitForSnapshot(stopped.jobId!, 1_000)).rejects.toThrow('router unavailable')
     await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '11', reason: 'manual_immediate', priority: 'immediate',
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'try again explicitly' }]
+      items: [{ id: 'a2', kind: 'assistant_message', text: 'try again explicitly' }], projectContext: projectContext()
     })
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4))
   })
@@ -516,7 +651,8 @@ describe('Evidence DAG runtime feed', () => {
       threadId: 'thread-1',
       targetWatermark: '10',
       reason: 'manual_immediate',
-      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }]
+      items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }],
+      projectContext: projectContext()
     })
 
     await expect(queue.acknowledgeSnapshot(committedSnapshot('sciforge:thread-1', '10'))).resolves.toBe(1)

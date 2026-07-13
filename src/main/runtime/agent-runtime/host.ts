@@ -1764,17 +1764,20 @@ export class AgentRuntimeHost {
           runtimeId: adapter.id,
           threadId
         })
-        const workspace = detail.workspace?.trim()
-        const includedSessions = workspace
-          ? await this.listThreads({
+        const listedWorkspace = detail.workspace?.trim()
+          ? undefined
+          : await adapter.listThreads(context, {
               limit: 1_000,
-              includeArchived: false,
+              includeArchived: true,
               includeSide: true
-            }).then((threads) => threads
-              .filter((thread) => thread.workspace?.trim() === workspace)
-              .map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id))
-            ).catch(() => undefined)
-          : undefined
+            }).then((threads) => threads.find((thread) => thread.id === threadId)?.workspace?.trim())
+              .catch(() => undefined)
+        const rememberedWorkspace = this.turnWorkspaces.get(
+          turnGovernanceKey(adapter.id, threadId, turnId)
+        )
+        const workspace = detail.workspace?.trim() || listedWorkspace || rememberedWorkspace ||
+          context.settings.workspaceRoot?.trim()
+        if (!workspace) return
         await enqueueEvidenceDagUpdate({
           runtimeId: adapter.id,
           threadId,
@@ -1782,12 +1785,16 @@ export class AgentRuntimeHost {
           targetWatermark: event.seq === undefined ? turnId : String(event.seq),
           reason: 'turn_committed',
           priority: 'background',
-          projectContext: workspace ? {
+          projectContext: {
             projectKey: workspace,
             workspaceRoot: workspace,
             projectRoot: workspace,
-            includedSessions
-          } : undefined
+            // Automatic updates compile only the changed session. A full
+            // workspace vector is reserved for explicit Project DAG refreshes;
+            // otherwise one historical session without a snapshot makes every
+            // completed turn fail its Project coordination phase.
+            includedSessions: [evidenceDagThreadId(adapter.id, threadId)]
+          }
         })
       } catch {
         // Queueing is fail-open for the foreground turn; the durable queue owns retry/recovery.

@@ -24,6 +24,7 @@ from evidence_dag.snapshot import (
     snapshot_filename,
     snapshot_storage_key,
 )
+from .human_review import normalize_upstream_review
 
 # statuses that qualify a session claim for promotion. `conflicting` is
 # included on purpose: a claim contested inside one session is exactly the
@@ -69,6 +70,7 @@ class EvidenceSnapshot:
     artifact_digests: tuple[str, ...]
     created_at: str
     status: str = "committed"
+    human_review: Optional[dict] = None
 
     @classmethod
     def from_dict(cls, value: dict) -> "EvidenceSnapshot":
@@ -100,6 +102,7 @@ class EvidenceSnapshot:
             verifier_version=str(value["verifierVersion"]),
             artifact_digests=tuple(sorted(set(artifacts))),
             created_at=str(value["createdAt"]),
+            human_review=normalize_upstream_review(value.get("humanReview"), thread_id),
         )
 
     def to_dict(self) -> dict:
@@ -114,6 +117,7 @@ class EvidenceSnapshot:
             "artifactDigests": list(self.artifact_digests),
             "createdAt": self.created_at,
             "status": self.status,
+            **({"humanReview": self.human_review} if self.human_review else {}),
         }
 
 

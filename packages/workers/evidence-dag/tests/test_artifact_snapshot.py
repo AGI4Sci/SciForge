@@ -163,7 +163,7 @@ class TestArtifactRegistry(unittest.TestCase):
 
 
 class TestEvidenceSnapshots(unittest.TestCase):
-    def test_update_commits_canonical_snapshot_registry_and_a0_a2_ledger(self):
+    def test_update_commits_canonical_snapshot_registry_and_incremental_ledger(self):
         with tempfile.TemporaryDirectory() as workspace:
             engine = Engine(
                 StubLLM(extract_response=_extract_payload("doi:10.1000/test"),
@@ -180,7 +180,9 @@ class TestEvidenceSnapshots(unittest.TestCase):
             self.assertEqual(set(snapshot), {
                 "threadId", "version", "digest", "inputWatermark", "schemaVersion",
                 "extractorVersion", "verifierVersion", "artifactDigests", "createdAt", "status",
+                "humanReview",
             })
+            self.assertEqual(snapshot["humanReview"]["policyVersion"], "human-review.v1")
             document = engine.export_prov_json("runtime:thread")
             self.assertEqual(document["edag:meta"]["snapshot"], snapshot)
             self.assertEqual(set(document["edag:artifactRegistry"]), {
@@ -191,8 +193,13 @@ class TestEvidenceSnapshots(unittest.TestCase):
             for field in ("edag:artifact_id", "edag:artifact_version_id", "edag:source_anchor_id"):
                 self.assertTrue(source[field])
             ledger = document["edag:assessments"]
-            self.assertTrue({"A0", "A1", "A2"}.issubset({item["level"] for item in ledger}))
+            # This fixture is an ordinary low-impact claim. A0 is complete and
+            # A1 covers its new semantic edge; A2 is intentionally reserved for
+            # critical, disputed, or high-impact targets.
+            self.assertTrue({"A0", "A1"}.issubset({item["level"] for item in ledger}))
+            self.assertNotIn("A2", {item["level"] for item in ledger})
             self.assertTrue(all(item["targetDigest"] == snapshot["digest"] for item in ledger))
+            self.assertTrue(all("humanReview" in item for item in ledger))
 
     def test_semantic_id_never_reuses_artifact_digest(self):
         semantic_id = make_node_id(NodeType.CLAIM, "A normalized scientific claim")

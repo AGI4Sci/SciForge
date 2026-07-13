@@ -316,6 +316,21 @@ type WorkspacePreviewAnnotationThreadDeleteOperation =
 
 const WORKSPACE_PREVIEW_TEXT_OBSERVATION_BYTES = WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS
 const WORKSPACE_PREVIEW_TEXT_COMPATIBILITY_SNIFF_BYTES = 8192
+const WORKSPACE_PREVIEW_IMAGE_MIME_BY_EXTENSION = new Map<string, string>([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.bmp', 'image/bmp'],
+  ['.avif', 'image/avif'],
+  ['.ico', 'image/x-icon']
+])
+
+function inferWorkspacePreviewMimeType(path: string, manifest: WorkspacePreviewPluginManifest): string | undefined {
+  if (manifest.modality !== 'image') return undefined
+  return WORKSPACE_PREVIEW_IMAGE_MIME_BY_EXTENSION.get(extensionFromPreviewPath(path).toLowerCase())
+}
 
 export class WorkspacePreviewHost {
   private readonly registry: WorkspacePreviewRegistry
@@ -376,11 +391,12 @@ export class WorkspacePreviewHost {
       }
 
       const now = input.now ?? new Date().toISOString()
+      const mimeType = input.mimeType ?? inferWorkspacePreviewMimeType(targetPath, route.manifest)
       const file: WorkspacePreviewFileState = {
         workspaceRoot,
         path: targetPath,
         relativePath,
-        ...(input.mimeType ? { mimeType: input.mimeType } : {}),
+        ...(mimeType ? { mimeType } : {}),
         size: fileInfo.size,
         mtimeMs: fileInfo.mtimeMs
       }

@@ -437,7 +437,7 @@
   "composerSteerPlaceholder": "Keep typing; sends inject into the current run…",
   "composerQueuePlaceholder": "Keep typing; sends wait and go out after the current reply finishes…",
   "composerPlanPlaceholder": "Break the goal down, outline steps, and scope changes before execution…",
-  "composerSlashHint": "Type / for commands",
+  "composerSlashHint": "↑/↓ history · Type / for commands",
   "workingDirectory": "Working directory",
   "emptyHeroTitle": "Start a new conversation",
   "emptyHeroSub": "Pick a task, or just type your question",

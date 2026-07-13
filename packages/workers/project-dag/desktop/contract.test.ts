@@ -17,7 +17,7 @@ type PureUi = {
     affected: Array<{ claim: { id: string }; kind: string; distance: number }>
   }
   graphModel: (graph: unknown) => {
-    nodes: Array<{ id: string; kind: string; label: string }>
+    nodes: Array<{ id: string; kind: string; label: string; review: { level: string } }>
     edges: Array<{ id: string; src: string; dst: string; type: string }>
     counts: Record<string, number>
   }
@@ -39,6 +39,14 @@ type PureUi = {
     mode?: 'direct' | 'strongest' | 'all'
   ) => { mode: string; nodeIds: string[]; edgeIds: string[] }
   graphEdgeRelationKind: (type: string) => string
+  normalizeHumanReview: (value: unknown) => {
+    level: string; score: number; status: string; blocking: boolean
+    reasons: Array<{ code: string; message: string }>
+  }
+  projectReviewQueueModel: (graph: unknown) => Array<{
+    node: { id: string }
+    review: { level: string; blocking: boolean; reviewPacketId: string | null }
+  }>
   opaqueGraphNodeId: (value: unknown) => string | null
   workspaceLocator: (assertion: unknown) => string | null
   workspacePreviewMessage: (
@@ -79,9 +87,48 @@ describe('Project DAG desktop contract', () => {
     expect(html).toContain('/claims/${encodeURIComponent(claimId)}?snapshot=')
     expect(html).toContain('/attention?snapshotDigest=')
     expect(html).toContain('只读模拟')
-    expect(html).not.toContain("method:'POST'")
-    expect(html).not.toContain('method: "POST"')
+    expect(html).toContain("method:'POST'")
+    expect(html).toContain('/reviews/${encodeURIComponent(packetId)}/decision')
     expect(html).not.toContain('/compile')
+  })
+
+  it('normalizes and prioritizes human review packets without duplicating packet targets', () => {
+    const { pure } = loadPureUi()
+    expect(pure.normalizeHumanReview({
+      level: 'required', score: 92, status: 'open', blocking: true,
+      reasons: [{ code: 'conflicting_evidence', message: 'Independent sources disagree' }]
+    })).toMatchObject({
+      level: 'required', score: 0.92, status: 'pending', blocking: true,
+      reasons: [{ code: 'conflicting_evidence', message: 'Independent sources disagree' }]
+    })
+
+    const queue = pure.projectReviewQueueModel({
+      snapshot: { evidenceVector: [] },
+      goals: [], entities: [], origins: [], edges: [], evidence: [],
+      claims: [
+        { id: 'claim-a', statement: 'A', humanReview: { level: 'required', score: 0.9, status: 'pending', blocking: true, reviewPacketId: 'packet-1' } },
+        { id: 'claim-b', statement: 'B', humanReview: { level: 'recommended', score: 0.7, status: 'pending', reviewPacketId: 'packet-1' } },
+        { id: 'claim-c', statement: 'C', humanReview: { level: 'optional', score: 0.4, status: 'approved', reviewPacketId: 'packet-2' } }
+      ]
+    })
+    expect(queue).toHaveLength(1)
+    expect(queue[0]).toMatchObject({ node: { id: 'claim-a' }, review: { level: 'required', blocking: true, reviewPacketId: 'packet-1' } })
+  })
+
+  it('maps upstream Evidence review packets onto the visible Session node', () => {
+    const { pure } = loadPureUi()
+    const model = pure.graphModel({
+      snapshot: { evidenceVector: [{ threadId: 'runtime:session-a', digest: 'sha256:a' }] },
+      goals: [], entities: [], origins: [], edges: [], evidence: [], claims: [],
+      reviewPackets: [{
+        id: 'packet-upstream', subjectIds: ['runtime:session-a'], level: 'required',
+        score: 0.95, status: 'pending', blocking: true,
+        reasons: [{ code: 'upstream_review_required', message: 'Evidence needs review' }]
+      }]
+    })
+    expect(model.nodes[0]).toMatchObject({
+      id: 'session:runtime:session-a', kind: 'session', review: { level: 'required' }
+    })
   })
 
   it('ships a unified review surface with the graph canvas always available', () => {

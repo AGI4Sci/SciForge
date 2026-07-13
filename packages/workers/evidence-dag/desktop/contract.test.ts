@@ -38,4 +38,16 @@ describe('Evidence DAG desktop contract', () => {
     expect(message).not.toContain('contentDigest')
     expect(message).not.toContain('selector')
   })
+
+  it('ships an accessible human-review heat overlay and deduplicated review queue', () => {
+    const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
+    expect(html).toContain('id="reviewHeat"')
+    expect(html).toContain('id="reviewQueue"')
+    expect(html).toContain('data-human-review-level=')
+    expect(html).toContain('Human Review Queue')
+    expect(html).toContain('reviewPacketId')
+    expect(html).toContain('machineChecks')
+    expect(html).toContain('blastRadius')
+    expect(html).toContain('aria-label="Human review checkpoint"')
+  })
 })

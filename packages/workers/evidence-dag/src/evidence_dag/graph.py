@@ -14,6 +14,7 @@ from .model import (
     EdgeRel,
     Node,
     NodeType,
+    ReviewPacket,
     SourceAnchor,
     make_edge_id,
     make_node_id,
@@ -38,6 +39,8 @@ class ThreadGraph:
         self.artifact_versions: dict[str, ArtifactVersion] = {}
         self.source_anchors: dict[str, SourceAnchor] = {}
         self.assessments: list[Assessment] = []
+        self.review_policy_version: Optional[str] = None
+        self.review_packets: list[ReviewPacket] = []
 
     # --- mutation -----------------------------------------------------------
     def add_or_get_node(
@@ -176,6 +179,12 @@ class ThreadGraph:
         self.source_anchors.update(other.source_anchors)
         for assessment in other.assessments:
             self.append_assessment(assessment)
+        if other.review_policy_version:
+            self.review_policy_version = other.review_policy_version
+        if other.review_packets:
+            by_id = {packet.review_packet_id: packet for packet in self.review_packets}
+            by_id.update({packet.review_packet_id: packet for packet in other.review_packets})
+            self.review_packets = sorted(by_id.values(), key=lambda packet: packet.review_packet_id)
         return {"new_nodes": new_nodes, "new_edges": new_edges}
 
     # --- graph views --------------------------------------------------------
@@ -378,7 +387,7 @@ class ThreadGraph:
 
     # --- (de)serialisation of the internal form -----------------------------
     def to_dict(self) -> dict:
-        return {
+        result = {
             "thread_id": self.thread_id,
             "meta": self.meta,
             "nodes": [n.to_dict() for n in self.nodes.values()],
@@ -390,6 +399,10 @@ class ThreadGraph:
             },
             "assessments": [a.to_dict() for a in self.assessments],
         }
+        if self.review_policy_version or self.review_packets:
+            from .human_review import human_review_summary
+            result["humanReview"] = human_review_summary(self)
+        return result
 
     @classmethod
     def from_dict(cls, d: dict) -> "ThreadGraph":
@@ -411,6 +424,13 @@ class ThreadGraph:
             anchor = SourceAnchor.from_dict(raw)
             g.source_anchors[anchor.anchor_id] = anchor
         g.assessments = [Assessment.from_dict(raw) for raw in d.get("assessments") or []]
+        review = d.get("humanReview") or d.get("human_review") or {}
+        if review:
+            g.review_policy_version = review.get("policyVersion") or review.get("policy_version")
+            g.review_packets = [
+                ReviewPacket.from_dict(raw)
+                for raw in (review.get("reviewPackets") or review.get("review_packets") or [])
+            ]
         return g
 
     def summary(self) -> dict:

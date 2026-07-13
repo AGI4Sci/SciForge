@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import uuid
+from dataclasses import replace
 from typing import Any, Optional
 
 from . import analysis as _analysis
@@ -18,11 +19,18 @@ from . import provjson
 from . import reconcile as _reconcile
 from .artifacts import ArtifactRegistry
 from .assessment import bind_target_digest, run_a0, run_a1, run_a2
+from .human_review import (
+    DEFAULT_POLICY,
+    attach_human_reviews,
+    remap_review_packet_assessment_ids,
+    select_a2_targets,
+)
 from .events import EventStore, utc_now_iso
 from .extractor import extract_dag
 from .graph import ThreadGraph
 from .incremental import TraceStagingCache, watermark_regresses
 from .llm import LLM
+from .model import EdgeRel, HumanReviewStatus
 from .snapshot import (
     EXTRACTOR_VERSION,
     SCHEMA_VERSION,
@@ -35,6 +43,10 @@ from .snapshot import (
     snapshot_storage_key,
 )
 from .verifier import verify as _verify
+
+
+class ReviewDecisionConflict(RuntimeError):
+    """Raised when a decision is not bound to the current immutable snapshot."""
 
 
 class Engine:
@@ -346,13 +358,34 @@ class Engine:
                         "status_changes": [], "aggregates": {},
                     }
 
+                semantic_edge_ids = {
+                    edge_id for edge_id in (delta.get("new_edges") or [])
+                    if edge_id in graph.edges and graph.edges[edge_id].rel in {
+                        EdgeRel.SUPPORTS, EdgeRel.CONTRADICTS,
+                    }
+                }
                 pending = [*run_a0(graph), *run_a1(
                     graph, threshold=threshold, verifier_version=VERIFIER_VERSION,
+                    target_edge_ids=semantic_edge_ids,
                 )]
+                a2_targets = select_a2_targets(
+                    graph,
+                    changed_node_ids=delta.get("new_nodes") or [],
+                    changed_edge_ids=delta.get("new_edges") or [],
+                )
                 if self.llm is not None:
-                    pending.extend(run_a2(graph, self.llm, reviewer_version=VERIFIER_VERSION))
+                    pending.extend(run_a2(
+                        graph, self.llm, reviewer_version=VERIFIER_VERSION,
+                        target_ids=set(a2_targets),
+                    ))
                 else:
                     raise RuntimeError("A2 independent reviewer is required for Evidence Snapshot commit")
+                computed_at = utc_now_iso()
+                pending, graph.review_packets = attach_human_reviews(
+                    graph, pending, delta=delta, computed_at=computed_at,
+                    policy=DEFAULT_POLICY,
+                )
+                graph.review_policy_version = DEFAULT_POLICY.version
                 prior_assessment_count = len(graph.assessments)
                 graph.assessments.extend(pending)
 
@@ -374,6 +407,10 @@ class Engine:
 
                 bound = bind_target_digest(pending, candidate.digest)
                 graph.assessments[prior_assessment_count:] = bound
+                graph.review_packets = remap_review_packet_assessment_ids(
+                    graph.review_packets,
+                    {before.assessment_id: after.assessment_id for before, after in zip(pending, bound)},
+                )
                 for assessment in bound:
                     edge = graph.edges.get(assessment.target_id)
                     if edge is not None and assessment.assessment_id not in edge.assessment_ids:
@@ -615,6 +652,7 @@ class Engine:
         with open(path, encoding="utf-8") as fh:
             graph = provjson.loads(fh.read())
         snapshot = self._verified_snapshot(graph, thread_id=thread_id)
+        self._apply_review_decisions(graph, snapshot.digest)
         self._graphs[thread_id] = graph
         self._snapshots[thread_id] = snapshot
         return graph
@@ -624,6 +662,179 @@ class Engine:
         if graph is None:
             raise KeyError(thread_id)
         return graph
+
+    @staticmethod
+    def _decision_status(action: str) -> HumanReviewStatus:
+        try:
+            return {
+                "approve": HumanReviewStatus.APPROVED,
+                "reject": HumanReviewStatus.REJECTED,
+                "defer": HumanReviewStatus.DEFERRED,
+                "request_evidence": HumanReviewStatus.PENDING,
+            }[action]
+        except KeyError as exc:
+            raise ValueError(
+                "action must be approve, reject, defer, or request_evidence"
+            ) from exc
+
+    @classmethod
+    def _apply_review_decision_to_graph(
+        cls,
+        graph: ThreadGraph,
+        *,
+        packet_id: str,
+        action: str,
+        actor: str,
+        reviewed_at: str,
+    ) -> dict[str, Any]:
+        status = cls._decision_status(action)
+        index = next((
+            index for index, packet in enumerate(graph.review_packets)
+            if packet.review_packet_id == packet_id
+        ), None)
+        if index is None:
+            raise KeyError(packet_id)
+        current = graph.review_packets[index]
+        blocking = (
+            current.level.value == "required"
+            and status != HumanReviewStatus.APPROVED
+        )
+        updated = replace(
+            current,
+            status=status,
+            blocking=blocking,
+            reviewed_by=actor,
+            reviewed_at=reviewed_at,
+        )
+        graph.review_packets[index] = updated
+        for assessment_index, assessment in enumerate(graph.assessments):
+            review = assessment.human_review
+            if review is None or review.review_packet_id != packet_id:
+                continue
+            graph.assessments[assessment_index] = replace(
+                assessment,
+                human_review=replace(
+                    review,
+                    status=status,
+                    blocking=blocking,
+                    reviewed_by=actor,
+                    reviewed_at=reviewed_at,
+                ),
+            )
+        return updated.to_dict()
+
+    def _apply_review_decisions(self, graph: ThreadGraph, snapshot_digest: str) -> None:
+        events = self._event_store.read(
+            event_types=("HumanReviewDecisionRecorded",), limit=5000,
+        )
+        for event in events:
+            payload = event.get("payload") or {}
+            if payload.get("threadId") != graph.thread_id:
+                continue
+            if payload.get("snapshotDigest") != snapshot_digest:
+                continue
+            try:
+                self._apply_review_decision_to_graph(
+                    graph,
+                    packet_id=str(payload.get("reviewPacketId") or ""),
+                    action=str(payload.get("action") or ""),
+                    actor=str(payload.get("actor") or ""),
+                    reviewed_at=str(event.get("occurredAt") or payload.get("reviewedAt") or ""),
+                )
+            except (KeyError, ValueError):
+                # The immutable event remains auditable even if a later policy
+                # version no longer exposes the packet in this read model.
+                continue
+
+    def record_review_decision(
+        self,
+        thread_id: str,
+        packet_id: str,
+        *,
+        action: str,
+        expected_snapshot_digest: str,
+        actor: str,
+        rationale: str,
+        idempotency_key: Optional[str] = None,
+        correlation_id: Optional[str] = None,
+    ) -> dict[str, Any]:
+        """Record a human disposition without rewriting an immutable snapshot."""
+        packet_id = str(packet_id or "").strip()
+        actor = str(actor or "").strip()
+        rationale = str(rationale or "").strip()
+        expected_snapshot_digest = str(expected_snapshot_digest or "").strip()
+        action = str(action or "").strip().lower()
+        self._decision_status(action)
+        if not packet_id or not actor or not rationale or not expected_snapshot_digest:
+            raise ValueError(
+                "reviewPacketId, expectedSnapshotDigest, actor, and rationale are required"
+            )
+        with self._compile_lock(thread_id):
+            snapshot = self.latest_snapshot(thread_id)
+            if snapshot is None:
+                raise KeyError(thread_id)
+            if snapshot.digest != expected_snapshot_digest:
+                raise ReviewDecisionConflict(
+                    "snapshot changed; reload review packets before recording a decision"
+                )
+            graph = self.require(thread_id)
+            if not any(packet.review_packet_id == packet_id for packet in graph.review_packets):
+                raise KeyError(packet_id)
+            decision_time = utc_now_iso()
+            if idempotency_key:
+                event_key = str(idempotency_key).strip()
+            else:
+                identity = json.dumps({
+                    "threadId": thread_id,
+                    "snapshotDigest": snapshot.digest,
+                    "reviewPacketId": packet_id,
+                    "action": action,
+                    "actor": actor,
+                    "rationale": rationale,
+                }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                event_key = "review-decision:" + hashlib.sha256(
+                    identity.encode("utf-8")
+                ).hexdigest()[:32]
+            decision_payload = {
+                "threadId": thread_id,
+                "snapshotDigest": snapshot.digest,
+                "reviewPacketId": packet_id,
+                "action": action,
+                "actor": actor,
+                "rationale": rationale,
+                "checker": {
+                    "actorType": "human",
+                    "actor": actor,
+                    "method": "review-decision-api-v1",
+                    "authority": "override",
+                },
+            }
+            event = self._event_store.append(
+                "HumanReviewDecisionRecorded",
+                aggregate_type="EvidenceThread",
+                aggregate_id=thread_id,
+                idempotency_key=event_key,
+                correlation_id=correlation_id,
+                payload=decision_payload,
+                occurred_at=decision_time,
+            )
+            if event.get("payload") != decision_payload:
+                raise ReviewDecisionConflict(
+                    "idempotency key was already used for a different review decision"
+                )
+            packet = self._apply_review_decision_to_graph(
+                graph,
+                packet_id=packet_id,
+                action=str(event["payload"]["action"]),
+                actor=str(event["payload"]["actor"]),
+                reviewed_at=str(event["occurredAt"]),
+            )
+            return {
+                "snapshot": snapshot.to_dict(),
+                "reviewPacket": packet,
+                "decision": dict(event["payload"]),
+                "event": event,
+            }
 
     def latest_snapshot(self, thread_id: str) -> Optional[EvidenceSnapshot]:
         if thread_id in self._snapshots:

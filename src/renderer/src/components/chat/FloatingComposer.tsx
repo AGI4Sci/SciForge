@@ -93,6 +93,14 @@ import {
 } from './FloatingComposerQueuedMessages'
 import { useComposerDraft } from './use-composer-draft'
 import {
+  composerDraftContextKey,
+  mergeComposerInputHistory,
+  readComposerDraft,
+  readComposerInputHistory,
+  rememberComposerInput,
+  writeComposerDraft
+} from './composer-input-memory'
+import {
   SPEECH_TRANSCRIPTION_MAX_DURATION_MS,
   getModelRouterSettings,
   type AgentRuntimeId,
@@ -713,6 +721,7 @@ export function FloatingComposer({
   const route = useChatStore((s) => s.route)
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   const storeActiveThreadId = useChatStore((s) => s.activeThreadId)
+  const storeBlocks = useChatStore((s) => s.blocks)
   const usageRefreshKey = useChatStore((s) => s.usageRefreshKey)
   const threads = useChatStore((s) => s.threads)
   const compactActiveThread = useChatStore((s) => s.compactActiveThread)
@@ -837,14 +846,41 @@ export function FloatingComposer({
   const hiddenChangedFileCount = Math.max(0, changedFiles.length - visibleChangedFiles.length)
   const stretchModelPicker =
     compact && modelPickerMode === 'combobox' && !showToolbarStartControls && !hideModelPicker
-  const draft = useComposerDraft({ input, canCompose: canEditComposer })
-  const slashQuery = getSlashQuery(input)
+  const remembersComposerInput = !compact && !disableThreadManagementCommands
+  const composerDraftKey = composerDraftContextKey({
+    threadId: activeThreadId,
+    workspaceRoot: effectiveWorkspaceRoot
+  })
+  const [rememberedInputHistory, setRememberedInputHistory] = useState(() => readComposerInputHistory())
+  const activeThreadInputHistory = useMemo(
+    () => storeBlocks.filter((block) => block.kind === 'user').map((block) => block.text),
+    [storeBlocks]
+  )
+  const inputHistory = useMemo(
+    () => remembersComposerInput
+      ? mergeComposerInputHistory(rememberedInputHistory, activeThreadInputHistory)
+      : activeThreadInputHistory,
+    [activeThreadInputHistory, rememberedInputHistory, remembersComposerInput]
+  )
+  const activeDraftKeyRef = useRef<string | null>(null)
+  const skipDraftPersistenceRef = useRef(false)
   const [composerCursor, setComposerCursor] = useState(() => input.length)
+  const [dismissedFileMentionKey, setDismissedFileMentionKey] = useState<string | null>(null)
+  const draft = useComposerDraft({
+    input,
+    canCompose: canEditComposer,
+    historyItems: inputHistory,
+    setInput,
+    onHistoryInput: (value) => {
+      setComposerCursor(value.length)
+      setDismissedFileMentionKey(null)
+    }
+  })
+  const slashQuery = getSlashQuery(input)
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0)
   const [fileMentionSuggestions, setFileMentionSuggestions] = useState<ComposerFileReference[]>([])
   const [fileMentionLoading, setFileMentionLoading] = useState(false)
   const [selectedFileMentionIndex, setSelectedFileMentionIndex] = useState(0)
-  const [dismissedFileMentionKey, setDismissedFileMentionKey] = useState<string | null>(null)
   const [composerMenuOpen, setComposerMenuOpen] = useState(false)
   const [imageGenerationMode, setImageGenerationMode] = useState(false)
   const [goalPanelOpen, setGoalPanelOpen] = useState(false)
@@ -860,6 +896,26 @@ export function FloatingComposer({
   const imageGenerationModeRef = useRef(false)
   const pendingImageGenerationSendRef = useRef(false)
   const speechToText = useSpeechToTextSettings()
+
+  useEffect(() => {
+    if (!remembersComposerInput) return
+    const previousKey = activeDraftKeyRef.current
+    if (previousKey === composerDraftKey) return
+    if (previousKey) writeComposerDraft(previousKey, input)
+    const restored = readComposerDraft(composerDraftKey)
+    activeDraftKeyRef.current = composerDraftKey
+    skipDraftPersistenceRef.current = true
+    if (restored !== input) setInput(restored)
+  }, [composerDraftKey, input, remembersComposerInput, setInput])
+
+  useEffect(() => {
+    if (!remembersComposerInput || activeDraftKeyRef.current !== composerDraftKey) return
+    if (skipDraftPersistenceRef.current) {
+      skipDraftPersistenceRef.current = false
+      return
+    }
+    writeComposerDraft(composerDraftKey, input)
+  }, [composerDraftKey, input, remembersComposerInput])
 
   useEffect(() => {
     imageGenerationModeRef.current = imageGenerationMode
@@ -1477,6 +1533,9 @@ export function FloatingComposer({
     if (shouldUseImageGeneration) {
       pendingImageGenerationSendRef.current = true
     }
+    if (remembersComposerInput && input.trim()) {
+      setRememberedInputHistory(rememberComposerInput(input))
+    }
     onSend(intent)
   }
   const handlePrimaryAction = useCallback((): void => {
@@ -1532,6 +1591,11 @@ export function FloatingComposer({
         setInput('')
         return
       }
+    }
+
+    if (!composing && remembersComposerInput && draft.navigateHistory(event)) {
+      event.preventDefault()
+      return
     }
 
     if (!sendByEnter || composing) return
@@ -2235,6 +2299,8 @@ export function FloatingComposer({
             value={input}
             disabled={!canEditComposer}
             onChange={(e) => {
+              draft.resetHistoryNavigation(e.target.value)
+              if (remembersComposerInput) writeComposerDraft(composerDraftKey, e.target.value)
               setInput(e.target.value)
               setComposerCursor(e.target.selectionStart ?? e.target.value.length)
               setDismissedFileMentionKey(null)

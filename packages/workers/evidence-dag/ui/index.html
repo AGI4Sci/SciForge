@@ -257,6 +257,29 @@
   .node-card.blast-source { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(37, 99, 235, .28), var(--shadow); }
   .node-card.blast-inval { border-color: var(--contra); box-shadow: 0 0 0 2px rgba(220, 38, 38, .24), var(--shadow); }
   .node-card.blast-weak { border-color: #fb923c; box-shadow: 0 0 0 2px rgba(251, 146, 60, .24), var(--shadow); }
+  body[data-review-heat="1"] .node-card.review-optional:not(.selected) {
+    border: 2px solid #f8c77e;
+  }
+  body[data-review-heat="1"] .node-card.review-recommended:not(.selected) {
+    border: 3px solid #e89127;
+    box-shadow: 0 0 0 2px rgba(232, 145, 39, .14), var(--shadow);
+  }
+  body[data-review-heat="1"] .node-card.review-required:not(.selected) {
+    border: 4px double #c9363e;
+    box-shadow: 0 0 0 3px rgba(201, 54, 62, .16), var(--shadow);
+  }
+  body[data-review-heat="1"] .node-card.review-approved:not(.selected) {
+    border: 2px solid #4e9b70;
+  }
+  body[data-review-heat="1"] .node-card.review-expired:not(.selected) {
+    border-style: dashed;
+  }
+  .human-review-badge { letter-spacing: .02em; }
+  .human-review-badge::before { content: "👤"; font-size: 9px; }
+  .human-review-badge.review-required { background:#fee2e2;border-color:#fca5a5;color:#991b1b; }
+  .human-review-badge.review-recommended { background:#ffedd5;border-color:#fdba74;color:#9a3412; }
+  .human-review-badge.review-optional { background:#fff7ed;border-color:#fed7aa;color:#9a5b12; }
+  .human-review-badge.review-approved { background:#dcfce7;border-color:#86efac;color:#166534; }
   .node-head {
     display: flex;
     align-items: center;
@@ -454,6 +477,20 @@
   }
   .mini-item:hover { border-color: #9db6e8; background: #f3f7ff; color: #334155; }
   #auditFindings, #analysis { max-height: 210px; overflow: auto; }
+  #reviewQueue { max-height: 260px; overflow: auto; }
+  .review-queue-item { position:relative;padding-left:10px; }
+  .review-queue-item.required { border-left:4px double #c9363e; }
+  .review-queue-item.recommended { border-left:3px solid #e89127; }
+  .review-queue-item.optional { border-left:2px solid #f8c77e; }
+  .review-reasons { margin-top:4px;color:var(--faint);font-size:10px; }
+  .review-detail { margin-top:10px;padding:9px;border:1px solid #fed7aa;border-radius:8px;background:#fffaf2; }
+  .review-detail.blocking { border-color:#fca5a5;background:#fff5f5; }
+  .review-detail h3 { margin:0 0 6px;font-size:11px; }
+  .review-detail ul { margin:5px 0;padding-left:18px; }
+  .review-actions { display:flex;gap:6px;flex-wrap:wrap;margin-top:8px; }
+  .review-actions button { height:27px;padding:4px 8px;font-size:10.5px; }
+  .review-actions .approve { border-color:#86c7a3;color:#17613d; }
+  .review-actions .reject { border-color:#e0a1a6;color:#9e2f37; }
   .riskbar {
     display: flex;
     align-items: center;
@@ -513,6 +550,7 @@
     <select id="thread" title="thread"></select>
     <button id="refresh" title="Refresh">Refresh</button>
     <label class="chk" title="Watch for new graph data"><input type="checkbox" id="auto" checked /> watch</label>
+    <label class="chk" title="Highlight nodes that need human review"><input type="checkbox" id="reviewHeat" checked /> human review</label>
     <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit</button>
     <button id="fit" class="icon" title="Fit graph">⌖</button>
     <span class="topbar-spacer"></span>
@@ -565,6 +603,10 @@
         <h2>Node Detail</h2>
         <div class="empty">Click a node in the structured DAG to inspect content, support, provenance, and connected evidence.</div>
       </div>
+      <div class="panel-section scroll" id="reviewQueue">
+        <h2>Human Review Queue</h2>
+        <div class="empty" style="min-height:70px;padding:8px">No human review needed.</div>
+      </div>
       <div class="panel-section scroll" id="auditFindings">
         <h2>Evidence Audit</h2>
         <div class="empty" style="min-height:70px;padding:8px">No audit run loaded.</div>
@@ -579,6 +621,12 @@
           <span><i class="sw" style="background:var(--source-soft);border-color:var(--source)"></i>Source</span>
           <span><i class="sw" style="background:var(--reasoning-soft);border-color:var(--reasoning)"></i>Reasoning</span>
           <span><i class="sw" style="background:var(--claim-soft);border-color:var(--claim)"></i>Claim</span>
+        </div>
+        <div class="legend-row">
+          <span><i class="sw" style="background:#fff7ed;border:2px solid #f8c77e"></i>H1 optional</span>
+          <span><i class="sw" style="background:#fff7ed;border:3px solid #e89127"></i>H2 recommended</span>
+          <span><i class="sw" style="background:#fff5f5;border:4px double #c9363e"></i>H3 required</span>
+          <span>👤 human checkpoint</span>
         </div>
         <div class="legend-row">
           <span><i class="sw" style="width:22px;height:0;border:0;border-top:3px solid var(--support);border-radius:0"></i>Support</span>
@@ -638,6 +686,7 @@ let weakMap = {};
 let blastState = null;
 let requestedNodeId = Q_NODE || null;
 let previewFeedback = null;
+let reviewHeatEnabled = true;
 const pendingPreviewRequests = new Map();
 
 function esc(value) {
@@ -688,6 +737,134 @@ function buildAnalysisMaps(data) {
   (data?.fragile || []).forEach((item) => { fragMap[item.id] = item; });
   (data?.pseudo_robust || []).forEach((item) => { prMap[item.id] = item; });
   (data?.weakly_supported || []).forEach((item) => { weakMap[item.id] = item; });
+}
+
+const REVIEW_LEVEL_RANK = { none: 0, optional: 1, recommended: 2, required: 3 };
+const REVIEW_LEVEL_LABEL = { none: 'H0', optional: 'H1', recommended: 'H2', required: 'H3' };
+const REVIEW_STATUS_LABEL = {
+  not_needed: 'not needed', pending: 'pending', approved: 'approved', rejected: 'rejected',
+  deferred: 'deferred', expired: 'expired'
+};
+
+function reviewReason(reason) {
+  if (typeof reason === 'string') return { code: reason, message: reason };
+  const value = object(reason);
+  return {
+    code: String(value.code || value.reason || 'human_review'),
+    message: String(value.message || value.description || value.code || value.reason || 'Human review requested'),
+    sourceType: value.sourceType || value.source_type,
+    sourceId: value.sourceId || value.source_id
+  };
+}
+
+function normalizeHumanReview(value, fallback = {}) {
+  const raw = object(value);
+  const level = Object.hasOwn(REVIEW_LEVEL_RANK, raw.level) ? raw.level : (fallback.level || 'none');
+  const validStatuses = new Set(['not_needed', 'pending', 'approved', 'rejected', 'deferred', 'expired']);
+  const legacyStatus = { not_required: 'not_needed', completed: 'approved', overridden: 'rejected', open: 'pending', resolved: 'approved' };
+  const statusValue = legacyStatus[raw.status] || raw.status || fallback.status || (level === 'none' ? 'not_needed' : 'pending');
+  const status = validStatuses.has(statusValue) ? statusValue : (level === 'none' ? 'not_needed' : 'pending');
+  const scoreValue = Number(raw.score ?? fallback.score ?? 0);
+  const score = Number.isFinite(scoreValue) ? Math.max(0, Math.min(1, scoreValue > 1 ? scoreValue / 100 : scoreValue)) : 0;
+  const checkerRaw = object(raw.checker || fallback.checker);
+  return {
+    level, score, status,
+    reasons: (Array.isArray(raw.reasons) ? raw.reasons : (fallback.reasons || [])).map(reviewReason),
+    blocking: Boolean(raw.blocking ?? fallback.blocking),
+    reviewPacketId: raw.reviewPacketId || raw.review_packet_id || raw.id || fallback.reviewPacketId || null,
+    policyVersion: raw.policyVersion || raw.policy_version || fallback.policyVersion || '',
+    computedAt: raw.computedAt || raw.computed_at || raw.createdAt || fallback.computedAt || '',
+    reviewedBy: raw.reviewedBy || raw.reviewed_by || fallback.reviewedBy || '',
+    reviewedAt: raw.reviewedAt || raw.reviewed_at || raw.resolvedAt || fallback.reviewedAt || '',
+    checker: {
+      actorType: checkerRaw.actorType || checkerRaw.actor_type || '',
+      actor: checkerRaw.actor || '', method: checkerRaw.method || '', authority: checkerRaw.authority || ''
+    },
+    question: raw.question || fallback.question || '',
+    machineChecks: raw.machineChecks || raw.machine_checks || fallback.machineChecks || [],
+    delta: raw.delta || fallback.delta || null,
+    blastRadius: raw.blastRadius || raw.blast_radius || fallback.blastRadius || null,
+    recommendedAction: raw.recommendedAction || raw.recommended_action || fallback.recommendedAction || '',
+    options: raw.options || fallback.options || [],
+    targetIds: raw.targetIds || raw.target_ids || fallback.targetIds || []
+  };
+}
+
+function graphReviewPackets(graph = lastGraph) {
+  const root = object(graph?.humanReview || graph?.human_review);
+  return Array.isArray(root.reviewPackets) ? root.reviewPackets
+    : Array.isArray(root.review_packets) ? root.review_packets
+    : Array.isArray(graph?.reviewPackets) ? graph.reviewPackets
+    : Array.isArray(graph?.review_packets) ? graph.review_packets : [];
+}
+
+function humanReviewForNode(node, graph = lastGraph) {
+  const candidates = [];
+  const direct = node?.humanReview || node?.human_review || object(node?.attributes).humanReview || object(node?.attributes).human_review;
+  if (direct) candidates.push(normalizeHumanReview(direct));
+  const index = graph?.humanReviews || graph?.human_reviews;
+  if (Array.isArray(index)) {
+    for (const item of index) if ((item.targetId || item.target_id || item.nodeId || item.node_id) === node?.id) candidates.push(normalizeHumanReview(item));
+  } else if (object(index)[node?.id]) candidates.push(normalizeHumanReview(object(index)[node.id]));
+  for (const assessment of (graph?.assessments || [])) {
+    if ((assessment.targetId || assessment.target_id) === node?.id && (assessment.humanReview || assessment.human_review)) {
+      candidates.push(normalizeHumanReview(assessment.humanReview || assessment.human_review));
+    }
+  }
+  for (const packet of graphReviewPackets(graph)) {
+    const targetIds = packet.targetIds || packet.target_ids || packet.subjectIds || packet.subject_ids || [];
+    if (targetIds.includes(node?.id)) candidates.push(normalizeHumanReview(packet, { targetIds }));
+  }
+  candidates.sort((a, b) => Number(b.blocking) - Number(a.blocking) || REVIEW_LEVEL_RANK[b.level] - REVIEW_LEVEL_RANK[a.level] || b.score - a.score);
+  return candidates[0] || normalizeHumanReview(null);
+}
+
+function reviewClass(review) {
+  if (review.status === 'approved') return 'review-approved';
+  if (review.status === 'expired') return `review-${review.level} review-expired`;
+  if (review.level === 'none' || review.status === 'not_needed') return '';
+  return `review-${review.level}`;
+}
+
+function humanReviewBadge(node) {
+  const review = humanReviewForNode(node);
+  if (review.level === 'none' || review.status === 'not_needed') return '';
+  const stateClass = review.status === 'approved' ? 'review-approved' : `review-${review.level}`;
+  const marker = review.status === 'approved' ? '\u2713' : review.status === 'expired' ? '\u21bb' : review.blocking ? '!' : '';
+  const title = `${REVIEW_LEVEL_LABEL[review.level]} ${REVIEW_STATUS_LABEL[review.status]}${review.reasons.length ? `: ${review.reasons.map(item => item.message).join(' · ')}` : ''}`;
+  return `<span class="badge human-review-badge ${stateClass}" title="${escAttr(title)}">${esc(REVIEW_LEVEL_LABEL[review.level])}${marker}</span>`;
+}
+
+function reviewQueueModel(graph = lastGraph) {
+  const nodes = graph?.nodes || [];
+  const byPacket = new Map();
+  for (const node of nodes) {
+    const review = humanReviewForNode(node, graph);
+    if (review.level === 'none' || ['not_needed', 'approved', 'rejected'].includes(review.status)) continue;
+    const key = review.reviewPacketId || `node:${node.id}`;
+    const current = byPacket.get(key);
+    const item = { key, review, node, targetIds: review.targetIds.length ? review.targetIds : [node.id] };
+    if (!current || Number(review.blocking) > Number(current.review.blocking) || REVIEW_LEVEL_RANK[review.level] > REVIEW_LEVEL_RANK[current.review.level]) byPacket.set(key, item);
+  }
+  return [...byPacket.values()].sort((a, b) => Number(b.review.blocking) - Number(a.review.blocking) || REVIEW_LEVEL_RANK[b.review.level] - REVIEW_LEVEL_RANK[a.review.level] || b.review.score - a.review.score || String(a.node.id).localeCompare(String(b.node.id)));
+}
+
+function renderReviewQueue(graph = lastGraph) {
+  const container = $('reviewQueue');
+  if (!container) return;
+  const items = reviewQueueModel(graph);
+  if (!items.length) {
+    container.innerHTML = '<h2>Human Review Queue</h2><div class="empty" style="min-height:70px;padding:8px">Machine checks are sufficient for the current snapshot.</div>';
+    return;
+  }
+  container.innerHTML = `<h2>Human Review Queue <span class="badge ${items.some(item => item.review.blocking) ? 'danger' : 'warn'}">${items.length}</span></h2>` + items.map(({ review, node }) => {
+    const reason = review.reasons[0]?.message || 'Human judgment requested';
+    return `<div class="mini-item review-queue-item ${escAttr(review.level)}" data-node-id="${escAttr(node.id)}" role="button" tabindex="0"><span class="badge human-review-badge review-${escAttr(review.level)}">${esc(REVIEW_LEVEL_LABEL[review.level])}${review.blocking ? '!' : ''}</span> <b>${esc(compact(review.question || node.content || node.id, 82))}</b><div class="review-reasons">${esc(compact(reason, 120))} · score ${(review.score * 100).toFixed(0)}%</div></div>`;
+  }).join('');
+  container.querySelectorAll('[data-node-id]').forEach((item) => {
+    item.onclick = () => selectNode(item.dataset.nodeId);
+    item.onkeydown = (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectNode(item.dataset.nodeId); } };
+  });
 }
 
 function graphCounts(graph) {
@@ -837,6 +1014,7 @@ function renderGraph(graph) {
   renderLanes(stageModel);
   renderEdges(stageModel);
   renderNodes(stageModel);
+  renderReviewQueue(graph);
   let restoredNodeId = null;
   if (!selectedNodeId && requestedNodeId && stageModel.nodeById[requestedNodeId]) {
     selectedNodeId = requestedNodeId;
@@ -879,6 +1057,7 @@ function renderNodes(model) {
 
 function nodeHtml(node, pos) {
   const meta = TYPE_META[node.type] || { label: node.type, icon: 'NODE' };
+  const review = humanReviewForNode(node);
   const badges = nodeBadges(node);
   const ref = sourceRefLabel(node);
   const foot = [
@@ -886,8 +1065,8 @@ function nodeHtml(node, pos) {
     ref ? compact(ref, 38) : ''
   ].filter(Boolean).join(' · ');
   return `
-    <div class="node-card ${escAttr(node.type)} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" role="button" tabindex="0"
-      aria-label="${escAttr(`${meta.label}: ${node.content || node.id}`)}"
+    <div class="node-card ${escAttr(node.type)} ${escAttr(reviewClass(review))} ${node._dagLayer === 'staging' ? 'staging' : ''}" data-node-id="${escAttr(node.id)}" data-dag-layer="${escAttr(node._dagLayer || 'committed')}" data-human-review-level="${escAttr(review.level)}" data-human-review-status="${escAttr(review.status)}" role="button" tabindex="0"
+      aria-label="${escAttr(`${meta.label}: ${node.content || node.id}; human review ${REVIEW_LEVEL_LABEL[review.level]} ${REVIEW_STATUS_LABEL[review.status]}`)}"
       style="left:${pos.x}px;top:${pos.y}px">
       <div class="node-head">
         <span class="node-type"><span>${esc(meta.icon)}</span><span>${esc(meta.label)}</span></span>
@@ -900,13 +1079,14 @@ function nodeHtml(node, pos) {
 }
 
 function nodeBadges(node) {
-  if (prMap[node.id]) return `<span class="badge info" title="Looks multi-supported but funnels through one source">shared</span>`;
-  if (fragMap[node.id]) return `<span class="badge warn" title="${escAttr((fragMap[node.id].reasons || []).join(' · '))}">fragile</span>`;
-  if (weakMap[node.id]) return `<span class="badge warn">weak</span>`;
-  if (lbMap[node.id]) return `<span class="badge warn" title="Load-bearing node">${esc(lbMap[node.id].critical_count)}x</span>`;
-  if (node.type === 'source_assertion' || node.status === 'supported') return `<span class="badge ok">ok</span>`;
-  if (node.status === 'conflicted') return `<span class="badge danger">conflict</span>`;
-  return '';
+  const badges = [humanReviewBadge(node)];
+  if (prMap[node.id]) badges.push(`<span class="badge info" title="Looks multi-supported but funnels through one source">shared</span>`);
+  else if (fragMap[node.id]) badges.push(`<span class="badge warn" title="${escAttr((fragMap[node.id].reasons || []).join(' · '))}">fragile</span>`);
+  else if (weakMap[node.id]) badges.push('<span class="badge warn">weak</span>');
+  else if (lbMap[node.id]) badges.push(`<span class="badge warn" title="Load-bearing node">${esc(lbMap[node.id].critical_count)}x</span>`);
+  else if (node.type === 'source_assertion' || node.status === 'supported') badges.push('<span class="badge ok">ok</span>');
+  else if (node.status === 'conflicted') badges.push('<span class="badge danger">conflict</span>');
+  return badges.filter(Boolean).join('');
 }
 
 function sourceRefLabel(node) {
@@ -1142,6 +1322,7 @@ function showNodeDetail(id) {
   const preview = sourcePreviewModel(node);
   const incoming = (stageModel.incoming[id] || []).slice(0, 6);
   const outgoing = (stageModel.outgoing[id] || []).slice(0, 6);
+  const review = humanReviewForNode(node);
   $('nodeInspector').innerHTML = `
     <h2>Node Detail</h2>
     <div class="detail-title">
@@ -1154,6 +1335,7 @@ function showNodeDetail(id) {
     <div class="row"><span class="lab">status</span><span class="val">${nodeBadges(node) || esc(node.status || '-')}</span></div>
     ${support ? `<div class="row"><span class="lab">support</span><span class="val"><span class="badge ${support.value >= .7 ? 'ok' : 'warn'}">ν ${support.value.toFixed(2)}</span> ${support.count} edge(s)</span></div>` : ''}
     ${analysisRowsHtml(node)}
+    ${humanReviewDetailHtml(review)}
     <div class="row"><span class="lab">trace</span><span class="val">${esc((node.trace_refs || []).join(', ') || '-')}</span></div>
     ${refRows}
     ${node.type === 'source_assertion' ? `<div class="row"><span class="lab">preview</span><span class="val">${esc(preview.message)}</span></div>` : ''}
@@ -1173,7 +1355,43 @@ function showNodeDetail(id) {
   $('nodeInspector').querySelectorAll('.mini-item[data-node-id]').forEach((item) => {
     item.onclick = () => selectNode(item.dataset.nodeId);
   });
+  bindHumanReviewActions($('nodeInspector'));
   renderPreviewFeedback();
+}
+
+function humanReviewDetailHtml(review) {
+  if (review.level === 'none' || review.status === 'not_needed') return '<div class="row"><span class="lab">human</span><span class="val"><span class="badge ok">H0 machine checks sufficient</span></span></div>';
+  const reasons = review.reasons.length ? `<ul>${review.reasons.map(item => `<li><b>${esc(item.code)}</b> — ${esc(item.message)}</li>`).join('')}</ul>` : '<p>No structured reason recorded.</p>';
+  const checks = Array.isArray(review.machineChecks) && review.machineChecks.length ? `<details><summary>Completed machine checks (${review.machineChecks.length})</summary><pre>${esc(JSON.stringify(review.machineChecks, null, 2))}</pre></details>` : '';
+  const context = [review.delta ? `<details><summary>Delta</summary><pre>${esc(JSON.stringify(review.delta, null, 2))}</pre></details>` : '', review.blastRadius ? `<details><summary>Blast radius</summary><pre>${esc(JSON.stringify(review.blastRadius, null, 2))}</pre></details>` : ''].join('');
+  const actions = review.reviewPacketId && !['approved', 'rejected', 'expired'].includes(review.status) ? `<div class="review-actions" data-review-packet="${escAttr(review.reviewPacketId)}"><button class="approve" data-review-decision="approve">Approve</button><button class="reject" data-review-decision="reject">Reject</button><button data-review-decision="request_evidence">Request evidence</button><button data-review-decision="defer">Defer</button></div>` : '';
+  return `<section class="review-detail ${review.blocking ? 'blocking' : ''}" aria-label="Human review checkpoint"><h3>👤 ${esc(REVIEW_LEVEL_LABEL[review.level])} · ${esc(REVIEW_STATUS_LABEL[review.status])}${review.blocking ? ' · blocking' : ''}</h3>${review.question ? `<p><b>${esc(review.question)}</b></p>` : ''}${reasons}${checks}${context}${review.recommendedAction ? `<p><b>Recommended:</b> ${esc(review.recommendedAction)}</p>` : ''}<p class="review-reasons">score ${(review.score * 100).toFixed(0)}% · policy ${esc(review.policyVersion || 'unversioned')}${review.reviewPacketId ? ` · packet ${esc(review.reviewPacketId)}` : ''}</p>${actions}</section>`;
+}
+
+async function submitHumanReviewDecision(packetId, action) {
+  if (!currentThread || !currentSnapshot?.digest || !packetId) return;
+  const buttons = [...document.querySelectorAll('[data-review-decision]')];
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const response = await api(`/threads/${encodeURIComponent(currentThread)}/reviews/${encodeURIComponent(packetId)}/decision`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, expectedSnapshotDigest: currentSnapshot.digest, actor: 'human:evidence-dag-ui', rationale: `Human ${action} decision from Evidence DAG review packet` })
+    });
+    if (!response?.ok) throw new Error(response?.error?.message || 'Human review decision failed.');
+    await loadGraph();
+  } catch (error) {
+    setStatus(`review failed: ${error instanceof Error ? error.message : String(error)}`);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
+}
+
+function bindHumanReviewActions(container) {
+  container.querySelectorAll('[data-review-packet]').forEach((group) => {
+    group.querySelectorAll('[data-review-decision]').forEach((button) => {
+      button.onclick = () => submitHumanReviewDecision(group.dataset.reviewPacket, button.dataset.reviewDecision);
+    });
+  });
 }
 
 function refHtml(node) {
@@ -1363,6 +1581,7 @@ function renderEmptyGraph(message) {
   showMetrics(null);
   showAuditRun(null);
   showAnalysis(null);
+  renderReviewQueue(null);
 }
 
 async function loadAuditRuns() {
@@ -1507,6 +1726,11 @@ window.addEventListener('message', (event) => {
 $('refresh').onclick = loadGraph;
 $('auditNow').onclick = runAuditNow;
 $('fit').onclick = fitGraph;
+$('reviewHeat').onchange = (event) => {
+  reviewHeatEnabled = Boolean(event.target.checked);
+  document.body.dataset.reviewHeat = reviewHeatEnabled ? '1' : '0';
+  if (lastGraph) renderGraph(lastGraph);
+};
 $('auto').onchange = (event) => {
   if (event.target.checked) {
     timer = setInterval(pollChanges, 3000);
@@ -1521,6 +1745,7 @@ $('stageScroll').addEventListener('click', (event) => {
 });
 
 // A URL-scoped thread can paint immediately; populating the thread picker is independent.
+document.body.dataset.reviewHeat = '1';
 const initialGraphLoad = currentThread ? loadGraph() : null;
 loadThreads().then(() => {
   return initialGraphLoad || loadGraph();

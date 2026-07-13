@@ -146,7 +146,7 @@ def normalize_scope(value: dict | None, default_sessions: Iterable[str] = ()) ->
 
 
 def validate_autonomy_mode(mode: str | None) -> str:
-    selected = mode or "autonomous"
+    selected = mode or "checkpointed"
     if selected not in AUTONOMY_MODES:
         raise ValueError(f"invalid autonomyMode: {selected}")
     return selected

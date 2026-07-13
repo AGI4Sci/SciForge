@@ -1,10 +1,16 @@
-\begin{thebibliography}{19}
+\begin{thebibliography}{22}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{{#1}}
 \providecommand{\urlprefix}{URL }
 \providecommand{\doi}[1]{\url{https://doi.org/#1}}
 \providecommand{\eprint}[2][]{\url{#2}}
  \bibcommenthead
+
+\bibitem[{Abdine et~al.(2023)Abdine, Chatzianastasis, Bouyioukos, and
+  Vazirgiannis}]{abdine2023prot2text}
+Abdine H, Chatzianastasis M, Bouyioukos C, et~al (2023) {Prot2Text}: Multimodal
+  protein's function generation with {GNNs} and transformers. arXiv preprint
+  arXiv:2307.14367
 
 \bibitem[{{Allen Institute for AI}(2025)}]{scholarQA2025}
 {Allen Institute for AI} (2025) {Ai2 ScholarQA}. Available at
@@ -78,6 +84,19 @@ Lu C, Lu C, Lange RT, et~al (2024) {The AI Scientist: Towards Fully Automated
 {OmicsClaw Contributors} (2026) {OmicsClaw: Local-First Multi-Omics Research
   Assistant}. Available at \url{https://github.com/TianGzlab/OmicsClaw}
   (accessed 4 July 2026)
+
+\bibitem[{Pei et~al.(2024)Pei, Wu, Gao, Liang, Fang, Zhu, Xie, Qin, and
+  Yan}]{pei2024biot5}
+Pei Q, Wu L, Gao K, et~al (2024) {BioT5+}: Towards generalized biological
+  understanding with {IUPAC} integration and multi-task tuning. arXiv preprint
+  arXiv:2402.17810
+
+\bibitem[{Rizvi et~al.(2025)Rizvi, Levine, Patel, Zhang, Wang, Perry, Vrkic,
+  Constante, Fu, He, Zhang, Tang, Lyu, Darji, Li, Sun, Jeong, Zhao, Kwan,
+  Braun, Hafler, Chung, Dhodapkar, Jaeger, Perozzi, Ishizuka, Azizi, and van
+  Dijk}]{rizvi2025c2s}
+Rizvi SA, Levine D, Patel A, et~al (2025) Scaling large language models for
+  next-generation single-cell analysis. bioRxiv \doi{10.1101/2025.04.14.648850}
 
 \bibitem[{Schmidgall et~al.(2025)}]{agentLaboratory2025}
 Schmidgall S, et~al (2025) {Agent Laboratory: Using LLM Agents as Research

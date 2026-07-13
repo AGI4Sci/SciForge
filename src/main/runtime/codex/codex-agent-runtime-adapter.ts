@@ -583,6 +583,7 @@ function mapCodexThread(thread: CodexNormalizedThread): AgentRuntimeThread {
 function mapCodexDetail(threadId: string, detail: {
   blocks: CodexChatBlock[]
   latestSeq: number
+  workspace?: string
   threadStatus?: string
   latestTurnId?: string
   latestUserMessageId?: string
@@ -621,6 +622,7 @@ function mapCodexDetail(threadId: string, detail: {
     ...(turnId && detail.threadStatus ? { status: detail.threadStatus } : {}),
     ...(turnId ? { latestTurnId: turnId } : {}),
     latestSeq: detail.latestSeq,
+    workspace: detail.workspace,
     turns,
     items,
     usage: detail.usage,

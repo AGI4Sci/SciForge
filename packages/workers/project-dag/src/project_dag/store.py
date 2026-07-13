@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS evidence_snapshot (
 
 CREATE TABLE IF NOT EXISTS project_policy (
   project_key        TEXT PRIMARY KEY,
-  autonomy_mode      TEXT NOT NULL DEFAULT 'autonomous'
+  autonomy_mode      TEXT NOT NULL DEFAULT 'checkpointed'
                      CHECK(autonomy_mode IN ('autonomous','checkpointed','supervised')),
   policy_version     INTEGER NOT NULL DEFAULT 1,
   checkpoints        TEXT NOT NULL DEFAULT '[]',
@@ -404,7 +404,7 @@ class Store:
             "reason": "TEXT NOT NULL DEFAULT 'manual'",
             "priority": "INTEGER NOT NULL DEFAULT 0",
             "lane": "TEXT NOT NULL DEFAULT 'P3'",
-            "autonomy_mode": "TEXT NOT NULL DEFAULT 'autonomous'",
+            "autonomy_mode": "TEXT NOT NULL DEFAULT 'checkpointed'",
             "attempts": "INTEGER NOT NULL DEFAULT 0",
             "next_attempt_at": "TEXT",
             "created_at": "TEXT",

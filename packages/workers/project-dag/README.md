@@ -26,7 +26,7 @@ Content-Type: application/json
   },
   "reason":"evidence_snapshot_committed",
   "priority":5,
-  "autonomyMode":"autonomous"
+  "autonomyMode":"checkpointed"
 }
 ```
 
@@ -47,8 +47,16 @@ Snapshot 提交事务只把绑定该 immutable digest 的 L0 请求写入独立 
 - `GET /claims?projectKey=...`、`GET /claims/{id}?projectKey=...`
 - `GET /provenance/{claimId}?projectKey=...&snapshotDigest=...`
 - `GET /assessments|findings|reviews|attention?projectKey=...`
+- `POST /reviews/{reviewPacketId}/decision`：记录 `approve | reject | defer | request_evidence` 人工结果。
 
 Graph/claim/detail 查询只读取 latest committed Snapshot payload；即使 writer 正在事务中更新 current tables，客户端仍只看见上一个完整版本。
+
+`GET /graph` 同时返回节点级 `humanReview`、去重的 `humanReviews`、当前
+`reviewPackets` 和项目级 `humanReview` gate 汇总。统一状态为
+`not_needed | pending | approved | rejected | deferred | expired`；每条记录包含
+level、0..1 score、结构化 reasons、blocking、policyVersion、timestamps 与 checker。
+Review Packet 还包含 question、machineChecks、delta、blastRadius、recommendedAction
+和 options。新项目默认 `checkpointed`；旧 Snapshot/数据库无需 human-review 字段仍可读取。
 
 内置 UI 的 Claim 列表可点击，并把详情查询固定到列表所来自的 committed Snapshot digest。详情按设计顺序展示状态与 scope、按溯源等级/工件可验证性/source quality 分维度排序的 strongest path、按 Artifact 身份去重的独立来源、支持/反对/refinement/适用性限定、ArtifactVersion/SourceAnchor/run、L0–L4 与断点，以及与该 Claim Finding 可证明关联的 DecisionEvent。不同 session 不会被误算成独立来源，项目级 Decision 也不会冒充 Claim 历史。移除来源的 what-if 只在浏览器内对 committed graph 做 `supports` / `derived_from` / `same_as` 依赖模拟，不发写请求、不修改当前图。
 

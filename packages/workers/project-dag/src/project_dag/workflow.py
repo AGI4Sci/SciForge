@@ -20,6 +20,7 @@ from .contracts import (
 )
 from .reader import EvidenceSnapshot, SessionReader
 from .store import Store, new_id, now_iso
+from .human_review import evaluate_project_human_review
 
 COMPILER_VERSION = "project-dag/1"
 UPDATE_RETRY_BASE_SECONDS = max(
@@ -80,7 +81,7 @@ class ProjectWorkflow:
             t = now_iso()
             self.store.x(
                 "INSERT INTO project_policy (project_key,autonomy_mode,updated_at)"
-                " VALUES (?,'autonomous',?)", (project_key, t))
+                " VALUES (?,'checkpointed',?)", (project_key, t))
             self.store.conn.commit()
             row = self.store.q1("SELECT * FROM project_policy WHERE project_key=?", (project_key,))
         assert row is not None
@@ -455,6 +456,39 @@ class ProjectWorkflow:
         )
         version = int((latest or {}).get("version") or 0) + 1
         created_at = now_iso()
+        graph = self._snapshot_graph(project_key, scope["includedSessions"])
+        assessment_specs = self._assessment_specs(graph)
+        policy = self.policy(project_key)
+        evidence_reviews = []
+        for entry in vector:
+            registered = self.store.q1(
+                "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
+                (entry["threadId"], entry["digest"]),
+            )
+            envelope = _loads((registered or {}).get("envelope"), {})
+            if isinstance(envelope.get("humanReview"), dict):
+                evidence_reviews.append(envelope["humanReview"])
+        open_reviews = self.store.q(
+            "SELECT * FROM review WHERE project_key=? AND status='open'"
+            " AND review_type<>'human_review_packet' ORDER BY created_at",
+            (project_key,),
+        )
+        review_result = evaluate_project_human_review(
+            project_key=project_key, graph=graph, assessments=assessment_specs,
+            evidence_reviews=evidence_reviews, open_reviews=open_reviews, policy=policy,
+            input_identity={"evidenceVector": vector, "goalVersion": self._goal_version(project_key)},
+            created_at=created_at,
+        )
+        packet = review_result["reviewPacket"]
+        human_review_summary = {
+            "policyVersion": str(policy["policy_version"]),
+            "gateStatus": "pending" if packet else "not_needed",
+            "pendingCount": 1 if packet else 0,
+            "blockingPacketIds": [packet["id"]] if packet and packet["blocking"] else [],
+            "reviewPackets": [packet] if packet else [],
+        }
+        review_result["graph"]["humanReview"] = human_review_summary
+        review_result["graph"]["reviewPackets"] = [packet] if packet else []
         payload = {
             "projectKey": project_key,
             "version": version,
@@ -466,17 +500,19 @@ class ProjectWorkflow:
             "createdAt": created_at,
             "status": "committed",
             "autonomyMode": autonomy_mode,
-            "graph": self._snapshot_graph(project_key, scope["includedSessions"]),
+            "graph": review_result["graph"],
             "compileDiff": compile_result["diff"],
+            "humanReview": human_review_summary,
         }
-        payload["assessments"] = self._assessment_specs(payload["graph"])
+        payload["assessments"] = review_result["assessments"]
         payload["digest"] = digest_json(payload, "project")
         if not self.store.conn.in_transaction:
             raise RuntimeError("Project Snapshot commit requires the compiler transaction")
         try:
-            for assessment in payload["assessments"]:
+            for assessment in assessment_specs:
                 self._assessment(project_key=project_key, target_digest=payload["digest"],
                                  **assessment)
+            self._persist_review_packet(project_key, payload["digest"], packet, created_at)
             self.store.x(
                 "INSERT INTO project_snapshot (project_key,version,digest,goal_version,"
                 "evidence_vector,excluded_sessions,isolated_sessions,compiler_version,created_at,"
@@ -1540,7 +1576,13 @@ class ProjectWorkflow:
         pending = self.store.q1(
             "SELECT id FROM project_update_job WHERE project_key=?"
             " AND status IN ('queued','running','failed','interrupted')", (project_key,))
-        gates_pass = not critical and pending is None
+        blocking_review_packets = [
+            packet for packet in self.review_packets(project_key, project_snapshot_digest)
+            if packet.get("blocking") and packet.get("status") in {
+                "pending", "rejected", "deferred",
+            }
+        ]
+        gates_pass = not critical and pending is None and not blocking_review_packets
         certification = requested_status
         if requested_status == "certified" and not gates_pass:
             certification = "blocked"
@@ -1558,9 +1600,148 @@ class ProjectWorkflow:
         self._event(project_key, "ReleaseRecordCreated", created_by, {
             "releaseId": release_id, "certificationStatus": certification,
             "runtimeAuthorization": runtime_authorization if external_action else None,
+            "blockingReviewPacketIds": [packet["id"] for packet in blocking_review_packets],
         })
         self.store.conn.commit()
         return self.release(release_id)  # type: ignore[return-value]
+
+    # ---------------------------------------------------------- human review
+    def _persist_review_packet(self, project_key: str, snapshot_digest: str,
+                               packet: Optional[dict], timestamp: str) -> None:
+        """Upsert the current packet and expire superseded open packets."""
+        current_id = packet["id"] if packet else None
+        stale = self.store.q(
+            "SELECT * FROM review WHERE project_key=? AND review_type='human_review_packet'"
+            " AND status='open' AND (? IS NULL OR id<>?)",
+            (project_key, current_id, current_id),
+        )
+        for row in stale:
+            payload = _loads(row["payload"], {})
+            payload.update({"status": "expired", "updatedAt": timestamp,
+                            "completedAt": timestamp})
+            self.store.x(
+                "UPDATE review SET status='resolved',payload=?,resolved_at=? WHERE id=?",
+                (canonical_json(payload), timestamp, row["id"]),
+            )
+        if packet is None:
+            return
+        stored = self.store.q1("SELECT * FROM review WHERE id=?", (packet["id"],))
+        if stored:
+            prior = _loads(stored["payload"], {})
+            status = prior.get("status", packet["status"])
+            updated = {**packet, "snapshotDigest": snapshot_digest,
+                       "status": status, "createdAt": prior.get("createdAt", packet["createdAt"]),
+                       "updatedAt": timestamp}
+            if status in {"approved", "rejected", "deferred", "expired"}:
+                updated["completedAt"] = prior.get("completedAt") or timestamp
+            self.store.x("UPDATE review SET payload=? WHERE id=?",
+                         (canonical_json(updated), packet["id"]))
+            return
+        persisted = {**packet, "snapshotDigest": snapshot_digest}
+        self.store.x(
+            "INSERT INTO review (id,project_key,subject_id,review_type,checkpoint,status,payload,"
+            "created_at) VALUES (?,?,?,'human_review_packet',?,'open',?,?)",
+            (packet["id"], project_key, packet["id"],
+             "human" if packet["blocking"] else "human_recommended",
+             canonical_json(persisted), timestamp),
+        )
+        self._event(project_key, "HumanReviewPacketQueued", "project-review-policy", {
+            "reviewPacketId": packet["id"], "snapshotDigest": snapshot_digest,
+            "blocking": packet["blocking"], "subjectIds": packet["subjectIds"],
+            "policyVersion": packet["policyVersion"],
+        })
+
+    def review_packets(self, project_key: str, snapshot_digest: Optional[str] = None) -> list[dict]:
+        rows = self.store.q(
+            "SELECT * FROM review WHERE project_key=? AND review_type='human_review_packet'"
+            " ORDER BY created_at,id", (project_key,),
+        )
+        packets = []
+        for row in rows:
+            payload = _loads(row["payload"], {})
+            if snapshot_digest and payload.get("snapshotDigest") != snapshot_digest:
+                continue
+            packets.append(payload)
+        return packets
+
+    def human_review_summary(self, project_key: str,
+                             snapshot_digest: Optional[str] = None) -> dict:
+        target = snapshot_digest or (self.latest_snapshot(project_key) or {}).get("digest")
+        packets = self.review_packets(project_key, target) if target else []
+        pending = [packet for packet in packets if packet.get("status") == "pending"]
+        rejected = [packet for packet in packets if packet.get("status") == "rejected"]
+        deferred = [packet for packet in packets if packet.get("status") == "deferred"]
+        gate_status = (
+            "rejected" if rejected else "pending" if pending else
+            "deferred" if deferred else "approved" if packets else "not_needed"
+        )
+        policy = self.policy(project_key)
+        return {
+            "policyVersion": str(policy["policy_version"]), "gateStatus": gate_status,
+            "pendingCount": len(pending),
+            "blockingPacketIds": [packet["id"] for packet in pending if packet.get("blocking")],
+            "reviewPackets": packets,
+        }
+
+    def record_review_result(self, *, project_key: str, packet_id: str, action: str,
+                             actor_id: str, rationale: str,
+                             confidence: float = 1.0,
+                             expected_snapshot_digest: Optional[str] = None) -> dict:
+        action_map = {
+            "approve": ("endorse", "approved", "resolved"),
+            "reject": ("challenge", "rejected", "resolved"),
+            "defer": ("defer", "deferred", "deferred"),
+            "request_evidence": ("request_evidence", "pending", "open"),
+        }
+        if action not in action_map:
+            raise ValueError("review action must be approve, reject, defer or request_evidence")
+        if not actor_id.strip() or not rationale.strip():
+            raise ValueError("actorId and rationale are required")
+        review = self.store.q1("SELECT * FROM review WHERE id=?", (packet_id,))
+        if review is None or review["project_key"] != project_key \
+                or review["review_type"] != "human_review_packet":
+            raise KeyError(packet_id)
+        payload = _loads(review["payload"], {})
+        if review["status"] != "open" or payload.get("status") == "expired":
+            raise ValueError("Review Packet is no longer open")
+        digest = payload.get("snapshotDigest")
+        snapshot = self.snapshot(digest) if isinstance(digest, str) else None
+        if snapshot is None or snapshot["projectKey"] != project_key:
+            raise ValueError("Review Packet does not identify a committed Project Snapshot")
+        if expected_snapshot_digest and expected_snapshot_digest != digest:
+            raise ValueError("Review Packet snapshot changed; reload before recording a decision")
+        latest = self.latest_snapshot(project_key)
+        if latest is None or latest["digest"] != digest:
+            raise ValueError("Review Packet is stale; reload the latest Project Snapshot")
+        decision_action, review_status, db_status = action_map[action]
+        policy = self.policy(project_key)
+        timestamp = now_iso()
+        decision_id = self._record_decision_row(
+            project_key=project_key, review_id=packet_id, finding_id=None,
+            action=decision_action, decided_by="human", actor_id=actor_id,
+            autonomy_mode=policy["autonomy_mode"], rationale=rationale,
+            alternatives=sorted(set(action_map) - {action}), evidence_digest=digest,
+            confidence=confidence, reversibility="fully_reversible", supersedes_id=None,
+        )
+        payload.update({
+            "status": review_status, "updatedAt": timestamp,
+            "humanResult": {"action": action, "decisionId": decision_id,
+                            "actorId": actor_id, "rationale": rationale,
+                            "recordedAt": timestamp},
+        })
+        if review_status != "pending":
+            payload["completedAt"] = timestamp
+        self.store.x(
+            "UPDATE review SET status=?,payload=?,resolved_at=? WHERE id=?",
+            (db_status, canonical_json(payload),
+             timestamp if db_status != "open" else None, packet_id),
+        )
+        self._event(project_key, "HumanReviewResultRecorded", actor_id, {
+            "reviewPacketId": packet_id, "decisionId": decision_id,
+            "action": action, "snapshotDigest": digest,
+        })
+        self.store.conn.commit()
+        return payload
 
     # --------------------------------------------------------------- queries
     def job(self, job_id: str) -> Optional[dict]:
@@ -1625,6 +1806,8 @@ class ProjectWorkflow:
             )),
             "attentionCount": int((attention or {}).get("n") or 0),
             "autonomy": self.policy(project_key),
+            "humanReview": self.human_review_summary(
+                project_key, snapshot["digest"] if snapshot else None),
         }
 
     def snapshot(self, digest: str) -> Optional[dict]:
@@ -1649,7 +1832,8 @@ class ProjectWorkflow:
 
     def reviews(self, project_key: str, status: str = "open") -> list[dict]:
         rows = self.store.q(
-            "SELECT * FROM review WHERE project_key=? AND status=? ORDER BY created_at",
+            "SELECT * FROM review WHERE project_key=? AND status=?"
+            " ORDER BY CASE WHEN review_type='human_review_packet' THEN 1 ELSE 0 END,created_at",
             (project_key, status),
         )
         for row in rows:

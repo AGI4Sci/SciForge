@@ -23,6 +23,7 @@ EVENT_TYPES = frozenset({
     "ArtifactContentChanged",
     "AuditCompleted",
     "FindingOpened",
+    "HumanReviewDecisionRecorded",
 })
 
 

@@ -70,6 +70,35 @@ describe('WorkspacePreviewHost', () => {
     })
   })
 
+  it('infers image MIME metadata when opening an image by path only', async () => {
+    await writeFile(join(workspaceRoot, 'figure.png'), Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a
+    ]))
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-image-path-only' })
+
+    const opened = await host.open({ workspaceRoot, path: 'figure.png' })
+
+    expect(opened).toMatchObject({
+      ok: true,
+      session: {
+        pluginId: 'image',
+        modality: 'image',
+        file: { mimeType: 'image/png' }
+      },
+      file: { mimeType: 'image/png' }
+    })
+    if (!opened.ok) return
+
+    await expect(host.describeAsset(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      descriptor: { file: { mimeType: 'image/png' } }
+    })
+    await expect(host.observe(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      observation: { file: { mimeType: 'image/png' } }
+    })
+  })
+
   it('seeds the session and observation with a structured selection at open time', async () => {
     await writeFile(join(workspaceRoot, 'selected.csv'), 'name,value\nalpha,1\nbeta,2\n', 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-selected' })

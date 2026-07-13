@@ -17,7 +17,10 @@ import json
 from typing import Any
 
 from .graph import ThreadGraph
-from .model import Artifact, ArtifactVersion, Assessment, Edge, EdgeRel, Node, NodeType, SourceAnchor
+from .model import (
+    Artifact, ArtifactVersion, Assessment, Edge, EdgeRel, Node, NodeType,
+    ReviewPacket, SourceAnchor,
+)
 
 PREFIX = {
     "prov": "http://www.w3.org/ns/prov#",
@@ -82,7 +85,7 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
                 "prov:influencee": e.dst, "prov:influencer": e.src, **common,
             }
 
-    return {
+    result = {
         "prefix": dict(PREFIX),
         "entity": entities,
         "activity": activities,
@@ -105,6 +108,10 @@ def to_prov_json(graph: ThreadGraph) -> dict[str, Any]:
         },
         "edag:assessments": [item.to_dict() for item in graph.assessments],
     }
+    if graph.review_policy_version or graph.review_packets:
+        from .human_review import human_review_summary
+        result["edag:humanReview"] = human_review_summary(graph)
+    return result
 
 
 def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
@@ -190,6 +197,13 @@ def from_prov_json(doc: dict[str, Any]) -> ThreadGraph:
         item = SourceAnchor.from_dict(raw)
         graph.source_anchors[item.anchor_id] = item
     graph.assessments = [Assessment.from_dict(raw) for raw in doc.get("edag:assessments") or []]
+    review = doc.get("edag:humanReview") or {}
+    if review:
+        graph.review_policy_version = review.get("policyVersion") or review.get("policy_version")
+        graph.review_packets = [
+            ReviewPacket.from_dict(raw)
+            for raw in (review.get("reviewPackets") or review.get("review_packets") or [])
+        ]
 
     return graph
 

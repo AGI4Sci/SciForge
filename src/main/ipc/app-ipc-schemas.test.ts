@@ -68,6 +68,30 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts side-thread metadata when starting a PDF annotation thread', () => {
+    expect(agentRuntimeStartThreadPayloadSchema.parse({
+      runtimeId: 'codex',
+      workspace: ' /tmp/workspace ',
+      title: ' PDF: selected text ',
+      mode: ' agent ',
+      relation: ' side ',
+      parentThreadId: ' parent-thread ',
+      parentTurnId: ' parent-turn ',
+      threadSource: ' pdf_annotation ',
+      sidebarVisibility: ' hidden '
+    })).toEqual({
+      runtimeId: 'codex',
+      workspace: '/tmp/workspace',
+      title: 'PDF: selected text',
+      mode: 'agent',
+      relation: 'side',
+      parentThreadId: 'parent-thread',
+      parentTurnId: 'parent-turn',
+      threadSource: 'pdf_annotation',
+      sidebarVisibility: 'hidden'
+    })
+  })
+
   it('accepts neutral agent runtime turn payloads', () => {
     const payload = agentRuntimeStartTurnPayloadSchema.parse({
       runtimeId: 'claude',
