@@ -1740,9 +1740,9 @@ test('pure text responses expose upstream reasoning content as a Responses reaso
       type: 'summary_text',
       text: 'Need a concise one sentence answer.',
     }]);
-    assert.deepEqual(calls[0]?.body.reasoning, { effort: 'high', summary: 'detailed' });
+    assert.equal(calls[0]?.body.reasoning, undefined);
     assert.equal(calls[0]?.body.reasoning_effort, 'high');
-    assert.equal(calls[0]?.body.include_reasoning, true);
+    assert.equal(calls[0]?.body.include_reasoning, undefined);
   } finally {
     await server.close();
   }

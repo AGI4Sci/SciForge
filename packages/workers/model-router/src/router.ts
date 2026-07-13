@@ -2705,9 +2705,7 @@ function chatRequestOptionsFromResponsesRequest(request: Record<string, unknown>
     max_tokens: chatRequest.max_tokens,
     parallel_tool_calls: chatRequest.parallel_tool_calls,
     metadata: chatRequest.metadata,
-    reasoning: chatRequest.reasoning,
     reasoning_effort: chatRequest.reasoning_effort,
-    include_reasoning: chatRequest.include_reasoning,
   }).filter(([, value]) => value !== undefined));
 }
 
