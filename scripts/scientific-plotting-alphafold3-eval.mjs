@@ -81,7 +81,7 @@ const architectureDraft = {
 }
 
 const commonBrief = [
-  'scientific_plotting_research_brief evidence for AlphaFold 3:',
+  'Retained source evidence for AlphaFold 3:',
   `Reference paper: ${alphaFold3Paper.title}, ${alphaFold3Paper.venue} ${alphaFold3Paper.year}, DOI ${alphaFold3Paper.doi}.`,
   'Figure conclusion: AlphaFold 3 broadens structure prediction from single proteins to biomolecular interactions, while confidence and modality-specific limits must remain visible.',
   'Evidence logic: show input modality breadth, diffusion-based structure generation, benchmark gains with uncertainty, and explicit caveats for low-evidence or unusual complexes.',
@@ -182,7 +182,7 @@ async function main() {
     outputDir: outputRoot,
     paper: alphaFold3Paper,
     status: {},
-    brief: null,
+    evidence: [alphaFold3Paper],
     cases: [],
     contactSheetPath: null,
     warnings: []
@@ -191,18 +191,6 @@ async function main() {
   try {
     summary.status.scientificPlotting = await callStructured(scientific.client, 'scientific_plotting_status', {}, 'status', 30_000)
     summary.status.imageGeneration = await callStructured(image.client, 'image_generation_status', {}, 'status', 30_000)
-    summary.brief = await callStructured(scientific.client, 'scientific_plotting_research_brief', {
-      workspaceRoot,
-      task: 'Evaluate SciForge publication-figure generation for AlphaFold 3 Nature paper: architecture schematic, benchmark data chart, and multi-panel summary.',
-      domain: 'structural biology and computational biology',
-      targetVenue: 'Nature',
-      dataSummary: 'Representative synthetic normalized values only; no exact paper data extraction. Use AlphaFold 3 paper as figure-intent and style evidence.',
-      referenceFigureNotes: 'Nature-style combination figures: compact multi-panel layouts, model pipeline diagrams, benchmark score panels, uncertainty, and explanatory callouts.',
-      candidatePapers: [alphaFold3Paper],
-      maxPapers: 1
-    }, 'brief', 60_000)
-    await writeJson(join(outputRoot, 'alphafold3-research-brief.json'), summary.brief)
-
     for (const item of cases) {
       const first = item.firstKind === 'scientific_plotting'
         ? await renderScientificFirst(scientific.client, item)
@@ -210,7 +198,7 @@ async function main() {
 
       const polish = await renderPolish(image.client, item, first)
       const review = first.ok && polish.ok
-        ? await reviewPair(image.client, item, first.outputPath, polish.outputPath)
+        ? await reviewPair(image.client, item, first.outputPath, polish.outputPath, polish.manifestPath)
         : null
 
       summary.cases.push({
@@ -257,17 +245,25 @@ async function connectMcp(entry, flag, name) {
 }
 
 async function renderScientificFirst(client, item) {
-  const scientificVisualPlan = {
-    route: 'deterministic_plot',
+  const visualPlan = {
+    planId: `visual-plan-${item.id}-code`,
+    route: 'code',
     routeLocked: true,
     rationale: 'This artifact contains data-bearing marks whose values, labels, axes, and statistics must remain reproducible.',
+    sourceArtifacts: [],
     reproducibleInputs: ['structured data', 'labels', 'template', 'style profile'],
-    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+    lockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+    modelOwnedElements: [],
+    contextStatus: 'ready',
+    contextStopReason: 'sufficient',
+    contextEvidenceIds: [],
+    unresolvedContext: [],
+    releaseCeiling: 'publication_ready',
     fallbackPolicy: 'fail_closed'
   }
   const response = await callStructured(client, 'scientific_plotting_render', {
     workspaceRoot,
-    scientificVisualPlan,
+    visualPlan,
     template: item.template,
     figureId: item.figureId,
     labels: item.labels,
@@ -284,20 +280,29 @@ async function renderScientificFirst(client, item) {
 }
 
 async function renderImageFirst(client, item) {
+  const visualPlan = {
+    planId: `visual-plan-${item.id}-model`,
+    route: 'model',
+    routeLocked: true,
+    rationale: 'The architecture panel is a conceptual visual whose visual expression is model-owned.',
+    sourceArtifacts: [],
+    reproducibleInputs: [],
+    lockedElements: [],
+    modelOwnedElements: ['architecture composition', 'module styling', 'visual hierarchy'],
+    contextStatus: 'ready',
+    contextStopReason: 'sufficient',
+    contextEvidenceIds: [],
+    unresolvedContext: [],
+    releaseCeiling: 'publication_ready',
+    fallbackPolicy: 'fail_closed'
+  }
   const recipe = {
     mode: 'text_to_image',
     prompt: item.firstPrompt,
     size: item.size,
     stylePreset: 'nature-publication-schematic',
     outputFormat: 'png',
-    scientificVisualPlan: {
-      route: 'generative_visual',
-      routeLocked: true,
-      rationale: 'The architecture panel is a conceptual scientific visual.',
-      reproducibleInputs: [],
-      truthLockedElements: ['architecture entities', 'module relationships', 'paper facts'],
-      fallbackPolicy: 'fail_closed'
-    }
+    visualPlan
   }
   const response = await callStructured(client, 'image_generation_render', {
     workspaceRoot,
@@ -310,14 +315,22 @@ async function renderImageFirst(client, item) {
 
 async function renderPolish(client, item, first) {
   const referencePath = first.outputPath ? toWorkspaceRelative(first.outputPath) : undefined
-  const scientificVisualPlan = {
-    route: item.firstKind === 'scientific_plotting' ? 'hybrid_composite' : 'generative_visual',
+  const visualPlan = {
+    planId: `visual-plan-${item.id}-polish`,
+    route: referencePath ? 'hybrid' : 'model',
     routeLocked: true,
     rationale: item.firstKind === 'scientific_plotting'
       ? 'Preserve the deterministic scientific panel while adding a controlled visual composition layer.'
       : 'Refine a conceptual scientific visual without introducing data-bearing marks.',
+    sourceArtifacts: referencePath ? [referencePath] : [],
     reproducibleInputs: referencePath ? [referencePath] : [],
-    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics', 'paper facts'],
+    lockedElements: referencePath ? ['data values', 'category names', 'axis labels', 'statistics', 'paper facts'] : [],
+    modelOwnedElements: ['visual polish', 'callouts', 'panel composition'],
+    contextStatus: 'ready',
+    contextStopReason: 'sufficient',
+    contextEvidenceIds: [],
+    unresolvedContext: [],
+    releaseCeiling: 'publication_ready',
     fallbackPolicy: 'fail_closed'
   }
   const prompt = [
@@ -336,7 +349,7 @@ async function renderPolish(client, item, first) {
     modeHint: referencePath ? 'image_to_image' : 'text_to_image',
     size: item.size,
     stylePreset: 'nature-cns-polish',
-    scientificVisualPlan,
+    visualPlan,
     ...(referencePath ? { referencePath } : {})
   }, 'plan', 60_000).catch((error) => ({
     ok: false,
@@ -349,7 +362,7 @@ async function renderPolish(client, item, first) {
     prompt,
     size: item.size,
     stylePreset: 'nature-cns-polish',
-    scientificVisualPlan,
+    visualPlan,
     ...(referencePath ? { referencePath } : {}),
     outputFormat: 'png'
   }
@@ -357,8 +370,7 @@ async function renderPolish(client, item, first) {
     workspaceRoot,
     recipe,
     imageId: `alphafold3-${item.id}-polished`,
-    outputDir,
-    ...(referencePath ? { reviewReferencePath: referencePath } : {})
+    outputDir
   }, 'result', 240_000).catch((error) => ({
     ok: false,
     status: 'tool_call_failed',
@@ -370,13 +382,13 @@ async function renderPolish(client, item, first) {
   }
 }
 
-async function reviewPair(client, item, referencePath, outputPath) {
+async function reviewPair(client, item, referencePath, outputPath, manifestPath) {
   return callStructured(client, 'visual_artifact_review', {
     workspaceRoot,
     referencePath: toWorkspaceRelative(referencePath),
     outputPath: toWorkspaceRelative(outputPath),
+    manifestPath: toWorkspaceRelative(manifestPath),
     task: `Review the polished ${item.label} against the first controlled render. Preserve the scientific content while checking layout, overlap, clipping, label legibility, and visual relationships.`,
-    truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics', 'paper facts'],
     minOverall: 0.72
   }, 'review', 60_000).catch((error) => ({
     ok: false,

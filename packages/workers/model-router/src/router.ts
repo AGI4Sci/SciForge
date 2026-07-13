@@ -326,6 +326,8 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           id: publicModelAlias,
           object: 'model',
           owned_by: 'sciforge',
+          input_modalities: ['text', 'image'],
+          supports_image_detail_original: false,
         };
         return sendJson(response, 200, {
           object: 'list',

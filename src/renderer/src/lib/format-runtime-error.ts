@@ -16,6 +16,16 @@ export type RuntimeErrorView = {
   settingsAction?: 'agents'
 }
 
+const EXECUTION_INTEGRITY_ERROR_CODES = new Set([
+  'runtime_execution_incomplete',
+  'runtime_execution_claim_unverified',
+  'runtime_visual_execution_missing'
+])
+
+export function isExecutionIntegrityErrorCode(code: string | null | undefined): boolean {
+  return EXECUTION_INTEGRITY_ERROR_CODES.has(code?.trim().toLowerCase() ?? '')
+}
+
 function readJsonPayload(raw: string): RuntimeErrorPayload | null {
   try {
     return JSON.parse(raw) as RuntimeErrorPayload
@@ -89,6 +99,10 @@ function detailString(value: unknown): string {
 
 function localizedRuntimeSummary(code: string | null, text: string): string | null {
   const lowered = text.toLowerCase()
+
+  if (isExecutionIntegrityErrorCode(code)) {
+    return i18n.t('common:runtimeExecutionBlocked')
+  }
 
   if (code === 'fetch_failed' || lowered.includes('fetch failed')) {
     return i18n.t('common:runtimeFetchFailed')

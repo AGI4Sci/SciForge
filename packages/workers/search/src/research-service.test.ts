@@ -5,6 +5,7 @@ import {
   createResearchSearchService,
   researchSearchConfigFromEnv
 } from './research-service.js';
+import { RESEARCH_SEARCH_TOOL_DESCRIPTION } from './mcp-server.js';
 import { buildArxivQuery } from './providers/arxiv.js';
 import {
   buildEuropePmcQuery,
@@ -33,6 +34,12 @@ class FakeProvider implements ResearchSearchProvider {
 }
 
 describe('research search service', () => {
+  it('describes budgeted context-loop follow-up searches without a one-call restriction', () => {
+    assert.match(RESEARCH_SEARCH_TOOL_DESCRIPTION, /visual_generate reports needs_context/);
+    assert.match(RESEARCH_SEARCH_TOOL_DESCRIPTION, /while budget remains/);
+    assert.doesNotMatch(RESEARCH_SEARCH_TOOL_DESCRIPTION, /once per user request|normally call it once/i);
+  });
+
   it('plans domain and intent query expansions', () => {
     const plan = planResearchQueries({
       query: 'latest protein foundation model benchmark',
@@ -189,5 +196,8 @@ describe('research search service', () => {
     assert.equal(result.webResults.length, 1);
     assert.ok(result.citations.some((citation) => citation.source === 'arxiv,europe_pmc,semantic_scholar'));
     assert.ok(result.diagnostics.some((diagnostic) => diagnostic.id === 'tavily' && diagnostic.available));
+    assert.match(result.answerGuidance, /merge the evidence.*visual_generate again/i);
+    assert.match(result.answerGuidance, /while budget remains/i);
+    assert.doesNotMatch(result.answerGuidance, /Do not call research_search again/i);
   });
 });

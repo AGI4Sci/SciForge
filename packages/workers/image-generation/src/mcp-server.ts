@@ -20,6 +20,8 @@ import {
   reviewVisualArtifact,
   segmentImageGenerationComponents
 } from './image-generation-engine'
+import { planVisualProduction } from './visual-production-planner'
+import type { VisualGenerateRequest } from './visual-production-planner'
 
 type McpLaunchOptions = {
   workspaceRoot?: string
@@ -82,27 +84,37 @@ const sizeSchema = z.object({
   height: z.number().int().min(128).max(4096)
 }).strict()
 
-const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render generative image artifacts after route selection. Scientific visual routing is owned exclusively by scientific_visual_plan; this worker never switches to deterministic plotting or treats a fallback renderer as success.'
+const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render model-owned visual layers after visual_generate has locked one code, model, or hybrid production route. Execution tools never reclassify prompts or switch routes.'
 
-const scientificVisualPlanSchema = z.object({
-  route: z.enum(['generative_visual', 'hybrid_composite']),
+const visualPlanSchema = z.object({
+  planId: z.string().trim().min(1).max(128),
+  route: z.enum(['code', 'model', 'hybrid']),
   routeLocked: z.literal(true),
   rationale: z.string().trim().min(1).max(2000),
+  sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64),
   reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64),
-  truthLockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+  lockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+  modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+  contextStatus: z.enum(['ready', 'budget_exhausted']),
+  contextStopReason: z.enum(['sufficient', 'policy_closed', 'round_limit', 'cost_limit', 'token_limit', 'elapsed_time_limit', 'no_information_gain']),
+  contextEvidenceIds: z.array(z.string().trim().min(1).max(512)).max(256),
+  unresolvedContext: z.array(z.string().trim().min(1).max(2000)).max(128),
+  releaseCeiling: z.enum(['publication_ready', 'draft_ready']),
   fallbackPolicy: z.literal('fail_closed')
 }).strict()
 
-const scientificPolishDeltaPlanSchema = z.object({
-  mode: z.literal('delta_only'),
-  targetPanels: z.array(z.object({
-    assetId: z.string().trim().min(1).max(160),
-    reason: z.string().trim().max(800).optional(),
-    allowedOperations: z.array(z.string().trim().min(1).max(80)).max(12).optional()
-  }).strict()).max(24).optional(),
-  allowedOperations: z.array(z.string().trim().min(1).max(80)).max(16),
-  lockedFacts: z.array(z.string().trim().min(1).max(240)).max(32),
-  handoffPrompt: z.string().trim().min(1).max(4000)
+const contextQuestionSchema = z.object({
+  id: z.string().trim().min(1).max(160),
+  question: z.string().trim().min(1).max(2000),
+  priority: z.enum(['required', 'optional']),
+  status: z.enum(['open', 'resolved'])
+}).strict()
+
+const contextEvidenceSchema = z.object({
+  id: z.string().trim().min(1).max(512),
+  source: z.string().trim().min(1).max(4096),
+  summary: z.string().trim().min(1).max(4000),
+  questionIds: z.array(z.string().trim().min(1).max(160)).max(128)
 }).strict()
 
 const recipeSchema = z.object({
@@ -122,20 +134,69 @@ const recipeSchema = z.object({
     status: z.enum(['required', 'confirmed'])
   }).strict().optional(),
   promptProfile: z.enum(['default', 'flowchart-light-v1', 'framework-spec-v1', 'framework-layered-draft-v1']).optional(),
-  scientificPolishDeltaPlan: scientificPolishDeltaPlanSchema.optional(),
-  controlledSubfigureManifests: z.array(z.string().trim().min(1).max(4096)).max(24).optional(),
-  scientificVisualPlan: scientificVisualPlanSchema.optional(),
-  creativeDirect: z.literal(true).optional()
+  visualPlan: visualPlanSchema
 }).strict()
 
-export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promise<boolean> {
-  const options = parseLaunchOptions(argv)
-  if (!options) return false
-
+export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): McpServer {
   const server = new McpServer(
     { name: 'sciforge-image-generation', version: '0.1.0' },
     { capabilities: { logging: {} } }
   )
+
+  server.registerTool('visual_generate', {
+    title: 'Plan Visual Generation',
+    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through visual_artifact_review.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      task: z.string().trim().min(1).max(16000),
+      action: z.enum(['create', 'revision']).optional(),
+      visualDocumentId: z.string().trim().min(1).max(160).optional(),
+      reviewPacketPath: z.string().trim().min(1).max(4096).optional(),
+      sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64).optional(),
+      requirements: z.object({
+        lockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+        modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
+        reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64)
+      }).strict(),
+      context: z.object({
+        policy: z.enum(['auto', 'closed']).optional(),
+        questions: z.array(contextQuestionSchema).max(128).optional(),
+        evidence: z.array(contextEvidenceSchema).max(256).optional(),
+        usage: z.object({
+          rounds: z.number().nonnegative().optional(),
+          costUnits: z.number().nonnegative().optional(),
+          tokens: z.number().nonnegative().optional(),
+          elapsedMs: z.number().nonnegative().optional(),
+          consecutiveNoProgressRounds: z.number().nonnegative().optional()
+        }).strict().optional()
+      }).strict().optional(),
+      budget: z.object({
+        maxRounds: z.number().positive().optional(),
+        maxCostUnits: z.number().positive().optional(),
+        maxTokens: z.number().positive().optional(),
+        maxElapsedMs: z.number().positive().optional()
+      }).strict().optional()
+    },
+    annotations: READ_ONLY_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: VisualGenerateRequest = {
+        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        task: input.task,
+        ...(input.action ? { action: input.action } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
+        ...(input.reviewPacketPath ? { reviewPacketPath: input.reviewPacketPath } : {}),
+        ...(input.sourceArtifacts ? { sourceArtifacts: input.sourceArtifacts } : {}),
+        requirements: input.requirements,
+        ...(input.context ? { context: input.context } : {}),
+        ...(input.budget ? { budget: input.budget } : {})
+      }
+      const plan = planVisualProduction(request)
+      return textResult(jsonSummary('Visual production plan: ' + plan.status + '.', plan), { plan })
+    } catch (error) {
+      return errorResult('Failed to plan visual production: ' + (error instanceof Error ? error.message : String(error)))
+    }
+  })
 
   server.registerTool('image_generation_status', {
     title: 'Image Generation MCP Status',
@@ -155,7 +216,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_prepare', {
     title: 'Prepare Generative Image',
-    description: `Convert an already-routed visual request into a controlled image_generation_render recipe. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} Does not write files. Supply either the locked plan returned by scientific_visual_plan or creativeDirect=true for a clearly non-scientific creative image; the two classifications are mutually exclusive.`,
+    description: `Convert a model or hybrid handoff returned by visual_generate into a controlled image_generation_render recipe. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} Does not write files.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(8000),
@@ -167,8 +228,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       }).strict().optional(),
       stylePreset: z.string().trim().max(160).optional(),
       referencePath: z.string().trim().max(4096).optional(),
-      scientificVisualPlan: scientificVisualPlanSchema.optional(),
-      creativeDirect: z.literal(true).optional()
+      visualPlan: visualPlanSchema
     },
     annotations: READ_ONLY_ANNOTATIONS
   }, async (input) => {
@@ -181,8 +241,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
         ...(input.size ? { size: input.size } : {}),
         ...(input.stylePreset ? { stylePreset: input.stylePreset } : {}),
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
-        ...(input.scientificVisualPlan ? { scientificVisualPlan: input.scientificVisualPlan } : {}),
-        ...(input.creativeDirect ? { creativeDirect: true as const } : {})
+        visualPlan: input.visualPlan
       }
       const plan = await planImageGeneration(request)
       return textResult(
@@ -196,7 +255,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
 
   server.registerTool('image_generation_render', {
     title: 'Render Image Generation Artifact',
-    description: `Render a controlled generative image artifact and write a SciForge artifact manifest for VisualDocument review. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} For scientific figures, generated pixels are visual composition/base layers only; publication labels, axes, numeric data, citations, scale bars, molecular annotations, and other locked claims require deterministic overlays.`,
+    description: `Render a controlled model-owned visual layer and write a SciForge artifact manifest for mandatory visual review. ${IMAGE_GENERATION_EXECUTION_DESCRIPTION} On hybrid routes, locked elements remain owned by deterministic composition.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       recipe: recipeSchema,
@@ -267,6 +326,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     description: 'Redraw selected framework component IDs from a component manifest, then recompose the edited patch into the original image without relying on manual bounding boxes.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
+      visualPlan: visualPlanSchema,
       componentManifestPath: z.string().trim().min(1).max(4096),
       componentIds: z.array(z.string().trim().min(1).max(180)).max(500).optional(),
       blockIds: z.array(z.string().trim().min(1).max(180)).max(200).optional(),
@@ -284,6 +344,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     try {
       const request: FrameworkLocalizedEditRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        visualPlan: input.visualPlan,
         componentManifestPath: input.componentManifestPath,
         instruction: input.instruction,
         ...(input.componentIds?.length ? { componentIds: input.componentIds } : {}),
@@ -313,6 +374,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     description: 'Convert VisualDocument annotations into non-destructive image edit candidates. Does not overwrite the original image.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
+      visualPlan: visualPlanSchema,
       reviewPacketPath: z.string().trim().max(4096).optional(),
       reviewPacket: z.unknown().optional(),
       maskPath: z.string().trim().max(4096).optional(),
@@ -325,6 +387,7 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     try {
       const request: ImageGenerationEditFromVisualReviewPacketRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        visualPlan: input.visualPlan,
         ...(input.reviewPacketPath ? { reviewPacketPath: input.reviewPacketPath } : {}),
         ...(input.reviewPacket ? { reviewPacket: input.reviewPacket } : {}),
         ...(input.maskPath ? { maskPath: input.maskPath } : {}),
@@ -350,8 +413,8 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       outputPath: z.string().trim().min(1).max(4096),
+      manifestPath: z.string().trim().min(1).max(4096),
       task: z.string().trim().min(1).max(16000),
-      truthLockedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
       referencePath: z.string().trim().max(4096).optional(),
       minOverall: z.number().min(0.5).max(0.98).optional()
     },
@@ -361,8 +424,8 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
       const request: VisualArtifactReviewRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         outputPath: input.outputPath,
+        manifestPath: input.manifestPath,
         task: input.task,
-        truthLockedElements: input.truthLockedElements,
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
         ...(input.minOverall ? { minOverall: input.minOverall } : {})
       }
@@ -373,7 +436,13 @@ export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promi
     }
   })
 
-  const transport = new StdioServerTransport()
-  await server.connect(transport)
+  return server
+}
+
+export async function runImageGenerationMcpServerFromArgv(argv: string[]): Promise<boolean> {
+  const options = parseLaunchOptions(argv)
+  if (!options) return false
+  const server = createImageGenerationMcpServer(options)
+  await server.connect(new StdioServerTransport())
   return true
 }

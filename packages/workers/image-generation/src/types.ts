@@ -1,3 +1,5 @@
+import type { VisualProductionHandoff } from './visual-production-planner'
+
 export const IMAGE_GENERATION_MODES = [
   'text_to_image',
   'image_to_image',
@@ -392,18 +394,6 @@ export type DiagramLayerManifest = {
 export type ImageGenerationProvider = 'image-endpoint' | 'placeholder' | 'controlled-edit'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 
-export type ScientificImagePolishDeltaPlan = {
-  mode: 'delta_only'
-  targetPanels?: Array<{
-    assetId: string
-    reason?: string
-    allowedOperations?: string[]
-  }>
-  allowedOperations: string[]
-  lockedFacts: string[]
-  handoffPrompt: string
-}
-
 export type ImageGenerationRecipe = {
   mode: ImageGenerationMode
   prompt: string
@@ -419,19 +409,7 @@ export type ImageGenerationRecipe = {
   frameworkRegionAssetMode?: 'disabled' | 'generate'
   confirmation?: DrawingConfirmation
   promptProfile?: 'default' | 'flowchart-light-v1' | 'framework-spec-v1' | 'framework-layered-draft-v1'
-  scientificPolishDeltaPlan?: ScientificImagePolishDeltaPlan
-  controlledSubfigureManifests?: string[]
-  scientificVisualPlan?: ScientificVisualPlanHandoff
-  creativeDirect?: true
-}
-
-export type ImageGenerationUsagePolicy = {
-  role: 'visual_composition_base'
-  deterministicOverlayRequired: boolean
-  overlayToolchain: 'script_or_scientific_plotting'
-  warning: string
-  lockedFacts?: string[]
-  sourceControlledArtifacts?: string[]
+  visualPlan: VisualProductionHandoff
 }
 
 export type ImageEditIntent = {
@@ -473,15 +451,6 @@ export type ImageGenerationStatus = {
   warnings: string[]
 }
 
-export type ScientificVisualPlanHandoff = {
-  route: 'generative_visual' | 'hybrid_composite'
-  routeLocked: true
-  rationale: string
-  reproducibleInputs: string[]
-  truthLockedElements: string[]
-  fallbackPolicy: 'fail_closed'
-}
-
 export type ImageGenerationPlanRequest = {
   workspaceRoot: string
   task: string
@@ -490,8 +459,7 @@ export type ImageGenerationPlanRequest = {
   size?: Partial<ImageSize>
   stylePreset?: string
   referencePath?: string
-  scientificVisualPlan?: ScientificVisualPlanHandoff
-  creativeDirect?: true
+  visualPlan: VisualProductionHandoff
 }
 
 export type ImageGenerationPlanResult =
@@ -501,14 +469,7 @@ export type ImageGenerationPlanResult =
       recipe: ImageGenerationRecipe
       suggestedRenderTool: 'image_generation_render'
       suggestedReviewTool: 'visual_artifact_review'
-      upstreamResearchWorkflow?: {
-        recommended: boolean
-        reason: string
-        suggestedBriefTool: 'scientific_plotting_research_brief'
-        suggestedSearchTool: 'research_search'
-        promptRequirements: string[]
-      }
-      scientificVisualPlan?: ScientificVisualPlanHandoff
+      visualPlan: VisualProductionHandoff
       artifactPolicy: string
       visualReviewWorkflow: string[]
       requiresConfirmation?: boolean
@@ -517,9 +478,9 @@ export type ImageGenerationPlanResult =
     }
   | {
       ok: false
-      status: 'scientific_visual_plan_required' | 'invalid_scientific_visual_plan'
+      status: 'visual_plan_required' | 'invalid_visual_plan'
       message: string
-      suggestedPlanTool: 'scientific_visual_plan'
+      suggestedPlanTool: 'visual_generate'
       warnings: string[]
     }
 
@@ -539,6 +500,7 @@ export type ImageGenerationRenderResult =
       status: 'awaiting_review' | 'rendered_placeholder'
       workspaceRoot: string
       outputPath: string
+      outputHash: string
       manifestPath: string
       artifactManifestPath: string
       diagramSpecPath?: string
@@ -551,22 +513,20 @@ export type ImageGenerationRenderResult =
       componentBasePath?: string
       componentAssetPaths?: string[]
       provider: ImageGenerationProvider
-      usagePolicy?: ImageGenerationUsagePolicy
       warnings: string[]
     }
   | {
       ok: false
-      status: 'invalid_workspace' | 'invalid_request' | 'research_required' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
+      status: 'invalid_workspace' | 'invalid_request' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
       message: string
-      upstreamResearchWorkflow?: Extract<ImageGenerationPlanResult, { ok: true }>['upstreamResearchWorkflow']
       warnings?: string[]
     }
 
 export type VisualArtifactReviewRequest = {
   workspaceRoot: string
   outputPath: string
+  manifestPath: string
   task: string
-  truthLockedElements: string[]
   referencePath?: string
   minOverall?: number
 }
@@ -584,12 +544,14 @@ export type VisualArtifactReviewScore = {
 export type VisualArtifactReviewResult =
   | {
       ok: true
+      status: 'publication_ready' | 'draft_ready' | 'needs_context'
       reviewedArtifactPath: string
       reviewedArtifactHash: string
       reviewedAt: string
       score: VisualArtifactReviewScore
       semantic: {
         pass: boolean
+        needsContext: boolean
         summary: string
         violations: string[]
         repairInstructions: string[]
@@ -599,13 +561,14 @@ export type VisualArtifactReviewResult =
     }
   | {
       ok: false
-      status: 'invalid_workspace' | 'image_unreadable' | 'reference_unreadable' | 'vision_review_unavailable' | 'vision_review_invalid'
+      status: 'invalid_workspace' | 'invalid_manifest' | 'image_unreadable' | 'reference_unreadable' | 'vision_review_unavailable' | 'vision_review_invalid'
       message: string
       warnings?: string[]
     }
 
 export type ImageGenerationEditFromVisualReviewPacketRequest = {
   workspaceRoot: string
+  visualPlan: VisualProductionHandoff
   reviewPacketPath?: string
   reviewPacket?: unknown
   maskPath?: string
@@ -630,7 +593,7 @@ export type ImageGenerationEditFromVisualReviewPacketResult =
     }
   | {
       ok: false
-      status: 'invalid_workspace' | 'invalid_packet' | 'no_edit_targets' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
+      status: 'invalid_workspace' | 'invalid_request' | 'invalid_packet' | 'no_edit_targets' | 'provider_not_configured' | 'provider_failed' | 'write_failed'
       message: string
       warnings?: string[]
     }
@@ -680,6 +643,7 @@ export type FrameworkLocalizedEditTarget = {
 
 export type FrameworkLocalizedEditRequest = {
   workspaceRoot: string
+  visualPlan: VisualProductionHandoff
   componentManifestPath: string
   instruction: string
   componentIds?: string[]
@@ -730,10 +694,12 @@ export type ImageGenerationManifest = {
   requestHash: string
   workspaceRoot: string
   outputPath: string
+  outputHash?: string
   visualDocumentId?: string
   threadId?: string
   stageForVisualReview?: boolean
   recipe?: ImageGenerationRecipe
+  visualPlan?: VisualProductionHandoff
   editIntent?: ImageEditIntent
   intent?: ImageDrawingIntent
   diagramSpecPath?: string
@@ -746,11 +712,6 @@ export type ImageGenerationManifest = {
   componentBasePath?: string
   componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
-  scientificPolishDeltaPlan?: ScientificImagePolishDeltaPlan
-  controlledSubfigureManifests?: string[]
-  lockedFacts?: string[]
-  sourceControlledArtifacts?: string[]
   provider: ImageGenerationProvider
-  usagePolicy?: ImageGenerationUsagePolicy
   warnings: string[]
 }

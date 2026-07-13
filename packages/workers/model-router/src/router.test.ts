@@ -70,6 +70,8 @@ test('public model list exposes only the configured public alias', async () => {
       id: 'public-router-alias',
       object: 'model',
       owned_by: 'sciforge',
+      input_modalities: ['text', 'image'],
+      supports_image_detail_original: false,
     };
     assert.deepEqual(body, {
       object: 'list',

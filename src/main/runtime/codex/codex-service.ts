@@ -188,6 +188,13 @@ type CodexRuntimeErrorInput = {
   severity?: NonNullable<CodexThreadEventPayload['runtimeError']>['severity']
 }
 
+type CodexToolExecutionIdentity = {
+  callId: string
+  toolName: string
+  summary: string
+  toolKind?: NonNullable<CodexThreadEventPayload['tool']>['toolKind']
+}
+
 const EMPTY_CODEX_TURN_USAGE: AgentRuntimeUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -213,7 +220,7 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   SCIENTIFIC_VISUAL_RUNTIME_POLICY,
   'For requests about the current GUI, visible panes, right sidebar, previews, PDF annotations, selected text, or component state, first use `gui_visible_context` to discover the visible component/resource index, then follow the returned access hints.',
-  'When visual inspection is needed, call `gui_visual_capture` for the whole window or for a componentId/targetId returned by `gui_visible_context`, then inspect the returned local PNG path with the available image tool. Do not substitute OS-level screenshots.',
+  'When visual inspection is needed, call `gui_visual_capture` for the whole window or for a componentId/targetId returned by `gui_visible_context`. Leave semantic inspection enabled and pass an inspectionPrompt matching the task. A successful result already contains attested Model Router vision evidence in runtime-portable text plus the PNG; do not substitute OS-level screenshots or claim that a local image tool ran when no tool event exists.',
   'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
   ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
@@ -273,6 +280,8 @@ export class CodexRuntimeService {
   private readonly seenModelDeltaKeys = new Set<string>()
   private readonly eventSubscribers = new Set<CodexRuntimeEventSubscriber>()
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
+  private readonly terminalToolItemsByTurn = new Map<string, Set<string>>()
+  private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private readonly workspaceReadKeys = new Set<string>()
@@ -1087,6 +1096,32 @@ export class CodexRuntimeService {
   ): Promise<CodexAppServerDynamicToolCallResponse> {
     const settings = await this.options.settings()
     const contextualRequest = await this.requestWithGuiThreadContext(request)
+    await this.publishDynamicToolExecutionFact(contextualRequest, 'dispatched')
+    let response: CodexAppServerDynamicToolCallResponse
+    try {
+      response = await this.executeDynamicToolCall(contextualRequest, settings)
+    } catch (error) {
+      const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
+      response = {
+        contentItems: [{
+          type: 'inputText',
+          text: `MCP dynamic tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+        }],
+        success: false
+      }
+    }
+    await this.publishDynamicToolExecutionFact(
+      contextualRequest,
+      response.success ? 'succeeded' : 'failed',
+      response
+    )
+    return response
+  }
+
+  private async executeDynamicToolCall(
+    contextualRequest: CodexAppServerDynamicToolCallRequest,
+    settings: AppSettingsV1
+  ): Promise<CodexAppServerDynamicToolCallResponse> {
     if (this.workspacePatchTool.canHandle(contextualRequest)) {
       return this.handleWorkspacePatchToolCall(contextualRequest, settings)
     }
@@ -1107,22 +1142,55 @@ export class CodexRuntimeService {
         success: false
       }
     }
+    const workspaceRequest = await this.requestWithThreadWorkspace(contextualRequest)
+    const response = await bridge.callTool(workspaceRequest)
+    if (response.success && workspaceIntelToolNameForRequest(workspaceRequest) === 'gui_workspace_read') {
+      await this.rememberWorkspaceRead(workspaceRequest)
+    }
+    return response
+  }
+
+  private async publishDynamicToolExecutionFact(
+    request: CodexAppServerDynamicToolCallRequest,
+    phase: 'dispatched' | 'succeeded' | 'failed',
+    response?: CodexAppServerDynamicToolCallResponse
+  ): Promise<void> {
+    const threadId = stringValue(request.threadId).trim()
+    const turnId = stringValue(request.turnId).trim()
+    if (!threadId || !turnId) return
+    const callId = stringValue(request.callId).trim() || String(request.requestId)
+    const toolName = stringValue(request.tool).trim() || 'dynamic_tool'
+    const terminal = phase !== 'dispatched'
+    const event: CodexThreadEventPayload = {
+      threadId,
+      turnId,
+      tool: {
+        itemId: callId,
+        summary: toolName,
+        status: phase === 'dispatched' ? 'running' : phase === 'succeeded' ? 'success' : 'error',
+        toolKind: 'tool_call',
+        ...(terminal && response ? { detail: dynamicToolResponseSummary(response) } : {}),
+        meta: {
+          callId,
+          toolName,
+          phase,
+          factSource: terminal ? 'executor_result' : 'runtime_lifecycle',
+          evidenceStrength: terminal ? 'executor_receipt' : 'runtime_lifecycle',
+          ...(terminal ? { success: response?.success === true } : {}),
+          ...(request.namespace ? { namespace: request.namespace } : {})
+        }
+      }
+    }
     try {
-      const workspaceRequest = await this.requestWithThreadWorkspace(contextualRequest)
-      const response = await bridge.callTool(workspaceRequest)
-      if (response.success && workspaceIntelToolNameForRequest(workspaceRequest) === 'gui_workspace_read') {
-        await this.rememberWorkspaceRead(workspaceRequest)
+      const correlated = this.withCorrelatedToolExecutionFacts(event)
+      for (const runtimeEvent of this.eventsAfterPendingToolBarrier(correlated)) {
+        await this.publishClientEvent(runtimeEvent)
       }
-      return response
     } catch (error) {
-      const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
-      return {
-        contentItems: [{
-          type: 'inputText',
-          text: `MCP dynamic tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
-        }],
-        success: false
-      }
+      this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.error, {
+        message: `Failed to publish Codex dynamic tool execution fact: ${error instanceof Error ? error.message : String(error)}`,
+        detail: error
+      })
     }
   }
 
@@ -1447,7 +1515,7 @@ export class CodexRuntimeService {
         const normalized = this.normalizeClientEvent(event.payload)
         const deduped = normalized ? this.dedupeModelDeltas(normalized) : null
         if (deduped) {
-          const guiEvent = await this.eventForGuiThread(deduped)
+          const guiEvent = this.withCorrelatedToolExecutionFacts(await this.eventForGuiThread(deduped))
           for (const runtimeEvent of this.eventsAfterPendingToolBarrier(guiEvent)) {
             await this.publishClientEvent(runtimeEvent)
           }
@@ -1779,12 +1847,55 @@ export class CodexRuntimeService {
     return events
   }
 
+  private withCorrelatedToolExecutionFacts(event: CodexThreadEventPayload): CodexThreadEventPayload {
+    const tool = event.tool
+    const turnId = event.turnId || event.userMessage?.turnId || ''
+    if (!tool || !turnId) return event
+    const meta = tool.meta ?? {}
+    const callId = stringValue(meta.callId).trim() || tool.itemId.trim()
+    if (!callId) return event
+    const key = codexToolExecutionKey(event.threadId, turnId, callId)
+    const previous = this.toolExecutionIdentityByCall.get(key)
+    const explicitToolName = stringValue(meta.toolName).trim()
+    const toolName = explicitToolName || previous?.toolName || inferredCodexToolName(tool)
+    const terminal = tool.status !== 'running'
+    const phase = stringValue(meta.phase).trim() || (
+      terminal ? (tool.status === 'success' ? 'succeeded' : 'failed') : 'dispatched'
+    )
+    const nextTool: NonNullable<CodexThreadEventPayload['tool']> = {
+      ...tool,
+      summary: tool.summary === 'Tool output' && previous ? previous.summary : tool.summary,
+      ...(tool.toolKind ? {} : previous?.toolKind ? { toolKind: previous.toolKind } : {}),
+      meta: {
+        ...meta,
+        callId,
+        toolName,
+        phase,
+        factSource: stringValue(meta.factSource).trim() || (terminal ? 'executor_result' : 'runtime_lifecycle'),
+        evidenceStrength: stringValue(meta.evidenceStrength).trim() || (
+          terminal ? 'executor_receipt' : 'runtime_lifecycle'
+        ),
+        ...(terminal && typeof meta.success !== 'boolean' ? { success: tool.status === 'success' } : {})
+      }
+    }
+    // Keep the identity until the turn closes so a later duplicate/terminal-only
+    // app-server event cannot overwrite an executor receipt with "unknown_tool".
+    this.toolExecutionIdentityByCall.set(key, {
+      callId,
+      toolName,
+      summary: tool.summary === 'Tool output' && previous ? previous.summary : tool.summary,
+      toolKind: tool.toolKind ?? previous?.toolKind
+    })
+    return { ...event, tool: nextTool }
+  }
+
   private trackPendingToolEvent(event: CodexThreadEventPayload, key: string): void {
     const tool = event.tool
     const itemId = tool?.itemId.trim()
     if (!tool || !itemId) return
 
     if (tool.status === 'running') {
+      if (this.terminalToolItemsByTurn.get(key)?.has(itemId)) return
       const pending = this.pendingToolItemsByTurn.get(key) ?? new Set<string>()
       pending.add(itemId)
       this.pendingToolItemsByTurn.set(key, pending)
@@ -1792,9 +1903,11 @@ export class CodexRuntimeService {
     }
 
     const pending = this.pendingToolItemsByTurn.get(key)
-    if (!pending) return
-    pending.delete(itemId)
-    if (pending.size === 0) this.pendingToolItemsByTurn.delete(key)
+    pending?.delete(itemId)
+    if (pending?.size === 0) this.pendingToolItemsByTurn.delete(key)
+    const terminal = this.terminalToolItemsByTurn.get(key) ?? new Set<string>()
+    terminal.add(itemId)
+    this.terminalToolItemsByTurn.set(key, terminal)
   }
 
   private turnHasPendingToolItems(key: string): boolean {
@@ -1812,15 +1925,26 @@ export class CodexRuntimeService {
 
   private clearPendingToolBarrierForTurn(key: string): void {
     this.pendingToolItemsByTurn.delete(key)
+    this.terminalToolItemsByTurn.delete(key)
     this.deferredTurnCompleteEvents.delete(key)
     this.clearPendingToolBarrierTimer(key)
+    this.clearToolExecutionIdentitiesForTurn(key)
   }
 
   private clearPendingToolBarrier(): void {
     this.pendingToolItemsByTurn.clear()
+    this.terminalToolItemsByTurn.clear()
     this.deferredTurnCompleteEvents.clear()
     for (const timer of this.pendingToolBarrierTimers.values()) clearTimeout(timer)
     this.pendingToolBarrierTimers.clear()
+    this.toolExecutionIdentityByCall.clear()
+  }
+
+  private clearToolExecutionIdentitiesForTurn(turnKey: string): void {
+    const prefix = `${turnKey}\u0000`
+    for (const key of this.toolExecutionIdentityByCall.keys()) {
+      if (key.startsWith(prefix)) this.toolExecutionIdentityByCall.delete(key)
+    }
   }
 
   private schedulePendingToolBarrierGrace(key: string): void {
@@ -1847,9 +1971,22 @@ export class CodexRuntimeService {
   private async releaseDeferredTurnCompleteAfterGrace(key: string): Promise<void> {
     const deferred = this.deferredTurnCompleteEvents.get(key)
     if (!deferred) return
+    const pendingCallIds = [...(this.pendingToolItemsByTurn.get(key) ?? [])]
     this.pendingToolItemsByTurn.delete(key)
+    this.terminalToolItemsByTurn.delete(key)
     this.deferredTurnCompleteEvents.delete(key)
-    await this.publishClientEvent(deferred)
+    this.clearToolExecutionIdentitiesForTurn(key)
+    await this.emitRuntimeError({
+      threadId: deferred.threadId,
+      turnId: deferred.turnId,
+      message: `Codex reported turn completion before ${pendingCallIds.length || 'one or more'} tool execution result${pendingCallIds.length === 1 ? '' : 's'} arrived. The turn is unresolved and was not marked completed.`,
+      code: 'tool_execution_unresolved',
+      details: {
+        pendingCallIds,
+        timeoutMs: CODEX_PENDING_TOOL_COMPLETION_GRACE_MS
+      },
+      severity: 'error'
+    }, { forceTurnDone: true })
   }
 
   private addEventSubscriber(threadId: string): CodexRuntimeEventSubscriber {
@@ -3333,6 +3470,17 @@ function turnTimingKey(threadId: string, turnId: string): string {
   return `${threadId}\u0000${turnId}`
 }
 
+function codexToolExecutionKey(threadId: string, turnId: string, callId: string): string {
+  return `${turnTimingKey(threadId, turnId)}\u0000${callId}`
+}
+
+function inferredCodexToolName(tool: NonNullable<CodexThreadEventPayload['tool']>): string {
+  if (tool.toolKind === 'command_execution') return 'exec_command'
+  if (tool.toolKind === 'file_change') return 'apply_patch'
+  const summary = tool.summary.trim()
+  return summary && summary !== 'Tool output' ? summary : 'unknown_tool'
+}
+
 function runtimeStatusItemId(
   threadId: string,
   turnId: string | undefined,
@@ -3372,6 +3520,16 @@ function dynamicToolArgumentsRecord(value: unknown): Record<string, unknown> | n
   } catch {
     return null
   }
+}
+
+function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallResponse): string {
+  const text = response.contentItems
+    .map((item) => item.type === 'inputText' ? item.text : '[image result]')
+    .filter(Boolean)
+    .join('\n')
+    .trim()
+  if (!text) return response.success ? 'Dynamic tool completed successfully.' : 'Dynamic tool failed.'
+  return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
 }
 
 function workspaceIntelToolNameForRequest(

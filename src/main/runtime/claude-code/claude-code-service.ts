@@ -118,6 +118,18 @@ type ClaudeSdkTurnState = {
   terminalMessage?: string
   partialContentTypes: Map<number, string>
   toolUses: Map<string, { name: string; input: Record<string, unknown> }>
+  pendingToolResults: Map<string, ClaudeToolResult>
+  toolResultFingerprints: Map<string, string>
+  toolConflicts: Map<string, string>
+}
+
+type ClaudeToolResult = {
+  content: unknown
+  detail: string
+  isError: boolean
+  payload?: Record<string, unknown>
+  sessionId?: string
+  fingerprint: string
 }
 
 export class ClaudeCodeRuntimeService {
@@ -613,13 +625,17 @@ export class ClaudeCodeRuntimeService {
       firstDeltaEmitted: false,
       terminalState: 'completed',
       partialContentTypes: new Map(),
-      toolUses: new Map()
+      toolUses: new Map(),
+      pendingToolResults: new Map(),
+      toolResultFingerprints: new Map(),
+      toolConflicts: new Map()
     }
     try {
       for await (const message of options.query) {
         await this.handleSdkMessage(message, options, state)
       }
       if (this.activeTurns.get(options.threadId)?.turnId !== options.turnId) return
+      await this.finalizeToolExecutions(options.threadId, options.turnId, state)
       this.activeTurns.delete(options.threadId)
       await this.completeTurn(options.threadId, options.turnId, state.terminalState, state.terminalMessage)
     } catch (error) {
@@ -693,9 +709,25 @@ export class ClaudeCodeRuntimeService {
       if (part.type !== 'tool_use') continue
       const name = stringField(part.name) || 'tool'
       const itemId = stringField(part.id) || `claude-tool-${randomUUID()}`
+      const input = recordValue(part.input)
+      const existing = state.toolUses.get(itemId)
+      if (existing) {
+        if (existing.name !== name || stringifyUnknown(existing.input) !== stringifyUnknown(input)) {
+          await this.recordToolConflict({
+            threadId: options.threadId,
+            turnId: options.turnId,
+            callId: itemId,
+            toolName: existing.name,
+            arguments: existing.input,
+            message: `Claude reused tool_use_id ${itemId} for a different tool request.`,
+            state
+          })
+        }
+        continue
+      }
       state.toolUses.set(itemId, {
         name,
-        input: recordValue(part.input)
+        input
       })
       await this.emit({
         threadId: options.threadId,
@@ -706,8 +738,28 @@ export class ClaudeCodeRuntimeService {
         toolKind: toolKindFromName(name),
         summary: `Claude Code tool: ${name}`,
         detail: stringifyUnknown(part.input),
-        meta: { name }
+        meta: {
+          name,
+          callId: itemId,
+          toolName: name,
+          arguments: input,
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent'
+        }
       })
+      const pendingResult = state.pendingToolResults.get(itemId)
+      if (pendingResult) {
+        state.pendingToolResults.delete(itemId)
+        await this.emitToolResult({
+          threadId: options.threadId,
+          turnId: options.turnId,
+          callId: itemId,
+          toolUse: { name, input },
+          result: pendingResult,
+          state
+        })
+      }
     }
 
     const reasoningText = reasoningTextFromContent(messageRecord.content)
@@ -772,33 +824,215 @@ export class ClaudeCodeRuntimeService {
         parseToolResultPayload(part.content),
         recordValue(message.tool_use_result)
       )
-      await this.emit({
+      const detail = textFromContent(part.content) || stringifyUnknown(part.content) || ''
+      const result: ClaudeToolResult = {
+        content: part.content,
+        detail,
+        isError: part.is_error === true,
+        ...(payload ? { payload } : {}),
+        ...(stringField(recordValue(message).session_id)
+          ? { sessionId: stringField(recordValue(message).session_id) }
+          : {}),
+        fingerprint: toolResultFingerprint(part.is_error === true, part.content, payload)
+      }
+      const priorFingerprint = state.toolResultFingerprints.get(itemId) ??
+        state.pendingToolResults.get(itemId)?.fingerprint
+      if (priorFingerprint) {
+        if (priorFingerprint !== result.fingerprint) {
+          await this.recordToolConflict({
+            threadId: options.threadId,
+            turnId: options.turnId,
+            callId: itemId,
+            toolName: toolUse?.name ?? 'tool',
+            arguments: toolUse?.input ?? {},
+            message: `Claude emitted conflicting tool results for tool_use_id ${itemId}.`,
+            state
+          })
+        }
+        continue
+      }
+      if (!toolUse) {
+        state.pendingToolResults.set(itemId, result)
+        continue
+      }
+      await this.emitToolResult({
         threadId: options.threadId,
         turnId: options.turnId,
+        callId: itemId,
+        toolUse,
+        result,
+        state
+      })
+    }
+  }
+
+  private async emitToolResult(input: {
+    threadId: string
+    turnId: string
+    callId: string
+    toolUse: { name: string; input: Record<string, unknown> }
+    result: ClaudeToolResult
+    state: ClaudeSdkTurnState
+  }): Promise<void> {
+    input.state.toolResultFingerprints.set(input.callId, input.result.fingerprint)
+    const error = input.result.isError
+      ? {
+          code: 'claude_tool_error',
+          message: input.result.detail || `Claude tool ${input.toolUse.name} failed.`
+        }
+      : null
+    await this.emit({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      kind: 'tool_event',
+      itemId: input.callId,
+      status: input.result.isError ? 'error' : 'success',
+      toolKind: toolKindFromName(input.toolUse.name),
+      summary: `Claude Code tool result: ${input.toolUse.name}`,
+      detail: input.result.detail,
+      meta: {
+        name: input.toolUse.name,
+        callId: input.callId,
+        toolName: input.toolUse.name,
+        arguments: input.toolUse.input,
+        phase: input.result.isError ? 'failed' : 'succeeded',
+        factSource: 'executor_result',
+        evidenceStrength: 'executor_receipt',
+        success: !input.result.isError,
+        error,
+        ...(input.result.payload ? { output: input.result.payload } : {})
+      }
+    })
+    if (input.result.payload) {
+      await this.emitChildFromToolResult({
+        threadId: input.threadId,
+        turnId: input.turnId,
+        toolUseId: input.callId,
+        toolName: input.toolUse.name,
+        toolInput: input.toolUse.input,
+        payload: input.result.payload,
+        isError: input.result.isError,
+        sessionId: input.result.sessionId ?? ''
+      })
+    }
+  }
+
+  private async recordToolConflict(input: {
+    threadId: string
+    turnId: string
+    callId: string
+    toolName: string
+    arguments: Record<string, unknown>
+    message: string
+    state: ClaudeSdkTurnState
+  }): Promise<void> {
+    if (input.state.toolConflicts.has(input.callId)) return
+    input.state.toolConflicts.set(input.callId, input.message)
+    await this.emit({
+      threadId: input.threadId,
+      turnId: input.turnId,
+      kind: 'tool_event',
+      itemId: input.callId,
+      status: 'error',
+      toolKind: toolKindFromName(input.toolName),
+      summary: `Claude Code tool unresolved: ${input.toolName}`,
+      detail: input.message,
+      meta: {
+        callId: input.callId,
+        toolName: input.toolName,
+        arguments: input.arguments,
+        phase: 'unresolved',
+        factSource: 'runtime_lifecycle',
+        evidenceStrength: 'runtime_lifecycle',
+        success: false,
+        error: {
+          code: 'claude_tool_result_conflict',
+          message: input.message
+        }
+      }
+    })
+  }
+
+  private async finalizeToolExecutions(
+    threadId: string,
+    turnId: string,
+    state: ClaudeSdkTurnState
+  ): Promise<void> {
+    const unresolvedMessages: string[] = []
+    for (const [callId, toolUse] of state.toolUses) {
+      if (state.toolResultFingerprints.has(callId) || state.toolConflicts.has(callId)) continue
+      const message = `Claude tool ${toolUse.name} (${callId}) ended without a matching tool_result.`
+      unresolvedMessages.push(message)
+      await this.emit({
+        threadId,
+        turnId,
         kind: 'tool_event',
-        itemId,
-        status: part.is_error === true ? 'error' : 'success',
-        toolKind: toolKindFromName(toolUse?.name ?? 'tool'),
-        summary: toolUse?.name ? `Claude Code tool result: ${toolUse.name}` : 'Claude Code tool result',
-        detail: textFromContent(part.content) || stringifyUnknown(part.content),
+        itemId: callId,
+        status: 'error',
+        toolKind: toolKindFromName(toolUse.name),
+        summary: `Claude Code tool unresolved: ${toolUse.name}`,
+        detail: message,
         meta: {
-          ...(toolUse?.name ? { name: toolUse.name } : {}),
-          ...(payload ? { output: payload } : {})
+          callId,
+          toolName: toolUse.name,
+          arguments: toolUse.input,
+          phase: 'unresolved',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle',
+          success: false,
+          error: {
+            code: 'claude_tool_result_missing',
+            message
+          }
         }
       })
-      if (toolUse?.name && payload) {
-        await this.emitChildFromToolResult({
-          threadId: options.threadId,
-          turnId: options.turnId,
-          toolUseId: itemId,
-          toolName: toolUse.name,
-          toolInput: toolUse.input,
-          payload,
-          isError: part.is_error === true,
-          sessionId: stringField(recordValue(message).session_id)
-        })
-      }
     }
+    for (const [callId, result] of state.pendingToolResults) {
+      const message = `Claude emitted tool_result ${callId} without a matching tool_use.`
+      unresolvedMessages.push(message)
+      await this.emit({
+        threadId,
+        turnId,
+        kind: 'tool_event',
+        itemId: callId,
+        status: 'error',
+        toolKind: 'tool_call',
+        summary: 'Claude Code tool result unresolved',
+        detail: result.detail || message,
+        meta: {
+          callId,
+          toolName: 'tool',
+          arguments: {},
+          phase: 'unresolved',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: false,
+          error: {
+            code: 'claude_tool_use_missing',
+            message
+          },
+          ...(result.payload ? { output: result.payload } : {})
+        }
+      })
+    }
+    unresolvedMessages.push(...state.toolConflicts.values())
+    if (unresolvedMessages.length === 0) return
+
+    const message = `Claude tool execution could not be verified: ${unresolvedMessages.join(' ')}`
+    state.terminalState = 'failed'
+    state.terminalMessage = state.terminalMessage
+      ? `${state.terminalMessage} ${message}`
+      : message
+    await this.emit({
+      threadId,
+      turnId,
+      kind: 'error',
+      itemId: `claude-error-${randomUUID()}`,
+      recoverable: false,
+      severity: 'error',
+      message,
+      code: 'claude_tool_execution_unresolved'
+    })
   }
 
   private async handleResultMessage(
@@ -1628,6 +1862,18 @@ function stringifyUnknown(value: unknown): string | undefined {
   } catch {
     return String(value)
   }
+}
+
+function toolResultFingerprint(
+  isError: boolean,
+  content: unknown,
+  payload?: Record<string, unknown> | null
+): string {
+  return [
+    isError ? 'error' : 'success',
+    stringifyUnknown(content) ?? '',
+    stringifyUnknown(payload) ?? ''
+  ].join('\n')
 }
 
 function stringField(value: unknown): string {

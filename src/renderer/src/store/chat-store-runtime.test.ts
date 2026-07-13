@@ -1170,6 +1170,35 @@ describe('thread event sink binding', () => {
 })
 
 describe('thread event sink runtime errors', () => {
+  it.each([
+    'runtime_execution_incomplete',
+    'runtime_execution_claim_unverified',
+    'runtime_visual_execution_missing'
+  ])('shows %s as blocked and unverified in the live timeline', (code) => {
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      busy: true,
+      blocks: [{ kind: 'user', id: 'user-current', text: 'run the tool' }]
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onRuntimeError?.({
+      itemId: `error-${code}`,
+      createdAt: '2026-06-08T00:00:00.000Z',
+      message: 'Required tool execution did not produce a trusted receipt.',
+      code,
+      severity: 'error'
+    })
+
+    expect(getState().blocks).toContainEqual(expect.objectContaining({
+      kind: 'system',
+      id: `error-${code}`,
+      code,
+      severity: 'error',
+      text: 'Blocked / unverified execution. The runtime did not provide trusted proof that the required tool action completed.'
+    }))
+  })
+
   it('adds runtime error events to the timeline with details', () => {
     const { getState, set, get } = makeSinkHarness({
       activeThreadId: 'thread-current',

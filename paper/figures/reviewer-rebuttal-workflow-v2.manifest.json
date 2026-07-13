@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "renderer": "sciforge-image-generation-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "image_generation_render",
+  "createdAt": "2026-07-13T15:58:56.585Z",
+  "requestHash": "d4a5f9b2d0f62419",
+  "workspaceRoot": "/Applications/workspace/ailab/research/app/DeepSeek-GUI",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/reviewer-rebuttal-workflow-v2.png",
+  "recipe": {
+    "mode": "text_to_image",
+    "prompt": "A clean, publication-quality scientific flowchart showing a six-stage horizontal Reviewer/Rebuttal Workflow for evidence-governed peer review. Left side shows INPUT: Manuscript + Reviewer Concerns flowing into six connected stage boxes with arrows between them: (1) Claim Extraction - parsing manuscript into structured claims, (2) Evidence Linking - mapping claims to evidence via figures/tables/methods/provenance, (3) Fragility Audit - classifying claims as supported/fragile/unsupported/needs_narrowing/needs_experiment, (4) Reviewer Decomposition - decomposing concerns into atomic comments mapped to claims, (5) Rebuttal & Revision Planning - prioritized response matrix and claim-edit plans, (6) Response Generation - drafting response letters and polishing plan. Right side shows OUTPUT: Claim-Evidence Revision Package + Response-Letter Draft + Decision Log. Professional blue and teal color palette, clean modern sans-serif typography, polished rounded stage boxes with subtle shadows, logical rightward flow arrows, white background. Academic computer science paper figure style. No pixel art, no clutter.\n\nSciForge semantic visual brief:\n- Treat any upstream scientific_plotting or diagram draft as structure only; create the polished final visual, not a tiny box draft.\n- Use a full-canvas composition with clear hierarchy, large readable labels, grouped modules, directional arrows, and visual emphasis on the key scientific/technical relationships.\n- Prefer a publication-grade schematic style: clean typography, balanced spacing, subtle color coding, light background, and concise annotations.\n- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.\n- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.\n- Style preset: scientific-diagram.\n- Output: one self-contained high-resolution PNG-style figure suitable for VisualDocument review.",
+    "size": {
+      "width": 1920,
+      "height": 832
+    },
+    "stylePreset": "scientific-diagram",
+    "outputFormat": "png",
+    "intent": "flowchart",
+    "creativeDirect": true
+  },
+  "intent": "flowchart",
+  "provider": "image-endpoint",
+  "warnings": []
+}

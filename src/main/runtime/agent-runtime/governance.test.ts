@@ -45,7 +45,7 @@ describe('RuntimeGovernanceSupervisor', () => {
     }))
   })
 
-  it('interrupts repeated tool calls after one extra repeat', async () => {
+  it('supplies failure context and continues after one extra repeat', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
@@ -54,6 +54,34 @@ describe('RuntimeGovernanceSupervisor', () => {
     }
     await Promise.resolve()
 
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.steerTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      text: expect.stringMatching(/tool_timeout.*workspace read timed out.*no successful terminal executor receipt observed/u)
+    }))
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'runtime_status',
+      message: expect.stringContaining('asked the model to recover'),
+      metadata: expect.objectContaining({
+        level: 'recovery',
+        recoveryAttempt: 1,
+        family: 'tool_call:lookup'
+      })
+    }))
+  })
+
+  it('interrupts only after bounded recovery attempts keep repeating', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 9; index += 1) {
+      supervisor.observe(toolEvent(index), baseCapabilities, strictBudgetSettings, controls)
+    }
+    await Promise.resolve()
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(3)
     expect(controls.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex',
       threadId: 'thread-1',
@@ -63,7 +91,7 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'error',
       code: 'runtime_tool_storm_interrupted',
-      message: expect.stringContaining('tool_call:lookup')
+      message: expect.stringContaining('could not be recovered')
     }))
   })
 })
@@ -87,6 +115,8 @@ function toolEvent(index: number): AgentRuntimeEvent {
     status: 'running',
     toolKind: 'tool_call',
     summary: 'lookup',
+    detail: 'workspace read timed out',
+    errorCode: 'tool_timeout',
     meta: {
       toolName: 'lookup',
       callId: `call-${index}`,

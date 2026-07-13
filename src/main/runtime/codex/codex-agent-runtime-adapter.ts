@@ -11,6 +11,9 @@ import type {
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeThread,
   AgentRuntimeThreadDetail,
+  AgentRuntimeToolEvidenceStrength,
+  AgentRuntimeToolExecutionPhase,
+  AgentRuntimeToolFactSource,
   AgentRuntimeToolKind,
   AgentRuntimeTurn
 } from '../../../shared/agent-runtime-contract'
@@ -1230,6 +1233,7 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     }
   }
   if (event.tool) {
+    const execution = codexToolExecutionFields(event.tool)
     const pendingRequest = mapCodexRequestEvent(common, event.tool)
     if (pendingRequest) {
       mapped.push(pendingRequest)
@@ -1240,6 +1244,7 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
         itemId: event.tool.itemId,
         status: event.tool.status,
         toolKind: normalizeToolKind(event.tool.toolKind),
+        ...execution,
         summary: event.tool.summary,
         detail: event.tool.detail,
         filePath: event.tool.filePath,
@@ -1326,6 +1331,62 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     })
   }
   return mapped
+}
+
+function codexToolExecutionFields(
+  tool: NonNullable<CodexThreadEventPayload['tool']>
+): {
+  callId?: string
+  toolName?: string
+  phase?: AgentRuntimeToolExecutionPhase
+  factSource?: AgentRuntimeToolFactSource
+  evidenceStrength?: AgentRuntimeToolEvidenceStrength
+  attempt?: number
+  resultDigest?: string
+  errorCode?: string
+} {
+  const meta = tool.meta ?? {}
+  const callId = stringValue(meta.callId) || tool.itemId
+  const toolName = stringValue(meta.toolName)
+  const phase = codexToolExecutionPhase(meta.phase)
+  const factSource = codexToolFactSource(meta.factSource)
+  const evidenceStrength = codexToolEvidenceStrength(meta.evidenceStrength)
+  const attempt = typeof meta.attempt === 'number' && Number.isInteger(meta.attempt) && meta.attempt > 0
+    ? meta.attempt
+    : undefined
+  const resultDigest = stringValue(meta.resultDigest)
+  const errorCode = stringValue(meta.errorCode)
+  return {
+    ...(callId ? { callId } : {}),
+    ...(toolName ? { toolName } : {}),
+    ...(phase ? { phase } : {}),
+    ...(factSource ? { factSource } : {}),
+    ...(evidenceStrength ? { evidenceStrength } : {}),
+    ...(attempt ? { attempt } : {}),
+    ...(resultDigest ? { resultDigest } : {}),
+    ...(errorCode ? { errorCode } : {})
+  }
+}
+
+function codexToolExecutionPhase(value: unknown): AgentRuntimeToolExecutionPhase | undefined {
+  return value === 'requested' || value === 'dispatched' || value === 'succeeded' ||
+    value === 'failed' || value === 'cancelled' || value === 'unresolved'
+    ? value
+    : undefined
+}
+
+function codexToolFactSource(value: unknown): AgentRuntimeToolFactSource | undefined {
+  return value === 'model_output' || value === 'runtime_lifecycle' ||
+    value === 'executor_result' || value === 'host_synthetic'
+    ? value
+    : undefined
+}
+
+function codexToolEvidenceStrength(value: unknown): AgentRuntimeToolEvidenceStrength | undefined {
+  return value === 'intent' || value === 'runtime_lifecycle' ||
+    value === 'executor_receipt' || value === 'attested'
+    ? value
+    : undefined
 }
 
 function mapCodexRequestBlock(

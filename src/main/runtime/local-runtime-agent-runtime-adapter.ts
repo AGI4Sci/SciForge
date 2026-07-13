@@ -52,6 +52,7 @@ import {
   localRuntimeThreadChildTranscriptPath,
   localRuntimeThreadCompactPath,
   localRuntimeThreadChildrenPath,
+  localRuntimeThreadEventsPath,
   localRuntimeThreadForkPath,
   localRuntimeThreadGoalPath,
   localRuntimeThreadInterruptPath,
@@ -224,6 +225,23 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
         const mapped = mapLocalRuntimeEvent(event, input.threadId)
         if (mapped) yield mapped
       }
+    },
+
+    async publishSyntheticEvent(context, event) {
+      if (event.kind !== 'error') return event
+      const payload = await requestJson(options, context, localRuntimeThreadEventsPath(event.threadId), {
+        method: 'POST',
+        body: JSON.stringify({
+          kind: 'error',
+          ...(event.turnId ? { turnId: event.turnId } : {}),
+          ...(event.itemId ? { itemId: event.itemId } : {}),
+          message: event.message,
+          ...(event.code ? { code: event.code } : {}),
+          ...(event.detail ? { details: event.detail } : {}),
+          severity: event.severity
+        })
+      })
+      return mapLocalRuntimeEvent(payload, event.threadId) ?? event
     },
 
     async resolveApproval(context, input) {
@@ -819,21 +837,32 @@ function mapLocalRuntimeItem(value: unknown): AgentRuntimeItem | null {
       toolKind: normalizeToolKind(record.toolKind),
       summary: stringValue(record.summary) || toolName || 'Tool call',
       detail: stringifyDetail(record.arguments),
-      meta: localRuntimeToolMeta(record, base.id, toolName)
+      meta: localRuntimeToolMeta(record, base.id, toolName, {
+        phase: 'requested',
+        factSource: 'model_output',
+        evidenceStrength: 'intent',
+        arguments: record.arguments
+      })
     }
   }
   if (kind === 'tool_result') {
     const toolName = stringValue(record.toolName)
     const itemId = localRuntimeToolItemId(record, base.id)
+    const failed = localRuntimeToolResultFailed(record)
     return {
       ...base,
       id: itemId,
       kind: 'tool',
-      status: record.isError === true ? 'error' : normalizeItemStatus(record.status) ?? 'success',
+      status: failed ? 'error' : normalizeItemStatus(record.status) ?? 'success',
       toolKind: normalizeToolKind(record.toolKind),
       summary: stringValue(record.summary) || toolName || 'Tool result',
       detail: stringifyDetail(record.output),
-      meta: localRuntimeToolMeta(record, base.id, toolName)
+      meta: localRuntimeToolMeta(record, base.id, toolName, {
+        phase: failed ? 'failed' : 'succeeded',
+        factSource: 'executor_result',
+        evidenceStrength: 'executor_receipt',
+        output: record.output
+      })
     }
   }
   if (kind === 'approval') {
@@ -898,7 +927,14 @@ function localRuntimeToolItemId(record: Record<string, unknown>, fallbackId: str
 function localRuntimeToolMeta(
   record: Record<string, unknown>,
   sourceItemId: string,
-  toolName: string
+  toolName: string,
+  execution: {
+    phase: 'requested' | 'succeeded' | 'failed'
+    factSource: 'model_output' | 'executor_result'
+    evidenceStrength: 'intent' | 'executor_receipt'
+    arguments?: unknown
+    output?: unknown
+  }
 ): Record<string, unknown> {
   const callId = stringValue(record.callId)
   const plan = localRuntimePlanToolMeta(toolName, record.output)
@@ -906,8 +942,17 @@ function localRuntimeToolMeta(
     sourceItemId,
     ...(callId ? { callId } : {}),
     ...(toolName ? { toolName } : {}),
+    phase: execution.phase,
+    factSource: execution.factSource,
+    evidenceStrength: execution.evidenceStrength,
+    ...(execution.arguments !== undefined ? { arguments: execution.arguments } : {}),
+    ...(execution.output !== undefined ? { output: execution.output } : {}),
     ...(plan ? { plan } : {})
   }
+}
+
+function localRuntimeToolResultFailed(record: Record<string, unknown>): boolean {
+  return record.isError === true || record.status === 'failed' || record.status === 'aborted' || record.status === 'error'
 }
 
 function localRuntimePlanToolMeta(toolName: string, output: unknown): Record<string, unknown> | null {
@@ -959,10 +1004,18 @@ function mapLocalRuntimeToolReadyEvent(
     status: 'running',
     summary: toolName,
     toolKind: 'tool_call',
+    callId,
+    toolName,
+    phase: 'requested',
+    factSource: 'model_output',
+    evidenceStrength: 'intent',
     meta: {
       ...(common.sourceItemId ? { sourceItemId: common.sourceItemId } : {}),
       callId,
       toolName,
+      phase: 'requested',
+      factSource: 'model_output',
+      evidenceStrength: 'intent',
       ...(typeof record.readyCount === 'number' ? { readyCount: record.readyCount } : {}),
       runtimeStatus: 'tool_call_ready'
     }
@@ -1180,6 +1233,23 @@ function mapLocalRuntimeEvent(value: unknown, fallbackThreadId: string): AgentRu
         itemId: item.id,
         item
       }
+    }
+  }
+
+  if (kind === 'error') {
+    return {
+      kind: 'error',
+      threadId,
+      runtimeId: SCIFORGE_RUNTIME_ID,
+      seq,
+      createdAt,
+      turnId,
+      itemId: itemId || undefined,
+      recoverable: true,
+      severity: record.severity === 'info' || record.severity === 'warning' ? record.severity : 'error',
+      message: stringValue(record.message),
+      code: optionalString(record.code),
+      detail: stringifyDetail(record.details)
     }
   }
 

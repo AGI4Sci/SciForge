@@ -87,6 +87,41 @@ describe('HTTP server', () => {
     })
   })
 
+  it('persists authenticated synthetic Host errors for event replay', async () => {
+    const h = buildHarness()
+    const thread = await h.threadService.create(
+      { workspace: '/tmp', model: 'deepseek-chat', mode: 'agent' },
+      { id: 'thr_integrity', title: 'Integrity' }
+    )
+    const response = await dispatchRequest(
+      h.router,
+      new Request(`http://localhost/v1/threads/${thread.id}/events`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer tok-1', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          kind: 'error',
+          turnId: 'turn-integrity',
+          itemId: 'integrity-error',
+          code: 'runtime_execution_incomplete',
+          message: 'Completion rejected.',
+          details: 'Open calls: call-1.',
+          severity: 'error'
+        })
+      })
+    )
+
+    expect(response.status).toBe(201)
+    expect(await readJson(response)).toMatchObject({
+      kind: 'error',
+      threadId: thread.id,
+      code: 'runtime_execution_incomplete',
+      seq: expect.any(Number)
+    })
+    await expect(h.sessionStore.loadEventsSince(thread.id, 0)).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', code: 'runtime_execution_incomplete' })
+    ]))
+  })
+
   it('returns runtime tool diagnostics', async () => {
     const h = buildHarness()
     h.runtime.toolDiagnostics = () => ({

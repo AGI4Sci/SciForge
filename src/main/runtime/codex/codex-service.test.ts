@@ -1867,6 +1867,7 @@ describe('CodexRuntimeService compatibility operations', () => {
 
   it('advertises managed MCP tools as Codex dynamic tools and routes their calls', async () => {
     const client = controllableClient()
+    const sink = { send: vi.fn() }
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'search-ok' }],
@@ -1885,7 +1886,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     }
     const service = new CodexRuntimeService({
       settings: async () => settings(),
-      sink: { send: vi.fn() },
+      sink,
       managedMcpServers: [{ id: 'research', command: '/bin/research-mcp' }],
       mcpClientFactory: async () => mcpClient,
       createClient: (options) => {
@@ -1920,10 +1921,22 @@ describe('CodexRuntimeService compatibility operations', () => {
       developerInstructions: expect.stringContaining('explicitly asks to use the system proxy')
     }))
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('call `scientific_visual_plan` before any renderer')
+      developerInstructions: expect.stringContaining('call `visual_generate` first')
+    }))
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      developerInstructions: expect.stringContaining('When `visual_generate` returns `needs_context`')
+    }))
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      developerInstructions: expect.stringContaining('Choose route `code`')
+    }))
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      developerInstructions: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
     }))
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'tool-request-1',
+      callId: 'call-research-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       tool: 'research_search',
       arguments: { query: 'agentic RL' }
     })).resolves.toEqual({
@@ -1937,6 +1950,34 @@ describe('CodexRuntimeService compatibility operations', () => {
       { name: 'research.search', arguments: { query: 'agentic RL' } },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
     )
+    const executionFacts = sink.send.mock.calls
+      .map((call) => call[1]?.event?.tool)
+      .filter((tool) => tool?.meta?.callId === 'call-research-1')
+    expect(executionFacts).toEqual([
+      expect.objectContaining({
+        itemId: 'call-research-1',
+        status: 'running',
+        meta: expect.objectContaining({
+          callId: 'call-research-1',
+          toolName: 'research_search',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle'
+        })
+      }),
+      expect.objectContaining({
+        itemId: 'call-research-1',
+        status: 'success',
+        meta: expect.objectContaining({
+          callId: 'call-research-1',
+          toolName: 'research_search',
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: true
+        })
+      })
+    ])
   })
 
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
@@ -2232,7 +2273,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           workspaceRoot: '/tmp/awesome-ai-scientist'
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
   })
 
@@ -2464,7 +2505,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           region: 'right-sidebar'
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
 
     await expect(pendingServerRequests?.onToolCallRequest?.({
@@ -2486,7 +2527,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           targetId: 'current-page'
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
   })
 
@@ -3757,7 +3798,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     queued.close()
   })
 
-  it('releases deferred Codex turn completion after a grace period when tool completion is missing', async () => {
+  it('fails closed after a grace period when a Codex tool completion is missing', async () => {
     vi.useFakeTimers()
     const queued = clientWithQueuedEvents()
     try {
@@ -3823,6 +3864,11 @@ describe('CodexRuntimeService compatibility operations', () => {
 
       expect(sink.send.mock.calls.some((call) =>
         call[1]?.event?.turnComplete === true
+      )).toBe(false)
+      expect(sink.send.mock.calls.some((call) =>
+        call[1]?.event?.runtimeError?.code === 'tool_execution_unresolved' &&
+        call[1]?.event?.runtimeError?.severity === 'error' &&
+        call[1]?.event?.runtimeError?.details?.pendingCallIds?.includes('cmd-1')
       )).toBe(true)
       await expect(service.interruptTurn('thread-1', 'turn-1')).resolves.toMatchObject({
         ok: false,
@@ -4549,6 +4595,69 @@ describe('CodexRuntimeService compatibility operations', () => {
       queued.close()
       vi.useRealTimers()
     }
+  })
+
+  it('correlates terminal function call output with the original Codex tool identity', async () => {
+    const queued = clientWithQueuedEvents()
+    const sink = { send: vi.fn() }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      createClient: () => queued.client
+    })
+
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'run tests' })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'turn-1'
+    })
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        type: 'response_item',
+        payload: {
+          type: 'function_call',
+          name: 'exec_command',
+          arguments: '{"cmd":"npm test"}',
+          call_id: 'call-1'
+        }
+      }
+    })
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        type: 'response_item',
+        payload: {
+          type: 'function_call_output',
+          call_id: 'call-1',
+          success: true,
+          output: 'ok'
+        }
+      }
+    })
+
+    await vi.waitFor(() => {
+      expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
+        event: expect.objectContaining({
+          tool: expect.objectContaining({
+            itemId: 'call-1',
+            summary: 'exec_command',
+            status: 'success',
+            toolKind: 'command_execution',
+            meta: expect.objectContaining({
+              callId: 'call-1',
+              toolName: 'exec_command',
+              phase: 'succeeded',
+              factSource: 'executor_result',
+              evidenceStrength: 'executor_receipt',
+              success: true
+            })
+          })
+        })
+      })
+    })
+    queued.close()
   })
 
   it('records Codex token usage notifications for cache-aware usage summaries', async () => {

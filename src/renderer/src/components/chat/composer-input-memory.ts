@@ -144,6 +144,8 @@ export function rememberComposerInput(
 }
 
 export function mergeComposerInputHistory(...groups: ReadonlyArray<readonly string[]>): string[] {
+  // Groups are ordered from least to most recent. normalizeHistory moves a
+  // duplicate to its latest occurrence, so later sources define recency.
   return normalizeHistory(groups.flatMap((group) => [...group]))
 }
 

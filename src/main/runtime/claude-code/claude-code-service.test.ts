@@ -148,6 +148,52 @@ function assistantThinking(thinking: string, text: string, sessionId: string): S
   })
 }
 
+function toolUseMessage(input: {
+  sessionId: string
+  callId: string
+  toolName: string
+  arguments?: Record<string, unknown>
+}): SDKMessage {
+  return sdkMessage({
+    type: 'assistant',
+    session_id: input.sessionId,
+    uuid: randomTestId('assistant-tool'),
+    parent_tool_use_id: null,
+    message: {
+      role: 'assistant',
+      content: [{
+        type: 'tool_use',
+        id: input.callId,
+        name: input.toolName,
+        input: input.arguments ?? {}
+      }]
+    }
+  })
+}
+
+function toolResultMessage(input: {
+  sessionId: string
+  callId: string
+  content: unknown
+  isError?: boolean
+}): SDKMessage {
+  return sdkMessage({
+    type: 'user',
+    session_id: input.sessionId,
+    uuid: randomTestId('user-tool'),
+    parent_tool_use_id: null,
+    message: {
+      role: 'user',
+      content: [{
+        type: 'tool_result',
+        tool_use_id: input.callId,
+        content: input.content,
+        ...(input.isError === true ? { is_error: true } : {})
+      }]
+    }
+  })
+}
+
 function thinkingDelta(text: string, sessionId: string): SDKMessage {
   return sdkMessage({
     type: 'stream_event',
@@ -196,6 +242,21 @@ function init(sessionId: string): SDKMessage {
 
 async function serviceRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-claude-runtime-'))
+}
+
+async function storedEvents(
+  service: ClaudeCodeRuntimeService,
+  threadId: string
+): Promise<AgentRuntimeEvent[]> {
+  const eventStore = (service as unknown as {
+    eventStore: {
+      read: (
+        threadId: string,
+        options: { includeAll: boolean }
+      ) => Promise<Array<{ event: AgentRuntimeEvent }>>
+    }
+  }).eventStore
+  return (await eventStore.read(threadId, { includeAll: true })).map((entry) => entry.event)
 }
 
 async function waitUntil(assertion: () => Promise<boolean>, timeoutMs = 1_000): Promise<void> {
@@ -466,6 +527,237 @@ describe('ClaudeCodeRuntimeService', () => {
     expect(detail.detail.items?.some((item) =>
       item.kind === 'reasoning' && item.text?.includes('Final thought should not duplicate.')
     )).toBe(false)
+  })
+
+  it('records tool_use as intent and tool_result as the executor receipt without duplicating either', async () => {
+    const toolUse = toolUseMessage({
+      sessionId: 'claude-session-tools',
+      callId: 'tool-read-1',
+      toolName: 'Read',
+      arguments: { file_path: '/tmp/input.txt' }
+    })
+    const toolResult = toolResultMessage({
+      sessionId: 'claude-session-tools',
+      callId: 'tool-read-1',
+      content: 'file contents'
+    })
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-tools'),
+      toolUse,
+      toolUse,
+      toolResult,
+      toolResult,
+      result('Done.', 'claude-session-tools')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Tool receipts' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'read it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.itemId === 'tool-read-1'
+    )
+    expect(toolEvents).toHaveLength(2)
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        kind: 'tool_event',
+        status: 'running',
+        meta: expect.objectContaining({
+          callId: 'tool-read-1',
+          toolName: 'Read',
+          arguments: { file_path: '/tmp/input.txt' },
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent'
+        })
+      }),
+      expect.objectContaining({
+        kind: 'tool_event',
+        status: 'success',
+        meta: expect.objectContaining({
+          callId: 'tool-read-1',
+          toolName: 'Read',
+          arguments: { file_path: '/tmp/input.txt' },
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: true,
+          error: null
+        })
+      })
+    ])
+  })
+
+  it('buffers an out-of-order tool_result until its matching tool_use arrives', async () => {
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-out-of-order'),
+      toolResultMessage({
+        sessionId: 'claude-session-out-of-order',
+        callId: 'tool-edit-1',
+        content: 'updated'
+      }),
+      toolUseMessage({
+        sessionId: 'claude-session-out-of-order',
+        callId: 'tool-edit-1',
+        toolName: 'Edit',
+        arguments: { file_path: '/tmp/output.txt', new_string: 'updated' }
+      }),
+      result('Done.', 'claude-session-out-of-order')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Out of order' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'edit it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.itemId === 'tool-edit-1'
+    )
+    expect(toolEvents).toEqual([
+      expect.objectContaining({
+        status: 'running',
+        meta: expect.objectContaining({ phase: 'requested' })
+      }),
+      expect.objectContaining({
+        status: 'success',
+        meta: expect.objectContaining({
+          toolName: 'Edit',
+          arguments: { file_path: '/tmp/output.txt', new_string: 'updated' },
+          phase: 'succeeded',
+          success: true
+        })
+      })
+    ])
+  })
+
+  it('keeps failed tool results explicit without treating the request event as execution proof', async () => {
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-tool-failure'),
+      toolUseMessage({
+        sessionId: 'claude-session-tool-failure',
+        callId: 'tool-bash-1',
+        toolName: 'Bash',
+        arguments: { command: 'false' }
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-tool-failure',
+        callId: 'tool-bash-1',
+        content: 'command exited with status 1',
+        isError: true
+      }),
+      result('The command failed.', 'claude-session-tool-failure')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Tool failure' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'run it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const toolEvents = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.itemId === 'tool-bash-1'
+    )
+    expect(toolEvents.at(-1)).toEqual(expect.objectContaining({
+      status: 'error',
+      meta: expect.objectContaining({
+        callId: 'tool-bash-1',
+        toolName: 'Bash',
+        arguments: { command: 'false' },
+        phase: 'failed',
+        factSource: 'executor_result',
+        evidenceStrength: 'executor_receipt',
+        success: false,
+        error: expect.objectContaining({ code: 'claude_tool_error' })
+      })
+    }))
+  })
+
+  it('fails the turn when a tool_use has no matching tool_result', async () => {
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-unresolved'),
+      toolUseMessage({
+        sessionId: 'claude-session-unresolved',
+        callId: 'tool-write-1',
+        toolName: 'Write',
+        arguments: { file_path: '/tmp/output.txt', content: 'draft' }
+      }),
+      result('Done.', 'claude-session-unresolved')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Unresolved tool' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'write it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'failed'
+    })
+
+    const events = await storedEvents(service, thread.thread.id)
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'tool_event',
+        itemId: 'tool-write-1',
+        status: 'error',
+        meta: expect.objectContaining({
+          callId: 'tool-write-1',
+          toolName: 'Write',
+          arguments: { file_path: '/tmp/output.txt', content: 'draft' },
+          phase: 'unresolved',
+          success: false,
+          error: expect.objectContaining({ code: 'claude_tool_result_missing' })
+        })
+      }),
+      expect.objectContaining({
+        kind: 'turn_lifecycle',
+        state: 'failed',
+        message: expect.stringContaining('ended without a matching tool_result')
+      })
+    ]))
   })
 
   it('injects the managed computer-use MCP server into Claude SDK turns when configured', async () => {

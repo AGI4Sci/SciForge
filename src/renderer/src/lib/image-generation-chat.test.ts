@@ -22,6 +22,6 @@ describe('visual artifact chat workflow', () => {
     const prompt = buildImageGenerationWorkflowPrompt('根据论文数据画图')
 
     expect(prompt).toContain('The runtime scientific-visual policy owns route selection')
-    expect(prompt).not.toContain('scientific_visual_plan')
+    expect(prompt).not.toContain('image_generation_render')
   })
 })

@@ -866,10 +866,13 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
         '--include-global-skills'
       ],
       env: {
-        ELECTRON_RUN_AS_NODE: '1'
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:3892/v1',
+        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'local-runtime-router-key',
+        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
       },
       trustScope: 'user',
-      timeoutMs: 30000
+      timeoutMs: 120000
     })
   })
 

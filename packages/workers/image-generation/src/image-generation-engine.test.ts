@@ -13,24 +13,79 @@ import {
   reviewVisualArtifact,
   segmentImageGenerationComponents
 } from './image-generation-engine'
+import type { ImageGenerationPlanRequest, ImageGenerationRenderRequest } from './types'
+import type { VisualProductionHandoff } from './visual-production-planner'
+
+const modelVisualPlan: VisualProductionHandoff = {
+  planId: 'test-model-plan',
+  route: 'model',
+  routeLocked: true,
+  rationale: 'The image model owns the declared visual expression.',
+  sourceArtifacts: [],
+  reproducibleInputs: [],
+  lockedElements: [],
+  modelOwnedElements: ['visual composition'],
+  contextStatus: 'ready',
+  contextStopReason: 'sufficient',
+  contextEvidenceIds: [],
+  unresolvedContext: [],
+  releaseCeiling: 'publication_ready',
+  fallbackPolicy: 'fail_closed'
+}
+
+const hybridVisualPlan: VisualProductionHandoff = {
+  ...modelVisualPlan,
+  planId: 'test-hybrid-plan',
+  route: 'hybrid',
+  rationale: 'Code owns exact content while the model owns visual expression.',
+  sourceArtifacts: ['data/results.csv'],
+  reproducibleInputs: ['data/results.csv'],
+  lockedElements: ['labels, values, and relationships'],
+  modelOwnedElements: ['background and visual style']
+}
+
+const codeVisualPlan: VisualProductionHandoff = {
+  ...modelVisualPlan,
+  planId: 'test-code-plan',
+  route: 'code',
+  rationale: 'Code owns the complete reproducible artifact.',
+  sourceArtifacts: ['data/results.csv'],
+  reproducibleInputs: ['data/results.csv'],
+  lockedElements: ['all rendered values and labels'],
+  modelOwnedElements: []
+}
+
+const draftVisualPlan: VisualProductionHandoff = {
+  ...modelVisualPlan,
+  planId: 'test-draft-plan',
+  contextStatus: 'budget_exhausted',
+  contextStopReason: 'cost_limit',
+  unresolvedContext: ['Confirm the current external standard.'],
+  releaseCeiling: 'draft_ready'
+}
+
+type PlanRequest = Omit<ImageGenerationPlanRequest, 'visualPlan'> & { visualPlan?: VisualProductionHandoff }
+type RenderRequest = Omit<ImageGenerationRenderRequest, 'recipe'> & {
+  recipe: Omit<ImageGenerationRenderRequest['recipe'], 'visualPlan'> & { visualPlan?: VisualProductionHandoff }
+}
 
 function planImageGeneration(
-  request: Parameters<typeof planImageGenerationEngine>[0]
+  request: PlanRequest
 ) {
   return planImageGenerationEngine({
     ...request,
-    ...(!request.scientificVisualPlan && !request.creativeDirect ? { creativeDirect: true as const } : {})
+    visualPlan: request.visualPlan ?? modelVisualPlan
   })
 }
 
 function renderImageGeneration(
-  request: Parameters<typeof renderImageGenerationEngine>[0]
+  request: RenderRequest
 ) {
   return renderImageGenerationEngine({
     ...request,
     recipe: {
       ...request.recipe,
-      ...(!request.recipe.scientificVisualPlan && !request.recipe.creativeDirect ? { creativeDirect: true as const } : {})
+      visualPlan: request.recipe.visualPlan ?? modelVisualPlan
     }
   })
 }
@@ -41,6 +96,16 @@ async function decodedPixels(path: string): Promise<Buffer> {
   const context = canvas.getContext('2d')
   context.drawImage(image, 0, 0)
   return Buffer.from(context.getImageData(0, 0, image.width, image.height).data)
+}
+
+function writeReviewManifest(outputPath: string, visualPlan: VisualProductionHandoff = modelVisualPlan): string {
+  const manifestPath = outputPath.replace(/\.[^.]+$/, '.manifest.json')
+  writeFileSync(manifestPath, JSON.stringify({
+    outputPath,
+    outputHash: createHash('sha256').update(readFileSync(outputPath)).digest('hex'),
+    visualPlan
+  }))
+  return manifestPath
 }
 
 let workspaceRoot = ''
@@ -98,15 +163,6 @@ afterEach(() => {
 })
 
 describe('image generation engine', () => {
-  const generativeScientificPlan = {
-    route: 'generative_visual' as const,
-    routeLocked: true as const,
-    rationale: 'The requested artifact explains scientific concepts rather than encoding numeric data.',
-    reproducibleInputs: [],
-    truthLockedElements: ['scientific labels and relationships'],
-    fallbackPolicy: 'fail_closed' as const
-  }
-
   it('reports a degraded placeholder provider when no Model Router image endpoint is configured', async () => {
     const status = await getImageGenerationStatus(workspaceRoot)
 
@@ -121,12 +177,13 @@ describe('image generation engine', () => {
     const outputPath = join(workspaceRoot, 'review.png')
     const canvas = createCanvas(256, 256)
     writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath)
 
     const review = await reviewVisualArtifact({
       workspaceRoot,
       outputPath,
+      manifestPath,
       task: 'Review a publication figure.',
-      truthLockedElements: ['all labels remain legible']
     })
 
     expect(review).toMatchObject({ ok: false, status: 'vision_review_unavailable' })
@@ -144,6 +201,7 @@ describe('image generation engine', () => {
     context.fillStyle = '#111827'
     context.fillRect(20, 20, 210, 210)
     writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath, hybridVisualPlan)
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
       output_text: JSON.stringify({
         pass: false,
@@ -158,17 +216,19 @@ describe('image generation engine', () => {
     const review = await reviewVisualArtifact({
       workspaceRoot,
       outputPath,
+      manifestPath,
       task: 'Create a clean publication pipeline figure.',
-      truthLockedElements: ['pipeline stage labels']
     })
 
     expect(review).toMatchObject({
       ok: true,
+      status: 'draft_ready',
       reviewedArtifactPath: outputPath,
       reviewedArtifactHash: createHash('sha256').update(readFileSync(outputPath)).digest('hex'),
       repairable: true,
       semantic: {
         pass: false,
+        needsContext: false,
         violations: ['Large overlapping shapes obscure the content.']
       },
       score: { semantic: 0.12 }
@@ -181,22 +241,105 @@ describe('image generation engine', () => {
     expect(String(request.body)).toContain('input_image')
   })
 
+  it('returns needs_context only when semantic review identifies missing external information', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const outputPath = join(workspaceRoot, 'context-blocked.png')
+    const canvas = createCanvas(256, 256)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath, draftVisualPlan)
+    globalThis.fetch = vi.fn(async () => Response.json({
+      output_text: JSON.stringify({
+        pass: false,
+        needsContext: true,
+        score: 0.5,
+        summary: 'The unresolved source value is required to verify the visual.',
+        violations: ['A required source value is unresolved.'],
+        repairInstructions: []
+      })
+    })) as unknown as typeof fetch
+
+    const review = await reviewVisualArtifact({
+      workspaceRoot,
+      outputPath,
+      manifestPath,
+      task: 'Review a context-limited visual.'
+    })
+
+    expect(review).toMatchObject({
+      ok: true,
+      status: 'needs_context',
+      repairable: false,
+      semantic: { needsContext: true }
+    })
+  })
+
+  it.each([
+    ['publication_ready', modelVisualPlan],
+    ['publication_ready', codeVisualPlan],
+    ['draft_ready', draftVisualPlan]
+  ] as const)('caps a passing unified review at %s', async (expectedStatus, visualPlan) => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
+    const outputPath = join(workspaceRoot, `${expectedStatus}.png`)
+    const canvas = createCanvas(256, 256)
+    const context = canvas.getContext('2d')
+    context.fillStyle = '#ffffff'
+    context.fillRect(0, 0, 256, 256)
+    context.fillStyle = '#2563eb'
+    context.fillRect(32, 32, 192, 192)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath, visualPlan)
+    globalThis.fetch = vi.fn(async () => Response.json({
+      output_text: JSON.stringify({
+        pass: true,
+        score: 1,
+        summary: 'The artifact is release-quality.',
+        violations: [],
+        repairInstructions: []
+      })
+    })) as unknown as typeof fetch
+
+    const review = await reviewVisualArtifact({
+      workspaceRoot,
+      outputPath,
+      manifestPath,
+      task: 'Review the release candidate.'
+    })
+
+    expect(review).toMatchObject({ ok: true, status: expectedStatus, repairable: false })
+  })
+
+  it('fails review closed when artifact bytes no longer match the render manifest', async () => {
+    const outputPath = join(workspaceRoot, 'tampered.png')
+    const canvas = createCanvas(256, 256)
+    writeFileSync(outputPath, canvas.toBuffer('image/png'))
+    const manifestPath = writeReviewManifest(outputPath)
+    writeFileSync(outputPath, Buffer.concat([readFileSync(outputPath), Buffer.from('tampered')]))
+
+    const review = await reviewVisualArtifact({
+      workspaceRoot,
+      outputPath,
+      manifestPath,
+      task: 'Review a tampered artifact.'
+    })
+
+    expect(review).toMatchObject({ ok: false, status: 'invalid_manifest' })
+  })
+
   it('plans semantic flowcharts from prose as image-generation work', async () => {
     const plan = await planImageGeneration({
       workspaceRoot,
       task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator usage from a paper excerpt.',
-      scientificVisualPlan: generativeScientificPlan
+      visualPlan: modelVisualPlan
     })
 
     expect(plan.ok).toBe(true)
     expect(plan.recipe.mode).toBe('text_to_image')
     expect(plan.suggestedRenderTool).toBe('image_generation_render')
-    expect(plan.upstreamResearchWorkflow).toMatchObject({
-      recommended: true,
-      suggestedBriefTool: 'scientific_plotting_research_brief',
-      suggestedSearchTool: 'research_search'
-    })
-    expect(plan.scientificVisualPlan).toEqual(generativeScientificPlan)
+    expect(plan.visualPlan).toEqual(modelVisualPlan)
     expect(plan.recipe.prompt).toContain('SciForge semantic visual brief')
     expect(plan.recipe.prompt).toContain('full-canvas composition')
   })
@@ -217,7 +360,7 @@ describe('image generation engine', () => {
       workspaceRoot,
       task: 'A clean scientific cover-style illustration',
       size: { width: 1280, height: 900 },
-      scientificVisualPlan: generativeScientificPlan
+      visualPlan: modelVisualPlan
     })
 
     expect(plan.ok).toBe(true)
@@ -225,7 +368,7 @@ describe('image generation engine', () => {
     expect(plan.warnings.join(' ')).toContain('1280x896')
   })
 
-  it('blocks ungrounded scientific semantic figure rendering until research brief evidence exists', async () => {
+  it('does not reclassify or block a terminal visual plan from prompt keywords', async () => {
     process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
 
     const result = await renderImageGeneration({
@@ -235,21 +378,16 @@ describe('image generation engine', () => {
         mode: 'text_to_image',
         prompt: '新建一张流程图，介绍 Transformer 框架和 Attention 数据流。',
         size: { width: 1024, height: 768 },
-        outputFormat: 'png',
-        scientificVisualPlan: generativeScientificPlan
+        outputFormat: 'png'
       }
     })
 
-    expect(result.ok).toBe(false)
-    if (result.ok) throw new Error('expected render to require research first')
-    expect(result.status).toBe('research_required')
-    expect(result.upstreamResearchWorkflow).toMatchObject({
-      recommended: true,
-      suggestedBriefTool: 'scientific_plotting_research_brief'
-    })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    expect(result.status).toBe('rendered_placeholder')
   })
 
-  it('does not treat an unconfirmed research brief prompt as grounding evidence', async () => {
+  it('renders a budget-exhausted plan as a draft that remains review-bound', async () => {
     process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
 
     const result = await renderImageGeneration({
@@ -257,22 +395,22 @@ describe('image generation engine', () => {
       imageId: 'ungrounded-brief-flowchart',
       recipe: {
         mode: 'text_to_image',
-        prompt: [
-          'Task: 新建一张论文级 Transformer 流程图。',
-          'Figure need: Method flow (diagram_spec_or_image_generation).',
-          'Reference papers and figure evidence:',
-          'No reference papers confirmed yet. Search related CNS/top-conference/domain papers before rendering.',
-          'Next controlled tool: research_search first, then scientific_plotting_research_brief again.'
-        ].join('\n'),
+        prompt: 'Create a standards-aligned workflow without inventing the unresolved standard.',
         size: { width: 1024, height: 768 },
         outputFormat: 'png',
-        scientificVisualPlan: generativeScientificPlan
+        visualPlan: draftVisualPlan
       }
     })
 
-    expect(result.ok).toBe(false)
-    if (result.ok) throw new Error('expected render to require research first')
-    expect(result.status).toBe('research_required')
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error(result.message)
+    expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
+      visualPlan: {
+        contextStatus: 'budget_exhausted',
+        releaseCeiling: 'draft_ready'
+      }
+    })
+    expect(result.warnings.join(' ')).toContain('draft_ready')
   })
 
   it('renders a non-destructive placeholder artifact when explicitly enabled for local tests', async () => {
@@ -303,7 +441,7 @@ describe('image generation engine', () => {
     })
   })
 
-  it('records scientific generated images as visual base layers requiring scripted overlays', async () => {
+  it('records hybrid ownership directly from the unified visual plan', async () => {
     process.env.SCIFORGE_IMAGE_ALLOW_PLACEHOLDER = '1'
 
     const plan = await planImageGeneration({
@@ -312,14 +450,13 @@ describe('image generation engine', () => {
       stylePreset: 'scientific_diagram',
       referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
       size: { width: 768, height: 512 },
-      scientificVisualPlan: generativeScientificPlan
+      visualPlan: hybridVisualPlan
     })
 
     expect(plan.ok).toBe(true)
     if (!plan.ok) throw new Error(plan.message)
-    expect(plan.artifactPolicy).toContain('visual base layer')
-    expect(plan.visualReviewWorkflow.join(' ')).toMatch(/script all labels/)
-    expect(plan.warnings.join(' ')).toMatch(/deterministic scripts/)
+    expect(plan.visualReviewWorkflow.join(' ')).toContain('deterministic composition')
+    expect(plan.warnings.join(' ')).toContain('Hybrid ownership is locked')
 
     const result = await renderImageGeneration({
       workspaceRoot,
@@ -329,51 +466,45 @@ describe('image generation engine', () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.message)
-    expect(result.usagePolicy).toMatchObject({
-      role: 'visual_composition_base',
-      deterministicOverlayRequired: true,
-      overlayToolchain: 'script_or_scientific_plotting'
-    })
-    expect(result.warnings.join(' ')).toMatch(/scientific_plotting/)
     expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
-      usagePolicy: {
-        role: 'visual_composition_base',
-        deterministicOverlayRequired: true
-      }
+      visualPlan: hybridVisualPlan
     })
     expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
-      usagePolicy: {
-        role: 'visual_composition_base',
-        deterministicOverlayRequired: true
-      }
+      visualPlan: hybridVisualPlan
     })
   })
 
-  it('requires a locked unified visual plan for scientific image preparation', async () => {
+  it('requires the terminal handoff from visual_generate for image preparation', async () => {
     const result = await planImageGenerationEngine({
       workspaceRoot,
       task: 'A scientific mechanism diagram explaining protein regulation'
-    })
+    } as ImageGenerationPlanRequest)
 
     expect(result).toMatchObject({
       ok: false,
-      status: 'scientific_visual_plan_required',
-      suggestedPlanTool: 'scientific_visual_plan'
+      status: 'visual_plan_required',
+      suggestedPlanTool: 'visual_generate'
     })
   })
 
-  it('allows grounded scientific delta polish and records locked facts in manifests', async () => {
+  it('uploads hybrid source pixels through the image edit endpoint and records unified ownership', async () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
+    const sourcePath = join(workspaceRoot, 'controlled-source.png')
+    const sourceBytes = Buffer.from(pngBase64, 'base64')
+    writeFileSync(sourcePath, sourceBytes)
     process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
     process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
     process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      expect(String(input)).toBe('http://127.0.0.1:3892/v1/images/generations')
-      const body = JSON.parse(String(init?.body ?? '{}'))
-      expect(body.prompt).toContain('Scientific delta-only polish mode')
-      expect(body.prompt).toContain('Locked scientific facts: numeric values; axes labels; p-values')
-      expect(body.prompt).toContain('Source controlled artifacts: .sciforge/figures/benchmark.manifest.json')
+      expect(String(input)).toBe('http://127.0.0.1:3892/v1/images/edits')
+      const body = init?.body as FormData
+      expect(body.get('model')).toBe('sciforge-router')
+      expect(body.get('input_fidelity')).toBe('high')
+      expect(String(body.get('prompt'))).toContain('Hybrid visual-layer mode')
+      expect(String(body.get('prompt'))).toContain('labels, values, and relationships')
+      const uploaded = body.get('image') as File
+      expect(Buffer.from(await uploaded.arrayBuffer())).toEqual(sourceBytes)
       return new Response(JSON.stringify({
         data: [{ b64_json: pngBase64 }]
       }), {
@@ -387,50 +518,30 @@ describe('image generation engine', () => {
       workspaceRoot,
       imageId: 'delta-polish',
       recipe: {
-        mode: 'text_to_image',
-        prompt: 'Polish this scientific paper figure with callouts and panel stitching.',
+        mode: 'image_to_image',
+        prompt: 'Add the model-owned background and visual style around the controlled source.',
+        referencePath: sourcePath,
         size: { width: 512, height: 512 },
         outputFormat: 'png',
-        controlledSubfigureManifests: ['.sciforge/figures/benchmark.manifest.json'],
-        scientificPolishDeltaPlan: {
-          mode: 'delta_only',
-          allowedOperations: ['panel_stitching', 'callout_overlay', 'visual_unification'],
-          lockedFacts: ['numeric values', 'axes labels', 'p-values'],
-          handoffPrompt: 'Use visual delta polish only; do not replace scientific panels.'
-        },
-        scientificVisualPlan: {
-          ...generativeScientificPlan,
-          route: 'hybrid_composite',
-          reproducibleInputs: ['.sciforge/figures/benchmark.manifest.json']
+        visualPlan: {
+          ...hybridVisualPlan,
+          sourceArtifacts: [sourcePath],
+          reproducibleInputs: [sourcePath]
         }
       }
     })
 
     expect(result.ok).toBe(true)
     if (!result.ok) throw new Error(result.message)
-    expect(result.usagePolicy).toMatchObject({
-      role: 'visual_composition_base',
-      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
-      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json']
-    })
     expect(JSON.parse(readFileSync(result.manifestPath, 'utf8'))).toMatchObject({
-      scientificPolishDeltaPlan: {
-        mode: 'delta_only',
-        lockedFacts: ['numeric values', 'axes labels', 'p-values']
-      },
-      controlledSubfigureManifests: ['.sciforge/figures/benchmark.manifest.json'],
-      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
-      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json'],
-      usagePolicy: {
-        role: 'visual_composition_base',
-        deterministicOverlayRequired: true,
-        lockedFacts: ['numeric values', 'axes labels', 'p-values']
+      visualPlan: {
+        route: 'hybrid',
+        sourceArtifacts: [sourcePath],
+        lockedElements: hybridVisualPlan.lockedElements,
+        modelOwnedElements: hybridVisualPlan.modelOwnedElements
       }
     })
-    expect(JSON.parse(readFileSync(result.artifactManifestPath, 'utf8'))).toMatchObject({
-      lockedFacts: ['numeric values', 'axes labels', 'p-values'],
-      sourceControlledArtifacts: ['.sciforge/figures/benchmark.manifest.json']
-    })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
   it('records VisualDocument review metadata without mutating review state directly', async () => {
@@ -581,7 +692,7 @@ describe('image generation engine', () => {
     expect(existsSync(join(workspaceRoot, '.sciforge/images/provider-failure-no-fallback.manifest.json'))).toBe(false)
   })
 
-  it('asks the image endpoint for unlabeled scientific base images', async () => {
+  it('tells the model not to invent unresolved context in draft-only rendering', async () => {
     const pngBase64 =
       'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII='
     process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
@@ -591,8 +702,8 @@ describe('image generation engine', () => {
       const url = String(input)
       if (url === 'http://127.0.0.1:3892/v1/images/generations') {
         const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
-        expect(String(body.prompt)).toContain('render an unlabeled visual composition')
-        expect(String(body.prompt)).toContain('Do not include readable labels')
+        expect(String(body.prompt)).toContain('Context-limited draft mode')
+        expect(String(body.prompt)).toContain('Confirm the current external standard')
         return new Response(JSON.stringify({
           data: [{ b64_json: pngBase64 }]
         }), {
@@ -606,14 +717,13 @@ describe('image generation engine', () => {
 
     const result = await renderImageGeneration({
       workspaceRoot,
-      imageId: 'unlabeled-science-base',
+      imageId: 'context-limited-draft',
       recipe: {
         mode: 'text_to_image',
-        prompt: 'Scientific figure showing meiotic entry labels and quantitative data tracks',
-        referencePath: 'research-briefs/meiotic-entry-figure-evidence.json',
+        prompt: 'Create a draft while preserving unresolved context explicitly.',
         size: { width: 512, height: 512 },
         outputFormat: 'png',
-        scientificVisualPlan: generativeScientificPlan
+        visualPlan: draftVisualPlan
       }
     })
 
@@ -780,6 +890,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'color-edited-diagram',
       reviewPacket: {
         schemaVersion: 1,
@@ -887,6 +998,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'arrow-edited-diagram',
       reviewPacket: {
         schemaVersion: 1,
@@ -963,6 +1075,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'no-op-semantic-edit',
       reviewPacket: {
         schemaVersion: 1,
@@ -1011,6 +1124,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'wrong-size-semantic-edit',
       reviewPacket: {
         schemaVersion: 1,
@@ -1062,6 +1176,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'explicit-mask-mismatch',
       maskPath: 'explicit-mask.png',
       reviewPacket: {
@@ -1113,6 +1228,7 @@ describe('image generation engine', () => {
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       imageId: 'protected-region-redraw',
       reviewPacket: {
         schemaVersion: 1,
@@ -1154,6 +1270,7 @@ describe('image generation engine', () => {
   it('rejects packets outside the VisualDocument review schema', async () => {
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       reviewPacket: { schemaVersion: 0 }
     })
 
@@ -1232,6 +1349,7 @@ describe('image generation engine', () => {
 
     const edited = await editFrameworkComponentsWithImage2({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       componentManifestPath: segmented.frameworkComponentManifestPath,
       componentIds: [componentManifest.components[0].componentId],
       instruction: 'redraw this module as a darker blue method block',
@@ -1370,6 +1488,7 @@ process.stdin.on('end', () => {
 
     const edited = await editFrameworkComponentsWithImage2({
       workspaceRoot,
+      visualPlan: hybridVisualPlan,
       componentManifestPath: manifestPath,
       blockIds: ['legacy-block'],
       instruction: 'make this legacy block green',

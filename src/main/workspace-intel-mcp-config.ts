@@ -2,6 +2,12 @@ import type { AppSettingsV1 } from '../shared/app-settings'
 import { GUI_WORKSPACE_INTEL_MCP_LAUNCH_FLAG } from './workspace-intel-mcp-server'
 import { WorkspaceIntelToolNames } from '../../packages/workers/workspace-intel/src/contract'
 import {
+  MODEL_ROUTER_BASE_URL_ENV,
+  MODEL_ROUTER_RUNTIME_API_KEY_ENV,
+  MODEL_ROUTER_VISUAL_MODEL_ENV
+} from '../../packages/workers/workspace-intel/src/visual-inspection'
+import { resolveRuntimeModelRouterSettings } from '../shared/app-settings-model-router'
+import {
   buildExternalLocalRuntimeMcpJson,
   buildManagedGuiLocalRuntimeMcpServerConfig,
   buildManagedGuiMcpJsonServerConfig,
@@ -19,7 +25,7 @@ import {
 
 export const GUI_WORKSPACE_INTEL_MCP_SERVER_NAME = 'gui_workspace_intel'
 const GUI_WORKSPACE_INTEL_MCP_NODE_ENTRY = 'out/main/workspace-intel-mcp-node-entry.js'
-export const WORKSPACE_INTEL_MCP_TIMEOUT_MS = 30_000
+export const WORKSPACE_INTEL_MCP_TIMEOUT_MS = 120_000
 
 export type WorkspaceIntelMcpLaunchConfig = ManagedGuiMcpLaunchConfig & {
   visibleContextPath?: string
@@ -64,10 +70,22 @@ export function buildWorkspaceIntelMcpArgs(
   return args
 }
 
-export function workspaceIntelMcpEnv(existingEnv: Record<string, string> = {}): Record<string, string> {
-  return {
+export function workspaceIntelMcpEnv(
+  existingEnv: Record<string, string> = {},
+  settings?: AppSettingsV1
+): Record<string, string> {
+  const env = {
     ...existingEnv,
     ...ELECTRON_RUN_AS_NODE_ENV
+  }
+  if (!settings) return env
+  const router = resolveRuntimeModelRouterSettings(settings)
+  if (!router.baseUrl || !router.apiKey || !router.model) return env
+  return {
+    ...env,
+    [MODEL_ROUTER_BASE_URL_ENV]: router.baseUrl,
+    [MODEL_ROUTER_RUNTIME_API_KEY_ENV]: router.apiKey,
+    [MODEL_ROUTER_VISUAL_MODEL_ENV]: router.model
   }
 }
 
@@ -85,7 +103,7 @@ export function buildWorkspaceIntelMcpServerConfig(
     descriptor: GUI_WORKSPACE_INTEL_MCP_DESCRIPTOR,
     launch,
     args: buildWorkspaceIntelMcpArgs(settings, launch),
-    env: workspaceIntelMcpEnv(env),
+    env: workspaceIntelMcpEnv(env, settings),
     existing
   })
 }
@@ -100,7 +118,7 @@ export function buildWorkspaceIntelLocalRuntimeMcpServerConfig(
     descriptor: GUI_WORKSPACE_INTEL_MCP_DESCRIPTOR,
     launch,
     args: buildWorkspaceIntelMcpArgs(settings, launch),
-    env: workspaceIntelMcpEnv(env),
+    env: workspaceIntelMcpEnv(env, settings),
     existing
   })
 }

@@ -2,6 +2,14 @@
 
 First-party MCP worker for controlled image generation and VisualDocument-based image review.
 
+`visual_generate` is the single visual-production entry point. It checks whether
+the retained context answers every required question before selecting `code`,
+`model`, or `hybrid`. When context is incomplete it returns targeted questions
+for `research_search`; callers merge the evidence and call the same tool again.
+Reaching a cost, round, token, elapsed-time, or no-progress limit locks a
+draft-only plan instead of bypassing review. Every terminal route ends in
+`visual_artifact_review`.
+
 The first version mirrors the scientific plotting worker pattern:
 
 - plan without file writes
@@ -24,7 +32,7 @@ those fields in the image manifest and artifact manifest so the VisualDocument
 worker can stage the artifact through the single review workflow.
 
 The unified revision path is: export a VisualDocument review packet, call
-`scientific_visual_plan` with `action="revision"`, execute
+`visual_generate` with `action="revision"`, execute
 `image_generation_edit_from_visual_review_packet` to create one non-destructive
 candidate from the packet's annotations and normalized masks, run
 `visual_artifact_review`, bind its artifact path,
@@ -33,11 +41,11 @@ human acceptance before replacing the source.
 
 `image_generation_prepare` and `image_generation_render` are creation tools.
 They must not replace packet-based editing for an annotated existing raster,
-including when the locked route is `hybrid_composite`.
+including when the locked route is `hybrid`.
 
 ## Diagram planning behavior
 
-After `scientific_visual_plan` has selected a generative route, `image_generation_prepare`
+After `visual_generate` has selected a `model` or `hybrid` route, `image_generation_prepare`
 normalizes the requested drawing into one of three render intents:
 
 - `general_image`: ordinary image planning.

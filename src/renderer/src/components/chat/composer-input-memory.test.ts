@@ -3,6 +3,7 @@ import type { BrowserStorageLike } from '../../lib/browser-storage'
 import {
   COMPOSER_INPUT_MEMORY_STORAGE_KEY,
   composerDraftContextKey,
+  mergeComposerInputHistory,
   navigateComposerHistory,
   readComposerDraft,
   readComposerInputHistory,
@@ -51,6 +52,28 @@ describe('composer input memory', () => {
     rememberComposerInput('first prompt', storage)
 
     expect(readComposerInputHistory(storage)).toEqual(['second prompt', 'first prompt'])
+  })
+
+  it('uses persisted send order ahead of older active-thread fallback messages', () => {
+    const history = mergeComposerInputHistory(
+      ['old thread prompt', 'duplicated prompt', 'latest message in an old thread snapshot'],
+      ['duplicated prompt', 'actual most recent prompt']
+    )
+
+    expect(history).toEqual([
+      'old thread prompt',
+      'latest message in an old thread snapshot',
+      'duplicated prompt',
+      'actual most recent prompt'
+    ])
+    expect(navigateComposerHistory({
+      key: 'ArrowUp',
+      value: '',
+      selectionStart: 0,
+      selectionEnd: 0,
+      history,
+      state: { cursor: null, draft: '' }
+    })?.value).toBe('actual most recent prompt')
   })
 
   it('navigates backward, forward, and back to the unsent draft', () => {

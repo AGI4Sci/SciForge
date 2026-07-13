@@ -230,6 +230,12 @@ describe('GUI MCP runtime registry', () => {
 
   it('builds Codex dynamic MCP server configs with contract-derived tools and local secrets', () => {
     const settings = createSettings()
+    settings.modelRouter = {
+      ...defaultModelRouterSettings(),
+      baseUrl: 'http://127.0.0.1:4567/v1',
+      runtimeApiKey: 'router-runtime-test-key',
+      publicModelAlias: 'router-vision-model'
+    }
     const servers = buildCodexManagedGuiMcpServers({
       settings,
       scheduleMcp: { settings, launch },
@@ -257,6 +263,36 @@ describe('GUI MCP runtime registry', () => {
         GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
       },
       enabledTools: expect.arrayContaining(['gui_workflow_list', 'gui_workflow_run'])
+    })
+    expect(servers.find((server) => server.id === 'gui_workspace_intel')).toMatchObject({
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4567/v1',
+        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
+        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
+      }
+    })
+    expect(buildClaudeCodeManagedGuiMcpServers({
+      settings,
+      workspaceIntelMcp: { settings, launch }
+    }).gui_workspace_intel).toMatchObject({
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4567/v1',
+        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
+        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
+      }
+    })
+    expect(buildLocalRuntimeManagedGuiMcpServers({
+      settings,
+      workspaceIntelMcp: { settings, launch }
+    }).gui_workspace_intel).toMatchObject({
+      env: {
+        ELECTRON_RUN_AS_NODE: '1',
+        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4567/v1',
+        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
+        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
+      }
     })
     expect(servers.find((server) => server.id === 'remote_executor')).toMatchObject({
       env: { ELECTRON_RUN_AS_NODE: '1' },
@@ -291,13 +327,13 @@ describe('GUI MCP runtime registry', () => {
       )
     }
 
-    expect(codex.find((server) => server.id === 'scientific_plotting')?.enabledTools).toEqual(
+    expect(codex.find((server) => server.id === 'image_generation')?.enabledTools).toEqual(
       expect.arrayContaining([
-        'scientific_visual_plan',
-        'scientific_plotting_research_brief',
-        'scientific_plotting_render'
+        'visual_generate'
       ])
     )
+    const scientificPlottingTools = codex.find((server) => server.id === 'scientific_plotting')?.enabledTools
+    expect(scientificPlottingTools).not.toContain('visual_generate')
     expect(codex.find((server) => server.id === 'visual_document')).toMatchObject({
       args: expect.arrayContaining(['--sciforge-visual-document-mcp-server']),
       enabledTools: expect.arrayContaining([

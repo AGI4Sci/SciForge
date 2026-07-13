@@ -225,6 +225,18 @@ describe('AgentRuntimeProvider', () => {
               hash: { algorithm: 'sha256', digest: 'a'.repeat(64) }
             }]
           }
+        },
+        {
+          id: 'integrity-error-1',
+          kind: 'system',
+          text: 'Required execution proof was missing.',
+          detail: 'apply_patch never returned a terminal receipt',
+          status: 'error',
+          createdAt: '2026-06-11T00:01:03.000Z',
+          meta: {
+            code: 'runtime_execution_incomplete',
+            severity: 'error'
+          }
         }
       ]
     }))
@@ -325,6 +337,14 @@ describe('AgentRuntimeProvider', () => {
           meta: {
             scientificObjects: [expect.objectContaining({ id: 'structure-1', modality: 'molecular' })]
           }
+        },
+        {
+          kind: 'system',
+          id: 'integrity-error-1',
+          text: 'Blocked / unverified execution. The runtime did not provide trusted proof that the required tool action completed.',
+          code: 'runtime_execution_incomplete',
+          detail: expect.stringContaining('apply_patch never returned a terminal receipt'),
+          severity: 'error'
         }
       ]
     })

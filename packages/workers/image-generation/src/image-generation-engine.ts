@@ -40,7 +40,6 @@ import type {
   VisualArtifactReviewRequest,
   VisualArtifactReviewResult,
   ImageGenerationStatus,
-  ImageGenerationUsagePolicy,
   ImageSize
 } from './types'
 
@@ -67,18 +66,6 @@ const ARTIFACT_DIR = '.sciforge/artifacts'
 const IMAGE_DIR = '.sciforge/images'
 const LOCAL_MODEL_ROUTER_BASE_URL_ERROR =
   'SCIFORGE_MODEL_ROUTER_BASE_URL must point to the local SciForge Model Router (http://127.0.0.1:<port>/v1, http://localhost:<port>/v1, or http://[::1]:<port>/v1).'
-const SCIENTIFIC_BASE_IMAGE_WARNING =
-  'Scientific figure image generation is for visual composition/base layers only. Overlay labels, axes, numeric data, citations, molecular annotations, and other scientific claims with deterministic scripts such as scientific_plotting.'
-const SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION =
-  'For scientific-figure use, render an unlabeled visual composition or background only. Leave clear space for scripted overlays. Do not include readable labels, axes, numeric values, data traces, citations, equations, tables, legends, scale bars, gene/protein names, or molecular identity claims in the raster image.'
-const SCIENTIFIC_DELTA_IMAGE_PROVIDER_INSTRUCTION =
-  'Scientific delta-only polish mode: use image generation only for visual increments over existing controlled subfigure artifacts. Do not redraw, replace, reinterpret, or invent scientific data panels. Preserve all locked facts exactly. If source artifacts are unavailable in the provider context, create only a neutral visual composition scaffold and leave deterministic overlays to SciForge.'
-const SCIENTIFIC_BASE_IMAGE_USAGE_POLICY: ImageGenerationUsagePolicy = {
-  role: 'visual_composition_base',
-  deterministicOverlayRequired: true,
-  overlayToolchain: 'script_or_scientific_plotting',
-  warning: SCIENTIFIC_BASE_IMAGE_WARNING
-}
 type ProviderRenderInput = {
   workspaceRoot: string
   outputPath: string
@@ -132,6 +119,25 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
   if (providerKindForReadOnly(warnings) === 'placeholder' && !allowPlaceholderProvider()) {
     warnings.push('Image model is not configured; rendering will return provider_not_configured until an image model is configured in Settings.')
   }
+  if (!request.visualPlan) {
+    return {
+      ok: false,
+      status: 'visual_plan_required',
+      message: 'Image preparation requires the terminal handoff returned by visual_generate.',
+      suggestedPlanTool: 'visual_generate',
+      warnings
+    }
+  }
+  const visualPlanError = validateImageVisualPlan(request.visualPlan)
+  if (visualPlanError) {
+    return {
+      ok: false,
+      status: 'invalid_visual_plan',
+      message: visualPlanError,
+      suggestedPlanTool: 'visual_generate',
+      warnings
+    }
+  }
   const size = normalizeSize(request.size, warnings)
   const task = request.task.trim()
   const intent = request.drawingIntent ?? classifyDrawingIntent(task, request.stylePreset)
@@ -161,37 +167,14 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
           promptProfile: 'framework-layered-draft-v1' as const
         }
       : {}),
-    ...(request.scientificVisualPlan ? { scientificVisualPlan: request.scientificVisualPlan } : {}),
-    ...(request.creativeDirect ? { creativeDirect: true as const } : {})
+    visualPlan: request.visualPlan
   }
-  const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(task)
-  if (upstreamResearchWorkflow?.recommended) {
-    warnings.push(upstreamResearchWorkflow.reason)
+  if (request.visualPlan.releaseCeiling === 'draft_ready') {
+    warnings.push('Context acquisition stopped before all required questions were resolved; this artifact can only become draft_ready after review.')
   }
-  if (Boolean(request.scientificVisualPlan) === Boolean(request.creativeDirect)) {
-    return {
-      ok: false,
-      status: 'scientific_visual_plan_required',
-      message: 'Image preparation requires exactly one route classification: a locked scientific_visual_plan or creativeDirect=true for clearly non-scientific creative work.',
-      suggestedPlanTool: 'scientific_visual_plan',
-      warnings: [...warnings, 'No renderer fallback is allowed until the visual route is explicitly classified.']
-    }
+  if (request.visualPlan.route === 'hybrid') {
+    warnings.push('Hybrid ownership is locked: the image model may render only modelOwnedElements; deterministic composition owns lockedElements.')
   }
-  const usagePolicy = scientificUsagePolicyForRecipe(recipe)
-  if (request.scientificVisualPlan && (
-    request.scientificVisualPlan.routeLocked !== true
-    || request.scientificVisualPlan.fallbackPolicy !== 'fail_closed'
-    || !['generative_visual', 'hybrid_composite'].includes(request.scientificVisualPlan.route)
-  )) {
-    return {
-      ok: false,
-      status: 'invalid_scientific_visual_plan',
-      message: 'Image generation accepts only a route-locked generative_visual or hybrid_composite plan with fail_closed fallback policy.',
-      suggestedPlanTool: 'scientific_visual_plan',
-      warnings
-    }
-  }
-  pushUsagePolicyWarning(warnings, usagePolicy)
   void workspaceRoot
   return {
     ok: true,
@@ -199,17 +182,16 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     recipe,
     suggestedRenderTool: 'image_generation_render',
     suggestedReviewTool: 'visual_artifact_review',
-    ...(upstreamResearchWorkflow ? { upstreamResearchWorkflow } : {}),
-    ...(request.scientificVisualPlan ? { scientificVisualPlan: request.scientificVisualPlan } : {}),
-    artifactPolicy: usagePolicy
-      ? 'Render writes a PNG visual base layer plus .sciforge/artifacts/*.generated-image.artifact.json for VisualDocument review; publication labels and data must be added by deterministic scripts.'
-      : 'Render writes PNG output plus .sciforge/artifacts/*.generated-image.artifact.json for VisualDocument review.',
+    visualPlan: request.visualPlan,
+    artifactPolicy: request.visualPlan.releaseCeiling === 'draft_ready'
+        ? 'Render writes a draft-only PNG plus .sciforge/artifacts/*.generated-image.artifact.json for mandatory VisualDocument review.'
+        : 'Render writes PNG output plus .sciforge/artifacts/*.generated-image.artifact.json for VisualDocument review.',
     visualReviewWorkflow: [
       'Run image_generation_render with the planned recipe.',
       'Stage the generated artifact in its VisualDocument.',
       'Use visual-review annotations for non-destructive edits.',
       'Run image_generation_edit_from_visual_review_packet to create a new before/after candidate.',
-      ...(usagePolicy ? ['For scientific figures, script all labels, axes, data traces, citations, scale bars, and molecular annotations after rendering the base image.'] : [])
+      ...(request.visualPlan.route === 'hybrid' ? ['Composite lockedElements over the model-owned visual layer with the deterministic composition stage.'] : [])
     ],
     requiresConfirmation: Boolean(frameworkDesignPlan),
     ...(frameworkDesignPlan ? { confirmationSummary: frameworkDesignPlan.confirmationSummary } : {}),
@@ -221,29 +203,18 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
   const warnings: string[] = []
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
-    const recipe = normalizeRecipe(request.recipe, warnings)
-    const usagePolicy = scientificUsagePolicyForRecipe(recipe)
-    if (Boolean(recipe.scientificVisualPlan) === Boolean(recipe.creativeDirect)) {
+    const visualPlanError = validateImageVisualPlan(request.recipe?.visualPlan)
+    if (visualPlanError) {
       return {
         ok: false,
         status: 'invalid_request',
-        message: 'Image rendering requires exactly one route classification: a locked scientific_visual_plan or creativeDirect=true.',
-        warnings: ['No cross-route or unclassified renderer fallback is allowed.']
+        message: visualPlanError,
+        warnings: ['Call visual_generate and pass its terminal model or hybrid handoff unchanged.']
       }
     }
-    pushUsagePolicyWarning(warnings, usagePolicy)
-    const upstreamResearchWorkflow = buildUpstreamResearchWorkflow(recipe.prompt)
-    if (upstreamResearchWorkflow?.recommended && !hasResearchEvidenceForRecipe(recipe)) {
-      return {
-        ok: false,
-        status: 'research_required',
-        message: 'Scientific paper-style images must be grounded before final rendering. Build a scientific_plotting_research_brief, search/read related papers and figure evidence, then call image_generation_render with the resulting full prompt or referencePath.',
-        upstreamResearchWorkflow,
-        warnings: [
-          ...warnings,
-          'Rendering was blocked to avoid producing an ungrounded scientific figure.'
-        ]
-      }
+    const recipe = normalizeRecipe(request.recipe, warnings)
+    if (recipe.visualPlan.releaseCeiling === 'draft_ready') {
+      warnings.push('Rendering a context-limited draft; unified visual review cannot promote it beyond draft_ready.')
     }
     if (recipe.intent === 'framework_diagram' && recipe.confirmation?.status !== 'confirmed') {
       return {
@@ -259,6 +230,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
     const outputPath = join(outputDir, imageId + '.' + (recipe.outputFormat ?? 'png'))
     const providerResult = await renderWithProvider({ workspaceRoot, outputPath, recipe })
     warnings.push(...providerResult.warnings)
+    const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
     const manifestPath = join(outputDir, imageId + '.manifest.json')
     const diagramSpecPath = recipe.intent === 'framework_diagram' && recipe.diagramSpec
       ? join(outputDir, imageId + '.diagram-spec.json')
@@ -313,6 +285,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       requestHash: hashValue({ recipe }),
       workspaceRoot,
       outputPath,
+      outputHash,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
@@ -328,14 +301,10 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(componentArtifacts?.fastSamPreviewPath ? { fastSamPreviewPath: componentArtifacts.fastSamPreviewPath } : {}),
       ...(componentArtifacts?.frameworkComponentManifestPath ? { frameworkComponentManifestPath: componentArtifacts.frameworkComponentManifestPath } : {}),
       ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
-      ...(componentArtifacts?.componentAssetPaths.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
+      ...(componentArtifacts?.componentAssetPaths?.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
-      ...(recipe.scientificPolishDeltaPlan ? { scientificPolishDeltaPlan: recipe.scientificPolishDeltaPlan } : {}),
-      ...(recipe.controlledSubfigureManifests?.length ? { controlledSubfigureManifests: recipe.controlledSubfigureManifests } : {}),
-      ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
-      ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
+      visualPlan: recipe.visualPlan,
       provider: providerResult.provider,
-      ...(usagePolicy ? { usagePolicy } : {}),
       warnings
     }
     await writeJson(manifestPath, manifest)
@@ -345,6 +314,7 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       artifactKind: 'generated_image',
       sourceTool: 'image_generation',
       outputPath,
+      outputHash,
       manifestPath,
       title: recipe.prompt.slice(0, 90) || imageId,
       referencePath: recipe.referencePath,
@@ -364,15 +334,14 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
-      ...(usagePolicy ? { usagePolicy } : {}),
-      ...(usagePolicy?.lockedFacts?.length ? { lockedFacts: usagePolicy.lockedFacts } : {}),
-      ...(usagePolicy?.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: usagePolicy.sourceControlledArtifacts } : {}),
+      visualPlan: recipe.visualPlan
     })
     return {
       ok: true,
       status: providerResult.placeholder ? 'rendered_placeholder' : 'awaiting_review',
       workspaceRoot,
       outputPath,
+      outputHash,
       manifestPath,
       artifactManifestPath,
       ...(diagramSpecPath ? { diagramSpecPath } : {}),
@@ -385,9 +354,8 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       ...(componentArtifacts?.fastSamPreviewPath ? { fastSamPreviewPath: componentArtifacts.fastSamPreviewPath } : {}),
       ...(componentArtifacts?.frameworkComponentManifestPath ? { frameworkComponentManifestPath: componentArtifacts.frameworkComponentManifestPath } : {}),
       ...(componentArtifacts?.componentBasePath ? { componentBasePath: componentArtifacts.componentBasePath } : {}),
-      ...(componentArtifacts?.componentAssetPaths.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
+      ...(componentArtifacts?.componentAssetPaths?.length ? { componentAssetPaths: componentArtifacts.componentAssetPaths } : {}),
       provider: providerResult.provider,
-      ...(usagePolicy ? { usagePolicy } : {}),
       warnings
     }
   } catch (error) {
@@ -400,30 +368,39 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
   }
 }
 
-function buildUpstreamResearchWorkflow(
-  task: string
-): Extract<ImageGenerationPlanResult, { ok: true }>['upstreamResearchWorkflow'] | undefined {
-  if (!requiresPaperGroundedPrompt(task)) return undefined
-  return {
-    recommended: true,
-    reason: 'This looks like a scientific paper-style diagram/figure. First gather related paper figures, captions, style cues, and the user analysis angle before final image rendering.',
-    suggestedBriefTool: 'scientific_plotting_research_brief',
-    suggestedSearchTool: 'research_search',
-    promptRequirements: [
-      'reference papers with titles/venues/years and figure/caption hints',
-      'figure conclusion and evidence logic',
-      'user analysis angle',
-      'visual archetype, layout, palette, typography, and annotation style',
-      'final controlled image_generation recipe or prompt'
-    ]
+function validateTerminalVisualPlan(plan: ImageGenerationRecipe['visualPlan'] | undefined): string | undefined {
+  if (!plan) return 'A terminal visualPlan handoff from visual_generate is required.'
+  if (!plan.planId?.trim()) return 'visualPlan.planId is required.'
+  if (plan.routeLocked !== true || plan.fallbackPolicy !== 'fail_closed') {
+    return 'visualPlan must be route-locked with fallbackPolicy=fail_closed.'
   }
+  if (plan.route !== 'code' && plan.route !== 'model' && plan.route !== 'hybrid') {
+    return `visualPlan.route is invalid: ${String(plan.route)}.`
+  }
+  if (plan.contextStatus === 'ready' && plan.releaseCeiling !== 'publication_ready') {
+    return 'A ready visualPlan must have releaseCeiling=publication_ready.'
+  }
+  if (plan.contextStatus === 'budget_exhausted' && plan.releaseCeiling !== 'draft_ready') {
+    return 'A budget-exhausted visualPlan must have releaseCeiling=draft_ready.'
+  }
+  if (plan.contextStatus !== 'ready' && plan.contextStatus !== 'budget_exhausted') {
+    return 'visualPlan.contextStatus must be terminal: ready or budget_exhausted.'
+  }
+  if (!Array.isArray(plan.sourceArtifacts) || !Array.isArray(plan.reproducibleInputs)
+    || !Array.isArray(plan.lockedElements) || !Array.isArray(plan.modelOwnedElements)
+    || !Array.isArray(plan.contextEvidenceIds) || !Array.isArray(plan.unresolvedContext)) {
+    return 'visualPlan ownership, source, and context fields must be arrays.'
+  }
+  return undefined
 }
 
-function requiresPaperGroundedPrompt(task: string): boolean {
-  const text = task.toLowerCase()
-  const scientificSignal = /transformer|reinforcement|attention|neural|model architecture|protein|cell|gene|molecular|clinical|nature|science|cell|paper|scientific|research|论文|文献|科研|实验|模型|机制|顶刊|顶会/i.test(text)
-  const figureSignal = /flow\s*chart|flowchart|workflow|pipeline|diagram|architecture|mechanism|schematic|infographic|figure|流程图|流程|工作流|管线|示意图|机制图|模型结构|架构图|信息图|论文图|图形摘要/i.test(text)
-  return scientificSignal && figureSignal
+function validateImageVisualPlan(plan: ImageGenerationRecipe['visualPlan'] | undefined): string | undefined {
+  const terminalError = validateTerminalVisualPlan(plan)
+  if (terminalError) return terminalError
+  if (plan!.route !== 'model' && plan!.route !== 'hybrid') {
+    return `Image generation accepts only route=model or route=hybrid; received route=${plan!.route}.`
+  }
+  return undefined
 }
 
 function shouldEnhanceSemanticVisualPrompt(prompt: string): boolean {
@@ -447,18 +424,6 @@ function enhanceImageGenerationPrompt(prompt: string, stylePreset?: string): str
     ...(style ? [`- Style preset: ${style}.`] : []),
     '- Output: one self-contained high-resolution PNG-style figure suitable for VisualDocument review.'
   ].join('\n')
-}
-
-function hasResearchEvidenceForRecipe(recipe: ImageGenerationRecipe): boolean {
-  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') return true
-  if (recipe.controlledSubfigureManifests?.some((item) => item.trim())) return true
-  return hasResearchEvidenceInPrompt(recipe.prompt, recipe.referencePath)
-}
-
-function hasResearchEvidenceInPrompt(prompt: string, referencePath?: string): boolean {
-  if (referencePath?.trim()) return true
-  if (/No reference papers confirmed yet|Search related .* before rendering|research_search first/i.test(prompt)) return false
-  return /reference papers?|candidate papers?|figure evidence|figure conclusion|evidence logic|literatureStrategy|scientific_plotting_research_brief|paper figures?|相关论文|参考论文|图注|证据链|分析角度/i.test(prompt)
 }
 
 function classifyDrawingIntent(task: string, stylePreset?: string): ImageDrawingIntent {
@@ -950,6 +915,10 @@ export async function editFrameworkComponentsWithImage2(
   const warnings: string[] = []
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
+    const visualPlanError = validateImageVisualPlan(request.visualPlan)
+    if (visualPlanError) {
+      return { ok: false, status: 'invalid_request', message: visualPlanError, warnings }
+    }
     const componentManifestPath = await resolveWorkspacePath(workspaceRoot, request.componentManifestPath)
     const manifest = parseFrameworkComponentManifest(JSON.parse(await readFile(componentManifestPath, 'utf8')) as unknown)
     const sourceImagePath = await resolveWorkspacePath(workspaceRoot, manifest.sourceImagePath)
@@ -990,12 +959,14 @@ export async function editFrameworkComponentsWithImage2(
       workspaceRoot,
       outputPath: editOutputPath,
       recipe: {
-        mode: 'text_to_image',
+        mode: 'image_to_image',
         prompt: editPrompt,
+        referencePath: editInputPath,
         size: editSize,
         outputFormat: 'png',
         intent: 'framework_diagram',
-        promptProfile: 'framework-layered-draft-v1'
+        promptProfile: 'framework-layered-draft-v1',
+        visualPlan: request.visualPlan
       }
     })
     warnings.push(...providerResult.warnings)
@@ -1013,6 +984,7 @@ export async function editFrameworkComponentsWithImage2(
       outputPath,
       contactSheetPath
     })
+    const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
     const manifestPath = join(outputDir, imageId + '.manifest.json')
     const manifestRecord: ImageGenerationManifest = {
       version: 1,
@@ -1023,6 +995,7 @@ export async function editFrameworkComponentsWithImage2(
       requestHash: hashValue({ request, target }),
       workspaceRoot,
       outputPath,
+      outputHash,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
       ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
@@ -1035,6 +1008,7 @@ export async function editFrameworkComponentsWithImage2(
       frameworkComponentManifestPath: componentManifestPath,
       componentBasePath: manifest.componentBasePath,
       componentAssetPaths: selected.map((component) => component.transparentAssetPath),
+      visualPlan: request.visualPlan,
       provider: providerResult.provider,
       warnings
     }
@@ -1045,6 +1019,7 @@ export async function editFrameworkComponentsWithImage2(
       artifactKind: 'edited_image',
       sourceTool: 'image_generation',
       outputPath,
+      outputHash,
       manifestPath,
       sourcePath: sourceImagePath,
       frameworkComponentManifestPath: componentManifestPath,
@@ -1053,7 +1028,8 @@ export async function editFrameworkComponentsWithImage2(
       title: request.instruction.slice(0, 90) || imageId,
       ...(request.visualDocumentId ? { visualDocumentId: request.visualDocumentId } : {}),
       ...(request.threadId ? { threadId: request.threadId } : {}),
-      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {})
+      ...(request.stageForVisualReview !== undefined ? { stageForVisualReview: request.stageForVisualReview } : {}),
+      visualPlan: request.visualPlan
     })
     return {
       ok: true,
@@ -2232,6 +2208,15 @@ export async function editImageFromVisualReviewPacket(
   const warnings: string[] = []
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
+    const visualPlanError = validateImageVisualPlan(request.visualPlan)
+    if (visualPlanError || request.visualPlan.sourceArtifacts.length === 0) {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: visualPlanError ?? 'A visual-review revision handoff must declare its sourceArtifacts.',
+        warnings
+      }
+    }
     const packet = await loadReviewPacket(request, workspaceRoot)
     const packetRecord = asRecord(packet)
     if (packetRecord.schemaVersion !== 1 || !packetRecord.sourceArtifact || !Array.isArray(packetRecord.annotations)) {
@@ -2262,10 +2247,9 @@ export async function editImageFromVisualReviewPacket(
     for (const [index, intent] of intents.entries()) {
       const imageId = slugForId(request.imageId ?? 'edited-image-' + new Date().toISOString() + '-' + (index + 1))
       const outputPath = join(outputDir, imageId + '.' + (intent.outputFormat ?? 'png'))
-      const usagePolicy = scientificUsagePolicyForEditIntent(intent)
-      pushUsagePolicyWarning(warnings, usagePolicy)
       const providerResult = await renderWithProvider({ workspaceRoot, outputPath, editIntent: intent })
       warnings.push(...providerResult.warnings)
+      const outputHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
       const manifestPath = join(outputDir, imageId + '.manifest.json')
       const manifest: ImageGenerationManifest = {
         version: 1,
@@ -2276,11 +2260,12 @@ export async function editImageFromVisualReviewPacket(
         requestHash: hashValue({ intent }),
         workspaceRoot,
         outputPath,
+        outputHash,
         ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
         editIntent: intent,
+        visualPlan: request.visualPlan,
         provider: providerResult.provider,
-        ...(usagePolicy ? { usagePolicy } : {}),
         warnings
       }
       await writeJson(manifestPath, manifest)
@@ -2290,12 +2275,13 @@ export async function editImageFromVisualReviewPacket(
         artifactKind: 'edited_image',
         sourceTool: 'image_generation',
         outputPath,
+        outputHash,
         manifestPath,
         sourcePath: intent.sourcePath,
         title: intent.instruction.slice(0, 90) || imageId,
         ...(visualDocumentId ? { visualDocumentId } : {}),
         ...(threadId ? { threadId } : {}),
-        ...(usagePolicy ? { usagePolicy } : {})
+        visualPlan: request.visualPlan
       })
       outputs.push({ workspaceRoot, outputPath, manifestPath, artifactManifestPath, provider: providerResult.provider })
     }
@@ -2320,6 +2306,8 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const outputPath = await resolveWorkspacePath(workspaceRoot, request.outputPath)
+    const manifestPath = await resolveWorkspacePath(workspaceRoot, request.manifestPath)
+    const { visualPlan, outputHash: manifestOutputHash } = await verifiedReviewManifest(workspaceRoot, outputPath, manifestPath)
     const image = await loadImage(outputPath)
     const warnings: string[] = []
     const sizeScore = image.width >= MIN_IMAGE_SIZE && image.height >= MIN_IMAGE_SIZE ? 1 : 0.35
@@ -2338,7 +2326,7 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
     const visualReview = await requestModelRouterVisualReview({
       outputPath,
       task: request.task,
-      truthLockedElements: request.truthLockedElements,
+      visualPlan,
       ...(request.referencePath
         ? { referencePath: await resolveWorkspacePath(workspaceRoot, request.referencePath) }
         : {})
@@ -2347,12 +2335,17 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
     const basicOverall = clamp01((sizeScore + nonEmptyScore + (referenceScore ?? 1)) / (referenceScore === undefined ? 2 : 3))
     const overall = clamp01(basicOverall * 0.35 + visualReview.score * 0.65)
     warnings.push(...visualReview.violations)
-    const repairable = !visualReview.pass || overall < (request.minOverall ?? 0.72)
-    const reviewedArtifactHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
+    const reviewPassed = visualReview.pass && overall >= (request.minOverall ?? 0.72)
+    const repairable = !reviewPassed && !visualReview.needsContext
     return {
       ok: true,
+      status: visualReview.needsContext
+        ? 'needs_context'
+        : reviewPassed
+          ? visualPlan.releaseCeiling
+          : 'draft_ready',
       reviewedArtifactPath: outputPath,
-      reviewedArtifactHash,
+      reviewedArtifactHash: manifestOutputHash,
       reviewedAt: new Date().toISOString(),
       score: {
         overall,
@@ -2365,6 +2358,7 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
       },
       semantic: {
         pass: visualReview.pass,
+        needsContext: visualReview.needsContext,
         summary: visualReview.summary,
         violations: visualReview.violations,
         repairInstructions: visualReview.repairInstructions
@@ -2375,16 +2369,46 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
   } catch (error) {
     return {
       ok: false,
-      status: 'image_unreadable',
+      status: error instanceof ReviewManifestError ? 'invalid_manifest' : 'image_unreadable',
       message: error instanceof Error ? error.message : String(error)
     }
   }
+}
+
+async function verifiedReviewManifest(
+  workspaceRoot: string,
+  outputPath: string,
+  manifestPath: string
+): Promise<{ visualPlan: ImageGenerationRecipe['visualPlan']; outputHash: string }> {
+  let manifest: JsonRecord
+  try {
+    manifest = asRecord(JSON.parse(await readFile(manifestPath, 'utf8')))
+  } catch (error) {
+    throw new ReviewManifestError('Visual review requires a readable JSON render manifest: ' + (error instanceof Error ? error.message : String(error)))
+  }
+  const recordedOutputPath = stringValue(manifest.outputPath)
+  if (!recordedOutputPath) throw new ReviewManifestError('Render manifest outputPath is required.')
+  const resolvedRecordedOutputPath = await resolveWorkspacePath(workspaceRoot, recordedOutputPath)
+  if (resolvedRecordedOutputPath !== outputPath) {
+    throw new ReviewManifestError('Render manifest outputPath does not match the reviewed artifact.')
+  }
+  const visualPlan = manifest.visualPlan as ImageGenerationRecipe['visualPlan'] | undefined
+  const visualPlanError = validateTerminalVisualPlan(visualPlan)
+  if (visualPlanError) throw new ReviewManifestError('Render manifest visualPlan is invalid: ' + visualPlanError)
+  const outputHash = stringValue(manifest.outputHash)
+  if (!outputHash || !/^[a-f0-9]{64}$/i.test(outputHash)) {
+    throw new ReviewManifestError('Render manifest outputHash is required.')
+  }
+  const actualHash = createHash('sha256').update(await readFile(outputPath)).digest('hex')
+  if (actualHash !== outputHash) throw new ReviewManifestError('Reviewed artifact hash does not match its render manifest.')
+  return { visualPlan: visualPlan!, outputHash }
 }
 
 type ModelRouterVisualReview =
   | {
       ok: true
       pass: boolean
+      needsContext: boolean
       score: number
       summary: string
       violations: string[]
@@ -2401,7 +2425,7 @@ async function requestModelRouterVisualReview(input: {
   outputPath: string
   referencePath?: string
   task: string
-  truthLockedElements: string[]
+  visualPlan: ImageGenerationRecipe['visualPlan']
 }): Promise<ModelRouterVisualReview> {
   const endpoint = configuredModelRouterImageEndpoint()
   if (!endpoint) {
@@ -2416,11 +2440,16 @@ async function requestModelRouterVisualReview(input: {
       {
         type: 'input_text',
         text: [
-          'Review this visual artifact as a strict scientific publication figure reviewer.',
+          'Review this visual artifact as a strict release reviewer.',
           `Task: ${input.task.trim().slice(0, 8000)}`,
-          `Truth-locked elements: ${JSON.stringify(input.truthLockedElements.slice(0, 64))}`,
+          `Production route: ${input.visualPlan.route}.`,
+          `Locked elements: ${JSON.stringify(input.visualPlan.lockedElements.slice(0, 64))}`,
+          `Model-owned elements: ${JSON.stringify(input.visualPlan.modelOwnedElements.slice(0, 64))}`,
+          `Unresolved context: ${JSON.stringify(input.visualPlan.unresolvedContext.slice(0, 64))}`,
+          `Release ceiling: ${input.visualPlan.releaseCeiling}.`,
           'Inspect semantic correctness and visible quality, including overlap, clipping, illegible text, broken connectors, hierarchy, whitespace, alignment, contrast, and whether the artifact actually satisfies the task.',
-          'Return JSON only with: {"pass":boolean,"score":number,"summary":string,"violations":string[],"repairInstructions":string[]}.',
+          'Return JSON only with: {"pass":boolean,"needsContext":boolean,"score":number,"summary":string,"violations":string[],"repairInstructions":string[]}.',
+          'Set needsContext=true only when correctness cannot be assessed or repaired without specific missing external information; visible layout or rendering defects alone are repairable draft issues, not missing context.',
           'A severe overlap, clipping, unreadable label, invented or missing locked fact, or visibly broken layout must set pass=false.'
         ].join('\n')
       },
@@ -2529,6 +2558,7 @@ function parseVisualReviewJson(text: string): Extract<ModelRouterVisualReview, {
   return {
     ok: true,
     pass: record.pass,
+    needsContext: record.needsContext === true,
     score: clamp01(record.score),
     summary,
     violations,
@@ -2704,6 +2734,9 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
   const editSourcePath = input.editIntent?.sourcePath
     ? await resolveWorkspacePath(input.workspaceRoot, input.editIntent.sourcePath)
     : undefined
+  const recipeReferencePath = input.recipe?.referencePath
+    ? await resolveWorkspacePath(input.workspaceRoot, input.recipe.referencePath)
+    : undefined
   const editSource = editSourcePath ? await loadImage(editSourcePath) : undefined
   const size = input.recipe?.size ?? (editSource
     ? { width: editSource.width, height: editSource.height }
@@ -2736,6 +2769,11 @@ async function renderWithConfiguredImageEndpoint(input: ProviderRenderInput): Pr
         })
         await compositeImageEditWithMask(editSourcePath, input.outputPath, { maskPath, generatedMask })
         await assertImageEditChangedPixels(editSourcePath, input.outputPath, { maskPath, generatedMask })
+      } else if (input.recipe?.referencePath && recipeReferencePath) {
+        await renderWithImageEditEndpoint(candidateBaseUrl, {
+          ...providerInput,
+          sourcePath: recipeReferencePath
+        })
       } else {
         await renderWithImageEndpoint(candidateBaseUrl, providerInput)
       }
@@ -3200,28 +3238,6 @@ function drawWrappedText(
   if (line) ctx.fillText(line, x, cursorY)
 }
 
-function normalizeScientificPolishDeltaPlan(
-  value: NonNullable<ImageGenerationRecipe['scientificPolishDeltaPlan']>
-): NonNullable<ImageGenerationRecipe['scientificPolishDeltaPlan']> {
-  const targetPanels = value.targetPanels
-    ?.map((panel) => ({
-      assetId: String(panel.assetId ?? '').trim().slice(0, 160),
-      ...(panel.reason ? { reason: panel.reason.trim().slice(0, 800) } : {}),
-      ...(panel.allowedOperations?.length
-        ? { allowedOperations: panel.allowedOperations.map((item) => String(item).trim()).filter(Boolean).slice(0, 12) }
-        : {})
-    }))
-    .filter((panel) => panel.assetId)
-    .slice(0, 24)
-  return {
-    mode: 'delta_only',
-    ...(targetPanels?.length ? { targetPanels } : {}),
-    allowedOperations: value.allowedOperations.map((item) => String(item).trim()).filter(Boolean).slice(0, 16),
-    lockedFacts: value.lockedFacts.map((item) => String(item).trim()).filter(Boolean).slice(0, 32),
-    handoffPrompt: value.handoffPrompt.trim().slice(0, 4000)
-  }
-}
-
 function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): ImageGenerationRecipe {
   if (!recipe || typeof recipe !== 'object') throw new Error('recipe is required.')
   const prompt = enhanceImageGenerationPrompt(recipe.prompt?.trim() ?? '', recipe.stylePreset)
@@ -3241,64 +3257,37 @@ function normalizeRecipe(recipe: ImageGenerationRecipe, warnings: string[]): Ima
     ...(recipe.frameworkRegionAssetMode ? { frameworkRegionAssetMode: recipe.frameworkRegionAssetMode } : {}),
     ...(recipe.confirmation ? { confirmation: recipe.confirmation } : {}),
     ...(recipe.promptProfile ? { promptProfile: recipe.promptProfile } : {}),
-    ...(recipe.scientificPolishDeltaPlan ? { scientificPolishDeltaPlan: normalizeScientificPolishDeltaPlan(recipe.scientificPolishDeltaPlan) } : {}),
-    ...(recipe.controlledSubfigureManifests?.length
-      ? { controlledSubfigureManifests: recipe.controlledSubfigureManifests.map((item) => item.trim()).filter(Boolean).slice(0, 24) }
-      : {}),
-    ...(recipe.scientificVisualPlan ? { scientificVisualPlan: recipe.scientificVisualPlan } : {}),
-    ...(recipe.creativeDirect ? { creativeDirect: true as const } : {})
+    visualPlan: recipe.visualPlan
   }
-}
-
-function scientificUsagePolicyForRecipe(recipe: ImageGenerationRecipe | undefined): ImageGenerationUsagePolicy | undefined {
-  if (!recipe) return undefined
-  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') {
-    return {
-      ...SCIENTIFIC_BASE_IMAGE_USAGE_POLICY,
-      lockedFacts: recipe.scientificPolishDeltaPlan.lockedFacts,
-      sourceControlledArtifacts: recipe.controlledSubfigureManifests ?? []
-    }
-  }
-  return recipe.scientificVisualPlan ? SCIENTIFIC_BASE_IMAGE_USAGE_POLICY : undefined
-}
-
-function scientificUsagePolicyForEditIntent(intent: ImageEditIntent | undefined): ImageGenerationUsagePolicy | undefined {
-  void intent
-  return undefined
-}
-
-function pushUsagePolicyWarning(warnings: string[], usagePolicy: ImageGenerationUsagePolicy | undefined): void {
-  if (!usagePolicy || warnings.includes(usagePolicy.warning)) return
-  warnings.push(usagePolicy.warning)
 }
 
 function providerPromptForRecipe(recipe: ImageGenerationRecipe): string {
   const prompt = recipe.prompt.trim()
-  if (recipe.scientificPolishDeltaPlan?.mode === 'delta_only') {
-    const plan = recipe.scientificPolishDeltaPlan
-    return [
-      prompt,
-      '',
-      SCIENTIFIC_DELTA_IMAGE_PROVIDER_INSTRUCTION,
-      '',
-      `Allowed delta operations: ${plan.allowedOperations.join(', ') || 'visual polish only'}.`,
-      `Locked scientific facts: ${plan.lockedFacts.join('; ') || 'all numeric/statistical content and paper conclusions'}.`,
-      recipe.controlledSubfigureManifests?.length
-        ? `Source controlled artifacts: ${recipe.controlledSubfigureManifests.join('; ')}.`
-        : 'Source controlled artifacts must be supplied by SciForge before final deterministic overlay.',
-      `Handoff contract: ${plan.handoffPrompt}`
-    ].join('\n')
-  }
-  return scientificUsagePolicyForRecipe(recipe)
-    ? prompt + '\n\n' + SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION
+  const contextLimitInstruction = recipe.visualPlan.releaseCeiling === 'draft_ready'
+    ? [
+        'Context-limited draft mode: do not invent answers for unresolved context.',
+        `Unresolved context: ${recipe.visualPlan.unresolvedContext.join('; ') || 'unspecified required context'}.`,
+        'Omit, leave a clear placeholder for, or explicitly mark any content that depends on those unresolved questions.'
+      ].join(' ')
+    : undefined
+  const ownershipInstruction = recipe.visualPlan.route === 'hybrid'
+    ? [
+        'Hybrid visual-layer mode: render only the model-owned elements declared below.',
+        `Model-owned elements: ${recipe.visualPlan.modelOwnedElements.join('; ') || 'none'}.`,
+        `Locked elements: ${recipe.visualPlan.lockedElements.join('; ') || 'none'}.`,
+        'Do not redraw, replace, label, or reinterpret locked elements; deterministic composition will add them from source artifacts.'
+      ].join(' ')
+    : undefined
+  const controlledPrompt = ownershipInstruction
+    ? prompt + '\n\n' + ownershipInstruction
     : prompt
+  return contextLimitInstruction
+    ? controlledPrompt + '\n\n' + contextLimitInstruction
+    : controlledPrompt
 }
 
 function providerPromptForEditIntent(intent: ImageEditIntent | undefined): string {
-  const instruction = intent?.instruction.trim() ?? ''
-  return scientificUsagePolicyForEditIntent(intent)
-    ? instruction + '\n\n' + SCIENTIFIC_BASE_IMAGE_PROVIDER_INSTRUCTION
-    : instruction
+  return intent?.instruction.trim() ?? ''
 }
 
 function normalizeSize(size: Partial<ImageSize> | undefined, warnings: string[]): ImageSize {
@@ -3358,13 +3347,13 @@ async function writeImageArtifactManifest(input: {
   artifactKind: 'generated_image' | 'edited_image'
   sourceTool: 'image_generation'
   outputPath: string
+  outputHash?: string
   manifestPath: string
   sourcePath?: string
   referencePath?: string
   visualDocumentId?: string
   threadId?: string
   stageForVisualReview?: boolean
-  usagePolicy?: ImageGenerationUsagePolicy
   title: string
   intent?: ImageDrawingIntent
   diagramSpecPath?: string
@@ -3379,8 +3368,7 @@ async function writeImageArtifactManifest(input: {
   componentBasePath?: string
   componentAssetPaths?: string[]
   promptProfile?: ImageGenerationRecipe['promptProfile']
-  lockedFacts?: string[]
-  sourceControlledArtifacts?: string[]
+  visualPlan?: ImageGenerationRecipe['visualPlan']
 }): Promise<string> {
   const artifactsDir = join(input.workspaceRoot, ARTIFACT_DIR)
   await mkdir(artifactsDir, { recursive: true })
@@ -3394,6 +3382,7 @@ async function writeImageArtifactManifest(input: {
     workspaceRoot: input.workspaceRoot,
     path: input.outputPath,
     outputPath: input.outputPath,
+    ...(input.outputHash ? { outputHash: input.outputHash } : {}),
     manifestPath: input.manifestPath,
     ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
     ...(input.threadId ? { threadId: input.threadId } : {}),
@@ -3413,10 +3402,9 @@ async function writeImageArtifactManifest(input: {
     ...(input.componentBasePath ? { componentBasePath: input.componentBasePath } : {}),
     ...(input.componentAssetPaths?.length ? { componentAssetPaths: input.componentAssetPaths } : {}),
     ...(input.promptProfile ? { promptProfile: input.promptProfile } : {}),
-    ...(input.lockedFacts?.length ? { lockedFacts: input.lockedFacts } : {}),
-    ...(input.sourceControlledArtifacts?.length ? { sourceControlledArtifacts: input.sourceControlledArtifacts } : {}),
+    ...(input.visualPlan ? { visualPlan: input.visualPlan } : {}),
     title: input.title,
-    ...(input.usagePolicy ? { usagePolicy: input.usagePolicy } : {})
+    ...(input.visualPlan ? { releaseCeiling: input.visualPlan.releaseCeiling } : {})
   })
   return artifactManifestPath
 }
@@ -3598,6 +3586,7 @@ class WorkspaceError extends Error {}
 class ProviderError extends Error {}
 class ProviderNotConfiguredError extends ProviderError {}
 class ReviewPacketError extends Error {}
+class ReviewManifestError extends Error {}
 
 function renderErrorStatus(
   error: unknown

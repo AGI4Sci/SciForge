@@ -1,0 +1,81 @@
+{
+  "version": 1,
+  "renderer": "sciforge-scientific-plotting-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "scientific_plotting_render",
+  "template": "bar",
+  "referenceProfile": {
+    "kind": "unknown",
+    "recommendedTemplate": "bar",
+    "confidence": 0.24,
+    "detectedTraits": {
+      "aspect": "wide",
+      "background": "light",
+      "axes": "measured",
+      "grid": "none",
+      "markDensity": "balanced",
+      "colorMode": "limited",
+      "panelGrid": "1x1",
+      "textSignals": []
+    },
+    "reasons": [
+      "Visible measured axes indicate a chart even when light grid lines are not detected."
+    ],
+    "risks": [
+      "No external reference image or StyleSpec was provided; profile is based on the default SciForge style."
+    ]
+  },
+  "templateAdvice": {
+    "selectedTemplate": "bar",
+    "referenceRecommendedTemplate": "bar",
+    "compatible": true,
+    "severity": "info",
+    "messages": [],
+    "nextActions": [
+      "Proceed with controlled rendering and visual review."
+    ]
+  },
+  "createdAt": "2026-07-13T12:05:55.491Z",
+  "requestHash": "cf5664d2ecf86822f45c17cf545ae343582f4ede6033c22d39e81b9db1b97098",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/ai4ai-delta-pcc-v2.png",
+  "attempts": [
+    {
+      "attempt": 1,
+      "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/ai4ai-delta-pcc-v2.png",
+      "repaired": false,
+      "rendererDiagnostics": {
+        "fontFallback": {
+          "cjk": null
+        },
+        "legendPlacement": "outside-right",
+        "barOrientation": "vertical",
+        "categoryLabelRotation": 0,
+        "savefigPadInches": 0.035,
+        "typography": {
+          "titleSize": 6.9,
+          "labelSize": 7.2,
+          "tickSize": 6.2,
+          "legendSize": 6.2,
+          "panelSize": 7.8,
+          "publicationClampApplied": true
+        },
+        "layoutQuality": {
+          "legendItemCount": 1,
+          "legendColumnCount": 1,
+          "legendOutsidePlot": true,
+          "legendOverlapRisk": "none",
+          "textOverflowRisk": "none",
+          "panelLabelAdjusted": false,
+          "warnings": []
+        },
+        "layoutNotes": [
+          "Clamped typography to conservative publication-size ranges.",
+          "Reserved extra y-axis headroom for error bars and panel labels.",
+          "Placed grouped bar legend outside the right edge to avoid covering data."
+        ]
+      },
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

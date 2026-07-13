@@ -18,6 +18,12 @@ test('workspace intel schemas reject unbounded inputs', () => {
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: 'a.txt', maxBytes: 0 }).success, false)
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: '' }).success, false)
   assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window' }).success, true)
+  assert.equal(VisualCaptureInputSchema.safeParse({
+    scope: 'window',
+    inspectionPrompt: 'Inspect the final layout.',
+    truthLockedElements: ['Capability is the first column.']
+  }).success, true)
+  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', inspectionPrompt: '' }).success, false)
   assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', targetId: 'page' }).success, false)
   assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'target' }).success, false)
   assert.equal(VisualCaptureInputSchema.safeParse({

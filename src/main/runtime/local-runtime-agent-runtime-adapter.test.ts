@@ -95,6 +95,48 @@ function jsonResponse(body: unknown) {
 }
 
 describe('createLocalRuntimeAgentRuntimeAdapter', () => {
+  it('persists synthetic execution-integrity errors through the runtime event log', async () => {
+    const request = vi.fn(async (_settings, pathAndQuery, init) => jsonResponse({
+      kind: 'error',
+      seq: 9,
+      timestamp: '2026-07-13T00:00:00.000Z',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'integrity-1',
+      code: 'runtime_execution_incomplete',
+      message: 'Completion rejected.',
+      details: 'Open calls: call-1.',
+      severity: 'error',
+      requestMethod: init.method,
+      requestPath: pathAndQuery
+    }))
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({ request })
+    const event = await adapter.publishSyntheticEvent?.({ settings: buildSettings() }, {
+      kind: 'error',
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'integrity-1',
+      recoverable: true,
+      severity: 'error',
+      code: 'runtime_execution_incomplete',
+      message: 'Completion rejected.',
+      detail: 'Open calls: call-1.'
+    })
+
+    expect(request).toHaveBeenCalledWith(
+      expect.anything(),
+      '/v1/threads/thread-1/events',
+      expect.objectContaining({ method: 'POST' })
+    )
+    expect(event).toMatchObject({
+      kind: 'error',
+      runtimeId: 'sciforge',
+      code: 'runtime_execution_incomplete',
+      detail: 'Open calls: call-1.'
+    })
+  })
+
   it('passes side conversation inclusion only when explicitly requested', async () => {
     const request = vi.fn(async (
       _settings: AppSettingsV1,
@@ -408,14 +450,74 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
       expect.objectContaining({
         id: 'tool_call-1',
         status: 'running',
-        meta: expect.objectContaining({ sourceItemId: 'tool-call-source', callId: 'call-1', toolName: 'read_file' })
+        meta: expect.objectContaining({
+          sourceItemId: 'tool-call-source',
+          callId: 'call-1',
+          toolName: 'read_file',
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent',
+          arguments: { path: 'draft.md' }
+        })
       }),
       expect.objectContaining({
         id: 'tool_call-1',
         status: 'success',
-        meta: expect.objectContaining({ sourceItemId: 'tool-result-source', callId: 'call-1', toolName: 'read_file' })
+        meta: expect.objectContaining({
+          sourceItemId: 'tool-result-source',
+          callId: 'call-1',
+          toolName: 'read_file',
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          output: 'ok'
+        })
       })
     ])
+  })
+
+  it('marks failed local runtime tool results as executor failure receipts', async () => {
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({
+      request: vi.fn(async () => jsonResponse({
+        id: 'thread-1',
+        title: 'Thread 1',
+        updatedAt: '2026-06-02T00:00:00.000Z',
+        turns: [{
+          id: 'turn-1',
+          threadId: 'thread-1',
+          status: 'failed',
+          items: [{
+            id: 'tool-result-source',
+            kind: 'tool_result',
+            status: 'completed',
+            callId: 'call-1',
+            toolName: 'read_file',
+            output: { code: 'ENOENT', message: 'missing' },
+            isError: true
+          }]
+        }]
+      }))
+    })
+
+    const detail = await adapter.readThread({ settings: buildSettings() }, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1'
+    })
+
+    expect(detail.items?.find((item) => item.kind === 'tool')).toEqual(expect.objectContaining({
+      id: 'tool_call-1',
+      status: 'error',
+      detail: expect.stringContaining('ENOENT'),
+      meta: expect.objectContaining({
+        sourceItemId: 'tool-result-source',
+        callId: 'call-1',
+        toolName: 'read_file',
+        phase: 'failed',
+        factSource: 'executor_result',
+        evidenceStrength: 'executor_receipt',
+        output: { code: 'ENOENT', message: 'missing' }
+      })
+    }))
   })
 
   it('maps local runtime todo snapshots and create_plan result metadata', async () => {
@@ -659,12 +761,104 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
         status: 'running',
         summary: 'read_file',
         toolKind: 'tool_call',
+        callId: 'call-1',
+        toolName: 'read_file',
+        phase: 'requested',
+        factSource: 'model_output',
+        evidenceStrength: 'intent',
         meta: expect.objectContaining({
           sourceItemId: 'tool-ready-source',
           callId: 'call-1',
           toolName: 'read_file',
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent',
           readyCount: 1,
           runtimeStatus: 'tool_call_ready'
+        })
+      })
+    ])
+  })
+
+  it('preserves tool call arguments and executor results on replayable item snapshots', async () => {
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({
+      request: vi.fn(async () => jsonResponse({})),
+      events: async function* () {
+        yield {
+          kind: 'item_created',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 8,
+          item: {
+            id: 'tool-call-source',
+            kind: 'tool_call',
+            status: 'pending',
+            callId: 'call-1',
+            toolName: 'read_file',
+            arguments: { path: 'draft.md' }
+          }
+        }
+        yield {
+          kind: 'item_completed',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 9,
+          item: {
+            id: 'tool-result-source',
+            kind: 'tool_result',
+            status: 'completed',
+            callId: 'call-1',
+            toolName: 'read_file',
+            output: { text: 'contents' },
+            isError: false
+          }
+        }
+      }
+    })
+
+    const events = []
+    for await (const event of adapter.subscribeEvents?.(
+      { settings: buildSettings() },
+      { runtimeId: 'sciforge', threadId: 'thread-1', sinceSeq: 0 }
+    ) ?? []) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        seq: 8,
+        itemId: 'tool_call-1',
+        item: expect.objectContaining({
+          id: 'tool_call-1',
+          detail: expect.stringContaining('draft.md'),
+          meta: expect.objectContaining({
+            sourceItemId: 'tool-call-source',
+            callId: 'call-1',
+            toolName: 'read_file',
+            phase: 'requested',
+            factSource: 'model_output',
+            evidenceStrength: 'intent',
+            arguments: { path: 'draft.md' }
+          })
+        })
+      }),
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        seq: 9,
+        itemId: 'tool_call-1',
+        item: expect.objectContaining({
+          id: 'tool_call-1',
+          detail: expect.stringContaining('contents'),
+          meta: expect.objectContaining({
+            sourceItemId: 'tool-result-source',
+            callId: 'call-1',
+            toolName: 'read_file',
+            phase: 'succeeded',
+            factSource: 'executor_result',
+            evidenceStrength: 'executor_receipt',
+            output: { text: 'contents' }
+          })
         })
       })
     ])

@@ -255,7 +255,16 @@ describe('claude-code config launch helpers', () => {
     expect(launch.sdkOptions.systemPrompt).toMatchObject({
       type: 'preset',
       preset: 'claude_code',
-      append: expect.stringContaining('call `scientific_visual_plan` before any renderer')
+      append: expect.stringContaining('call `visual_generate` first')
+    })
+    expect(launch.sdkOptions.systemPrompt).toMatchObject({
+      append: expect.stringContaining('When `visual_generate` returns `needs_context`')
+    })
+    expect(launch.sdkOptions.systemPrompt).toMatchObject({
+      append: expect.stringContaining('Choose route `code`')
+    })
+    expect(launch.sdkOptions.systemPrompt).toMatchObject({
+      append: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
     })
   })
 

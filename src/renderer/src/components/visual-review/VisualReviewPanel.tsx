@@ -74,10 +74,11 @@ export function buildVisualRevisionRequest(input: {
     `VisualDocument ID：${input.documentId}`,
     `审改包：${input.packetPath}`,
     '先读取审改包中的结构化批注、归一化区域、语义节点、truth locks 和 styleProfileRef。',
-    '必须先调用 scientific_visual_plan，action="revision"；由模型根据事实敏感性选择 deterministic_plot、generative_visual 或 hybrid_composite，并严格执行锁定路线。',
+    '必须先调用 visual_generate，action="revision"，并传入源 artifact、当前审改包、可复现输入、truth locks 和已有证据；统一入口会锁定 code、model 或 hybrid 路线。',
+    '若 visual_generate 返回 needs_context，只针对返回的未解决问题调用 research_search，合并新增证据后再次调用 visual_generate；达到 cost/round/token/time 上限或连续无信息增益时停止搜索，仍生成不臆造缺失事实的受限草稿并统一审查。',
     '必须逐项执行计划返回的 execution.stages；当阶段指定 image_generation_edit_from_visual_review_packet 时，直接传入当前审改包，禁止改用 image_generation_render 重绘整图。',
     '审改包是人类确认的输入：禁止改写批注文字、几何区域或状态，也禁止为了重试而导出更改过的审改包。',
-    '若锁定路线为 generative_visual 或 hybrid_composite，必须直接调用 image_generation_edit_from_visual_review_packet 并传入上述审改包；禁止用 image_generation_prepare 或 image_generation_render 替代，因为它们会重新生成整张图而不是按标注局部修改。',
+    '若锁定路线为 model 或 hybrid，必须直接调用 image_generation_edit_from_visual_review_packet 并传入上述审改包；禁止用 image_generation_prepare 或 image_generation_render 替代，因为它们会重新生成整张图而不是按标注局部修改。',
     '只修改批注目标；未标注区域、精确标签、数据、连线关系和 truth locks 必须保持不变。',
     '生成后调用 visual_artifact_review 做语义视觉检查；发现重叠、裁切、不可读文字、错误关系或锁定事实变化时，应在同一路线内修复后重新检查。',
     '禁止覆盖源 artifact，也禁止调用 accept 工具。检查通过且 repairable=false 后，调用 sciforge_visual_document_create_candidate；reviewEvidence 必须等于 { tool: "visual_artifact_review", ...review结果 }，系统会核验候选路径和文件哈希。',
@@ -279,7 +280,7 @@ export function VisualReviewPanel({
 
   if (loading || !source) {
     return (
-      <aside className={`flex h-full min-h-0 flex-col bg-white dark:bg-ds-canvas ${className}`}>
+      <aside className={`ds-no-drag flex h-full min-h-0 flex-col bg-white dark:bg-ds-canvas ${className}`}>
         <div className="flex h-12 items-center justify-between border-b border-ds-border-muted px-4">
           <span className="text-[13px] font-semibold text-ds-ink">图片审改</span>
           <button type="button" className="ds-sidebar-toggle-button" onClick={onCollapse} aria-label="收起右侧栏">
@@ -294,7 +295,7 @@ export function VisualReviewPanel({
   }
 
   return (
-    <aside className={`flex h-full min-h-0 flex-col bg-white dark:bg-ds-canvas ${className}`}>
+    <aside className={`ds-no-drag flex h-full min-h-0 flex-col bg-white dark:bg-ds-canvas ${className}`}>
       <div className="flex min-h-12 items-center gap-2 border-b border-ds-border-muted px-3 py-2">
         <button type="button" className="ds-sidebar-toggle-button" onClick={onCollapse} aria-label="收起右侧栏">
           <PanelRightClose className="h-4 w-4" />

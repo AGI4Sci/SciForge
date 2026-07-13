@@ -1,3 +1,7 @@
+import type { VisualProductionHandoff } from '@sciforge/image-generation/visual-production-planner'
+
+export type { VisualProductionHandoff } from '@sciforge/image-generation/visual-production-planner'
+
 export type FigureStyleSourceType = 'image' | 'pdf'
 
 export type VisualStyleScope = 'manuscript' | 'workspace' | 'artifact'
@@ -316,137 +320,6 @@ export type ScientificExternalSkillCatalogItem = {
   notes: string[]
 }
 
-export type ScientificPlottingResearchPaper = {
-  title: string
-  venue?: string
-  year?: number
-  source?: string
-  url?: string
-  doi?: string
-  figureHints?: string[]
-  notes?: string
-}
-
-export type ScientificPlottingImagePolishDeltaPlan = {
-  mode: 'delta_only'
-  targetPanels: Array<{
-    assetId: string
-    reason: string
-    allowedOperations: Array<
-      | 'panel_stitching'
-      | 'callout_overlay'
-      | 'zoom_inset'
-      | 'visual_unification'
-      | 'typography_cleanup'
-      | 'mechanism_visual_draft'
-    >
-  }>
-  allowedOperations: Array<
-    | 'panel_stitching'
-    | 'callout_overlay'
-    | 'zoom_inset'
-    | 'visual_unification'
-    | 'typography_cleanup'
-    | 'mechanism_visual_draft'
-  >
-  lockedFacts: string[]
-  handoffPrompt: string
-}
-
-export type ScientificPaperFigureCompositionPlan = {
-  sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1'
-  stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration']
-  controlledSubfigures: Array<{
-    assetId: string
-    title: string
-    claim: string
-    recommendedTemplate:
-      | ScientificPlottingTemplate
-      | 'kaplan-meier'
-      | 'cox-forest'
-      | 'roc'
-      | 'image_generation_composition'
-    firstPassTool: 'scientific_visual_plan'
-    requiredArtifact: 'png_manifest'
-    factLocks: string[]
-    polishAllowedOperations: Array<
-      | 'crop'
-      | 'resize'
-      | 'align'
-      | 'panel_stitching'
-      | 'callout_overlay'
-      | 'zoom_inset'
-      | 'visual_unification'
-      | 'typography_cleanup'
-    >
-  }>
-  image2Composition: {
-    nextControlledTool: 'scientific_visual_plan'
-    inputArtifacts: string[]
-    allowedOperations: Array<
-      | 'panel_stitching'
-      | 'callout_overlay'
-      | 'zoom_inset'
-      | 'visual_unification'
-      | 'typography_cleanup'
-    >
-    forbiddenOperations: string[]
-    handoffPrompt: string
-    outputContract: string[]
-  }
-  imagePolishDeltaPlan: ScientificPlottingImagePolishDeltaPlan
-  visualReview: {
-    openInVisualReview: true
-    preserveOriginalArtifacts: true
-    reviewPacketRequired: true
-    revisionPolicy: 'new_version_next_to_original'
-  }
-}
-
-export type ScientificPaperFigureProductionPlan = {
-  scope: 'paper_level'
-  sourceWorkflow: 'paper_figures_data_first_v1'
-  requiredInputs: string[]
-  proposedAssets: Array<{
-    id: string
-    kind: 'figure' | 'table'
-    title: string
-    claim: string
-    recommendedTemplate:
-      | ScientificPlottingTemplate
-      | 'kaplan-meier'
-      | 'cox-forest'
-      | 'roc'
-      | 'three-line-table'
-      | 'image_generation_composition'
-    dataRequirements: string[]
-    statistics: string[]
-    firstPassTool: 'scientific_visual_plan' | 'table_generator'
-    visualReview: boolean
-    notes: string[]
-  }>
-  handoff: {
-    firstPass: string[]
-    imagePolish: string[]
-    reviewLoop: string[]
-  }
-  compositionPlan?: ScientificPaperFigureCompositionPlan
-  missingCapabilities: string[]
-}
-
-export type ScientificPlottingSelectedSkillProfile = {
-  profileId:
-    | 'controlled-data-plot-v1'
-    | 'paper-figure-cns-life-science-v1'
-    | 'paper-figure-cns-domain-v1'
-    | 'mechanism-diagram-image-delta-v1'
-    | 'general-paper-figure-v1'
-  selectedSkillIds: string[]
-  selectionReason: string
-  skillPriority: ['kdense', 'cns', 'domain', 'image-delta']
-  readOnlyExternalSkills: true
-}
-
 export type ScientificFigureNeedClassification = {
   primaryNeed: ScientificFigureNeed
   secondaryNeeds: ScientificFigureNeed[]
@@ -454,79 +327,11 @@ export type ScientificFigureNeedClassification = {
   route: ScientificFigureRoute
   routeReason: string
   domain: 'life-science' | 'chemistry' | 'materials' | 'ai-ml' | 'geo-climate' | 'general'
-  recommendedNextTool: 'scientific_visual_plan'
+  recommendedNextTool: 'visual_generate'
   requiredInputs: string[]
   avoidTemplates: ScientificPlottingTemplate[]
   warnings: string[]
 }
-
-export type ScientificPlottingResearchBriefRequest = {
-  workspaceRoot?: string
-  task: string
-  domain?: string
-  targetVenue?: string
-  dataSummary?: string
-  referenceFigureNotes?: string
-  candidatePapers?: ScientificPlottingResearchPaper[]
-  maxPapers?: number
-}
-
-export type ScientificPlottingResearchBriefResult =
-  | {
-      ok: true
-      task: string
-      domain: ScientificFigureNeedClassification['domain']
-      targetVenue?: string
-      figureNeed: ScientificFigureNeedClassification
-      selectedSkillProfile: ScientificPlottingSelectedSkillProfile
-      skillCatalog: ScientificExternalSkillCatalogItem[]
-      recommendedSkillLayers: Array<{
-        sourceKind: ScientificExternalSkillSourceKind
-        skillIds: string[]
-        reason: string
-      }>
-      literatureStrategy: {
-        suggestedQueries: string[]
-        preferredSources: string[]
-        nextControlledTool: 'research_search' | 'scientific_plotting_research_brief'
-        notes: string[]
-      }
-      candidatePapers: ScientificPlottingResearchPaper[]
-      figureContract: {
-        figureConclusion: string
-        evidenceLogic: string[]
-        archetype: ScientificFigureNeed
-        journalExportContract: string[]
-        reviewRisks: string[]
-      }
-      paperFigureProductionPlan?: ScientificPaperFigureProductionPlan
-      promptSpecDraft: {
-        task: string
-        figureNeed: ScientificFigureNeed
-        referencePapers: ScientificPlottingResearchPaper[]
-        visualPlan: string[]
-        dataRequirements: string[]
-        styleGuidance: string[]
-        fullPrompt: string
-        codeGenerationPlan: {
-          target: 'scientific_visual_plan_request'
-          nextControlledTool: string
-          notes: string[]
-        }
-        nextControlledTool: string
-      }
-      confirmationCard: {
-        title: string
-        proposedRoute: ScientificFigureRoute
-        analysisAngle: string
-        questions: string[]
-        requiredInputs: string[]
-        availableSkillIds: string[]
-      }
-      guardrails: string[]
-      warnings: string[]
-    }
-  | { ok: false; message: string; warnings: string[] }
 
 export type ScientificPlottingTemplateGuide = {
   template: ScientificPlottingTemplate
@@ -605,7 +410,7 @@ export const SCIENTIFIC_PLOTTING_TEMPLATE_GUIDES = [
     useWhen: ['compact directed workflows with explicit nodes/edges', 'process steps connected by arrows', 'decision trees, pathways, or cause-effect chains with already-structured steps'],
     avoidWhen: ['unordered concept maps', 'module layouts without direction', 'ordinary categorical data', 'long prose or paper excerpts that need semantic visual design'],
     expectedData: ['nodes[] with id and label', 'optional edges[] with from/to; if omitted, compact steps are connected sequentially'],
-    modelSelectionHint: 'Choose flowchart only for controlled compact node-edge diagrams; choose image_generation for prose-to-visual flowcharts, infographics, or illustrative diagrams.'
+    modelSelectionHint: 'Choose flowchart for compact node-edge diagrams with code-owned layout. Route dense prose-to-visual work through visual_generate before selecting an executor.'
   },
   {
     template: 'schematic-grid',
@@ -666,15 +471,6 @@ export type ScientificPlottingAutoRepairOptions = {
   minOverall?: number
 }
 
-export type ScientificPlottingVisualPlanHandoff = {
-  route: 'deterministic_plot' | 'hybrid_composite'
-  routeLocked: true
-  rationale: string
-  reproducibleInputs: string[]
-  truthLockedElements: string[]
-  fallbackPolicy: 'fail_closed'
-}
-
 export type ScientificPlottingStyleProfile = {
   id: string
   name: string
@@ -721,7 +517,7 @@ export type ScientificPlottingStyleProfilesResult =
       profileMatches?: ScientificPlottingStyleProfileMatch[]
       referenceProfile?: ScientificPlottingReferenceProfile
       recommendedNextTools: Array<
-        | 'scientific_visual_plan'
+        | 'visual_generate'
         | 'scientific_plotting_map_data'
         | 'scientific_plotting_render'
         | 'visual_artifact_review'
@@ -782,7 +578,7 @@ export type ScientificPlottingReferenceManifest = {
     referencePath: string
     suggestedStyleProfileId?: string
     suggestedProfileTool: 'scientific_plotting_style_profiles'
-    suggestedPlanTool: 'scientific_visual_plan'
+    suggestedPlanTool: 'visual_generate'
     suggestedRenderTool: 'scientific_plotting_render'
     suggestedReviewTool: 'visual_artifact_review'
     guardrails: string[]
@@ -829,7 +625,7 @@ export type ScientificPlottingPrepareReferenceResult =
 
 export type ScientificPlottingRenderRequest = {
   workspaceRoot: string
-  scientificVisualPlan: ScientificPlottingVisualPlanHandoff
+  visualPlan: VisualProductionHandoff
   template: ScientificPlottingTemplate
   data: unknown
   labels?: ScientificPlottingLabels
@@ -851,22 +647,55 @@ export type ScientificPlottingRenderRequest = {
   autoRepair?: ScientificPlottingAutoRepairOptions
 }
 
-export type ScientificPlottingDraftHandoff = {
-  kind: 'diagram_draft_handoff'
-  draftRole: 'structure_only'
-  sourceTemplate: ScientificPlottingTemplate
-  recommendedNextTools: ['image_generation_prepare', 'image_generation_render']
-  imageGenerationTask: string
-  promptGuidance: string[]
-  draftSpec: {
-    template: ScientificPlottingTemplate
-    title?: string
-    nodes?: Array<{ id?: string; label: string; group?: string }>
-    edges?: Array<{ from: string; to: string; label?: string }>
-    panels?: Array<{ template?: string; title?: string; nodeCount?: number }>
+export type ScientificPlottingCompositeLayer = {
+  path: string
+  owner: 'model' | 'code'
+  bounds?: {
+    unit?: 'ratio' | 'pixel'
+    x: number
+    y: number
+    width: number
+    height: number
   }
-  guardrails: string[]
+  fit?: 'contain' | 'cover' | 'stretch'
+  /** Model layers may be translucent. Code-owned truth layers are always composited at full opacity. */
+  opacity?: number
 }
+
+export type ScientificPlottingCompositeRequest = {
+  workspaceRoot: string
+  visualPlan: VisualProductionHandoff
+  layers: ScientificPlottingCompositeLayer[]
+  canvas?: {
+    width: number
+    height: number
+    background?: string
+  }
+  figureId?: string
+  outputDir?: string
+  visualDocumentId?: string
+  threadId?: string
+}
+
+export type ScientificPlottingCompositeResult =
+  | {
+      ok: true
+      status: 'composed'
+      outputPath: string
+      manifestPath: string
+      artifactManifestPath: string
+      layers: Array<ScientificPlottingCompositeLayer & {
+        resolvedPath: string
+        sha256: string
+      }>
+      warnings: string[]
+    }
+  | {
+      ok: false
+      status: 'invalid_request' | 'invalid_workspace' | 'image_unreadable' | 'write_failed'
+      message: string
+      warnings?: string[]
+    }
 
 export type ScientificPlottingPlanRequest = {
   workspaceRoot?: string
@@ -882,7 +711,7 @@ export type ScientificPlottingPlanRequest = {
 
 export type ScientificPlottingDataMappingRequest = {
   workspaceRoot: string
-  scientificVisualPlan: ScientificPlottingVisualPlanHandoff
+  visualPlan: VisualProductionHandoff
   task: string
   data: unknown
   labels?: ScientificPlottingLabels
@@ -958,13 +787,6 @@ export type ScientificPlottingPlanResult =
       templateSelection: ScientificPlottingTemplateSelection
       templateGuides: ScientificPlottingTemplateGuide[]
       figureNeed?: ScientificFigureNeedClassification
-      researchBriefRecommendation?: {
-        recommended: boolean
-        reason: string
-        nextControlledTool: 'scientific_plotting_research_brief'
-        useWhen: string[]
-        requiresUserConfirmation: true
-      }
       externalSkillCatalog?: {
         recommendedSkillIds: string[]
         primarySources: ScientificExternalSkillSourceKind[]
@@ -1162,6 +984,8 @@ export type ScientificPlottingManifest = {
       createdAt: string
   requestHash: string
   outputPath: string
+  outputHash: string
+  visualPlan: VisualProductionHandoff
   visualDocumentId?: string
   threadId?: string
   outputScale?: number
@@ -1193,12 +1017,10 @@ export type ScientificPlottingRenderResult =
       status:
         | 'invalid_request'
         | 'invalid_workspace'
-        | 'diagram_requires_image_generation'
         | 'renderer_unavailable'
         | 'render_failed'
         | 'review_failed'
       message: string
-      draftHandoff?: ScientificPlottingDraftHandoff
       stdoutTail?: string
       stderrTail?: string
       warnings?: string[]

@@ -22,7 +22,6 @@
     "./mcp-server": "./src/mcp-server.ts",
     "./visual-style-extractor": "./src/visual-style-extractor.ts",
     "./scientific-plotting-engine": "./src/scientific-plotting-engine.ts",
-    "./scientific-visual-planner": "./src/scientific-visual-planner.ts",
     "./scientific-skills-index": "./src/scientific-skills-index.ts",
     "./scientific-skills-installer": "./src/scientific-skills-installer.ts",
     "./service": "./src/service.ts"
@@ -38,6 +37,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@sciforge/image-generation": "^0.1.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@napi-rs/canvas": "^0.1.100",
     "zod": "^4.4.3"

@@ -14,6 +14,15 @@ type ResearchSearchMcpService = Pick<ResearchSearchService, 'config' | 'configur
   diagnostics?: () => ResearchSearchWorkerDiagnostics;
 };
 
+export const RESEARCH_SEARCH_TOOL_DESCRIPTION = [
+  'Search external context and research evidence using arXiv, bioRxiv, Europe PMC/PubMed, Semantic Scholar, CNS official sites, and configured web search.',
+  'Use it for latest information, standards, style references, comparisons, baselines, SOTA, datasets, code, research gaps, or another specific external-context question.',
+  'Each call expands one targeted question and searches multiple enabled sources.',
+  'When visual_generate reports needs_context, search its explicit unresolved questions, merge the evidence into the retained context state, and return to visual_generate.',
+  'Follow-up searches are appropriate while budget remains and each round targets an unresolved question with expected information gain; do not repeat an unchanged query.',
+  'The returned structured data is internal evidence for the assistant; synthesize it instead of showing raw JSON unless requested.'
+].join(' ');
+
 export function createResearchSearchMcpServer(
   service: ResearchSearchMcpService = createResearchSearchWorkerService()
 ): McpServer {
@@ -23,12 +32,7 @@ export function createResearchSearchMcpServer(
   );
 
   server.registerTool('research_search', {
-    description: [
-      'Explore an AI4S or scientific research direction using arXiv, bioRxiv, Europe PMC/PubMed, Semantic Scholar, CNS official sites, and configured web search.',
-      'Use it for latest progress, baselines, SOTA, datasets, code, or research gap discovery.',
-      'One call expands the query and searches multiple enabled sources; normally call it once per user request, then synthesize the result.',
-      'The returned structured data is internal evidence for the assistant; synthesize it instead of showing raw JSON unless requested.'
-    ].join(' '),
+    description: RESEARCH_SEARCH_TOOL_DESCRIPTION,
     inputSchema: {
       query: z.string().min(1),
       intent: z.enum(['overview', 'latest', 'baseline', 'sota', 'dataset', 'code', 'gap']).optional(),

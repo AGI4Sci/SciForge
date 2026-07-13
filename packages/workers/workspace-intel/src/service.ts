@@ -58,6 +58,10 @@ import {
   type WorkspaceTreeNode,
   type WorkspaceTreeResult
 } from './contract.js'
+import {
+  modelRouterVisualInspectorFromEnv,
+  type VisualInspector
+} from './visual-inspection.js'
 
 export type WorkspaceIntelServiceOptions = {
   workspaceRoot?: string
@@ -66,6 +70,7 @@ export type WorkspaceIntelServiceOptions = {
   visibleContextPath?: string
   visualCaptureTimeoutMs?: number
   visualCapturePollIntervalMs?: number
+  visualInspector?: VisualInspector
   maxReadBytes?: number
   maxPreviewChars?: number
   maxListEntries?: number
@@ -155,6 +160,7 @@ export class WorkspaceIntelService {
   readonly visibleContextPath?: string
   readonly visualCaptureTimeoutMs: number
   readonly visualCapturePollIntervalMs: number
+  readonly visualInspector?: VisualInspector
   readonly maxReadBytes: number
   readonly maxPreviewChars: number
   readonly maxListEntries: number
@@ -174,6 +180,7 @@ export class WorkspaceIntelService {
       5,
       1_000
     )
+    this.visualInspector = options.visualInspector
     this.maxReadBytes = clampInteger(
       options.maxReadBytes ?? WORKSPACE_INTEL_DEFAULT_READ_BYTES,
       1,
@@ -539,10 +546,36 @@ export class WorkspaceIntelService {
           )
         }
         await validateVisualCaptureAsset(response.capture.path, this.visibleContextPath)
+        const requireSemanticInspection = input.requireSemanticInspection !== false
+        let inspection
+        if (requireSemanticInspection) {
+          if (!this.visualInspector) {
+            throw serviceError(
+              'visual_inspection_unavailable',
+              'The screenshot was captured, but semantic visual inspection is unavailable.',
+              'Configure the local SciForge Model Router vision translator and retry.'
+            )
+          }
+          const inspected = await this.visualInspector({
+            imagePath: response.capture.path,
+            ...(input.inspectionPrompt ? { prompt: input.inspectionPrompt } : {}),
+            ...(input.truthLockedElements ? { truthLockedElements: input.truthLockedElements } : {})
+          })
+          if (inspected.status !== 'inspected') {
+            throw serviceError(
+              inspected.status,
+              inspected.message,
+              'Check the Model Router vision translator health and retry.',
+              true
+            )
+          }
+          inspection = inspected
+        }
         return {
           ok: true,
           requestId,
-          resource: response.capture
+          resource: response.capture,
+          ...(inspection ? { inspection } : {})
         }
       } finally {
         await Promise.all([
@@ -860,10 +893,12 @@ export function createWorkspaceIntelService(options: WorkspaceIntelServiceOption
 
 export function workspaceIntelConfigFromEnv(env: NodeJS.ProcessEnv = process.env): WorkspaceIntelServiceOptions {
   const skillRoots = parsePathList(env.SCIFORGE_WORKSPACE_INTEL_SKILL_ROOTS)
+  const visualInspector = modelRouterVisualInspectorFromEnv(env)
   return {
     workspaceRoot: cleanOptionalPath(env.SCIFORGE_WORKSPACE_INTEL_ROOT) ?? cleanOptionalPath(env.SCIFORGE_WORKSPACE_PATH),
     ...(skillRoots.length > 0 ? { skillRoots } : {}),
     ...(cleanOptionalPath(env.SCIFORGE_VISIBLE_CONTEXT_PATH) ? { visibleContextPath: cleanOptionalPath(env.SCIFORGE_VISIBLE_CONTEXT_PATH) } : {}),
+    ...(visualInspector ? { visualInspector } : {}),
     includeGlobalSkillRoots: env.SCIFORGE_WORKSPACE_INTEL_INCLUDE_GLOBAL_SKILLS === '1',
     ...(parsePositiveInteger(env.SCIFORGE_WORKSPACE_INTEL_MAX_READ_BYTES) ? { maxReadBytes: parsePositiveInteger(env.SCIFORGE_WORKSPACE_INTEL_MAX_READ_BYTES) } : {}),
     ...(parsePositiveInteger(env.SCIFORGE_WORKSPACE_INTEL_MAX_LIST_ENTRIES) ? { maxListEntries: parsePositiveInteger(env.SCIFORGE_WORKSPACE_INTEL_MAX_LIST_ENTRIES) } : {})

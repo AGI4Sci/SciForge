@@ -20,7 +20,8 @@
     ".": "./src/index.ts",
     "./contract": "./src/contract.ts",
     "./mcp-server": "./src/mcp-server.ts",
-    "./service": "./src/service.ts"
+    "./service": "./src/service.ts",
+    "./visual-inspection": "./src/visual-inspection.ts"
   },
   "files": [
     "src",

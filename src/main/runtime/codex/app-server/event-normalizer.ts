@@ -52,28 +52,44 @@ export function normalizeCodexEvent(
     }
   }
   if (method === 'item/commandExecution/outputDelta') {
+    const callId = stringValue(params.itemId) || 'codex-command-output'
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: stringValue(params.itemId),
+        itemId: callId,
         summary: 'Command output',
         status: 'running',
         toolKind: 'command_execution',
-        detail: stringValue(params.delta)
+        detail: stringValue(params.delta),
+        meta: toolExecutionMeta({
+          callId,
+          toolName: 'exec_command',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle'
+        })
       }
     }
   }
   if (method === 'item/fileChange/outputDelta') {
+    const callId = stringValue(params.itemId) || 'codex-file-change-output'
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: stringValue(params.itemId),
+        itemId: callId,
         summary: 'File changes',
         status: 'running',
         toolKind: 'file_change',
-        detail: stringValue(params.delta)
+        detail: stringValue(params.delta),
+        meta: toolExecutionMeta({
+          callId,
+          toolName: 'apply_patch',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle'
+        })
       }
     }
   }
@@ -261,7 +277,7 @@ function normalizeSessionResponseItem(
     const toolName = stringValue(payload.name) || 'tool'
     const args = parseJsonObject(stringValue(payload.arguments))
     const callId = stringValue(payload.call_id)
-    const itemId = callId || `${toolName}-${Date.now()}`
+    const itemId = callId || stringValue(payload.id) || `${toolName}-${turnId || threadId}`
     const command = stringValue(args?.cmd) || stringValue(args?.command)
     const cwd = stringValue(args?.workdir) || stringValue(args?.cwd)
     return {
@@ -274,8 +290,13 @@ function normalizeSessionResponseItem(
         toolKind: toolKindForFunction(toolName),
         ...(toolCallDetail(args, payload) ? { detail: toolCallDetail(args, payload) } : {}),
         meta: {
-          toolName,
-          ...(callId ? { callId } : {}),
+          ...toolExecutionMeta({
+            callId: itemId,
+            toolName,
+            phase: 'requested',
+            factSource: 'model_output',
+            evidenceStrength: 'intent'
+          }),
           ...(command ? { command } : {}),
           ...(cwd ? { cwd } : {}),
           ...(args ? { arguments: args } : {})
@@ -285,35 +306,51 @@ function normalizeSessionResponseItem(
   }
   if (type === 'function_call_output') {
     const output = outputText(payload.output)
-    const callId = stringValue(payload.call_id)
+    const callId = stringValue(payload.call_id) || stringValue(payload.id) || 'codex-tool-output'
+    const toolName = stringValue(payload.name) || stringValue(payload.tool_name)
+    const status = toolOutputStatus(payload, output)
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: callId || 'codex-tool-output',
-        summary: 'Tool output',
-        status: toolOutputStatus(output),
+        itemId: callId,
+        summary: toolName || 'Tool output',
+        status,
         detail: output,
-        ...(callId ? { meta: { callId } } : {})
+        meta: toolExecutionMeta({
+          callId,
+          ...(toolName ? { toolName } : {}),
+          phase: status === 'success' ? 'succeeded' : 'failed',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: status === 'success'
+        })
       }
     }
   }
   if (type === 'local_shell_call') {
     const action = asRecord(payload.action)
     const command = stringValue(action?.command)
-    const callId = stringValue(payload.call_id)
+    const callId = stringValue(payload.call_id) || stringValue(payload.id) || 'codex-local-shell-call'
+    const status = localShellCallStatus(payload)
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: callId || 'codex-local-shell-call',
+        itemId: callId,
         summary: command || 'Local shell',
-        status: stringValue(payload.status) === 'completed' ? 'success' : 'running',
+        status,
         toolKind: 'command_execution',
         ...(command ? { detail: command } : {}),
         meta: {
-          toolName: 'local_shell',
-          ...(callId ? { callId } : {}),
+          ...toolExecutionMeta({
+            callId,
+            toolName: 'local_shell',
+            phase: status === 'running' ? 'dispatched' : status === 'success' ? 'succeeded' : 'failed',
+            factSource: status === 'running' ? 'runtime_lifecycle' : 'executor_result',
+            evidenceStrength: status === 'running' ? 'runtime_lifecycle' : 'executor_receipt',
+            ...(status === 'running' ? {} : { success: status === 'success' })
+          }),
           ...(command ? { command } : {})
         }
       }
@@ -355,6 +392,7 @@ function normalizeThreadItem(
   }
   if (type === 'commandExecution') {
     const status = threadItemStatus(item, lifecycle)
+    const callId = toolItemCallId(item, 'codex-command')
     const output = stringValue(item.aggregatedOutput)
     const command = stringValue(item.command)
     const cwd = stringValue(item.cwd)
@@ -362,12 +400,13 @@ function normalizeThreadItem(
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: stringValue(item.id) || 'codex-command',
+        itemId: callId,
         summary: command || 'Command execution',
         status,
         toolKind: 'command_execution',
         ...(output || command ? { detail: output || command } : {}),
         meta: {
+          ...terminalAwareToolExecutionMeta(callId, 'exec_command', status),
           ...(command ? { command } : {}),
           ...(cwd ? { cwd } : {}),
           ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {})
@@ -376,15 +415,18 @@ function normalizeThreadItem(
     }
   }
   if (type === 'fileChange') {
+    const status = threadItemStatus(item, lifecycle)
+    const callId = toolItemCallId(item, 'codex-file-change')
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: stringValue(item.id) || 'codex-file-change',
+        itemId: callId,
         summary: 'File changes',
-        status: threadItemStatus(item, lifecycle),
+        status,
         toolKind: 'file_change',
-        detail: threadItemJsonDetail(item.changes)
+        detail: threadItemJsonDetail(item.changes),
+        meta: terminalAwareToolExecutionMeta(callId, 'apply_patch', status)
       }
     }
   }
@@ -400,6 +442,8 @@ function normalizeThreadItem(
   }
   if (type === 'mcpToolCall' || type === 'dynamicToolCall' || type === 'collabAgentToolCall') {
     const tool = stringValue(item.tool) || stringValue(item.server) || type
+    const callId = toolItemCallId(item, `codex-${type}`)
+    const status = threadItemStatus(item, lifecycle)
     const args = recordArguments(item)
     const child = type === 'collabAgentToolCall'
       ? childFromCollabAgentToolCall(item, context, lifecycle, threadId, turnId)
@@ -408,13 +452,13 @@ function normalizeThreadItem(
       threadId,
       ...(turnId ? { turnId } : {}),
       tool: {
-        itemId: stringValue(item.id) || `codex-${type}`,
+        itemId: callId,
         summary: tool,
-        status: threadItemStatus(item, lifecycle),
+        status,
         toolKind: 'tool_call',
         detail: threadItemJsonDetail(item.result) || threadItemJsonDetail(item.error) || threadItemJsonDetail(item.contentItems),
         meta: {
-          toolName: tool,
+          ...terminalAwareToolExecutionMeta(callId, tool, status),
           ...(stringValue(item.server) ? { server: stringValue(item.server) } : {}),
           ...(stringValue(item.namespace) ? { namespace: stringValue(item.namespace) } : {}),
           ...(args ? { arguments: args } : {}),
@@ -896,10 +940,79 @@ function toolCallDetail(
   return stringValue(payload.arguments)
 }
 
-function toolOutputStatus(output: string): NonNullable<CodexThreadEventPayload['tool']>['status'] {
+type CodexToolExecutionPhase = 'requested' | 'dispatched' | 'succeeded' | 'failed' | 'cancelled' | 'unresolved'
+type CodexToolFactSource = 'model_output' | 'runtime_lifecycle' | 'executor_result' | 'host_synthetic'
+type CodexToolEvidenceStrength = 'intent' | 'runtime_lifecycle' | 'executor_receipt' | 'attested'
+
+function toolExecutionMeta(input: {
+  callId: string
+  toolName?: string
+  phase: CodexToolExecutionPhase
+  factSource: CodexToolFactSource
+  evidenceStrength: CodexToolEvidenceStrength
+  success?: boolean
+}): Record<string, unknown> {
+  return {
+    callId: input.callId,
+    ...(input.toolName ? { toolName: input.toolName } : {}),
+    phase: input.phase,
+    factSource: input.factSource,
+    evidenceStrength: input.evidenceStrength,
+    ...(typeof input.success === 'boolean' ? { success: input.success } : {})
+  }
+}
+
+function terminalAwareToolExecutionMeta(
+  callId: string,
+  toolName: string,
+  status: NonNullable<CodexThreadEventPayload['tool']>['status']
+): Record<string, unknown> {
+  if (status === 'running') {
+    return toolExecutionMeta({
+      callId,
+      toolName,
+      phase: 'dispatched',
+      factSource: 'runtime_lifecycle',
+      evidenceStrength: 'runtime_lifecycle'
+    })
+  }
+  return toolExecutionMeta({
+    callId,
+    toolName,
+    phase: status === 'success' ? 'succeeded' : 'failed',
+    factSource: 'executor_result',
+    evidenceStrength: 'executor_receipt',
+    success: status === 'success'
+  })
+}
+
+function toolItemCallId(item: Record<string, unknown>, fallback: string): string {
+  return stringValue(item.callId) || stringValue(item.call_id) || stringValue(item.id) || fallback
+}
+
+function toolOutputStatus(
+  payload: Record<string, unknown>,
+  output: string
+): NonNullable<CodexThreadEventPayload['tool']>['status'] {
+  if (typeof payload.success === 'boolean') return payload.success ? 'success' : 'error'
+  if (payload.error !== undefined && payload.error !== null) return 'error'
+  const status = stringValue(payload.status).toLowerCase()
+  if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') return 'error'
+  if (status === 'completed' || status === 'success' || status === 'succeeded') return 'success'
   const exitCode = output.match(/Process exited with code\s+(-?\d+)/i)
   if (!exitCode) return 'success'
   return exitCode[1] === '0' ? 'success' : 'error'
+}
+
+function localShellCallStatus(
+  payload: Record<string, unknown>
+): NonNullable<CodexThreadEventPayload['tool']>['status'] {
+  const status = stringValue(payload.status).toLowerCase()
+  if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') return 'error'
+  if (typeof payload.exit_code === 'number' && payload.exit_code !== 0) return 'error'
+  if (typeof payload.exitCode === 'number' && payload.exitCode !== 0) return 'error'
+  if (status === 'completed' || status === 'success' || status === 'succeeded') return 'success'
+  return 'running'
 }
 
 function threadItemStatus(
@@ -908,6 +1021,8 @@ function threadItemStatus(
 ): NonNullable<CodexThreadEventPayload['tool']>['status'] {
   const status = stringValue(item.status)
   if (status === 'failed' || status === 'declined' || status === 'error') return 'error'
+  if (item.error !== undefined && item.error !== null) return 'error'
+  if (typeof item.success === 'boolean' && !item.success) return 'error'
   if (typeof item.exitCode === 'number' && item.exitCode !== 0) return 'error'
   if (status === 'completed' || lifecycle === 'completed') return 'success'
   return 'running'

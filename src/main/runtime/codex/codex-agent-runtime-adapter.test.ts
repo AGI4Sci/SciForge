@@ -620,6 +620,52 @@ describe('createCodexAgentRuntimeAdapter', () => {
     ])
   })
 
+  it('promotes Codex execution receipt metadata onto shared tool events', async () => {
+    const service = {
+      readStoredEvents: vi.fn(async () => [{
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        seq: 1,
+        tool: {
+          itemId: 'call-1',
+          summary: 'exec_command',
+          status: 'success' as const,
+          toolKind: 'command_execution' as const,
+          meta: {
+            callId: 'call-1',
+            toolName: 'exec_command',
+            phase: 'succeeded',
+            factSource: 'executor_result',
+            evidenceStrength: 'executor_receipt',
+            attempt: 2,
+            resultDigest: 'sha256:abc'
+          }
+        }
+      }])
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const events = []
+
+    for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
+      runtimeId: 'codex',
+      threadId: 'thread-1'
+    })) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([expect.objectContaining({
+      kind: 'tool_event',
+      itemId: 'call-1',
+      callId: 'call-1',
+      toolName: 'exec_command',
+      phase: 'succeeded',
+      factSource: 'executor_result',
+      evidenceStrength: 'executor_receipt',
+      attempt: 2,
+      resultDigest: 'sha256:abc'
+    })])
+  })
+
   it('maps terminal Codex runtime errors to turn lifecycle events', async () => {
     const service = {
       readStoredEvents: vi.fn(async () => [

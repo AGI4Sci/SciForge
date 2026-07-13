@@ -297,6 +297,7 @@ HTTP 服务在 `/v1/*` 提供以下路由：
 | POST | `/v1/threads/{id}/turns/{turnId}/interrupt` | 中断回合 |
 | POST | `/v1/threads/{id}/compact` | 压缩历史 |
 | GET | `/v1/threads/{id}/events?since_seq=N` | 获取事件积压并订阅实时事件 |
+| POST | `/v1/threads/{id}/events` | 持久化经过认证的 Host 合成错误，供事件重放 |
 | POST | `/v1/approvals/{approvalId}` | 允许/拒绝工具审批 |
 | POST | `/v1/attachments` | 以 base64 上传图片附件 |
 | GET | `/v1/attachments/diagnostics` | 附件存储状态 |

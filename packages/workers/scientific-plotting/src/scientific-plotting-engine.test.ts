@@ -1,41 +1,50 @@
+import { createHash } from 'node:crypto'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import { describe, expect, it } from 'vitest'
-import type { FigureStyleSpec, ScientificPlottingVisualPlanHandoff } from './types'
+import type { FigureStyleSpec, VisualProductionHandoff } from './types'
 import {
   buildScientificFigureNeedClassification,
-  createScientificPlottingResearchBrief,
   createScientificPlottingReviewPacket,
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
   mapScientificPlottingData as mapScientificPlottingDataEngine,
   planScientificPlotting,
   prepareScientificPlottingReference,
+  compositeScientificPlotLayers,
   renderScientificPlot as renderScientificPlotEngine,
   reviewScientificPlottingOutput
 } from './scientific-plotting-engine'
 
-const CONTROLLED_PLOT_PLAN: ScientificPlottingVisualPlanHandoff = {
-  route: 'deterministic_plot',
+const CONTROLLED_PLOT_PLAN: VisualProductionHandoff = {
+  planId: 'test-code-plan',
+  route: 'code',
   routeLocked: true,
   rationale: 'Test exercises the controlled deterministic plotting route.',
+  sourceArtifacts: [],
   reproducibleInputs: ['test fixture data'],
-  truthLockedElements: ['all fixture values and labels'],
+  lockedElements: ['all fixture values and labels'],
+  modelOwnedElements: [],
+  contextStatus: 'ready',
+  contextStopReason: 'sufficient',
+  contextEvidenceIds: [],
+  unresolvedContext: [],
+  releaseCeiling: 'publication_ready',
   fallbackPolicy: 'fail_closed'
 }
 
 function mapScientificPlottingData(
-  request: Omit<Parameters<typeof mapScientificPlottingDataEngine>[0], 'scientificVisualPlan'>
+  request: Omit<Parameters<typeof mapScientificPlottingDataEngine>[0], 'visualPlan'>
 ) {
-  return mapScientificPlottingDataEngine({ ...request, scientificVisualPlan: CONTROLLED_PLOT_PLAN })
+  return mapScientificPlottingDataEngine({ ...request, visualPlan: CONTROLLED_PLOT_PLAN })
 }
 
 function renderScientificPlot(
-  request: Omit<Parameters<typeof renderScientificPlotEngine>[0], 'scientificVisualPlan'>
+  request: Omit<Parameters<typeof renderScientificPlotEngine>[0], 'visualPlan'>
 ) {
-  return renderScientificPlotEngine({ ...request, scientificVisualPlan: CONTROLLED_PLOT_PLAN })
+  return renderScientificPlotEngine({ ...request, visualPlan: CONTROLLED_PLOT_PLAN })
 }
 
 async function tempWorkspace(): Promise<string> {
@@ -144,7 +153,7 @@ function referenceStyleSpec(figureId: string): FigureStyleSpec {
 }
 
 describe('scientific plotting engine', () => {
-  it('fails closed when deterministic mapping bypasses scientific_visual_plan', async () => {
+  it('fails closed when deterministic mapping bypasses visual_generate', async () => {
     const result = await mapScientificPlottingDataEngine({
       workspaceRoot: '/tmp',
       task: 'Draw a data plot.',
@@ -154,7 +163,7 @@ describe('scientific plotting engine', () => {
     expect(result).toMatchObject({
       ok: false,
       status: 'invalid_request',
-      missingInputs: ['scientificVisualPlan']
+      missingInputs: ['visualPlan']
     })
   })
 
@@ -170,19 +179,15 @@ describe('scientific plotting engine', () => {
     })
   })
 
-  it('routes paper-style figure requests through the research brief first', async () => {
+  it('keeps style planning behind the unified visual plan', async () => {
     await expect(planScientificPlotting({
       task: 'Draw an attention heatmap in the style of a NeurIPS paper.'
     })).resolves.toMatchObject({
       ok: true,
       recommendedTemplate: 'attention-map',
-      controlledTool: 'scientific_plotting_research_brief',
+      controlledTool: 'scientific_plotting_render',
       figureNeed: expect.objectContaining({
-        recommendedNextTool: 'scientific_visual_plan'
-      }),
-      researchBriefRecommendation: expect.objectContaining({
-        recommended: true,
-        nextControlledTool: 'scientific_plotting_research_brief'
+        recommendedNextTool: 'visual_generate'
       })
     })
   })
@@ -226,11 +231,7 @@ describe('scientific plotting engine', () => {
     expect(flowchartPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_research_brief',
-      researchBriefRecommendation: expect.objectContaining({
-        recommended: true,
-        nextControlledTool: 'scientific_plotting_research_brief'
-      }),
+      controlledTool: 'scientific_plotting_render',
       templateSelection: expect.objectContaining({
         selectedTemplate: 'flowchart',
         selectedBy: 'taskIntent',
@@ -239,7 +240,7 @@ describe('scientific plotting engine', () => {
       templateGuides: expect.arrayContaining([
         expect.objectContaining({
           template: 'flowchart',
-          modelSelectionHint: expect.stringContaining('image_generation')
+          modelSelectionHint: expect.stringContaining('visual_generate')
         }),
         expect.objectContaining({
           template: 'schematic-grid',
@@ -256,11 +257,11 @@ describe('scientific plotting engine', () => {
     expect(transformerPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_research_brief',
+      controlledTool: 'scientific_plotting_render',
       figureNeed: expect.objectContaining({
         primaryNeed: 'model_architecture',
         route: 'needs_clarification',
-        recommendedNextTool: 'scientific_visual_plan'
+        recommendedNextTool: 'visual_generate'
       })
     })
 
@@ -275,12 +276,9 @@ describe('scientific plotting engine', () => {
       figureNeed: expect.objectContaining({
         primaryNeed: 'statistical_comparison',
         route: 'needs_clarification',
-        recommendedNextTool: 'scientific_visual_plan'
+        recommendedNextTool: 'visual_generate'
       })
     })
-    if (cellLineStatsPlan.ok) {
-      expect(cellLineStatsPlan.researchBriefRecommendation?.recommended).not.toBe(true)
-    }
 
     const plainBarPlan = await planScientificPlotting({
       task: '把季度收入数据画成柱状图。'
@@ -303,9 +301,6 @@ describe('scientific plotting engine', () => {
       recommendedTemplate: 'bar',
       controlledTool: 'scientific_plotting_render'
     })
-    if (annotatedBarPlan.ok) {
-      expect(annotatedBarPlan.researchBriefRecommendation).toBeUndefined()
-    }
 
     const proseFlowchartPlan = await planScientificPlotting({
       task: '根据以下内容建一张流程图：One goal in reinforcement learning is to understand simulator use. In this paper, we argue that researchers need to distinguish simulator use cases and discuss several misleading conclusions from long prose.'
@@ -313,10 +308,7 @@ describe('scientific plotting engine', () => {
     expect(proseFlowchartPlan).toMatchObject({
       ok: true,
       recommendedTemplate: 'flowchart',
-      controlledTool: 'scientific_plotting_research_brief',
-      researchBriefRecommendation: expect.objectContaining({
-        recommended: true
-      })
+      controlledTool: 'scientific_plotting_render'
     })
   })
 
@@ -329,7 +321,7 @@ describe('scientific plotting engine', () => {
     expect(proseNeed).toMatchObject({
       domain: 'ai-ml',
       route: 'needs_clarification',
-      recommendedNextTool: 'scientific_visual_plan',
+      recommendedNextTool: 'visual_generate',
       avoidTemplates: ['flowchart']
     })
     expect(['method_flow', 'model_architecture']).toContain(proseNeed.primaryNeed)
@@ -343,231 +335,20 @@ describe('scientific plotting engine', () => {
 
     expect(cnsPlan).toMatchObject({
       ok: true,
-      controlledTool: 'scientific_plotting_research_brief',
+      controlledTool: 'scientific_plotting_render',
       figureNeed: expect.objectContaining({
         primaryNeed: 'mechanism_schematic',
         route: 'needs_clarification',
-        recommendedNextTool: 'scientific_visual_plan'
-      }),
-      researchBriefRecommendation: expect.objectContaining({
-        nextControlledTool: 'scientific_plotting_research_brief',
-        requiresUserConfirmation: true
+        recommendedNextTool: 'visual_generate'
       })
     })
     if (cnsPlan.ok) {
-      expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds).toContain('nature-figure')
-      expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds.slice(0, 6)).toContain('nature-figure')
       expect(cnsPlan.externalSkillCatalog?.recommendedSkillIds).toContain('pathway-enrichment')
       expect(cnsPlan.externalSkillCatalog?.excludedSources.join(' ')).toContain('SciVisAgentSkills')
     }
   })
 
-  it('builds a CNS/domain research brief without executing external skills', async () => {
-    const brief = await createScientificPlottingResearchBrief({
-      task: '参考 Nature 论文风格，画一个肿瘤免疫逃逸机制图，包含 T cell exhaustion、PD-1/PD-L1 和 cytokine signaling。',
-      domain: 'life science',
-      targetVenue: 'Nature',
-      dataSummary: '用户有基因表达差异表和 pathway enrichment 结果。',
-      candidatePapers: [
-        {
-          title: 'Cancer immunotherapy and immune escape mechanisms',
-          venue: 'Nature',
-          year: 2024,
-          figureHints: ['mechanism schematic', 'multi-panel immune pathway figure']
-        }
-      ]
-    })
-
-    expect(brief).toMatchObject({
-      ok: true,
-      domain: 'life-science',
-      targetVenue: 'Nature',
-      figureNeed: expect.objectContaining({
-        primaryNeed: 'mechanism_schematic',
-        recommendedNextTool: 'scientific_visual_plan'
-      }),
-      figureContract: expect.objectContaining({
-        archetype: 'mechanism_schematic',
-        journalExportContract: expect.arrayContaining([expect.stringContaining('Nature')])
-      }),
-      selectedSkillProfile: expect.objectContaining({
-        profileId: 'paper-figure-cns-life-science-v1',
-        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data']),
-        skillPriority: ['kdense', 'cns', 'domain', 'image-delta'],
-        readOnlyExternalSkills: true
-      }),
-      promptSpecDraft: expect.objectContaining({
-        nextControlledTool: 'scientific_visual_plan',
-        fullPrompt: expect.stringContaining('Reference papers and figure evidence'),
-        codeGenerationPlan: expect.objectContaining({
-          target: 'scientific_visual_plan_request',
-          nextControlledTool: 'scientific_visual_plan',
-          notes: expect.arrayContaining([expect.stringContaining('referencePapers')])
-        }),
-        referencePapers: expect.arrayContaining([
-          expect.objectContaining({ title: 'Cancer immunotherapy and immune escape mechanisms' })
-        ])
-      })
-    })
-    if (brief.ok) {
-      const skillIds = brief.skillCatalog.map((item) => item.skillId)
-      expect(skillIds).toContain('nature-figure')
-      expect(skillIds).toContain('nature-reader')
-      expect(skillIds).toContain('pathway-enrichment')
-      expect(skillIds).toContain('claude-code-skills')
-      expect(brief.recommendedSkillLayers[0]).toMatchObject({
-        sourceKind: 'kdense'
-      })
-      expect(brief.recommendedSkillLayers.some((layer) => layer.sourceKind === 'cns')).toBe(true)
-      expect(brief.paperFigureProductionPlan).toMatchObject({
-        scope: 'paper_level',
-        sourceWorkflow: 'paper_figures_data_first_v1',
-        handoff: expect.objectContaining({
-          imagePolish: expect.arrayContaining([expect.stringContaining('Model Router')])
-        }),
-        compositionPlan: expect.objectContaining({
-          sourceWorkflow: 'controlled_subfigures_then_image2_composition_v1',
-          stageOrder: ['controlled_subfigures', 'image2_composition', 'canvas_review_iteration'],
-          image2Composition: expect.objectContaining({
-            nextControlledTool: 'scientific_visual_plan',
-            allowedOperations: expect.arrayContaining([
-              'panel_stitching',
-              'callout_overlay',
-              'zoom_inset',
-              'visual_unification'
-            ]),
-            forbiddenOperations: expect.arrayContaining([
-              expect.stringContaining('Do not change numeric values')
-            ])
-          }),
-          imagePolishDeltaPlan: expect.objectContaining({
-            mode: 'delta_only',
-            allowedOperations: expect.arrayContaining([
-              'panel_stitching',
-              'callout_overlay',
-              'zoom_inset',
-              'visual_unification',
-              'typography_cleanup',
-              'mechanism_visual_draft'
-            ]),
-            lockedFacts: expect.arrayContaining([
-              'numeric values',
-              'axes labels and scales',
-              'paper claims and figure conclusions'
-            ]),
-            handoffPrompt: expect.stringContaining('Do not redraw, replace, or reinterpret scientific data panels')
-          }),
-          visualReview: expect.objectContaining({
-            preserveOriginalArtifacts: true,
-            revisionPolicy: 'new_version_next_to_original'
-          })
-        })
-      })
-      expect(brief.guardrails.join(' ')).toContain('read-only planning')
-      expect(JSON.stringify(brief.skillCatalog)).not.toMatch(/SciVisAgentBench|ChartMimic|paraview_mcp/)
-      expect(brief.warnings.join(' ')).toContain('Excluded from this workflow')
-    }
-  })
-
-  it('builds a data-first paper figure production plan from raw data context', async () => {
-    const brief = await createScientificPlottingResearchBrief({
-      task: 'Plan figures for a heart-failure survival paper from raw clinical CSV data. Include key predictor comparisons, correlation heatmap, Kaplan-Meier survival, Cox forest, and ROC evaluation.',
-      domain: 'clinical medicine',
-      targetVenue: 'Nature-family journal',
-      dataSummary: 'CSV has 299 patients with columns age, ejection_fraction, serum_creatinine, time, DEATH_EVENT, and other clinical variables.',
-      candidatePapers: [
-        {
-          title: 'Machine learning can predict survival of patients with heart failure from serum creatinine and ejection fraction alone',
-          year: 2020,
-          figureHints: ['survival analysis', 'ROC evaluation', 'key predictor comparison']
-        }
-      ]
-    })
-
-    expect(brief).toMatchObject({
-      ok: true,
-      selectedSkillProfile: expect.objectContaining({
-        profileId: 'paper-figure-cns-life-science-v1',
-        selectedSkillIds: expect.arrayContaining(['nature-figure', 'nature-reader', 'nature-data', 'image-delta-polish'])
-      }),
-      paperFigureProductionPlan: expect.objectContaining({
-        scope: 'paper_level',
-        sourceWorkflow: 'paper_figures_data_first_v1',
-        proposedAssets: expect.arrayContaining([
-          expect.objectContaining({ id: 'fig-key-predictors', recommendedTemplate: 'box-violin' }),
-          expect.objectContaining({ id: 'fig-correlation-heatmap', recommendedTemplate: 'heatmap' }),
-          expect.objectContaining({ id: 'fig-survival-km', recommendedTemplate: 'kaplan-meier' }),
-          expect.objectContaining({ id: 'fig-effect-size-forest', recommendedTemplate: 'cox-forest' }),
-          expect.objectContaining({ id: 'fig-model-roc', recommendedTemplate: 'roc' })
-        ]),
-        compositionPlan: expect.objectContaining({
-          controlledSubfigures: expect.arrayContaining([
-            expect.objectContaining({ assetId: 'fig-key-predictors', requiredArtifact: 'png_manifest' }),
-            expect.objectContaining({ assetId: 'fig-correlation-heatmap', requiredArtifact: 'png_manifest' }),
-            expect.objectContaining({ assetId: 'fig-survival-km', requiredArtifact: 'png_manifest' }),
-            expect.objectContaining({ assetId: 'fig-effect-size-forest', requiredArtifact: 'png_manifest' }),
-            expect.objectContaining({ assetId: 'fig-model-roc', requiredArtifact: 'png_manifest' })
-          ]),
-          image2Composition: expect.objectContaining({
-            inputArtifacts: expect.arrayContaining([
-              'fig-key-predictors.manifest.json',
-              'fig-model-roc.manifest.json'
-            ])
-          }),
-          imagePolishDeltaPlan: expect.objectContaining({
-            mode: 'delta_only',
-            targetPanels: expect.arrayContaining([
-              expect.objectContaining({ assetId: 'fig-key-predictors' }),
-              expect.objectContaining({ assetId: 'fig-model-roc' })
-            ]),
-            lockedFacts: expect.arrayContaining(['sample sizes', 'statistical tests and p-values'])
-          })
-        }),
-        missingCapabilities: expect.arrayContaining([
-          expect.stringContaining('Kaplan-Meier'),
-          expect.stringContaining('forest'),
-          expect.stringContaining('ROC')
-        ])
-      })
-    })
-    expect(brief.ok && brief.skillCatalog.some((item) => item.skillId === 'paper-figures')).toBe(true)
-  })
-
-  it('requires paper search before rendering ungrounded scientific semantic figures', async () => {
-    const brief = await createScientificPlottingResearchBrief({
-      task: '新建一张流程图，介绍 Transformer 框架和 Attention 数据流。',
-      domain: 'AI/ML',
-      targetVenue: 'NeurIPS'
-    })
-
-    expect(brief).toMatchObject({
-      ok: true,
-      selectedSkillProfile: expect.objectContaining({
-        profileId: 'mechanism-diagram-image-delta-v1',
-        selectedSkillIds: expect.arrayContaining(['image-delta-polish'])
-      }),
-      figureNeed: expect.objectContaining({
-        route: 'needs_clarification',
-        recommendedNextTool: 'scientific_visual_plan'
-      }),
-      literatureStrategy: expect.objectContaining({
-        nextControlledTool: 'research_search',
-        suggestedQueries: expect.arrayContaining([expect.stringContaining('Transformer')])
-      }),
-      promptSpecDraft: expect.objectContaining({
-        referencePapers: [],
-        nextControlledTool: 'research_search',
-        fullPrompt: expect.stringContaining('No reference papers confirmed yet'),
-        codeGenerationPlan: expect.objectContaining({
-          target: 'scientific_visual_plan_request',
-          nextControlledTool: 'scientific_visual_plan',
-          notes: expect.arrayContaining([expect.stringContaining('Do not render yet')])
-        })
-      })
-    })
-  })
-
-  it('uses a StyleSpec reference profile when planning a vague style-transfer task', async () => {
+    it('uses a StyleSpec reference profile when planning a vague style-transfer task', async () => {
     const plan = await planScientificPlotting({
       task: 'Make a figure like this paper panel.',
       styleSpec: {
@@ -928,8 +709,16 @@ describe('scientific plotting engine', () => {
       if (!rendered.ok) return
       const dimensions = await loadImage(rendered.outputPath)
       expect(dimensions.width).toBeGreaterThanOrEqual(2400)
-      const manifest = JSON.parse(await readFile(rendered.manifestPath, 'utf8')) as { outputScale?: number; warnings?: string[] }
+      const outputHash = createHash('sha256').update(await readFile(rendered.outputPath)).digest('hex')
+      const manifest = JSON.parse(await readFile(rendered.manifestPath, 'utf8')) as {
+        outputScale?: number
+        outputHash?: string
+        visualPlan?: { planId?: string }
+        warnings?: string[]
+      }
       expect(manifest.outputScale).toBe(2)
+      expect(manifest.outputHash).toBe(outputHash)
+      expect(manifest.visualPlan?.planId).toBe(CONTROLLED_PLOT_PLAN.planId)
       expect(manifest.warnings?.join('\n')).toContain('outputScale=2')
     } finally {
       await rm(workspace, { recursive: true, force: true })
@@ -1082,26 +871,15 @@ describe('scientific plotting engine', () => {
           ]
         }
       })
-      expect(flowchart).toMatchObject({
-        ok: false,
-        status: 'diagram_requires_image_generation',
-        draftHandoff: expect.objectContaining({
-          kind: 'diagram_draft_handoff',
-          recommendedNextTools: ['image_generation_prepare', 'image_generation_render'],
-          draftSpec: expect.objectContaining({
-            template: 'flowchart',
-            nodes: expect.arrayContaining([
-              expect.objectContaining({ label: 'Research goal' })
-            ])
-          })
-        })
-      })
+      expect(flowchart).toMatchObject({ ok: true, status: 'rendered' })
+      if (!flowchart.ok) return
+      expect((await stat(flowchart.outputPath)).size).toBeGreaterThan(1000)
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
   }, 60_000)
 
-  it('rejects dense prose-derived flowcharts that should use image generation', async () => {
+  it('fails closed within the code route for oversized flowcharts', async () => {
     const status = await getScientificPlottingStatus()
     if (!status.ok || !status.renderer.available) {
       expect(status.ok && status.degraded).toBe(true)
@@ -1123,11 +901,74 @@ describe('scientific plotting engine', () => {
 
       expect(result.ok).toBe(false)
       if (result.ok) throw new Error('expected dense flowchart to fail')
-      expect(result.message).toContain('image_generation')
+      expect(result.message).toContain('locked code route')
+      expect(result.message).not.toContain('image_generation')
     } finally {
       await rm(workspace, { recursive: true, force: true })
     }
   }, 60_000)
+
+  it('deterministically composites model layers below code-owned truth layers', async () => {
+    const workspace = await tempWorkspace()
+    try {
+      const modelPath = join(workspace, 'model.png')
+      const truthPath = join(workspace, 'truth.png')
+      const model = createCanvas(100, 80)
+      const modelContext = model.getContext('2d')
+      modelContext.fillStyle = '#1d4ed8'
+      modelContext.fillRect(0, 0, 100, 80)
+      await writeFile(modelPath, model.toBuffer('image/png'))
+      const truth = createCanvas(20, 20)
+      const truthContext = truth.getContext('2d')
+      truthContext.fillStyle = '#16a34a'
+      truthContext.fillRect(0, 0, 20, 20)
+      await writeFile(truthPath, truth.toBuffer('image/png'))
+
+      const result = await compositeScientificPlotLayers({
+        workspaceRoot: workspace,
+        visualPlan: {
+          ...CONTROLLED_PLOT_PLAN,
+          route: 'hybrid',
+          modelOwnedElements: ['background color and texture']
+        },
+        layers: [
+          { path: truthPath, owner: 'code', bounds: { unit: 'pixel', x: 10, y: 10, width: 40, height: 40 } },
+          { path: modelPath, owner: 'model' }
+        ],
+        canvas: { width: 128, height: 128 },
+        figureId: 'hybrid-composite-test'
+      })
+
+      expect(result).toMatchObject({
+        ok: true,
+        status: 'composed',
+        layers: [
+          { owner: 'model', sha256: expect.any(String) },
+          { owner: 'code', opacity: 1, sha256: expect.any(String) }
+        ]
+      })
+      if (!result.ok) return
+      const output = await loadImage(result.outputPath)
+      const outputCanvas = createCanvas(output.width, output.height)
+      const outputContext = outputCanvas.getContext('2d')
+      outputContext.drawImage(output, 0, 0)
+      expect([...outputContext.getImageData(20, 20, 1, 1).data].slice(0, 3)).toEqual([22, 163, 74])
+      const manifest = JSON.parse(await readFile(result.manifestPath, 'utf8'))
+      const outputHash = createHash('sha256').update(await readFile(result.outputPath)).digest('hex')
+      expect(manifest).toMatchObject({
+        tool: 'scientific_plotting_composite',
+        outputHash,
+        visualPlan: { planId: CONTROLLED_PLOT_PLAN.planId, route: 'hybrid' },
+        layers: [
+          { owner: 'model', sha256: expect.any(String) },
+          { owner: 'code', sha256: expect.any(String) }
+        ]
+      })
+      await expect(stat(result.artifactManifestPath)).resolves.toBeTruthy()
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
 
   it('renders v1.14 statistical and multi-panel templates as non-empty PNGs', async () => {
     const status = await getScientificPlottingStatus()
@@ -1828,7 +1669,7 @@ describe('scientific plotting engine', () => {
         styleSpecPath: result.styleSpecPath,
         nextWorkflow: {
           referencePath: result.croppedImagePath,
-          suggestedPlanTool: 'scientific_visual_plan',
+          suggestedPlanTool: 'visual_generate',
           suggestedRenderTool: 'scientific_plotting_render',
           suggestedReviewTool: 'visual_artifact_review'
         }

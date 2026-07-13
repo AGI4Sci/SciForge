@@ -222,4 +222,54 @@ describe('ModelRequestAuditRecorder', () => {
     expect(serialized).toContain('[redacted]')
     expect(serialized).toContain('[path]')
   })
+
+  it('preserves request identity and records terminal executor proof', () => {
+    const recorder = new ModelRequestAuditRecorder()
+    const id = recorder.start({
+      runtimeId: 'codex',
+      threadId: 'thread-proof',
+      request: { runtimeId: 'codex', threadId: 'thread-proof', text: 'Run it.' }
+    })
+    recorder.attachTurn(id, 'codex', 'thread-proof', 'turn-proof')
+    recorder.observeEvent({
+      kind: 'tool_event',
+      runtimeId: 'codex',
+      threadId: 'thread-proof',
+      turnId: 'turn-proof',
+      itemId: 'request-item',
+      callId: 'call-proof',
+      toolName: 'local_shell',
+      status: 'running',
+      phase: 'requested',
+      factSource: 'model_output',
+      evidenceStrength: 'intent',
+      meta: { arguments: { cmd: 'pnpm test' } }
+    })
+    recorder.observeEvent({
+      kind: 'tool_event',
+      runtimeId: 'codex',
+      threadId: 'thread-proof',
+      turnId: 'turn-proof',
+      itemId: 'result-item',
+      callId: 'call-proof',
+      status: 'success',
+      phase: 'succeeded',
+      factSource: 'executor_result',
+      evidenceStrength: 'executor_receipt',
+      resultDigest: 'sha256:result',
+      meta: { output: { exitCode: 0 } }
+    })
+
+    expect(recorder.snapshot()[0].streamOutput.toolCalls).toEqual([expect.objectContaining({
+      callId: 'call-proof',
+      toolName: 'local_shell',
+      arguments: { cmd: 'pnpm test' },
+      result: { exitCode: 0 },
+      status: 'success',
+      phase: 'succeeded',
+      factSource: 'executor_result',
+      evidenceStrength: 'executor_receipt',
+      resultDigest: 'sha256:result'
+    })])
+  })
 })

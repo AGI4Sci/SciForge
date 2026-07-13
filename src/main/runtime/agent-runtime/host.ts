@@ -63,6 +63,14 @@ import type {
 } from './adapter'
 import { RuntimeGovernanceSupervisor, runtimeGuardSettings } from './governance'
 import {
+  requiresVerifiedVisualInspection,
+  withVisualExecutionRequirement
+} from './visual-execution-guard'
+import {
+  RuntimeExecutionIntegrityGuard,
+  withExecutionIntegrityRequirement
+} from './execution-integrity-guard'
+import {
   completedTurnItems,
   enqueueEvidenceDagUpdate,
   isEvidenceDagAutoFeedEnabled
@@ -141,6 +149,7 @@ export class AgentRuntimeHost {
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly postTurnCheckpoints = new Set<string>()
   private readonly governance = new RuntimeGovernanceSupervisor()
+  private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
     this.adapters = normalizeAdapters(options.adapters)
@@ -224,9 +233,13 @@ export class AgentRuntimeHost {
           )
         )
       : safeInput
+    const visualRequestText = safeInput.displayText ?? (options.includeSharedContext ? safeInput.text : '')
+    const visualRequired = requiresVerifiedVisualInspection(visualRequestText)
+    const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput, visualRequired)
+    const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const turnInput = options.includeSharedContext
-      ? await this.withVisibleContextLookupHint(sharedInput, safeInput.text)
-      : sharedInput
+      ? await this.withVisibleContextLookupHint(integrityGuardedInput, safeInput.text)
+      : integrityGuardedInput
     this.createPreTurnCheckpoint(adapter.id, context, turnInput)
     const modelRouter = resolveRuntimeModelRouterSettings(context.settings)
     const modelAlias = modelRouter.model
@@ -286,7 +299,23 @@ export class AgentRuntimeHost {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     const capabilities = await adapter.capabilities(context)
     const guardSettings = runtimeGuardSettings(context)
-    for await (const event of adapter.subscribeEvents(context, input)) {
+    for await (const sourceEvent of adapter.subscribeEvents(context, input)) {
+      const integrityObservation = this.executionIntegrity.observe(adapter.id, sourceEvent)
+      const event = integrityObservation.event
+      if (integrityObservation.violation) {
+        await this.publishSyntheticEvent(adapter, context, {
+          kind: 'error',
+          runtimeId: adapter.id,
+          threadId: event.threadId,
+          turnId: event.turnId,
+          itemId: `runtime-execution-integrity-${event.turnId || event.threadId}`,
+          recoverable: true,
+          severity: 'error',
+          code: integrityObservation.violation.code,
+          message: integrityObservation.violation.message,
+          detail: integrityObservation.violation.detail
+        }).catch(() => null)
+      }
       this.options.services?.modelAudit?.observeEvent(event)
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
@@ -1182,7 +1211,6 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     threads: AgentRuntimeThread[]
   ): Promise<AgentRuntimeThread[]> {
-    if (!this.options.services?.goals) return threads
     return Promise.all(threads.map((thread) => this.withSharedGoalOnThread(runtimeId, thread)))
   }
 
@@ -1190,11 +1218,49 @@ export class AgentRuntimeHost {
     runtimeId: AgentRuntimeId,
     thread: T
   ): Promise<T> {
-    if (thread.goal !== undefined) return thread
+    const guardedThread = this.withExecutionIntegrityStatus(runtimeId, thread)
+    if (guardedThread.goal !== undefined) return guardedThread
     const service = this.options.services?.goals
-    if (!service) return thread
-    const goal = await service.get({ runtimeId, threadId: thread.id }).catch(() => null)
-    return goal ? { ...thread, goal } : thread
+    if (!service) return guardedThread
+    const goal = await service.get({ runtimeId, threadId: guardedThread.id }).catch(() => null)
+    return goal ? { ...guardedThread, goal } : guardedThread
+  }
+
+  private withExecutionIntegrityStatus<T extends AgentRuntimeThread>(
+    runtimeId: AgentRuntimeId,
+    thread: T
+  ): T {
+    const detail = thread as unknown as Pick<AgentRuntimeThreadDetail, 'turns' | 'items'>
+    const rejectedTurnIds = new Set(this.executionIntegrity.rejectedTurnIds(runtimeId, thread.id))
+    const items = [
+      ...(detail.items ?? []),
+      ...(detail.turns ?? []).flatMap((turn) => (turn.items ?? []).map((item) => ({
+        ...item,
+        turnId: item.turnId ?? turn.id
+      })))
+    ]
+    for (const item of items) {
+      const code = recordPayload(item.meta).code
+      if (item.turnId && (
+        code === 'runtime_visual_execution_missing' ||
+        code === 'runtime_execution_incomplete' ||
+        code === 'runtime_execution_claim_unverified'
+      )) {
+        rejectedTurnIds.add(item.turnId)
+      }
+    }
+    if (rejectedTurnIds.size === 0) return thread
+    const turns = detail.turns?.map((turn) => rejectedTurnIds.has(turn.id)
+      ? { ...turn, status: 'failed' as const }
+      : turn)
+    const latestTurnId = thread.latestTurnId || turns?.at(-1)?.id
+    return {
+      ...thread,
+      ...(turns ? { turns } : {}),
+      ...(latestTurnId && rejectedTurnIds.has(latestTurnId)
+        ? { latestTurnStatus: 'failed' }
+        : {})
+    }
   }
 
   private async resolveOptionalActiveRuntime(runtimeId?: AgentRuntimeId): Promise<{
@@ -1256,6 +1322,12 @@ export class AgentRuntimeHost {
   ): Promise<AgentRuntimeTurnHandle> {
     const handle = await adapter.startTurn(context, input)
     this.rememberTurnGovernanceProfile(adapter.id, input, handle)
+    this.executionIntegrity.rememberTurn(
+      adapter.id,
+      input,
+      handle.threadId || input.threadId,
+      handle.turnId
+    )
     this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
     return handle
   }
@@ -2469,7 +2541,7 @@ function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot): strin
     'Visible GUI context lookup:',
     'The current user request appears to reference content visible in the SciForge GUI. Do not say you cannot see the right sidebar, current preview, or PDF annotations before checking the available visible-context tools.',
     'First call `gui_visible_context` when it is available. It returns a bounded index of visible components and resource pointers, not full document contents.',
-    'If the request requires visual inspection, call `gui_visual_capture` with `scope: window` or with a componentId and targetId published by `gui_visible_context`, then inspect the returned local PNG path with the available image tool.',
+    'If the request requires visual inspection, call `gui_visual_capture` with `scope: window` or with a componentId and targetId published by `gui_visible_context`. Leave semantic inspection enabled and pass an inspectionPrompt matching the task; the successful result contains attested Model Router vision evidence in text as well as the PNG.',
     'If the result includes a `pdfAnnotations` resource, use its workspaceRoot plus relativePath/path with `gui_workspace_read` to inspect the annotation sidecar JSON only when the task needs those annotations.'
   ]
   const components = snapshot.components.filter((component) => component.visible).slice(0, 6)

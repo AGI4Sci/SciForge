@@ -14,10 +14,9 @@ export const SCIENTIFIC_SKILLS_TOOL_SIDE_EFFECTS = {
 export const SCIENTIFIC_PLOTTING_TOOL_SIDE_EFFECTS = {
   scientific_plotting_status: 'read',
   scientific_plotting_style_profiles: 'read',
-  scientific_plotting_research_brief: 'read',
-  scientific_visual_plan: 'read',
   scientific_plotting_map_data: 'read',
   scientific_plotting_render: 'controlled-write',
+  scientific_plotting_composite: 'controlled-write',
   scientific_plotting_prepare_reference: 'controlled-write',
   scientific_plotting_review_packet: 'controlled-write'
 } as const

@@ -1,9 +1,43 @@
+import { z } from 'zod'
 import { encodeSseEvent } from '../sse.js'
+import { jsonResponse, type JsonResponse } from '../response.js'
+import { readJsonBody } from '../read-json-body.js'
 import type { EventBus } from '../../ports/event-bus.js'
 import type { SessionStore } from '../../ports/session-store.js'
 import type { RuntimeEvent } from '../../contracts/events.js'
+import type { RuntimeEventRecorder } from '../../services/runtime-event-recorder.js'
+import { ERRORS } from './runtime-error.js'
 
 const HEARTBEAT_INTERVAL_MS = 15_000
+
+const SyntheticErrorEvent = z.object({
+  kind: z.literal('error'),
+  turnId: z.string().min(1).optional(),
+  itemId: z.string().min(1).optional(),
+  message: z.string().min(1),
+  code: z.string().min(1).optional(),
+  details: z.unknown().optional(),
+  severity: z.enum(['info', 'warning', 'error']).optional()
+})
+
+/** Persist a bearer-authenticated Host verdict into the normal replay log. */
+export async function recordSyntheticErrorEvent(input: {
+  request: Request
+  threadId: string
+  events: RuntimeEventRecorder
+  threadExists: () => Promise<boolean>
+}): Promise<JsonResponse | Response> {
+  if (!await input.threadExists()) return ERRORS.notFound(`thread not found: ${input.threadId}`)
+  const body = await readJsonBody(input.request)
+  if (!body.ok) return body.response
+  const parsed = SyntheticErrorEvent.safeParse(body.value)
+  if (!parsed.success) return ERRORS.validation('invalid synthetic event body', parsed.error.issues)
+  const event = await input.events.record({
+    ...parsed.data,
+    threadId: input.threadId
+  })
+  return jsonResponse(event, 201)
+}
 
 /**
  * Build an SSE response for `GET /v1/threads/{id}/events`.

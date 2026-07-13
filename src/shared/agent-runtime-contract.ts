@@ -137,6 +137,26 @@ export type AgentRuntimeModality = 'text' | 'image'
 
 export type AgentRuntimeToolKind = 'tool_call' | 'command_execution' | 'file_change'
 
+export type AgentRuntimeToolExecutionPhase =
+  | 'requested'
+  | 'dispatched'
+  | 'succeeded'
+  | 'failed'
+  | 'cancelled'
+  | 'unresolved'
+
+export type AgentRuntimeToolFactSource =
+  | 'model_output'
+  | 'runtime_lifecycle'
+  | 'executor_result'
+  | 'host_synthetic'
+
+export type AgentRuntimeToolEvidenceStrength =
+  | 'intent'
+  | 'runtime_lifecycle'
+  | 'executor_receipt'
+  | 'attested'
+
 export type AgentRuntimeErrorSeverity = 'info' | 'warning' | 'error'
 
 export type AgentRuntimeResearchSourceKind = 'arxiv' | 'biorxiv' | 'semantic_scholar' | 'web' | 'cns'
@@ -212,7 +232,14 @@ export type AgentRuntimeModelAuditToolCall = {
   callId?: string
   toolName: string
   arguments?: unknown
+  result?: unknown
   status?: 'running' | 'success' | 'error'
+  phase?: AgentRuntimeToolExecutionPhase
+  factSource?: AgentRuntimeToolFactSource
+  evidenceStrength?: AgentRuntimeToolEvidenceStrength
+  attempt?: number
+  resultDigest?: string
+  errorCode?: string
 }
 
 export type AgentRuntimeModelAuditRequestBodySummary = {
@@ -1050,6 +1077,14 @@ export type AgentRuntimeEvent =
       itemId: string
       status: 'running' | 'success' | 'error'
       toolKind?: AgentRuntimeToolKind
+      callId?: string
+      toolName?: string
+      phase?: AgentRuntimeToolExecutionPhase
+      factSource?: AgentRuntimeToolFactSource
+      evidenceStrength?: AgentRuntimeToolEvidenceStrength
+      attempt?: number
+      resultDigest?: string
+      errorCode?: string
       summary?: string
       detail?: string
       filePath?: string

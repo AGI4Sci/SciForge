@@ -87,7 +87,14 @@ describe('normalizeCodexEvent', () => {
         summary: 'Command output',
         status: 'running',
         toolKind: 'command_execution',
-        detail: 'stdout line'
+        detail: 'stdout line',
+        meta: {
+          callId: 'cmd-1',
+          toolName: 'exec_command',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle'
+        }
       }
     })
   })
@@ -166,12 +173,40 @@ describe('normalizeCodexEvent', () => {
         meta: {
           toolName: 'exec_command',
           callId: 'call-1',
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent',
           command: 'npm test',
           cwd: '/tmp/workspace',
           arguments: {
             cmd: 'npm test',
             workdir: '/tmp/workspace'
           }
+        }
+      }
+    })
+
+    expect(normalizeCodexEvent({
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call-2',
+        name: 'research_search',
+        success: false,
+        output: 'Provider returned a result without an exit-code string.'
+      }
+    }, { threadId: 'thread-1', turnId: 'turn-1' })).toMatchObject({
+      tool: {
+        itemId: 'call-2',
+        summary: 'research_search',
+        status: 'error',
+        meta: {
+          callId: 'call-2',
+          toolName: 'research_search',
+          phase: 'failed',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: false
         }
       }
     })
@@ -192,7 +227,11 @@ describe('normalizeCodexEvent', () => {
         status: 'success',
         detail: 'Process exited with code 0\nOutput:\nok',
         meta: {
-          callId: 'call-1'
+          callId: 'call-1',
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: true
         }
       }
     })
@@ -217,6 +256,9 @@ describe('normalizeCodexEvent', () => {
         meta: {
           toolName: 'local_shell',
           callId: 'shell-1',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle',
           command: 'date'
         }
       }
@@ -345,6 +387,11 @@ describe('normalizeCodexEvent', () => {
         toolKind: 'command_execution',
         detail: 'npm test',
         meta: {
+          callId: 'cmd-1',
+          toolName: 'exec_command',
+          phase: 'dispatched',
+          factSource: 'runtime_lifecycle',
+          evidenceStrength: 'runtime_lifecycle',
           command: 'npm test',
           cwd: '/tmp/workspace'
         }
@@ -376,6 +423,12 @@ describe('normalizeCodexEvent', () => {
         toolKind: 'command_execution',
         detail: 'ok',
         meta: {
+          callId: 'cmd-1',
+          toolName: 'exec_command',
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          success: true,
           command: 'npm test',
           cwd: '/tmp/workspace',
           exitCode: 0

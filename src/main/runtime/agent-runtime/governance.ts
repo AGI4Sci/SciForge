@@ -24,6 +24,7 @@ type ToolStormState = {
   events: ToolFingerprint[]
   steered: Set<string>
   interrupted: Set<string>
+  recoveryAttempts: Map<string, number>
   observedRunningToolIds: Set<string>
 }
 
@@ -31,6 +32,8 @@ type ToolFingerprint = {
   exact: string
   family: string
 }
+
+const MAX_TOOL_STORM_RECOVERY_ATTEMPTS = 2
 
 export class RuntimeGovernanceSupervisor {
   private readonly toolStormStates = new Map<string, ToolStormState>()
@@ -48,10 +51,11 @@ export class RuntimeGovernanceSupervisor {
     if (!threadId || !turnId) return
     if (!settings.toolStorm.enabled) return
     const key = `${capabilities.runtimeId}:${threadId}:${turnId}`
-    const state = this.toolStormStates.get(key) ?? {
+    const state: ToolStormState = this.toolStormStates.get(key) ?? {
       events: [],
       steered: new Set(),
       interrupted: new Set(),
+      recoveryAttempts: new Map(),
       observedRunningToolIds: new Set()
     }
     const runningToolId = runningToolIdentity(event)
@@ -70,7 +74,29 @@ export class RuntimeGovernanceSupervisor {
     const exactCount = countMatches(state.events, 'exact', fingerprint.exact)
     const exactSteerKey = `exact:${fingerprint.exact}`
     const exactInterruptKey = `exact:${fingerprint.exact}`
-    if (exactCount >= hardThreshold && !state.interrupted.has(exactInterruptKey)) {
+    if (exactCount >= hardThreshold) {
+      const recoveryAttempt = state.recoveryAttempts.get(exactInterruptKey) ?? 0
+      if (recoveryAttempt < MAX_TOOL_STORM_RECOVERY_ATTEMPTS) {
+        const nextRecoveryAttempt = recoveryAttempt + 1
+        state.recoveryAttempts.set(exactInterruptKey, nextRecoveryAttempt)
+        state.events = state.events.filter((item) => item.exact !== fingerprint.exact)
+        void controls.steerTurn({
+          runtimeId: capabilities.runtimeId,
+          threadId,
+          turnId,
+          text: toolStormRecoveryInstruction(event, fingerprint.family, nextRecoveryAttempt)
+        }).catch(() => undefined)
+        void publishToolStormEvent(
+          controls,
+          event,
+          capabilities.runtimeId,
+          'recovery',
+          fingerprint.family,
+          nextRecoveryAttempt
+        )
+        return
+      }
+      if (state.interrupted.has(exactInterruptKey)) return
       state.interrupted.add(exactInterruptKey)
       void controls.interruptTurn({
         runtimeId: capabilities.runtimeId,
@@ -87,7 +113,10 @@ export class RuntimeGovernanceSupervisor {
         runtimeId: capabilities.runtimeId,
         threadId,
         turnId,
-        text: `Stop repeating the same ${fingerprint.family} tool call. Use the results already available and answer the user directly.`
+        text: [
+          `The runtime has not observed a successful terminal receipt for the repeated ${fingerprint.family} tool call.`,
+          'Inspect the latest tool output or error, do not repeat the identical call, and continue the original task using a different valid approach.'
+        ].join(' ')
       }).catch(() => undefined)
       void publishToolStormEvent(controls, event, capabilities.runtimeId, 'soft', fingerprint.family)
     }
@@ -268,8 +297,9 @@ async function publishToolStormEvent(
   controls: RuntimeGovernanceControls,
   source: AgentRuntimeEvent,
   runtimeId: AgentRuntimeId,
-  level: 'soft' | 'hard',
-  family: string
+  level: 'soft' | 'recovery' | 'hard',
+  family: string,
+  recoveryAttempt?: number
 ): Promise<void> {
   await controls.publishSyntheticEvent({
     kind: 'runtime_status',
@@ -278,13 +308,16 @@ async function publishToolStormEvent(
     turnId: source.turnId,
     phase: 'tool_running',
     message: level === 'hard'
-      ? `Runtime guard interrupted repeated ${family} tool activity.`
-      : `Runtime guard steered repeated ${family} tool activity.`,
+      ? `Runtime guard interrupted repeated ${family} tool activity after recovery was exhausted.`
+      : level === 'recovery'
+        ? `Runtime guard supplied missing-receipt context and asked the model to recover repeated ${family} tool activity.`
+        : `Runtime guard steered repeated ${family} tool activity.`,
     metadata: {
       synthetic: true,
       guard: 'toolStorm',
       level,
-      family
+      family,
+      ...(recoveryAttempt ? { recoveryAttempt } : {})
     }
   })
   if (level === 'hard') {
@@ -297,10 +330,41 @@ async function publishToolStormEvent(
       recoverable: true,
       severity: 'error',
       code: 'runtime_tool_storm_interrupted',
-      message: `Runtime guard stopped this turn after repeated ${family} tool activity.`,
-      detail: `The runtime interrupted the turn to prevent a repeated tool-call loop. Tool family: ${family}.`
+      message: `Runtime guard stopped this turn after repeated ${family} tool activity could not be recovered.`,
+      detail: `The runtime supplied ${MAX_TOOL_STORM_RECOVERY_ATTEMPTS} recovery instructions before interrupting the repeated tool-call loop. Tool family: ${family}.`
     })
   }
+}
+
+function toolStormRecoveryInstruction(
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>,
+  family: string,
+  recoveryAttempt: number
+): string {
+  const meta = recordValue(event.meta)
+  const callId = stringValue(event.callId) ||
+    stringValue(meta.callId) ||
+    stringValue(meta.toolCallId) ||
+    event.itemId.trim()
+  const errorCode = stringValue(event.errorCode) || stringValue(meta.errorCode)
+  const detail = boundedRecoveryDetail(event.detail || stringValue(meta.error) || stringValue(meta.message))
+  const evidence = [
+    `tool family: ${family}`,
+    callId ? `latest call: ${callId}` : '',
+    errorCode ? `error code: ${errorCode}` : '',
+    detail ? `latest detail: ${detail}` : '',
+    'receipt status: no successful terminal executor receipt observed'
+  ].filter(Boolean).join('; ')
+  return [
+    `Runtime recovery ${recoveryAttempt}/${MAX_TOOL_STORM_RECOVERY_ATTEMPTS}: ${evidence}.`,
+    'Use this failure information to diagnose the problem. Do not repeat the identical call.',
+    'Try a different tool, corrected arguments, or another verifiable method, then continue and complete the original user task.',
+    'Only report a blocker after the available recovery paths have genuinely failed.'
+  ].join(' ')
+}
+
+function boundedRecoveryDetail(value: string): string {
+  return value.trim().replace(/\s+/g, ' ').slice(0, 800)
 }
 
 function countMatches<T extends keyof ToolFingerprint>(

@@ -549,11 +549,19 @@ const client = new Client({ name: 'scientific-plotting-style-regression', versio
 await client.connect(transport, { timeout: 30_000 })
 
 const controlledPlotPlan = {
-  route: 'deterministic_plot',
+  planId: 'visual-plan-style-regression-code',
+  route: 'code',
   routeLocked: true,
   rationale: 'Regression artifacts contain data-bearing marks whose inputs and labels must remain reproducible.',
+  sourceArtifacts: [],
   reproducibleInputs: ['structured data', 'labels', 'template or template selection', 'style specification'],
-  truthLockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+  lockedElements: ['data values', 'category names', 'axis labels', 'statistics'],
+  modelOwnedElements: [],
+  contextStatus: 'ready',
+  contextStopReason: 'sufficient',
+  contextEvidenceIds: [],
+  unresolvedContext: [],
+  releaseCeiling: 'publication_ready',
   fallbackPolicy: 'fail_closed'
 }
 
@@ -601,7 +609,7 @@ for (const item of referencePreparationChecks) {
 const unifiedMappingResponse = await client.callTool({
   name: 'scientific_plotting_map_data',
   arguments: {
-    scientificVisualPlan: controlledPlotPlan,
+    visualPlan: controlledPlotPlan,
     task: 'Use the reference paper style to draw a benchmark comparison bar chart.',
     figureId: 'v2-scientific-plotting-style-transfer',
     referencePath: 'tmp/figure-style-paper-smoke/references/nature-2021-alphafold-fig2.png',
@@ -649,7 +657,7 @@ for (const item of cases) {
   const response = await client.callTool({
     name: 'scientific_plotting_render',
     arguments: {
-      scientificVisualPlan: controlledPlotPlan,
+      visualPlan: controlledPlotPlan,
       template: item.template,
       figureId: `regression-${item.id}`,
       labels: item.labels,
@@ -681,7 +689,7 @@ for (const item of mappedRenderChecks) {
   const mappingResponse = await client.callTool({
     name: 'scientific_plotting_map_data',
     arguments: {
-      scientificVisualPlan: controlledPlotPlan,
+      visualPlan: controlledPlotPlan,
       task: item.task,
       data: item.data,
       labels: item.labels,

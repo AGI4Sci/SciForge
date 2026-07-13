@@ -882,6 +882,7 @@
   "runtimeUnhealthy": "The local runtime is currently unavailable. Check the port, token, or runtime status.",
   "runtimeAuthRequired": "The local runtime requires a bearer token for thread APIs. Add the runtime token in Settings, or restart the GUI so it can manage the local runtime again.",
   "runtimePortConflict": "The runtime port is already in use. Free that port, or choose another port in Settings.",
+  "runtimeExecutionBlocked": "Blocked / unverified execution. The runtime did not provide trusted proof that the required tool action completed.",
   "runtimeActionFailed": "Runtime action failed. Please try again.",
   "failedSendRetryRequired": "The turn did not start. Your message is preserved for a safe retry. {{message}}",
   "failedSendRecoveryPrompt": "Continue responding to the immediately preceding user message. Do not treat this recovery instruction as a new request.",

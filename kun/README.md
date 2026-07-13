@@ -323,6 +323,7 @@ The HTTP server exposes the following routes under `/v1/*`:
 | POST | `/v1/threads/{id}/turns/{turnId}/interrupt` | abort a turn |
 | POST | `/v1/threads/{id}/compact` | fold old history |
 | GET | `/v1/threads/{id}/events?since_seq=N` | SSE backlog + live |
+| POST | `/v1/threads/{id}/events` | persist an authenticated Host synthetic error for replay |
 | POST | `/v1/approvals/{approvalId}` | allow/deny |
 | POST | `/v1/attachments` | upload an image attachment as base64 |
 | GET | `/v1/attachments/diagnostics` | attachment store status |

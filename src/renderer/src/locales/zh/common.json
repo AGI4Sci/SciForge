@@ -882,6 +882,7 @@
   "runtimeUnhealthy": "本地运行时当前不可用。请检查端口、令牌或运行状态。",
   "runtimeAuthRequired": "本地运行时要求 Bearer Token 才能访问会话接口。请在设置中填写运行时令牌，或重启 GUI 让它重新管理本地运行时。",
   "runtimePortConflict": "运行时端口已被占用。请释放该端口，或在设置中更换端口。",
+  "runtimeExecutionBlocked": "已阻止 / 执行未验证：运行时没有提供可信凭证，无法证明所需工具操作已经完成。",
   "runtimeActionFailed": "运行时操作失败。请稍后重试。",
   "failedSendRetryRequired": "回合未能启动；消息已保留，可安全重试。{{message}}",
   "failedSendRecoveryPrompt": "请继续处理紧邻的上一条用户消息，不要把本条恢复指令视为新的需求。",

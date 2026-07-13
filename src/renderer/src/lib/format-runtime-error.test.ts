@@ -45,4 +45,30 @@ describe('format runtime error', () => {
     expect(view.code).toBe('provider_auth_blocked')
     expect(view.settingsAction).toBe('agents')
   })
+
+  it.each([
+    'runtime_execution_incomplete',
+    'runtime_execution_claim_unverified',
+    'runtime_visual_execution_missing'
+  ])('labels %s as blocked and unverified execution', (code) => {
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code,
+      message: 'The model claimed the required tool action completed without a trusted receipt.',
+      severity: 'error'
+    })))
+
+    expect(view.summary).toBe(i18n.t('common:runtimeExecutionBlocked'))
+    expect(view.code).toBe(code)
+    expect(view.detail).toContain('The model claimed the required tool action completed')
+    expect(view.settingsAction).toBeUndefined()
+  })
+
+  it('localizes execution integrity failures in Chinese', async () => {
+    await i18n.changeLanguage('zh')
+
+    expect(formatRuntimeError(new Error(JSON.stringify({
+      code: 'runtime_execution_incomplete',
+      message: 'missing receipt'
+    })))).toBe('已阻止 / 执行未验证：运行时没有提供可信凭证，无法证明所需工具操作已经完成。')
+  })
 })

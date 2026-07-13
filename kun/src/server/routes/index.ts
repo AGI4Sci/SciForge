@@ -25,7 +25,7 @@ import {
   steerTurn
 } from './turns.js'
 import { startReview } from './review.js'
-import { buildEventStreamResponse } from './events.js'
+import { buildEventStreamResponse, recordSyntheticErrorEvent } from './events.js'
 import { decideApproval } from './approvals.js'
 import { resolveUserInput } from './user-inputs.js'
 import { resumeSession } from './sessions.js'
@@ -73,7 +73,7 @@ import type { ServerRuntime } from './server-runtime.js'
  * - `POST /v1/threads/{id}/turns/{turnId}/steer` (auth)
  * - `POST /v1/threads/{id}/turns/{turnId}/interrupt` (auth)
  * - `POST /v1/threads/{id}/compact` (auth)
- * - `GET /v1/threads/{id}/events` (auth)
+ * - `GET/POST /v1/threads/{id}/events` (auth; POST accepts Host synthetic errors)
  * - `GET /v1/threads/{id}/children` (auth)
  * - `GET /v1/threads/{id}/children/{childId}/transcript` (auth)
  * - `POST /v1/approvals/{id}` (auth)
@@ -239,6 +239,15 @@ export function buildRouter(runtime: ServerRuntime): Router {
       eventBus: runtime.eventBus,
       sessionStore: runtime.sessionStore,
       allocateSeq: runtime.allocateSeq
+    })
+  })
+  router.add('POST', '/v1/threads/:id/events', async (request, ctx) => {
+    if (!authorize(request, runtime)) return ERRORS.unauthorized()
+    return recordSyntheticErrorEvent({
+      request,
+      threadId: ctx.params.id,
+      events: runtime.events,
+      threadExists: async () => Boolean(await runtime.threadService.get(ctx.params.id))
     })
   })
   router.add('GET', '/v1/threads/:id/children', async (request, ctx) => {

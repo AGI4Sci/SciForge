@@ -124,12 +124,29 @@ test('requests a managed visual capture and returns the verified PNG resource', 
   const service = createWorkspaceIntelService({
     visibleContextPath,
     visualCaptureTimeoutMs: 1_000,
-    visualCapturePollIntervalMs: 5
+    visualCapturePollIntervalMs: 5,
+    visualInspector: async ({ imagePath, prompt, truthLockedElements }) => ({
+      status: 'inspected',
+      provider: 'model-router-vision',
+      model: 'sciforge-model-router',
+      inspectedAt: '2026-07-13T00:00:00.000Z',
+      captureSha256: 'a'.repeat(64),
+      observationSha256: 'b'.repeat(64),
+      attestation: `sha256:${'c'.repeat(64)}`,
+      prompt: prompt ?? '',
+      summary: `Inspected ${imagePath}`,
+      visibleFacts: truthLockedElements ?? [],
+      layoutIssues: ['Description column is too narrow.'],
+      recommendedActions: ['Widen the second column.'],
+      confidence: 0.9
+    })
   })
   const capturePromise = service.visualCapture({
     scope: 'target',
     componentId: 'right-sidebar.file-preview',
-    targetId: 'current-page'
+    targetId: 'current-page',
+    inspectionPrompt: 'Inspect the final table layout.',
+    truthLockedElements: ['Capability is the first column.']
   })
   const requestName = await waitForFileName(requestDirectory, '.request.json')
   const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as {
@@ -174,7 +191,101 @@ test('requests a managed visual capture and returns the verified PNG resource', 
   if (!result.ok) return
   assert.equal(result.resource.path, capturePath)
   assert.equal(result.resource.target?.page, 10)
+  assert.equal(result.inspection?.prompt, 'Inspect the final table layout.')
+  assert.deepEqual(result.inspection?.visibleFacts, ['Capability is the first column.'])
+  assert.match(result.inspection?.attestation ?? '', /^sha256:[a-f0-9]{64}$/u)
   assert.deepEqual(await readdir(requestDirectory), [])
+})
+
+test('fails closed when capture succeeds but semantic visual inspection is unavailable', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-unavailable-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
+  const capturePath = join(tempRoot, 'visible-context', 'captures', 'latest.png')
+  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
+  await mkdir(join(tempRoot, 'visible-context', 'captures'), { recursive: true })
+  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  const service = createWorkspaceIntelService({
+    visibleContextPath,
+    visualCaptureTimeoutMs: 1_000,
+    visualCapturePollIntervalMs: 5
+  })
+
+  const capturePromise = service.visualCapture({ scope: 'window' })
+  const requestName = await waitForFileName(requestDirectory, '.request.json')
+  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
+  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
+    schemaVersion: 1,
+    requestId: request.requestId,
+    completedAt: new Date().toISOString(),
+    ok: true,
+    capture: {
+      kind: 'visualSnapshot',
+      role: 'window',
+      path: capturePath,
+      mimeType: 'image/png',
+      capturedAt: new Date().toISOString(),
+      width: 1280,
+      height: 720,
+      scaleFactor: 2,
+      windowId: 'window-1',
+      revision: 1
+    }
+  }), 'utf8')
+
+  const result = await capturePromise
+
+  assert.equal(result.ok, false)
+  if (result.ok) return
+  assert.equal(result.error.code, 'visual_inspection_unavailable')
+  assert.match(result.error.message, /semantic visual inspection is unavailable/iu)
+})
+
+test('allows explicit capture-only diagnostics without treating them as semantic review', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-capture-only-'))
+  t.after(async () => {
+    await rm(tempRoot, { recursive: true, force: true })
+  })
+  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
+  const capturePath = join(tempRoot, 'visible-context', 'captures', 'latest.png')
+  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
+  await mkdir(join(tempRoot, 'visible-context', 'captures'), { recursive: true })
+  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+  const service = createWorkspaceIntelService({
+    visibleContextPath,
+    visualCaptureTimeoutMs: 1_000,
+    visualCapturePollIntervalMs: 5
+  })
+
+  const capturePromise = service.visualCapture({ scope: 'window', requireSemanticInspection: false })
+  const requestName = await waitForFileName(requestDirectory, '.request.json')
+  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
+  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
+    schemaVersion: 1,
+    requestId: request.requestId,
+    completedAt: new Date().toISOString(),
+    ok: true,
+    capture: {
+      kind: 'visualSnapshot',
+      role: 'window',
+      path: capturePath,
+      mimeType: 'image/png',
+      capturedAt: new Date().toISOString(),
+      width: 1280,
+      height: 720,
+      scaleFactor: 2,
+      windowId: 'window-1',
+      revision: 1
+    }
+  }), 'utf8')
+
+  const result = await capturePromise
+
+  assert.equal(result.ok, true)
+  if (!result.ok) return
+  assert.equal(result.inspection, undefined)
 })
 
 test('bounds visual capture waits and reports an actionable timeout', async (t) => {

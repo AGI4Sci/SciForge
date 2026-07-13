@@ -100,13 +100,31 @@ export class ModelRequestAuditRecorder {
         record.streamOutput.reasoning = appendText(record.streamOutput.reasoning, event.text)
         return
       case 'tool_event':
+        {
+          const meta = event.meta
         record.streamOutput.toolCalls = mergeToolCall(record.streamOutput.toolCalls, {
-          callId: stringMeta(event.meta, 'callId') ?? event.itemId,
-          toolName: stringMeta(event.meta, 'toolName') ?? event.summary ?? 'tool',
+          callId: event.callId ?? stringMeta(meta, 'callId') ?? event.itemId,
+          toolName: event.toolName ?? stringMeta(meta, 'toolName') ?? event.summary ?? 'tool',
           status: event.status,
-          arguments: redactValue(event.meta)
+          arguments: redactValue(meta?.arguments ?? meta),
+          ...(meta?.output !== undefined || meta?.result !== undefined
+            ? { result: redactValue(meta.output ?? meta.result) }
+            : {}),
+          ...(event.phase ?? stringMeta(meta, 'phase')
+            ? { phase: (event.phase ?? stringMeta(meta, 'phase')) as AgentRuntimeModelAuditToolCall['phase'] }
+            : {}),
+          ...(event.factSource ?? stringMeta(meta, 'factSource')
+            ? { factSource: (event.factSource ?? stringMeta(meta, 'factSource')) as AgentRuntimeModelAuditToolCall['factSource'] }
+            : {}),
+          ...(event.evidenceStrength ?? stringMeta(meta, 'evidenceStrength')
+            ? { evidenceStrength: (event.evidenceStrength ?? stringMeta(meta, 'evidenceStrength')) as AgentRuntimeModelAuditToolCall['evidenceStrength'] }
+            : {}),
+          ...(event.attempt !== undefined ? { attempt: event.attempt } : {}),
+          ...(event.resultDigest ? { resultDigest: event.resultDigest } : {}),
+          ...(event.errorCode ? { errorCode: event.errorCode } : {})
         })
         return
+        }
       case 'item_snapshot':
         if (event.item.kind === 'tool') {
           record.streamOutput.toolCalls = mergeToolCall(record.streamOutput.toolCalls, toolCallFromItem(event.item))
@@ -288,11 +306,27 @@ function summarizeRequestBody(
 }
 
 function toolCallFromItem(item: AgentRuntimeItem): AgentRuntimeModelAuditToolCall {
+  const meta = item.meta
   return {
-    callId: stringMeta(item.meta, 'callId') ?? item.id,
-    toolName: stringMeta(item.meta, 'toolName') ?? item.summary ?? 'tool',
+    callId: stringMeta(meta, 'callId') ?? item.id,
+    toolName: stringMeta(meta, 'toolName') ?? item.summary ?? 'tool',
     status: auditToolStatus(item.status),
-    arguments: redactValue(item.meta)
+    arguments: redactValue(meta?.arguments ?? meta),
+    ...(meta?.output !== undefined || meta?.result !== undefined
+      ? { result: redactValue(meta.output ?? meta.result) }
+      : {}),
+    ...(stringMeta(meta, 'phase')
+      ? { phase: stringMeta(meta, 'phase') as AgentRuntimeModelAuditToolCall['phase'] }
+      : {}),
+    ...(stringMeta(meta, 'factSource')
+      ? { factSource: stringMeta(meta, 'factSource') as AgentRuntimeModelAuditToolCall['factSource'] }
+      : {}),
+    ...(stringMeta(meta, 'evidenceStrength')
+      ? { evidenceStrength: stringMeta(meta, 'evidenceStrength') as AgentRuntimeModelAuditToolCall['evidenceStrength'] }
+      : {}),
+    ...(typeof meta?.attempt === 'number' ? { attempt: meta.attempt } : {}),
+    ...(stringMeta(meta, 'resultDigest') ? { resultDigest: stringMeta(meta, 'resultDigest') } : {}),
+    ...(stringMeta(meta, 'errorCode') ? { errorCode: stringMeta(meta, 'errorCode') } : {})
   }
 }
 
@@ -310,8 +344,23 @@ function mergeToolCall(
   const index = calls.findIndex((call) => call.callId && call.callId === next.callId)
   if (index === -1) return [...calls, next].slice(-100)
   const merged = [...calls]
-  merged[index] = { ...merged[index], ...next }
+  const current = merged[index]
+  const nextName = next.toolName === 'tool' ? undefined : next.toolName
+  const keepCurrentTerminal = isTerminalAuditPhase(current.phase) && !isTerminalAuditPhase(next.phase)
+  merged[index] = {
+    ...current,
+    ...next,
+    toolName: nextName ?? current.toolName,
+    arguments: current.arguments ?? next.arguments,
+    ...(keepCurrentTerminal
+      ? { status: current.status, phase: current.phase, factSource: current.factSource, evidenceStrength: current.evidenceStrength }
+      : {})
+  }
   return merged
+}
+
+function isTerminalAuditPhase(phase: AgentRuntimeModelAuditToolCall['phase']): boolean {
+  return phase === 'succeeded' || phase === 'failed' || phase === 'cancelled' || phase === 'unresolved'
 }
 
 function stringMeta(meta: Record<string, unknown> | undefined, key: string): string | undefined {

@@ -11,6 +11,11 @@ import {
 import { GUI_WORKSPACE_INTEL_MCP_LAUNCH_FLAG } from './workspace-intel-mcp-server'
 import { WorkspaceIntelToolNames } from '../../packages/workers/workspace-intel/src/contract'
 import {
+  MODEL_ROUTER_BASE_URL_ENV,
+  MODEL_ROUTER_RUNTIME_API_KEY_ENV,
+  MODEL_ROUTER_VISUAL_MODEL_ENV
+} from '../../packages/workers/workspace-intel/src/visual-inspection'
+import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
@@ -86,6 +91,25 @@ describe('workspace intel MCP config', () => {
       KEEP_ME: 'yes',
       DROP_ME: 'no',
       ELECTRON_RUN_AS_NODE: '1'
+    })
+  })
+
+  it('passes local Model Router vision settings to every workspace-intel runtime launch', () => {
+    const settings = createSettings('/tmp/project')
+    const modelRouter = defaultModelRouterSettings()
+    settings.modelRouter = {
+      ...modelRouter,
+      baseUrl: 'http://127.0.0.1:4892/v1',
+      runtimeApiKey: 'runtime-test-key',
+      publicModelAlias: 'public-vision-model'
+    }
+
+    expect(workspaceIntelMcpEnv({ KEEP_ME: 'yes' }, settings)).toEqual({
+      KEEP_ME: 'yes',
+      ELECTRON_RUN_AS_NODE: '1',
+      [MODEL_ROUTER_BASE_URL_ENV]: 'http://127.0.0.1:4892/v1',
+      [MODEL_ROUTER_RUNTIME_API_KEY_ENV]: 'runtime-test-key',
+      [MODEL_ROUTER_VISUAL_MODEL_ENV]: 'public-vision-model'
     })
   })
 

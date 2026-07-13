@@ -68,7 +68,25 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   ].join('\n'), 'utf8')
   await writeFile(join(tempRoot, 'outside.txt'), 'outside\n', 'utf8')
 
-  const service = createWorkspaceIntelService({ workspaceRoot, visibleContextPath })
+  const service = createWorkspaceIntelService({
+    workspaceRoot,
+    visibleContextPath,
+    visualInspector: async ({ prompt }) => ({
+      status: 'inspected',
+      provider: 'model-router-vision',
+      model: 'sciforge-model-router',
+      inspectedAt: '2026-07-13T00:00:00.000Z',
+      captureSha256: 'a'.repeat(64),
+      observationSha256: 'b'.repeat(64),
+      attestation: `sha256:${'c'.repeat(64)}`,
+      prompt: prompt ?? 'Inspect the captured SciForge interface.',
+      summary: 'The captured window is visible.',
+      visibleFacts: ['The preview occupies the right sidebar.'],
+      layoutIssues: [],
+      recommendedActions: [],
+      confidence: 0.98
+    })
+  })
   const server = createWorkspaceIntelMcpServer(service)
   const client = new Client({ name: 'workspace-intel-test', version: '0.1.0' })
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
@@ -149,6 +167,9 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const structuredCapture = asRecord(capture.structuredContent)
   assert.equal(structuredCapture.ok, true)
   assert.equal(asRecord(structuredCapture.resource).kind, 'visualSnapshot')
+  assert.match(String(asRecord(structuredCapture.inspection).attestation), /^sha256:[a-f0-9]{64}$/u)
+  const textContent = capture.content.find((item) => item.type === 'text')
+  assert.match(textContent?.type === 'text' ? textContent.text : '', /Semantic visual inspection completed/u)
   const imageContent = capture.content.find((item) => item.type === 'image')
   assert.equal(imageContent?.type, 'image')
   if (imageContent?.type === 'image') {

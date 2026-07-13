@@ -858,7 +858,10 @@ export function FloatingComposer({
   )
   const inputHistory = useMemo(
     () => remembersComposerInput
-      ? mergeComposerInputHistory(rememberedInputHistory, activeThreadInputHistory)
+      // Thread blocks are a fallback for older or externally-created messages.
+      // Persisted composer memory is appended last because it tracks the actual
+      // send order across threads and must win recency when entries overlap.
+      ? mergeComposerInputHistory(activeThreadInputHistory, rememberedInputHistory)
       : activeThreadInputHistory,
     [activeThreadInputHistory, rememberedInputHistory, remembersComposerInput]
   )

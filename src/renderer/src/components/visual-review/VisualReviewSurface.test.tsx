@@ -8,6 +8,7 @@ import {
   normalizedPointFromRect,
   type VisualReviewAnnotation
 } from './VisualReviewSurface'
+import { VisualReviewPanel } from './VisualReviewPanel'
 
 const source = {
   id: 'source-v1',
@@ -63,6 +64,17 @@ describe('visual review normalized geometry', () => {
 })
 
 describe('VisualReviewSurface', () => {
+  it('carves the desktop review panel out of the Electron window drag region', () => {
+    const markup = renderToStaticMarkup(createElement(VisualReviewPanel, {
+      workspaceRoot: '/tmp/project',
+      documentId: 'figure-1',
+      onCollapse: vi.fn(),
+      onSendReviewRequest: vi.fn()
+    }))
+
+    expect(markup).toContain('class="ds-no-drag ')
+  })
+
   it('renders an annotation-first surface without an external editor dependency', () => {
     const markup = renderToStaticMarkup(createElement(VisualReviewSurface, {
       source,

@@ -23,6 +23,7 @@ import {
   createWorkspaceIntelService,
   type WorkspaceIntelService
 } from './service.js'
+import type { VisualInspectionEvidence } from './visual-inspection.js'
 
 type McpToolResult = {
   content: Array<
@@ -63,16 +64,22 @@ export function createWorkspaceIntelMcpServer(
   })
 
   server.registerTool('gui_visual_capture', {
-    description: 'Capture the current SciForge window or one visual target published by gui_visible_context. Returns the captured PNG as standard MCP image content plus structured capture metadata; arbitrary coordinates are not accepted.',
+    description: 'Capture and semantically inspect the current SciForge window or one visual target published by gui_visible_context. Semantic inspection is enabled by default and runs through Model Router vision before success, returning an attested textual observation plus the PNG. Set requireSemanticInspection=false only for capture-only diagnostics; capture-only results do not satisfy visual QA. Arbitrary coordinates are not accepted.',
     inputSchema: VisualCaptureInputSchema,
     annotations: READ_ONLY_TOOL_ANNOTATIONS
   }, async (args) => {
     const result = await service.visualCapture(args)
     if (!result.ok) return toolResult(result, result.error.message)
     const bytes = await readFile(result.resource.path)
+    const inspectionText = result.inspection
+      ? visualInspectionText(result.inspection)
+      : 'Semantic visual inspection was explicitly disabled; this capture is not visual QA evidence.'
     return {
       content: [
-        { type: 'text', text: `Captured ${result.resource.role} visual context to ${result.resource.path}.` },
+        {
+          type: 'text',
+          text: `Captured ${result.resource.role} visual context to ${result.resource.path}.\n${inspectionText}`
+        },
         { type: 'image', data: bytes.toString('base64'), mimeType: result.resource.mimeType }
       ],
       structuredContent: result
@@ -195,6 +202,18 @@ export function createWorkspaceIntelMcpServer(
   })
 
   return server
+}
+
+function visualInspectionText(inspection: VisualInspectionEvidence): string {
+  const lines = [
+    `Semantic visual inspection completed. Attestation: ${inspection.attestation}`,
+    `Summary: ${inspection.summary}`,
+    `Confidence: ${inspection.confidence}`
+  ]
+  if (inspection.visibleFacts.length) lines.push(`Visible facts: ${inspection.visibleFacts.join(' | ')}`)
+  if (inspection.layoutIssues.length) lines.push(`Layout issues: ${inspection.layoutIssues.join(' | ')}`)
+  if (inspection.recommendedActions.length) lines.push(`Recommended actions: ${inspection.recommendedActions.join(' | ')}`)
+  return lines.join('\n')
 }
 
 export async function startWorkspaceIntelMcpServer(

@@ -108,7 +108,9 @@ export class ResearchSearchService {
         'Use this tool result as internal evidence.',
         'Answer in the user language.',
         'Summarize the main findings, cite titles/URLs where useful, and mention provider issues or gaps.',
-        'Do not call research_search again unless a required source failed or the user explicitly asks for a follow-up search.',
+        'When this search resolves a visual_generate context question, merge the evidence into the retained context state and call visual_generate again.',
+        'A follow-up research_search is appropriate while budget remains and it targets a specific unresolved question with expected information gain.',
+        'Do not repeat an unchanged query or discard evidence and resolved questions from earlier rounds.',
         'Do not paste raw structured JSON unless the user explicitly requested raw output.'
       ].join(' '),
       interpretedIntent: plan.interpretedIntent,

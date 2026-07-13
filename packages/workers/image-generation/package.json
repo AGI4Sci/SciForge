@@ -21,6 +21,7 @@
     "./contract": "./src/contract.ts",
     "./mcp-server": "./src/mcp-server.ts",
     "./engine": "./src/image-generation-engine.ts",
+    "./visual-production-planner": "./src/visual-production-planner.ts",
     "./service": "./src/service.ts"
   },
   "files": [

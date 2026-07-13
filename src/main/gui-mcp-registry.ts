@@ -533,7 +533,7 @@ function managedRuntimeServerConfigs(
       id: GUI_WORKSPACE_INTEL_MCP_SERVER_NAME,
       command: resolveWorkspaceIntelMcpCommand(input.workspaceIntelMcp.launch),
       args: buildWorkspaceIntelMcpArgs(workspaceIntelSettings, input.workspaceIntelMcp.launch),
-      env: workspaceIntelMcpEnv(),
+      env: workspaceIntelMcpEnv({}, workspaceIntelSettings),
       timeoutMs: WORKSPACE_INTEL_MCP_TIMEOUT_MS,
       enabledTools: workspaceIntelMcpEnabledTools()
     })

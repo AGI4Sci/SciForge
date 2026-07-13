@@ -3,15 +3,15 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
+  type ScientificPlottingCompositeRequest,
   type ScientificPlottingDataMappingRequest,
   type ScientificPlottingPrepareReferenceRequest,
   type ScientificPlottingRenderRequest,
-  type ScientificPlottingResearchBriefRequest,
   type ScientificPlottingReviewPacketRequest,
   type ScientificPlottingStyleProfilesRequest,
 } from './types'
 import {
-  createScientificPlottingResearchBrief,
+  compositeScientificPlotLayers,
   createScientificPlottingReviewPacket,
   getScientificPlottingStatus,
   listScientificPlottingStyleProfiles,
@@ -19,7 +19,6 @@ import {
   prepareScientificPlottingReference,
   renderScientificPlot
 } from './scientific-plotting-engine'
-import { planScientificVisual } from './scientific-visual-planner'
 import { SCIENTIFIC_PLOTTING_MCP_FLAG } from './contract'
 
 type McpLaunchOptions = {
@@ -41,11 +40,19 @@ const CONTROLLED_WRITE_ANNOTATIONS = {
 } as const
 
 const controlledPlottingPlanSchema = z.object({
-  route: z.enum(['deterministic_plot', 'hybrid_composite']),
+  planId: z.string().trim().min(1).max(160),
+  route: z.enum(['code', 'hybrid']),
   routeLocked: z.literal(true),
   rationale: z.string().trim().min(1).max(2000),
+  sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64),
   reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
-  truthLockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
+  lockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
+  modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
+  contextStatus: z.enum(['ready', 'budget_exhausted']),
+  contextStopReason: z.enum(['sufficient', 'policy_closed', 'round_limit', 'cost_limit', 'token_limit', 'elapsed_time_limit', 'no_information_gain']),
+  contextEvidenceIds: z.array(z.string().trim().min(1).max(160)).max(128),
+  unresolvedContext: z.array(z.string().trim().min(1).max(2000)).max(64),
+  releaseCeiling: z.enum(['publication_ready', 'draft_ready']),
   fallbackPolicy: z.literal('fail_closed')
 }).strict()
 
@@ -87,7 +94,7 @@ function workspaceRootFor(inputWorkspaceRoot: string | undefined, options: McpLa
   return workspaceRoot
 }
 
-const TEMPLATE_SELECTION_DESCRIPTION = 'Template selection guide: use scientific_plotting for structured numeric/table/matrix data and paper-figure draft/spec planning. Use image_generation for final flowcharts, model architecture diagrams, mechanisms, infographics, covers, posters, or illustrative diagrams where the image model should choose layout/icons/composition. Within scientific_plotting: flowchart/schematic-grid are draft structures only and scientific_plotting_render will return a draft handoff instead of a final PNG; use bar/errorbar-bar for categorical summaries; use line/scatter for measured x-y data; use heatmap/attention-map for matrices; use box-violin or histogram-density for distributions; use multi-panel only when combining controlled numeric/statistical panels.'
+const TEMPLATE_SELECTION_DESCRIPTION = 'Template selection guide: use scientific_plotting for code-owned structured plots and diagrams selected by the locked visual_generate plan. Use flowchart for compact node-edge processes, schematic-grid for explicit conceptual layouts, bar/errorbar-bar for categorical summaries, line/scatter for measured x-y data, heatmap/attention-map for matrices, box-violin or histogram-density for distributions, and multi-panel for controlled combinations.'
 
 const templateSchema = z.enum(SCIENTIFIC_PLOTTING_TEMPLATES).describe(TEMPLATE_SELECTION_DESCRIPTION)
 const cropBoxSchema = z.object({
@@ -163,94 +170,12 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     }
   })
 
-  server.registerTool('scientific_plotting_research_brief', {
-    title: 'Build Scientific Figure Research Brief',
-    description: 'Create a read-only CNS/domain-aware paper-figure brief before rendering: figure need classification, reference-paper strategy, figure conclusion, evidence logic, archetype, data requirements, and next controlled tool. Does not search the web, execute scripts, or write files.',
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      task: z.string().trim().min(1),
-      domain: z.string().trim().max(120).optional(),
-      targetVenue: z.string().trim().max(120).optional(),
-      dataSummary: z.string().trim().max(4000).optional(),
-      referenceFigureNotes: z.string().trim().max(4000).optional(),
-      candidatePapers: z.array(z.object({
-        title: z.string().trim().min(1).max(500),
-        venue: z.string().trim().max(120).optional(),
-        year: z.number().int().min(1800).max(2200).optional(),
-        source: z.string().trim().max(160).optional(),
-        url: z.string().trim().max(2048).optional(),
-        doi: z.string().trim().max(240).optional(),
-        figureHints: z.array(z.string().trim().max(300)).max(12).optional(),
-        notes: z.string().trim().max(1200).optional()
-      }).strict()).max(8).optional(),
-      maxPapers: z.number().int().min(0).max(8).optional()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  }, async (input) => {
-    try {
-      const request: ScientificPlottingResearchBriefRequest = {
-        ...(input.workspaceRoot || options.workspaceRoot ? { workspaceRoot: input.workspaceRoot ?? options.workspaceRoot } : {}),
-        task: input.task,
-        ...(input.domain ? { domain: input.domain } : {}),
-        ...(input.targetVenue ? { targetVenue: input.targetVenue } : {}),
-        ...(input.dataSummary ? { dataSummary: input.dataSummary } : {}),
-        ...(input.referenceFigureNotes ? { referenceFigureNotes: input.referenceFigureNotes } : {}),
-        ...(input.candidatePapers ? { candidatePapers: input.candidatePapers } : {}),
-        ...(input.maxPapers !== undefined ? { maxPapers: input.maxPapers } : {})
-      }
-      const brief = await createScientificPlottingResearchBrief(request)
-      return textResult(
-        brief.ok
-          ? jsonSummary('Scientific plotting research brief.', brief)
-          : jsonSummary('Scientific plotting research brief failed.', brief),
-        { brief }
-      )
-    } catch (error) {
-      return errorResult(`Failed to build scientific plotting research brief: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
-  server.registerTool('scientific_visual_plan', {
-    title: 'Plan Scientific Visual',
-    description: 'Lock one general scientific-visual production route before rendering. The calling model must inspect the task and submit a structured decision. Choose deterministic_plot when exact data, axes, statistics, coordinates, or reproducibility dominate; choose generative_visual for conceptual or illustrative composition without data-bearing marks; choose hybrid_composite when deterministic truth layers and generated conceptual composition are both required. For action=revision on an existing raster, provide reviewPacketPath; generative and hybrid revisions are then locked to image_generation_edit_from_visual_review_packet and must not substitute image_generation_render. The returned route is fail-closed and cannot silently fall back to another route.',
-    inputSchema: {
-      workspaceRoot: z.string().trim().min(1).optional(),
-      task: z.string().trim().min(1).max(16000),
-      action: z.enum(['create', 'revision']).optional(),
-      visualDocumentId: z.string().trim().min(1).max(160).optional(),
-      reviewPacketPath: z.string().trim().min(1).max(4096).optional(),
-      sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64).optional(),
-      decision: z.object({
-        route: z.enum(['deterministic_plot', 'generative_visual', 'hybrid_composite']),
-        rationale: z.string().trim().min(1).max(2000),
-        reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).max(64),
-        truthLockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64)
-      }).strict()
-    },
-    annotations: READ_ONLY_ANNOTATIONS
-  }, async ({ workspaceRoot, task, action, visualDocumentId, reviewPacketPath, sourceArtifacts, decision }) => {
-    try {
-      const plan = planScientificVisual({
-        workspaceRoot: workspaceRoot?.trim() || options.workspaceRoot,
-        task,
-        ...(action ? { action } : {}),
-        ...(visualDocumentId ? { visualDocumentId } : {}),
-        ...(reviewPacketPath ? { reviewPacketPath } : {}),
-        ...(sourceArtifacts ? { sourceArtifacts } : {}),
-        decision
-      })
-      return textResult(jsonSummary('Scientific visual plan.', plan), { plan })
-    } catch (error) {
-      return errorResult(`Failed to plan scientific visual: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  })
-
   server.registerTool('scientific_plotting_map_data', {
     title: 'Map Data To Scientific Plot',
     description: `Map structured data or tabular records into a controlled scientific_plotting_render request after choosing a template. ${TEMPLATE_SELECTION_DESCRIPTION} Does not render or write files.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
-      scientificVisualPlan: controlledPlottingPlanSchema,
+      visualPlan: controlledPlottingPlanSchema,
       task: z.string().trim().min(1),
       data: z.unknown(),
       labels: z.object({
@@ -282,7 +207,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     try {
       const request: ScientificPlottingDataMappingRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        scientificVisualPlan: input.scientificVisualPlan,
+        visualPlan: input.visualPlan,
         task: input.task,
         data: input.data,
         ...(input.labels ? { labels: input.labels } : {}),
@@ -313,10 +238,10 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_render', {
     title: 'Render Scientific Plot',
-    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} Call scientific_visual_plan before choosing a rendering route; use this renderer only when its locked execution stages select it.`,
+    description: `Render a PNG artifact from structured JSON data with optional FigureStyleSpec and bounded style auto-repair. ${TEMPLATE_SELECTION_DESCRIPTION} Call visual_generate before choosing a rendering route; use this renderer only when its locked execution stages select it.`,
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
-      scientificVisualPlan: controlledPlottingPlanSchema,
+      visualPlan: controlledPlottingPlanSchema,
       template: templateSchema,
       data: z.unknown(),
       labels: z.object({
@@ -347,7 +272,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
     try {
       const request: ScientificPlottingRenderRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
-        scientificVisualPlan: input.scientificVisualPlan,
+        visualPlan: input.visualPlan,
         template: input.template,
         data: input.data,
         ...(input.labels ? { labels: input.labels } : {}),
@@ -372,6 +297,62 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       )
     } catch (error) {
       return errorResult(`Failed to render scientific plot: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  })
+
+  server.registerTool('scientific_plotting_composite', {
+    title: 'Composite Hybrid Visual Layers',
+    description: 'Deterministically compose real model-owned and code-owned image files for a locked hybrid visual plan. Model layers are drawn first; code-owned truth layers are always drawn last at full opacity. The output and manifest record hashes for every consumed layer and must be reviewed with visual_artifact_review.',
+    inputSchema: {
+      workspaceRoot: z.string().trim().min(1).optional(),
+      visualPlan: controlledPlottingPlanSchema.refine((plan) => plan.route === 'hybrid', {
+        message: 'scientific_plotting_composite requires route=hybrid.'
+      }),
+      layers: z.array(z.object({
+        path: z.string().trim().min(1).max(4096),
+        owner: z.enum(['model', 'code']),
+        bounds: z.object({
+          unit: z.enum(['ratio', 'pixel']).optional(),
+          x: z.number(),
+          y: z.number(),
+          width: z.number().positive(),
+          height: z.number().positive()
+        }).strict().optional(),
+        fit: z.enum(['contain', 'cover', 'stretch']).optional(),
+        opacity: z.number().min(0).max(1).optional()
+      }).strict()).min(2).max(32),
+      canvas: z.object({
+        width: z.number().int().min(128).max(4096),
+        height: z.number().int().min(128).max(4096),
+        background: z.string().trim().min(1).max(120).optional()
+      }).strict().optional(),
+      figureId: z.string().trim().max(120).optional(),
+      outputDir: z.string().trim().max(4096).optional(),
+      visualDocumentId: z.string().trim().max(120).optional(),
+      threadId: z.string().trim().max(120).optional()
+    },
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (input) => {
+    try {
+      const request: ScientificPlottingCompositeRequest = {
+        workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
+        visualPlan: input.visualPlan,
+        layers: input.layers,
+        ...(input.canvas ? { canvas: input.canvas } : {}),
+        ...(input.figureId ? { figureId: input.figureId } : {}),
+        ...(input.outputDir ? { outputDir: input.outputDir } : {}),
+        ...(input.visualDocumentId ? { visualDocumentId: input.visualDocumentId } : {}),
+        ...(input.threadId ? { threadId: input.threadId } : {})
+      }
+      const result = await compositeScientificPlotLayers(request)
+      return textResult(
+        result.ok
+          ? jsonSummary('Composed hybrid visual layers.', result)
+          : jsonSummary(`Hybrid visual composition failed: ${result.status}.`, result),
+        { result }
+      )
+    } catch (error) {
+      return errorResult(`Failed to composite hybrid visual layers: ${error instanceof Error ? error.message : String(error)}`)
     }
   })
 

@@ -26,6 +26,7 @@ import type {
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
   AgentRuntimeThread,
+  AgentRuntimeThreadDetail,
   AgentRuntimeTurnHandle
 } from '../../../shared/agent-runtime-contract'
 import {
@@ -611,8 +612,220 @@ describe('AgentRuntimeHost', () => {
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(visibleContext.get).not.toHaveBeenCalled()
     expect(dispatched?.text).not.toContain('gui_visible_context')
-    expect(dispatched?.text).toBe('Run the unit tests.')
+    expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
+    expect(dispatched?.displayText).toBe('Run the unit tests.')
   })
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'enforces verified visual execution before %s can complete',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-thread`
+      const turnId = `${runtimeId}-turn`
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId,
+          threadId,
+          turnId,
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      })
+      adapter.readThread = vi.fn(async () => ({
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z',
+        latestTurnId: turnId,
+        latestTurnStatus: 'completed',
+        latestSeq: 1,
+        turns: [{ id: turnId, threadId, status: 'completed' }],
+        items: []
+      } satisfies AgentRuntimeThreadDetail))
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+      const text = '需要用视觉能力看一下排版后的表格图像，优化排版。'
+
+      await host.startTurn({ runtimeId, threadId, text, displayText: text })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+
+      expect(adapter.startTurn).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          text: expect.stringContaining('Runtime-enforced visual completion gate'),
+          displayText: text,
+          metadata: expect.objectContaining({ sciforgeVisualExecutionRequired: true })
+        })
+      )
+      expect(events).toContainEqual(expect.objectContaining({
+        kind: 'turn_lifecycle',
+        state: 'failed',
+        message: expect.stringContaining('verified visual inspection did not execute')
+      }))
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          kind: 'error',
+          code: 'runtime_visual_execution_missing',
+          threadId,
+          turnId
+        })
+      )
+      await expect(host.readThread({ runtimeId, threadId })).resolves.toMatchObject({
+        latestTurnStatus: 'failed',
+        turns: [{ id: turnId, status: 'failed' }]
+      })
+    }
+  )
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'enforces executor receipts before explicit %s execution can complete',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-receipt-thread`
+      const turnId = `${runtimeId}-turn`
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId,
+          threadId,
+          turnId,
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+
+      expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'failed' })
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ code: 'runtime_execution_incomplete', threadId, turnId })
+      )
+    }
+  )
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'accepts correlated %s executor receipts',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-receipt-ok-thread`
+      const turnId = `${runtimeId}-turn`
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'call-1',
+          callId: 'call-1',
+          toolName: 'local_shell',
+          status: 'running',
+          phase: 'requested',
+          factSource: 'model_output',
+          evidenceStrength: 'intent'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'call-1-result',
+          callId: 'call-1',
+          toolName: 'local_shell',
+          status: 'success',
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId,
+          threadId,
+          turnId,
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+
+      expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'completed' })
+      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalled()
+    }
+  )
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'does not retroactively reject unmarked stored %s thread detail',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-stored-thread`
+      const turnId = `${runtimeId}-stored-turn`
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      })
+      adapter.readThread = vi.fn(async () => ({
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-07-13T00:00:00.000Z',
+        latestTurnId: turnId,
+        latestTurnStatus: 'completed',
+        latestSeq: 3,
+        turns: [{
+          id: turnId,
+          threadId,
+          status: 'completed',
+          items: [{
+            id: 'stored-user-message',
+            turnId,
+            kind: 'user_message',
+            text: '需要用视觉能力看一下排版后的表格图像，优化排版。'
+          }]
+        }],
+        items: []
+      } satisfies AgentRuntimeThreadDetail))
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      await expect(host.readThread({ runtimeId, threadId })).resolves.toMatchObject({
+        latestTurnStatus: 'completed',
+        turns: [{ id: turnId, status: 'completed' }]
+      })
+    }
+  )
 
   it('streams events through the selected adapter', async () => {
     const local = fakeAdapter('sciforge', {
@@ -3136,7 +3349,7 @@ describe('AgentRuntimeHost', () => {
     expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')
   })
 
-  it('observes repeated tool activity and escalates Codex guard controls', async () => {
+  it('observes repeated tool activity and steers Codex through recovery before interruption', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -3194,15 +3407,7 @@ describe('AgentRuntimeHost', () => {
         turnId: 'turn-1'
       })
     )
-    expect(codex.interruptTurn).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        runtimeId: 'codex',
-        threadId: 'codex-thread',
-        turnId: 'turn-1',
-        discard: false
-      })
-    )
+    expect(codex.interruptTurn).not.toHaveBeenCalled()
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -3213,9 +3418,8 @@ describe('AgentRuntimeHost', () => {
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        kind: 'error',
-        code: 'runtime_tool_storm_interrupted',
-        severity: 'error'
+        kind: 'runtime_status',
+        metadata: expect.objectContaining({ level: 'recovery', recoveryAttempt: 1 })
       })
     )
   })
@@ -3354,11 +3558,11 @@ describe('AgentRuntimeHost', () => {
       // exhaust stream
     }
     await vi.waitFor(() => {
-      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(3)
+      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(2)
     })
 
-    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
-    expect(codex.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(codex.steerTurn).toHaveBeenCalledTimes(2)
+    expect(codex.interruptTurn).not.toHaveBeenCalled()
     expect(codex.publishSyntheticEvent).toHaveBeenNthCalledWith(
       1,
       expect.anything(),
@@ -3376,7 +3580,8 @@ describe('AgentRuntimeHost', () => {
       expect.objectContaining({
         kind: 'runtime_status',
         metadata: expect.objectContaining({
-          level: 'hard',
+          level: 'recovery',
+          recoveryAttempt: 1,
           family: 'command_execution:shell/read-file'
         })
       })

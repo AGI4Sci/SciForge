@@ -9,6 +9,7 @@ export {
 export const IMAGE_GENERATION_MCP_FLAG = '--image-generation-mcp-server'
 
 export const IMAGE_GENERATION_TOOL_SIDE_EFFECTS = {
+  visual_generate: 'read',
   image_generation_status: 'read',
   image_generation_prepare: 'read',
   image_generation_render: 'controlled-write',

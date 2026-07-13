@@ -43,6 +43,10 @@ import type {
 import { extractScientificObjectMetadata } from '@shared/scientific-objects'
 import type { LocalRuntimeMemoryRecordJson } from './local-runtime-contract'
 import { getDisplayThreadTitle } from '../lib/thread-title'
+import {
+  describeRuntimeError,
+  isExecutionIntegrityErrorCode
+} from '../lib/format-runtime-error'
 
 type LegacyCapabilities = ReturnType<AgentProvider['getCapabilities']>
 type SendUserMessageOptions = NonNullable<Parameters<AgentProvider['sendUserMessage']>[2]>
@@ -288,6 +292,35 @@ function reviewBlock(item: AgentRuntimeItem): ReviewBlock {
   }
 }
 
+function systemBlock(item: AgentRuntimeItem): Extract<ChatBlock, { kind: 'system' }> {
+  const code = stringMeta(item.meta, 'code')
+  if (isExecutionIntegrityErrorCode(code)) {
+    const view = describeRuntimeError(new Error(JSON.stringify({
+      code,
+      message: item.text ?? item.summary ?? '',
+      ...(item.detail ? { details: item.detail } : {}),
+      severity: 'error'
+    })))
+    return {
+      kind: 'system',
+      id: item.id,
+      createdAt: item.createdAt,
+      text: view.summary,
+      ...(view.code ? { code: view.code } : {}),
+      ...(view.detail ? { detail: view.detail } : {}),
+      severity: 'error'
+    }
+  }
+  return {
+    kind: 'system',
+    id: item.id,
+    createdAt: item.createdAt,
+    text: item.text ?? item.summary ?? '',
+    detail: item.detail,
+    severity: visibleStatus(item.status) === 'error' ? 'error' : 'info'
+  }
+}
+
 function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
   const kind = item.kind
   switch (kind) {
@@ -319,14 +352,7 @@ function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
     case 'review':
       return reviewBlock(item)
     case 'system':
-      return {
-        kind: 'system',
-        id: item.id,
-        createdAt: item.createdAt,
-        text: item.text ?? item.summary ?? '',
-        detail: item.detail,
-        severity: visibleStatus(item.status) === 'error' ? 'error' : 'info'
-      }
+      return systemBlock(item)
     case 'approval':
       return {
         kind: 'approval',

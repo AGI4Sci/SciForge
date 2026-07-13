@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { VisualInspectionEvidence } from './visual-inspection.js'
 
 export const WORKSPACE_TREE_RESOURCE_URI = 'workspace://tree'
 export const WORKSPACE_FILE_RESOURCE_URI_TEMPLATE = 'workspace://file/{+path}'
@@ -49,6 +50,8 @@ export type WorkspaceIntelErrorCode =
   | 'visual_target_bounds_unavailable'
   | 'visual_capture_request_expired'
   | 'visual_capture_broker_failed'
+  | 'visual_inspection_unavailable'
+  | 'visual_inspection_invalid'
   | 'read_failed'
 
 export type WorkspaceIntelError = {
@@ -278,6 +281,7 @@ export type VisualCaptureResult = WorkspaceIntelFailure | {
   ok: true
   requestId: string
   resource: VisibleContextVisualSnapshotResource
+  inspection?: VisualInspectionEvidence
 }
 
 export const WorkspaceRootInputSchema = z.object({
@@ -335,7 +339,10 @@ export const VisibleContextInputSchema = z.object({
 export const VisualCaptureInputSchema = z.object({
   scope: z.enum(['window', 'target']),
   componentId: z.string().trim().min(1).max(256).optional(),
-  targetId: z.string().trim().min(1).max(256).optional()
+  targetId: z.string().trim().min(1).max(256).optional(),
+  requireSemanticInspection: z.boolean().optional(),
+  inspectionPrompt: z.string().trim().min(1).max(16_000).optional(),
+  truthLockedElements: z.array(z.string().trim().min(1).max(1_000)).max(64).optional()
 }).strict().superRefine((request, context) => {
   if (request.scope === 'target' && (!request.componentId || !request.targetId)) {
     context.addIssue({
