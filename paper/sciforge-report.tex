@@ -494,40 +494,40 @@ SciForge presents a research-native AI workbench that brings together local exec
 \label{tab:capability_differentiation}
 \scriptsize
 \centering
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.15}
-\begin{tabular}{@{}L{2.2cm} L{2.7cm} L{3.0cm} L{3.5cm}@{}}
+\setlength{\tabcolsep}{2.5pt}
+\renewcommand{\arraystretch}{1.08}
+\begin{tabular}{@{}L{2.0cm} L{2.4cm} L{2.8cm} L{3.1cm}@{}}
 \toprule
 \textbf{Capability} & \textbf{Function} & \textbf{Typical approaches} & \textbf{SciForge differentiation} \\
 \midrule
 Model Router
 & Unified provider and model management
 & Single-provider lock-in or manual switching
-& Routes across OpenAI, Anthropic, DeepSeek, and local models with fallback and localizable deployment \\
+& Provider-agnostic routing across OpenAI, Anthropic, DeepSeek, and local models with cost-aware fallback chains; localizable deployment preserves data sovereignty \\
 Scientific Pipeline
 & Convert scientific objects into agent-readable evidence
-& General LLMs receive raw scientific text or require manual preprocessing
-& Translate-then-reason with four modality experts (protein, structure, molecule, single-cell); C2S is a worker contract; unsupported formats fail closed \\
+& Raw scientific text input or manual preprocessing
+& Translate-then-reason with four C2S modality experts (protein, structure, molecule, single-cell); unrecognized formats fail closed with diagnostics \\
 Agent Runtime
 & Coordinate agents, tools, commands, and long tasks
-& Single-session chat execution with limited delegation
-& Workspace-aware runtime with sub-agent delegation, MCP workers, plan recovery, and task continuation \\
+& Single-session chat with limited delegation
+& Research-aware runtime with sub-agent delegation, MCP workers, plan recovery, and cross-session task continuation \\
 Workflow Engine
 & Automate repeatable research protocols
 & Scripts, cron jobs, and manual runbooks
-& Code, agent, tool, schedule, event, and approval nodes under one research workflow model \\
+& DAG-based workflows combining code, agent, tool, schedule, event, and approval nodes; natively integrated with the agent runtime \\
 Research Memory
 & Preserve project state across sessions
 & Chat history or document RAG
-& Scoped free-text records (scope, tags, confidence, timestamps, context); typed goals and decisions belong to Project DAG \\
+& Structured Project DAG with confidence-tagged, timestamped records; typed goals and formal decisions persist as first-class DAG nodes \\
 Evidence Governance
 & Connect claims, evidence, audit findings, and approvals
-& Outputs remain detached from data, scripts, and review history
-& Thread-scoped Evidence DAGs with provenance capture when runtime supplies evidenceLineage; audit runs, risk digests, quality gates, and approval boundaries \\
+& Outputs detached from data, scripts, and review history
+& Thread-scoped Evidence DAGs with automatic provenance capture; scheduled audit runs; quality gates and configurable approval boundaries \\
 Research Capability Patterns
 & Expose human judgment points
 & Generic chat and file views
-& Unified workbench patterns backed by Evidence DAGs, audit findings, and lightweight decision records for approvals, artifact review, and next actions \\
+& Human-in-the-loop judgment patterns (artifact review, approval, visual inspection) grounded in Evidence DAGs and audit records \\
 \bottomrule
 \end{tabular}
 \end{table}
