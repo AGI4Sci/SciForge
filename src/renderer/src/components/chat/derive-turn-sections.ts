@@ -126,7 +126,7 @@ export function deriveTurnSections({
       continue
     }
     if (block.kind === 'approval') {
-      conversationBlocks.push(block)
+      if (block.status === 'pending') conversationBlocks.push(block)
       continue
     }
     if (isInternalUserInputToolBlock(block)) {

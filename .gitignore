@@ -64,6 +64,7 @@ docs/R2_RELEASE.md
 
 # ### Paper build artifacts
 # paper/
+*.synctex.gz
 
 ### Local end-to-end run artifacts
 temp/

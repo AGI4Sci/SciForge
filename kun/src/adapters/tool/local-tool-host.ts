@@ -302,6 +302,7 @@ export class LocalToolHost implements ToolHost {
   private requiresApproval(tool: LocalTool, call: ToolCallLike, context: ToolHostContext): boolean {
     if (this.isInteractiveGuiGateTool(call.toolName)) return false
     if (tool.policy === 'never' || context.approvalPolicy === 'never') return false
+    if (context.sandboxMode === 'danger-full-access') return false
     if (this.isTrustedRemoteExecutorBypass(tool, call)) return false
     switch (context.approvalPolicy) {
       case 'auto':

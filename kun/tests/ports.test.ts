@@ -174,6 +174,37 @@ describe('LocalToolHost', () => {
     })
   })
 
+  it('runs tools without approval when the sandbox grants full access', async () => {
+    let approvals = 0
+    const fullAccessTool = LocalToolHost.defineTool({
+      name: 'full_access_tool',
+      description: 'A tool normally requiring approval.',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'on-request',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const host = new LocalToolHost({ tools: [fullAccessTool] })
+
+    const result = await host.execute(
+      { callId: 'c-full-access', toolName: 'full_access_tool', arguments: {} },
+      {
+        threadId: 'th',
+        turnId: 'tu',
+        workspace: '/tmp',
+        approvalPolicy: 'on-request',
+        sandboxMode: 'danger-full-access',
+        abortSignal: new AbortController().signal,
+        awaitApproval: async () => {
+          approvals += 1
+          return 'deny'
+        }
+      }
+    )
+
+    expect(approvals).toBe(0)
+    expect(result).toMatchObject({ approved: true, item: { kind: 'tool_result', isError: false } })
+  })
+
   it('redacts secrets from tool result payloads', async () => {
     const secret = ['sk', '1234567890abcdefghijklmnopqrstuvwxyz'].join('-')
     const host = new LocalToolHost({

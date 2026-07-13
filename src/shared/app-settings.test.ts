@@ -1397,6 +1397,42 @@ describe('agent runtime settings', () => {
       sandboxMode: 'workspace-write'
     }))
   })
+
+  it('normalizes full-access runtimes to automatic approval policies', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      agents: {
+        sciforge: {
+          ...defaultLocalRuntimeSettings(),
+          sandboxMode: 'danger-full-access',
+          approvalPolicy: 'on-request'
+        },
+        codex: {
+          ...defaultCodexRuntimeSettings(),
+          sandboxMode: 'danger-full-access',
+          approvalPolicy: 'on-request'
+        },
+        claude: {
+          ...defaultClaudeRuntimeSettings(),
+          sandboxMode: 'danger-full-access',
+          approvalPolicy: 'on-request'
+        }
+      }
+    })
+
+    expect(normalized.agents.sciforge).toEqual(expect.objectContaining({
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'auto'
+    }))
+    expect(getCodexRuntimeSettings(normalized)).toEqual(expect.objectContaining({
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'never'
+    }))
+    expect(getClaudeRuntimeSettings(normalized)).toEqual(expect.objectContaining({
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'auto'
+    }))
+  })
 })
 
 describe('local runtime settings normalization', () => {

@@ -169,7 +169,15 @@ function SideMessageBubble({ block }: { block: ChatBlock }): ReactElement | null
       </div>
     )
   }
-  if (block.kind === 'approval' || block.kind === 'compaction') {
+  if (block.kind === 'approval') {
+    if (block.status !== 'pending') return null
+    return (
+      <div className="rounded-full border border-ds-border-muted bg-ds-card/60 px-3 py-1.5 text-[12px] text-ds-muted">
+        {block.summary}
+      </div>
+    )
+  }
+  if (block.kind === 'compaction') {
     return (
       <div className="rounded-full border border-ds-border-muted bg-ds-card/60 px-3 py-1.5 text-[12px] text-ds-muted">
         {block.summary}

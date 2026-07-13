@@ -85,12 +85,15 @@ function normalizeClaudeRuntimeSettings(
   input: Partial<ClaudeRuntimeSettingsV1> | undefined
 ): ClaudeRuntimeSettingsV1 {
   const defaults = defaultClaudeRuntimeSettings()
+  const sandboxMode = normalizeSandboxMode(input?.sandboxMode, defaults.sandboxMode)
   return {
     command: nonEmptyString(input?.command, defaults.command),
     configDir: nonEmptyString(input?.configDir, defaults.configDir),
     model: optionalString(input?.model),
-    approvalPolicy: normalizeApprovalPolicy(input?.approvalPolicy, defaults.approvalPolicy),
-    sandboxMode: normalizeSandboxMode(input?.sandboxMode, defaults.sandboxMode),
+    approvalPolicy: sandboxMode === 'danger-full-access'
+      ? 'auto'
+      : normalizeApprovalPolicy(input?.approvalPolicy, defaults.approvalPolicy),
+    sandboxMode,
     extraArgs: normalizeExtraArgs(input?.extraArgs)
   }
 }

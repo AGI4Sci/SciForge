@@ -2,7 +2,7 @@ PWD /Applications/workspace/ailab/research/app/DeepSeek-GUI/paper
 INPUT /usr/local/texlive/2023/texmf.cnf
 INPUT /usr/local/texlive/2023/texmf-dist/web2c/texmf.cnf
 INPUT /usr/local/texlive/2023/texmf-var/web2c/pdftex/pdflatex.fmt
-INPUT sciforge-report.tex
+INPUT /Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/sciforge-report.tex
 OUTPUT sciforge-report.log
 INPUT ./sn-jnl.cls
 INPUT ./sn-jnl.cls

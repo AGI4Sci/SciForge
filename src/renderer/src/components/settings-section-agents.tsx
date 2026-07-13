@@ -657,10 +657,15 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           </label>
                           <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
                             {t('approvalPolicy')}
-                            <span className="font-normal leading-5 text-ds-faint">{t('approvalPolicyDesc')}</span>
+                            <span className="font-normal leading-5 text-ds-faint">
+                              {t(codex.sandboxMode === 'danger-full-access'
+                                ? 'approvalFullAccessDesc'
+                                : 'approvalPolicyDesc')}
+                            </span>
                             <select
-                              className={selectControlClass}
+                              className={`${selectControlClass} disabled:cursor-not-allowed disabled:opacity-60`}
                               value={codex.approvalPolicy}
+                              disabled={codex.sandboxMode === 'danger-full-access'}
                               onChange={(e) =>
                                 updateCodexRuntime({
                                   approvalPolicy: e.target.value as ApprovalPolicy
@@ -678,11 +683,15 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                             <select
                               className={selectControlClass}
                               value={codex.sandboxMode}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const sandboxMode = e.target.value as SandboxMode
                                 updateCodexRuntime({
-                                  sandboxMode: e.target.value as SandboxMode
+                                  sandboxMode,
+                                  ...(sandboxMode === 'danger-full-access'
+                                    ? { approvalPolicy: 'never' as const }
+                                    : {})
                                 })
-                              }
+                              }}
                             >
                               <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
                               <option value="read-only">{t('sandboxReadOnly')}</option>
@@ -746,10 +755,15 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
 	                          </label>
 	                          <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
 	                            {t('approvalPolicy')}
-	                            <span className="font-normal leading-5 text-ds-faint">{t('claudeApprovalPolicyDesc')}</span>
+                            <span className="font-normal leading-5 text-ds-faint">
+                              {t(claude.sandboxMode === 'danger-full-access'
+                                ? 'approvalFullAccessDesc'
+                                : 'claudeApprovalPolicyDesc')}
+                            </span>
                             <select
-                              className={selectControlClass}
+                              className={`${selectControlClass} disabled:cursor-not-allowed disabled:opacity-60`}
                               value={claude.approvalPolicy}
+                              disabled={claude.sandboxMode === 'danger-full-access'}
                               onChange={(e) =>
                                 updateClaudeRuntime({
                                   approvalPolicy: e.target.value as ApprovalPolicy
@@ -765,14 +779,18 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                           <label className="grid gap-1.5 text-[12px] font-semibold text-ds-muted">
                             {t('sandboxMode')}
                             <span className="font-normal leading-5 text-ds-faint">{t('claudeSandboxModeDesc')}</span>
-                            <select
-                              className={selectControlClass}
-                              value={claude.sandboxMode}
-                              onChange={(e) =>
-                                updateClaudeRuntime({
-                                  sandboxMode: e.target.value as SandboxMode
-                                })
-                              }
+	                            <select
+	                              className={selectControlClass}
+	                              value={claude.sandboxMode}
+	                              onChange={(e) => {
+                                  const sandboxMode = e.target.value as SandboxMode
+                                  updateClaudeRuntime({
+                                    sandboxMode,
+                                    ...(sandboxMode === 'danger-full-access'
+                                      ? { approvalPolicy: 'auto' as const }
+                                      : {})
+                                  })
+	                              }}
 	                            >
 	                              <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
 	                              <option value="read-only">{t('sandboxReadOnly')}</option>
@@ -2000,11 +2018,14 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                 <SettingsCard title={t('localRuntimePermissions')}>
                   <SettingRow
                     title={t('approvalPolicy')}
-                    description={t('approvalPolicyDesc')}
+                    description={t(localRuntime.sandboxMode === 'danger-full-access'
+                      ? 'approvalFullAccessDesc'
+                      : 'approvalPolicyDesc')}
                     control={
                       <select
-                        className={selectControlClass}
+                        className={`${selectControlClass} disabled:cursor-not-allowed disabled:opacity-60`}
                         value={localRuntime.approvalPolicy}
+                        disabled={localRuntime.sandboxMode === 'danger-full-access'}
                         onChange={(e) =>
                           updateLocalRuntime({
                             approvalPolicy: e.target.value as ApprovalPolicy
@@ -2026,11 +2047,15 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                       <select
                         className={selectControlClass}
                         value={localRuntime.sandboxMode}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const sandboxMode = e.target.value as SandboxMode
                           updateLocalRuntime({
-                            sandboxMode: e.target.value as SandboxMode
+                            sandboxMode,
+                            ...(sandboxMode === 'danger-full-access'
+                              ? { approvalPolicy: 'auto' as const }
+                              : {})
                           })
-                        }
+                        }}
                       >
                         <option value="workspace-write">{t('sandboxWorkspaceWrite')}</option>
                         <option value="read-only">{t('sandboxReadOnly')}</option>

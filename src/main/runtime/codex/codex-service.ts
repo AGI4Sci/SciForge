@@ -1183,9 +1183,6 @@ export class CodexRuntimeService {
     if (runtime.sandboxMode === 'read-only') {
       return failedDynamicToolCall('gui_workspace_apply_patch is blocked by the read-only sandbox.')
     }
-    if (runtime.approvalPolicy === 'never') {
-      return failedDynamicToolCall('gui_workspace_apply_patch is blocked because approvals are disabled.')
-    }
     const storedThread = await this.findStoredThread(threadId)
     const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
     let canonicalPath: string
@@ -1200,8 +1197,12 @@ export class CodexRuntimeService {
         `read-before-edit guard blocked ${path}; call gui_workspace_read for this file in the current turn before applying a patch.`
       )
     }
-    const approved = await this.requestWorkspacePatchApproval(request, path)
-    if (!approved) return failedDynamicToolCall(`User denied the patch for ${path}.`)
+    const approvalIsAutomatic =
+      runtime.sandboxMode === 'danger-full-access' || runtime.approvalPolicy === 'never'
+    if (!approvalIsAutomatic) {
+      const approved = await this.requestWorkspacePatchApproval(request, path)
+      if (!approved) return failedDynamicToolCall(`User denied the patch for ${path}.`)
+    }
     const response = await this.workspacePatchTool.apply({ workspaceRoot, path, patch })
     if (response.success) this.workspaceReadKeys.delete(readKey)
     return response
@@ -2725,7 +2726,7 @@ function baseThreadParams(
   const dynamicTools = dynamicMcp.dynamicTools?.length ? dynamicMcp.dynamicTools : undefined
   return {
     cwd,
-    approvalPolicy: mapApprovalPolicy(runtime.approvalPolicy),
+    approvalPolicy: mapApprovalPolicy(runtime.approvalPolicy, runtime.sandboxMode),
     sandbox: mapThreadSandboxMode(runtime.sandboxMode),
     config: codexAppServerThreadReasoningConfig(),
     ...(dynamicDeveloperInstructions({ ...dynamicMcp, workspacePatchConfigured: true })
@@ -2801,13 +2802,17 @@ function turnStartParams(input: {
     ...(input.model ? { model: input.model } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),
     modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID,
-    approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy),
+    approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
     sandboxPolicy: mapTurnSandboxMode(input.runtime.sandboxMode, input.workspace),
     ...codexAppServerTurnReasoningParams({ reasoningEffort: input.reasoningEffort })
   }
 }
 
-function mapApprovalPolicy(policy: ApprovalPolicy): 'never' | 'on-request' | 'untrusted' {
+function mapApprovalPolicy(
+  policy: ApprovalPolicy,
+  sandboxMode: SandboxMode
+): 'never' | 'on-request' | 'untrusted' {
+  if (sandboxMode === 'danger-full-access') return 'never'
   if (policy === 'never' || policy === 'untrusted') return policy
   return 'on-request'
 }

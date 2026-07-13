@@ -1,13 +1,14 @@
 # Fdb version 4
-["bibtex sciforge-report"] 1783878303 "sciforge-report.aux" "sciforge-report.bbl" "sciforge-report" 1783878306 0
+["bibtex sciforge-report"] 1783927475 "sciforge-report.aux" "sciforge-report.bbl" "sciforge-report" 1783927627 0
   "./sn-basic.bst" 1783839368 35515 7cc706cef7829df727b1420a5d0e9fe4 ""
-  "./sn-bibliography.bib" 1783839368 9548 6a936a9d8ef8292a1dba6ede836d8df6 ""
-  "sciforge-report.aux" 1783878305 20604 c6bffc1a9a47dd062748951b2c075d16 "pdflatex"
+  "./sn-bibliography.bib" 1783920266 10805 aee5fd746d82351e19b13383ae0d6bcc ""
+  "sciforge-report.aux" 1783927627 20915 f5b53740cb28f901ef3be01b0c8d1ebc "pdflatex"
   (generated)
   "sciforge-report.bbl"
   "sciforge-report.blg"
   (rewritten before read)
-["pdflatex"] 1783878303 "sciforge-report.tex" "sciforge-report.pdf" "sciforge-report" 1783878306 0
+["pdflatex"] 1783927626 "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/sciforge-report.tex" "sciforge-report.pdf" "sciforge-report" 1783927627 0
+  "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/sciforge-report.tex" 1783927511 78655 4497b02a8f6dc1ab8700ca9cabe0ec2c ""
   "/usr/local/texlive/2023/texmf-dist/fonts/enc/dvips/cm-super/cm-super-ts1.enc" 1136849721 2900 1537cc8184ad1792082cd229ecc269f4 ""
   "/usr/local/texlive/2023/texmf-dist/fonts/map/fontname/texfonts.map" 1577235249 3524 cb3e574dea2d1052e39280babc910dc8 ""
   "/usr/local/texlive/2023/texmf-dist/fonts/tfm/jknappen/ec/tcrm1000.tfm" 1136768653 1536 e07581a4bb3136ece9eeb4c3ffab8233 ""
@@ -279,10 +280,10 @@
   "figures/molclaw_score_trajectory.png" 1783868222 63859 0beada6c128c94ed188ae60a9586aebb ""
   "figures/molclaw_strategy_effectiveness.png" 1783868222 78432 8147c2d0c89367f98c206bbcc0ad17a7 ""
   "figures/sciforge-research-pipeline.png" 1783839368 682215 81fb59a1884eaa94b7dcd80604475c4d ""
-  "sciforge-report.aux" 1783878305 20604 c6bffc1a9a47dd062748951b2c075d16 "pdflatex"
-  "sciforge-report.bbl" 1783878303 4396 007965e67c237da2a63099137af07776 "bibtex sciforge-report"
-  "sciforge-report.out" 1783878305 6870 5b458c65a987f005382b23209a20dabc "pdflatex"
-  "sciforge-report.tex" 1783878275 81052 6428b3fc5f2f8132a6690e8701235e86 ""
+  "sciforge-report.aux" 1783927627 20915 f5b53740cb28f901ef3be01b0c8d1ebc "pdflatex"
+  "sciforge-report.bbl" 1783927516 5356 427383db6ea3bcdd408ae8d1d62ac9e3 "bibtex sciforge-report"
+  "sciforge-report.out" 1783927627 7180 9b9db34c9f09e14e80eab8771d6c2522 "pdflatex"
+  "sciforge-report.tex" 1783927511 78655 4497b02a8f6dc1ab8700ca9cabe0ec2c ""
   "sn-jnl.cls" 1783839368 55857 7d4515312123fd1744517a7415d792ff ""
   (generated)
   "sciforge-report.aux"

@@ -3,12 +3,18 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactElement
 } from 'react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { MessageSquarePlus, MessagesSquare, X } from 'lucide-react'
 import { CommentEditor } from './CommentEditor'
 import { CommentPanel } from './CommentPanel'
 import { ProductFeedbackDialog } from './ProductFeedbackDialog'
+import {
+  clampCommentLauncherPosition,
+  readCommentLauncherPosition,
+  writeCommentLauncherPosition,
+  type CommentLauncherPoint
+} from './comment-launcher-position'
 import {
   ANCHORED_COMMENTS_DELETE_EVENT,
   ANCHORED_COMMENTS_STATUS_CHANGE_EVENT,
@@ -33,6 +39,7 @@ import {
 import type { AnchoredCommentKind, CommentTargetInspection } from './types'
 
 const COMMENT_PORTAL_HOST_ID = 'sciforge-comments-portal-root'
+const COMMENT_LAUNCHER_DRAG_THRESHOLD = 4
 
 function commentPortalHost(): HTMLElement {
   const existing = document.getElementById(COMMENT_PORTAL_HOST_ID)
@@ -75,6 +82,70 @@ export function AnchoredCommentsLayer({
   const [deniedMessage, setDeniedMessage] = useState<string | null>(null)
   const [captureClean, setCaptureClean] = useState(false)
   const captureLayerRef = useRef<HTMLDivElement | null>(null)
+  const launcherRef = useRef<HTMLDivElement | null>(null)
+  const [launcherPosition, setLauncherPosition] = useState<CommentLauncherPoint | null>(
+    readCommentLauncherPosition
+  )
+  const launcherPositionRef = useRef<CommentLauncherPoint | null>(launcherPosition)
+  const [launcherDragging, setLauncherDragging] = useState(false)
+  const launcherDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startY: number
+    origin: CommentLauncherPoint
+    current: CommentLauncherPoint
+    moved: boolean
+  } | null>(null)
+  const suppressLauncherClickRef = useRef(false)
+  const suppressLauncherClickTimerRef = useRef<number | null>(null)
+
+  const clampLauncherPosition = useCallback((point: CommentLauncherPoint): CommentLauncherPoint => {
+    const launcher = launcherRef.current
+    if (!launcher) return point
+    const bounds = launcher.getBoundingClientRect()
+    return clampCommentLauncherPosition(
+      point,
+      { width: bounds.width, height: bounds.height },
+      { width: window.innerWidth, height: window.innerHeight }
+    )
+  }, [])
+
+  const updateLauncherPosition = useCallback((point: CommentLauncherPoint): CommentLauncherPoint => {
+    const next = clampLauncherPosition(point)
+    launcherPositionRef.current = next
+    setLauncherPosition(next)
+    return next
+  }, [clampLauncherPosition])
+
+  useLayoutEffect(() => {
+    const launcher = launcherRef.current
+    if (!launcher) return
+    const bounds = launcher.getBoundingClientRect()
+    updateLauncherPosition(
+      launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
+    )
+  }, [threads.length, updateLauncherPosition])
+
+  useEffect(() => {
+    const keepLauncherVisible = (): void => {
+      const launcher = launcherRef.current
+      if (!launcher) return
+      const bounds = launcher.getBoundingClientRect()
+      updateLauncherPosition(
+        launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
+      )
+    }
+    window.addEventListener('resize', keepLauncherVisible)
+    return () => window.removeEventListener('resize', keepLauncherVisible)
+  }, [updateLauncherPosition])
+
+  useEffect(() => {
+    return () => {
+      if (suppressLauncherClickTimerRef.current !== null) {
+        window.clearTimeout(suppressLauncherClickTimerRef.current)
+      }
+    }
+  }, [])
 
   useLayoutEffect(() => {
     if (!commentMode) return
@@ -242,6 +313,65 @@ export function AnchoredCommentsLayer({
     event.stopPropagation()
   }
 
+  const startLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    if (!event.isPrimary || event.button !== 0) return
+    const bounds = event.currentTarget.getBoundingClientRect()
+    const origin = { x: bounds.left, y: bounds.top }
+    suppressLauncherClickRef.current = false
+    if (suppressLauncherClickTimerRef.current !== null) {
+      window.clearTimeout(suppressLauncherClickTimerRef.current)
+      suppressLauncherClickTimerRef.current = null
+    }
+    launcherDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin,
+      current: origin,
+      moved: false
+    }
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
+
+  const moveLauncher = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = launcherDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    const deltaX = event.clientX - drag.startX
+    const deltaY = event.clientY - drag.startY
+    if (!drag.moved && Math.hypot(deltaX, deltaY) < COMMENT_LAUNCHER_DRAG_THRESHOLD) return
+    drag.moved = true
+    setLauncherDragging(true)
+    event.preventDefault()
+    drag.current = updateLauncherPosition({
+      x: drag.origin.x + deltaX,
+      y: drag.origin.y + deltaY
+    })
+  }
+
+  const finishLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = launcherDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    launcherDragRef.current = null
+    setLauncherDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (!drag.moved) return
+    writeCommentLauncherPosition(drag.current)
+    suppressLauncherClickRef.current = true
+    suppressLauncherClickTimerRef.current = window.setTimeout(() => {
+      suppressLauncherClickRef.current = false
+      suppressLauncherClickTimerRef.current = null
+    }, 0)
+  }
+
+  const suppressClickAfterLauncherDrag = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!suppressLauncherClickRef.current) return
+    suppressLauncherClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
   if (captureClean) return <></>
 
   return createPortal(
@@ -317,8 +447,17 @@ export function AnchoredCommentsLayer({
       {panelOpen ? <CommentPanel /> : null}
 
       <div
+        ref={launcherRef}
         data-sciforge-comments-ui
-        className="ds-no-drag fixed bottom-4 right-4 z-[1000] flex items-center gap-2"
+        className={`ds-no-drag fixed z-[1000] flex touch-none select-none items-center gap-2 ${
+          launcherPosition ? '' : 'bottom-4 right-4'
+        } ${launcherDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+        style={launcherPosition ? { left: launcherPosition.x, top: launcherPosition.y } : undefined}
+        onPointerDown={startLauncherDrag}
+        onPointerMove={moveLauncher}
+        onPointerUp={finishLauncherDrag}
+        onPointerCancel={finishLauncherDrag}
+        onClickCapture={suppressClickAfterLauncherDrag}
         onClick={preventWorkbenchClick}
       >
         <button
@@ -330,6 +469,7 @@ export function AnchoredCommentsLayer({
           }`}
           aria-label={commentMode ? 'Exit comment mode' : 'Comment on anything'}
           aria-pressed={commentMode}
+          style={{ cursor: 'inherit' }}
           onClick={toggleCommentMode}
         >
           {commentMode ? <X className="h-5 w-5" /> : <MessageSquarePlus className="h-5 w-5" />}
@@ -340,6 +480,7 @@ export function AnchoredCommentsLayer({
             className="relative grid h-11 w-11 place-items-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-[0_14px_36px_rgba(30,41,59,0.22)] transition hover:bg-ds-hover"
             aria-label="Open comments"
             aria-expanded={panelOpen}
+            style={{ cursor: 'inherit' }}
             onClick={() => setPanelOpen(!panelOpen)}
           >
             <MessagesSquare className="h-5 w-5" />

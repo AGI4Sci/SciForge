@@ -269,9 +269,14 @@ export function mergeLocalRuntimeSettings(
         }
       : {})
   })
+  const sandboxMode = runtimePatch?.sandboxMode ?? current.sandboxMode
   return {
     ...current,
     ...(runtimePatch ?? {}),
+    approvalPolicy: sandboxMode === 'danger-full-access'
+      ? 'auto'
+      : runtimePatch?.approvalPolicy ?? current.approvalPolicy,
+    sandboxMode,
     dataDir: normalizeLocalRuntimeDataDir(runtimePatch?.dataDir ?? current.dataDir),
     tokenEconomyMode: nextTokenEconomy.enabled,
     tokenEconomy: nextTokenEconomy,

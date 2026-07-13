@@ -100,6 +100,7 @@ function normalizeCodexRuntimeSettings(
 ): CodexRuntimeSettingsV1 {
   const defaults = defaultCodexRuntimeSettings()
   const command = nonEmptyString(input?.command, defaults.command)
+  const sandboxMode = normalizeSandboxMode(input?.sandboxMode, defaults.sandboxMode)
   return {
     command,
     autoStart: input?.autoStart !== false,
@@ -107,8 +108,10 @@ function normalizeCodexRuntimeSettings(
     profile: optionalString(input?.profile),
     model: optionalString(input?.model),
     modelProvider: optionalString(input?.modelProvider),
-    approvalPolicy: normalizeApprovalPolicy(input?.approvalPolicy, defaults.approvalPolicy),
-    sandboxMode: normalizeSandboxMode(input?.sandboxMode, defaults.sandboxMode),
+    approvalPolicy: sandboxMode === 'danger-full-access'
+      ? 'never'
+      : normalizeApprovalPolicy(input?.approvalPolicy, defaults.approvalPolicy),
+    sandboxMode,
     extraArgs: normalizeExtraArgs(input?.extraArgs)
   }
 }

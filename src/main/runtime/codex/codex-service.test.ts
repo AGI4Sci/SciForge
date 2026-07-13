@@ -2236,7 +2236,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
-  it('advertises and executes the approved read-before-edit workspace patch tool without shell', async () => {
+  it('advertises the workspace patch tool, requests approval in workspace mode, and auto-applies in full access', async () => {
     const client = controllableClient()
     const storageRoot = await tempRoot()
     const workspaceRoot = join(storageRoot, 'workspace')
@@ -2268,8 +2268,9 @@ describe('CodexRuntimeService compatibility operations', () => {
       })),
       close: vi.fn(async () => undefined)
     }
+    let serviceSettings = { ...settings(), workspaceRoot }
     const service = new CodexRuntimeService({
-      settings: async () => ({ ...settings(), workspaceRoot }),
+      settings: async () => serviceSettings,
       sink: { send: vi.fn() },
       storageRoot,
       managedMcpServers: [{ id: 'gui_workspace_intel', command: '/bin/workspace-intel' }],
@@ -2353,6 +2354,31 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
     await expect(deniedPatch).resolves.toMatchObject({ success: false })
     await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
+
+    serviceSettings = {
+      ...serviceSettings,
+      agents: {
+        ...serviceSettings.agents,
+        codex: {
+          ...defaultCodexRuntimeSettings(),
+          ...serviceSettings.agents.codex,
+          sandboxMode: 'danger-full-access',
+          approvalPolicy: 'on-request'
+        }
+      }
+    }
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'full-access-patch',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_apply_patch',
+      arguments: {
+        path: 'notes.txt',
+        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta edited\n+beta full access\n gamma\n*** End Patch'
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(service.pendingServerRequests()).toEqual([])
+    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta full access\ngamma\n')
   })
 
   it('does not inject a workspace root into visible-context or visual-capture dynamic MCP calls', async () => {

@@ -28,6 +28,36 @@ function processingSections(input: {
 }
 
 describe('deriveTurnSections', () => {
+  it('shows only pending approvals and removes settled approval cards', () => {
+    const result = sections([
+      {
+        kind: 'approval',
+        id: 'approval-pending',
+        approvalId: 'pending',
+        summary: 'Pending approval',
+        status: 'pending'
+      },
+      {
+        kind: 'approval',
+        id: 'approval-allowed',
+        approvalId: 'allowed',
+        summary: 'Allowed approval',
+        status: 'allowed'
+      },
+      {
+        kind: 'approval',
+        id: 'approval-error',
+        approvalId: 'error',
+        summary: 'Failed approval',
+        status: 'error'
+      }
+    ])
+
+    expect(result.conversationBlocks).toEqual([
+      expect.objectContaining({ id: 'approval-pending', status: 'pending' })
+    ])
+  })
+
   it('renders the final assistant answer as content even when reasoning was persisted after it', () => {
     const result = sections([
       { kind: 'assistant', id: 'answer', text: '你好！' },

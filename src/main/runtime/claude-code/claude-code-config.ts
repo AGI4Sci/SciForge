@@ -297,10 +297,7 @@ function claudePermissionMode(runtime: {
   approvalPolicy: ApprovalPolicy
 }): NonNullable<ClaudeAgentSdkOptions['permissionMode']> {
   if (runtime.sandboxMode === 'read-only') return 'plan'
-  if (
-    runtime.sandboxMode === 'danger-full-access' &&
-    (runtime.approvalPolicy === 'never' || runtime.approvalPolicy === 'auto')
-  ) {
+  if (runtime.sandboxMode === 'danger-full-access') {
     return 'bypassPermissions'
   }
   return 'acceptEdits'
