@@ -129,9 +129,7 @@ export function responsesToChatCompletions(
     parallel_tool_calls: request.parallel_tool_calls,
     metadata: request.metadata,
     asr_options: request.asr_options,
-    reasoning: request.reasoning,
     reasoning_effort: reasoningEffort || undefined,
-    include_reasoning: shouldRequestReasoningContent(request.reasoning) ? true : undefined,
   });
 }
 
@@ -853,11 +851,6 @@ function messageReasoningContent(message: Record<string, unknown>): string {
     return stringValue(message.reasoning.content) || stringValue(message.reasoning.text);
   }
   return '';
-}
-
-function shouldRequestReasoningContent(reasoning: unknown): boolean {
-  if (!isRecord(reasoning)) return false;
-  return stringValue(reasoning.summary).toLowerCase() !== 'none';
 }
 
 function compactJsonObject(values: Record<string, unknown>): JsonObject {
