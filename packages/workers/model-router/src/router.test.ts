@@ -845,6 +845,41 @@ test('chat completions compatibility route returns OpenAI-shaped text choices', 
   }
 });
 
+test('chat completions compatibility route normalizes reasoning for chat providers', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-reasoning-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-reasoner-answer', 'The chat-compatible reasoning answer.'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        messages: [{ role: 'user', content: 'Think carefully.' }],
+        reasoning: { effort: 'high', summary: 'detailed' },
+        reasoning_effort: 'medium',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.body.reasoning, undefined);
+    assert.equal(calls[0]?.body.reasoning_effort, 'medium');
+    assert.equal(calls[0]?.body.include_reasoning, undefined);
+  } finally {
+    await server.close();
+  }
+});
+
 test('chat completions compatibility route sends image_url inputs through vision routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-vision-'));
   const calls: CapturedFetch[] = [];
