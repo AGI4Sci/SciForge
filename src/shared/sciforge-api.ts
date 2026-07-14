@@ -88,6 +88,23 @@ import type {
   WorkspaceStructuredSelection
 } from './workspace-preview'
 import type {
+  BiologyRoomApplyInput,
+  BiologyRoomApplyResult,
+  BiologyRoomCreateInput,
+  BiologyRoomHistoryInput,
+  BiologyRoomHistoryResult,
+  BiologyRoomListInput,
+  BiologyRoomManifest,
+  BiologyRoomObserveInput,
+  BiologyRoomObserveResult,
+  BiologyRoomOpenOrCreateInput,
+  BiologyRoomOpenOrCreateResult,
+  BiologyRoomRefreshInput,
+  BiologyRoomSummary,
+  BiologyRoomTarget
+} from './biology-room'
+import type { BioGymDoctorResult, BioGymRunEvent } from './biogym'
+import type {
   WriteInlineCompletionDebugEntry,
   WriteInlineCompletionRequest,
   WriteInlineCompletionResult
@@ -1179,6 +1196,24 @@ export type SciForgeApi = {
     unwatch: (watchId: string) => Promise<boolean>
     onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
     getAssetSourceUrl?: (sessionId: string) => string | null
+  }
+  /** Optional while connecting to an older desktop or browser-only bridge. */
+  biologyRoom?: {
+    pickFile: (workspaceRoot: string) => Promise<WorkspacePickResult>
+    create: (input: BiologyRoomCreateInput) => Promise<BiologyRoomManifest>
+    openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<BiologyRoomOpenOrCreateResult>
+    load: (input: BiologyRoomTarget) => Promise<BiologyRoomManifest>
+    list: (input: BiologyRoomListInput) => Promise<BiologyRoomSummary[]>
+    observe: (input: BiologyRoomObserveInput) => Promise<BiologyRoomObserveResult>
+    apply: (input: BiologyRoomApplyInput) => Promise<BiologyRoomApplyResult>
+    refresh: (input: BiologyRoomRefreshInput) => Promise<BiologyRoomApplyResult>
+    history: (input: BiologyRoomHistoryInput) => Promise<BiologyRoomHistoryResult>
+  }
+  /** Optional until the BioGym service PR is installed. */
+  biogym?: {
+    doctor: () => Promise<BioGymDoctorResult>
+    replay?: () => Promise<void>
+    onRunEvent: (handler: (event: BioGymRunEvent) => void) => () => void
   }
   requestWriteInlineCompletion: (
     payload: WriteInlineCompletionRequest

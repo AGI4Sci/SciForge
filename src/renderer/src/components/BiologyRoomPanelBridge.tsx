@@ -529,7 +529,9 @@ export function BiologyRoomPanelBridge({
     asReference = false,
     targetTrackId?: string
   ): Promise<void> => {
-    const picked = await window.sciforge.biologyRoom.pickFile(workspaceRoot)
+    const api = window.sciforge.biologyRoom
+    if (!api) throw new Error('Biology Room desktop bridge is unavailable.')
+    const picked = await api.pickFile(workspaceRoot)
     if (picked.canceled || !picked.path) return
     if (targetTrackId && biologyRoomFormatFromPath(picked.path) !== 'fasta') {
       setError('Select a FASTA reference (.fa, .fasta, .fna, or indexed bgzip FASTA).')
@@ -609,7 +611,12 @@ export function BiologyRoomPanelBridge({
       onRequestAddAsset={() => void pickAsset(false)}
       onSelectReference={(track) => void pickAsset(true, track.id)}
       onReloadConflict={() => {
-        void window.sciforge.biologyRoom.load({ workspaceRoot, roomId: room.roomId })
+        const api = window.sciforge.biologyRoom
+        if (!api) {
+          setError('Biology Room desktop bridge is unavailable.')
+          return
+        }
+        void api.load({ workspaceRoot, roomId: room.roomId })
           .then(acceptRoom)
           .catch((cause) => setError(formatBiologyRoomError(cause)))
       }}

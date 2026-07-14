@@ -62,6 +62,7 @@ Direct root dependencies recorded in `package-lock.json`:
 | `@codemirror/language-data` | `^6.5.2` | `MIT` |
 | `@codemirror/state` | `^6.6.0` | `MIT` |
 | `@codemirror/view` | `^6.43.0` | `MIT` |
+| `@jbrowse/react-linear-genome-view2` | `4.3.0` | `MIT` |
 | `@larksuiteoapi/node-sdk` | `^1.64.0` | `MIT` |
 | `@modelcontextprotocol/sdk` | `^1.29.0` | `MIT` |
 | `@tencent-weixin/openclaw-weixin` | `2.4.3` | `MIT` |
@@ -85,6 +86,7 @@ Direct root dependencies recorded in `package-lock.json`:
 | `jszip` | `^3.10.1` | `(MIT OR GPL-3.0-or-later)` |
 | `katex` | `^0.16.22` | `MIT` |
 | `lucide-react` | `^0.544.0` | `ISC` |
+| `molstar` | `5.10.1` | `MIT` |
 | `node-pty` | `^1.1.0` | `MIT` |
 | `openclaw` | `file:vendor/openclaw-shim` | `MIT`, project-local shim |
 | `pdfjs-dist` | `5.4.394` | `Apache-2.0` |
@@ -98,6 +100,8 @@ Direct root dependencies recorded in `package-lock.json`:
 | `remark-gfm` | `^4.0.1` | `MIT` |
 | `remark-math` | `^6.0.0` | `MIT` |
 | `remark-parse` | `^11.0.0` | `MIT` |
+| `seqparse` | `0.2.2` | `MIT` |
+| `seqviz` | `3.10.22` | `MIT` |
 | `shiki` | `^3.23.0` | `MIT` |
 | `streamdown` | `^2.5.0` | `Apache-2.0` |
 | `unified` | `^11.0.5` | `MIT` |
