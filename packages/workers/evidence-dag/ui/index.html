@@ -6,10 +6,15 @@
 <title>Evidence DAG - SciForge</title>
 <script>
   try {
-    const embedded = new URLSearchParams(location.search).get('embed') === '1' || window.self !== window.top;
+    const params = new URLSearchParams(location.search);
+    const embedded = params.get('embed') === '1' || window.self !== window.top;
     document.documentElement.dataset.embedded = embedded ? '1' : '0';
+    // Embedded panels are scoped to one runtime thread via the URL; the thread
+    // picker is only useful in the standalone browser view.
+    document.documentElement.dataset.threadLocked = embedded && params.get('thread') ? '1' : '0';
   } catch (_) {
     document.documentElement.dataset.embedded = '1';
+    document.documentElement.dataset.threadLocked = '0';
   }
 </script>
 <style>
@@ -56,6 +61,7 @@
     flex-wrap: wrap;
   }
   html[data-embedded="1"] .brand-title { display: none; }
+  html[data-thread-locked="1"] #thread { display: none; }
   .brand {
     display: flex;
     flex-direction: column;
@@ -77,7 +83,7 @@
     font-size: 10.5px;
     color: var(--faint);
   }
-  select, button, label.chk {
+  select, button {
     height: 29px;
     border: 1px solid var(--line);
     border-radius: 8px;
@@ -100,16 +106,6 @@
   button:hover { border-color: #9db6e8; background: #f3f7ff; color: #174ea6; }
   button:active { transform: translateY(1px); }
   button.primary { background: var(--accent-soft); border-color: #b8ccf8; color: #174ea6; }
-  button.icon { width: 29px; padding: 0; }
-  label.chk {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 0 8px;
-    color: var(--muted);
-    cursor: pointer;
-  }
-  label.chk input { accent-color: var(--accent); }
   .topbar-spacer { flex: 1; min-width: 8px; }
   #status {
     min-width: 110px;
@@ -549,10 +545,7 @@
     </div>
     <select id="thread" title="thread"></select>
     <button id="refresh" title="Refresh">Refresh</button>
-    <label class="chk" title="Watch for new graph data"><input type="checkbox" id="auto" checked /> watch</label>
-    <label class="chk" title="Highlight nodes that need human review"><input type="checkbox" id="reviewHeat" checked /> human review</label>
     <button id="auditNow" class="primary" title="Run an adversarial evidence audit now">Audit</button>
-    <button id="fit" class="icon" title="Fit graph">⌖</button>
     <span class="topbar-spacer"></span>
     <span id="status">-</span>
   </header>
@@ -674,7 +667,6 @@ const PAD_Y = 72;
 let currentThread = Q_THREAD || null;
 let lastGraph = null;
 let stageModel = null;
-let renderedSig = null;
 let renderedStagingSig = null;
 let selectedNodeId = null;
 let timer = null;
@@ -686,7 +678,6 @@ let weakMap = {};
 let blastState = null;
 let requestedNodeId = Q_NODE || null;
 let previewFeedback = null;
-let reviewHeatEnabled = true;
 const pendingPreviewRequests = new Map();
 
 function esc(value) {
@@ -849,14 +840,23 @@ function reviewQueueModel(graph = lastGraph) {
   return [...byPacket.values()].sort((a, b) => Number(b.review.blocking) - Number(a.review.blocking) || REVIEW_LEVEL_RANK[b.review.level] - REVIEW_LEVEL_RANK[a.review.level] || b.review.score - a.review.score || String(a.node.id).localeCompare(String(b.node.id)));
 }
 
+function setPanelVisible(id, visible) {
+  const section = $(id);
+  if (section) section.style.display = visible ? '' : 'none';
+}
+
 function renderReviewQueue(graph = lastGraph) {
   const container = $('reviewQueue');
   if (!container) return;
   const items = reviewQueueModel(graph);
   if (!items.length) {
-    container.innerHTML = '<h2>Human Review Queue</h2><div class="empty" style="min-height:70px;padding:8px">Machine checks are sufficient for the current snapshot.</div>';
+    // An empty queue means machine checks passed; hide the section instead of
+    // reserving space for a placeholder.
+    container.innerHTML = '<h2>Human Review Queue</h2>';
+    setPanelVisible('reviewQueue', false);
     return;
   }
+  setPanelVisible('reviewQueue', true);
   container.innerHTML = `<h2>Human Review Queue <span class="badge ${items.some(item => item.review.blocking) ? 'danger' : 'warn'}">${items.length}</span></h2>` + items.map(({ review, node }) => {
     const reason = review.reasons[0]?.message || 'Human judgment requested';
     return `<div class="mini-item review-queue-item ${escAttr(review.level)}" data-node-id="${escAttr(node.id)}" role="button" tabindex="0"><span class="badge human-review-badge review-${escAttr(review.level)}">${esc(REVIEW_LEVEL_LABEL[review.level])}${review.blocking ? '!' : ''}</span> <b>${esc(compact(review.question || node.content || node.id, 82))}</b><div class="review-reasons">${esc(compact(reason, 120))} · score ${(review.score * 100).toFixed(0)}%</div></div>`;
@@ -1435,9 +1435,11 @@ function showAnalysis(data) {
   const pr = data?.pseudo_robust || [];
   const weak = data?.weakly_supported || [];
   if (!lb.length && !pr.length && !weak.length) {
-    $('analysis').innerHTML = '<h2>Load-Bearing / Shared Source</h2><div class="empty" style="min-height:70px;padding:8px">No single-point dependencies or hidden shared sources.</div>';
+    $('analysis').innerHTML = '<h2>Load-Bearing / Shared Source</h2>';
+    setPanelVisible('analysis', false);
     return;
   }
+  setPanelVisible('analysis', true);
   let html = '<h2>Load-Bearing / Shared Source</h2>';
   lb.slice(0, 5).forEach((item) => {
     html += `<div class="mini-item" data-node-id="${escAttr(item.id)}"><span class="badge warn">${esc(item.critical_count)}x</span> ${esc(compact(item.content, 76))}</div>`;
@@ -1456,9 +1458,11 @@ function showAnalysis(data) {
 
 function showAuditRun(run) {
   if (!run) {
-    $('auditFindings').innerHTML = '<h2>Evidence Audit</h2><div class="empty" style="min-height:70px;padding:8px">No audit run yet. Click Audit after the graph loads.</div>';
+    $('auditFindings').innerHTML = '<h2>Evidence Audit</h2>';
+    setPanelVisible('auditFindings', false);
     return;
   }
+  setPanelVisible('auditFindings', true);
   const counts = run.risk_digest?.counts_by_severity || {};
   let html = '<h2>Evidence Audit</h2>';
   html += `<div class="riskbar">
@@ -1499,16 +1503,28 @@ async function loadThreads() {
   setSubtitle(currentThread || 'All threads');
 }
 
+let graphLoadInFlight = false;
+
 async function loadGraph() {
   if (!currentThread) {
     renderEmptyGraph('No thread selected.');
     return;
   }
+  // Overlapping loads (watch poll + manual refresh) would interleave DOM
+  // rebuilds and flicker; one load at a time is always enough.
+  if (graphLoadInFlight) return;
+  graphLoadInFlight = true;
   setStatus('loading...');
   try {
-    const [graphResponse, stagingResponse] = await Promise.all([
-      api(`/threads/${encodeURIComponent(currentThread)}/graph`).catch(() => null),
-      api(`/threads/${encodeURIComponent(currentThread)}/staging`).catch(() => null)
+    const encoded = encodeURIComponent(currentThread);
+    // Fetch everything in parallel and render ONCE with analysis maps ready,
+    // instead of painting the graph and immediately repainting it.
+    const [graphResponse, stagingResponse, metrics, analysis, audits] = await Promise.all([
+      api(`/threads/${encoded}/graph`).catch(() => null),
+      api(`/threads/${encoded}/staging`).catch(() => null),
+      api(`/threads/${encoded}/metrics`).catch(() => null),
+      api(`/threads/${encoded}/analysis`).catch(() => null),
+      api(`/audits?threadId=${encoded}`).catch(() => null)
     ]);
     if (!graphResponse?.ok && !stagingResponse?.ok) {
       renderEmptyGraph('No DAG yet for this thread. The graph appears after extraction succeeds.');
@@ -1537,25 +1553,12 @@ async function loadGraph() {
     currentSnapshot = graphResponse?.data?.snapshot || null;
     selectedNodeId = selectedNodeId && graph.nodes.some((node) => node.id === selectedNodeId) ? selectedNodeId : null;
     blastState = null;
-    buildAnalysisMaps(null);
+    showMetrics(metrics?.ok ? metrics.data : null);
+    buildAnalysisMaps(analysis?.ok ? analysis.data : null);
+    showAnalysis(analysis?.ok ? analysis.data : null);
     renderGraph(graph);
-    renderedSig = sigOf(graphResponse?.data || stagingResponse?.data);
+    showAuditRun(audits?.ok ? audits.data.latest : null);
     markUpdated(false);
-
-    const [metrics, analysis, audits] = currentSnapshot ? await Promise.all([
-      api(`/threads/${encodeURIComponent(currentThread)}/metrics`).catch(() => null),
-      api(`/threads/${encodeURIComponent(currentThread)}/analysis`).catch(() => null),
-      api(`/audits?threadId=${encodeURIComponent(currentThread)}`).catch(() => null)
-    ]) : [null, null, null];
-    if (metrics?.ok) showMetrics(metrics.data);
-    if (analysis?.ok) {
-      buildAnalysisMaps(analysis.data);
-      showAnalysis(analysis.data);
-      renderGraph(graph);
-    } else {
-      showAnalysis(null);
-    }
-    if (audits?.ok) showAuditRun(audits.data.latest);
     const stagingNodes = graph.nodes.filter((node) => node._dagLayer === 'staging').length;
     setStatus(stagingNodes
       ? `${committedNodeIds.size} committed · ${stagingNodes} staging · 待验证`
@@ -1563,6 +1566,8 @@ async function loadGraph() {
   } catch (error) {
     renderEmptyGraph(error instanceof Error ? error.message : String(error));
     setStatus('error');
+  } finally {
+    graphLoadInFlight = false;
   }
 }
 
@@ -1655,15 +1660,6 @@ function showReconcile(nodeId, result) {
   });
 }
 
-function fitGraph() {
-  $('stageScroll').scrollTo({ top: 0, left: 0, behavior: 'smooth' });
-}
-
-function sigOf(data) {
-  const summary = data?.summary || {};
-  return JSON.stringify([summary.node_count, summary.edge_count, summary.nodes_by_status]);
-}
-
 function markUpdated(on) {
   const button = $('refresh');
   if (on) {
@@ -1682,27 +1678,33 @@ function markUpdated(on) {
 async function pollChanges() {
   if (!currentThread) return;
   const response = await api(`/updates/status?threadId=${encodeURIComponent(currentThread)}`).catch(() => null);
-  const staging = response?.data?.staging || null;
+  if (!response?.ok) return;
+  const staging = response.data?.staging || null;
   const stagingSig = JSON.stringify([
-    response?.data?.graphState || null,
+    response.data?.graphState || null,
     staging?.status || null,
     staging?.batchDigest || null,
     staging?.newTraceCount || 0
   ]);
-  if (response?.ok && stagingSig !== renderedStagingSig) {
+  if (stagingSig !== renderedStagingSig) {
+    // The first poll after load records the baseline; reloading here would
+    // repaint an unchanged graph right after the initial render.
+    const isBaseline = renderedStagingSig === null;
     renderedStagingSig = stagingSig;
-    await loadGraph();
-    return;
+    if (!isBaseline) {
+      await loadGraph();
+      return;
+    }
   }
-  const nextDigest = response?.data?.snapshot?.digest;
-  if (response?.ok && nextDigest && nextDigest !== currentSnapshot?.digest) markUpdated(true);
+  const nextDigest = response.data?.snapshot?.digest;
+  if (nextDigest && nextDigest !== currentSnapshot?.digest) markUpdated(true);
 }
 
 $('thread').onchange = (event) => {
   currentThread = event.target.value;
   selectedNodeId = null;
   previewFeedback = null;
-  renderedSig = null;
+  renderedStagingSig = null;
   markUpdated(false);
   setSubtitle(currentThread || 'All threads');
   loadGraph();
@@ -1725,35 +1727,26 @@ window.addEventListener('message', (event) => {
 });
 $('refresh').onclick = loadGraph;
 $('auditNow').onclick = runAuditNow;
-$('fit').onclick = fitGraph;
-$('reviewHeat').onchange = (event) => {
-  reviewHeatEnabled = Boolean(event.target.checked);
-  document.body.dataset.reviewHeat = reviewHeatEnabled ? '1' : '0';
-  if (lastGraph) renderGraph(lastGraph);
-};
-$('auto').onchange = (event) => {
-  if (event.target.checked) {
-    timer = setInterval(pollChanges, 3000);
-  } else {
-    clearInterval(timer);
-    timer = null;
-    markUpdated(false);
-  }
-};
 $('stageScroll').addEventListener('click', (event) => {
   if (event.target === $('stageScroll') || event.target === $('stage') || event.target === $('laneLayer') || event.target === $('edgeLayer')) clearSelection();
 });
 
-// A URL-scoped thread can paint immediately; populating the thread picker is independent.
+// Human-review heat overlay is always on; change watching is always on.
 document.body.dataset.reviewHeat = '1';
+// A URL-scoped thread can paint immediately; the thread picker (and its
+// /threads listing) only matters in the standalone, non-locked view.
+const THREAD_LOCKED = document.documentElement.dataset.threadLocked === '1';
 const initialGraphLoad = currentThread ? loadGraph() : null;
-loadThreads().then(() => {
+const bootstrap = THREAD_LOCKED
+  ? Promise.resolve(setSubtitle(currentThread))
+  : loadThreads();
+bootstrap.then(() => {
   return initialGraphLoad || loadGraph();
 }).catch((error) => {
   renderEmptyGraph(error instanceof Error ? error.message : String(error));
   setStatus('error');
 });
-if ($('auto').checked && !timer) timer = setInterval(pollChanges, 3000);
+timer = setInterval(pollChanges, 3000);
 </script>
 </body>
 </html>

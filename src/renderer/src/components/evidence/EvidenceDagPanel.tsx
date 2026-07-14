@@ -153,8 +153,12 @@ export function EvidenceDagPanel({
     })).then((result) => {
       if (cancelled) return
       viewCache.set(viewCacheKey, result)
+      // Update the status band only. The iframe must NOT be remounted here:
+      // this effect also runs from the background status poll, and remounting
+      // reloads the embedded view every few seconds (visible flicker, and the
+      // graph never gets a chance to render). Explicit reloads happen through
+      // the Refresh button / Update action, which bump frameNonce themselves.
       setView(result)
-      setFrameNonce((current) => current + 1)
     }).catch((cause) => {
       if (cancelled) return
       // Keep the last committed graph visible when only background revalidation fails.
@@ -170,11 +174,13 @@ export function EvidenceDagPanel({
     }
   }, [requestNonce, runtimeId, t, threadId, viewCacheKey])
 
+  // Background status poll while a compile is running. It refreshes the status
+  // band only; the embedded view keeps its own lightweight change watcher.
   useEffect(() => {
     const freshness = view?.status.freshness
     if (freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty' &&
         !(freshness === 'failed' && view?.status.nextAttemptAt)) return
-    const timer = setInterval(() => setRequestNonce((current) => current + 1), 2_000)
+    const timer = setInterval(() => setRequestNonce((current) => current + 1), 5_000)
     return () => clearInterval(timer)
   }, [view?.status.freshness, view?.status.nextAttemptAt, view?.status.pendingCount])
 
@@ -266,7 +272,11 @@ export function EvidenceDagPanel({
           </button>
           <button
             type="button"
-            onClick={() => setRequestNonce((current) => current + 1)}
+            onClick={() => {
+              // Explicit user refresh: refetch status AND reload the embedded view.
+              setRequestNonce((current) => current + 1)
+              setFrameNonce((current) => current + 1)
+            }}
             disabled={loading || submitting}
             className="rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t('evidenceDagRefresh')}
@@ -290,16 +300,6 @@ export function EvidenceDagPanel({
             {status.missingArtifactCount ? <span className="text-amber-700">{t('dagMissingArtifacts', { count: status.missingArtifactCount })}</span> : null}
             {status.auditStale ? <span className="text-amber-700">{t('dagAuditStale')}</span> : null}
           </div>
-          {status.latestSnapshotDigest ? (
-            <div className="mt-1 truncate font-mono text-[10.5px] text-ds-faint" title={status.latestSnapshotDigest}>
-              {t('dagSnapshotDigest')}: {status.latestSnapshotDigest}
-            </div>
-          ) : null}
-          {status.desiredWatermark ? (
-            <div className="mt-1 truncate text-[10.5px] text-ds-faint">
-              {t('dagWatermarks', { committed: status.committedWatermark || '—', desired: status.desiredWatermark })}
-            </div>
-          ) : null}
           {status.progress ? (
             <div className="mt-2" role="progressbar" aria-label={t(`dagProgressStage.${status.progress.stage}`)}
               aria-valuemin={0} aria-valuemax={status.progress.totalItems}
@@ -321,6 +321,16 @@ export function EvidenceDagPanel({
           {status.lastError ? <div className="mt-1 break-words text-[11px] text-amber-700">{status.lastError}</div> : null}
           <details className="mt-2 text-[11px] text-ds-muted">
             <summary className="flex cursor-pointer list-none items-center gap-1"><ChevronDown className="h-3 w-3" />{t('dagAdvancedActions')}</summary>
+            {status.latestSnapshotDigest ? (
+              <div className="mt-2 truncate font-mono text-[10.5px] text-ds-faint" title={status.latestSnapshotDigest}>
+                {t('dagSnapshotDigest')}: {status.latestSnapshotDigest}
+              </div>
+            ) : null}
+            {status.desiredWatermark ? (
+              <div className="mt-1 truncate text-[10.5px] text-ds-faint">
+                {t('dagWatermarks', { committed: status.committedWatermark || '—', desired: status.desiredWatermark })}
+              </div>
+            ) : null}
             <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-amber-800">
               <p>{t('evidenceDagRebuildWarning')}</p>
               <button type="button" disabled={submitting || !canUpdateDag} onClick={() => submitUpdate('rebuild')} className="mt-2 inline-flex items-center gap-1 rounded-md border border-amber-300 px-2 py-1 font-medium disabled:opacity-50">

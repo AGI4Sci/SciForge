@@ -41,7 +41,9 @@ describe('Evidence DAG desktop contract', () => {
 
   it('ships an accessible human-review heat overlay and deduplicated review queue', () => {
     const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
-    expect(html).toContain('id="reviewHeat"')
+    // The heat overlay is always on; there is no user toggle any more.
+    expect(html).toContain("document.body.dataset.reviewHeat = '1'")
+    expect(html).toContain('data-review-heat="1"')
     expect(html).toContain('id="reviewQueue"')
     expect(html).toContain('data-human-review-level=')
     expect(html).toContain('Human Review Queue')
