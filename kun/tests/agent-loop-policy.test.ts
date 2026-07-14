@@ -93,7 +93,7 @@ describe('event-driven agent policy integration', () => {
     ]))
   })
 
-  it('detects a redundant read through path aliases and covered ranges', async () => {
+  it('suppresses redundant read aliases before bounded recovery exhausts', async () => {
     let executions = 0
     let modelSteps = 0
     const readTool = LocalToolHost.defineTool({
@@ -143,14 +143,15 @@ describe('event-driven agent policy integration', () => {
     await bootstrapThread(h, { workspace: '/repo' })
 
     await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('failed')
-    expect(executions).toBe(3)
-    expect(modelSteps).toBe(3)
+    // The repeat-loop guard suppresses one covered-range alias before the
+    // trajectory detector terminates the model's continued retry pattern.
+    expect(executions).toBe(2)
+    expect(modelSteps).toBe(4)
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({
         kind: 'error',
-        code: 'agent_stuck',
-        details: expect.objectContaining({ kind: 'redundant_read' })
+        code: 'tool_loop_recovery_exhausted'
       })
     ]))
   })

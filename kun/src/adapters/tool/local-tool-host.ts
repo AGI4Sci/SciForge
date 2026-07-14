@@ -375,6 +375,7 @@ export class LocalToolHost implements ToolHost {
     const argumentOverride = tool.requiresApproval?.(call.arguments, context)
     if (tool.approvalMode === 'mandatory' && argumentOverride === true) return true
     if (context.approvalPolicy === 'never') return false
+    if (context.sandboxMode === 'danger-full-access' && context.approvalPolicy !== 'untrusted') return false
     if (argumentOverride !== undefined) {
       if (context.approvalPolicy === 'auto') return false
       return argumentOverride
