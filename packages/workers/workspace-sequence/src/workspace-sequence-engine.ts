@@ -102,6 +102,8 @@ type SelectableSearchMatch = WorkspaceSequenceSearchMatch & {
 const SUPPORTED_EXTENSIONS: Record<string, WorkspaceSequenceResolvedFormat> = {
   '.fasta': 'fasta',
   '.fa': 'fasta',
+  '.fna': 'fasta',
+  '.faa': 'fasta',
   '.fastq': 'fastq',
   '.fq': 'fastq',
   '.gb': 'genbank',

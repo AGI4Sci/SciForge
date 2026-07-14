@@ -14,6 +14,7 @@ import {
   createMolecularLigandSelectionOperation,
   decodeWorkspacePreviewBase64Text,
   MolecularWorkspaceViewer,
+  molecularWorkbenchSourceIdentity,
   readMolecularRenderableAssetText,
   resolveMolecularRenderableAsset
 } from './MolecularWorkspaceViewer'
@@ -381,5 +382,30 @@ describe('MolecularWorkspaceViewer', () => {
       ok: false,
       reason: expect.stringContaining('refusing to load a truncated molecular model')
     })
+  })
+
+  it('keys Mol* source loading by source identity rather than observation selection or callback identity', () => {
+    const asset = createMolecularAssetDescriptor()
+    const identity = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset,
+      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      rangeReaderAvailable: true
+    })
+    const sameSource = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset: { ...asset },
+      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      rangeReaderAvailable: true
+    })
+    const nextSession = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset: { ...asset, sessionId: 'session-next' },
+      sourceUrl: 'sciforge-preview://asset/session-next',
+      rangeReaderAvailable: true
+    })
+
+    expect(sameSource).toBe(identity)
+    expect(nextSession).not.toBe(identity)
   })
 })
