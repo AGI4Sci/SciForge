@@ -54,6 +54,51 @@ class TestEventStore(unittest.TestCase):
             self.assertTrue(first["persistent"])
             self.assertEqual(len(EventStore(path).read()), 1)
 
+    def test_legacy_document_file_is_read_and_migrated_on_next_append(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "events.json")
+            legacy_event = {
+                "schemaVersion": "evidence-domain-events.v1", "eventId": "evidence-event:legacy",
+                "sequence": 1, "type": "EvidenceUpdateQueued", "aggregateType": "EvidenceThread",
+                "aggregateId": "t", "idempotencyKey": "job-legacy",
+                "occurredAt": "2026-07-10T00:00:00Z", "correlationId": None,
+                "causationId": None, "persistent": True, "payload": {"threadId": "t"},
+            }
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump({"schemaVersion": "evidence-domain-events.v1", "events": [legacy_event]}, fh)
+            store = EventStore(path)
+            self.assertEqual(len(store.read()), 1)
+            store.append(
+                "EvidenceSnapshotCommitted", aggregate_type="EvidenceThread", aggregate_id="t",
+                idempotency_key="snap-1", payload={"threadId": "t"},
+            )
+            with open(path, encoding="utf-8") as fh:
+                lines = [line for line in fh.read().splitlines() if line.strip()]
+            self.assertEqual(len(lines), 2)  # migrated to one JSON line per event
+            self.assertEqual([e["sequence"] for e in EventStore(path).read()], [1, 2])
+
+    def test_torn_trailing_line_from_crash_is_dropped(self):
+        with tempfile.TemporaryDirectory() as root:
+            path = os.path.join(root, "events.json")
+            store = EventStore(path)
+            store.append(
+                "EvidenceUpdateQueued", aggregate_type="EvidenceThread", aggregate_id="t",
+                idempotency_key="job-1", payload={"threadId": "t"},
+            )
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write('{"schemaVersion": "evidence-domain-ev')  # simulated torn write
+            recovered = EventStore(path)
+            self.assertEqual(len(recovered.read()), 1)
+            recovered.append(
+                "EvidenceSnapshotCommitted", aggregate_type="EvidenceThread", aggregate_id="t",
+                idempotency_key="snap-1", payload={"threadId": "t"},
+            )
+            restarted = EventStore(path).read()
+            self.assertEqual([event["sequence"] for event in restarted], [1, 2])
+            self.assertEqual([event["type"] for event in restarted], [
+                "EvidenceUpdateQueued", "EvidenceSnapshotCommitted",
+            ])
+
     def test_update_and_snapshot_events_survive_restart_without_duplicates(self):
         with tempfile.TemporaryDirectory() as workspace:
             storage = os.path.join(workspace, ".edag")

@@ -101,8 +101,8 @@ def _dispute_reason(graph: ThreadGraph, target_id: str) -> Optional[HumanReviewR
     }
     disputed = disputed or any(
         edge.rel in {EdgeRel.CONTRADICTS, EdgeRel.INVALIDATES, EdgeRel.FAILS_TO_REPLICATE}
-        and target_id in {edge.src, edge.dst}
-        for edge in graph.edges.values()
+        for incident in (graph.edges_by_src().get(target_id, ()), graph.edges_by_dst().get(target_id, ()))
+        for edge in incident
     )
     if not disputed:
         return None
@@ -114,8 +114,8 @@ def _dispute_reason(graph: ThreadGraph, target_id: str) -> Optional[HumanReviewR
     )
 
 
-def _downstream_count(graph: ThreadGraph, target_id: str) -> int:
-    support = graph.supports_digraph()
+def _downstream_count(support: nx.DiGraph, target_id: str) -> int:
+    """Descendant count on a caller-built supports digraph (built once per pass)."""
     if target_id not in support:
         return 0
     return len(nx.descendants(support, target_id))
@@ -156,7 +156,7 @@ def select_a2_targets(
             _critical_reason(graph, node.id),
             _dispute_reason(graph, node.id),
         ) if reason is not None]
-        downstream = _downstream_count(graph, node.id)
+        downstream = _downstream_count(support, node.id)
         if downstream >= 3:
             reasons.append(HumanReviewReason(
                 code="high_blast_radius",
@@ -297,6 +297,7 @@ def attach_human_reviews(
     policy: HumanReviewPolicy = DEFAULT_POLICY,
 ) -> tuple[list[Assessment], list[ReviewPacket]]:
     """Annotate assessments and create a bounded, deduplicated review queue."""
+    support = graph.supports_digraph()
     reviewed = [replace(
         assessment,
         human_review=_score_assessment(graph, assessment, policy, computed_at=computed_at),
@@ -353,7 +354,7 @@ def attach_human_reviews(
             },
             blast_radius={
                 "targetCount": len(targets),
-                "maxDownstreamNodes": max((_downstream_count(graph, target) for target in targets), default=0),
+                "maxDownstreamNodes": max((_downstream_count(support, target) for target in targets), default=0),
             },
             recommended_action=(
                 "Resolve required evidence gaps before relying on the snapshot."
@@ -403,7 +404,6 @@ def attach_human_reviews(
     # expired so queues never silently accumulate stale ancestors.
     current_ids = {packet.review_packet_id for packet in packets}
     affected_targets = set((delta or {}).get("new_nodes") or [])
-    support = graph.supports_digraph()
     for edge_id in (delta or {}).get("new_edges") or []:
         edge = graph.edges.get(edge_id)
         if edge is not None:

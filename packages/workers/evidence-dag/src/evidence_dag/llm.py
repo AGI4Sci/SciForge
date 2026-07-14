@@ -68,7 +68,15 @@ class ModelRouterLLM:
                 with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
                     body = json.loads(resp.read().decode("utf-8"))
                 return _response_text(body)
-            except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, KeyError) as exc:
+            except urllib.error.HTTPError as exc:
+                last_err = exc
+                # 4xx (except 408/429) means the request itself is wrong;
+                # retrying only burns the backoff budget.
+                if exc.code < 500 and exc.code not in (408, 429):
+                    break
+                if attempt < self.max_attempts:
+                    self._sleep(self.retry_base_s * (2 ** (attempt - 1)))
+            except (urllib.error.URLError, TimeoutError, KeyError) as exc:
                 last_err = exc
                 if attempt < self.max_attempts:
                     self._sleep(self.retry_base_s * (2 ** (attempt - 1)))
@@ -89,6 +97,11 @@ def _int_env(name: str, default: int) -> int:
         return value if value > 0 else default
     except ValueError:
         return default
+
+
+def llm_concurrency() -> int:
+    """Bounded fan-out for independent judge/review calls (EDAG_LLM_CONCURRENCY)."""
+    return max(1, _int_env("EDAG_LLM_CONCURRENCY", 8))
 
 
 class StubLLM:

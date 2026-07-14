@@ -72,6 +72,13 @@ class ArtifactRegistry:
         self.versions: dict[str, ArtifactVersion] = {}
         self.anchors: dict[str, SourceAnchor] = {}
         self.pending_events: dict[str, dict[str, Any]] = {}
+        # path -> (size, mtime_ns, digest): skip re-hashing unchanged files.
+        self._digest_cache: dict[str, tuple[int, int, str]] = {}
+        # current or historical locator -> artifact_id (unique by construction:
+        # register() reuses the artifact that already owns a locator).
+        self._artifact_by_locator: dict[str, str] = {}
+        self._revision = 0
+        self._state_digest_cache: Optional[tuple[int, str]] = None
         if path and os.path.exists(path):
             self._load()
         if self._event_path() and os.path.exists(self._event_path() or ""):
@@ -115,12 +122,33 @@ class ArtifactRegistry:
         payload = f"artifact-version-v1|{artifact_id}|{content_digest or ''}|{version or ''}|{ordinal}"
         return f"artifact-version:{hashlib.sha256(payload.encode('utf-8')).hexdigest()[:24]}"
 
+    # Distrust cache entries whose mtime is this recent: a same-size rewrite
+    # inside the filesystem timestamp resolution would otherwise go unnoticed
+    # (the same race git guards against for its index).
+    _DIGEST_CACHE_SLACK_NS = 2_000_000_000
+
+    def _digest_local_file(self, path: str) -> str:
+        """Content digest with an (size, mtime) cache so unchanged files are hashed once."""
+        stat = os.stat(path)
+        cached = self._digest_cache.get(path)
+        if (
+            cached is not None
+            and cached[0] == stat.st_size
+            and cached[1] == stat.st_mtime_ns
+            and time.time_ns() - stat.st_mtime_ns > self._DIGEST_CACHE_SLACK_NS
+        ):
+            return cached[2]
+        digest = digest_file(path)
+        self._digest_cache[path] = (stat.st_size, stat.st_mtime_ns, digest)
+        return digest
+
+    def _index_locator(self, locator: str, artifact_id: str) -> None:
+        # First registration wins, mirroring the previous insertion-order scan.
+        self._artifact_by_locator.setdefault(locator, artifact_id)
+
     def _find_by_locator(self, locator: str) -> Optional[Artifact]:
-        for artifact in self.artifacts.values():
-            current = self.versions.get(artifact.current_version_id)
-            if current and (current.locator == locator or locator in current.historical_locators):
-                return artifact
-        return None
+        artifact_id = self._artifact_by_locator.get(locator)
+        return self.artifacts.get(artifact_id) if artifact_id else None
 
     def register(
         self,
@@ -163,7 +191,7 @@ class ArtifactRegistry:
         locator = self._normalize_locator(locator)
         local_path = self._absolute_locator(locator)
         if local_path and os.path.isfile(local_path):
-            actual_digest = digest_file(local_path)
+            actual_digest = self._digest_local_file(local_path)
             if content_digest and normalize_sha256(content_digest) != actual_digest:
                 raise ValueError("supplied contentDigest does not match artifact bytes")
             content_digest = actual_digest
@@ -187,6 +215,7 @@ class ArtifactRegistry:
                     current.locator = locator
                     current.availability = "moved"
                     current.observed_at = observed
+                    self._index_locator(locator, artifact.artifact_id)
                     self._persist()
                     self._record_lifecycle_event(artifact.artifact_id, before_state, "moved")
                     return artifact, current, "moved"
@@ -224,6 +253,7 @@ class ArtifactRegistry:
         )
         self.artifacts[artifact_id] = artifact
         self.versions[version_id] = artifact_version
+        self._index_locator(locator, artifact_id)
         self._persist()
         return artifact, artifact_version, "registered"
 
@@ -254,6 +284,7 @@ class ArtifactRegistry:
         )
         artifact.current_version_id = version_id
         self.versions[version_id] = created
+        self._index_locator(locator, artifact.artifact_id)
         self._persist()
         return artifact, created
 
@@ -429,7 +460,7 @@ class ArtifactRegistry:
             return {"outcome": "available", **self.get(artifact_id)}
         path = self._absolute_locator(current.locator)
         if path and os.path.isfile(path):
-            observed_digest = digest_file(path)
+            observed_digest = self._digest_local_file(path)
             if current.content_digest and observed_digest != current.content_digest:
                 _, created = self._append_version(
                     artifact, locator=current.locator, content_digest=observed_digest,
@@ -448,7 +479,9 @@ class ArtifactRegistry:
             self._persist()
             return {"outcome": "available", **self.get(artifact_id)}
 
-        candidates = self._matching_candidates(current.content_digest, candidate_locators)
+        candidates = self._matching_candidates(
+            current.content_digest, candidate_locators, expected_size=current.size,
+        )
         if len(candidates) == 1:
             old = current.locator
             if old not in current.historical_locators:
@@ -457,6 +490,7 @@ class ArtifactRegistry:
             current.availability = "moved"
             current.rebind_candidates = []
             current.observed_at = _now_iso()
+            self._index_locator(current.locator, artifact_id)
             self._persist()
             return {"outcome": "moved", "previousLocator": old, "locator": current.locator,
                     **self.get(artifact_id)}
@@ -478,7 +512,8 @@ class ArtifactRegistry:
         if normalized not in current.rebind_candidates:
             raise ValueError("locator is not a pending rebind candidate")
         absolute = self._absolute_locator(normalized)
-        if not absolute or not os.path.isfile(absolute) or digest_file(absolute) != current.content_digest:
+        if not absolute or not os.path.isfile(absolute) \
+                or self._digest_local_file(absolute) != current.content_digest:
             raise ValueError("rebind candidate no longer matches the ArtifactVersion digest")
         previous = current.locator
         if previous not in current.historical_locators:
@@ -487,24 +522,36 @@ class ArtifactRegistry:
         current.availability = "moved"
         current.rebind_candidates = []
         current.observed_at = _now_iso()
+        self._index_locator(normalized, artifact_id)
         self._persist()
         return {"outcome": "moved", "previousLocator": previous, **self.get(artifact_id)}
 
-    def _matching_candidates(self, digest: Optional[str], supplied: Iterable[str]) -> list[str]:
+    def _matching_candidates(
+        self, digest: Optional[str], supplied: Iterable[str], *, expected_size: Optional[int] = None,
+    ) -> list[str]:
         if not digest:
             return []
+
+        def matches(absolute: str) -> bool:
+            # Size is a free pre-filter: a different byte count can never hash
+            # to the recorded digest, so most of the workspace is skipped
+            # without reading file contents.
+            if expected_size is not None and os.path.getsize(absolute) != expected_size:
+                return False
+            return self._digest_local_file(absolute) == digest
+
         paths: list[str] = []
         for supplied_locator in supplied:
             normalized = self._normalize_locator(supplied_locator)
             absolute = self._absolute_locator(normalized)
-            if absolute and os.path.isfile(absolute) and digest_file(absolute) == digest:
+            if absolute and os.path.isfile(absolute) and matches(absolute):
                 paths.append(normalized)
         for root in self.workspace_roots:
             for directory, _dirs, files in os.walk(root):
                 for filename in files:
                     absolute = os.path.join(directory, filename)
                     try:
-                        if digest_file(absolute) == digest:
+                        if matches(absolute):
                             paths.append(os.path.relpath(absolute, self.locator_root or root).replace(os.sep, "/"))
                     except OSError:
                         continue
@@ -522,6 +569,9 @@ class ArtifactRegistry:
 
     def state_digest(self) -> str:
         """Digest effective registry state; observation timestamps are non-semantic."""
+        cached = self._state_digest_cache
+        if cached is not None and cached[0] == self._revision:
+            return cached[1]
         versions = []
         for item in self.versions.values():
             value = item.to_dict()
@@ -538,9 +588,14 @@ class ArtifactRegistry:
             "artifactVersions": sorted(versions, key=lambda value: value["versionId"]),
             "sourceAnchors": sorted(anchors, key=lambda value: value["anchorId"]),
         }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
-        return f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+        digest = f"sha256:{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+        self._state_digest_cache = (self._revision, digest)
+        return digest
 
     def _persist(self) -> None:
+        # Every mutation path ends here, so the revision doubles as the
+        # invalidation key for the state_digest cache.
+        self._revision += 1
         if not self.path:
             return
         with self._lock:
@@ -555,6 +610,8 @@ class ArtifactRegistry:
             try:
                 with open(tmp, "x", encoding="utf-8") as fh:
                     json.dump(payload, fh, ensure_ascii=False, sort_keys=True, indent=2)
+                    fh.flush()
+                    os.fsync(fh.fileno())
                 os.replace(tmp, self.path)
             finally:
                 if os.path.exists(tmp):
@@ -601,3 +658,13 @@ class ArtifactRegistry:
         self.artifacts = {a.artifact_id: a for a in map(Artifact.from_dict, payload.get("artifacts") or [])}
         self.versions = {v.version_id: v for v in map(ArtifactVersion.from_dict, payload.get("artifactVersions") or [])}
         self.anchors = {a.anchor_id: a for a in map(SourceAnchor.from_dict, payload.get("sourceAnchors") or [])}
+        # Rebuild the locator index over the same view the lookup used before
+        # (current version's locator plus its historical locators).
+        self._artifact_by_locator = {}
+        for artifact in self.artifacts.values():
+            current = self.versions.get(artifact.current_version_id)
+            if current is None:
+                continue
+            self._index_locator(current.locator, artifact.artifact_id)
+            for historical in current.historical_locators:
+                self._index_locator(historical, artifact.artifact_id)

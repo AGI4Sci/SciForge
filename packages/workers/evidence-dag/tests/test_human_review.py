@@ -37,9 +37,11 @@ from evidence_dag.snapshot import build_snapshot, compute_snapshot_digest
 class AdversarialLLM:
     def __init__(self) -> None:
         self.calls = 0
+        self._lock = threading.Lock()
 
     def chat(self, messages, *, temperature=0.0, max_tokens=2048):
-        self.calls += 1
+        with self._lock:  # run_a2 fans reviews out concurrently
+            self.calls += 1
         return '{"result":"uncertain","confidence":0.65,"rationale":"Visible evidence conflicts."}'
 
 
