@@ -12,13 +12,15 @@ import uuid
 from dataclasses import replace
 from typing import Any, Optional
 
+import networkx as nx
+
 from . import analysis as _analysis
 from . import audit as _audit
 from . import metrics as _metrics
 from . import provjson
 from . import reconcile as _reconcile
 from .artifacts import ArtifactRegistry
-from .assessment import bind_target_digest, run_a0, run_a1, run_a2
+from .assessment import assessment_identity, bind_target_digest, run_a0, run_a1, run_a2
 from .human_review import (
     DEFAULT_POLICY,
     attach_human_reviews,
@@ -62,6 +64,10 @@ class Engine:
         self._registries: dict[str, ArtifactRegistry] = {}
         self._lock = threading.RLock()
         self._compile_locks: dict[str, threading.RLock] = {}
+        # Read-path caches keyed by file mtime; snapshot files are immutable
+        # and the latest file is atomically replaced, so mtime is authoritative.
+        self._thread_id_cache: dict[str, tuple[float, str]] = {}
+        self._history_cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._trace_staging = TraceStagingCache(storage_dir)
         if storage_dir:
             os.makedirs(storage_dir, exist_ok=True)
@@ -134,16 +140,19 @@ class Engine:
         except ValueError as exc:
             raise ValueError("projectRoot must be contained by workspaceRoot") from exc
         cache_key = f"{project_key}|{workspace}|{project}"
-        registry = self._registries.get(cache_key)
-        if registry is None:
-            registry_path = os.path.join(
-                self.storage_dir, "artifact-registries", f"{self._safe_key(project_key)}.json",
-            ) if self.storage_dir else None
-            registry = ArtifactRegistry(
-                registry_path, workspace_roots=(project,), locator_root=workspace,
-            )
-            self._registries[cache_key] = registry
-        return registry
+        # Guard the check-then-create: concurrent HTTP handlers must never end
+        # up with two Registry instances writing the same persistent file.
+        with self._lock:
+            registry = self._registries.get(cache_key)
+            if registry is None:
+                registry_path = os.path.join(
+                    self.storage_dir, "artifact-registries", f"{self._safe_key(project_key)}.json",
+                ) if self.storage_dir else None
+                registry = ArtifactRegistry(
+                    registry_path, workspace_roots=(project,), locator_root=workspace,
+                )
+                self._registries[cache_key] = registry
+            return registry
 
     def _compile_lock(self, thread_id: str) -> threading.RLock:
         """Serialize one thread without blocking independent DAG compiles or readers."""
@@ -380,6 +389,12 @@ class Engine:
                     ))
                 else:
                     raise RuntimeError("A2 independent reviewer is required for Evidence Snapshot commit")
+                # A0 re-checks the whole graph each compile; keeping only checks
+                # that changed (new target, new result, new rationale) stops the
+                # append-only ledger from growing with every unchanged compile.
+                # A genuinely changed verdict has a different identity and is kept.
+                recorded = {assessment_identity(existing) for existing in graph.assessments}
+                pending = [item for item in pending if assessment_identity(item) not in recorded]
                 computed_at = utc_now_iso()
                 pending, graph.review_packets = attach_human_reviews(
                     graph, pending, delta=delta, computed_at=computed_at,
@@ -537,16 +552,14 @@ class Engine:
                 stale_roots.append(node.id)
             else:
                 node.freshness = "fresh"
+        if not stale_roots:
+            return
         support_graph = graph.supports_digraph()
+        stale_downstream: set[str] = set()
         for root in stale_roots:
-            for downstream in support_graph.successors(root):
-                graph.nodes[downstream].freshness = "stale"
-            try:
-                import networkx as nx
-                for downstream in nx.descendants(support_graph, root):
-                    graph.nodes[downstream].freshness = "stale"
-            except Exception:
-                pass
+            stale_downstream.update(nx.descendants(support_graph, root))
+        for node_id in stale_downstream:
+            graph.nodes[node_id].freshness = "stale"
 
     # --- Artifact Registry commands --------------------------------------
     def register_artifact(
@@ -850,10 +863,16 @@ class Engine:
                     continue
                 path = os.path.join(self.storage_dir, filename)
                 try:
+                    mtime = os.path.getmtime(path)
+                    cached = self._thread_id_cache.get(path)
+                    if cached is not None and cached[0] == mtime:
+                        found[cached[1]] = mtime
+                        continue
                     with open(path, encoding="utf-8") as fh:
                         doc = json.load(fh)
                     snapshot = EvidenceSnapshot.from_dict((doc.get("edag:meta") or {}).get("snapshot") or {})
-                    found[snapshot.thread_id] = os.path.getmtime(path)
+                    self._thread_id_cache[path] = (mtime, snapshot.thread_id)
+                    found[snapshot.thread_id] = mtime
                 except (OSError, ValueError, TypeError):
                     continue
         for thread_id in self._graphs:
@@ -903,10 +922,18 @@ class Engine:
         if directory and os.path.isdir(directory):
             for path in glob.glob(os.path.join(directory, "*.prov.json")):
                 try:
-                    with open(path, encoding="utf-8") as fh:
-                        graph = provjson.loads(fh.read())
-                    snapshot = self._verified_snapshot(graph, thread_id=thread_id)
-                    snapshots[snapshot.digest] = snapshot.to_dict()
+                    # Historical snapshot files are immutable: verify each file
+                    # once and serve later reads from the mtime-keyed cache.
+                    mtime = os.path.getmtime(path)
+                    cached = self._history_cache.get(path)
+                    if cached is None or cached[0] != mtime:
+                        with open(path, encoding="utf-8") as fh:
+                            graph = provjson.loads(fh.read())
+                        snapshot = self._verified_snapshot(graph, thread_id=thread_id)
+                        cached = (mtime, snapshot.to_dict())
+                        self._history_cache[path] = cached
+                    entry = cached[1]
+                    snapshots[str(entry["digest"])] = dict(entry)
                 except (OSError, TypeError, ValueError):
                     continue
         current = self.latest_snapshot(thread_id)

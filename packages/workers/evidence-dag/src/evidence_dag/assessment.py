@@ -4,11 +4,12 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from typing import Any, Optional
 
 from .graph import ThreadGraph
-from .llm import LLM
+from .llm import LLM, llm_concurrency
 from .model import (
     Assessment,
     AssessmentDimension,
@@ -165,12 +166,13 @@ def run_a2(
     target_ids: Optional[set[str]] = None,
 ) -> list[Assessment]:
     """Run adversarial review only for policy-selected semantic targets."""
-    assessments: list[Assessment] = []
-    for node in graph.nodes.values():
-        if target_ids is not None and node.id not in target_ids:
-            continue
-        if node.type not in {NodeType.CLAIM, NodeType.FINDING, NodeType.ASSUMPTION}:
-            continue
+    targets = [
+        node for node in graph.nodes.values()
+        if (target_ids is None or node.id in target_ids)
+        and node.type in {NodeType.CLAIM, NodeType.FINDING, NodeType.ASSUMPTION}
+    ]
+
+    def _review(node) -> Assessment:
         path = graph.provenance_path(node.id)
         evidence = [
             item["content"] for item in path["nodes"]
@@ -189,13 +191,41 @@ def run_a2(
         except (TypeError, ValueError, json.JSONDecodeError, RuntimeError) as exc:
             result, confidence = AssessmentResult.UNCERTAIN, 0.0
             rationale = f"Independent adversarial review failed safely: {type(exc).__name__}."
-        assessments.append(_assessment(
+        return _assessment(
             node.id, AssessmentDimension.METHODOLOGY, AssessmentLevel.A2, result,
             actor=f"independent-adversarial-reviewer:{reviewer_version}",
             method="independent-prompt-and-context:adversarial-v1", confidence=confidence,
             rationale=rationale,
-        ))
-    return assessments
+        )
+
+    if not targets:
+        return []
+    # Reviews are independent per target; a bounded pool keeps compile latency
+    # tied to the slowest review instead of the sum of all of them.
+    workers = min(llm_concurrency(), len(targets))
+    if workers <= 1:
+        return [_review(node) for node in targets]
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        return list(pool.map(_review, targets))
+
+
+def assessment_identity(assessment: Assessment) -> str:
+    """Stable identity of one machine check, ignoring execution metadata.
+
+    Two assessments with the same identity say exactly the same thing about the
+    same target; re-recording the second one every compile only bloats the
+    append-only ledger without changing what a reader can learn from it.
+    """
+    return json.dumps({
+        "targetId": assessment.target_id,
+        "dimension": assessment.dimension.value,
+        "level": assessment.level.value,
+        "result": assessment.result.value,
+        "actor": assessment.actor,
+        "method": assessment.method,
+        "confidence": round(float(assessment.confidence), 6),
+        "rationale": assessment.rationale,
+    }, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def bind_target_digest(assessments: list[Assessment], target_digest: str) -> list[Assessment]:

@@ -18,10 +18,11 @@ from __future__ import annotations
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
 from .graph import ThreadGraph
-from .llm import LLM
+from .llm import LLM, llm_concurrency
 from .model import EdgeRel, NodeStatus, NodeType
 
 logger = logging.getLogger(__name__)
@@ -197,15 +198,28 @@ def verify(graph: ThreadGraph, llm: LLM, *, threshold: float = 0.7,
     before = {nid: n.status for nid, n in graph.nodes.items()}
 
     def _score_edges(rel: EdgeRel, scorer) -> int:
-        n = 0
-        for e in graph.edges_of(rel):
-            if only_unscored and e.nli_score is not None:
-                continue
-            src, dst = graph.nodes.get(e.src), graph.nodes.get(e.dst)
-            if src and dst:
-                e.nli_score = scorer(llm, src.content, dst.content)
-                n += 1
-        return n
+        pending = [
+            e for e in graph.edges_of(rel)
+            if (not only_unscored or e.nli_score is None)
+            and e.src in graph.nodes and e.dst in graph.nodes
+        ]
+        if not pending:
+            return 0
+        # Judge calls are independent; fan them out under a bounded pool so a
+        # compile is not serialized on one slow Model Router round-trip per edge.
+        workers = min(llm_concurrency(), len(pending))
+        if workers <= 1:
+            scores = [scorer(llm, graph.nodes[e.src].content, graph.nodes[e.dst].content)
+                      for e in pending]
+        else:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                scores = list(pool.map(
+                    lambda e: scorer(llm, graph.nodes[e.src].content, graph.nodes[e.dst].content),
+                    pending,
+                ))
+        for edge, score in zip(pending, scores):
+            edge.nli_score = score
+        return len(pending)
 
     # supports edges carry ν = support degree; contradicts edges carry ν =
     # contradiction degree — scored the same way, just a different judge.
