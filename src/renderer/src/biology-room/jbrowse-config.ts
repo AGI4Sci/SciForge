@@ -114,7 +114,7 @@ export function buildJBrowseLocalViewConfig(input: {
   const defaultTracks = [
     sessionTrack(referenceTrackId, 'ReferenceSequenceTrack', 'LinearReferenceSequenceDisplay'),
     ...trackConfigs
-      .filter(({ asset }) => isBiologyRoomTrackVisible(room, asset.id))
+      .filter(({ asset }) => asset.id === activeTrack.id || isBiologyRoomTrackVisible(room, asset.id))
       .map(({ track, displayType }) => sessionTrack(String(track.trackId), String(track.type), displayType))
   ]
   const trackAssetIds = Object.fromEntries(trackConfigs.flatMap(({ asset, track }) => {

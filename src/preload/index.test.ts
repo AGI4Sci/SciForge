@@ -336,8 +336,7 @@ describe('preload agentRuntime bridge', () => {
       workspaceRoot: '/tmp/workspace'
     })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
-    expect(assetSourceUrl).toContain('http://127.0.0.1:5174/workspace-preview/assets/session%201')
-    expect(assetSourceUrl).toContain('clientId=electron-preload-')
+    expect(assetSourceUrl).toBe('sciforge-preview://asset/session%201')
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
     expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {

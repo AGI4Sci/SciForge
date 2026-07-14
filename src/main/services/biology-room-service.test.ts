@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { mkdtemp, readFile, readdir, rm, symlink, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { gzipSync } from 'node:zlib'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   BIOLOGY_ROOM_MAX_TOTAL_ASSET_BYTES,
@@ -961,11 +962,11 @@ describe('BiologyRoomService', () => {
     const workspaceRoot = await tempWorkspace()
     await writeFile(join(workspaceRoot, 'reference.fa'), '>chr1\nAAAA\n', 'utf8')
     await writeFile(join(workspaceRoot, 'zero-tbi.vcf.gz'), Buffer.from('compressed'))
-    await writeFile(join(workspaceRoot, 'zero-tbi.vcf.gz.tbi'), tbiIndex(['chrX']))
+    await writeFile(join(workspaceRoot, 'zero-tbi.vcf.gz.tbi'), gzipSync(tbiIndex(['chrX'])))
     await writeFile(join(workspaceRoot, 'partial.vcf.gz'), Buffer.from('compressed'))
-    await writeFile(join(workspaceRoot, 'partial.vcf.gz.tbi'), tbiIndex(['chr1', 'chrX']))
+    await writeFile(join(workspaceRoot, 'partial.vcf.gz.tbi'), gzipSync(tbiIndex(['chr1', 'chrX'])))
     await writeFile(join(workspaceRoot, 'zero-csi.vcf.gz'), Buffer.from('compressed'))
-    await writeFile(join(workspaceRoot, 'zero-csi.vcf.gz.csi'), csiIndex(['chrY']))
+    await writeFile(join(workspaceRoot, 'zero-csi.vcf.gz.csi'), gzipSync(csiIndex(['chrY'])))
     const service = new BiologyRoomService()
 
     for (const [roomId, path] of [

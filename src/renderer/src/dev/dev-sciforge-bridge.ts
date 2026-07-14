@@ -299,6 +299,17 @@ function createApi(): SciForgeApi {
       onChanged: (handler) => onChannel('workspacePreview:changed', handler),
       getAssetSourceUrl: workspacePreviewAssetSourceUrl
     },
+    biologyRoom: {
+      pickFile: (workspaceRoot) => invoke('biologyRoom:pick-file', { workspaceRoot }),
+      create: (input) => invoke('biologyRoom:create', input),
+      openOrCreate: (input) => invoke('biologyRoom:openOrCreate', input),
+      load: (input) => invoke('biologyRoom:load', input),
+      list: (input) => invoke('biologyRoom:list', input),
+      observe: (input) => invoke('biologyRoom:observe', input),
+      apply: (input) => invoke('biologyRoom:apply', input),
+      refresh: (input) => invoke('biologyRoom:refresh', input),
+      history: (input) => invoke('biologyRoom:history', input)
+    },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),
     listWriteInlineCompletionDebugEntries: () => invoke('write:inline-completion-debug:list'),

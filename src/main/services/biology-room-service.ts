@@ -3,6 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { link, open, readFile, readdir, rename, rm, stat } from 'node:fs/promises'
 import { basename, join, relative, resolve } from 'node:path'
+import { gunzipSync } from 'node:zlib'
 import {
   BIOLOGY_ROOM_MAX_ANNOTATIONS,
   BIOLOGY_ROOM_MAX_ASSETS,
@@ -188,7 +189,7 @@ export class BiologyRoomService {
     const source = await resolveSourceFile(workspaceRoot, parsed.path)
 
     return this.enqueue(`${workspaceRoot}:open:${source.relativePath}`, async () => {
-      const manifests = await listManifests(workspaceRoot, 500)
+      const manifests = await listManifests(workspaceRoot)
       const existing = manifests.find((manifest) =>
         manifest.assets.some((asset) => asset.path === source.relativePath)
       )
@@ -243,7 +244,7 @@ export class BiologyRoomService {
   async list(input: BiologyRoomListInput): Promise<BiologyRoomSummary[]> {
     const parsed = biologyRoomListInputSchema.parse(input)
     const workspaceRoot = await resolveWorkspaceRoot(parsed.workspaceRoot)
-    const manifests = await listManifests(workspaceRoot, 500)
+    const manifests = await listManifests(workspaceRoot)
     return manifests
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.roomId.localeCompare(b.roomId))
       .slice(0, parsed.limit)
@@ -616,7 +617,7 @@ async function loadRevision(
   return biologyRoomManifestSchema.parse(JSON.parse(await readFile(path, 'utf8')) as unknown)
 }
 
-async function listManifests(workspaceRoot: string, limit: number): Promise<BiologyRoomManifest[]> {
+async function listManifests(workspaceRoot: string): Promise<BiologyRoomManifest[]> {
   const rawDirectory = join(workspaceRoot, BIOLOGY_ROOMS_DIRECTORY)
   if (!(await pathExists(rawDirectory))) return []
   const directory = await resolveOpenTargetPath(BIOLOGY_ROOMS_DIRECTORY, workspaceRoot, {
@@ -625,7 +626,6 @@ async function listManifests(workspaceRoot: string, limit: number): Promise<Biol
   const entries = await readdir(directory, { withFileTypes: true })
   const manifests: BiologyRoomManifest[] = []
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
-    if (manifests.length >= limit) break
     if (!entry.isDirectory() || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.name)) continue
     const manifest = await loadRoomUnlocked(workspaceRoot, entry.name).catch(() => null)
     if (manifest) manifests.push(manifest)
@@ -1345,17 +1345,31 @@ async function validateIndexFiles(
       }
       continue
     }
+    const decodedBytes = decodeTabixIndex(bytes, indexPath)
     const expectedMagic = extension === '.tbi' ? 'TBI\u0001' : extension === '.csi' ? 'CSI\u0001' : ''
     const minimumBytes = extension === '.tbi' ? 36 : extension === '.csi' ? 16 : Number.POSITIVE_INFINITY
-    if (!expectedMagic || bytes.length < minimumBytes || bytes.subarray(0, 4).toString('latin1') !== expectedMagic) {
+    if (
+      !expectedMagic ||
+      decodedBytes.length < minimumBytes ||
+      decodedBytes.subarray(0, 4).toString('latin1') !== expectedMagic
+    ) {
       throw new Error(`Invalid ${extension.slice(1).toUpperCase() || 'biology'} index: ${indexPath}`)
     }
     const contigs = extension === '.tbi'
-      ? contigsFromTbi(bytes, indexPath)
-      : contigsFromCsi(bytes, indexPath)
+      ? contigsFromTbi(decodedBytes, indexPath)
+      : contigsFromCsi(decodedBytes, indexPath)
     if (contigs.length) contigsByIndex.set(indexPath, contigs)
   }
   return contigsByIndex
+}
+
+function decodeTabixIndex(bytes: Buffer, path: string): Buffer {
+  if (bytes[0] !== 0x1f || bytes[1] !== 0x8b) return bytes
+  try {
+    return gunzipSync(bytes, { maxOutputLength: MAX_INDEX_BINARY_BYTES })
+  } catch {
+    throw new Error(`Invalid compressed biology index: ${path}`)
+  }
 }
 
 function validateFaiText(text: string, path: string): void {

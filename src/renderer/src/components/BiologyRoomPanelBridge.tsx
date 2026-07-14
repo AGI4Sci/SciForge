@@ -49,6 +49,7 @@ import {
   resolveBioGymDisplayedAssetId,
   shouldResetBioGymFollowRun
 } from '../biology-room/biogym-run-ui'
+import { createBiologyPreviewSessionLease } from '../biology-room/preview-session-lease'
 
 type PreviewTransportState = {
   planKey: string | null
@@ -230,7 +231,11 @@ export function BiologyRoomPanelBridge({
       setFollowRun(true)
     }
     runEventRef.current = runEvent
-    if (runEvent.workspaceRoot !== workspaceRoot || runEvent.roomId !== initialRoomId) return
+    const displayedRoomId = initialRoomId?.trim() || roomRef.current?.roomId
+    if (
+      runEvent.workspaceRoot !== workspaceRoot ||
+      (displayedRoomId && runEvent.roomId !== displayedRoomId)
+    ) return
     const api = window.sciforge?.biologyRoom
     if (!api) return
     let cancelled = false
@@ -461,25 +466,23 @@ export function BiologyRoomPanelBridge({
       return undefined
     }
     let cancelled = false
-    const sessionIds: string[] = []
+    const sessionLease = createBiologyPreviewSessionLease((sessionId) =>
+      window.sciforge.workspacePreview.releaseSession(sessionId)
+    )
     setPreview(EMPTY_PREVIEW_TRANSPORT)
-    void prepareRoomPreviewTransport(transportPlan, workspaceRoot, sessionIds)
+    void prepareRoomPreviewTransport(transportPlan, workspaceRoot, sessionLease.track)
       .then((next) => {
         if (!cancelled) setPreview({ ...next, planKey: transportPlanJson })
       })
       .catch((cause) => {
-        for (const sessionId of sessionIds.splice(0)) {
-          void window.sciforge.workspacePreview.releaseSession(sessionId)
-        }
+        sessionLease.releaseAll()
         if (!cancelled) {
           setPreview({ ...EMPTY_PREVIEW_TRANSPORT, planKey: transportPlanJson, error: errorMessage(cause) })
         }
       })
     return () => {
       cancelled = true
-      for (const sessionId of sessionIds) {
-        void window.sciforge.workspacePreview.releaseSession(sessionId)
-      }
+      sessionLease.releaseAll()
     }
   }, [transportPlan, transportPlanJson, workspaceRoot])
 
@@ -633,7 +636,7 @@ export function BiologyRoomPanelBridge({
 async function prepareRoomPreviewTransport(
   plan: BiologyPreviewTransportPlan,
   workspaceRoot: string,
-  sessionIds: string[]
+  onSessionOpened: (sessionId: string) => void
 ): Promise<PreviewTransportState> {
   const previewApi = window.sciforge.workspacePreview
   const active = plan.assets.find((asset) => asset.id === plan.activeAssetId)
@@ -647,7 +650,7 @@ async function prepareRoomPreviewTransport(
   for (const path of paths) {
     const opened = await previewApi.open({ path, workspaceRoot, mode: 'inspect' })
     if (!opened.ok) throw new Error(opened.message)
-    sessionIds.push(opened.session.id)
+    onSessionOpened(opened.session.id)
     sessions.set(path, opened.session.id)
   }
   const sourceForPath = (path: string): string | null => {
