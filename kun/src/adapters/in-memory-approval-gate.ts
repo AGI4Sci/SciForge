@@ -25,7 +25,7 @@ export class InMemoryApprovalGate implements ApprovalGate {
 
   decide(approvalId: string, decision: 'allow' | 'deny', reason?: string): boolean {
     const approval = this.approvals.get(approvalId)
-    if (!approval) return false
+    if (!approval || approval.status !== 'pending') return false
     const resolved = resolveApprovalRequest(approval, decision, reason)
     this.approvals.set(approvalId, resolved)
     const resolver = this.resolvers.get(approvalId)

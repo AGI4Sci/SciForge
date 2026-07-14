@@ -194,10 +194,10 @@ SciForge Runtime 使用 JSON 配置文件管理运行时行为，避免重建后
       }
     },
     "web": {
-      "enabled": false,
-      "fetchEnabled": false,
-      "searchEnabled": false,
-      "provider": "fetch",
+      "enabled": true,
+      "fetchEnabled": true,
+      "searchEnabled": true,
+      "provider": "public-rss",
       "allowDomains": [],
       "denyDomains": ["localhost", "127.0.0.1"]
     },
@@ -239,11 +239,14 @@ SciForge Runtime 默认使用混合存储：`threads/{threadId}/messages.jsonl` 
 功能开关是显式设计：
 
 - `capabilities.mcp` 启动配置化 MCP 客户端并将工具加入动态注册表；工作区级服务器要求设置 `trustedWorkspaceRoots`。
-- `serve.mcpSearch` 可把大量 MCP 工具收敛为 `mcp_search`、`mcp_describe`、`mcp_call` 和 `mcp_refresh_catalog` 四个入口；当工具目录过大时，模型先检索意图相关工具，再描述和调用具体工具，避免每轮都携带完整 MCP schema。
+- `capabilities.mcp.search` 默认使用 `auto`；MCP 工具达到 24 个时，会收敛为 `mcp_search`、`mcp_describe`、`mcp_call` 和 `mcp_refresh_catalog` 四个发现入口。专用 research 工具仍在索引中，仅在查询与其匹配时选择。
 - `serve.tokenEconomy` / `tokenEconomyMode` 会压缩工具描述、工具结果和历史上下文；保留代码、路径、命令、URL、错误信号等高价值信息，同时省掉重复、超长或二进制 payload。
 - `contextCompaction` 控制长会话压缩的兜底阈值和摘要方式；模型级阈值写在 `models.profiles`。压缩时保留目标、约束、决策、已触碰文件、工具结果和未解决事项。
-- `serve.runtimeTuning.toolStorm` 会抑制同一回合内重复的相同工具调用，阻止无意义 tool loop 继续烧 token。
-- `capabilities.web` 暴露 `web_fetch` 与/或 `web_search`。内置 provider 负责 HTTP(S) 抓取；搜索功能依赖 provider 实现，未配置时会变为不可用。
+- `runtime.maxToolCallsPerTurn` 设置工具执行硬预算（默认 16 次）；达到预算后会移除工具并让模型完成一次最终总结。即使关闭完全重复调用拦截，该硬预算仍然生效。
+- `runtime.toolStorm` 控制完全重复调用拦截和恢复提示。
+- `runtime.stuckDetection` 从持久化回合条目中识别重复 action/observation、重复错误、A/B 交替循环以及语义重复读文件。
+- `runtime.maxTurnModelSteps` 控制事件驱动 runner 的模型步数，默认值为 24；子代理保留更大的已记录步数额度，但使用相同的卡死检测与工具预算策略。
+- `capabilities.web` 暴露 `web_fetch` 与/或 `web_search`。内置 `public-rss` provider 无需 API key 即可搜索当前网页，并可继续抓取结果页面核实细节。
 - `capabilities.skills` 扫描 `roots` 下的 `skill.json`。manifest 可以把 `entry` 指向 `SKILL.md`，但单独存在的 `SKILL.md` 不再作为 package 标记。
 - `capabilities.attachments` 将图片二进制从线程日志剥离，允许回合记录引用 `attachmentIds`。视觉模型直接接收图片部分，纯文本模型走受限文本 fallback。
 - `capabilities.memory` 在数据目录下持久化跨会话记忆，按作用域检索并注入上下文；也会公开 `memory_create`、`memory_update`、`memory_delete` 工具。

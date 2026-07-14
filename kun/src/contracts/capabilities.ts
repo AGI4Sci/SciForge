@@ -55,7 +55,7 @@ export type McpToolDiscoveryMode = z.infer<typeof McpToolDiscoveryMode>
 
 export const McpSearchConfig = z
   .object({
-    enabled: z.boolean().default(false),
+    enabled: z.boolean().default(true),
     mode: McpToolDiscoveryMode.default('auto'),
     autoThresholdToolCount: z.number().int().positive().default(24),
     topKDefault: z.number().int().positive().default(5),

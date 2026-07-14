@@ -54,6 +54,10 @@ export type ToolHostContext = {
   threadId: string
   turnId: string
   workspace: string
+  /** Current request plus any bounded runtime context injected for this turn. */
+  requestText?: string
+  /** Main-process-derived native tools backed by trusted durable service state. */
+  activeNativeToolNames?: readonly ('biogym_design')[]
   /** Current project key. Defaults to the workspace root when no explicit project model exists. */
   project?: string
   /**
@@ -150,6 +154,24 @@ export interface ToolHost {
     providerKind?: ToolProviderKind
     metadata?: Record<string, unknown>
   }[]>
+  /**
+   * Stable partition for tools whose advertised presence intentionally depends
+   * on the current user request. The agent loop keeps an independent catalog
+   * fingerprint per partition so an intent-gated tool appearing or disappearing
+   * across turns is not mistaken for a runtime schema mutation.
+   */
+  toolCatalogScope?(context?: ToolHostContext): Promise<string> | string
+  /**
+   * Optionally materialize a side-effect-free policy denial for a call that was
+   * not advertised in the current model step. Implementations must not execute
+   * the tool, request approval, or run tool hooks here. This lets the loop
+   * preserve typed security-boundary errors (for example `sandbox_read_only`)
+   * without weakening its advertised-tool guard for ordinary hidden tools.
+   */
+  preflightPolicyResult?(
+    call: ToolCallLike,
+    context: ToolHostContext
+  ): ToolHostResult | null
   execute(
     call: ToolCallLike,
     context: ToolHostContext,

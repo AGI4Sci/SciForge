@@ -10,7 +10,7 @@ export type ResearchQueryPlan = {
 };
 
 const INTENT_KEYWORDS: Array<[ResearchIntent, RegExp]> = [
-  ['latest', /\b(latest|recent|new|progress|advance|trend|202[4-9]|最新|最近|进展|趋势)\b/i],
+  ['latest', /\b(latest|recent|new|newly|release|released|launch|launched|announcement|progress|advance|trend|20\d{2}|最新|最近|发布|进展|趋势)\b/i],
   ['baseline', /\b(baseline|benchmark|compare|comparison|基线|对比)\b/i],
   ['sota', /\b(sota|state[- ]of[- ]the[- ]art|best|leaderboard|最优|前沿)\b/i],
   ['dataset', /\b(dataset|data set|benchmark data|corpus|数据集)\b/i],
@@ -36,9 +36,8 @@ const DOMAIN_EXPANSIONS: Record<ResearchDomain, string[]> = {
   general: []
 };
 
-const INTENT_EXPANSIONS: Record<ResearchIntent, string[]> = {
+const STATIC_INTENT_EXPANSIONS: Omit<Record<ResearchIntent, string[]>, 'latest'> = {
   overview: ['survey', 'review'],
-  latest: ['2024 OR 2025 OR 2026', 'recent advances'],
   baseline: ['benchmark', 'baseline comparison'],
   sota: ['state of the art', 'leaderboard'],
   dataset: ['dataset', 'benchmark dataset'],
@@ -51,23 +50,34 @@ export function planResearchQueries(input: {
   intent?: string;
   domain?: string;
   maxQueries?: number;
+  now?: () => Date;
 }): ResearchQueryPlan {
   const query = normalizeQuery(input.query);
   const intent = normalizeIntent(input.intent) ?? inferIntent(query);
-  const domain = normalizeDomain(input.domain) ?? inferDomain(query);
+  const inferredDomain = inferDomain(query);
+  const requestedDomain = normalizeDomain(input.domain);
+  const domain = isGeneralProductOrNewsQuery(query) && inferredDomain === 'general'
+    ? 'general'
+    : requestedDomain ?? inferredDomain;
+  const currentYear = validCurrentYear((input.now ?? (() => new Date()))());
+  const discoveryQuery = normalizeDiscoveryQuery(query, intent, domain);
   const domainExpansions = domain === 'biology' && isWetBiologyQuery(query)
     ? wetBiologyExpansions(query)
     : DOMAIN_EXPANSIONS[domain];
+  const intentExpansions = expansionsForIntent(intent, currentYear, domain);
   const candidates = new Set<string>();
-  candidates.add(query);
-  for (const expansion of domainExpansions) {
-    candidates.add(`${query} ${expansion}`);
+  candidates.add(discoveryQuery);
+  if (intent === 'latest' && intentExpansions[0]) {
+    candidates.add(`${discoveryQuery} ${intentExpansions[0]}`);
   }
-  for (const expansion of INTENT_EXPANSIONS[intent]) {
-    candidates.add(`${query} ${expansion}`);
+  for (const expansion of domainExpansions) {
+    candidates.add(`${discoveryQuery} ${expansion}`);
+  }
+  for (const expansion of intentExpansions) {
+    candidates.add(`${discoveryQuery} ${expansion}`);
   }
   if (domain !== 'ai4s' && domain !== 'general') {
-    candidates.add(`${query} AI for Science ${domain}`);
+    candidates.add(`${discoveryQuery} AI for Science ${domain}`);
   }
   const generatedQueries = [...candidates]
     .map((candidate) => normalizeQuery(candidate))
@@ -81,6 +91,46 @@ export function planResearchQueries(input: {
     },
     generatedQueries
   };
+}
+
+function normalizeDiscoveryQuery(
+  query: string,
+  intent: ResearchIntent,
+  domain: ResearchDomain
+): string {
+  if (domain !== 'general') return query;
+  let normalized = query
+    .replace(/^(?:please\s+)?(?:research|look\s+up|find(?:\s+information)?|search(?:\s+for)?|tell\s+me)(?:\s+(?:about|on|into))?(?:\s+the)?\s+/i, '')
+    .replace(/\bnewly\s+released\b/gi, intent === 'latest' ? ' ' : 'release')
+    .replace(/\b([a-z]{2,})(\d+(?:\.\d+)+)\b/gi, '$1 $2');
+  if (intent === 'latest') {
+    normalized = `${normalized.replace(/\b(latest|recent|newly)\b/gi, ' ')} latest release`;
+  }
+  normalized = normalizeQuery(normalized);
+  return normalized || query;
+}
+
+function expansionsForIntent(
+  intent: ResearchIntent,
+  currentYear: number,
+  domain: ResearchDomain
+): string[] {
+  if (intent !== 'latest') return STATIC_INTENT_EXPANSIONS[intent];
+  return domain === 'general'
+    ? [String(currentYear), `official announcement ${currentYear}`, `release news ${currentYear}`]
+    : [String(currentYear), `${currentYear - 1} OR ${currentYear}`, 'recent advances'];
+}
+
+function validCurrentYear(now: Date): number {
+  const year = now.getUTCFullYear();
+  return Number.isInteger(year) && year >= 1991 && year <= 3000
+    ? year
+    : new Date().getUTCFullYear();
+}
+
+function isGeneralProductOrNewsQuery(query: string): boolean {
+  return /\b(newly\s+released|releas(?:e|ed|es|ing)|launch(?:ed|es|ing)?|announc(?:e|ed|ement)|product|pricing|availability|changelog|version|api|software|service|news)\b/i.test(query) ||
+    (/\b(latest|recent|new)\b/i.test(query) && /\b(model|platform|product|version|api|service)\b/i.test(query));
 }
 
 function isWetBiologyQuery(query: string): boolean {

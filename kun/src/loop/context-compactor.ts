@@ -248,7 +248,7 @@ function buildCompactionSummary(input: {
   )
   lines.push('Conversation and work summary:')
   const summaryLines = fitLinesToBudget(
-    selectSummaryLines(input.history.map(summarizeItem).filter((line) => line.length > 0)),
+    selectSummaryLines(input.history.flatMap(summaryLinesForItem)),
     contentBudget
   )
   if (summaryLines.length === 0) {
@@ -257,6 +257,31 @@ function buildCompactionSummary(input: {
     lines.push(...summaryLines)
   }
   return lines.join('\n')
+}
+
+function summaryLinesForItem(item: TurnItem): string[] {
+  if (item.kind !== 'compaction') {
+    const line = summarizeItem(item)
+    return line ? [line] : []
+  }
+  if (item.replacedTokens <= 0) return []
+
+  // Repeated compaction must flatten the prior durable facts instead of nesting
+  // the entire boilerplate summary. Nesting plus per-line clipping eventually
+  // pushes foundational requirements out of the retained prefix.
+  const durableLines = item.summary
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^- (?:User|Assistant|Tool call|Tool result|Approval|User input|Review|Error)\b/.test(line))
+    .map((line) => clipText(line, 1_200))
+  if (durableLines.length > 0) return durableLines
+
+  const summaryBody = item.summary
+    .split('Conversation and work summary:')
+    .at(-1)
+    ?.split('Compaction digest marker:')[0]
+    ?.trim()
+  return summaryBody ? [`- Earlier context: ${clipText(summaryBody, 1_200)}`] : []
 }
 
 function extractSkillPins(history: TurnItem[]): string[] {
@@ -296,9 +321,7 @@ function summarizeItem(item: TurnItem): string {
     case 'user_input':
       return `- User input ${item.status}: ${clipText(item.prompt)}`
     case 'compaction':
-      return item.replacedTokens > 0
-        ? `- Earlier compaction summary: ${clipText(item.summary, 600)}`
-        : ''
+      return ''
     case 'review':
       return `- Review ${item.title}: ${clipText(item.reviewText || stringifyCompact(item.output))}`
     case 'error':

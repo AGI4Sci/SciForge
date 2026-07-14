@@ -63,6 +63,22 @@ describe('research search service', () => {
     assert.ok(!plan.generatedQueries.some((query) => query.includes('protein design')));
   });
 
+  it('routes newly released product news as general web research with the injected current year', () => {
+    const plan = planResearchQueries({
+      query: 'research the newly released Acme 5.6 model',
+      domain: 'ai4s',
+      maxQueries: 4,
+      now: () => new Date('2028-02-03T00:00:00.000Z')
+    });
+
+    assert.equal(plan.interpretedIntent.intent, 'latest');
+    assert.equal(plan.interpretedIntent.domain, 'general');
+    assert.equal(plan.generatedQueries[0], 'Acme 5.6 model latest release');
+    assert.equal(plan.generatedQueries[1], 'Acme 5.6 model latest release 2028');
+    assert.ok(plan.generatedQueries.some((query) => query.includes('official announcement 2028')));
+    assert.ok(!plan.generatedQueries.some((query) => query.includes('AI for Science')));
+  });
+
   it('builds arXiv queries with date filters', () => {
     assert.match(
       buildArxivQuery('AI for protein design latest 2026', 2024),
@@ -111,8 +127,151 @@ describe('research search service', () => {
     assert.equal(config.arxivEnabled, false);
     assert.equal(config.europePmcEnabled, true);
     assert.equal(config.tavilyEnabled, true);
+    assert.equal(config.publicWebEnabled, true);
     assert.equal(config.cnsEnabled, true);
     assert.equal(config.maxResults, 7);
+  });
+
+  it('uses only the public web provider for general product news when no API key is configured', async () => {
+    let academicCalls = 0;
+    const academic = new FakeProvider('arxiv', () => {
+      academicCalls += 1;
+      return { papers: [], webResults: [] };
+    });
+    const publicWeb = new FakeProvider('public_web', (request) => ({
+      papers: [],
+      webResults: [{
+        title: 'Acme 5.6 launch announcement',
+        url: 'https://example.test/acme-5-6',
+        snippet: `Released from query ${request.query}`,
+        source: 'public_web',
+        rank: 1
+      }],
+      diagnostics: [{
+        id: 'public_web',
+        enabled: true,
+        available: true,
+        role: 'fallback',
+        resultCount: 1
+      }]
+    }));
+    const service = createResearchSearchService({
+      arxivEnabled: true,
+      biorxivEnabled: false,
+      europePmcEnabled: false,
+      semanticScholarEnabled: false,
+      semanticScholarApiKey: '',
+      tavilyEnabled: false,
+      tavilyApiKey: '',
+      publicWebEnabled: true,
+      cnsEnabled: false,
+      cnsDomains: [],
+      maxResults: 5,
+      timeoutMs: 1000
+    }, {
+      providers: { arxiv: academic, public_web: publicWeb },
+      now: () => new Date('2028-02-03T00:00:00.000Z')
+    });
+
+    const result = await service.search({
+      query: 'latest Acme 5.6 model release',
+      domain: 'ai4s'
+    });
+
+    assert.equal(academicCalls, 0);
+    assert.equal(result.interpretedIntent.domain, 'general');
+    assert.equal(result.webResults.length, 1);
+    assert.equal(result.webResults[0]?.source, 'public_web');
+    assert.ok(result.diagnostics.some((diagnostic) =>
+      diagnostic.id === 'public_web' && diagnostic.role === 'fallback' && diagnostic.available));
+  });
+
+  it('falls back to keyless web search when the configured primary returns no results', async () => {
+    const service = createResearchSearchService({
+      arxivEnabled: false,
+      biorxivEnabled: false,
+      europePmcEnabled: false,
+      semanticScholarEnabled: false,
+      semanticScholarApiKey: '',
+      tavilyEnabled: true,
+      tavilyApiKey: 'configured-key',
+      publicWebEnabled: true,
+      cnsEnabled: false,
+      cnsDomains: [],
+      maxResults: 5,
+      timeoutMs: 1000
+    }, {
+      providers: {
+        tavily: new FakeProvider('tavily', () => ({
+          papers: [],
+          webResults: [],
+          diagnostics: [{ id: 'tavily', enabled: true, available: true, resultCount: 0 }]
+        })),
+        public_web: new FakeProvider('public_web', () => ({
+          papers: [],
+          webResults: [{
+            title: 'Official release',
+            url: 'https://example.test/release',
+            snippet: 'The current release announcement.',
+            source: 'public_web',
+            rank: 1
+          }],
+          diagnostics: [{ id: 'public_web', enabled: true, available: true, resultCount: 1 }]
+        }))
+      },
+      now: () => new Date('2028-02-03T00:00:00.000Z')
+    });
+
+    const result = await service.search({ query: 'latest Acme model release' });
+
+    assert.equal(result.webResults[0]?.source, 'public_web');
+    assert.ok(result.diagnostics.some((diagnostic) =>
+      diagnostic.id === 'tavily' && diagnostic.role === 'primary'));
+    assert.ok(result.diagnostics.some((diagnostic) =>
+      diagnostic.id === 'public_web' && diagnostic.role === 'fallback'));
+  });
+
+  it('falls back without leaking exception details when the primary provider throws', async () => {
+    const throwingPrimary = new FakeProvider('tavily', () => {
+      throw new Error('transport failed with secret-token-value');
+    });
+    const service = createResearchSearchService({
+      arxivEnabled: false,
+      biorxivEnabled: false,
+      europePmcEnabled: false,
+      semanticScholarEnabled: false,
+      semanticScholarApiKey: '',
+      tavilyEnabled: true,
+      tavilyApiKey: 'configured-key',
+      publicWebEnabled: true,
+      cnsEnabled: false,
+      cnsDomains: [],
+      maxResults: 5,
+      timeoutMs: 1000
+    }, {
+      providers: {
+        tavily: throwingPrimary,
+        public_web: new FakeProvider('public_web', () => ({
+          papers: [],
+          webResults: [{
+            title: 'Fallback result',
+            url: 'https://example.test/fallback',
+            snippet: 'Recovered safely.',
+            source: 'public_web',
+            rank: 1
+          }],
+          diagnostics: [{ id: 'public_web', enabled: true, available: true, resultCount: 1 }]
+        }))
+      }
+    });
+
+    const result = await service.search({ query: 'current Acme product release' });
+    const primaryDiagnostic = result.diagnostics.find((diagnostic) => diagnostic.id === 'tavily');
+
+    assert.equal(result.webResults[0]?.url, 'https://example.test/fallback');
+    assert.equal(primaryDiagnostic?.available, false);
+    assert.match(primaryDiagnostic?.reason ?? '', /Primary provider request failed/);
+    assert.doesNotMatch(JSON.stringify(result.diagnostics), /secret-token-value/);
   });
 
   it('searches selected sources and merges duplicate papers', async () => {

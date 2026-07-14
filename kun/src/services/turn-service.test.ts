@@ -56,6 +56,61 @@ it('startTurn rejects a second running turn on the same thread', async () => {
   expect(thread?.turns.map((turn) => turn.id)).toEqual([first.turnId])
 })
 
+it('startTurn reuses the persisted turn for a repeated host request id', async () => {
+  const { turns, threadStore, sessionStore } = createTurnService()
+  await threadStore.upsert(makeThread('thread_1'))
+
+  const first = await turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'Continue the workflow', hostRequestId: 'biogym:run-1:ready:3' }
+  })
+  const repeated = await turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'A retry may have different rendered context', hostRequestId: 'biogym:run-1:ready:3' }
+  })
+
+  expect(repeated).toEqual({ ...first, reused: true })
+  expect((await threadStore.get('thread_1'))?.turns).toHaveLength(1)
+  expect(await sessionStore.loadItems('thread_1')).toHaveLength(1)
+})
+
+it('serializes concurrent repeated host requests into exactly one turn', async () => {
+  const { turns, threadStore, sessionStore } = createTurnService()
+  await threadStore.upsert(makeThread('thread_1'))
+  const request = {
+    threadId: 'thread_1',
+    request: { prompt: 'Stage completed', hostRequestId: 'biogym:run-1:stage:4' }
+  }
+
+  const [first, second] = await Promise.all([
+    turns.startTurn(request),
+    turns.startTurn(request)
+  ])
+
+  expect(second.turnId).toBe(first.turnId)
+  expect([first.reused, second.reused].filter(Boolean)).toHaveLength(1)
+  expect((await threadStore.get('thread_1'))?.turns).toHaveLength(1)
+  expect(await sessionStore.loadItems('thread_1')).toHaveLength(1)
+})
+
+it('reuses a completed keyed turn instead of running the continuation twice', async () => {
+  const { turns, threadStore } = createTurnService()
+  await threadStore.upsert(makeThread('thread_1'))
+  const first = await turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'Stage completed', hostRequestId: 'biogym:run-1:stage:5' }
+  })
+  await turns.finishTurn({ threadId: 'thread_1', turnId: first.turnId, status: 'completed' })
+
+  const repeated = await turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'Stage completed', hostRequestId: 'biogym:run-1:stage:5' }
+  })
+
+  expect(repeated).toEqual({ ...first, reused: true })
+  expect((await threadStore.get('thread_1'))?.turns).toHaveLength(1)
+})
+
 it('reconcileStaleRunningTurns aborts persisted running turns after runtime restart', async () => {
   const firstRuntime = createTurnService()
   await firstRuntime.threadStore.upsert(makeThread('thread_1'))
@@ -76,6 +131,40 @@ it('reconcileStaleRunningTurns aborts persisted running turns after runtime rest
   const turn = await restartedRuntime.turns.getTurn('thread_1', started.turnId)
   expect(turn?.status).toBe('aborted')
   expect(turn?.error).toContain('Runtime restarted')
+})
+
+it('allows a keyed continuation to replace its startup-reconciled stale turn', async () => {
+  const firstRuntime = createTurnService()
+  await firstRuntime.threadStore.upsert(makeThread('thread_1'))
+  const first = await firstRuntime.turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'Stage completed', hostRequestId: 'biogym:run-1:stage:6' }
+  })
+  const restartedRuntime = createTurnService({
+    threadStore: firstRuntime.threadStore,
+    sessionStore: firstRuntime.sessionStore
+  })
+  await restartedRuntime.turns.reconcileStaleRunningTurns()
+
+  const replacement = await restartedRuntime.turns.startTurn({
+    threadId: 'thread_1',
+    request: { prompt: 'Stage completed', hostRequestId: 'biogym:run-1:stage:6' }
+  })
+
+  expect(replacement.turnId).not.toBe(first.turnId)
+  expect(replacement.reused).toBeUndefined()
+  const thread = await restartedRuntime.threadStore.get('thread_1')
+  expect(thread?.turns).toHaveLength(2)
+  expect(thread?.turns[0]).toMatchObject({
+    id: first.turnId,
+    status: 'aborted',
+    errorCode: 'stale_turn_reconciled'
+  })
+  expect(thread?.turns[1]).toMatchObject({
+    id: replacement.turnId,
+    status: 'running',
+    hostRequestId: 'biogym:run-1:stage:6'
+  })
 })
 
 function createTurnService(deps: {

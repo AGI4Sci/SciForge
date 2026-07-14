@@ -545,7 +545,11 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: buildDefaultLocalTools(), toolStorm: { enabled: false } }
+      {
+        tools: buildDefaultLocalTools(),
+        toolStorm: { enabled: false },
+        stuckDetection: { enabled: false }
+      }
     )
     await bootstrapThread(h)
 
@@ -2031,9 +2035,11 @@ describe('AgentLoop', () => {
     expect(planCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
     expect(planResult).toMatchObject({ kind: 'tool_result', isError: true })
     expect(planResult?.kind === 'tool_result' ? JSON.stringify(planResult.output) : '')
-      .toContain('not advertised in this turn context')
+      .toContain('not available in this agent step')
     expect(events.some((event) =>
-      event.kind === 'error' && event.code === 'tool_dispatch_rejected'
+      event.kind === 'tool_storm_suppressed' &&
+      event.toolName === CREATE_PLAN_TOOL_NAME &&
+      event.message.includes('not available in this agent step')
     )).toBe(true)
   })
 
@@ -2763,6 +2769,39 @@ describe('AgentLoop', () => {
     const items = await h.sessionStore.loadItems(h.threadId)
     const user = items.find((item) => item.kind === 'user_message' && item.text === 'follow up')
     expect(user).toBeDefined()
+  })
+
+  it('drains steering that arrives while a final model response is streaming', async () => {
+    let calls = 0
+    let h: ReturnType<typeof makeHarness>
+    h = makeHarness({
+      provider: 'late-steering',
+      model: 'late-steering',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        calls += 1
+        if (calls === 1) {
+          h.steering.enqueue(h.turnId, 'BioGym stage completed; advance the run.')
+          yield { kind: 'assistant_text_delta', text: 'Waiting for the stage.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Continuing with the completed stage.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    })
+    await bootstrapThread(h)
+
+    await expect(h.loop.runTurn(h.threadId, h.turnId)).resolves.toBe('completed')
+
+    expect(calls).toBe(2)
+    expect(h.steering.peek(h.turnId)).toEqual([])
+    const items = await h.sessionStore.loadItems(h.threadId)
+    expect(items).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        kind: 'user_message',
+        text: 'BioGym stage completed; advance the run.'
+      })
+    ]))
   })
 
   it('cleans up inflight ids after success and error', async () => {

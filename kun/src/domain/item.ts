@@ -135,18 +135,21 @@ export function makeApprovalItem(input: {
   approvalId: string
   toolName: string
   summary: string
+  status?: 'pending' | 'allowed' | 'denied' | 'expired'
 }): TurnItem {
+  const status = input.status ?? 'pending'
   return {
     id: input.id,
     turnId: input.turnId,
     threadId: input.threadId,
     role: 'tool',
     createdAt: new Date().toISOString(),
+    ...(status === 'pending' ? {} : { finishedAt: new Date().toISOString() }),
     kind: 'approval',
     approvalId: input.approvalId,
     toolName: input.toolName,
     summary: redactSensitiveString(input.summary),
-    status: 'pending'
+    status
   }
 }
 

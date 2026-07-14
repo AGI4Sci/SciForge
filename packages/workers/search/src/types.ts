@@ -18,7 +18,14 @@ export type ResearchDomain =
 
 export type ResearchSourceKind = 'arxiv' | 'biorxiv' | 'europe_pmc' | 'semantic_scholar' | 'web' | 'cns';
 
-export type ResearchProviderId = 'arxiv' | 'biorxiv' | 'europe_pmc' | 'semantic_scholar' | 'tavily' | 'cns';
+export type ResearchProviderId =
+  | 'arxiv'
+  | 'biorxiv'
+  | 'europe_pmc'
+  | 'semantic_scholar'
+  | 'tavily'
+  | 'public_web'
+  | 'cns';
 
 export type ResearchSearchRequest = {
   query: string;
@@ -51,7 +58,7 @@ export type ResearchWebResult = {
   title: string;
   url: string;
   snippet: string;
-  source: 'tavily' | 'cns';
+  source: 'tavily' | 'public_web' | 'cns';
   rank: number;
 };
 
@@ -60,6 +67,7 @@ export type ResearchProviderDiagnostic = {
   enabled: boolean;
   available: boolean;
   resultCount?: number;
+  role?: 'primary' | 'fallback';
   reason?: string;
 };
 
@@ -82,6 +90,7 @@ export type ResearchSearchConfig = {
   semanticScholarApiKey: string;
   tavilyEnabled: boolean;
   tavilyApiKey: string;
+  publicWebEnabled?: boolean;
   cnsEnabled: boolean;
   cnsDomains: string[];
   defaultSinceYear?: number;

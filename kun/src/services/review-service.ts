@@ -178,10 +178,12 @@ export class ReviewService {
       ...(this.deps.contextCompaction ? { contextCompaction: this.deps.contextCompaction } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       ...(this.deps.runtime?.maxTurnModelSteps ? { maxTurnModelSteps: this.deps.runtime.maxTurnModelSteps } : {}),
+      ...(this.deps.runtime?.maxToolCallsPerTurn ? { maxToolCallsPerTurn: this.deps.runtime.maxToolCallsPerTurn } : {}),
       ...(this.deps.runtime?.toolStorm ? { toolStorm: this.deps.runtime.toolStorm } : {}),
       ...(this.deps.runtime?.toolBudget ? { toolBudget: this.deps.runtime.toolBudget } : {}),
       toolBudgetProfile: 'review',
       ...(this.deps.runtime?.parallelism ? { parallelism: this.deps.runtime.parallelism } : {}),
+      ...(this.deps.runtime?.stuckDetection ? { stuckDetection: this.deps.runtime.stuckDetection } : {}),
       ...(this.deps.runtime?.toolArgumentRepair ? { toolArgumentRepair: this.deps.runtime.toolArgumentRepair } : {})
     })
 

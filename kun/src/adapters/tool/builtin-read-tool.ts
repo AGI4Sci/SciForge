@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { DEFAULT_LIST_LIMIT, type ListEntry } from './builtin-tool-types.js'
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES, formatSize, truncateHead } from './truncate.js'
@@ -119,6 +120,7 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
         return { output: { error: 'read only supports text files in SciForge Runtime serve mode', path: absolutePath }, isError: true }
       }
       const text = fileBuffer.toString('utf8').replace(/\r\n/g, '\n')
+      const contentSha256 = createHash('sha256').update(fileBuffer).digest('hex')
       const allLines = text.split('\n')
       const offset = Math.max(1, normalizePositiveInteger(args.offset, 1))
       const effectiveMaxLines = options.maxLines ?? DEFAULT_MAX_LINES
@@ -161,6 +163,7 @@ export function createReadLocalTool(options: ReadLocalToolOptions = {}): LocalTo
           path: absolutePath,
           relative_path: relativePath,
           content,
+          content_sha256: contentSha256,
           classification: classification ?? null,
           start_line: offset,
           end_line: Math.max(offset, offset + truncated.shownLines - 1),

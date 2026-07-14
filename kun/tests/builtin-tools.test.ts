@@ -386,6 +386,7 @@ describe('Local runtime built-in tools', () => {
       relative_path: 'notes/demo.txt'
     })
     expect(String(readOutput.content)).toContain('hello world')
+    expect(String(readOutput.content_sha256)).toMatch(/^[a-f0-9]{64}$/)
 
     const editOutput = await executeTool(host, workspace, 'edit', {
       path: 'notes/demo.txt',
@@ -593,6 +594,28 @@ describe('Local runtime built-in tools', () => {
     expect(typeof output.shell).toBe('string')
     expect(String(output.output)).toContain('from bash')
     expect(output.truncation).toBe(null)
+  })
+
+  it('never exposes private BioGym bridge credentials to bash subprocesses', async () => {
+    const baseUrlName = 'SCIFORGE_BIOGYM_INTERNAL_BASE_URL'
+    const tokenName = 'SCIFORGE_BIOGYM_INTERNAL_TOKEN'
+    const previousBaseUrl = process.env[baseUrlName]
+    const previousToken = process.env[tokenName]
+    process.env[baseUrlName] = 'http://127.0.0.1:43210'
+    process.env[tokenName] = 'private-token'
+    try {
+      const output = await executeTool(host, workspace, 'bash', {
+        command: 'if [ -z "${SCIFORGE_BIOGYM_INTERNAL_BASE_URL:-}" ] && [ -z "${SCIFORGE_BIOGYM_INTERNAL_TOKEN:-}" ]; then printf redacted; else printf leaked; fi'
+      })
+      expect(output.exit_code).toBe(0)
+      expect(String(output.output)).toContain('redacted')
+      expect(String(output.output)).not.toContain('private-token')
+    } finally {
+      if (previousBaseUrl === undefined) delete process.env[baseUrlName]
+      else process.env[baseUrlName] = previousBaseUrl
+      if (previousToken === undefined) delete process.env[tokenName]
+      else process.env[tokenName] = previousToken
+    }
   })
 
   it('finishes bash commands after the shell exits even when a background child keeps stdio open', async () => {

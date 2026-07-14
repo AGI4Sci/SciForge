@@ -8,7 +8,12 @@ import {
 } from './service.js';
 import type { ResearchSearchService } from './research-service.js';
 import type { ResearchSearchWorkerDiagnostics } from './contract.js';
-import type { ResearchDomain, ResearchIntent, ResearchSourceKind } from './types.js';
+import type {
+  ResearchDomain,
+  ResearchIntent,
+  ResearchProviderDiagnostic,
+  ResearchSourceKind
+} from './types.js';
 
 type ResearchSearchMcpService = Pick<ResearchSearchService, 'config' | 'configuredDiagnostics' | 'search'> & {
   diagnostics?: () => ResearchSearchWorkerDiagnostics;
@@ -101,7 +106,7 @@ function renderResearchSummary(result: Awaited<ReturnType<ResearchSearchService[
   const webCount = result.webResults.length;
   const providers = result.diagnostics
     .filter((diagnostic) => diagnostic.enabled)
-    .map((diagnostic) => `${diagnostic.id}:${diagnostic.available ? 'ok' : 'unavailable'}`)
+    .map(renderProviderStatus)
     .join(', ');
   return [
     `Found ${paperCount} paper result(s) and ${webCount} web result(s).`,
@@ -113,11 +118,16 @@ function renderResearchSummary(result: Awaited<ReturnType<ResearchSearchService[
 function renderWorkerDiagnostics(diagnostics: ResearchSearchWorkerDiagnostics): string {
   const enabled = diagnostics.providers
     .filter((provider) => provider.enabled)
-    .map((provider) => `${provider.id}:${provider.available ? 'ok' : 'unavailable'}`)
+    .map(renderProviderStatus)
     .join(', ');
   return [
     `Research search worker ${diagnostics.version} is ${diagnostics.health.status} over ${diagnostics.transport}.`,
     enabled ? `Providers: ${enabled}.` : 'Providers: none enabled.',
     diagnostics.recentError ? `Recent error: ${diagnostics.recentError}.` : ''
   ].filter(Boolean).join(' ');
+}
+
+function renderProviderStatus(provider: ResearchProviderDiagnostic): string {
+  const role = provider.role ? `[${provider.role}]` : '';
+  return `${provider.id}${role}:${provider.available ? 'ok' : 'unavailable'}`;
 }

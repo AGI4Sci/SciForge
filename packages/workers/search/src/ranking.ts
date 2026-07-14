@@ -34,6 +34,9 @@ export function mergeAndRankPapers(input: {
 
 export function mergeAndRankWebResults(input: {
   webResults: ResearchWebResult[];
+  query?: string;
+  intent?: ResearchIntent;
+  currentYear?: number;
   maxResults: number;
 }): ResearchWebResult[] {
   const merged = new Map<string, ResearchWebResult>();
@@ -50,8 +53,64 @@ export function mergeAndRankWebResults(input: {
     }
   }
   return [...merged.values()]
-    .sort((a, b) => a.rank - b.rank)
+    .sort((a, b) => {
+      const scoreDifference = scoreWebResult(b, input.query ?? '', input.intent, input.currentYear) -
+        scoreWebResult(a, input.query ?? '', input.intent, input.currentYear);
+      return scoreDifference || a.rank - b.rank;
+    })
     .slice(0, input.maxResults);
+}
+
+function scoreWebResult(
+  result: ResearchWebResult,
+  query: string,
+  intent: ResearchIntent | undefined,
+  currentYear: number | undefined
+): number {
+  const titleTokens = tokenSet(result.title);
+  const snippetTokens = tokenSet(result.snippet);
+  const queryTerms = webQueryTerms(query);
+  let score = 0;
+  for (const term of queryTerms) {
+    if (titleTokens.has(term)) score += 8;
+    else if (snippetTokens.has(term)) score += 3;
+  }
+  const compactEvidence = compactSearchText(`${result.title} ${result.snippet} ${result.url}`);
+  for (const signature of versionedEntitySignatures(query)) {
+    if (compactEvidence.includes(signature)) score += 40;
+  }
+  if (intent === 'latest') {
+    if (/\b(release|released|launch|launched|announce|announcement|current|latest|new)\b/i.test(`${result.title} ${result.snippet}`)) {
+      score += 4;
+    }
+    if (currentYear && new RegExp(`\\b${currentYear}\\b`).test(`${result.title} ${result.snippet}`)) {
+      score += 3;
+    }
+  }
+  return score - Math.min(result.rank, 100) / 100;
+}
+
+function webQueryTerms(query: string): string[] {
+  const stop = new Set([
+    'about', 'current', 'latest', 'model', 'models', 'new', 'newly', 'official',
+    'release', 'released', 'research', 'the', 'announcement', 'news'
+  ]);
+  return [...tokenSet(query)].filter((term) => term.length >= 2 && !stop.has(term) && !/^20\d{2}$/.test(term));
+}
+
+function tokenSet(value: string): Set<string> {
+  return new Set((value.toLowerCase().match(/[\p{L}\p{N}]+(?:\.[\p{L}\p{N}]+)*/gu) ?? [])
+    .map((token) => token.replace(/^\.+|\.+$/g, ''))
+    .filter(Boolean));
+}
+
+function versionedEntitySignatures(query: string): string[] {
+  return [...query.matchAll(/\b([\p{L}][\p{L}\p{N}]{1,})[- ]?(\d+(?:\.\d+)+)\b/gu)]
+    .map((match) => compactSearchText(`${match[1]}${match[2]}`));
+}
+
+function compactSearchText(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
 export function buildThemeClusters(papers: readonly ResearchPaper[]): ThemeCluster[] {

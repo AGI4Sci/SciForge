@@ -93,7 +93,7 @@ function parseTavilyResults(value: unknown, source: 'tavily' | 'cns'): ResearchW
       source,
       rank: index + 1
     };
-  }).filter((item): item is ResearchWebResult => item !== null);
+  }).filter((item): item is NonNullable<typeof item> => item !== null);
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

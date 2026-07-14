@@ -50,12 +50,35 @@ export type LocalTool = {
    */
   policy: 'auto' | 'on-request' | 'suggest' | 'never' | 'untrusted'
   /**
+   * `mandatory` makes a positive argument-level `requiresApproval` result an
+   * invariant rather than a preference: it still prompts under the runtime's
+   * `auto` policy and fails closed under `never`. This is reserved for bounded
+   * operations that allocate an external budget; ordinary tools should retain
+   * the default `policy` behavior.
+   */
+  approvalMode?: 'policy' | 'mandatory'
+  /**
    * Optional gating predicate. When present, the tool is only listed
    * and only executed when `shouldAdvertise` returns true for the
    * active turn context. Use this for mode/plan-only tools such as
    * `create_plan`.
    */
   shouldAdvertise?: (context: ToolHostContext) => boolean
+  /**
+   * Marks the advertisement predicate as an intentional per-request catalog
+   * partition. This is narrower than `shouldAdvertise`: unmarked predicates
+   * continue to participate in ordinary in-thread catalog drift detection.
+   */
+  advertisementScope?: 'request'
+  /**
+   * Optional argument-level approval override. Return true to require the
+   * active approval gate, false to bypass a descriptor-level prompt for this
+   * call, or undefined to retain the static tool policy.
+   */
+  requiresApproval?: (
+    args: Record<string, unknown>,
+    context: ToolHostContext
+  ) => boolean | undefined
   execute: (
     args: Record<string, unknown>,
     context: ToolHostContext,
@@ -106,8 +129,39 @@ export class LocalToolHost implements ToolHost {
     return Promise.resolve(this.registry.listTools(context))
   }
 
+  toolCatalogScope(context?: ToolHostContext): string {
+    return this.registry.toolCatalogScope(context)
+  }
+
   diagnostics() {
     return this.registry.diagnostics()
+  }
+
+  preflightPolicyResult(
+    call: ToolCallLike,
+    context: ToolHostContext
+  ): ToolHostResult | null {
+    let tool: LocalTool
+    try {
+      tool = this.registry.resolveTool(call.toolName, context, call.providerId).tool
+    } catch {
+      // Provider, allow-list, plan-mode, and request-scoped advertisement gates
+      // remain owned by the loop's advertised-tool guard.
+      return null
+    }
+    if (tool.policy === 'never') return null
+    const sandboxBlock = sandboxBlockForTool(tool, context)
+    if (!sandboxBlock) return null
+    return {
+      item: this.errorToolResult(
+        context,
+        call,
+        tool,
+        sandboxBlock.message,
+        sandboxBlock.code
+      ),
+      approved: false
+    }
   }
 
   async execute(
@@ -191,7 +245,8 @@ export class LocalToolHost implements ToolHost {
           threadId: context.threadId,
           approvalId,
           toolName: activeCall.toolName,
-          summary: approval.summary
+          summary: approval.summary,
+          status: 'denied'
         })
         return { item, approved: false }
       }
@@ -263,7 +318,11 @@ export class LocalToolHost implements ToolHost {
       output,
       isError
     })
-    return { item, approved: !needsApproval }
+    // Reaching execution means either approval was unnecessary or a required
+    // approval was explicitly granted. `approved` describes the outcome, not
+    // whether a prompt happened; returning false here poisons loop-progress
+    // accounting for every successfully approved tool call.
+    return { item, approved: true }
   }
 
   clearReadTracker(threadId?: string): void {
@@ -296,14 +355,30 @@ export class LocalToolHost implements ToolHost {
         message: `tool ${call.toolName} is disabled by tool policy`
       }
     }
+    if (
+      tool.approvalMode === 'mandatory' &&
+      context.approvalPolicy === 'never' &&
+      tool.requiresApproval?.(call.arguments, context) === true
+    ) {
+      return {
+        code: 'approval_policy_blocked',
+        message: `tool ${call.toolName} requires approval for this operation but the active approval policy is never`
+      }
+    }
     return null
   }
 
   private requiresApproval(tool: LocalTool, call: ToolCallLike, context: ToolHostContext): boolean {
     if (this.isInteractiveGuiGateTool(call.toolName)) return false
-    if (tool.policy === 'never' || context.approvalPolicy === 'never') return false
-    if (context.sandboxMode === 'danger-full-access') return false
+    if (tool.policy === 'never') return false
     if (this.isTrustedRemoteExecutorBypass(tool, call)) return false
+    const argumentOverride = tool.requiresApproval?.(call.arguments, context)
+    if (tool.approvalMode === 'mandatory' && argumentOverride === true) return true
+    if (context.approvalPolicy === 'never') return false
+    if (argumentOverride !== undefined) {
+      if (context.approvalPolicy === 'auto') return false
+      return argumentOverride
+    }
     switch (context.approvalPolicy) {
       case 'auto':
         return false
@@ -366,7 +441,10 @@ export class LocalToolHost implements ToolHost {
       toolKind: tool.toolKind ?? 'tool_call',
       execute: tool.execute,
       ...(tool.metadata ? { metadata: tool.metadata } : {}),
-      ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {})
+      ...(tool.approvalMode ? { approvalMode: tool.approvalMode } : {}),
+      ...(tool.shouldAdvertise ? { shouldAdvertise: tool.shouldAdvertise } : {}),
+      ...(tool.advertisementScope ? { advertisementScope: tool.advertisementScope } : {}),
+      ...(tool.requiresApproval ? { requiresApproval: tool.requiresApproval } : {})
     }
   }
 }

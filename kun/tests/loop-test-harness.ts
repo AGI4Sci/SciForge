@@ -79,6 +79,7 @@ export function makeHarness(
     modelCapabilities?: (model: string) => ModelCapabilityMetadata
     tokenEconomy?: TokenEconomyConfig
     contextCompaction?: ContextCompactionConfig
+    maxToolCallsPerTurn?: number
     toolStorm?: ToolStormBreakerOptions & {
       enabled?: boolean
       maxRecoverySteps?: number
@@ -86,7 +87,10 @@ export function makeHarness(
       maxStepsAfterRecovery?: number
       maxToolCallsPerTurn?: number
     }
+    stuckDetection?: AgentLoopOptions['stuckDetection']
+    nowIso?: () => string
     nowMs?: () => number
+    timeZone?: () => string
     toolHost?: LocalToolHost
     toolArgumentRepair?: {
       maxStringBytes?: number
@@ -107,7 +111,7 @@ export function makeHarness(
   const compactor = options.compactor ?? new ContextCompactor({ softThreshold: 64, hardThreshold: 128 })
   const toolHost = options.toolHost ?? new LocalToolHost({ tools: options.tools ?? defaultLocalTools })
   const usage = new UsageService()
-  const nowIso = () => new Date().toISOString()
+  const nowIso = options.nowIso ?? (() => new Date().toISOString())
   const nowMs = options.nowMs ?? (() => Date.now())
   const allocateSeq = (threadId: string) => bus.allocateSeq(threadId)
   const events = new RuntimeEventRecorder({ eventBus: bus, sessionStore, allocateSeq, nowIso })
@@ -141,16 +145,19 @@ export function makeHarness(
     ids,
     nowIso,
     nowMs,
+    ...(options.timeZone ? { timeZone: options.timeZone } : {}),
     ...(options.skillRuntime ? { skillRuntime: options.skillRuntime } : {}),
     ...(options.attachmentStore ? { attachmentStore: options.attachmentStore } : {}),
     ...(options.memoryStore ? { memoryStore: options.memoryStore } : {}),
     ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
     ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
     ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
+    ...(options.maxToolCallsPerTurn ? { maxToolCallsPerTurn: options.maxToolCallsPerTurn } : {}),
     ...(options.toolStorm ? { toolStorm: options.toolStorm } : {}),
     ...(options.toolBudget ? { toolBudget: options.toolBudget } : {}),
     ...(options.toolBudgetProfile ? { toolBudgetProfile: options.toolBudgetProfile } : {}),
     ...(options.parallelism ? { parallelism: options.parallelism } : {}),
+    ...(options.stuckDetection ? { stuckDetection: options.stuckDetection } : {}),
     ...(options.toolArgumentRepair ? { toolArgumentRepair: options.toolArgumentRepair } : {}),
     ...(options.onPlanWritten ? { onPlanWritten: options.onPlanWritten } : {})
   })

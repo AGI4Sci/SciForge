@@ -52,53 +52,10 @@ export class TurnService {
     threadId: string
     request: StartTurnRequest
   }): Promise<StartTurnResponse> {
-    const thread = await this.deps.threadStore.get(input.threadId)
-    if (!thread) throw new Error(`thread not found: ${input.threadId}`)
-    const turnId = this.deps.ids.next('turn')
-    const turn = createTurnRecord({
-      id: turnId,
-      threadId: input.threadId,
-      prompt: input.request.prompt,
-      model: input.request.model,
-      reasoningEffort: input.request.reasoningEffort,
-      attachmentIds: input.request.attachmentIds ?? [],
-      attachments: input.request.attachments ?? [],
-      guiPlan: input.request.guiPlan,
-      remoteTargetId: input.request.remoteTargetId,
-      mode: input.request.mode,
-      approvalPolicy: input.request.approvalPolicy,
-      sandboxMode: input.request.sandboxMode,
-      allowedToolNames: input.request.allowedToolNames,
-      bashCommandPolicy: input.request.bashCommandPolicy,
-      filePathPolicy: input.request.filePathPolicy,
-      strictAllowedToolNames: input.request.strictAllowedToolNames
-    })
-    const userItem = makeUserItem({
-      id: `item_${turnId}_user`,
-      turnId,
-      threadId: input.threadId,
-      text: input.request.prompt,
-      displayText: input.request.displayText,
-      attachmentIds: input.request.attachmentIds ?? []
-    })
-    const controller = new AbortController()
-    await this.upsertThread(input.threadId, (current) => {
-      const runningTurn = current.turns.find((candidate) => candidate.status === 'running')
-      if (current.status === 'running' || runningTurn) {
-        throw new TurnInProgressError(input.threadId, runningTurn?.id)
-      }
-      return {
-        ...touchThread(current, this.deps.nowIso()),
-        status: 'running',
-        ...(input.request.approvalPolicy !== undefined
-          ? { approvalPolicy: input.request.approvalPolicy }
-          : {}),
-        ...(input.request.sandboxMode !== undefined
-          ? { sandboxMode: input.request.sandboxMode }
-          : {}),
-        turns: [...current.turns, startTurnRecord(appendTurnItem(turn, userItem))]
-      }
-    })
+    const prepared = await this.prepareTurnStart(input)
+    if (prepared.reused) return prepared.response
+    const { response, userItem, controller } = prepared
+    const { turnId } = response
     await this.deps.sessionStore.appendItem(input.threadId, userItem)
     await this.deps.events.record({
       kind: 'turn_started',
@@ -120,7 +77,118 @@ export class TurnService {
       turnId
     })
     this.deps.steering.setTurn(turnId)
-    return { threadId: input.threadId, turnId, userMessageItemId: userItem.id }
+    return response
+  }
+
+  /**
+   * Serialize idempotency lookup and creation with every other thread mutation.
+   * This is deliberately persisted on the Turn rather than held in memory so a
+   * host retry after an Electron/runtime reconnect resolves to the same handle.
+   */
+  private async prepareTurnStart(input: {
+    threadId: string
+    request: StartTurnRequest
+  }): Promise<
+    | { reused: true; response: StartTurnResponse }
+    | {
+        reused: false
+        response: StartTurnResponse
+        userItem: ReturnType<typeof makeUserItem>
+        controller: AbortController
+      }
+  > {
+    const previous = this.threadMutationQueues.get(input.threadId) ?? Promise.resolve()
+    const run = previous.catch(() => undefined).then(async () => {
+      const current = await this.deps.threadStore.get(input.threadId)
+      if (!current) throw new Error(`thread not found: ${input.threadId}`)
+
+      const hostRequestId = input.request.hostRequestId?.trim()
+      const existing = hostRequestId
+        ? latestTurnForHostRequest(current.turns, hostRequestId)
+        : undefined
+      if (existing && !isStartupReconciledStaleTurn(existing)) {
+        const userMessageItemId = existing.items.find((item) => item.kind === 'user_message')?.id ??
+          `item_${existing.id}_user`
+        return {
+          reused: true as const,
+          response: {
+            threadId: input.threadId,
+            turnId: existing.id,
+            userMessageItemId,
+            reused: true
+          }
+        }
+      }
+
+      const runningTurn = current.turns.find((candidate) => candidate.status === 'running')
+      if (current.status === 'running' || runningTurn) {
+        throw new TurnInProgressError(input.threadId, runningTurn?.id)
+      }
+
+      const existingTurnIds = new Set(current.turns.map((turn) => turn.id))
+      let turnId = this.deps.ids.next('turn')
+      for (let attempt = 0; existingTurnIds.has(turnId) && attempt <= current.turns.length; attempt += 1) {
+        turnId = this.deps.ids.next('turn')
+      }
+      if (existingTurnIds.has(turnId)) {
+        throw new Error(`could not allocate a unique turn id for thread ${input.threadId}`)
+      }
+      const turn = createTurnRecord({
+        id: turnId,
+        threadId: input.threadId,
+        prompt: input.request.prompt,
+        model: input.request.model,
+        reasoningEffort: input.request.reasoningEffort,
+        attachmentIds: input.request.attachmentIds ?? [],
+        attachments: input.request.attachments ?? [],
+        guiPlan: input.request.guiPlan,
+        hostRequestId,
+        nativeToolContext: input.request.nativeToolContext,
+        remoteTargetId: input.request.remoteTargetId,
+        mode: input.request.mode,
+        approvalPolicy: input.request.approvalPolicy,
+        sandboxMode: input.request.sandboxMode,
+        allowedToolNames: input.request.allowedToolNames,
+        bashCommandPolicy: input.request.bashCommandPolicy,
+        filePathPolicy: input.request.filePathPolicy,
+        strictAllowedToolNames: input.request.strictAllowedToolNames
+      })
+      const userItem = makeUserItem({
+        id: `item_${turnId}_user`,
+        turnId,
+        threadId: input.threadId,
+        text: input.request.prompt,
+        displayText: input.request.displayText,
+        attachmentIds: input.request.attachmentIds ?? []
+      })
+      const next = {
+        ...touchThread(current, this.deps.nowIso()),
+        status: 'running' as const,
+        ...(input.request.approvalPolicy !== undefined
+          ? { approvalPolicy: input.request.approvalPolicy }
+          : {}),
+        ...(input.request.sandboxMode !== undefined
+          ? { sandboxMode: input.request.sandboxMode }
+          : {}),
+        turns: [...current.turns, startTurnRecord(appendTurnItem(turn, userItem))]
+      }
+      await this.deps.threadStore.upsert({ ...next, updatedAt: this.deps.nowIso() })
+      return {
+        reused: false as const,
+        response: { threadId: input.threadId, turnId, userMessageItemId: userItem.id },
+        userItem,
+        controller: new AbortController()
+      }
+    })
+    const guard = run.then(() => undefined, () => undefined)
+    this.threadMutationQueues.set(input.threadId, guard)
+    try {
+      return await run
+    } finally {
+      if (this.threadMutationQueues.get(input.threadId) === guard) {
+        this.threadMutationQueues.delete(input.threadId)
+      }
+    }
   }
 
   async steerTurn(input: { threadId: string; turnId: string; text: string }): Promise<void> {
@@ -141,7 +209,7 @@ export class TurnService {
     }
     const controller = this.inflightTurns.get(input.turnId)
     if (controller) controller.abort()
-    this.deps.steering.clear()
+    this.deps.steering.clear(input.turnId)
     this.inflightTurns.delete(input.turnId)
     this.deps.inflight.end(input.turnId)
     await this.deps.events.record({
@@ -245,13 +313,17 @@ export class TurnService {
   }): Promise<void> {
     this.inflightTurns.delete(input.turnId)
     this.deps.inflight.end(input.turnId)
-    this.deps.steering.clear()
+    this.deps.steering.clear(input.turnId)
     await this.finalizePersistedOpenItems(input.threadId, input.turnId, input.status)
     await this.upsertThread(input.threadId, (current) => {
       const next = current.turns.map((t) => {
         if (t.id !== input.turnId) return t
         const finished = this.finalizeOpenItems(finishTurn(t, input.status), input.status)
-        return input.error ? { ...finished, error: input.error } : finished
+        return {
+          ...finished,
+          ...(input.error ? { error: input.error } : {}),
+          ...(input.code ? { errorCode: input.code } : {})
+        }
       })
       return { ...touchThread(current, this.deps.nowIso()), turns: next, status: 'idle' }
     })
@@ -507,4 +579,16 @@ export class TurnService {
   private isSystemOnly(item: TurnItem): boolean {
     return item.kind === 'compaction' || item.kind === 'error'
   }
+}
+
+function latestTurnForHostRequest(turns: Turn[], hostRequestId: string): Turn | undefined {
+  for (let index = turns.length - 1; index >= 0; index -= 1) {
+    const turn = turns[index]
+    if (turn?.hostRequestId === hostRequestId) return turn
+  }
+  return undefined
+}
+
+function isStartupReconciledStaleTurn(turn: Turn): boolean {
+  return turn.status === 'aborted' && turn.errorCode === 'stale_turn_reconciled'
 }

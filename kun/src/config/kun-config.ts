@@ -137,11 +137,27 @@ export const RuntimeTuningConfigSchema = z
   .object({
     modelStreamIdleTimeoutMs: PositiveInt.optional(),
     maxTurnModelSteps: PositiveInt.optional(),
+    maxToolCallsPerTurn: PositiveInt.optional(),
     toolStorm: z
       .object({
         enabled: z.boolean().optional(),
         windowSize: PositiveInt.optional(),
-        threshold: z.number().int().min(2).optional()
+        threshold: z.number().int().min(2).optional(),
+        maxRecoverySteps: PositiveInt.optional(),
+        nonProgressThreshold: PositiveInt.optional(),
+        maxStepsAfterRecovery: PositiveInt.optional(),
+        maxToolCallsPerTurn: PositiveInt.optional()
+      })
+      .strict()
+      .optional(),
+    stuckDetection: z
+      .object({
+        enabled: z.boolean().optional(),
+        maxItems: PositiveInt.optional(),
+        repeatedActionObservationThreshold: z.number().int().min(2).optional(),
+        repeatedActionErrorThreshold: z.number().int().min(2).optional(),
+        alternatingThreshold: z.number().int().min(4).optional(),
+        redundantReadThreshold: PositiveInt.optional()
       })
       .strict()
       .optional(),

@@ -128,6 +128,44 @@ describe('InMemorySessionStore', () => {
 })
 
 describe('LocalToolHost', () => {
+  it('lets argument-level policy bypass or require an on-request approval', async () => {
+    const approvals: string[] = []
+    const tool = LocalToolHost.defineTool({
+      name: 'mixed_risk_tool',
+      description: 'Changes either transient or persistent state.',
+      inputSchema: { type: 'object' },
+      policy: 'on-request',
+      requiresApproval: (args) => args.persistent === true,
+      execute: async (args) => ({ output: args })
+    })
+    const host = new LocalToolHost({ tools: [tool] })
+    const context = {
+      threadId: 'th',
+      turnId: 'tu',
+      workspace: '/tmp',
+      approvalPolicy: 'on-request' as const,
+      abortSignal: new AbortController().signal,
+      awaitApproval: async (approval: { toolName: string }) => {
+        approvals.push(approval.toolName)
+        return 'allow' as const
+      }
+    }
+
+    await host.execute({
+      callId: 'safe',
+      toolName: 'mixed_risk_tool',
+      arguments: { persistent: false }
+    }, context)
+    expect(approvals).toEqual([])
+
+    await host.execute({
+      callId: 'protected',
+      toolName: 'mixed_risk_tool',
+      arguments: { persistent: true }
+    }, context)
+    expect(approvals).toEqual(['mixed_risk_tool'])
+  })
+
   it('runs an auto tool without approval', async () => {
     const host = new LocalToolHost({ tools: defaultLocalTools })
     const result = await host.execute(

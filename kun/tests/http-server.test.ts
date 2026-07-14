@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -377,6 +377,39 @@ describe('HTTP server', () => {
     const body = await readJson(response) as { turnId: string; userMessageItemId: string }
     expect(body.turnId).toMatch(/^turn_/)
     expect(body.userMessageItemId).toBe(`item_${body.turnId}_user`)
+  })
+
+  it('does not run the loop twice when a host continuation request is reused', async () => {
+    const h = buildHarness()
+    const runTurn = vi.fn()
+    h.runtime.runTurn = runTurn
+    await h.threadService.create({
+      workspace: '/tmp',
+      model: 'deepseek-chat',
+      mode: 'agent'
+    }, { id: 'thr_host_retry', title: 'demo' })
+    const start = () => dispatchRequest(
+      h.router,
+      new Request('http://localhost/v1/threads/thr_host_retry/turns', {
+        method: 'POST',
+        headers: { authorization: 'Bearer tok-1', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          prompt: 'BioGym stage completed',
+          hostRequestId: 'biogym:run-1:stage:7'
+        })
+      })
+    )
+
+    const first = await start()
+    const repeated = await start()
+    const firstBody = await readJson(first) as { turnId: string; reused?: boolean }
+    const repeatedBody = await readJson(repeated) as { turnId: string; reused?: boolean }
+
+    expect(first.status).toBe(202)
+    expect(repeated.status).toBe(202)
+    expect(repeatedBody).toMatchObject({ turnId: firstBody.turnId, reused: true })
+    expect(runTurn).toHaveBeenCalledTimes(1)
+    expect(runTurn).toHaveBeenCalledWith('thr_host_retry', firstBody.turnId)
   })
 
   it('lists turns for CLI and app status synchronization', async () => {

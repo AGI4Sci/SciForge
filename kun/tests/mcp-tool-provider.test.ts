@@ -58,6 +58,121 @@ describe('MCP tool provider', () => {
     expect(normalizeMcpToolName('GitHub Server', 'Search Issues')).toBe('mcp_github_server_search_issues')
   })
 
+  it('applies Biology Room argument approvals through the progressive MCP gateway', async () => {
+    const approvals: string[] = []
+    const calls: Array<{ name: string; arguments: Record<string, unknown> }> = []
+    const config = LocalRuntimeCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        search: { enabled: true, mode: 'search' },
+        servers: {
+          gui_workspace_intel: {
+            transport: 'stdio',
+            command: 'node',
+            trustScope: 'user'
+          }
+        }
+      }
+    })
+    const built = await buildMcpToolProviders(config.mcp, {
+      clientFactory: async () => ({
+        async listTools() {
+          return {
+            tools: [{
+              name: 'biology_room_apply',
+              description: 'Apply Biology Room operations.',
+              inputSchema: { type: 'object' }
+            }]
+          }
+        },
+        async callTool(input) {
+          calls.push(input)
+          return { ok: true }
+        },
+        async close() {
+          // no-op
+        }
+      })
+    })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    const context: ToolHostContext = {
+      ...buildContext('/tmp/project'),
+      requestText: 'Active Biology Room context: update the current selection.',
+      approvalPolicy: 'on-request',
+      awaitApproval: async (approval) => {
+        approvals.push(approval.toolName)
+        return 'allow'
+      }
+    }
+
+    await host.execute({
+      callId: 'safe-room-change',
+      toolName: 'mcp_call',
+      arguments: {
+        toolId: 'gui_workspace_intel/biology_room_apply',
+        arguments: { operations: [{ type: 'setSelection', selection: null }] }
+      }
+    }, context)
+    expect(approvals).toEqual([])
+
+    await host.execute({
+      callId: 'protected-room-change',
+      toolName: 'mcp_call',
+      arguments: {
+        toolId: 'gui_workspace_intel/biology_room_apply',
+        arguments: { operations: [{ type: 'deleteAnnotation', annotationId: 'a-1' }] }
+      }
+    }, context)
+    expect(approvals).toEqual(['mcp_call'])
+    expect(calls).toHaveLength(2)
+  })
+
+  it('advertises direct Biology Room tools only for relevant turn context', async () => {
+    const config = LocalRuntimeCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        search: { enabled: false },
+        servers: {
+          gui_workspace_intel: {
+            transport: 'stdio',
+            command: 'node',
+            trustScope: 'user'
+          }
+        }
+      }
+    })
+    const built = await buildMcpToolProviders(config.mcp, {
+      clientFactory: async () => ({
+        async listTools() {
+          return {
+            tools: [
+              { name: 'biology_room_observe', inputSchema: { type: 'object' } },
+              { name: 'biology_room_apply', inputSchema: { type: 'object' } },
+              { name: 'gui_visible_context', inputSchema: { type: 'object' } }
+            ]
+          }
+        },
+        async callTool(input) { return { called: input.name } },
+        async close() { /* no-op */ }
+      })
+    })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    const unrelated = (await host.listTools({
+      ...buildContext('/tmp/project'),
+      requestText: 'Refactor the settings panel.'
+    })).map((tool) => tool.name)
+    const biology = (await host.listTools({
+      ...buildContext('/tmp/project'),
+      requestText: 'Active Biology Room context: annotate residue 42.'
+    })).map((tool) => tool.name)
+
+    expect(unrelated).toContain('mcp_gui_workspace_intel_gui_visible_context')
+    expect(unrelated).not.toContain('mcp_gui_workspace_intel_biology_room_observe')
+    expect(unrelated).not.toContain('mcp_gui_workspace_intel_biology_room_apply')
+    expect(biology).toContain('mcp_gui_workspace_intel_biology_room_observe')
+    expect(biology).toContain('mcp_gui_workspace_intel_biology_room_apply')
+  })
+
   it('evaluates workspace trust scopes', () => {
     const server = {
       enabled: true,
@@ -522,6 +637,218 @@ describe('MCP tool provider', () => {
         }
       })
     }
+  })
+
+  it('keeps strict direct MCP allow-lists reachable through a scoped progressive gateway', async () => {
+    const callInputs: Array<{ name: string; arguments: Record<string, unknown> }> = []
+    const config = LocalRuntimeCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        search: { enabled: true, mode: 'search' },
+        servers: {
+          github: {
+            transport: 'stdio',
+            command: 'node',
+            trustScope: 'workspace',
+            trustedWorkspaceRoots: ['/tmp/project']
+          }
+        }
+      }
+    })
+    const built = await buildMcpToolProviders(config.mcp, {
+      clientFactory: async () => ({
+        async listTools() {
+          return {
+            tools: [
+              {
+                name: 'search_issues',
+                description: 'Search GitHub issues by query',
+                inputSchema: {
+                  type: 'object',
+                  properties: { query: { type: 'string' } },
+                  required: ['query']
+                },
+                annotations: { readOnlyHint: true }
+              },
+              {
+                name: 'create_issue',
+                description: 'Create a GitHub issue',
+                inputSchema: {
+                  type: 'object',
+                  properties: { title: { type: 'string' } },
+                  required: ['title']
+                }
+              }
+            ]
+          }
+        },
+        async callTool(input) {
+          callInputs.push(input)
+          return { called: input.name, arguments: input.arguments }
+        },
+        async close() {
+          // no-op
+        }
+      })
+    })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    const context: ToolHostContext = {
+      ...buildContext('/tmp/project'),
+      allowedToolNames: ['mcp_github_search_issues'],
+      explicitAllowedToolNames: ['mcp_github_search_issues'],
+      explicitStrictAllowedToolNames: true
+    }
+
+    expect((await host.listTools(context)).map((tool) => tool.name)).toEqual([
+      'mcp_search',
+      'mcp_describe',
+      'mcp_call'
+    ])
+
+    const search = await host.execute({
+      callId: 'call_scoped_search',
+      toolName: 'mcp_search',
+      arguments: { query: 'GitHub issue' }
+    }, context)
+    if (search.item.kind === 'tool_result') {
+      const output = search.item.output as { searchedTools: number; results: Array<{ toolId: string }> }
+      expect(output.searchedTools).toBe(1)
+      expect(output.results.map((result) => result.toolId)).toEqual(['github/search_issues'])
+    }
+
+    const blocked = await host.execute({
+      callId: 'call_blocked_create',
+      toolName: 'mcp_call',
+      arguments: { toolId: 'github/create_issue', arguments: { title: 'must stay blocked' } }
+    }, context)
+    if (blocked.item.kind === 'tool_result') {
+      expect(blocked.item.isError).toBe(true)
+      expect(blocked.item.output).toEqual({ error: 'unknown MCP tool: github/create_issue' })
+    }
+    expect(callInputs).toEqual([])
+
+    await host.execute({
+      callId: 'call_allowed_search',
+      toolName: 'mcp_call',
+      arguments: { toolId: 'github/search_issues', arguments: { query: 'bug' } }
+    }, context)
+    expect(callInputs).toEqual([{
+      name: 'search_issues',
+      arguments: { query: 'bug' }
+    }])
+  })
+
+  it('activates auto discovery above 24 tools while keeping research discoverable', async () => {
+    const config = LocalRuntimeCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        servers: {
+          gui_research: {
+            transport: 'stdio',
+            command: 'node',
+            trustScope: 'user'
+          }
+        }
+      }
+    })
+    const descriptors = [
+      {
+        name: 'research_search',
+        description: 'Search current research and public web sources.',
+        inputSchema: {
+          type: 'object',
+          properties: { query: { type: 'string' } },
+          required: ['query']
+        },
+        annotations: { readOnlyHint: true }
+      },
+      ...Array.from({ length: 24 }, (_, index) => ({
+        name: `auxiliary_tool_${index + 1}`,
+        description: `Auxiliary research tool ${index + 1}`,
+        inputSchema: { type: 'object' }
+      }))
+    ]
+    const built = await buildMcpToolProviders(config.mcp, {
+      clientFactory: async () => ({
+        async listTools() {
+          return { tools: descriptors }
+        },
+        async callTool(input) {
+          return { called: input.name, arguments: input.arguments }
+        },
+        async close() {
+          // no-op
+        }
+      })
+    })
+    const host = new LocalToolHost({ registry: new CapabilityRegistry(built.providers) })
+    const advertisedNames = (await host.listTools(buildContext('/tmp/project'))).map((tool) => tool.name)
+
+    expect(built.toolCount).toBe(25)
+    expect(built.search).toMatchObject({
+      enabled: true,
+      mode: 'auto',
+      active: true,
+      indexedToolCount: 25,
+      advertisedToolCount: 4
+    })
+    expect(advertisedNames).toEqual(expect.arrayContaining([
+      'mcp_search',
+      'mcp_describe',
+      'mcp_call',
+      'mcp_refresh_catalog'
+    ]))
+    expect(advertisedNames).not.toContain('mcp_gui_research_research_search')
+    expect(advertisedNames).not.toContain('mcp_gui_research_auxiliary_tool_1')
+
+    const searchResult = await host.execute({
+      callId: 'call_find_research',
+      toolName: 'mcp_search',
+      arguments: { query: 'current public web research' }
+    }, buildContext('/tmp/project'))
+    expect(searchResult.item.kind).toBe('tool_result')
+    if (searchResult.item.kind === 'tool_result') {
+      const output = searchResult.item.output as { results: Array<{ toolId: string }> }
+      expect(output.results.map((result) => result.toolId)).toContain('gui_research/research_search')
+    }
+  })
+
+  it('respects an explicit MCP search opt-out even for a large catalog', async () => {
+    const config = LocalRuntimeCapabilitiesConfig.parse({
+      mcp: {
+        enabled: true,
+        search: { enabled: false },
+        servers: {
+          large_catalog: {
+            transport: 'stdio',
+            command: 'node',
+            trustScope: 'user'
+          }
+        }
+      }
+    })
+    const built = await buildMcpToolProviders(config.mcp, {
+      clientFactory: async () => ({
+        async listTools() {
+          return {
+            tools: Array.from({ length: 25 }, (_, index) => ({
+              name: `tool_${index + 1}`,
+              inputSchema: { type: 'object' }
+            }))
+          }
+        },
+        async callTool(input) {
+          return { called: input.name }
+        },
+        async close() {
+          // no-op
+        }
+      })
+    })
+
+    expect(built.search.active).toBe(false)
+    expect(built.search.advertisedToolCount).toBe(25)
+    expect(built.providers.flatMap((provider) => provider.tools.map((tool) => tool.name))).not.toContain('mcp_search')
   })
 
   it('passes computer-use arguments through MCP search calls without context injection', async () => {

@@ -401,10 +401,33 @@ describe('buildDelegationToolProviders', () => {
 
     expect(runChild.mock.calls[0]?.[0].allowedToolNames).toEqual([
       'web_fetch',
-      'mcp_gui_research_research_search'
+      'mcp_gui_research_research_search',
+      'mcp_search',
+      'mcp_describe',
+      'mcp_call'
     ])
     expect(runChild.mock.calls[0]?.[0].strictAllowedToolNames).toBe(true)
     expect(runChild.mock.calls[0]?.[0].maxToolCalls).toBe(12)
+  })
+
+  it('includes progressive MCP discovery and dispatch tools in the default research policy', async () => {
+    const { runtime, runChild } = fakeRuntime()
+    const tool = buildDelegationToolProviders(runtime)[0]?.tools.find((candidate) => candidate.name === 'delegate_task')
+
+    await tool?.execute({
+      label: 'default-research',
+      prompt: 'Research current benchmark evidence and cite sources.'
+    }, fakeContext())
+
+    expect(runChild.mock.calls[0]?.[0].allowedToolNames).toEqual([
+      'web_search',
+      'web_fetch',
+      'mcp_gui_research_research_search',
+      'mcp_search',
+      'mcp_describe',
+      'mcp_call'
+    ])
+    expect(runChild.mock.calls[0]?.[0].strictAllowedToolNames).toBe(true)
   })
 
   it('keeps research child agents tool-less when the parent explicit policy has no research tools', async () => {
