@@ -70,6 +70,7 @@ class EventStore:
         self._events: list[dict[str, Any]] = []
         self._by_id: dict[str, dict[str, Any]] = {}
         self._legacy_file = False
+        self._torn_tail = False
         if path and os.path.exists(path):
             self._load_file()
 
@@ -264,7 +265,12 @@ class EventStore:
                 except json.JSONDecodeError:
                     if index == len(lines) - 1:
                         # A torn trailing line is a crash mid-append; the event
-                        # was never surfaced to a caller, so drop it.
+                        # was never surfaced to a caller, so drop it from the
+                        # read model and rewrite the valid prefix before the
+                        # next append. Appending directly after a partial JSON
+                        # object would make the new durable event unreadable on
+                        # the next restart.
+                        self._torn_tail = True
                         break
                     raise ValueError("Evidence domain event stream contains a corrupt line")
         self._validate(events)
@@ -275,9 +281,10 @@ class EventStore:
         if not self.path:
             return
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        if self._legacy_file:
+        if self._legacy_file or self._torn_tail:
             self._rewrite_all([*self._events, event])
             self._legacy_file = False
+            self._torn_tail = False
             return
         creating = not os.path.exists(self.path)
         with open(self.path, "a", encoding="utf-8") as fh:

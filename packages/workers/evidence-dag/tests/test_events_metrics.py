@@ -87,7 +87,17 @@ class TestEventStore(unittest.TestCase):
             )
             with open(path, "a", encoding="utf-8") as fh:
                 fh.write('{"schemaVersion": "evidence-domain-ev')  # simulated torn write
-            self.assertEqual(len(EventStore(path).read()), 1)
+            recovered = EventStore(path)
+            self.assertEqual(len(recovered.read()), 1)
+            recovered.append(
+                "EvidenceSnapshotCommitted", aggregate_type="EvidenceThread", aggregate_id="t",
+                idempotency_key="snap-1", payload={"threadId": "t"},
+            )
+            restarted = EventStore(path).read()
+            self.assertEqual([event["sequence"] for event in restarted], [1, 2])
+            self.assertEqual([event["type"] for event in restarted], [
+                "EvidenceUpdateQueued", "EvidenceSnapshotCommitted",
+            ])
 
     def test_update_and_snapshot_events_survive_restart_without_duplicates(self):
         with tempfile.TemporaryDirectory() as workspace:

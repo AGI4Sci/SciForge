@@ -1504,15 +1504,20 @@ async function loadThreads() {
 }
 
 let graphLoadInFlight = false;
+let graphReloadPending = false;
 
 async function loadGraph() {
   if (!currentThread) {
     renderEmptyGraph('No thread selected.');
     return;
   }
-  // Overlapping loads (watch poll + manual refresh) would interleave DOM
-  // rebuilds and flicker; one load at a time is always enough.
-  if (graphLoadInFlight) return;
+  // Overlapping loads (watch poll + manual refresh) must not interleave DOM
+  // rebuilds, but the newest request must still be observed. Coalesce any
+  // overlap into exactly one follow-up load after the current pass finishes.
+  if (graphLoadInFlight) {
+    graphReloadPending = true;
+    return;
+  }
   graphLoadInFlight = true;
   setStatus('loading...');
   try {
@@ -1568,6 +1573,10 @@ async function loadGraph() {
     setStatus('error');
   } finally {
     graphLoadInFlight = false;
+    if (graphReloadPending) {
+      graphReloadPending = false;
+      void loadGraph();
+    }
   }
 }
 

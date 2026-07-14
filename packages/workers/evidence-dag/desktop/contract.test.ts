@@ -52,4 +52,11 @@ describe('Evidence DAG desktop contract', () => {
     expect(html).toContain('blastRadius')
     expect(html).toContain('aria-label="Human review checkpoint"')
   })
+
+  it('coalesces overlapping graph refreshes without dropping the newest request', () => {
+    const html = readFileSync(new URL('../ui/index.html', import.meta.url), 'utf8')
+    expect(html).toContain('let graphReloadPending = false')
+    expect(html).toContain('if (graphLoadInFlight) {\n    graphReloadPending = true;\n    return;\n  }')
+    expect(html).toContain('if (graphReloadPending) {\n      graphReloadPending = false;\n      void loadGraph();\n    }')
+  })
 })
