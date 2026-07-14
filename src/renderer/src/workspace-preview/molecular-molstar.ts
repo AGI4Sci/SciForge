@@ -234,12 +234,10 @@ export const renderMolecularWorkbenchWithMolstar: MolecularWorkbenchRenderer = a
   await loadMolstarSource(viewer, source)
   await resetMolecularMolstarViewport(viewer)
   applyMolecularMolstarSelection(viewer, selection)
-  await resetMolecularMolstarViewport(viewer)
 
   return {
     setSelection: (nextSelection) => {
       applyMolecularMolstarSelection(viewer, nextSelection)
-      void resetMolecularMolstarViewport(viewer)
     },
     resize: () => viewer.handleResize(),
     dispose: () => viewer.dispose()
