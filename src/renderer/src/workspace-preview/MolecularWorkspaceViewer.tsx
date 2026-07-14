@@ -451,7 +451,6 @@ function useMolecularWorkbenchRender(input: {
   const latestSelectionRef = useRef<MolecularStructuredSelection | undefined>(
     molecularSelectionFromObservation(observation)
   )
-
   const assetRef = useRef(asset)
   const observationRef = useRef(observation)
   const readRangeRef = useRef(readRange)

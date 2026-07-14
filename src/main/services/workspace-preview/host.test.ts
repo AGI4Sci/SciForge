@@ -247,6 +247,32 @@ describe('WorkspacePreviewHost', () => {
     }
   })
 
+  it('opens passive binary biology indexes for range transport', async () => {
+    await writeFile(join(workspaceRoot, 'variants.vcf.gz.tbi'), Buffer.from([0x54, 0x42, 0x49, 0x01, 0x00, 0xff]))
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-index' })
+
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'variants.vcf.gz.tbi',
+      mode: 'inspect'
+    })
+
+    expect(opened).toMatchObject({
+      ok: true,
+      session: {
+        id: 'session-index',
+        pluginId: 'biology-index-transport',
+        modality: 'unknown',
+        mode: 'inspect'
+      }
+    })
+    if (!opened.ok) return
+    await expect(host.readRange(opened.session.id, { offset: 0, length: 4 })).resolves.toMatchObject({
+      ok: true,
+      length: 4
+    })
+  })
+
   it('describes lazy large-asset transport for life-science plugins', async () => {
     await writeFile(join(workspaceRoot, 'cells.ome.tiff'), Buffer.alloc(8 * 1024 * 1024))
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-asset' })

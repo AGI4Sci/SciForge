@@ -1,18 +1,7 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
-
-const DEV_BROWSER_BRIDGE_ASSET_BASE_URL = 'http://127.0.0.1:5174/workspace-preview/assets'
-const DEV_BROWSER_BRIDGE_CLIENT_ID = `electron-preload-${Math.random().toString(36).slice(2)}`
-
-function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
-  if (!import.meta.env.DEV) return null
-  const trimmed = sessionId.trim()
-  if (!trimmed) return null
-  const url = new URL(`${DEV_BROWSER_BRIDGE_ASSET_BASE_URL}/${encodeURIComponent(trimmed)}`)
-  url.searchParams.set('clientId', DEV_BROWSER_BRIDGE_CLIENT_ID)
-  return url.toString()
-}
+import { workspacePreviewAssetSourceUrl } from '../shared/workspace-preview-asset-url'
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
@@ -282,6 +271,17 @@ const api = {
       ipcRenderer.on('workspacePreview:changed', wrapped)
       return () => ipcRenderer.removeListener('workspacePreview:changed', wrapped)
     }
+  },
+  biologyRoom: {
+    pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
+    create: (input) => ipcRenderer.invoke('biologyRoom:create', input),
+    openOrCreate: (input) => ipcRenderer.invoke('biologyRoom:openOrCreate', input),
+    load: (input) => ipcRenderer.invoke('biologyRoom:load', input),
+    list: (input) => ipcRenderer.invoke('biologyRoom:list', input),
+    observe: (input) => ipcRenderer.invoke('biologyRoom:observe', input),
+    apply: (input) => ipcRenderer.invoke('biologyRoom:apply', input),
+    refresh: (input) => ipcRenderer.invoke('biologyRoom:refresh', input),
+    history: (input) => ipcRenderer.invoke('biologyRoom:history', input)
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),

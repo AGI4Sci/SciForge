@@ -2,6 +2,12 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS,
   applyMolecularMolstarSelection,
+  biologyMolecularLocatorsToMolstarSchemaItems,
+  biologyMolecularRepresentationForComponent,
+  biologyMolecularSelectionSignature,
+  biologyMolecularVisualStateSignature,
+  buildMolstarSelectionUniverse,
+  compactMolstarAtomicSelectionRecordsToBiologyLocators,
   createMolecularMolstarRuntimeLoader,
   molecularMolstarFormatForPath,
   molecularSelectionToMolstarSchemaItems,
@@ -18,6 +24,13 @@ describe('molecular Mol* adapter', () => {
       viewportShowExpand: false,
       viewportShowToggleFullscreen: false
     })
+  })
+
+  it('keeps ligands and water visible when the macromolecule uses cartoon representation', () => {
+    expect(biologyMolecularRepresentationForComponent('cartoon', 'polymer')).toBe('cartoon')
+    expect(biologyMolecularRepresentationForComponent('cartoon', 'ligand')).toBe('ball-and-stick')
+    expect(biologyMolecularRepresentationForComponent('cartoon', 'water')).toBe('ball-and-stick')
+    expect(biologyMolecularRepresentationForComponent('surface', 'ligand')).toBe('surface')
   })
 
   it('preloads the Mol* runtime through a reusable async loader', async () => {
@@ -185,5 +198,83 @@ describe('molecular Mol* adapter', () => {
       action: 'select'
     })
     expect(structureInteractivity.mock.calls[0]?.[0].action).not.toBe('focus')
+  })
+
+  it('keeps model/chain/residue/atom locator context together for Biology Room selections', () => {
+    const items = biologyMolecularLocatorsToMolstarSchemaItems([{
+      modelId: 1,
+      chainId: 'A',
+      residueNumber: 42,
+      residueName: 'GLY',
+      atomName: 'CA',
+      atomId: 17
+    }])
+
+    expect(items).toHaveLength(1)
+    for (const item of items) {
+      expect(item.atom_id).toBe(17)
+      expect(item.pdbx_PDB_ins_code).toBe('')
+      expect(item.auth_asym_id).toBe('A')
+      expect(item.auth_seq_id).toBe(42)
+      expect(item.auth_comp_id).toBe('GLY')
+      expect(item.auth_atom_id).toBe('CA')
+      expect(item).not.toHaveProperty('type_symbol')
+    }
+  })
+
+  it('compacts complete residue and chain selections while preserving partial atom context', () => {
+    const records = [
+      { modelId: 1, chainId: 'A', residueNumber: 42, residueName: 'GLY', atomName: 'N', atomId: 1 },
+      { modelId: 1, chainId: 'A', residueNumber: 42, residueName: 'GLY', atomName: 'CA', atomId: 2 },
+      { modelId: 1, chainId: 'A', residueNumber: 43, residueName: 'SER', atomName: 'N', atomId: 3 },
+      { modelId: 1, chainId: 'B', residueNumber: 7, residueName: 'ATP', atomName: 'P', atomId: 4 }
+    ]
+    const universe = buildMolstarSelectionUniverse(records)
+
+    expect(compactMolstarAtomicSelectionRecordsToBiologyLocators(records.slice(0, 2), universe)).toEqual([{
+      modelId: 1,
+      chainId: 'A',
+      residueNumber: 42,
+      residueName: 'GLY'
+    }])
+    expect(compactMolstarAtomicSelectionRecordsToBiologyLocators(records.slice(0, 3), universe)).toEqual([{
+      modelId: 1,
+      chainId: 'A'
+    }])
+    expect(compactMolstarAtomicSelectionRecordsToBiologyLocators([records[1]!], universe)).toEqual([{
+      modelId: 1,
+      chainId: 'A',
+      residueNumber: 42,
+      residueName: 'GLY',
+      atomName: 'CA',
+      atomId: 2
+    }])
+  })
+
+  it('uses order-insensitive selection signatures and excludes camera motion from visual updates', () => {
+    const left = {
+      kind: 'molecular' as const,
+      assetId: 'protein',
+      locators: [{ chainId: 'A' }, { chainId: 'B', residueNumber: 7 }]
+    }
+    const right = {
+      ...left,
+      locators: [...left.locators].reverse()
+    }
+    const baseView = {
+      assetId: 'protein',
+      representation: 'cartoon' as const,
+      colorScheme: 'chain' as const
+    }
+
+    expect(biologyMolecularSelectionSignature(left)).toBe(biologyMolecularSelectionSignature(right))
+    expect(biologyMolecularVisualStateSignature(baseView)).toBe(biologyMolecularVisualStateSignature({
+      ...baseView,
+      camera: {
+        position: [1, 2, 3],
+        target: [0, 0, 0],
+        up: [0, 1, 0]
+      }
+    }))
   })
 })

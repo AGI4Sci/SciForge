@@ -1059,7 +1059,15 @@ describe('life science workspace preview scope guard', () => {
   })
 
   it('routes sequence and genomics files to the life-science sequence plugin', () => {
-    for (const path of ['reads.fastq', 'reference.fasta', 'genes.gff', 'variants.vcf']) {
+    for (const path of [
+      'reads.fastq',
+      'reference.fasta',
+      'reference.fna',
+      'proteome.faa',
+      'genes.gff',
+      'genes.gff3',
+      'variants.vcf'
+    ]) {
       expect(resolveLifeSciencePreviewRoute(path)).toMatchObject({
         scope: 'life-science',
         format: { pluginId: 'sequence-genomics', modality: 'sequence' }

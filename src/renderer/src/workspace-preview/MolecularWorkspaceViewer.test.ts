@@ -385,7 +385,7 @@ describe('MolecularWorkspaceViewer', () => {
     })
   })
 
-  it('keys Mol* loading by source identity instead of observation selection', () => {
+  it('keys Mol* source loading by source identity rather than observation selection or callback identity', () => {
     const asset = createMolecularAssetDescriptor()
     const identity = molecularWorkbenchSourceIdentity({
       observationPath: '/workspace/lab/protein.pdb',
