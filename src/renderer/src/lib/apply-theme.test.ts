@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { applyDocumentLocale } from './apply-theme'
+import { applyDocumentLocale, applyUiFontScale } from './apply-theme'
 
 describe('applyDocumentLocale', () => {
   afterEach(() => {
@@ -37,5 +37,45 @@ describe('applyDocumentLocale', () => {
 
     applyDocumentLocale('en')
     expect(writes).toBe(0)
+  })
+})
+
+describe('applyUiFontScale', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('prefers native page zoom and disables CSS zoom when the preload bridge supports it', () => {
+    const properties = new Map<string, string>()
+    const setUiZoomFactor = vi.fn()
+    vi.stubGlobal('document', {
+      documentElement: {
+        style: {
+          setProperty: (name: string, value: string) => properties.set(name, value)
+        }
+      }
+    })
+    vi.stubGlobal('window', { sciforge: { setUiZoomFactor } })
+
+    applyUiFontScale('small')
+
+    expect(properties.get('--ds-ui-scale')).toBe('1')
+    expect(setUiZoomFactor).toHaveBeenCalledWith(0.82)
+  })
+
+  it('keeps the CSS zoom fallback for browser-only development', () => {
+    const properties = new Map<string, string>()
+    vi.stubGlobal('document', {
+      documentElement: {
+        style: {
+          setProperty: (name: string, value: string) => properties.set(name, value)
+        }
+      }
+    })
+    vi.stubGlobal('window', {})
+
+    applyUiFontScale('medium')
+
+    expect(properties.get('--ds-ui-scale')).toBe('0.88')
   })
 })

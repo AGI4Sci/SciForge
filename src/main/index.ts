@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray } from 'electron'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -145,6 +145,11 @@ import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migrati
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
+import { WorkspacePreviewHost } from './services/workspace-preview'
+import {
+  installWorkspacePreviewAssetProtocol,
+  registerWorkspacePreviewAssetScheme
+} from './workspace-preview-asset-protocol'
 import {
   startDevBrowserBridgeServer,
   type DevBrowserBridgeServer
@@ -365,6 +370,7 @@ traceStartup('main module evaluated')
 // whenReady 副作用污染。
 configureAppIdentity()
 configureLinuxWaylandImeSwitches()
+registerWorkspacePreviewAssetScheme(protocol)
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID)
@@ -2187,6 +2193,15 @@ app.whenReady().then(async () => {
 
   startModelRouterConfigWatcher(app.getPath('userData'), applyExternalModelRouterConfigFileChange)
 
+  const workspacePreviewHost = new WorkspacePreviewHost({
+    loadSettings: () => store.load()
+  })
+  installWorkspacePreviewAssetProtocol(protocol, {
+    isSessionAuthorized: (sessionId) => workspacePreviewHost.getSession(sessionId) !== null,
+    describeAsset: (sessionId) => workspacePreviewHost.describeAsset(sessionId),
+    readRange: (sessionId, range) => workspacePreviewHost.readRange(sessionId, range)
+  })
+
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     getMainWindow: () => mainWindow,
@@ -2225,6 +2240,7 @@ app.whenReady().then(async () => {
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    workspacePreviewHost,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     ensureEvidenceDagReady: async () => {

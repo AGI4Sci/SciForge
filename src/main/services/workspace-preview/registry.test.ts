@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  WORKSPACE_PREVIEW_NO_AGENT_ACCESS,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
   WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
@@ -89,6 +90,24 @@ describe('WorkspacePreviewRegistry', () => {
       status: 'matched',
       manifest: { id: 'molecular', modality: 'molecular' }
     })
+  })
+
+  it('routes passive biology companion indexes without treating them as editable text', () => {
+    const registry = createWorkspacePreviewRegistry()
+    for (const path of ['reference.fa.fai', 'reference.fa.gz.gzi', 'variants.vcf.gz.tbi', 'variants.vcf.gz.csi']) {
+      expect(registry.resolve({ path })).toMatchObject({
+        status: 'matched',
+        manifest: {
+          id: 'biology-index-transport',
+          modality: 'unknown',
+          capabilities: {
+            edit: false,
+            structuredSelection: false,
+            agent: WORKSPACE_PREVIEW_NO_AGENT_ACCESS
+          }
+        }
+      })
+    }
   })
 
   it('falls back to the text plugin only when requested', () => {

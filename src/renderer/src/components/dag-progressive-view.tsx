@@ -45,9 +45,15 @@ export function dagProgressiveView(status?: DagPanelStatus): DagProgressiveViewS
   }
 }
 
-export function DagProgressiveLegend({ status, t, className = '' }: DagProgressiveLegendProps): ReactElement {
+export function DagProgressiveLegend({ status, t, className = '' }: DagProgressiveLegendProps): ReactElement | null {
   const progressive = dagProgressiveView(status)
   const staging = progressive.staging
+  const stagingActivity = Boolean(staging && (
+    staging.collectedCount || staging.extractingCount || staging.pendingVerificationCount || staging.temporaryEdgeCount
+  ))
+  // An idle panel with only inferred zero counts has nothing to explain;
+  // hiding the band keeps the graph area quiet until staging work exists.
+  if (!stagingActivity && progressive.inferred) return null
   const presentations: StagePresentation[] = [
     {
       stage: 'collected',
@@ -74,9 +80,7 @@ export function DagProgressiveLegend({ status, t, className = '' }: DagProgressi
       icon: <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
     }
   ]
-  const hasStaging = Boolean(staging && (
-    staging.collectedCount || staging.extractingCount || staging.pendingVerificationCount || staging.temporaryEdgeCount
-  ))
+  const hasStaging = stagingActivity
 
   return (
     <section

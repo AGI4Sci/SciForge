@@ -31,21 +31,34 @@ _DERIVED = (NodeType.CLAIM, NodeType.REASONING)
 _RESEARCH_CONCLUSIONS = (NodeType.CLAIM, NodeType.FINDING)
 
 
-def provenance_coverage(graph: ThreadGraph) -> float:
-    derived = [n for n in graph.nodes.values() if n.type in _DERIVED]
+def _paths_of(graph: ThreadGraph, types: tuple[NodeType, ...],
+              paths: Optional[dict[str, dict]] = None) -> dict[str, dict]:
+    """Provenance path per node of `types`, reusing `paths` when supplied.
+
+    The walk is the dominant cost of every metric below, so ``all_metrics``
+    computes each node's path once and shares it across the metric functions.
+    """
+    result: dict[str, dict] = {}
+    for node in graph.nodes.values():
+        if node.type not in types:
+            continue
+        cached = (paths or {}).get(node.id)
+        result[node.id] = cached if cached is not None else graph.provenance_path(node.id)
+    return result
+
+
+def provenance_coverage(graph: ThreadGraph, paths: Optional[dict[str, dict]] = None) -> float:
+    derived = _paths_of(graph, _DERIVED, paths)
     if not derived:
         return 1.0
-    covered = sum(1 for n in derived if graph.provenance_path(n.id)["sourceAssertionLeaves"])
+    covered = sum(1 for path in derived.values() if path["sourceAssertionLeaves"])
     return covered / len(derived)
 
 
-def provenance_soundness(graph: ThreadGraph) -> float:
+def provenance_soundness(graph: ThreadGraph, paths: Optional[dict[str, dict]] = None) -> float:
     """Mean ν over supports edges that sit on a source-rooted path."""
     load_bearing: list[float] = []
-    for n in graph.nodes.values():
-        if n.type not in _DERIVED:
-            continue
-        path = graph.provenance_path(n.id)
+    for path in _paths_of(graph, _DERIVED, paths).values():
         if not path["sourceAssertionLeaves"]:
             continue
         for e in path["edges"]:
@@ -66,14 +79,11 @@ def contradiction_transparency(graph: ThreadGraph) -> dict:
     }
 
 
-def audit_effort(graph: ThreadGraph) -> float:
-    lengths: list[int] = []
-    for n in graph.nodes.values():
-        if n.type not in _DERIVED:
-            continue
-        path = graph.provenance_path(n.id)
-        if path["sourceAssertionLeaves"]:
-            lengths.append(len(path["edges"]))
+def audit_effort(graph: ThreadGraph, paths: Optional[dict[str, dict]] = None) -> float:
+    lengths = [
+        len(path["edges"]) for path in _paths_of(graph, _DERIVED, paths).values()
+        if path["sourceAssertionLeaves"]
+    ]
     return mean(lengths) if lengths else 0.0
 
 
@@ -153,13 +163,14 @@ def _staleness(
     return lag, detail
 
 
-def _provenance_rates(graph: ThreadGraph) -> tuple[Optional[float], Optional[float], Optional[float], dict]:
-    conclusions = [node for node in graph.nodes.values() if node.type in _RESEARCH_CONCLUSIONS]
-    if not conclusions:
+def _provenance_rates(
+    graph: ThreadGraph, shared_paths: Optional[dict[str, dict]] = None,
+) -> tuple[Optional[float], Optional[float], Optional[float], dict]:
+    paths = list(_paths_of(graph, _RESEARCH_CONCLUSIONS, shared_paths).values())
+    if not paths:
         return None, None, None, {
             "status": "unavailable", "reason": "no_claim_or_finding", "denominator": 0,
         }
-    paths = [graph.provenance_path(node.id) for node in conclusions]
     broken = sum(
         1 for path in paths
         if path.get("provenanceLevel") == "L0" or bool(path.get("breakpoints"))
@@ -169,7 +180,7 @@ def _provenance_rates(graph: ThreadGraph) -> tuple[Optional[float], Optional[flo
         1 for path in paths
         if str(path.get("provenanceLevel") or "L0") in {"L2", "L3", "L4"}
     )
-    total = len(conclusions)
+    total = len(paths)
     return (
         round(broken / total, 4),
         round(reachable / total, 4),
@@ -212,13 +223,15 @@ def all_metrics(
     audit_lag, audit_detail = _staleness(
         snapshot, list(audits or []), list(snapshot_history or []),
     )
-    break_rate, reachability, level_2_plus, break_detail = _provenance_rates(graph)
+    # One provenance walk per node, shared by every path-based metric below.
+    shared_paths = _paths_of(graph, tuple({*_DERIVED, *_RESEARCH_CONCLUSIONS}))
+    break_rate, reachability, level_2_plus, break_detail = _provenance_rates(graph, shared_paths)
     reproducible_rate, reproducible_detail = _reproducible_finding_rate(graph)
     return {
-        "provenance_coverage": round(provenance_coverage(graph), 4),
-        "provenance_soundness": round(provenance_soundness(graph), 4),
+        "provenance_coverage": round(provenance_coverage(graph, shared_paths), 4),
+        "provenance_soundness": round(provenance_soundness(graph, shared_paths), 4),
         "contradiction_transparency": contradiction_transparency(graph),
-        "audit_effort": round(audit_effort(graph), 4),
+        "audit_effort": round(audit_effort(graph, shared_paths), 4),
         "artifact_reachability": reachability,
         "level_2_plus_coverage": level_2_plus,
         "queue_latency_ms": queue_samples[-1] if queue_samples else None,

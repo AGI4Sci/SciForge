@@ -51,7 +51,13 @@ def _canonical(value: Any) -> str:
 
 
 class EventStore:
-    """Small atomic JSON event store suitable for the local Evidence worker.
+    """Durable append-only event store suitable for the local Evidence worker.
+
+    Events live in memory and are fsynced to disk as one JSON line per event
+    before they are surfaced to any caller, so appends and reads are O(1)/O(n)
+    instead of a full-file rewrite per event.  Files written by earlier builds
+    (one JSON document holding an ``events`` array) are read transparently and
+    migrated to the line-oriented layout on the next append.
 
     Production workers configure ``storage_dir`` and therefore use a durable
     path.  A path-less Engine retains the same API for pure in-memory tests, but
@@ -61,9 +67,12 @@ class EventStore:
     def __init__(self, path: Optional[str]) -> None:
         self.path = path
         self._lock = threading.RLock()
-        self._memory: list[dict[str, Any]] = []
+        self._events: list[dict[str, Any]] = []
+        self._by_id: dict[str, dict[str, Any]] = {}
+        self._legacy_file = False
+        self._torn_tail = False
         if path and os.path.exists(path):
-            self._read_document()
+            self._load_file()
 
     @property
     def persistent(self) -> bool:
@@ -154,8 +163,7 @@ class EventStore:
         if not isinstance(payload, dict):
             raise ValueError("event payload must be an object")
         with self._lock:
-            events = self._load_events()
-            existing = next((item for item in events if item.get("eventId") == event_id), None)
+            existing = self._by_id.get(event_id)
             if existing is not None:
                 expected = {
                     "type": event_type,
@@ -170,7 +178,7 @@ class EventStore:
             created = {
                 "schemaVersion": SCHEMA_VERSION,
                 "eventId": event_id,
-                "sequence": len(events) + 1,
+                "sequence": len(self._events) + 1,
                 "type": event_type,
                 "aggregateType": str(aggregate_type),
                 "aggregateId": aggregate_id,
@@ -181,8 +189,11 @@ class EventStore:
                 "persistent": self.persistent,
                 "payload": json.loads(_canonical(payload)),
             }
-            events.append(created)
-            self._persist(events)
+            # Durable first: the event enters memory (and is returned) only
+            # after the fsynced write succeeded.
+            self._persist_append(created)
+            self._events.append(created)
+            self._by_id[event_id] = created
             return dict(created)
 
     def read(
@@ -202,61 +213,109 @@ class EventStore:
         if unknown:
             raise ValueError(f"unsupported Evidence event type(s): {', '.join(sorted(unknown))}")
         with self._lock:
-            # Always re-read the durable file.  No event is surfaced from a
-            # speculative in-memory append.
-            events = self._load_events()
+            # Memory only ever contains fsynced events, so it is as durable a
+            # read model as the file itself.
             selected = [
-                dict(event) for event in events
+                dict(event) for event in self._events
                 if int(event.get("sequence", 0)) > after_sequence
                 and (not requested or event.get("type") in requested)
                 and (aggregate_id is None or event.get("aggregateId") == aggregate_id)
             ]
             return selected[:limit]
 
-    def _load_events(self) -> list[dict[str, Any]]:
-        if self.path:
-            if not os.path.exists(self.path):
-                return []
-            return self._read_document()
-        return [dict(item) for item in self._memory]
-
-    def _read_document(self) -> list[dict[str, Any]]:
-        assert self.path is not None
-        with open(self.path, encoding="utf-8") as fh:
-            document = json.load(fh)
-        if document.get("schemaVersion") != SCHEMA_VERSION:
-            raise ValueError("unsupported Evidence domain event stream schema")
-        events = document.get("events")
-        if not isinstance(events, list):
-            raise ValueError("Evidence domain event stream events must be a list")
+    @staticmethod
+    def _validate(events: list[Any]) -> None:
         for index, event in enumerate(events, start=1):
             if not isinstance(event, dict) or event.get("sequence") != index:
                 raise ValueError("Evidence domain event stream sequence is corrupt")
             if event.get("type") not in EVENT_TYPES or not event.get("eventId"):
                 raise ValueError("Evidence domain event stream contains an invalid event")
-        return events
 
-    def _persist(self, events: list[dict[str, Any]]) -> None:
+    def _load_file(self) -> None:
+        assert self.path is not None
+        with open(self.path, encoding="utf-8") as fh:
+            text = fh.read()
+        if not text.strip():
+            return
+        # A legacy file is one JSON document holding the full events array; a
+        # line-oriented file holds one event object per line (so a whole-text
+        # parse either fails on the second line or yields an event, not a
+        # document with an "events" array).
+        document = None
+        try:
+            document = json.loads(text)
+        except json.JSONDecodeError:
+            pass
+        if isinstance(document, dict) and "events" in document:
+            if document.get("schemaVersion") != SCHEMA_VERSION:
+                raise ValueError("unsupported Evidence domain event stream schema")
+            events = document.get("events")
+            if not isinstance(events, list):
+                raise ValueError("Evidence domain event stream events must be a list")
+            self._legacy_file = True
+        else:
+            events = []
+            lines = text.splitlines()
+            for index, line in enumerate(lines):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    events.append(json.loads(line))
+                except json.JSONDecodeError:
+                    if index == len(lines) - 1:
+                        # A torn trailing line is a crash mid-append; the event
+                        # was never surfaced to a caller, so drop it from the
+                        # read model and rewrite the valid prefix before the
+                        # next append. Appending directly after a partial JSON
+                        # object would make the new durable event unreadable on
+                        # the next restart.
+                        self._torn_tail = True
+                        break
+                    raise ValueError("Evidence domain event stream contains a corrupt line")
+        self._validate(events)
+        self._events = events
+        self._by_id = {event["eventId"]: event for event in events}
+
+    def _persist_append(self, event: dict[str, Any]) -> None:
         if not self.path:
-            self._memory = [dict(item) for item in events]
             return
         os.makedirs(os.path.dirname(self.path), exist_ok=True)
-        document = _canonical({"schemaVersion": SCHEMA_VERSION, "events": events})
+        if self._legacy_file or self._torn_tail:
+            self._rewrite_all([*self._events, event])
+            self._legacy_file = False
+            self._torn_tail = False
+            return
+        creating = not os.path.exists(self.path)
+        with open(self.path, "a", encoding="utf-8") as fh:
+            fh.write(_canonical(event) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        if creating:
+            self._fsync_directory()
+
+    def _rewrite_all(self, events: list[dict[str, Any]]) -> None:
+        assert self.path is not None
+        content = "".join(_canonical(event) + "\n" for event in events)
         tmp = f"{self.path}.{uuid.uuid4().hex}.tmp"
         try:
             with open(tmp, "x", encoding="utf-8") as fh:
-                fh.write(document)
+                fh.write(content)
                 fh.flush()
                 os.fsync(fh.fileno())
             os.replace(tmp, self.path)
-            try:
-                directory_fd = os.open(os.path.dirname(self.path), os.O_RDONLY)
-                try:
-                    os.fsync(directory_fd)
-                finally:
-                    os.close(directory_fd)
-            except OSError:
-                pass
+            self._fsync_directory()
         finally:
             if os.path.exists(tmp):
                 os.unlink(tmp)
+
+    def _fsync_directory(self) -> None:
+        assert self.path is not None
+        try:
+            directory_fd = os.open(os.path.dirname(self.path), os.O_RDONLY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+        except OSError:
+            pass

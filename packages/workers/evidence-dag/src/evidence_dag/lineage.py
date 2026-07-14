@@ -292,33 +292,34 @@ def _related_runs(graph: "ThreadGraph", target_id: str) -> list[str]:
     target = graph.nodes[target_id]
     if target.type in _RUN_TYPES:
         return [target_id]
+    by_src, by_dst = graph.edges_by_src(), graph.edges_by_dst()
     # Walk epistemic inputs backwards, then follow entity -> activity generation.
     candidates = {target_id}
     stack = [target_id]
     while stack:
         current = stack.pop()
-        for edge in graph.edges.values():
-            if edge.rel in {EdgeRel.SUPPORTS, EdgeRel.DERIVED_FROM} and edge.dst == current:
-                if edge.src not in candidates:
-                    candidates.add(edge.src)
-                    stack.append(edge.src)
+        for edge in by_dst.get(current, ()):
+            if edge.rel in {EdgeRel.SUPPORTS, EdgeRel.DERIVED_FROM} and edge.src not in candidates:
+                candidates.add(edge.src)
+                stack.append(edge.src)
     runs: set[str] = set()
-    for edge in graph.edges.values():
-        if edge.rel == EdgeRel.GENERATED_BY and edge.src in candidates:
-            if graph.nodes[edge.dst].type in _RUN_TYPES:
+    for candidate in candidates:
+        for edge in by_src.get(candidate, ()):
+            if edge.rel == EdgeRel.GENERATED_BY and graph.nodes[edge.dst].type in _RUN_TYPES:
                 runs.add(edge.dst)
-        if edge.rel in {EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE} and edge.dst == target_id:
-            if graph.nodes[edge.src].type in _RUN_TYPES:
-                runs.add(edge.src)
+    for edge in by_dst.get(target_id, ()):
+        if edge.rel in {EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE} \
+                and graph.nodes[edge.src].type in _RUN_TYPES:
+            runs.add(edge.src)
     return sorted(runs)
 
 
 def _run_report(graph: "ThreadGraph", run_id: str) -> dict[str, Any]:
     run = graph.nodes[run_id]
-    used = [graph.nodes[e.dst] for e in graph.edges.values()
-            if e.rel == EdgeRel.USED and e.src == run_id]
-    generated = [graph.nodes[e.src] for e in graph.edges.values()
-                 if e.rel == EdgeRel.GENERATED_BY and e.dst == run_id]
+    used = [graph.nodes[e.dst] for e in graph.edges_by_src().get(run_id, ())
+            if e.rel == EdgeRel.USED]
+    generated = [graph.nodes[e.src] for e in graph.edges_by_dst().get(run_id, ())
+                 if e.rel == EdgeRel.GENERATED_BY]
     inputs = [node for node in used if node.type in _INPUT_TYPES]
     software = [node for node in used if node.type == NodeType.SOFTWARE_VERSION]
     environments = [node for node in used if node.type == NodeType.ENVIRONMENT]

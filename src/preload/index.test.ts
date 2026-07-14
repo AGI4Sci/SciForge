@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const invoke = vi.fn()
 const on = vi.fn()
 const removeListener = vi.fn()
+const setZoomFactor = vi.fn()
 let exposedApi: unknown
 
 vi.mock('electron', () => ({
@@ -16,6 +17,9 @@ vi.mock('electron', () => ({
     on,
     removeListener
   },
+  webFrame: {
+    setZoomFactor
+  },
   webUtils: {
     getPathForFile: vi.fn(() => '/tmp/file.txt')
   }
@@ -27,6 +31,7 @@ describe('preload agentRuntime bridge', () => {
     invoke.mockReset()
     on.mockReset()
     removeListener.mockReset()
+    setZoomFactor.mockReset()
     exposedApi = undefined
     await import('./index')
   })
@@ -48,6 +53,20 @@ describe('preload agentRuntime bridge', () => {
       at: '2026-06-14T00:00:00.000Z'
     })
     expect(removeListener).toHaveBeenCalledWith('runtime:status', wrapped)
+  })
+
+  it('uses native Chromium zoom for renderer UI scaling', () => {
+    const api = exposedApi as {
+      setUiZoomFactor(factor: number): void
+    }
+
+    api.setUiZoomFactor(0.82)
+    api.setUiZoomFactor(0.1)
+    api.setUiZoomFactor(Number.NaN)
+
+    expect(setZoomFactor).toHaveBeenNthCalledWith(1, 0.82)
+    expect(setZoomFactor).toHaveBeenNthCalledWith(2, 0.5)
+    expect(setZoomFactor).toHaveBeenNthCalledWith(3, 1)
   })
 
   it('exposes a bridge to open the local Model Router config file', async () => {
@@ -317,8 +336,7 @@ describe('preload agentRuntime bridge', () => {
       workspaceRoot: '/tmp/workspace'
     })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
-    expect(assetSourceUrl).toContain('http://127.0.0.1:5174/workspace-preview/assets/session%201')
-    expect(assetSourceUrl).toContain('clientId=electron-preload-')
+    expect(assetSourceUrl).toBe('sciforge-preview://asset/session%201')
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
     expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {

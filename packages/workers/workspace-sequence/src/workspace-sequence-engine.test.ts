@@ -112,6 +112,16 @@ test('resolves compact FASTA and GenBank extensions', () => {
   }).format, 'fasta')
 
   assert.equal(service.preview({
+    text: '>dna\nACGT\n',
+    path: 'reference.fna'
+  }).format, 'fasta')
+
+  assert.equal(service.preview({
+    text: '>protein\nMPEPTIDE\n',
+    path: 'proteome.faa'
+  }).format, 'fasta')
+
+  assert.equal(service.preview({
     text: [
       'LOCUS       MINI           4 bp    DNA     linear   PLN 01-JAN-2000',
       'ORIGIN',

@@ -31,6 +31,16 @@ import type {
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
+  biologyRoomApplyInputSchema,
+  biologyRoomCreateInputSchema,
+  biologyRoomHistoryInputSchema,
+  biologyRoomListInputSchema,
+  biologyRoomObserveInputSchema,
+  biologyRoomOpenOrCreateInputSchema,
+  biologyRoomRefreshInputSchema,
+  biologyRoomTargetSchema
+} from '../../shared/biology-room'
+import {
   agentRuntimeConnectPayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
   agentRuntimeApprovalResolvePayloadSchema,
@@ -321,6 +331,7 @@ import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
+import { BiologyRoomService } from '../services/biology-room-service'
 import {
   acknowledgeEvidenceDagSnapshot,
   enqueueEvidenceDagUpdate,
@@ -457,6 +468,16 @@ type RegisterAppIpcHandlersOptions = {
     | 'releaseSession'
     | 'prepareWatch'
     | 'createWatchSnapshot'
+  >
+  biologyRoomService?: Pick<BiologyRoomService,
+    | 'create'
+    | 'openOrCreate'
+    | 'load'
+    | 'list'
+    | 'observe'
+    | 'apply'
+    | 'refresh'
+    | 'history'
   >
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
@@ -1318,6 +1339,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     resolveLogDirectory,
     terminalPtyBridge,
     workspacePreviewHost: providedWorkspacePreviewHost,
+    biologyRoomService: providedBiologyRoomService,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -1346,6 +1368,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const workspacePreviewHost = providedWorkspacePreviewHost ?? new WorkspacePreviewHost({
     loadSettings: () => store.load()
   })
+  const biologyRoomService = providedBiologyRoomService ?? new BiologyRoomService()
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
   const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()
@@ -2283,6 +2306,63 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       path: result.canceled ? null : (result.filePaths[0] ?? null)
     }
   })
+
+  handleInvoke('biologyRoom:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+    const { workspaceRoot } = parseIpcPayload(
+      'biologyRoom:pick-file',
+      z.object({ workspaceRoot: z.string().trim().min(1).max(4_096) }).strict(),
+      payload
+    )
+    const options: Electron.OpenDialogOptions = {
+      title: 'Select a biology asset',
+      defaultPath: workspaceRoot,
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: [
+        {
+          name: 'Biology files',
+          extensions: [
+            'fa', 'fasta', 'fna', 'faa', 'gb', 'gbk', 'pdb', 'cif', 'mmcif',
+            'gff', 'gff3', 'bed', 'vcf', 'gz'
+          ]
+        },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }
+    const mainWindow = getMainWindow()
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options)
+    return {
+      canceled: result.canceled,
+      path: result.canceled ? null : (result.filePaths[0] ?? null)
+    }
+  })
+  handleInvoke('biologyRoom:create', async (_, payload: unknown) =>
+    biologyRoomService.create(parseIpcPayload('biologyRoom:create', biologyRoomCreateInputSchema, payload))
+  )
+  handleInvoke('biologyRoom:openOrCreate', async (_, payload: unknown) =>
+    biologyRoomService.openOrCreate(
+      parseIpcPayload('biologyRoom:openOrCreate', biologyRoomOpenOrCreateInputSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:load', async (_, payload: unknown) =>
+    biologyRoomService.load(parseIpcPayload('biologyRoom:load', biologyRoomTargetSchema, payload))
+  )
+  handleInvoke('biologyRoom:list', async (_, payload: unknown) =>
+    biologyRoomService.list(parseIpcPayload('biologyRoom:list', biologyRoomListInputSchema, payload))
+  )
+  handleInvoke('biologyRoom:observe', async (_, payload: unknown) =>
+    biologyRoomService.observe(parseIpcPayload('biologyRoom:observe', biologyRoomObserveInputSchema, payload))
+  )
+  handleInvoke('biologyRoom:apply', async (_, payload: unknown) =>
+    biologyRoomService.apply(parseIpcPayload('biologyRoom:apply', biologyRoomApplyInputSchema, payload))
+  )
+  handleInvoke('biologyRoom:refresh', async (_, payload: unknown) =>
+    biologyRoomService.refresh(parseIpcPayload('biologyRoom:refresh', biologyRoomRefreshInputSchema, payload))
+  )
+  handleInvoke('biologyRoom:history', async (_, payload: unknown) =>
+    biologyRoomService.history(parseIpcPayload('biologyRoom:history', biologyRoomHistoryInputSchema, payload))
+  )
 
   handleInvoke(
     'skill:save-file',

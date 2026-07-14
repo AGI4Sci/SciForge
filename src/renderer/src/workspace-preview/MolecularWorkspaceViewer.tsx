@@ -355,6 +355,36 @@ export function resolveMolecularRenderableAsset(input: {
   }
 }
 
+export function molecularWorkbenchSourceIdentity(input: {
+  observationPath?: string
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  sourceUrl?: string | null
+  rangeReaderAvailable: boolean
+}): string {
+  const { asset } = input
+  return JSON.stringify([
+    input.observationPath ?? null,
+    asset?.sessionId ?? null,
+    asset?.assetId ?? null,
+    asset?.file.relativePath ?? null,
+    asset?.file.name ?? null,
+    asset?.file.mimeType ?? null,
+    asset?.range.available ?? false,
+    asset?.range.size ?? null,
+    input.sourceUrl ?? null,
+    input.rangeReaderAvailable
+  ])
+}
+
+export function activateMolecularWorkbenchRendererHandle(
+  handleRef: { current: MolecularWorkbenchRendererHandle | null },
+  handle: MolecularWorkbenchRendererHandle,
+  selection?: MolecularStructuredSelection
+): void {
+  handleRef.current = handle
+  handle.setSelection(selection)
+}
+
 export async function readMolecularRenderableAssetText(input: {
   byteLength: number
   readRange: MolecularWorkspaceViewerReadRange
@@ -421,12 +451,27 @@ function useMolecularWorkbenchRender(input: {
   const latestSelectionRef = useRef<MolecularStructuredSelection | undefined>(
     molecularSelectionFromObservation(observation)
   )
+  const assetRef = useRef(asset)
+  const observationRef = useRef(observation)
+  const readRangeRef = useRef(readRange)
+  const workbenchRendererRef = useRef(workbenchRenderer)
+  assetRef.current = asset
+  observationRef.current = observation
+  readRangeRef.current = readRange
+  workbenchRendererRef.current = workbenchRenderer
+  const selection = molecularSelectionFromObservation(observation)
+  const selectionSignature = JSON.stringify(selection ?? null)
+  latestSelectionRef.current = selection
+  const sourceIdentity = molecularWorkbenchSourceIdentity({
+    observationPath: observation?.file.path,
+    asset,
+    sourceUrl,
+    rangeReaderAvailable: Boolean(readRange)
+  })
 
   useEffect(() => {
-    const selection = molecularSelectionFromObservation(observation)
-    latestSelectionRef.current = selection
-    rendererHandleRef.current?.setSelection(selection)
-  }, [observation])
+    rendererHandleRef.current?.setSelection(latestSelectionRef.current)
+  }, [selectionSignature])
 
   useEffect(() => {
     const container = containerRef.current
@@ -457,7 +502,10 @@ function useMolecularWorkbenchRender(input: {
       return undefined
     }
 
-    if (!asset || (!sourceUrl && !readRange)) {
+    const activeAsset = assetRef.current
+    const activeReadRange = readRangeRef.current
+    const activeWorkbenchRenderer = workbenchRendererRef.current
+    if (!activeAsset || (!sourceUrl && !activeReadRange)) {
       setRenderState({
         kind: 'fallback',
         title: 'Molecular summary only',
@@ -476,8 +524,8 @@ function useMolecularWorkbenchRender(input: {
     }
 
     const renderable = resolveMolecularRenderableAsset({
-      asset,
-      observation,
+      asset: activeAsset,
+      observation: observationRef.current,
       sourceUrl
     })
     if (!renderable.ok) {
@@ -504,7 +552,7 @@ function useMolecularWorkbenchRender(input: {
 
     void loadRenderableSource({
       renderable,
-      readRange
+      readRange: activeReadRange
     })
       .then(async (source) => {
         if (cancelled) return
@@ -522,7 +570,7 @@ function useMolecularWorkbenchRender(input: {
           title: 'Initializing Mol*',
           message: 'Mol* is creating the molecular workbench.'
         })
-        handle = await workbenchRenderer({
+        handle = await activeWorkbenchRenderer({
           element: mount,
           source: source.source,
           selection: latestSelectionRef.current
@@ -531,7 +579,14 @@ function useMolecularWorkbenchRender(input: {
           handle.dispose()
           return
         }
-        rendererHandleRef.current = handle
+        // Selection may change while the async Mol* renderer is initializing.
+        // The selection effect cannot reach the handle until this point, so
+        // replay the latest value once the handle becomes active.
+        activateMolecularWorkbenchRendererHandle(
+          rendererHandleRef,
+          handle,
+          latestSelectionRef.current
+        )
         if (typeof ResizeObserver !== 'undefined') {
           resizeObserver = new ResizeObserver(() => handle?.resize())
           resizeObserver.observe(container)
@@ -561,15 +616,12 @@ function useMolecularWorkbenchRender(input: {
       mount.remove()
     }
   }, [
-    asset,
     assetError,
     assetStatus,
     containerRef,
     enabled,
-    observation,
+    sourceIdentity,
     sourceUrl,
-    readRange,
-    workbenchRenderer
   ])
 
   return renderState

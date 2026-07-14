@@ -9,6 +9,7 @@ import {
   TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
   TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
   WORKSPACE_PREVIEW_AGENT_ACCESS,
+  WORKSPACE_PREVIEW_NO_AGENT_ACCESS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
@@ -188,6 +189,26 @@ export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewP
       agent: WORKSPACE_PREVIEW_AGENT_ACCESS
     },
     workerPackage: '@sciforge/workspace-deck'
+  },
+  {
+    contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+    id: 'biology-index-transport',
+    displayName: 'Biology Index Transport',
+    version: '0.1.0',
+    modality: 'unknown',
+    lifecycle: 'main',
+    priority: 805,
+    extensions: ['.fai', '.gzi', '.tbi', '.csi'],
+    mimeTypes: [],
+    capabilities: {
+      preview: true,
+      edit: false,
+      inspect: true,
+      structuredSelection: false,
+      export: [],
+      agent: WORKSPACE_PREVIEW_NO_AGENT_ACCESS
+    },
+    notes: 'Passive byte-range transport for validated Biology Room companion indexes.'
   }
 ] as const
 

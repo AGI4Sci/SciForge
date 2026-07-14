@@ -41,6 +41,29 @@ class ThreadGraph:
         self.assessments: list[Assessment] = []
         self.review_policy_version: Optional[str] = None
         self.review_packets: list[ReviewPacket] = []
+        # (edge_count, by_src, by_dst) — edges are append-only, so the edge
+        # count uniquely identifies the incidence structure.
+        self._edge_index: Optional[tuple[int, dict[str, list[Edge]], dict[str, list[Edge]]]] = None
+
+    # --- incidence indexes ----------------------------------------------------
+    def _edge_indexes(self) -> tuple[dict[str, list[Edge]], dict[str, list[Edge]]]:
+        """Cached src->edges / dst->edges maps. Treat the returned dicts as read-only."""
+        cached = self._edge_index
+        if cached is not None and cached[0] == len(self.edges):
+            return cached[1], cached[2]
+        by_src: dict[str, list[Edge]] = {}
+        by_dst: dict[str, list[Edge]] = {}
+        for edge in self.edges.values():
+            by_src.setdefault(edge.src, []).append(edge)
+            by_dst.setdefault(edge.dst, []).append(edge)
+        self._edge_index = (len(self.edges), by_src, by_dst)
+        return by_src, by_dst
+
+    def edges_by_src(self) -> dict[str, list[Edge]]:
+        return self._edge_indexes()[0]
+
+    def edges_by_dst(self) -> dict[str, list[Edge]]:
+        return self._edge_indexes()[1]
 
     # --- mutation -----------------------------------------------------------
     def add_or_get_node(
@@ -126,20 +149,36 @@ class ThreadGraph:
             if nli_score is not None:
                 e.nli_score = nli_score
             return e
-        if rel in ACYCLIC_LINEAGE_RELS and self._would_cycle(src, dst, rel):
+        if rel in ACYCLIC_LINEAGE_RELS and self._would_cycle(src, dst):
             return None
         edge = Edge(id=eid, src=src, dst=dst, rel=rel, nli_score=nli_score, created_at=created_at)
         self.edges[eid] = edge
         return edge
 
-    def _would_cycle(self, src: str, dst: str, rel: EdgeRel) -> bool:
-        family_graph = nx.DiGraph()
-        family_graph.add_nodes_from(self.nodes)
+    def _family_adjacency(self) -> dict[str, list[str]]:
+        """src -> [dst] over the acyclic causal-lineage relations only."""
+        adjacency: dict[str, list[str]] = {}
         for edge in self.edges.values():
             if edge.rel in ACYCLIC_LINEAGE_RELS:
-                family_graph.add_edge(edge.src, edge.dst)
-        family_graph.add_edge(src, dst)
-        return not nx.is_directed_acyclic_graph(family_graph)
+                adjacency.setdefault(edge.src, []).append(edge.dst)
+        return adjacency
+
+    @staticmethod
+    def _reaches(adjacency: dict[str, list[str]], start: str, target: str) -> bool:
+        stack, seen = [start], {start}
+        while stack:
+            current = stack.pop()
+            if current == target:
+                return True
+            for successor in adjacency.get(current, ()):
+                if successor not in seen:
+                    seen.add(successor)
+                    stack.append(successor)
+        return False
+
+    def _would_cycle(self, src: str, dst: str, *, adjacency: Optional[dict[str, list[str]]] = None) -> bool:
+        # Inserting src -> dst closes a cycle iff dst already reaches src.
+        return self._reaches(adjacency if adjacency is not None else self._family_adjacency(), dst, src)
 
     def merge_from(self, other: "ThreadGraph") -> dict:
         """Accumulate another graph's nodes/edges into this one, in place.
@@ -163,15 +202,18 @@ class ThreadGraph:
             self.nodes[nid] = node
             new_nodes.append(nid)
         new_edges: list[str] = []
+        # One adjacency for the whole merge, extended per accepted edge, keeps
+        # cycle checking O(reachable) per edge instead of a full-graph rebuild.
+        family_adjacency = self._family_adjacency()
         for eid, edge in other.edges.items():
             if edge.src not in self.nodes or edge.dst not in self.nodes:
                 continue  # endpoint absent after merge -> drop (mirrors add_edge)
             if eid in self.edges:
                 continue
-            if edge.rel in ACYCLIC_LINEAGE_RELS and self._would_cycle(
-                edge.src, edge.dst, edge.rel,
-            ):
-                continue
+            if edge.rel in ACYCLIC_LINEAGE_RELS:
+                if self._would_cycle(edge.src, edge.dst, adjacency=family_adjacency):
+                    continue
+                family_adjacency.setdefault(edge.src, []).append(edge.dst)
             self.edges[eid] = edge
             new_edges.append(eid)
         self.artifacts.update(other.artifacts)
@@ -204,17 +246,30 @@ class ThreadGraph:
         """
         return self._digraph(rels=EVIDENTIAL_RELS)
 
+    @staticmethod
+    def _cyclic_components(g: nx.DiGraph) -> list[list[str]]:
+        """Strongly connected components that contain a cycle (linear time).
+
+        Enumerating simple cycles is exponential in dense components; every
+        consumer here only needs "which nodes participate in a cycle", which
+        SCCs answer exactly.
+        """
+        return [
+            sorted(component) for component in nx.strongly_connected_components(g)
+            if len(component) > 1 or any(g.has_edge(n, n) for n in component)
+        ]
+
     def detect_cycles(self) -> dict:
         """Cycle report over the support/structural graph (Gate 1A item).
 
         We DO NOT silently break cycles: we report them so the extractor /
         scientist can decide, and so the topo layout knows what to exclude.
+        Each reported cycle is one strongly connected component.
         """
-        g = self._digraph(rels=_LAYOUT_RELS)
-        cycles = [list(c) for c in nx.simple_cycles(g)]
+        cycles = self._cyclic_components(self._digraph(rels=_LAYOUT_RELS))
         in_cycle: set[str] = set()
-        for c in cycles:
-            in_cycle.update(c)
+        for component in cycles:
+            in_cycle.update(component)
         return {
             "acyclic": len(cycles) == 0,
             "cycle_count": len(cycles),
@@ -230,22 +285,19 @@ class ThreadGraph:
         "成环子图排除出 topo 布局".
         """
         g = self._digraph(rels=_LAYOUT_RELS)
-        if not nx.is_directed_acyclic_graph(g):
-            # strip nodes participating in any cycle, then layer the remainder
-            g = g.copy()
-            for c in nx.simple_cycles(g):
-                g.remove_nodes_from([n for n in c if n in g])
+        cyclic = self._cyclic_components(g)
+        if cyclic:
+            g.remove_nodes_from([n for component in cyclic for n in component])
         return [sorted(layer) for layer in nx.topological_generations(g)]
 
     def provenance_path(self, node_id: str) -> dict:
         """Resolve a semantic node through assertions/anchors to original Artifacts."""
         if node_id not in self.nodes:
             raise KeyError(node_id)
-        # incoming supports edges, indexed by destination
-        incoming: dict[str, list[Edge]] = {}
-        for e in self.edges.values():
-            if e.rel in EVIDENTIAL_RELS:
-                incoming.setdefault(e.dst, []).append(e)
+        by_src, by_dst = self._edge_indexes()
+
+        def incoming_of(nid: str) -> list[Edge]:
+            return [e for e in by_dst.get(nid, ()) if e.rel in EVIDENTIAL_RELS]
 
         seen_nodes: set[str] = set()
         seen_edges: list[Edge] = []
@@ -255,7 +307,7 @@ class ThreadGraph:
             if cur in seen_nodes:
                 continue
             seen_nodes.add(cur)
-            for e in incoming.get(cur, []):
+            for e in incoming_of(cur):
                 seen_edges.append(e)
                 stack.append(e.src)
 
@@ -270,11 +322,15 @@ class ThreadGraph:
             EdgeRel.REPLICATES, EdgeRel.FAILS_TO_REPLICATE,
         }
         lineage_edges: list[Edge] = []
+        lineage_edge_ids: set[str] = set()
         lineage_seen: set[str] = set(seen_nodes)
         lineage_stack = list(seen_nodes)
         while lineage_stack:
             current = lineage_stack.pop()
-            for edge in self.edges.values():
+            # The direction rules below only ever match edges incident to
+            # `current`, so walking the incidence index is equivalent to the
+            # full edge scan while staying O(degree) per node.
+            for edge in (*by_src.get(current, ()), *by_dst.get(current, ())):
                 if edge.rel not in lineage_rels:
                     continue
                 neighbor: Optional[str] = None
@@ -292,20 +348,20 @@ class ThreadGraph:
                     neighbor = edge.dst
                 if neighbor is None:
                     continue
-                if all(existing.id != edge.id for existing in lineage_edges):
+                if edge.id not in lineage_edge_ids:
+                    lineage_edge_ids.add(edge.id)
                     lineage_edges.append(edge)
                 if neighbor not in lineage_seen:
                     lineage_seen.add(neighbor)
                     lineage_stack.append(neighbor)
         seen_nodes.update(lineage_seen)
-        seen_edges.extend(
-            edge for edge in lineage_edges
-            if all(existing.id != edge.id for existing in seen_edges)
-        )
+        seen_edge_ids = {edge.id for edge in seen_edges}
+        seen_edges.extend(edge for edge in lineage_edges if edge.id not in seen_edge_ids)
+        seen_edge_ids.update(lineage_edge_ids)
 
         leaves = sorted(n for n in seen_nodes if self.nodes[n].type == NodeType.SOURCE_ASSERTION)
         unsupported_leaves = sorted(
-            n for n in seen_nodes if not incoming.get(n) and self.nodes[n].type != NodeType.SOURCE_ASSERTION
+            n for n in seen_nodes if not incoming_of(n) and self.nodes[n].type != NodeType.SOURCE_ASSERTION
         )
         assertions = [self.nodes[n] for n in seen_nodes if self.nodes[n].type == NodeType.SOURCE_ASSERTION]
         artifact_ids = {n.artifact_id for n in assertions if n.artifact_id}
@@ -372,12 +428,12 @@ class ThreadGraph:
                 "sourceAnchors": [self.source_anchors[x].to_dict() for x in sorted(anchor_ids)
                                   if x in self.source_anchors],
             },
-            "assessments": [a.to_dict() for a in self.assessments if a.target_id in seen_nodes or
-                            a.target_id in {edge.id for edge in seen_edges}],
+            "assessments": [a.to_dict() for a in self.assessments
+                            if a.target_id in seen_nodes or a.target_id in seen_edge_ids],
         }
 
     def incoming_supports(self, node_id: str) -> list[Edge]:
-        return [e for e in self.edges.values() if e.dst == node_id and e.rel in EVIDENTIAL_RELS]
+        return [e for e in self.edges_by_dst().get(node_id, ()) if e.rel in EVIDENTIAL_RELS]
 
     def edges_of(self, rel: EdgeRel) -> list[Edge]:
         return [e for e in self.edges.values() if e.rel == rel]

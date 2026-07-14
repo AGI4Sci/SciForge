@@ -70,16 +70,20 @@ def _status_map(graph: ThreadGraph, *, threshold: float,
         if nu is not None:
             incoming.setdefault(d, []).append(nu)
 
-    # 残留 supports 子图上,每个节点能反向走到哪些存活来源
+    # 残留 supports 子图上,每个节点能反向走到哪些存活来源。
+    # 从每个来源做一次正向 descendants(O(sources·(V+E))),
+    # 等价于对每个节点做 ancestors 交集,但便宜得多(来源数 << 节点数)。
     g = nx.DiGraph()
     g.add_nodes_from(n for n in graph.nodes if n not in rm_nodes)
     for s, d, _nu in surviving:
         g.add_edge(s, d)
     live_sources = {n for n, nd in graph.nodes.items()
                     if nd.type == NodeType.SOURCE_ASSERTION and n not in rm_nodes}
-    reach: dict[str, set[str]] = {}
-    for n in g.nodes:
-        reach[n] = (nx.ancestors(g, n) | {n}) & live_sources
+    reach: dict[str, set[str]] = {n: set() for n in g.nodes}
+    for source in live_sources:
+        reach[source].add(source)
+        for downstream in nx.descendants(g, source):
+            reach[downstream].add(source)
 
     contested = _contested(graph, rm_nodes, rm_edges, add_contra)
     out: dict[str, tuple] = {}
