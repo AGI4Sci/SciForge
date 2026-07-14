@@ -233,9 +233,10 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('defaults MCP search discovery to off', () => {
+  it('defaults MCP search discovery to automatic filtering', () => {
     expect(defaultLocalRuntimeSettings().mcpSearch).toMatchObject({
-      enabled: false,
+      defaultsRevision: 1,
+      enabled: true,
       mode: 'auto',
       autoThresholdToolCount: 24,
       topKDefault: 5,
@@ -1059,6 +1060,46 @@ describe('mergeLocalRuntimeSettings', () => {
     expect(next.mcpSearch.mode).toBe('search')
     expect(next.mcpSearch.topKDefault).toBe(3)
     expect(next.mcpSearch.topKMax).toBe(current.mcpSearch.topKMax)
+  })
+
+  it('migrates only the exact legacy disabled MCP search defaults once', () => {
+    const current = defaultLocalRuntimeSettings()
+    const migrated = mergeLocalRuntimeSettings(current, {
+      mcpSearch: {
+        enabled: false,
+        mode: 'auto',
+        autoThresholdToolCount: 24,
+        topKDefault: 5,
+        topKMax: 10,
+        minScore: 0.15
+      }
+    })
+
+    expect(migrated.mcpSearch).toMatchObject({
+      defaultsRevision: 1,
+      enabled: true,
+      mode: 'auto'
+    })
+
+    const explicitlyDisabled = mergeLocalRuntimeSettings(current, {
+      mcpSearch: {
+        ...migrated.mcpSearch,
+        enabled: false
+      }
+    })
+    expect(explicitlyDisabled.mcpSearch.enabled).toBe(false)
+
+    const customizedLegacySettings = mergeLocalRuntimeSettings(current, {
+      mcpSearch: {
+        enabled: false,
+        mode: 'auto',
+        autoThresholdToolCount: 32,
+        topKDefault: 5,
+        topKMax: 10,
+        minScore: 0.15
+      }
+    })
+    expect(customizedLegacySettings.mcpSearch.enabled).toBe(false)
   })
 
   it('deep-merges advanced local runtime settings', () => {

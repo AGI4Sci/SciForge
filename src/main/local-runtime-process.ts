@@ -89,9 +89,24 @@ import {
 
 let child: ChildProcess | null = null
 let childLogCapture: LocalRuntimeChildLogCapture | null = null
+let privateBioGymBridge: { baseUrl: string; token: string } | null = null
+
+const BIOGYM_PRIVATE_BOOTSTRAP_VERSION = 1 as const
+const BIOGYM_PRIVATE_BOOTSTRAP_FD = 3
+const BIOGYM_PRIVATE_ENV_NAMES = [
+  'SCIFORGE_BIOGYM_INTERNAL_BASE_URL',
+  'SCIFORGE_BIOGYM_INTERNAL_TOKEN'
+] as const
+
+export function setLocalRuntimeBioGymBridge(
+  bridge: { baseUrl: string; token: string } | null
+): void {
+  privateBioGymBridge = bridge ? { ...bridge } : null
+}
 let lastResolvedBinary: string | null = null
 let localRuntimeStartPromise: Promise<void> | null = null
 let childStderrTail = ''
+export const DEFAULT_LOCAL_RUNTIME_WEB_SEARCH_PROVIDER = 'public-rss'
 const intentionalStops = new WeakSet<ChildProcess>()
 const readyChildren = new WeakSet<ChildProcess>()
 const COMPUTER_USE_SERVICE_ENV_NAMES = [
@@ -472,10 +487,13 @@ async function startLocalRuntimeChildOnce(
       SCIFORGE_MODEL_ROUTER_MODEL: runtime.model,
       ...runtimeSecretEnv(settings)
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    // fd 3 is a private, one-shot bootstrap pipe. Unlike argv/env, it is not
+    // visible in `ps eww`; KUN consumes and closes it before runtime composition.
+    stdio: ['ignore', 'pipe', 'pipe', 'pipe'],
     detached: false
   })
   const startedChild = child
+  writeBioGymPrivateBootstrap(startedChild, privateBioGymBridge)
   const startedLogCapture = createLocalRuntimeChildLogCapture(startedChild.pid)
   childLogCapture = startedLogCapture
   childStderrTail = ''
@@ -624,6 +642,9 @@ export async function syncGuiManagedLocalRuntimeConfig(
   const search = objectValue(mcp.search)
   const attachments = objectValue(capabilities.attachments)
   const web = objectValue(capabilities.web)
+  const configuredWebProvider = typeof web.provider === 'string' && web.provider.trim()
+    ? web.provider.trim()
+    : undefined
   const skills = objectValue(capabilities.skills)
   const subagents = objectValue(capabilities.subagents)
   const agentCapabilities = normalizeAgentCapabilitySettings(options?.agentCapabilities)
@@ -666,7 +687,12 @@ export async function syncGuiManagedLocalRuntimeConfig(
       web: {
         ...web,
         enabled: web.enabled === false ? false : true,
-        fetchEnabled: web.fetchEnabled === false ? false : true
+        fetchEnabled: web.fetchEnabled === false ? false : true,
+        // Provider-less configs were generated before zero-config public search
+        // existed. Assigning the provider is the one-time migration marker;
+        // after that, an explicit searchEnabled=false remains authoritative.
+        searchEnabled: configuredWebProvider ? web.searchEnabled !== false : true,
+        provider: configuredWebProvider ?? DEFAULT_LOCAL_RUNTIME_WEB_SEARCH_PROVIDER
       },
       skills: skillCapability,
       subagents: {
@@ -1071,17 +1097,46 @@ function sanitizeLocalRuntimeRuntimeConfig(value: unknown): Record<string, unkno
   const next: Record<string, unknown> = {}
   const modelStreamIdleTimeoutMs = positiveIntegerValue(raw.modelStreamIdleTimeoutMs)
   const maxTurnModelSteps = positiveIntegerValue(raw.maxTurnModelSteps)
+  const maxToolCallsPerTurn = positiveIntegerValue(raw.maxToolCallsPerTurn)
   if (modelStreamIdleTimeoutMs !== undefined) next.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs
   if (maxTurnModelSteps !== undefined) next.maxTurnModelSteps = maxTurnModelSteps
+  if (maxToolCallsPerTurn !== undefined) next.maxToolCallsPerTurn = maxToolCallsPerTurn
 
   const rawToolStorm = objectValue(raw.toolStorm)
   const toolStorm: Record<string, unknown> = {}
   if (typeof rawToolStorm.enabled === 'boolean') toolStorm.enabled = rawToolStorm.enabled
   const windowSize = positiveIntegerValue(rawToolStorm.windowSize)
   const threshold = positiveIntegerValue(rawToolStorm.threshold)
+  const maxRecoverySteps = positiveIntegerValue(rawToolStorm.maxRecoverySteps)
+  const nonProgressThreshold = positiveIntegerValue(rawToolStorm.nonProgressThreshold)
+  const maxStepsAfterRecovery = positiveIntegerValue(rawToolStorm.maxStepsAfterRecovery)
+  const nestedMaxToolCallsPerTurn = positiveIntegerValue(rawToolStorm.maxToolCallsPerTurn)
   if (windowSize !== undefined) toolStorm.windowSize = windowSize
   if (threshold !== undefined) toolStorm.threshold = threshold
+  if (maxRecoverySteps !== undefined) toolStorm.maxRecoverySteps = maxRecoverySteps
+  if (nonProgressThreshold !== undefined) toolStorm.nonProgressThreshold = nonProgressThreshold
+  if (maxStepsAfterRecovery !== undefined) toolStorm.maxStepsAfterRecovery = maxStepsAfterRecovery
+  if (nestedMaxToolCallsPerTurn !== undefined) {
+    toolStorm.maxToolCallsPerTurn = nestedMaxToolCallsPerTurn
+  }
   if (Object.keys(toolStorm).length > 0) next.toolStorm = toolStorm
+
+  const rawStuckDetection = objectValue(raw.stuckDetection)
+  const stuckDetection: Record<string, unknown> = {}
+  if (typeof rawStuckDetection.enabled === 'boolean') {
+    stuckDetection.enabled = rawStuckDetection.enabled
+  }
+  for (const key of [
+    'maxItems',
+    'repeatedActionObservationThreshold',
+    'repeatedActionErrorThreshold',
+    'alternatingThreshold',
+    'redundantReadThreshold'
+  ] as const) {
+    const value = positiveIntegerValue(rawStuckDetection[key])
+    if (value !== undefined) stuckDetection[key] = value
+  }
+  if (Object.keys(stuckDetection).length > 0) next.stuckDetection = stuckDetection
 
   const rawToolArgumentRepair = objectValue(raw.toolArgumentRepair)
   const maxStringBytes = positiveIntegerValue(rawToolArgumentRepair.maxStringBytes)
@@ -1202,6 +1257,9 @@ function waitForChildExit(process: ChildProcess, timeoutMs: number): Promise<boo
 
 function localRuntimeChildEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env = { ...baseEnv }
+  for (const name of BIOGYM_PRIVATE_ENV_NAMES) {
+    delete env[name]
+  }
   for (const name of UPSTREAM_PROVIDER_SECRET_ENV_NAMES) {
     delete env[name]
   }
@@ -1218,6 +1276,21 @@ function localRuntimeChildEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     if (isUpstreamProviderConfigEnv(key) || isLegacyDirectWorkerEnv(key)) delete env[key]
   }
   return env
+}
+
+function writeBioGymPrivateBootstrap(
+  startedChild: ChildProcess,
+  bridge: { baseUrl: string; token: string } | null
+): void {
+  const pipe = startedChild.stdio[BIOGYM_PRIVATE_BOOTSTRAP_FD]
+  if (!pipe || typeof (pipe as NodeJS.WritableStream).write !== 'function') return
+  // Handle an early child exit without surfacing or logging the secret payload.
+  pipe.once('error', () => undefined)
+  const payload = JSON.stringify({
+    version: BIOGYM_PRIVATE_BOOTSTRAP_VERSION,
+    ...(bridge ? { bioGymBridge: bridge } : {})
+  })
+  ;(pipe as NodeJS.WritableStream).end(payload)
 }
 
 function isLegacyDirectWorkerEnv(key: string): boolean {

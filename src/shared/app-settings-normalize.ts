@@ -8,6 +8,7 @@ import {
   type ComputerUseSettingsPatchV1,
   type RemoteChannelSettingsPatchV1,
   type RemoteExecutorSettingsPatchV1,
+  type BioGymSettingsPatchV1,
   type GuiUpdateConfigV1,
   type ImageGenerationSettingsPatchV1,
   type NotificationConfigV1,
@@ -42,6 +43,7 @@ import { normalizeConnectPhoneSettings, normalizeRemoteChannelSettings } from '.
 import { normalizeScheduleSettings } from './app-settings-schedule'
 import { normalizeWorkflowSettings } from './app-settings-workflow'
 import { normalizeRemoteExecutorSettings } from './app-settings-remote-executor'
+import { normalizeBioGymSettings } from './app-settings-biogym'
 import { normalizeWriteSettings } from './app-settings-write'
 import { normalizeSpeechToTextSettings } from './speech-to-text'
 import { normalizeComputerUseSettings } from './app-settings-computer-use'
@@ -61,6 +63,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     schedule?: ScheduleSettingsPatchV1
     workflow?: WorkflowSettingsPatchV1
     remoteExecutor?: RemoteExecutorSettingsPatchV1
+    biogym?: BioGymSettingsPatchV1
     speechToText?: SpeechToTextSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
     runtimeGuards?: Parameters<typeof normalizeRuntimeGuardSettings>[0]
@@ -114,6 +117,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     schedule: normalizeScheduleSettings(maybeSettings.schedule),
     workflow: normalizeWorkflowSettings(maybeSettings.workflow),
     remoteExecutor: normalizeRemoteExecutorSettings(maybeSettings.remoteExecutor),
+    biogym: normalizeBioGymSettings(maybeSettings.biogym),
     guiUpdate: {
       channel: normalizeGuiUpdateChannel(
         maybeSettings.guiUpdate?.channel ?? DEFAULT_GUI_UPDATE_CHANNEL

@@ -419,6 +419,12 @@
   "remoteResourcesTitle": "远程资源",
   "remoteExecutorEnabled": "启用远程执行目标",
   "remoteExecutorEnabledDesc": "在会话 target selector 中显示已配置的 SSH 和 Slurm 目标。",
+  "biogymSettingsTitle": "BioGym 蛋白设计",
+  "biogymEnabled": "启用 BioGym 工具",
+  "biogymEnabledDesc": "仅向 SciForge 原生代理暴露受控蛋白设计工具；GPU 运行仍需按 run 审批。",
+  "biogymCliPath": "BioGym CLI 路径",
+  "biogymSshHost": "SSH 别名",
+  "biogymRemoteRoot": "远端 BioGym 根目录",
   "remoteExecutorDefaultTarget": "默认目标",
   "remoteExecutorDefaultTargetDesc": "当 selector 尚未单独切换时，新回合会默认使用这个目标。",
   "remoteExecutorDefaultLocal": "本地",
@@ -611,5 +617,8 @@
   "logRetentionSeven": "7 天",
   "loading": "加载中…",
   "loadFailed": "无法加载设置：{{message}}",
-  "preloadBridgeError": "应用桥接不可用。请重启应用或检查预加载脚本路径。"
+  "preloadBridgeError": "应用桥接不可用。请重启应用或检查预加载脚本路径。",
+  "biogymDoctorAction": "检查 BioGym 就绪状态",
+  "biogymDoctorRunning": "正在检查 BioGym…",
+  "biogymDoctorBridgeUnavailable": "BioGym 桌面桥接不可用，请重启 SciForge。"
 }

@@ -11,6 +11,10 @@ import { FileSessionStore, FileThreadStore } from '../adapters/file/index.js'
 import { HybridSessionStore, HybridThreadStore } from '../adapters/hybrid/index.js'
 import { ModelRouterModelClient } from '../adapters/model/model-router-model-client.js'
 import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
+import {
+  buildBioGymDesignToolProviderFromConfig,
+  type BioGymPrivateBridgeConfig
+} from '../adapters/tool/biogym-design-tool.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
@@ -89,6 +93,8 @@ export type LocalRuntimeServeOptions = {
   storage?: StorageConfig
   capabilities?: LocalRuntimeCapabilitiesConfig
   startedAt?: string
+  /** Private one-shot bootstrap value; never sourced from argv or process.env. */
+  bioGymBridge?: BioGymPrivateBridgeConfig
 }
 
 export type LocalRuntimeServeHandle = NodeHttpServerHandle & {
@@ -277,8 +283,13 @@ export async function createLocalRuntimeServeRuntime(
       available: Boolean(delegationRuntime)
     }
   })
+  // Keep BioGym out of `baseToolProviders`: that registry is also inherited by
+  // delegated child agents. It is intentionally wired only into the native
+  // SciForge agent below.
+  const bioGymDesign = buildBioGymDesignToolProviderFromConfig(options.bioGymBridge)
   const registry = new CapabilityRegistry([
     ...baseToolProviders,
+    bioGymDesign.provider,
     {
       id: 'goal',
       kind: 'gui' as const,

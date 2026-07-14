@@ -186,6 +186,8 @@ export type ResolvedLocalRuntimeSettingsV1 = LocalRuntimeSettingsV1 & {
 export type LocalRuntimeMcpSearchMode = 'direct' | 'search' | 'auto'
 
 export type LocalRuntimeMcpSearchSettingsV1 = {
+  /** Marks defaults that have already adopted progressive MCP discovery. */
+  defaultsRevision?: number
   enabled: boolean
   mode: LocalRuntimeMcpSearchMode
   autoThresholdToolCount: number
@@ -1454,6 +1456,18 @@ export type RemoteExecutorSettingsPatchV1 = Partial<
   targets?: RemoteExecutorTargetPatchV1[]
 }
 
+export type BioGymSettingsV1 = {
+  enabled: boolean
+  /** Absolute path to the trusted local BioGym CLI executable. */
+  cliPath: string
+  /** OpenSSH config alias; this is never supplied by an agent tool call. */
+  sshHost: string
+  /** Fixed remote BioGym project root; this is never supplied by an agent tool call. */
+  remoteRoot: string
+}
+
+export type BioGymSettingsPatchV1 = Partial<BioGymSettingsV1>
+
 export type AppSettingsV1 = {
   version: 1
   installationId?: string
@@ -1480,12 +1494,13 @@ export type AppSettingsV1 = {
   schedule: ScheduleSettingsV1
   workflow: WorkflowSettingsV1
   remoteExecutor?: RemoteExecutorSettingsV1
+  biogym?: BioGymSettingsV1
   guiUpdate: GuiUpdateConfigV1
   codePromptPrefix: string
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'biogym' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   provider?: ModelProviderSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
@@ -1505,5 +1520,6 @@ export type AppSettingsPatch = Partial<
   schedule?: ScheduleSettingsPatchV1
   workflow?: WorkflowSettingsPatchV1
   remoteExecutor?: RemoteExecutorSettingsPatchV1
+  biogym?: BioGymSettingsPatchV1
   guiUpdate?: Partial<GuiUpdateConfigV1>
 }

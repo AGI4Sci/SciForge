@@ -61,7 +61,8 @@ export function defaultLocalRuntimeSettings(
 
 export function defaultLocalRuntimeMcpSearchSettings(): LocalRuntimeMcpSearchSettingsV1 {
   return {
-    enabled: false,
+    defaultsRevision: 1,
+    enabled: true,
     mode: 'auto',
     autoThresholdToolCount: 24,
     topKDefault: 5,
@@ -196,9 +197,13 @@ export function mergeLocalRuntimeSettings(
 ): LocalRuntimeSettingsV1 {
   const runtimePatch = supportedLocalRuntimePatch(patch)
   const currentMcpSearch = normalizeLocalRuntimeMcpSearchSettings(current.mcpSearch)
+  const migrateLegacyMcpSearchDefaults = shouldMigrateLegacyLocalRuntimeMcpSearchDefaults(
+    runtimePatch?.mcpSearch
+  )
   const nextMcpSearch = normalizeLocalRuntimeMcpSearchSettings({
     ...currentMcpSearch,
-    ...(runtimePatch?.mcpSearch ?? {})
+    ...(runtimePatch?.mcpSearch ?? {}),
+    ...(migrateLegacyMcpSearchDefaults ? { enabled: true, defaultsRevision: 1 } : {})
   })
   const currentTokenEconomy = normalizeLocalRuntimeTokenEconomySettings(
     current.tokenEconomy,
@@ -372,7 +377,8 @@ function normalizeLocalRuntimeMcpSearchSettings(
   const topKMax = positiveInt(input?.topKMax, defaults.topKMax)
   const topKDefault = Math.min(positiveInt(input?.topKDefault, defaults.topKDefault), topKMax)
   return {
-    enabled: input?.enabled === true,
+    defaultsRevision: positiveInt(input?.defaultsRevision, defaults.defaultsRevision ?? 1),
+    enabled: typeof input?.enabled === 'boolean' ? input.enabled : defaults.enabled,
     mode: input?.mode === 'direct' || input?.mode === 'search' || input?.mode === 'auto'
       ? input.mode
       : defaults.mode,
@@ -381,6 +387,24 @@ function normalizeLocalRuntimeMcpSearchSettings(
     topKMax,
     minScore: nonNegativeNumber(input?.minScore, defaults.minScore)
   }
+}
+
+/**
+ * The previous GUI wrote its entire disabled MCP-search default object to disk.
+ * Only that exact legacy shape is migrated. Customized disabled settings are
+ * preserved, and the defaults revision prevents a later explicit opt-out from
+ * being re-enabled on the next launch.
+ */
+export function shouldMigrateLegacyLocalRuntimeMcpSearchDefaults(
+  input: Partial<LocalRuntimeMcpSearchSettingsV1> | undefined
+): boolean {
+  if (!input || input.defaultsRevision !== undefined) return false
+  return input.enabled === false &&
+    input.mode === 'auto' &&
+    input.autoThresholdToolCount === 24 &&
+    input.topKDefault === 5 &&
+    input.topKMax === 10 &&
+    input.minScore === 0.15
 }
 
 function positiveInt(value: unknown, fallback: number): number {

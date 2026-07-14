@@ -419,6 +419,12 @@
   "remoteResourcesTitle": "Remote resources",
   "remoteExecutorEnabled": "Enable remote executor targets",
   "remoteExecutorEnabledDesc": "Show configured SSH and Slurm targets in the thread target selector.",
+  "biogymSettingsTitle": "BioGym protein design",
+  "biogymEnabled": "Enable BioGym tool",
+  "biogymEnabledDesc": "Expose the controlled protein-design tool to the native SciForge agent. GPU runs still require run-level approval.",
+  "biogymCliPath": "BioGym CLI path",
+  "biogymSshHost": "SSH alias",
+  "biogymRemoteRoot": "Remote BioGym root",
   "remoteExecutorDefaultTarget": "Default target",
   "remoteExecutorDefaultTargetDesc": "Used as the starting target for new turns when the selector has not been changed.",
   "remoteExecutorDefaultLocal": "Local",
@@ -611,5 +617,8 @@
   "logRetentionSeven": "7 days",
   "loading": "Loading…",
   "loadFailed": "Could not load settings: {{message}}",
-  "preloadBridgeError": "The app bridge is not available. Restart the application or check the preload path."
+  "preloadBridgeError": "The app bridge is not available. Restart the application or check the preload path.",
+  "biogymDoctorAction": "Check BioGym readiness",
+  "biogymDoctorRunning": "Checking BioGym…",
+  "biogymDoctorBridgeUnavailable": "The BioGym desktop bridge is unavailable. Restart SciForge."
 }

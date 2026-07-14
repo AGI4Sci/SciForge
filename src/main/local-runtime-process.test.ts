@@ -151,6 +151,7 @@ beforeEach(() => {
 afterEach(async () => {
   const module = await import('./local-runtime-process')
   module.setLocalRuntimeUnexpectedExitHandler(null)
+  module.setLocalRuntimeBioGymBridge(null)
   await module.stopLocalRuntimeChildAndWait()
   configureLogger({ dir: '', enabled: true, retentionDays: 2 })
   if (tempRoot) {
@@ -195,6 +196,44 @@ describe('startLocalRuntimeChild', () => {
     const logText = await readLocalRuntimeLog()
     expect(logText).toContain('KUN_READY')
     expect(logText).toContain('ready marker received on port 8899')
+  })
+
+  it('passes the private BioGym bridge over fd 3 without exposing it in argv or env', async () => {
+    const script = writeScript(
+      'biogym-bridge-child.js',
+      [
+        "const fs = require('node:fs')",
+        "const secretNames = ['SCIFORGE_BIOGYM_INTERNAL_BASE_URL', 'SCIFORGE_BIOGYM_INTERNAL_TOKEN']",
+        "if (secretNames.some((name) => Object.hasOwn(process.env, name))) process.exit(24)",
+        "const argv = process.argv.join(' ')",
+        "if (secretNames.some((name) => argv.includes(name)) || argv.includes('private-bridge-token')) process.exit(25)",
+        "const bootstrap = JSON.parse(fs.readFileSync(3, 'utf8'))",
+        "if (bootstrap.version !== 1) process.exit(26)",
+        "if (bootstrap.bioGymBridge?.baseUrl !== 'http://127.0.0.1:43210') process.exit(27)",
+        "if (bootstrap.bioGymBridge?.token !== 'private-bridge-token') process.exit(28)",
+        "process.stdout.write('KUN_READY ' + JSON.stringify({ service: 'kun', mode: 'serve', port: 8899 }) + '\\n')",
+        'setInterval(() => {}, 1_000)'
+      ].join('\n')
+    )
+    const module = await import('./local-runtime-process')
+    const previousBaseUrl = process.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL
+    const previousToken = process.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN
+    process.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL = 'must-not-be-inherited'
+    process.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN = 'must-not-be-inherited'
+    module.setLocalRuntimeBioGymBridge({
+      baseUrl: 'http://127.0.0.1:43210',
+      token: 'private-bridge-token'
+    })
+    try {
+      await expect(module.startLocalRuntimeChild(createSettings(script))).resolves.toBeUndefined()
+      expect(process.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL).toBe('must-not-be-inherited')
+      expect(process.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN).toBe('must-not-be-inherited')
+    } finally {
+      if (previousBaseUrl === undefined) delete process.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL
+      else process.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL = previousBaseUrl
+      if (previousToken === undefined) delete process.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN
+      else process.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN = previousToken
+    }
   })
 
   it('resolves from /health when the stdout ready marker is delayed', async () => {
@@ -552,7 +591,7 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       maxParallel: 2,
       maxChildRuns: 4
     })
-    expect(parsed.capabilities.mcp.search).toMatchObject({ enabled: false, mode: 'auto' })
+    expect(parsed.capabilities.mcp.search).toMatchObject({ enabled: true, mode: 'auto' })
   })
 
   it('derives local runtime subagent capability config from shared agent settings', async () => {
@@ -1101,8 +1140,22 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       runtime: {
         customRuntimeFlag: true,
         modelStreamIdleTimeoutMs: 180000,
+        maxToolCallsPerTurn: 18,
         toolStorm: {
-          customStormFlag: 'keep'
+          customStormFlag: 'keep',
+          maxRecoverySteps: 2,
+          nonProgressThreshold: 4,
+          maxStepsAfterRecovery: 6,
+          maxToolCallsPerTurn: 20
+        },
+        stuckDetection: {
+          enabled: true,
+          maxItems: 80,
+          repeatedActionObservationThreshold: 4,
+          repeatedActionErrorThreshold: 3,
+          alternatingThreshold: 6,
+          redundantReadThreshold: 2,
+          customStuckFlag: 'drop'
         }
       },
       serve: {
@@ -1248,11 +1301,25 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     expect(parsed.runtime.toolStorm).toMatchObject({
       enabled: false,
       windowSize: 12,
-      threshold: 4
+      threshold: 4,
+      maxRecoverySteps: 2,
+      nonProgressThreshold: 4,
+      maxStepsAfterRecovery: 6,
+      maxToolCallsPerTurn: 20
     })
     expect(parsed.runtime.toolStorm.customStormFlag).toBeUndefined()
+    expect(parsed.runtime.stuckDetection).toMatchObject({
+      enabled: true,
+      maxItems: 80,
+      repeatedActionObservationThreshold: 4,
+      repeatedActionErrorThreshold: 3,
+      alternatingThreshold: 6,
+      redundantReadThreshold: 2
+    })
+    expect(parsed.runtime.stuckDetection.customStuckFlag).toBeUndefined()
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()
     expect(parsed.runtime.modelStreamIdleTimeoutMs).toBe(180000)
+    expect(parsed.runtime.maxToolCallsPerTurn).toBe(18)
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 262144 })
     expect(parsed.runtime.toolBudget.profiles.long).toMatchObject({
       softLimit: 16,
@@ -1428,6 +1495,57 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       fetchEnabled: false,
       searchEnabled: true,
       provider: 'custom-search'
+    })
+  })
+
+  it('migrates provider-less web config to zero-config public search', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    writeFileSync(configPath, JSON.stringify({
+      capabilities: {
+        web: {
+          enabled: true,
+          fetchEnabled: true,
+          searchEnabled: false
+        }
+      }
+    }), 'utf8')
+    const module = await import('./local-runtime-process')
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings())
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.web).toMatchObject({
+      enabled: true,
+      fetchEnabled: true,
+      searchEnabled: true,
+      provider: 'public-rss'
+    })
+  })
+
+  it('preserves an explicit web search opt-out after a provider is selected', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    writeFileSync(configPath, JSON.stringify({
+      capabilities: {
+        web: {
+          enabled: true,
+          fetchEnabled: true,
+          searchEnabled: false,
+          provider: 'public-rss'
+        }
+      }
+    }), 'utf8')
+    const module = await import('./local-runtime-process')
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings())
+
+    const parsed = JSON.parse(readFileSync(configPath, 'utf8')) as any
+    expect(parsed.capabilities.web).toMatchObject({
+      enabled: true,
+      fetchEnabled: true,
+      searchEnabled: false,
+      provider: 'public-rss'
     })
   })
 })

@@ -23,6 +23,7 @@ import {
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultRemoteExecutorSettings,
+  defaultBioGymSettings,
   defaultImageGenerationSettings,
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
@@ -43,12 +44,14 @@ import {
   mergeSpeechToTextSettings,
   mergeWorkflowSettings,
   mergeRemoteExecutorSettings,
+  mergeBioGymSettings,
   mergeWriteSettings,
   mergeImageGenerationSettings,
   normalizeAppBehaviorSettings,
   normalizeKeyboardShortcuts,
   normalizeAppSettings,
   normalizeAgentRuntimeId,
+  shouldMigrateLegacyLocalRuntimeMcpSearchDefaults,
   reconcileScheduleWorkflows,
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -297,7 +300,8 @@ const defaultSettings = (): AppSettingsV1 => ({
   connectPhone: defaultConnectPhoneSettings(),
   schedule: defaultScheduleSettings(),
   workflow: defaultWorkflowSettings(),
-  remoteExecutor: defaultRemoteExecutorSettings()
+  remoteExecutor: defaultRemoteExecutorSettings(),
+  biogym: defaultBioGymSettings()
 })
 
 function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
@@ -348,6 +352,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     schedule,
     workflow,
     remoteExecutor: mergeRemoteExecutorSettings(defaults.remoteExecutor, migrated.remoteExecutor),
+    biogym: mergeBioGymSettings(defaults.biogym, migrated.biogym),
     guiUpdate: { ...defaults.guiUpdate, ...migrated.guiUpdate },
     codePromptPrefix: typeof migrated.codePromptPrefix === 'string' ? migrated.codePromptPrefix : ''
   }
@@ -441,6 +446,9 @@ export class JsonSettingsStore {
 
     const normalizedBeforeLocalIds = normalizeStoredSettings(buildMergedSettings(parsed))
     const normalized = withGeneratedLocalIds(normalizedBeforeLocalIds)
+    const migratedLegacyMcpSearchDefaults = shouldMigrateLegacyLocalRuntimeMcpSearchDefaults(
+      parsed.agents?.sciforge?.mcpSearch
+    )
     await ensureWorkspaceRootExists(normalized.workspaceRoot)
     await ensureWriteWorkspaceRootsExist(normalized)
     await ensureClawChannelWorkspaceRootsExist(normalized)
@@ -451,7 +459,9 @@ export class JsonSettingsStore {
       normalized.schedule.internal.secret !== normalizedBeforeLocalIds.schedule.internal.secret ||
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
       !('remoteExecutor' in parsed) ||
-      !('agentCapabilities' in parsed)
+      !('biogym' in parsed) ||
+      !('agentCapabilities' in parsed) ||
+      migratedLegacyMcpSearchDefaults
     ) {
       await this.save(normalized)
     }
@@ -481,6 +491,7 @@ export class JsonSettingsStore {
       speechToText: speechToTextPatch,
       connectPhone: connectPhonePatch,
       remoteExecutor: remoteExecutorPatch,
+      biogym: biogymPatch,
     } = partial
     const patchedRuntimeSettings = applyClaudeRuntimePatch(
       applyCodexRuntimePatch(applyLocalRuntimePatch(cur, agentsPatch?.sciforge), agentsPatch?.codex),
@@ -525,6 +536,7 @@ export class JsonSettingsStore {
       schedule,
       workflow,
       remoteExecutor: mergeRemoteExecutorSettings(cur.remoteExecutor, remoteExecutorPatch),
+      biogym: mergeBioGymSettings(cur.biogym, biogymPatch),
       guiUpdate: { ...cur.guiUpdate, ...(partial.guiUpdate ?? {}) }
     }))
     await this.save(next)

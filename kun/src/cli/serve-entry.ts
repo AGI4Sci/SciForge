@@ -7,6 +7,7 @@ import {
   splitLocalRuntimeCliCommand
 } from './agent-cli.js'
 import { startLocalRuntimeServe } from '../server/runtime-factory.js'
+import { consumeBioGymPrivateBootstrap } from './biogym-private-bootstrap.js'
 
 export const KUN_READY_PREFIX = 'KUN_READY '
 
@@ -27,7 +28,14 @@ async function serveMain(argv: readonly string[]): Promise<number> {
     }
     return parsed.exitCode
   }
-  const handle = await startLocalRuntimeServe(parsed.options)
+  // Consume and close the inherited private pipe before composing any model or
+  // tool runtime. Missing/malformed bootstrap input simply leaves BioGym
+  // unavailable; it is never recovered from argv or process.env.
+  const bioGymBridge = await consumeBioGymPrivateBootstrap()
+  const handle = await startLocalRuntimeServe({
+    ...parsed.options,
+    ...(bioGymBridge ? { bioGymBridge } : {})
+  })
   const info = handle.runtime.info()
   const startupInfo = {
     service: 'kun',

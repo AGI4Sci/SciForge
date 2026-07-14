@@ -1,6 +1,7 @@
-import type { ReactElement } from 'react'
+import { useState, type ReactElement } from 'react'
 import {
   getRemoteExecutorSettings,
+  getBioGymSettings,
   isRemoteExecutorTargetTrustedForWorkspace,
   remoteExecutorWorkspaceMatchesTrust,
   type AppSettingsPatch,
@@ -8,7 +9,7 @@ import {
   type RemoteExecutorTargetKindV1,
   type RemoteExecutorTargetV1
 } from '@shared/app-settings'
-import { Plus, Trash2 } from 'lucide-react'
+import { Loader2, Plus, Stethoscope, Trash2 } from 'lucide-react'
 import { SettingsCard, SettingRow, Toggle } from './settings-controls'
 
 type RemoteResourcesSettingsContext = {
@@ -61,8 +62,29 @@ export function RemoteResourcesSettingsSection({
 }): ReactElement {
   const { t, form, update, selectControlClass } = ctx
   const remoteExecutor = getRemoteExecutorSettings(form)
+  const biogym = getBioGymSettings(form)
   const targets = remoteExecutor.targets
   const workspaceRoot = form.workspaceRoot.trim()
+  const [bioGymDoctorBusy, setBioGymDoctorBusy] = useState(false)
+  const [bioGymDoctorResult, setBioGymDoctorResult] = useState<{ ok: boolean; message: string } | null>(null)
+
+  const runBioGymDoctor = async (): Promise<void> => {
+    setBioGymDoctorBusy(true)
+    setBioGymDoctorResult(null)
+    try {
+      const api = window.sciforge?.biogym
+      if (!api) throw new Error(t('biogymDoctorBridgeUnavailable'))
+      const result = await api.doctor()
+      setBioGymDoctorResult({ ok: result.ok, message: result.message })
+    } catch (error) {
+      setBioGymDoctorResult({
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setBioGymDoctorBusy(false)
+    }
+  }
 
   const patchRemoteExecutor = (
     nextTargets: RemoteExecutorTargetV1[],
@@ -172,6 +194,73 @@ export function RemoteResourcesSettingsSection({
             </select>
           }
         />
+      </SettingsCard>
+
+      <SettingsCard title={t('biogymSettingsTitle')} className="mt-6">
+        <SettingRow
+          title={t('biogymEnabled')}
+          description={t('biogymEnabledDesc')}
+          control={
+            <Toggle
+              checked={biogym.enabled}
+              onChange={(enabled) => update({ biogym: { enabled } })}
+            />
+          }
+        />
+        <div className="grid gap-3 px-3 py-5 md:grid-cols-2">
+          <label className="block min-w-0 md:col-span-2">
+            <span className="mb-1.5 block text-[12px] font-semibold text-ds-muted">
+              {t('biogymCliPath')}
+            </span>
+            <input
+              className={inputClass()}
+              value={biogym.cliPath}
+              placeholder="/absolute/path/to/biogym"
+              onChange={(event) => update({ biogym: { cliPath: event.target.value } })}
+            />
+          </label>
+          <label className="block min-w-0">
+            <span className="mb-1.5 block text-[12px] font-semibold text-ds-muted">
+              {t('biogymSshHost')}
+            </span>
+            <input
+              className={inputClass()}
+              value={biogym.sshHost}
+              onChange={(event) => update({ biogym: { sshHost: event.target.value } })}
+            />
+          </label>
+          <label className="block min-w-0">
+            <span className="mb-1.5 block text-[12px] font-semibold text-ds-muted">
+              {t('biogymRemoteRoot')}
+            </span>
+            <input
+              className={inputClass()}
+              value={biogym.remoteRoot}
+              onChange={(event) => update({ biogym: { remoteRoot: event.target.value } })}
+            />
+          </label>
+          <div className="flex min-w-0 flex-col items-start gap-2 md:col-span-2">
+            <button
+              type="button"
+              onClick={() => { void runBioGymDoctor() }}
+              disabled={bioGymDoctorBusy}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-wait disabled:opacity-60"
+            >
+              {bioGymDoctorBusy
+                ? <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.8} />
+                : <Stethoscope className="h-4 w-4" strokeWidth={1.8} />}
+              {bioGymDoctorBusy ? t('biogymDoctorRunning') : t('biogymDoctorAction')}
+            </button>
+            {bioGymDoctorResult ? (
+              <div
+                role="status"
+                className={`text-[12px] leading-5 ${bioGymDoctorResult.ok ? 'text-emerald-700' : 'text-red-600'}`}
+              >
+                {bioGymDoctorResult.message}
+              </div>
+            ) : null}
+          </div>
+        </div>
       </SettingsCard>
 
       <SettingsCard title={t('remoteExecutorTargets')} className="mt-6">

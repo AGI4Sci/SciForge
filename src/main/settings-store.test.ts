@@ -172,6 +172,64 @@ describe('JsonSettingsStore', () => {
     expect(raw.agentCapabilities).toEqual(defaultAgentCapabilitySettings())
   })
 
+  it('migrates and persists the exact legacy disabled MCP search defaults once', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const settingsPath = join(userDataDir, 'sciforge-settings.json')
+    const runtime = defaultLocalRuntimeSettings()
+    const { defaultsRevision: _defaultsRevision, ...legacyMcpSearch } = runtime.mcpSearch
+
+    await writeFile(settingsPath, JSON.stringify({
+      version: 1,
+      agents: {
+        sciforge: {
+          ...runtime,
+          mcpSearch: {
+            ...legacyMcpSearch,
+            enabled: false
+          }
+        }
+      }
+    }), 'utf8')
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+      agents?: { sciforge?: { mcpSearch?: { enabled?: boolean; defaultsRevision?: number } } }
+    }
+
+    expect(loaded.agents.sciforge.mcpSearch).toMatchObject({
+      enabled: true,
+      defaultsRevision: 1
+    })
+    expect(persisted.agents?.sciforge?.mcpSearch).toMatchObject({
+      enabled: true,
+      defaultsRevision: 1
+    })
+  })
+
+  it('preserves an explicit MCP search opt-out after defaults migration', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const runtime = defaultLocalRuntimeSettings()
+
+    await writeFile(join(userDataDir, 'sciforge-settings.json'), JSON.stringify({
+      version: 1,
+      agents: {
+        sciforge: {
+          ...runtime,
+          mcpSearch: {
+            ...runtime.mcpSearch,
+            enabled: false
+          }
+        }
+      }
+    }), 'utf8')
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    expect(loaded.agents.sciforge.mcpSearch).toMatchObject({
+      enabled: false,
+      defaultsRevision: 1
+    })
+  })
+
   it('creates a default write workspace with welcome.md', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
 
