@@ -728,6 +728,8 @@ function normalizeCallableWorkflow(value: unknown): WorkflowCallableSummary | nu
     id,
     name,
     description: stringValue(record.description),
+    ...(typeof record.enabled === 'boolean' ? { enabled: record.enabled } : {}),
+    ...(typeof record.callableByAgent === 'boolean' ? { callableByAgent: record.callableByAgent } : {}),
     inputs,
     schemaResourceUri: workflowSchemaResourceUri(id)
   }

@@ -929,6 +929,38 @@ describe('app-ipc-schemas', () => {
     expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
   })
 
+  it('accepts workflow AI-agent runtime ownership in settings patches', () => {
+    const payload = settingsPatchSchema.parse({
+      workflow: {
+        workflows: [{
+          id: 'workflow-1',
+          name: 'Runtime-owned workflow',
+          enabled: true,
+          callableByAgent: true,
+          nodes: [{
+            id: 'agent-1',
+            type: 'ai-agent',
+            config: {
+              prompt: 'Run the workflow task.',
+              workspaceRoot: '/tmp/workspace',
+              runtimeId: 'sciforge',
+              providerId: '',
+              model: '',
+              reasoningEffort: 'high',
+              mode: 'agent'
+            }
+          }]
+        }]
+      }
+    })
+
+    const workflow = payload.workflow?.workflows?.[0]
+    expect(workflow?.nodes?.[0]).toMatchObject({
+      type: 'ai-agent',
+      config: { runtimeId: 'sciforge' }
+    })
+  })
+
   it('rejects Local Runtime credential override patches', () => {
     expect(() =>
       settingsPatchSchema.parse({

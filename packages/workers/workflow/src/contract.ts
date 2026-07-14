@@ -177,6 +177,8 @@ export const WorkflowCallableSummarySchema = z.object({
   id: z.string().min(1),
   name: z.string().min(1),
   description: z.string().optional(),
+  enabled: z.boolean().optional(),
+  callableByAgent: z.boolean().optional(),
   inputs: z.array(WorkflowInputFieldSchema),
   schemaResourceUri: z.string().optional()
 }).strict()
@@ -257,8 +259,12 @@ export const WorkflowConnectionImportSchema = z.object({
 export const WorkflowImportDocumentSchema = z.object({
   id: z.string().trim().min(1).max(256).optional(),
   name: z.string().trim().min(1).max(256),
-  enabled: z.boolean().optional(),
-  callableByAgent: z.boolean().optional(),
+  enabled: z.boolean().optional().describe(
+    'Round-trip metadata only. Imported workflows are always staged disabled until a user enables them in the SciForge workflow editor.'
+  ),
+  callableByAgent: z.boolean().optional().describe(
+    'Round-trip metadata only. Imported workflows are never agent-callable until a user enables agent access in the SciForge workflow editor.'
+  ),
   nodes: z.array(WorkflowNodeImportSchema).min(1),
   connections: z.array(WorkflowConnectionImportSchema).optional(),
   env: z.array(z.record(z.string(), z.unknown())).optional()

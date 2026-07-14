@@ -77,6 +77,21 @@ const LIVE_STATUS_LINGER_MS = 8_000
 
 type WorkflowPayload = { json: unknown; text: string }
 type ScheduleTriggerNode = Extract<WorkflowNodeV1, { type: 'schedule-trigger' }>
+type WorkflowToolRunResult = {
+  ok: boolean
+  status: WorkflowRunStatus
+  message: string
+  output: string
+  runId: string
+}
+type PreparedWorkflowRun =
+  | { ok: false; result: WorkflowToolRunResult }
+  | {
+      ok: true
+      triggerNodeId: string
+      runId: ReturnType<typeof randomUUID>
+      initialPayload: WorkflowPayload
+    }
 
 type NodeOutcome = {
   payload: WorkflowPayload
@@ -1727,7 +1742,7 @@ export class WorkflowRuntime {
         ok: true,
         workflowId: workflow.id,
         workflow,
-        message: 'Workflow imported.'
+        message: 'Workflow imported disabled and not callable by agents. Enable it and allow agent access in the SciForge workflow editor before running it.'
       })
       return
     }
@@ -1804,18 +1819,83 @@ export class WorkflowRuntime {
     }
   }
 
-  /** Run a workflow on behalf of the local runtime tool: resolve by id/name, await it, return its output. */
+  /** Start a workflow on behalf of the local runtime tool and return a pollable run id immediately. */
   async runWorkflowForTool(
     idOrName: string,
     input?: unknown,
     workspaceOverride?: string
-  ): Promise<{ ok: boolean; status: WorkflowRunStatus; message: string; output: string; runId: string }> {
+  ): Promise<WorkflowToolRunResult> {
     const settings = await this.deps.store.load()
     const workflow = this.findAgentCallableWorkflowByRef(settings, idOrName)
     if (!workflow) {
       return { ok: false, status: 'error', message: `No agent-callable workflow matches "${idOrName}".`, output: '', runId: '' }
     }
-    return this.runResolved(workflow, input, workspaceOverride)
+    return this.startResolved(workflow, input, workspaceOverride)
+  }
+
+  private startResolved(
+    workflow: WorkflowV1,
+    input: unknown,
+    workspaceOverride?: string
+  ): WorkflowToolRunResult {
+    const prepared = this.prepareResolvedRun(workflow, input)
+    if (!prepared.ok) return prepared.result
+    void this.runWorkflowInternal(
+      workflow,
+      prepared.triggerNodeId,
+      'agent',
+      prepared.runId,
+      prepared.initialPayload,
+      workspaceOverride
+    )
+      .catch((error: unknown) => {
+        this.deps.logError('workflow', 'Detached workflow run failed', {
+          message: error instanceof Error ? error.message : String(error),
+          workflowId: workflow.id,
+          runId: prepared.runId
+        })
+      })
+    return {
+      ok: true,
+      status: 'running',
+      message: 'Workflow started.',
+      output: '',
+      runId: prepared.runId
+    }
+  }
+
+  private prepareResolvedRun(workflow: WorkflowV1, input: unknown): PreparedWorkflowRun {
+    if (this.runningWorkflowIds.has(workflow.id)) {
+      return {
+        ok: false,
+        result: { ok: false, status: 'error', message: 'Workflow is already running.', output: '', runId: '' }
+      }
+    }
+    const trigger =
+      workflow.nodes.find((node) => node.type === 'manual-trigger' && !node.disabled) ??
+      workflow.nodes.find((node) => node.type === 'schedule-trigger' && !node.disabled) ??
+      workflow.nodes.find((node) => node.type === 'webhook-trigger' && !node.disabled) ??
+      workflow.nodes.find(
+        (node) =>
+          node.type === 'manual-trigger' || node.type === 'schedule-trigger' || node.type === 'webhook-trigger'
+      )
+    if (!trigger) {
+      return {
+        ok: false,
+        result: { ok: false, status: 'error', message: 'Workflow has no trigger node.', output: '', runId: '' }
+      }
+    }
+    const inputSchema = trigger.type === 'manual-trigger' ? trigger.config.inputSchema : undefined
+    const missing = missingRequiredInput(inputSchema, input)
+    if (missing) {
+      return {
+        ok: false,
+        result: { ok: false, status: 'error', message: `Missing required input: ${missing}`, output: '', runId: '' }
+      }
+    }
+    const runId = randomUUID()
+    const initialPayload = coerceInputToPayload(inputSchema, input)
+    return { ok: true, triggerNodeId: trigger.id, runId, initialPayload }
   }
 
   /**
@@ -1872,35 +1952,24 @@ export class WorkflowRuntime {
     workflow: WorkflowV1,
     input: unknown,
     workspaceOverride?: string
-  ): Promise<{ ok: boolean; status: WorkflowRunStatus; message: string; output: string; runId: string }> {
-    if (this.runningWorkflowIds.has(workflow.id)) {
-      return { ok: false, status: 'error', message: 'Workflow is already running.', output: '', runId: '' }
-    }
-    // Prefer an enabled trigger (manual > schedule > webhook); fall back to any trigger.
-    const trigger =
-      workflow.nodes.find((node) => node.type === 'manual-trigger' && !node.disabled) ??
-      workflow.nodes.find((node) => node.type === 'schedule-trigger' && !node.disabled) ??
-      workflow.nodes.find((node) => node.type === 'webhook-trigger' && !node.disabled) ??
-      workflow.nodes.find(
-        (node) =>
-          node.type === 'manual-trigger' || node.type === 'schedule-trigger' || node.type === 'webhook-trigger'
-      )
-    if (!trigger) {
-      return { ok: false, status: 'error', message: 'Workflow has no trigger node.', output: '', runId: '' }
-    }
-    const inputSchema = trigger.type === 'manual-trigger' ? trigger.config.inputSchema : undefined
-    const missing = missingRequiredInput(inputSchema, input)
-    if (missing) {
-      return { ok: false, status: 'error', message: `Missing required input: ${missing}`, output: '', runId: '' }
-    }
-    const runId = randomUUID()
-    const initialPayload = coerceInputToPayload(inputSchema, input)
-    const result = await this.runWorkflowInternal(workflow, trigger.id, 'agent', runId, initialPayload, workspaceOverride)
+  ): Promise<WorkflowToolRunResult> {
+    const prepared = this.prepareResolvedRun(workflow, input)
+    if (!prepared.ok) return prepared.result
+    const result = await this.runWorkflowInternal(
+      workflow,
+      prepared.triggerNodeId,
+      'agent',
+      prepared.runId,
+      prepared.initialPayload,
+      workspaceOverride
+    )
     const after = await this.deps.store.load()
-    const run = after.workflow.workflows.find((item) => item.id === workflow.id)?.runs.find((entry) => entry.id === runId)
+    const run = after.workflow.workflows
+      .find((item) => item.id === workflow.id)
+      ?.runs.find((entry) => entry.id === prepared.runId)
     const status: WorkflowRunStatus = 'status' in result ? result.status : 'error'
     const output = this.pickRunOutput(workflow, run) || result.message
-    return { ok: result.ok, status, message: result.message, output, runId }
+    return { ok: result.ok, status, message: result.message, output, runId: prepared.runId }
   }
 
   /** The run's canonical output: the last successful `output` node's result, else the last node's. */
@@ -2099,34 +2168,36 @@ export class WorkflowRuntime {
     }
     let changed = false
     const now = new Date()
+    const interruptedMessage = 'Workflow was interrupted before completion.'
+    const markInterrupted = (workflow: WorkflowV1): WorkflowV1 => ({
+      ...workflow,
+      ...(workflowHasOneShotAtTrigger(workflow) ? { enabled: false, nextRunAt: '' } : {}),
+      lastStatus: 'error',
+      lastMessage: interruptedMessage,
+      updatedAt: now.toISOString(),
+      runs: workflow.runs.map((run) => run.status === 'running'
+        ? {
+            ...run,
+            status: 'error',
+            finishedAt: now.toISOString(),
+            message: interruptedMessage
+          }
+        : run)
+    })
     const workflows = settings.workflow.workflows.map((workflow) => {
       const wasInterrupted = workflow.lastStatus === 'running' && !this.runningWorkflowIds.has(workflow.id)
       const scheduled = workflowHasScheduleTrigger(workflow)
       if (!workflow.enabled || !scheduled || this.runningWorkflowIds.has(workflow.id)) {
         if (!wasInterrupted) return workflow
         changed = true
-        const oneShot = workflowHasOneShotAtTrigger(workflow)
-        return {
-          ...workflow,
-          ...(oneShot ? { enabled: false, nextRunAt: '' } : {}),
-          lastStatus: 'error' as const,
-          lastMessage: 'Workflow was interrupted before completion.',
-          updatedAt: now.toISOString()
-        }
+        return markInterrupted(workflow)
       }
       if (workflow.nextRunAt && !wasInterrupted) return workflow
       changed = true
+      const next = wasInterrupted ? markInterrupted(workflow) : workflow
       return {
-        ...workflow,
-        nextRunAt: computeWorkflowNextRunAt(workflow, now),
-        ...(wasInterrupted
-          ? {
-              ...(workflowHasOneShotAtTrigger(workflow) ? { enabled: false, nextRunAt: '' } : {}),
-              lastStatus: 'error' as const,
-              lastMessage: 'Workflow was interrupted before completion.',
-              updatedAt: now.toISOString()
-            }
-          : {})
+        ...next,
+        nextRunAt: workflowHasOneShotAtTrigger(next) ? '' : computeWorkflowNextRunAt(next, now)
       }
     })
     if (!changed) {

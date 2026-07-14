@@ -247,7 +247,10 @@ export async function waitForAssistantTextViaRuntime(
       const error = targetTurn.error?.trim()
       throw new Error(error || `Agent turn ${targetTurn.status}.`)
     }
-    if (targetTurn.status === 'completed' && lastText) return lastText
+    // A tool-driven agent turn may complete successfully without emitting a final
+    // assistant message. Completion is authoritative; an empty result is valid
+    // and callers surface it as "Completed" instead of waiting until timeout.
+    if (targetTurn.status === 'completed') return lastText
   }
   if (lastText) return lastText
   throw new Error('Timed out waiting for agent response.')

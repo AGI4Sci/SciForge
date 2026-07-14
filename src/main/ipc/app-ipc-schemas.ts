@@ -927,6 +927,7 @@ const workflowAiAgentConfigSchema = z
   .object({
     prompt: z.string().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
     workspaceRoot: defaultPathSchema,
+    runtimeId: agentRuntimeIdSchema.optional(),
     providerId: z.string().trim().max(64).optional(),
     model: optionalTrimmedString(128),
     reasoningEffort: scheduleReasoningEffortSchema.optional(),

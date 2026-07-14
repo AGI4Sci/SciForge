@@ -29,9 +29,9 @@ test('uses fake internal HTTP fetch for list and run', async () => {
       return jsonResponse({
         ok: true,
         runId: 'run-1',
-        status: 'success',
-        message: 'Done',
-        output: 'summary'
+        status: 'running',
+        message: 'Workflow started.',
+        output: ''
       })
     }
     return jsonResponse({ ok: false, message: 'not found' }, 404)
@@ -52,6 +52,8 @@ test('uses fake internal HTTP fetch for list and run', async () => {
   const run = await service.run({ workflow_id: 'wf-1', input: { topic: 'biology' }, confirmed: true })
   assert.equal(run.ok, true)
   assert.equal(run.ok ? run.runId : '', 'run-1')
+  assert.equal(run.ok ? run.status : '', 'running')
+  assert.equal(run.ok ? run.message : '', 'Workflow started.')
 
   const runCall = calls.find((call) => new URL(call.url).pathname === '/workflow/internal/run')
   assert.ok(runCall)
@@ -130,6 +132,40 @@ test('write tools require confirmation before invoking runtime write endpoints',
   const records = service.auditRecords()
   assert.deepEqual(records.map((record) => record.action), ['run', 'import'])
   assert.deepEqual(records.map((record) => record.confirmationRequired), [true, true])
+})
+
+test('confirmed import reports the runtime-staged disabled state', async () => {
+  const client = new FakeWorkflowClient({
+    '/workflow/internal/import': {
+      ok: true,
+      workflowId: 'wf-imported',
+      workflow: {
+        id: 'wf-imported',
+        name: 'Imported workflow',
+        enabled: false,
+        callableByAgent: false
+      },
+      message: 'Workflow imported disabled and not callable by agents. Enable it and allow agent access in the SciForge workflow editor before running it.'
+    }
+  })
+  const service = createWorkflowService({ client })
+
+  const result = await service.importWorkflow({
+    workflow: {
+      id: 'wf-imported',
+      name: 'Imported workflow',
+      enabled: true,
+      callableByAgent: true,
+      nodes: [{ id: 'trigger', type: 'manual-trigger', config: {} }]
+    },
+    confirmed: true
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.ok ? result.workflow?.enabled : true, false)
+  assert.equal(result.ok ? result.workflow?.callableByAgent : true, false)
+  assert.match(result.ok ? result.message : '', /Enable it and allow agent access/)
+  assert.deepEqual(client.paths, ['/workflow/internal/import'])
 })
 
 test('stop preview avoids confirmation and live stop requires confirmation', async () => {

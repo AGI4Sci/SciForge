@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
   defaultKeyboardShortcuts,
@@ -11,7 +11,11 @@ import {
   defaultWriteSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { resolveScheduleModelConfig } from './schedule-runtime-helpers'
+import {
+  resolveScheduleModelConfig,
+  waitForAssistantTextViaRuntime,
+  type ScheduleRuntimeDeps
+} from './schedule-runtime-helpers'
 
 function settings(): AppSettingsV1 {
   return {
@@ -54,5 +58,27 @@ describe('resolveScheduleModelConfig', () => {
       model: 'router-public-alias',
       reasoningEffort: 'high'
     })
+  })
+})
+
+describe('waitForAssistantTextViaRuntime', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('accepts a completed tool-driven turn with no assistant text', async () => {
+    vi.useFakeTimers()
+    const readThread = vi.fn(async () => ({
+      turns: [{ id: 'turn-1', status: 'completed', items: [] }]
+    }))
+    const deps = {
+      agentRuntime: { readThread }
+    } as unknown as ScheduleRuntimeDeps
+
+    const result = waitForAssistantTextViaRuntime(deps, 'sciforge', 'thread-1', 'turn-1', 30_000)
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    await expect(result).resolves.toBe('')
+    expect(readThread).toHaveBeenCalledOnce()
   })
 })

@@ -356,7 +356,7 @@ describe('WorkflowRuntime internal HTTP facade', () => {
             callableByAgent: false,
             runs: []
           },
-          message: 'Workflow imported.'
+          message: 'Workflow imported disabled and not callable by agents. Enable it and allow agent access in the SciForge workflow editor before running it.'
         }
       })
     } finally {
@@ -378,6 +378,76 @@ describe('WorkflowRuntime internal HTTP facade', () => {
       await expect(requestInternal(port, '/workflow/internal/list', undefined, 'anything')).resolves.toMatchObject({
         status: 401,
         json: { ok: false, message: 'Unauthorized.' }
+      })
+    } finally {
+      runtime.stop()
+    }
+  })
+
+  it('starts an agent-callable workflow without awaiting terminal completion', async () => {
+    const port = await findAvailablePort()
+    const store = createStore(settingsWith([makeWorkflow()], port))
+    const runtime = new WorkflowRuntime({
+      store: store as never,
+      agentRuntime: unusedAgentRuntime(),
+      logError: vi.fn()
+    })
+    runtime.sync(store.read())
+    const runtimeInternals = runtime as unknown as {
+      runWorkflowInternal: (...args: unknown[]) => Promise<never>
+    }
+    vi.spyOn(runtimeInternals, 'runWorkflowInternal').mockImplementation(
+      () => new Promise<never>(() => undefined)
+    )
+
+    try {
+      await expect(runtime.runWorkflowForTool('workflow-1', { topic: 'biology' })).resolves.toMatchObject({
+        ok: true,
+        status: 'running',
+        message: 'Workflow started.',
+        output: '',
+        runId: expect.any(String)
+      })
+    } finally {
+      runtime.stop()
+    }
+  })
+
+  it('marks persisted in-flight runs as interrupted after a runtime restart', async () => {
+    const port = await findAvailablePort()
+    const workflow = makeWorkflow({
+      lastStatus: 'running',
+      lastMessage: 'Running',
+      runs: [{
+        id: 'orphaned-run',
+        trigger: 'agent',
+        status: 'running',
+        startedAt: now,
+        finishedAt: '',
+        message: '',
+        nodeResults: []
+      }]
+    })
+    const store = createStore(settingsWith([workflow], port))
+    const runtime = new WorkflowRuntime({
+      store: store as never,
+      agentRuntime: unusedAgentRuntime(),
+      logError: vi.fn()
+    })
+
+    try {
+      runtime.sync(store.read())
+      await waitFor(async () => store.read().workflow.workflows[0]?.lastStatus === 'error')
+
+      expect(store.read().workflow.workflows[0]).toMatchObject({
+        lastStatus: 'error',
+        lastMessage: 'Workflow was interrupted before completion.',
+        runs: [{
+          id: 'orphaned-run',
+          status: 'error',
+          message: 'Workflow was interrupted before completion.',
+          finishedAt: expect.any(String)
+        }]
       })
     } finally {
       runtime.stop()
