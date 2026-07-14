@@ -40,11 +40,25 @@ export function applyUiFontScale(scale: UiFontScale): void {
   const root = document.documentElement
   const factor =
     scale === 'small'
-      ? '0.82'
+      ? 0.82
       : scale === 'large'
-        ? '1'
-        : '0.88'
-  root.style.setProperty('--ds-ui-scale', factor)
+        ? 1
+        : 0.88
+  const setNativeZoom = typeof window !== 'undefined'
+    ? window.sciforge?.setUiZoomFactor
+    : undefined
+
+  if (setNativeZoom) {
+    // Browser-level zoom keeps client coordinates, layout sizes, canvas buffers,
+    // and device pixels in one coordinate system. CSS zoom does not, which
+    // causes proportional picking offsets in WebGL viewers such as Mol*.
+    root.style.setProperty('--ds-ui-scale', '1')
+    setNativeZoom(factor)
+    return
+  }
+
+  // Browser-only development and tests do not have Electron's webFrame bridge.
+  root.style.setProperty('--ds-ui-scale', String(factor))
 }
 
 /**

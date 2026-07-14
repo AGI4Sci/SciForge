@@ -234,12 +234,10 @@ export const renderMolecularWorkbenchWithMolstar: MolecularWorkbenchRenderer = a
   await loadMolstarSource(viewer, source)
   await resetMolecularMolstarViewport(viewer)
   applyMolecularMolstarSelection(viewer, selection)
-  await resetMolecularMolstarViewport(viewer)
 
   return {
     setSelection: (nextSelection) => {
       applyMolecularMolstarSelection(viewer, nextSelection)
-      void resetMolecularMolstarViewport(viewer)
     },
     resize: () => viewer.handleResize(),
     dispose: () => viewer.dispose()
@@ -313,8 +311,10 @@ export function applyMolecularMolstarSelection(
 
   viewer.structureInteractivity({
     elements: { items: elements },
-    action: ['select', 'focus'],
-    focusOptions: { extraRadius: 3 }
+    // Keep structured selection visual state independent from the user's
+    // camera. Mol*'s `focus` action calls camera.focusLoci and would move the
+    // viewport every time persisted selection state changes.
+    action: 'select'
   })
 }
 

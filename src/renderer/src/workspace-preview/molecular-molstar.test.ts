@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   MOLECULAR_MOLSTAR_EMBEDDED_VIEWER_OPTIONS,
+  applyMolecularMolstarSelection,
   createMolecularMolstarRuntimeLoader,
   molecularMolstarFormatForPath,
   molecularSelectionToMolstarSchemaItems,
@@ -167,5 +168,22 @@ describe('molecular Mol* adapter', () => {
       { auth_atom_id: 'CA' },
       { type_symbol: 'Zn' }
     ])
+  })
+
+  it('applies structured selection without moving the Mol* camera', () => {
+    const structureInteractivity = vi.fn()
+
+    applyMolecularMolstarSelection({ structureInteractivity } as never, {
+      kind: 'molecular',
+      chains: ['A']
+    })
+
+    expect(structureInteractivity).toHaveBeenCalledWith({
+      elements: {
+        items: [{ auth_asym_id: 'A' }, { label_asym_id: 'A' }]
+      },
+      action: 'select'
+    })
+    expect(structureInteractivity.mock.calls[0]?.[0].action).not.toBe('focus')
   })
 })

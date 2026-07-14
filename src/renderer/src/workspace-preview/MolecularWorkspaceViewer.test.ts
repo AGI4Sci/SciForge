@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
@@ -8,12 +8,14 @@ import {
   type WorkspacePreviewAssetTransportDescriptor
 } from '@shared/workspace-preview'
 import {
+  activateMolecularWorkbenchRendererHandle,
   buildMolecularWorkspaceViewerModel,
   createMolecularChainSelectionOperation,
   createMolecularClearSelectionOperation,
   createMolecularLigandSelectionOperation,
   decodeWorkspacePreviewBase64Text,
   MolecularWorkspaceViewer,
+  molecularWorkbenchSourceIdentity,
   readMolecularRenderableAssetText,
   resolveMolecularRenderableAsset
 } from './MolecularWorkspaceViewer'
@@ -381,5 +383,49 @@ describe('MolecularWorkspaceViewer', () => {
       ok: false,
       reason: expect.stringContaining('refusing to load a truncated molecular model')
     })
+  })
+
+  it('keys Mol* loading by source identity instead of observation selection', () => {
+    const asset = createMolecularAssetDescriptor()
+    const identity = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset,
+      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      rangeReaderAvailable: true
+    })
+    const sameSource = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset: { ...asset },
+      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      rangeReaderAvailable: true
+    })
+    const nextSession = molecularWorkbenchSourceIdentity({
+      observationPath: '/workspace/lab/protein.pdb',
+      asset: { ...asset, sessionId: 'session-next' },
+      sourceUrl: 'sciforge-preview://asset/session-next',
+      rangeReaderAvailable: true
+    })
+
+    expect(sameSource).toBe(identity)
+    expect(nextSession).not.toBe(identity)
+  })
+
+  it('replays the latest selection when an asynchronous renderer handle becomes active', () => {
+    const handleRef = { current: null }
+    const setSelection = vi.fn()
+    const handle = {
+      setSelection,
+      resize: vi.fn(),
+      dispose: vi.fn()
+    }
+    const latestSelection = {
+      kind: 'molecular' as const,
+      chains: ['B']
+    }
+
+    activateMolecularWorkbenchRendererHandle(handleRef, handle, latestSelection)
+
+    expect(handleRef.current).toBe(handle)
+    expect(setSelection).toHaveBeenCalledWith(latestSelection)
   })
 })

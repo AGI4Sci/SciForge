@@ -977,6 +977,11 @@ export type WorkspacePreviewInvokeActionResult =
 
 export type SciForgeApi = {
   platform: string
+  /**
+   * Use Chromium page zoom for application-wide UI scaling. Unlike CSS `zoom`,
+   * this keeps pointer coordinates aligned with WebGL canvas coordinates.
+   */
+  setUiZoomFactor?: (factor: number) => void
   getSettings: () => Promise<AppSettingsV1>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   onSettingsChanged: (handler: (settings: AppSettingsV1) => void) => () => void
