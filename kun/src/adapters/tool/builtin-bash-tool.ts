@@ -73,6 +73,16 @@ type BashPayload = {
 }
 
 const bashSessions = new Map<string, BashSession>()
+const PRIVATE_TOOL_BRIDGE_ENV_NAMES = [
+  'SCIFORGE_BIOGYM_INTERNAL_BASE_URL',
+  'SCIFORGE_BIOGYM_INTERNAL_TOKEN'
+] as const
+
+function modelSubprocessEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const name of PRIVATE_TOOL_BRIDGE_ENV_NAMES) delete env[name]
+  return env
+}
 
 async function bashExecute(
   command: string,
@@ -99,7 +109,7 @@ async function bashExecute(
     ? null
     : spawn(shellRuntime.shell, shellCommandArgs(shellRuntime, command), {
         cwd,
-        env: process.env,
+        env: modelSubprocessEnvironment(),
         detached: process.platform !== 'win32',
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true
@@ -415,7 +425,7 @@ async function startBashSession(
   const shellRuntime = shellRuntimeInfo()
   const child = spawn(shellRuntime.shell, shellCommandArgs(shellRuntime, input.command), {
     cwd: input.cwd,
-    env: process.env,
+    env: modelSubprocessEnvironment(),
     detached: process.platform !== 'win32',
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true

@@ -165,6 +165,18 @@ describe('contracts', () => {
     expect(parsed.remoteTargetId).toBe('gpu-a')
   })
 
+  it('normalizes bounded host continuation request ids', () => {
+    const parsed = StartTurnRequest.parse({
+      prompt: 'Continue after a background stage',
+      hostRequestId: ' biogym:run-1:stage:10 '
+    })
+    expect(parsed.hostRequestId).toBe('biogym:run-1:stage:10')
+    expect(StartTurnRequest.safeParse({
+      prompt: 'Continue',
+      hostRequestId: 'x'.repeat(257)
+    }).success).toBe(false)
+  })
+
   it('accepts per-turn tool allow-lists on start turn payloads', () => {
     const parsed = StartTurnRequest.parse({
       prompt: 'Run the bounded experiment',
@@ -489,10 +501,23 @@ describe('cli', () => {
         runtime: {
           modelStreamIdleTimeoutMs: 120_000,
           maxTurnModelSteps: 128,
+          maxToolCallsPerTurn: 18,
           toolStorm: {
             enabled: true,
             windowSize: 5,
-            threshold: 4
+            threshold: 4,
+            maxRecoverySteps: 2,
+            nonProgressThreshold: 4,
+            maxStepsAfterRecovery: 6,
+            maxToolCallsPerTurn: 20
+          },
+          stuckDetection: {
+            enabled: true,
+            maxItems: 80,
+            repeatedActionObservationThreshold: 4,
+            repeatedActionErrorThreshold: 3,
+            alternatingThreshold: 6,
+            redundantReadThreshold: 2
           },
           toolArgumentRepair: {
             maxStringBytes: 4096
@@ -567,6 +592,9 @@ describe('cli', () => {
       expect(parsed.models?.profiles?.['custom-1m']?.inputModalities).toEqual(['text', 'image'])
       expect(parsed.runtime?.toolStorm?.windowSize).toBe(5)
       expect(parsed.runtime?.toolStorm?.threshold).toBe(4)
+      expect(parsed.runtime?.toolStorm?.maxToolCallsPerTurn).toBe(20)
+      expect(parsed.runtime?.stuckDetection?.alternatingThreshold).toBe(6)
+      expect(parsed.runtime?.stuckDetection?.redundantReadThreshold).toBe(2)
       expect(parsed.runtime?.toolArgumentRepair?.maxStringBytes).toBe(4096)
       expect(parsed.runtime?.toolBudget?.profiles?.review).toEqual({
         softLimit: 8,
@@ -577,6 +605,7 @@ describe('cli', () => {
       expect(parsed.runtime?.parallelism).toEqual({ localReadOnly: 8, networkMcp: 4 })
       expect(parsed.runtime?.modelStreamIdleTimeoutMs).toBe(120_000)
       expect(parsed.runtime?.maxTurnModelSteps).toBe(128)
+      expect(parsed.runtime?.maxToolCallsPerTurn).toBe(18)
       expect(parsed.capabilities.web.enabled).toBe(true)
       expect(parsed.capabilities.web.fetchEnabled).toBe(true)
       expect(parsed.capabilities.skills.roots).toEqual(['/tmp/skills'])
@@ -606,10 +635,10 @@ describe('cli', () => {
     }
   })
 
-  it('normalizes capability config to disabled defaults', () => {
+  it('normalizes capability config to progressive MCP discovery defaults', () => {
     const config = LocalRuntimeCapabilitiesConfig.parse({})
     expect(config.mcp.enabled).toBe(false)
-    expect(config.mcp.search.enabled).toBe(false)
+    expect(config.mcp.search.enabled).toBe(true)
     expect(config.mcp.search.mode).toBe('auto')
     expect(config.web.enabled).toBe(false)
     expect(config.skills.enabled).toBe(false)
@@ -755,7 +784,7 @@ describe('cli', () => {
     expect(manifest.model.inputModalities).toContain('text')
     expect(manifest.mcp.available).toBe(false)
     expect(manifest.mcp.reason).toMatch(/disabled/)
-    expect(manifest.mcp.search.enabled).toBe(false)
+    expect(manifest.mcp.search.enabled).toBe(true)
     expect(manifest.mcp.search.active).toBe(false)
     expect(manifest.research.available).toBe(false)
     expect(manifest.research.toolName).toBe('research_search')

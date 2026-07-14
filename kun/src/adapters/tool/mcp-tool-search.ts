@@ -6,6 +6,13 @@ import type { ToolHostContext } from '../../ports/tool-host.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import { mcpInputValidationFailure } from './mcp-schema-repair.js'
+import { strictCanonicalMcpToolAllowList } from './mcp-progressive-policy.js'
+import {
+  biologyRoomApplyRequiresApproval,
+  isBiologyRoomApplyTool,
+  isBiologyRoomTool,
+  isBiologyRoomToolContext
+} from './biology-room-tool-policy.js'
 
 const MCP_SEARCH_TOOL_NAME = 'mcp_search'
 const MCP_DESCRIBE_TOOL_NAME = 'mcp_describe'
@@ -277,6 +284,11 @@ function createMcpSearchTools(options: McpSearchProviderOptions): LocalTool[] {
         required: ['toolId', 'arguments']
       },
       policy: 'on-request',
+      requiresApproval: (args, context) => {
+        const record = resolveTrustedRecord(options, context, stringArg(args.toolId))
+        if (!record || !isBiologyRoomApplyTool(record.serverId, record.descriptor.name)) return undefined
+        return biologyRoomApplyRequiresApproval(objectArg(args.arguments))
+      },
       execute: async (args, context) => {
         const toolId = stringArg(args.toolId)
         const record = resolveTrustedRecord(options, context, toolId)
@@ -329,7 +341,12 @@ function createMcpSearchTools(options: McpSearchProviderOptions): LocalTool[] {
 }
 
 function trustedRecords(options: McpSearchProviderOptions, context: ToolHostContext): McpSearchCatalogRecord[] {
-  return options.state.records.filter((record) => options.isServerTrusted(record.server, context.workspace))
+  const allowedDirectTools = strictCanonicalMcpToolAllowList(context)
+  return options.state.records.filter((record) =>
+    options.isServerTrusted(record.server, context.workspace) &&
+    (!isBiologyRoomTool(record.serverId, record.descriptor.name) || isBiologyRoomToolContext(context.requestText)) &&
+    (!allowedDirectTools || allowedDirectTools.has(record.normalizedName))
+  )
 }
 
 function resolveTrustedRecord(

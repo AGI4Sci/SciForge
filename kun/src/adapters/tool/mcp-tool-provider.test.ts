@@ -147,6 +147,117 @@ describe('buildMcpToolProviders workspace-intel arguments', () => {
     )
   })
 
+  it('injects the thread workspaceRoot for Biology Room tools', async () => {
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+    const client: McpClientLike = {
+      listTools: async () => ({
+        tools: [{
+          name: 'biology_room_observe',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              roomId: { type: 'string' },
+              workspaceRoot: { type: 'string' }
+            }
+          }
+        }]
+      }),
+      callTool,
+      close: async () => undefined
+    }
+    const built = await buildMcpToolProviders(config(), {
+      clientFactory: async () => client
+    })
+    const tool = built.providers[0]?.tools.find((candidate) =>
+      candidate.name === normalizeMcpToolName('gui_workspace_intel', 'biology_room_observe')
+    )
+
+    await tool?.execute({ roomId: 'protein-room' }, fakeContext())
+
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'biology_room_observe',
+        arguments: {
+          roomId: 'protein-room',
+          workspaceRoot: '/tmp/research-workspace'
+        }
+      },
+      expect.objectContaining({ timeout: 1000 })
+    )
+  })
+
+  it('binds Biology Room apply provenance to the active agent turn', async () => {
+    const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] }))
+    const client: McpClientLike = {
+      listTools: async () => ({
+        tools: [{
+          name: 'biology_room_apply',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              roomId: { type: 'string' },
+              workspaceRoot: { type: 'string' },
+              baseRevision: { type: 'number' },
+              operations: { type: 'array', items: { type: 'object' } },
+              actor: {
+                type: 'object',
+                properties: {
+                  kind: { type: 'string' },
+                  taskId: { type: 'string' },
+                  turnId: { type: 'string' }
+                }
+              }
+            }
+          }
+        }]
+      }),
+      callTool,
+      close: async () => undefined
+    }
+    const built = await buildMcpToolProviders(config(), {
+      clientFactory: async () => client
+    })
+    const tool = built.providers[0]?.tools.find((candidate) =>
+      candidate.name === normalizeMcpToolName('gui_workspace_intel', 'biology_room_apply')
+    )
+
+    expect(tool?.requiresApproval?.({
+      operations: [{ type: 'setSelection', selection: null }]
+    }, fakeContext())).toBe(false)
+    expect(tool?.requiresApproval?.({
+      operations: [{ type: 'upsertAnnotation', annotation: {} }]
+    }, fakeContext())).toBe(true)
+    expect(tool?.requiresApproval?.({
+      dryRun: true,
+      operations: [{ type: 'restoreRevision', revision: 1 }]
+    }, fakeContext())).toBe(false)
+
+    await tool?.execute({
+      roomId: 'protein-room',
+      baseRevision: 3,
+      operations: [{ type: 'setSelection', selection: null }],
+      actor: { kind: 'user', taskId: 'spoofed-task' }
+    }, fakeContext())
+
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'biology_room_apply',
+        arguments: {
+          roomId: 'protein-room',
+          baseRevision: 3,
+          operations: [{ type: 'setSelection', selection: null }],
+          workspaceRoot: '/tmp/research-workspace',
+          actor: {
+            kind: 'agent',
+            taskId: 'thread-1',
+            turnId: 'turn-1'
+          }
+        }
+      },
+      expect.objectContaining({ timeout: 1000 })
+    )
+  })
+
   it('reconnects MCP clients that report Not connected', async () => {
     const firstClose = vi.fn(async () => undefined)
     const firstClient: McpClientLike = {

@@ -1,6 +1,7 @@
 import { EMPTY_MULTI_AGENT_USAGE, MultiAgentRuntimeError, type MultiAgentRuntime } from '@sciforge/multi-agent'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost } from './local-tool-host.js'
+import { MCP_PROGRESSIVE_DISCOVERY_TOOL_NAMES, isCanonicalMcpToolName } from './mcp-progressive-policy.js'
 
 const DEFAULT_DELEGATE_TIMEOUT_MS = 600_000
 const MAX_DELEGATE_TIMEOUT_MS = 1_200_000
@@ -9,7 +10,8 @@ const RESEARCH_CHILD_MAX_TOOL_CALLS = 12
 const RESEARCH_CHILD_ALLOWED_TOOL_NAMES = [
   'web_search',
   'web_fetch',
-  'mcp_gui_research_research_search'
+  'mcp_gui_research_research_search',
+  ...MCP_PROGRESSIVE_DISCOVERY_TOOL_NAMES
 ] as const
 
 const CHILD_AGENT_RUNTIME_GUARDRAILS = [
@@ -404,8 +406,14 @@ function childToolPolicyForPrompt(
 
   const researchAllowed = new Set<string>(RESEARCH_CHILD_ALLOWED_TOOL_NAMES)
   if (explicitAllowedToolNames) {
+    const allowedToolNames = explicitAllowedToolNames.filter((toolName) => researchAllowed.has(toolName))
+    if (allowedToolNames.some(isCanonicalMcpToolName)) {
+      for (const toolName of MCP_PROGRESSIVE_DISCOVERY_TOOL_NAMES) {
+        if (!allowedToolNames.includes(toolName)) allowedToolNames.push(toolName)
+      }
+    }
     return {
-      allowedToolNames: explicitAllowedToolNames.filter((toolName) => researchAllowed.has(toolName)),
+      allowedToolNames,
       strictAllowedToolNames: true,
       maxToolCalls: RESEARCH_CHILD_MAX_TOOL_CALLS
     }

@@ -30,7 +30,7 @@ export async function startTurn(
       threadId,
       request: parsed.data
     })
-    onStarted?.(response)
+    if (!response.reused) onStarted?.(response)
     return jsonResponse(response, 202)
   } catch (error) {
     if (error instanceof TurnInProgressError) {

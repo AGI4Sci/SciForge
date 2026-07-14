@@ -97,3 +97,40 @@ describe('LocalToolHost bash git staging safety', () => {
     expect(item.isError).toBeFalsy()
   })
 })
+
+describe('LocalToolHost approval outcomes', () => {
+  it('marks a successfully executed mandatory approval call as approved', async () => {
+    const awaitApproval = vi.fn(async () => 'allow' as const)
+    const execute = vi.fn(async () => ({ output: { accepted: true } }))
+    const host = new LocalToolHost({
+      tools: [LocalToolHost.defineTool({
+        name: 'allocate_external_budget',
+        description: 'test mandatory approval tool',
+        inputSchema: { type: 'object', properties: {} },
+        policy: 'on-request',
+        approvalMode: 'mandatory',
+        requiresApproval: () => true,
+        execute
+      })]
+    })
+
+    const result = await host.execute({
+      callId: 'approved-budget-call',
+      toolName: 'allocate_external_budget',
+      arguments: {}
+    }, {
+      ...fakeContext(),
+      approvalPolicy: 'auto',
+      awaitApproval
+    })
+
+    expect(awaitApproval).toHaveBeenCalledTimes(1)
+    expect(execute).toHaveBeenCalledTimes(1)
+    expect(result.approved).toBe(true)
+    expect(result.item).toMatchObject({
+      kind: 'tool_result',
+      isError: false,
+      output: { accepted: true }
+    })
+  })
+})

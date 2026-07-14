@@ -1,6 +1,8 @@
 import { ArxivResearchProvider } from './providers/arxiv.js';
 import { BiorxivResearchProvider } from './providers/biorxiv.js';
 import { EuropePmcResearchProvider } from './providers/europe-pmc.js';
+import { FallbackWebResearchProvider } from './providers/fallback-web.js';
+import { PublicWebResearchProvider } from './providers/public-web.js';
 import { SemanticScholarResearchProvider } from './providers/semantic-scholar.js';
 import { TavilyResearchProvider } from './providers/tavily.js';
 import {
@@ -35,16 +37,19 @@ type ProviderEntry = {
 
 export type ResearchSearchServiceOptions = {
   providers?: Partial<Record<ResearchProviderId, ResearchSearchProvider>>;
+  now?: () => Date;
 };
 
 export class ResearchSearchService {
   private readonly providers: ProviderEntry[];
+  private readonly now: () => Date;
 
   constructor(
     readonly config: ResearchSearchConfig,
     options: ResearchSearchServiceOptions = {}
   ) {
     this.providers = buildProviderEntries(config, options.providers ?? {});
+    this.now = options.now ?? (() => new Date());
   }
 
   configuredDiagnostics(): ResearchProviderDiagnostic[] {
@@ -54,16 +59,25 @@ export class ResearchSearchService {
   async search(input: ResearchSearchInput): Promise<ResearchSearchOutput> {
     const query = input.query.trim();
     if (!query) throw new Error('query is required');
+    const now = this.now();
     const maxResults = boundedInt(input.maxResults, this.config.maxResults, 1, this.config.maxResults);
-    const sinceYear = boundedYear(input.sinceYear, this.config.defaultSinceYear);
     const plan = planResearchQueries({
       query,
       intent: input.intent,
       domain: input.domain,
-      maxQueries: MAX_QUERY_COUNT
+      maxQueries: MAX_QUERY_COUNT,
+      now: () => now
     });
+    const sinceYear = boundedYear(
+      input.sinceYear,
+      this.config.defaultSinceYear ?? (plan.interpretedIntent.intent === 'latest' ? now.getUTCFullYear() - 1 : undefined)
+    );
     const sources = normalizeSources(input.sources);
-    const activeProviders = this.providers.filter((item) => !sources || sources.includes(item.source));
+    const activeProviders = this.providers.filter((item) => sources
+      ? sources.includes(item.source)
+      : plan.interpretedIntent.domain === 'general'
+        ? item.source === 'web'
+        : true);
     if (activeProviders.length === 0) {
       throw new Error(`no requested research sources are enabled: ${(sources ?? allSources()).join(', ')}`);
     }
@@ -74,13 +88,15 @@ export class ResearchSearchService {
     const perQueryLimit = Math.max(1, Math.ceil(maxResults / Math.max(1, Math.min(3, plan.generatedQueries.length))));
     const signal = input.signal ?? new AbortController().signal;
     for (const generatedQuery of plan.generatedQueries) {
-      const results = await Promise.all(activeProviders.map(({ provider }) =>
+      const results = await Promise.all(activeProviders.map(({ provider, source }) =>
         provider.search({
           query: generatedQuery,
           intent: plan.interpretedIntent.intent,
           domain: plan.interpretedIntent.domain,
           ...(sinceYear ? { sinceYear } : {}),
-          maxResults: perQueryLimit,
+          maxResults: source === 'web'
+            ? Math.min(30, Math.max(10, maxResults * 2))
+            : perQueryLimit,
           timeoutMs: this.config.timeoutMs || DEFAULT_TIMEOUT_MS,
           signal
         })
@@ -100,6 +116,9 @@ export class ResearchSearchService {
     });
     const rankedWebResults = mergeAndRankWebResults({
       webResults,
+      query,
+      intent: plan.interpretedIntent.intent,
+      currentYear: now.getUTCFullYear(),
       maxResults
     });
 
@@ -148,6 +167,7 @@ export function researchSearchConfigFromEnv(env: Record<string, string | undefin
     semanticScholarApiKey,
     tavilyEnabled: booleanEnv(env, 'SCIFORGE_RESEARCH_TAVILY_ENABLED', Boolean(tavilyApiKey)),
     tavilyApiKey,
+    publicWebEnabled: booleanEnv(env, 'SCIFORGE_RESEARCH_PUBLIC_WEB_ENABLED', true),
     cnsEnabled: booleanEnv(env, 'SCIFORGE_RESEARCH_CNS_ENABLED', Boolean(tavilyApiKey)),
     cnsDomains: listEnv(env, 'SCIFORGE_RESEARCH_CNS_DOMAINS', DEFAULT_CNS_DOMAINS),
     defaultSinceYear: numberEnv(env, 'SCIFORGE_RESEARCH_DEFAULT_SINCE_YEAR'),
@@ -175,8 +195,18 @@ function buildProviderEntries(
       provider: providers.semantic_scholar ?? new SemanticScholarResearchProvider(config.semanticScholarApiKey)
     });
   }
+  const publicWebEnabled = config.publicWebEnabled !== false;
+  const publicWebProvider = providers.public_web ?? new PublicWebResearchProvider();
   if (config.tavilyEnabled) {
-    entries.push({ source: 'web', provider: providers.tavily ?? new TavilyResearchProvider(config.tavilyApiKey) });
+    const primary = providers.tavily ?? new TavilyResearchProvider(config.tavilyApiKey);
+    entries.push({
+      source: 'web',
+      provider: publicWebEnabled
+        ? new FallbackWebResearchProvider(primary, publicWebProvider)
+        : primary
+    });
+  } else if (publicWebEnabled) {
+    entries.push({ source: 'web', provider: publicWebProvider });
   }
   if (config.cnsEnabled) {
     entries.push({
@@ -217,7 +247,15 @@ function configuredDiagnostics(config: ResearchSearchConfig): ResearchProviderDi
       id: 'tavily',
       enabled: config.tavilyEnabled,
       available: config.tavilyEnabled && Boolean(config.tavilyApiKey.trim()),
+      role: 'primary',
       ...(config.tavilyEnabled && !config.tavilyApiKey.trim() ? { reason: 'Tavily API key is required' } : {})
+    },
+    {
+      id: 'public_web',
+      enabled: config.publicWebEnabled !== false,
+      available: config.publicWebEnabled !== false,
+      role: 'fallback',
+      ...(config.publicWebEnabled === false ? { reason: 'Keyless public web fallback is disabled' } : {})
     },
     {
       id: 'cns',
@@ -244,18 +282,24 @@ function normalizeSources(value: unknown): ResearchSourceKind[] | null {
 }
 
 function summarizeDiagnostics(diagnostics: ResearchProviderDiagnostic[]): ResearchProviderDiagnostic[] {
-  const byId = new Map<ResearchProviderId, ResearchProviderDiagnostic>();
+  const byId = new Map<ResearchProviderId, ResearchProviderDiagnostic[]>();
   for (const diagnostic of diagnostics) {
-    const current = byId.get(diagnostic.id);
-    byId.set(diagnostic.id, {
-      id: diagnostic.id,
-      enabled: current?.enabled ?? diagnostic.enabled,
-      available: (current?.available ?? false) || diagnostic.available,
-      resultCount: (current?.resultCount ?? 0) + (diagnostic.resultCount ?? 0),
-      ...(diagnostic.reason && !(current?.available) ? { reason: diagnostic.reason } : {})
-    });
+    byId.set(diagnostic.id, [...(byId.get(diagnostic.id) ?? []), diagnostic]);
   }
-  return [...byId.values()];
+  return [...byId.entries()].map(([id, items]) => {
+    const runtimeItems = items.filter((item) => item.resultCount != null || item.reason != null);
+    const observedItems = runtimeItems.length > 0 ? runtimeItems : items;
+    const reason = observedItems.find((item) => item.reason)?.reason;
+    const role = items.find((item) => item.role)?.role;
+    return {
+      id,
+      enabled: items.some((item) => item.enabled),
+      available: observedItems.some((item) => item.available),
+      resultCount: runtimeItems.reduce((sum, item) => sum + (item.resultCount ?? 0), 0),
+      ...(role ? { role } : {}),
+      ...(reason ? { reason } : {})
+    };
+  });
 }
 
 function citationsFor(

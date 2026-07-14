@@ -23,11 +23,20 @@ import {
   mcpInputValidationFailure,
   schemaSafeMcpToolArguments
 } from './mcp-schema-repair.js'
+import {
+  BIOLOGY_ROOM_APPLY_TOOL_NAME,
+  BIOLOGY_ROOM_MCP_SERVER_ID,
+  biologyRoomApplyRequiresApproval,
+  isBiologyRoomApplyTool,
+  isBiologyRoomTool,
+  isBiologyRoomToolContext
+} from './biology-room-tool-policy.js'
 
 const GUI_COMPUTER_USE_MCP_SERVER_ID = 'gui_owl_computer_use'
 const GUI_COMPUTER_USE_TOOL_NAME = 'computer_use'
-const GUI_WORKSPACE_INTEL_MCP_SERVER_ID = 'gui_workspace_intel'
+const GUI_WORKSPACE_INTEL_MCP_SERVER_ID = BIOLOGY_ROOM_MCP_SERVER_ID
 const GUI_WORKSPACE_TOOL_PREFIX = 'gui_workspace_'
+const BIOLOGY_ROOM_TOOL_PREFIX = 'biology_room_'
 const REMOTE_EXECUTOR_MCP_SERVER_ID = 'remote_executor'
 const REMOTE_EXECUTOR_TOOL_PREFIX = 'remote_'
 const DEFAULT_MCP_INHERITED_ENV_NAMES = process.platform === 'win32'
@@ -185,7 +194,7 @@ export async function buildMcpToolProviders(
       diagnostics,
       search: mcpSearchDiagnostic({
         config: config?.search ?? {
-          enabled: false,
+          enabled: true,
           mode: 'auto',
           autoThresholdToolCount: 24,
           topKDefault: 5,
@@ -454,7 +463,12 @@ function createMcpLocalTool(
           descriptor.annotations?.openWorldHint !== true
       }
     },
-    shouldAdvertise: (context: ToolHostContext) => isMcpServerTrusted(state.server, context.workspace),
+    shouldAdvertise: (context: ToolHostContext) =>
+      isMcpServerTrusted(state.server, context.workspace) &&
+      (!isBiologyRoomTool(state.serverId, descriptor.name) || isBiologyRoomToolContext(context.requestText)),
+    ...(isBiologyRoomApplyTool(state.serverId, descriptor.name)
+      ? { requiresApproval: (args: Record<string, unknown>) => biologyRoomApplyRequiresApproval(args) }
+      : {}),
     execute: async (args, context) => {
       if (!isMcpServerTrusted(state.server, context.workspace)) {
         return {
@@ -552,11 +566,24 @@ function mcpToolArgumentsForContext(
   args: Record<string, unknown>,
   context: ToolHostContext
 ): Record<string, unknown> {
-  if (state.serverId === GUI_WORKSPACE_INTEL_MCP_SERVER_ID && descriptor.name.startsWith(GUI_WORKSPACE_TOOL_PREFIX)) {
+  if (
+    state.serverId === GUI_WORKSPACE_INTEL_MCP_SERVER_ID &&
+    (descriptor.name.startsWith(GUI_WORKSPACE_TOOL_PREFIX) || descriptor.name.startsWith(BIOLOGY_ROOM_TOOL_PREFIX))
+  ) {
     const workspaceRoot = typeof args.workspaceRoot === 'string' && args.workspaceRoot.trim()
       ? args.workspaceRoot
       : context.workspace.trim()
-    return workspaceRoot ? { ...args, workspaceRoot } : args
+    const workspaceArgs = workspaceRoot ? { ...args, workspaceRoot } : args
+    return descriptor.name === BIOLOGY_ROOM_APPLY_TOOL_NAME
+      ? {
+          ...workspaceArgs,
+          actor: {
+            kind: 'agent',
+            taskId: context.threadId,
+            turnId: context.turnId
+          }
+        }
+      : workspaceArgs
   }
   if (state.serverId === REMOTE_EXECUTOR_MCP_SERVER_ID && descriptor.name.startsWith(REMOTE_EXECUTOR_TOOL_PREFIX)) {
     return remoteExecutorArgumentsForContext(descriptor, args, context)

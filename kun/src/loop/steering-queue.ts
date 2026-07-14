@@ -5,24 +5,25 @@
  * on turn completion or interruption.
  */
 export class SteeringQueue {
-  private readonly buffer: string[] = []
-  private turnId: string | null = null
+  private readonly buffers = new Map<string, string[]>()
+  private defaultTurnId: string | null = null
 
   setTurn(turnId: string | null): void {
-    if (this.turnId !== turnId) {
-      this.buffer.length = 0
+    if (turnId === null) {
+      this.clear()
+      return
     }
-    this.turnId = turnId
+    if (!this.buffers.has(turnId)) this.buffers.set(turnId, [])
+    this.defaultTurnId = turnId
   }
 
   enqueue(turnId: string, text: string): void {
-    if (this.turnId !== turnId) {
-      this.buffer.length = 0
-      this.turnId = turnId
-    }
     const trimmed = text.trim()
     if (!trimmed) return
-    this.buffer.push(trimmed)
+    const buffer = this.buffers.get(turnId) ?? []
+    buffer.push(trimmed)
+    this.buffers.set(turnId, buffer)
+    this.defaultTurnId = turnId
   }
 
   /**
@@ -30,10 +31,12 @@ export class SteeringQueue {
    * this at safe boundaries (after a model response, before the next
    * model request). Returns an empty array when nothing is pending.
    */
-  drain(): string[] {
-    if (this.buffer.length === 0) return []
-    const out = [...this.buffer]
-    this.buffer.length = 0
+  drain(turnId = this.defaultTurnId): string[] {
+    if (!turnId) return []
+    const buffer = this.buffers.get(turnId)
+    if (!buffer?.length) return []
+    const out = [...buffer]
+    buffer.length = 0
     return out
   }
 
@@ -41,12 +44,20 @@ export class SteeringQueue {
    * Peek at the queued text without removing it. Used by the UI to
    * show pending steering in a "pending injection" indicator.
    */
-  peek(): string[] {
-    return [...this.buffer]
+  peek(turnId = this.defaultTurnId): string[] {
+    if (!turnId) return []
+    return [...(this.buffers.get(turnId) ?? [])]
   }
 
-  clear(): void {
-    this.buffer.length = 0
-    this.turnId = null
+  clear(turnId?: string): void {
+    if (turnId === undefined) {
+      this.buffers.clear()
+      this.defaultTurnId = null
+      return
+    }
+    this.buffers.delete(turnId)
+    if (this.defaultTurnId === turnId) {
+      this.defaultTurnId = [...this.buffers.keys()].at(-1) ?? null
+    }
   }
 }

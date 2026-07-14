@@ -3,6 +3,7 @@ import type {
   Turn,
   BashCommandPolicyJson,
   FilePathPolicyJson,
+  NativeToolContextJson,
   TurnFileAttachmentJson,
   TurnReasoningEffort,
   TurnStatus
@@ -22,6 +23,8 @@ export function createTurnRecord(input: {
   attachmentIds?: string[]
   attachments?: TurnFileAttachmentJson[]
   guiPlan?: GuiPlanContextJson
+  hostRequestId?: string
+  nativeToolContext?: NativeToolContextJson
   remoteTargetId?: string
   mode?: ThreadMode
   approvalPolicy?: ApprovalPolicy
@@ -50,6 +53,8 @@ export function createTurnRecord(input: {
     ...(model ? { model } : {}),
     ...(reasoningEffort ? { reasoningEffort } : {}),
     ...(input.guiPlan ? { guiPlan: input.guiPlan } : {}),
+    ...(input.hostRequestId?.trim() ? { hostRequestId: input.hostRequestId.trim() } : {}),
+    ...(input.nativeToolContext ? { nativeToolContext: input.nativeToolContext } : {}),
     ...(input.remoteTargetId?.trim() ? { remoteTargetId: input.remoteTargetId.trim() } : {}),
     ...(input.mode ? { mode: input.mode } : {}),
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),

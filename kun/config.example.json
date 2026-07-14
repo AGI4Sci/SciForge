@@ -62,11 +62,31 @@
       }
     }
   },
+  "runtime": {
+    "maxTurnModelSteps": 24,
+    "maxToolCallsPerTurn": 16,
+    "toolStorm": {
+      "enabled": true,
+      "windowSize": 8,
+      "threshold": 3,
+      "maxRecoverySteps": 1,
+      "nonProgressThreshold": 3,
+      "maxStepsAfterRecovery": 8
+    },
+    "stuckDetection": {
+      "enabled": true,
+      "maxItems": 96,
+      "repeatedActionObservationThreshold": 4,
+      "repeatedActionErrorThreshold": 3,
+      "alternatingThreshold": 6,
+      "redundantReadThreshold": 2
+    }
+  },
   "capabilities": {
     "mcp": {
       "enabled": false,
       "search": {
-        "enabled": false,
+        "enabled": true,
         "mode": "auto",
         "autoThresholdToolCount": 24,
         "topKDefault": 5,
@@ -80,9 +100,10 @@
       "servers": {}
     },
     "web": {
-      "enabled": false,
-      "fetchEnabled": false,
-      "searchEnabled": false,
+      "enabled": true,
+      "fetchEnabled": true,
+      "searchEnabled": true,
+      "provider": "public-rss",
       "allowDomains": [],
       "denyDomains": []
     },

@@ -138,4 +138,52 @@ describe('CapabilityRegistry', () => {
     )
     expect(visible.map((entry) => entry.name)).toEqual(['vision_tool'])
   })
+
+  it('partitions catalog fingerprints only for explicitly request-scoped tools', () => {
+    const contextual = LocalToolHost.defineTool({
+      name: 'contextual_design',
+      description: 'Intent-gated design tool',
+      inputSchema: { type: 'object' },
+      policy: 'auto',
+      advertisementScope: 'request',
+      shouldAdvertise: (context) => context.requestText?.includes('design') === true,
+      execute: async () => ({ output: { ok: true } })
+    })
+    const ordinaryGate = LocalToolHost.defineTool({
+      name: 'ordinary_gate',
+      description: 'Ordinary dynamic gate',
+      inputSchema: { type: 'object' },
+      policy: 'auto',
+      shouldAdvertise: (context) => context.requestText?.includes('ordinary') === true,
+      execute: async () => ({ output: { ok: true } })
+    })
+    const host = new LocalToolHost({ tools: [contextual, ordinaryGate] })
+
+    expect(host.toolCatalogScope(buildContext({ requestText: 'design a scaffold' })))
+      .toBe('contextual_design:1')
+    expect(host.toolCatalogScope(buildContext({ requestText: 'ordinary follow-up' })))
+      .toBe('contextual_design:0')
+  })
+
+  it('does not treat a non-MCP lookalike as a progressive discovery gateway', async () => {
+    const lookalike = LocalToolHost.defineTool({
+      name: 'mcp_call',
+      description: 'not the MCP progressive dispatcher',
+      inputSchema: { type: 'object' },
+      policy: 'auto',
+      execute: async () => ({ output: { ok: true } })
+    })
+    const host = new LocalToolHost({
+      registry: new CapabilityRegistry([
+        { id: 'builtin-lookalike', kind: 'built-in', enabled: true, available: true, tools: [lookalike] }
+      ])
+    })
+    const context = buildContext({
+      allowedToolNames: ['mcp_github_search_issues'],
+      explicitAllowedToolNames: ['mcp_github_search_issues'],
+      explicitStrictAllowedToolNames: true
+    })
+
+    expect(await host.listTools(context)).toEqual([])
+  })
 })

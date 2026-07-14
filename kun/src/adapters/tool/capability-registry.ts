@@ -4,6 +4,7 @@ import type {
   ToolProviderPolicy
 } from '../../ports/tool-host.js'
 import type { LocalTool } from './local-tool-host.js'
+import { allowsProgressiveMcpDiscoveryGateway } from './mcp-progressive-policy.js'
 import { isToolAdvertisedInSandbox } from './sandbox-policy.js'
 
 export type CapabilityToolRecord = {
@@ -76,7 +77,7 @@ export class CapabilityRegistry {
     const specs: CapabilityToolSpec[] = []
     for (const record of this.tools.values()) {
       if (!this.canUseProvider(record.provider, context)) continue
-      if (!this.canUseTool(record.tool.name, context)) continue
+      if (!this.canUseTool(record.tool.name, context, record.provider)) continue
       if (!isToolAdvertisedInSandbox(record.tool, context)) continue
       if (record.tool.shouldAdvertise) {
         if (!context || !record.tool.shouldAdvertise(context)) continue
@@ -94,6 +95,25 @@ export class CapabilityRegistry {
     return specs
   }
 
+  /**
+   * Return only bounded advertisement decisions, never request text. This lets
+   * the loop distinguish expected intent-gating from a tool definition changing
+   * in place while keeping each scoped catalog independently fingerprinted.
+   */
+  toolCatalogScope(context?: ToolHostContext): string {
+    return [...this.tools.values()]
+      .filter((record) => record.tool.advertisementScope === 'request')
+      .map((record) => {
+        const advertised = Boolean(
+          context &&
+          (!record.tool.shouldAdvertise || record.tool.shouldAdvertise(context))
+        )
+        return `${record.tool.name}:${advertised ? '1' : '0'}`
+      })
+      .sort()
+      .join(',')
+  }
+
   resolveTool(toolName: string, context: ToolHostContext, providerId?: string): CapabilityToolRecord {
     const record = this.tools.get(toolName)
     if (!record) {
@@ -105,7 +125,7 @@ export class CapabilityRegistry {
     if (!this.canUseProvider(record.provider, context)) {
       throw new Error(`tool ${toolName} is not advertised by provider ${record.provider.id}`)
     }
-    if (!this.canUseTool(toolName, context)) {
+    if (!this.canUseTool(toolName, context, record.provider)) {
       throw new Error(`tool ${toolName} is not advertised by active tool policy`)
     }
     if (record.tool.shouldAdvertise && !record.tool.shouldAdvertise(context)) {
@@ -125,12 +145,18 @@ export class CapabilityRegistry {
     return true
   }
 
-  private canUseTool(toolName: string, context?: ToolHostContext): boolean {
+  private canUseTool(
+    toolName: string,
+    context?: ToolHostContext,
+    provider?: ToolProviderPolicy
+  ): boolean {
     if (isPlanModeContext(context) && !PLAN_MODE_ALLOWED_TOOL_NAMES.has(toolName)) {
       return false
     }
     const allowed = context?.allowedToolNames
-    return !allowed || allowed.includes(toolName)
+    return !allowed ||
+      allowed.includes(toolName) ||
+      (provider?.id === 'mcp:search' && allowsProgressiveMcpDiscoveryGateway(toolName, context))
   }
 }
 

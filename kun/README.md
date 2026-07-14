@@ -203,10 +203,10 @@ Shape:
       }
     },
     "web": {
-      "enabled": false,
-      "fetchEnabled": false,
-      "searchEnabled": false,
-      "provider": "fetch",
+      "enabled": true,
+      "fetchEnabled": true,
+      "searchEnabled": true,
+      "provider": "public-rss",
       "allowDomains": [],
       "denyDomains": ["localhost", "127.0.0.1"]
     },
@@ -261,12 +261,14 @@ See `../docs/local-runtime-config.md` for the detailed file layout and examples.
 Feature flags are intentionally explicit:
 
 - `capabilities.mcp` starts configured MCP clients and imports their tools into the dynamic registry. Workspace-scoped servers require `trustedWorkspaceRoots`.
-- `serve.mcpSearch` can collapse a large MCP catalog into four entry points: `mcp_search`, `mcp_describe`, `mcp_call`, and `mcp_refresh_catalog`. When the catalog is too large, the model searches for relevant tools first, then describes and calls the exact tool instead of carrying every MCP schema on every turn.
+- `capabilities.mcp.search` defaults to `auto` and collapses catalogs of 24 or more MCP tools into four discovery entry points: `mcp_search`, `mcp_describe`, `mcp_call`, and `mcp_refresh_catalog`. Specialized research tools stay indexed and can be selected only when the query fits them.
 - `serve.tokenEconomy` / `tokenEconomyMode` compresses tool descriptions, tool results, and history context while preserving code, paths, commands, URLs, errors, and other high-value signals.
 - `contextCompaction` controls fallback long-thread compaction thresholds and summary behavior. Per-model thresholds live in `models.profiles`. Compaction preserves goals, constraints, decisions, touched files, tool outcomes, and unresolved next steps.
-- `serve.runtimeTuning.toolStorm` suppresses repeated identical tool calls within a turn so useless tool loops do not keep spending tokens.
-- `serve.runtimeTuning.maxTurnModelSteps` raises or lowers the per-turn model-step cap for long-running workflows such as delegated research agents; the default remains 64.
-- `capabilities.web` exposes `web_fetch` and/or `web_search`. The built-in provider can fetch HTTP(S) pages; search requires a provider implementation and may report unavailable.
+- `runtime.maxToolCallsPerTurn` sets the hard tool-execution budget (default 16); budget exhaustion performs one final model synthesis with tools removed. It remains active when exact-repeat suppression is disabled.
+- `runtime.toolStorm` controls exact-repeat suppression and recovery guidance.
+- `runtime.stuckDetection` derives OpenHands-style repeated action/observation, repeated error, A/B alternation, and semantic redundant-read checks from persisted turn items.
+- `runtime.maxTurnModelSteps` raises or lowers the event-driven runner's model-step cap; the default is 24. Child agents retain their documented larger step allowance but use the same stuck and tool-budget policy.
+- `capabilities.web` exposes `web_fetch` and/or `web_search`. The built-in `public-rss` provider supports zero-key current-web search, with direct page fetching used to verify result details.
 - `capabilities.skills` scans configured roots for `skill.json` manifests. A manifest may point its `entry` at `SKILL.md`, but a bare `SKILL.md` file is not a package marker.
 - `capabilities.attachments` stores image bytes outside thread logs and allows turns to reference `attachmentIds`. Vision-capable models receive image parts; text-only models receive a bounded compressed base64 text fallback.
 - `capabilities.memory` stores long-term records under the data dir, retrieves scoped matches before turns, and exposes `memory_create`, `memory_update`, and `memory_delete` tools.

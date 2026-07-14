@@ -49,6 +49,13 @@ export const TurnFileAttachmentSchema = z.object({
 })
 export type TurnFileAttachmentJson = z.infer<typeof TurnFileAttachmentSchema>
 
+export const NativeToolContextSchema = z.object({
+  activeToolNames: z.array(z.literal('biogym_design')).min(1).max(1)
+}).strict()
+export type NativeToolContextJson = z.infer<typeof NativeToolContextSchema>
+
+export const HostRequestIdSchema = z.string().trim().min(1).max(256)
+
 const RegexPatternSchema = z.string().min(1).refine((pattern) => {
   try {
     new RegExp(pattern)
@@ -110,6 +117,10 @@ export const TurnSchema = z.object({
   toolCatalogToolCount: z.number().int().nonnegative().optional(),
   toolCatalogDrift: z.boolean().optional(),
   guiPlan: GuiPlanContextSchema.optional(),
+  /** Trusted host idempotency key for background continuation turns. */
+  hostRequestId: HostRequestIdSchema.optional(),
+  /** Main-process-derived native tool availability; renderer IPC cannot set this. */
+  nativeToolContext: NativeToolContextSchema.optional(),
   remoteTargetId: z.string().min(1).optional(),
   /**
    * Optional per-turn mode override. When set, it takes precedence over
@@ -121,7 +132,8 @@ export const TurnSchema = z.object({
   approvalPolicy: ApprovalPolicySchema.optional(),
   /** Per-turn sandbox mode. Overrides the thread default for this turn. */
   sandboxMode: SandboxModeSchema.optional(),
-  error: z.string().optional()
+  error: z.string().optional(),
+  errorCode: z.string().optional()
 })
 export type Turn = z.infer<typeof TurnSchema>
 
@@ -169,6 +181,10 @@ export const StartTurnRequest = z.object({
    * path advertised in the context.
    */
   guiPlan: GuiPlanContextSchema.optional(),
+  /** Trusted host idempotency key. Ordinary renderer turns never receive one. */
+  hostRequestId: HostRequestIdSchema.optional(),
+  /** Main-process-derived native tool availability; renderer IPC cannot set this. */
+  nativeToolContext: NativeToolContextSchema.optional(),
   /** Optional remote execution target selected by the GUI for this turn. */
   remoteTargetId: z.string().trim().min(1).optional()
 })
@@ -177,7 +193,9 @@ export type StartTurnRequest = z.input<typeof StartTurnRequest>
 export const StartTurnResponse = z.object({
   threadId: z.string().min(1),
   turnId: z.string().min(1),
-  userMessageItemId: z.string().min(1)
+  userMessageItemId: z.string().min(1),
+  /** The hostRequestId already named an accepted persisted turn. */
+  reused: z.boolean().optional()
 })
 export type StartTurnResponse = z.infer<typeof StartTurnResponse>
 

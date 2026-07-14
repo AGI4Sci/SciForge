@@ -125,9 +125,15 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
       maxTurnModelSteps: resolveChildMaxTurnModelSteps(options.runtime),
+      ...(input.maxToolCalls !== undefined
+        ? { maxToolCallsPerTurn: input.maxToolCalls }
+        : options.runtime?.maxToolCallsPerTurn
+          ? { maxToolCallsPerTurn: options.runtime.maxToolCallsPerTurn }
+          : {}),
       ...(toolStorm ? { toolStorm } : {}),
       ...(options.runtime?.toolBudget ? { toolBudget: options.runtime.toolBudget } : {}),
       ...(options.runtime?.parallelism ? { parallelism: options.runtime.parallelism } : {}),
+      ...(options.runtime?.stuckDetection ? { stuckDetection: options.runtime.stuckDetection } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})
     })
 

@@ -28,8 +28,39 @@ printMarkdownTable(left, right)
 async function summarizeEvents(path) {
   const events = await readJsonl(path)
   const usageEvents = events.filter((event) => event.kind === 'usage' && event.usage)
-  const summary = usageEvents.reduce((acc, event) => mergeUsage(acc, event.usage), emptyUsage())
-  return { path, turns: usageEvents.length, usage: summary }
+  // Usage events contain the thread's cumulative snapshot, not per-step deltas.
+  // Taking the latest event avoids multiplying early usage across model steps.
+  const summary = usageSnapshot(usageEvents.at(-1)?.usage)
+  const terminals = events.filter((event) =>
+    event.kind === 'turn_completed' || event.kind === 'turn_failed' || event.kind === 'turn_aborted'
+  )
+  const count = (predicate) => events.filter(predicate).length
+  const toolCalls = count((event) => event.kind === 'tool_call_ready')
+  const suppressedTools = count((event) => event.kind === 'tool_storm_suppressed')
+  const modelSteps = count((event) =>
+    event.kind === 'pipeline_stage' && event.stage === 'pre_send'
+  ) || usageEvents.length
+  return {
+    path,
+    usage: summary,
+    quality: {
+      turns: count((event) => event.kind === 'turn_started'),
+      completed: terminals.filter((event) => event.kind === 'turn_completed').length,
+      failed: terminals.filter((event) => event.kind === 'turn_failed').length,
+      aborted: terminals.filter((event) => event.kind === 'turn_aborted').length,
+      modelSteps,
+      toolCalls,
+      executedTools: Math.max(0, toolCalls - suppressedTools),
+      suppressedTools,
+      stuckStops: count((event) => event.kind === 'error' && event.code === 'agent_stuck'),
+      budgetExhaustions: count((event) =>
+        event.kind === 'error' && event.code === 'tool_budget_exhausted'
+      ),
+      steeringCorrections: count((event) => event.kind === 'turn_steered'),
+      approvalRequests: count((event) => event.kind === 'approval_requested'),
+      compactions: count((event) => event.kind === 'compaction_completed')
+    }
+  }
 }
 
 async function readJsonl(path) {
@@ -47,31 +78,19 @@ async function readJsonl(path) {
   return out
 }
 
-function emptyUsage() {
-  return {
-    promptTokens: 0,
-    completionTokens: 0,
-    totalTokens: 0,
-    cacheHitTokens: 0,
-    cacheMissTokens: 0,
-    costUsd: 0,
-    cacheSavingsUsd: 0
-  }
-}
-
-function mergeUsage(acc, usage) {
+function usageSnapshot(usage = {}) {
   const promptTokens = Number(usage.promptTokens ?? 0)
   const completionTokens = Number(usage.completionTokens ?? 0)
   const cacheHitTokens = Number(usage.cacheHitTokens ?? 0)
   const cacheMissTokens = Number(usage.cacheMissTokens ?? 0)
   return {
-    promptTokens: acc.promptTokens + promptTokens,
-    completionTokens: acc.completionTokens + completionTokens,
-    totalTokens: acc.totalTokens + Number(usage.totalTokens ?? promptTokens + completionTokens),
-    cacheHitTokens: acc.cacheHitTokens + cacheHitTokens,
-    cacheMissTokens: acc.cacheMissTokens + cacheMissTokens,
-    costUsd: acc.costUsd + Number(usage.costUsd ?? 0),
-    cacheSavingsUsd: acc.cacheSavingsUsd + Number(usage.cacheSavingsUsd ?? 0)
+    promptTokens,
+    completionTokens,
+    totalTokens: Number(usage.totalTokens ?? promptTokens + completionTokens),
+    cacheHitTokens,
+    cacheMissTokens,
+    costUsd: Number(usage.costUsd ?? 0),
+    cacheSavingsUsd: Number(usage.cacheSavingsUsd ?? 0)
   }
 }
 
@@ -82,7 +101,19 @@ function hitRate(usage) {
 
 function printMarkdownTable(left, right) {
   const rows = [
-    ['events', left.turns, right.turns],
+    ['turns started', left.quality.turns, right.quality.turns],
+    ['turns completed', left.quality.completed, right.quality.completed],
+    ['turns failed', left.quality.failed, right.quality.failed],
+    ['turns aborted', left.quality.aborted, right.quality.aborted],
+    ['model steps', left.quality.modelSteps, right.quality.modelSteps],
+    ['tool calls', left.quality.toolCalls, right.quality.toolCalls],
+    ['executed tools', left.quality.executedTools, right.quality.executedTools],
+    ['suppressed tools', left.quality.suppressedTools, right.quality.suppressedTools],
+    ['stuck stops', left.quality.stuckStops, right.quality.stuckStops],
+    ['tool budget exhaustions', left.quality.budgetExhaustions, right.quality.budgetExhaustions],
+    ['steering corrections', left.quality.steeringCorrections, right.quality.steeringCorrections],
+    ['approval requests', left.quality.approvalRequests, right.quality.approvalRequests],
+    ['compactions', left.quality.compactions, right.quality.compactions],
     ['prompt tokens', left.usage.promptTokens, right.usage.promptTokens],
     ['completion tokens', left.usage.completionTokens, right.usage.completionTokens],
     ['total tokens', left.usage.totalTokens, right.usage.totalTokens],
