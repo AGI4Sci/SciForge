@@ -1690,7 +1690,12 @@ function testSettings(biogym: Partial<BioGymSettingsV1> = {}): AppSettingsV1 {
     schedule: defaultScheduleSettings(),
     workflow: defaultWorkflowSettings(),
     remoteExecutor: defaultRemoteExecutorSettings(),
-    biogym: { ...defaultBioGymSettings(), ...biogym },
+    biogym: {
+      ...defaultBioGymSettings(),
+      sshHost: 'test-biogym-host',
+      remoteRoot: '/srv/biogym',
+      ...biogym
+    },
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
   }

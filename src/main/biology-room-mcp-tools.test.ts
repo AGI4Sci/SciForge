@@ -168,8 +168,11 @@ async function createFixture(activeRoomId: string): Promise<{
   const visibleContextPath = join(root, 'visible-context.json')
   await mkdir(workspaceRoot, { recursive: true })
   await writeFile(visibleContextPath, JSON.stringify({
-    schemaVersion: 1,
-    updatedAt: '2026-07-11T00:00:00.000Z',
+    schemaVersion: 2,
+    windowId: 'test-window',
+    revision: 1,
+    publishedAt: '2026-07-11T00:00:00.000Z',
+    freshness: { stale: false, ageMs: 0, staleAfterMs: 30_000 },
     activeThreadId: 'thread-1',
     workspaceRoot,
     route: 'chat',

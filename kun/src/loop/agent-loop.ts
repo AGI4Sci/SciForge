@@ -4477,17 +4477,29 @@ function memoryInstructions(memories: Array<{ id: string; content: string; scope
 }
 
 function specializedToolUseInstruction(tools: ModelToolSpec[]): string | undefined {
+  const hasBioGymDesign = tools.some((tool) => tool.name === 'biogym_design')
   const specializedTools = tools
     .filter((tool) => tool.name.startsWith('mcp_') || tool.name === 'mcp_search' || tool.name === 'mcp_call')
     .map((tool) => tool.name)
     .sort()
-  if (specializedTools.length === 0) return undefined
-  return [
-    'Specialized MCP tools are available in this turn.',
-    `Available MCP tool entry points: ${specializedTools.map((name) => `\`${name}\``).join(', ')}.`,
-    'When a specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
-    'Use generic command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.'
-  ].join('\n')
+  if (!hasBioGymDesign && specializedTools.length === 0) return undefined
+  const lines: string[] = []
+  if (hasBioGymDesign) {
+    lines.push(
+      '`biogym_design` is an already-advertised first-party native tool for this protein-design turn.',
+      'Invoke `biogym_design` directly; do not call `mcp_search` to rediscover BioGym or its stages.',
+      'Follow its attached JSON schema exactly. Do not invent `params`, snake_case aliases, or extra stage fields.'
+    )
+  }
+  if (specializedTools.length > 0) {
+    lines.push(
+      'Specialized MCP tools are available in this turn.',
+      `Available MCP tool entry points: ${specializedTools.map((name) => `\`${name}\``).join(', ')}.`,
+      'When a specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
+      'Use generic command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.'
+    )
+  }
+  return lines.join('\n')
 }
 
 function prefixVolatilityStageDetails(

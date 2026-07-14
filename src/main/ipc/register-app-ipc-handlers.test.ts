@@ -1829,16 +1829,16 @@ describe('registerAppIpcHandlers', () => {
 	    ).resolves.toMatchObject({ ok: true, session: { id: 'session-1' } })
 	    expect(sender.once).toHaveBeenCalledWith('destroyed', expect.any(Function))
     await expect(
-      handlers.get('workspacePreview:observe')?.({}, { sessionId: ' session-1 ' })
+      handlers.get('workspacePreview:observe')?.({ sender }, { sessionId: ' session-1 ' })
     ).resolves.toMatchObject({ ok: true, observation: { view: { pluginId: 'molecular' } } })
     await expect(
-      handlers.get('workspacePreview:readRange')?.({}, {
+      handlers.get('workspacePreview:readRange')?.({ sender }, {
         sessionId: ' session-1 ',
         range: { offset: 0, length: 4 }
       })
     ).resolves.toMatchObject({ ok: true, dataBase64: Buffer.from('ATOM').toString('base64') })
     await expect(
-      handlers.get('workspacePreview:describeAsset')?.({}, { sessionId: ' session-1 ' })
+      handlers.get('workspacePreview:describeAsset')?.({ sender }, { sessionId: ' session-1 ' })
     ).resolves.toMatchObject({
       ok: true,
       descriptor: {
@@ -1847,7 +1847,7 @@ describe('registerAppIpcHandlers', () => {
       }
     })
     await expect(
-      handlers.get('workspacePreview:prepareArtifact')?.({}, {
+      handlers.get('workspacePreview:prepareArtifact')?.({ sender }, {
         sessionId: ' session-1 ',
         request: {
           kind: 'cache-artifact',
@@ -1862,7 +1862,7 @@ describe('registerAppIpcHandlers', () => {
       }
     })
     await expect(
-      handlers.get('workspacePreview:readArtifactRange')?.({}, {
+      handlers.get('workspacePreview:readArtifactRange')?.({ sender }, {
         sessionId: ' session-1 ',
         request: {
           artifactId: ' artifact-1 ',
@@ -1875,7 +1875,7 @@ describe('registerAppIpcHandlers', () => {
       dataBase64: Buffer.from('{"ok').toString('base64')
     })
     await expect(
-      handlers.get('workspacePreview:applyEdit')?.({}, {
+      handlers.get('workspacePreview:applyEdit')?.({ sender }, {
         sessionId: ' session-1 ',
         operation: {
           kind: 'molecular.setSelection',
@@ -1889,7 +1889,7 @@ describe('registerAppIpcHandlers', () => {
       audit: { effect: 'session-update' }
     })
     await expect(
-      handlers.get('workspacePreview:export')?.({}, {
+      handlers.get('workspacePreview:export')?.({ sender }, {
         sessionId: ' session-1 ',
         target: {
           kind: 'workspace-file',

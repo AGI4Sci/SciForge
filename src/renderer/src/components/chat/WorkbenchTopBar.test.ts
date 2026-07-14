@@ -46,7 +46,7 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
       onToggleRightPanelMode: vi.fn()
     }))
 
-    expect(html).toContain('Project evidence')
+    expect(html).toContain('Project DAG')
     expect(html).toContain('aria-pressed="true"')
   })
 

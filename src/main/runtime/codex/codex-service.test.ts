@@ -2325,7 +2325,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           workspaceRoot: '/tmp/awesome-ai-scientist'
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
 
     callTool.mockClear()
@@ -2356,7 +2356,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           }
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
 
     callTool.mockClear()
@@ -2378,7 +2378,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         name: 'biology_room_apply',
         arguments: {
           roomId: 'protein-room',
-          workspaceRoot: '/tmp/explicit-workspace',
+          workspaceRoot: '/tmp/awesome-ai-scientist',
           baseRevision: 4,
           operations: [{ type: 'setViewport', viewport: { start: 10, end: 20 } }],
           actor: {
@@ -2388,7 +2388,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           }
         }
       },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
   })
 

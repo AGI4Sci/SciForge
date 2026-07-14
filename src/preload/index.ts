@@ -296,17 +296,6 @@ const api = {
       return () => ipcRenderer.removeListener(BIOGYM_RUN_EVENT_CHANNEL, wrapped)
     }
   },
-  biologyRoom: {
-    pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
-    create: (input) => ipcRenderer.invoke('biologyRoom:create', input),
-    openOrCreate: (input) => ipcRenderer.invoke('biologyRoom:openOrCreate', input),
-    load: (input) => ipcRenderer.invoke('biologyRoom:load', input),
-    list: (input) => ipcRenderer.invoke('biologyRoom:list', input),
-    observe: (input) => ipcRenderer.invoke('biologyRoom:observe', input),
-    apply: (input) => ipcRenderer.invoke('biologyRoom:apply', input),
-    refresh: (input) => ipcRenderer.invoke('biologyRoom:refresh', input),
-    history: (input) => ipcRenderer.invoke('biologyRoom:history', input)
-  },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),
   copyWriteDocumentAsRichText: (payload) =>
