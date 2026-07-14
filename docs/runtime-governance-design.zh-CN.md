@@ -64,6 +64,8 @@ Runtime 原生层保留各自能力：
 
 ```text
 guard.toolStorm = native | observe | unsupported
+guard.toolBudget = native | observe | unsupported
+guard.stuckDetection = native | observe | unsupported
 controls.steer = true | false
 controls.interrupt = true | false
 events.replayable = true | false
@@ -74,8 +76,14 @@ userInput = sync | async | unsupported
 
 示例：
 
-- SciForge Runtime: `guard.toolStorm = native`，因为它能在工具执行前 suppress。
-- Codex: `guard.toolStorm = observe`，因为 GUI 侧主要通过已归一事件观察后纠偏。
+- SciForge Runtime: 三类 guard 都是 `native`，由原生 AgentLoop 在执行边界处理。
+- Codex: `guard.toolStorm = observe`，因为 GUI 侧主要通过已归一事件观察后纠偏；
+  `toolBudget` 和 `stuckDetection` 暂时显式声明为 `unsupported`。
+- Claude Code: 三类 guard 暂时都显式声明为 `unsupported`，不借 capability 暗示尚未实现的保护。
+
+公共事件 code 只统一已经存在且语义稳定的 guard 分类：工具风暴、工具预算和卡死检测。
+runtime 仍可发出私有 code；公共 parser 对已知 guard code 保真，对未知 code 保持向后兼容的
+开放字符串边界。
 
 ## 工具循环治理
 
@@ -115,6 +123,10 @@ runtimeGuards.budgets.remoteGuardMaxToolEvents
 ```
 
 设置只读取 `runtimeGuards.toolStorm`。UI 文案使用 Runtime Guard，不再使用默认运行时专属命名。
+
+main process 专用的内部服务凭据不得透传到任何 agent runtime 子进程。SciForge Runtime、
+Codex 和 Claude Code 的启动环境统一经过共享 sanitizer；runtime 自己需要的公开配置仍由各自
+adapter 显式注入。
 
 ## 拓展规则
 

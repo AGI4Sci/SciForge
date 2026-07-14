@@ -131,7 +131,45 @@ export type AgentRuntimeControlSupport =
 
 export type AgentRuntimeCompactSupport = 'unsupported' | 'native' | 'noop'
 
-export type AgentRuntimeToolStormGuardSupport = 'native' | 'observe' | 'unsupported'
+export type AgentRuntimeGuardSupport = 'native' | 'observe' | 'unsupported'
+
+/** Backward-compatible alias for consumers that imported the original guard-specific type. */
+export type AgentRuntimeToolStormGuardSupport = AgentRuntimeGuardSupport
+
+export type AgentRuntimeGuardKind = 'toolStorm' | 'toolBudget' | 'stuckDetection'
+
+/**
+ * Existing public event codes grouped by the guard that emits them. Keep
+ * `AgentRuntimeEvent.code` open as a string so runtime-specific codes remain
+ * backward compatible; consumers can use the helpers below when they only
+ * need to identify shared guard failures and notices.
+ */
+export const AGENT_RUNTIME_GUARD_ERROR_CODE_TAXONOMY = {
+  runtime_tool_storm_interrupted: 'toolStorm',
+  tool_loop_recovery: 'toolStorm',
+  tool_loop_recovery_exhausted: 'toolStorm',
+  tool_loop_trivial_final: 'toolStorm',
+  tool_budget_phase_checkpoint: 'toolBudget',
+  tool_budget_phase_continued: 'toolBudget',
+  tool_budget_exhausted: 'toolBudget',
+  agent_stuck: 'stuckDetection'
+} as const satisfies Record<string, AgentRuntimeGuardKind>
+
+export type AgentRuntimeGuardErrorCode = keyof typeof AGENT_RUNTIME_GUARD_ERROR_CODE_TAXONOMY
+
+export function agentRuntimeGuardForErrorCode(value: unknown): AgentRuntimeGuardKind | null {
+  if (
+    typeof value !== 'string' ||
+    !Object.prototype.hasOwnProperty.call(AGENT_RUNTIME_GUARD_ERROR_CODE_TAXONOMY, value)
+  ) {
+    return null
+  }
+  return AGENT_RUNTIME_GUARD_ERROR_CODE_TAXONOMY[value as AgentRuntimeGuardErrorCode]
+}
+
+export function isAgentRuntimeGuardErrorCode(value: unknown): value is AgentRuntimeGuardErrorCode {
+  return agentRuntimeGuardForErrorCode(value) !== null
+}
 
 export type AgentRuntimeModality = 'text' | 'image'
 
@@ -1289,7 +1327,9 @@ export type AgentRuntimeCapabilities = {
     resumeSession: boolean
   }
   guard: {
-    toolStorm: AgentRuntimeToolStormGuardSupport
+    toolStorm: AgentRuntimeGuardSupport
+    toolBudget: AgentRuntimeGuardSupport
+    stuckDetection: AgentRuntimeGuardSupport
   }
   storage: {
     guiOwnedThreads: boolean
@@ -1414,7 +1454,9 @@ export function createDefaultAgentRuntimeCapabilities(input: {
       resumeSession: false
     },
     guard: {
-      toolStorm: 'unsupported'
+      toolStorm: 'unsupported',
+      toolBudget: 'unsupported',
+      stuckDetection: 'unsupported'
     },
     storage: {
       guiOwnedThreads: false,

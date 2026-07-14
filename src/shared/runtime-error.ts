@@ -1,3 +1,8 @@
+import {
+  isAgentRuntimeGuardErrorCode,
+  type AgentRuntimeGuardErrorCode
+} from './agent-runtime-contract'
+
 /**
  * Shared parser for local runtime error bodies.
  *
@@ -8,9 +13,9 @@
  *
  * This module normalises both shapes so the renderer and main
  * process agree on a single `RuntimeError` view. The `code` field
- * always carries either a local runtime contract code or one of the
- * `LEGACY_MAIN_GUARD_CODES` (main-process guard codes that aren't
- * part of the runtime schema). `details` carries the original
+ * always carries either a local runtime contract code, a code from
+ * the shared agent-runtime guard taxonomy, or one of the remaining
+ * `LEGACY_MAIN_GUARD_CODES`. `details` carries the original
  * payload untouched so callers that need more context can read it.
  */
 export type LocalRuntimeErrorCode =
@@ -45,7 +50,10 @@ export type LegacyMainGuardCode =
   | 'missing_api_key'
   | 'provider_auth_blocked'
 
-export type RuntimeErrorCode = LocalRuntimeErrorCode | LegacyMainGuardCode
+export type RuntimeErrorCode =
+  | LocalRuntimeErrorCode
+  | AgentRuntimeGuardErrorCode
+  | LegacyMainGuardCode
 
 export type RuntimeError = {
   code: RuntimeErrorCode
@@ -89,6 +97,7 @@ const KNOWN_LEGACY_CODES: ReadonlySet<LegacyMainGuardCode> = new Set<LegacyMainG
 function normalizeCode(value: unknown): RuntimeErrorCode {
   if (typeof value !== 'string') return 'unknown'
   if ((KNOWN_LOCAL_RUNTIME_CODES as Set<string>).has(value)) return value as LocalRuntimeErrorCode
+  if (isAgentRuntimeGuardErrorCode(value)) return value
   if ((KNOWN_LEGACY_CODES as Set<string>).has(value)) return value as LegacyMainGuardCode
   return 'unknown'
 }

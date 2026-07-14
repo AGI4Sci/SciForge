@@ -8,6 +8,11 @@ describe('createCodexAgentRuntimeAdapter', () => {
     } as never)
 
     const caps = await adapter.capabilities({ settings: {} as never })
+    expect(caps.guard).toEqual({
+      toolStorm: 'observe',
+      toolBudget: 'unsupported',
+      stuckDetection: 'unsupported'
+    })
     expect(caps.tools.research).toMatchObject({
       available: true,
       server: 'mcp',

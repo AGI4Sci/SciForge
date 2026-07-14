@@ -3,6 +3,7 @@ import {
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   AGENT_RUNTIME_EVENT_KINDS,
+  agentRuntimeGuardForErrorCode,
   createAgentRuntimeCapabilityMatrix,
   createDefaultAgentRuntimeCapabilities,
   createUnavailableCapabilityState,
@@ -10,13 +11,16 @@ import {
   filterAgentRuntimeThreadChildren,
   isAgentRuntimeChildActive,
   isAgentRuntimeDirectThreadChild,
+  isAgentRuntimeGuardErrorCode,
   type AgentRuntimeAuxiliaryInput,
   type AgentRuntimeAuxiliaryOperation,
   type AgentRuntimeCapabilities,
   type AgentRuntimeChild,
   type AgentRuntimeEvent,
+  type AgentRuntimeGuardSupport,
   type AgentRuntimeListThreadChildrenResponse,
-  type AgentRuntimeReadChildTranscriptResponse
+  type AgentRuntimeReadChildTranscriptResponse,
+  type AgentRuntimeToolStormGuardSupport
 } from './agent-runtime-contract'
 
 function exhaustiveEventLabel(event: AgentRuntimeEvent): string {
@@ -194,7 +198,9 @@ describe('agent runtime contract', () => {
         resumeSession: false
       },
       guard: {
-        toolStorm: 'unsupported'
+        toolStorm: 'unsupported',
+        toolBudget: 'unsupported',
+        stuckDetection: 'unsupported'
       }
     })
     expect(capabilities.events.live).toBe(false)
@@ -266,19 +272,29 @@ describe('agent runtime contract', () => {
   })
 
   it('represents native and observe runtime guards without implying host controls', () => {
+    const legacyToolStormSupport: AgentRuntimeToolStormGuardSupport = 'observe'
+    const sharedGuardSupport: AgentRuntimeGuardSupport = legacyToolStormSupport
     const base = createDefaultAgentRuntimeCapabilities({
       runtimeId: 'codex',
       transport: 'jsonrpc_stdio'
     })
     const codex = {
       ...base,
-      guard: { toolStorm: 'observe' }
+      guard: {
+        toolStorm: 'observe',
+        toolBudget: 'unsupported',
+        stuckDetection: 'unsupported'
+      }
     } satisfies AgentRuntimeCapabilities
     const localRuntime = {
       ...base,
       runtimeId: 'sciforge',
       transport: 'http_sse',
-      guard: { toolStorm: 'native' },
+      guard: {
+        toolStorm: 'native',
+        toolBudget: 'native',
+        stuckDetection: 'native'
+      },
       controls: {
         ...base.controls,
         interrupt: false,
@@ -287,9 +303,29 @@ describe('agent runtime contract', () => {
     } satisfies AgentRuntimeCapabilities
 
     expect(codex.guard.toolStorm).toBe('observe')
+    expect(sharedGuardSupport).toBe('observe')
     expect(localRuntime.guard.toolStorm).toBe('native')
     expect(localRuntime.controls.interrupt).toBe(false)
     expect(localRuntime.controls.steer).toBe(false)
+  })
+
+  it('classifies existing guard error aliases without narrowing open event codes', () => {
+    expect(agentRuntimeGuardForErrorCode('runtime_tool_storm_interrupted')).toBe('toolStorm')
+    expect(agentRuntimeGuardForErrorCode('tool_loop_recovery_exhausted')).toBe('toolStorm')
+    expect(agentRuntimeGuardForErrorCode('tool_budget_exhausted')).toBe('toolBudget')
+    expect(agentRuntimeGuardForErrorCode('agent_stuck')).toBe('stuckDetection')
+    expect(agentRuntimeGuardForErrorCode('runtime_specific_guard')).toBeNull()
+    expect(isAgentRuntimeGuardErrorCode('tool_budget_phase_checkpoint')).toBe(true)
+
+    const runtimeSpecificEvent = {
+      kind: 'error',
+      threadId: 'thread-1',
+      recoverable: true,
+      severity: 'warning',
+      message: 'runtime-specific guard notice',
+      code: 'runtime_specific_guard'
+    } satisfies AgentRuntimeEvent
+    expect(runtimeSpecificEvent.code).toBe('runtime_specific_guard')
   })
 
   it('serializes child runs and degraded transcript responses without runtime-specific imports', () => {

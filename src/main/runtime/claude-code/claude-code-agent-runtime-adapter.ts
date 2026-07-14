@@ -379,6 +379,11 @@ function claudeCapabilities(
       todos: false,
       resumeSession: false
     },
+    guard: {
+      toolStorm: 'unsupported',
+      toolBudget: 'unsupported',
+      stuckDetection: 'unsupported'
+    },
     storage: {
       guiOwnedThreads: true,
       backendThreadIdStable: false,

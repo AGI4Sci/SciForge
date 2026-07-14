@@ -252,6 +252,11 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
 
     await expect(adapter.capabilities({ settings: buildSettings() })).resolves.toMatchObject({
       runtimeId: 'sciforge',
+      guard: {
+        toolStorm: 'native',
+        toolBudget: 'native',
+        stuckDetection: 'native'
+      },
       tools: {
         mcp: { available: true, toolCount: 1 },
         computerUse: {

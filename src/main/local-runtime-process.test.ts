@@ -352,7 +352,9 @@ describe('startLocalRuntimeChild', () => {
       EXPERT_PROVIDER_BASE_URL: 'http://127.0.0.1:8001/v1',
       EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
       SCIMODALITY_ROUTER_PORT: '3898',
-      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token'
+      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token',
+      SCIFORGE_BIOGYM_INTERNAL_BASE_URL: 'http://127.0.0.1:43210',
+      SCIFORGE_BIOGYM_INTERNAL_TOKEN: 'outer-biogym-token'
     }
     const previousParentEnv = Object.fromEntries(
       Object.keys(blockedParentEnv).map((name) => [name, process.env[name]])

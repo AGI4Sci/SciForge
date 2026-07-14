@@ -30,6 +30,7 @@ import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
 import { internalSecretEnv } from '../../internal-http-secret'
+import { sanitizeAgentRuntimeEnv } from '../../agent-runtime-env'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -131,11 +132,11 @@ export function codexRuntimeEnv(
   runtimeApiKey?: string,
   localSecrets: Record<string, string> = {}
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {
+  const env = sanitizeAgentRuntimeEnv({
     ...baseEnv,
     CODEX_HOME: codexHome,
     ...localSecrets
-  }
+  })
   delete env.CODEX_USER_HOME
   delete env.CODEX_CONFIG_HOME
   for (const key of UPSTREAM_PROVIDER_SECRET_ENV_NAMES) {

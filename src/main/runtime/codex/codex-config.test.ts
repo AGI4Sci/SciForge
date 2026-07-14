@@ -126,6 +126,8 @@ describe('codex config launch helpers', () => {
         EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
         EDAG_LLM_API_KEY: 'outer-edag-key',
         EDAG_LLM_MODEL: 'outer-edag-model',
+        SCIFORGE_BIOGYM_INTERNAL_BASE_URL: 'http://127.0.0.1:43210',
+        SCIFORGE_BIOGYM_INTERNAL_TOKEN: 'outer-biogym-token',
         SCIFORGE_RUNTIME_API_KEY: 'stale-runtime-key',
         PATH: '/bin',
         CODEX_USER_HOME: '/old',
@@ -184,6 +186,8 @@ describe('codex config launch helpers', () => {
     expect(launch.env.EDAG_LLM_BASE_URL).toBeUndefined()
     expect(launch.env.EDAG_LLM_API_KEY).toBeUndefined()
     expect(launch.env.EDAG_LLM_MODEL).toBeUndefined()
+    expect(launch.env.SCIFORGE_BIOGYM_INTERNAL_BASE_URL).toBeUndefined()
+    expect(launch.env.SCIFORGE_BIOGYM_INTERNAL_TOKEN).toBeUndefined()
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.NO_PROXY).toContain('127.0.0.1')

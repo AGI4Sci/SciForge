@@ -32,4 +32,21 @@ describe('runtime error parsing', () => {
       details: { status: 503 }
     })
   })
+
+  it('preserves shared guard error aliases instead of normalizing them to unknown', () => {
+    expect(parseRuntimeErrorBody(JSON.stringify({
+      code: 'agent_stuck',
+      message: 'trajectory repeated'
+    }), 'fallback')).toEqual({
+      code: 'agent_stuck',
+      message: 'trajectory repeated'
+    })
+    expect(parseRuntimeErrorBody(JSON.stringify({
+      code: 'tool_loop_recovery_exhausted',
+      message: 'recovery failed'
+    }), 'fallback')).toEqual({
+      code: 'tool_loop_recovery_exhausted',
+      message: 'recovery failed'
+    })
+  })
 })

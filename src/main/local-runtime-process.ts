@@ -76,6 +76,7 @@ import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
 import { appendManagedLogLine } from './logger'
 import { guiSkillRootsForRuntime, normalizeSkillRootPath } from './services/skill-service'
 import { APP_MODEL_ROUTER_RUNTIME_API_KEY_ENV } from '../shared/app-brand'
+import { sanitizeAgentRuntimeEnv } from './agent-runtime-env'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -1201,7 +1202,7 @@ function waitForChildExit(process: ChildProcess, timeoutMs: number): Promise<boo
 }
 
 function localRuntimeChildEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const env = { ...baseEnv }
+  const env = sanitizeAgentRuntimeEnv(baseEnv)
   for (const name of UPSTREAM_PROVIDER_SECRET_ENV_NAMES) {
     delete env[name]
   }

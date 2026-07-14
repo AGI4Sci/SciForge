@@ -16,6 +16,11 @@ describe('createClaudeCodeAgentRuntimeAdapter', () => {
 
     await expect(adapter.capabilities(ctx)).resolves.toMatchObject({
       runtimeId: 'claude',
+      guard: {
+        toolStorm: 'unsupported',
+        toolBudget: 'unsupported',
+        stuckDetection: 'unsupported'
+      },
       tools: {
         mcp: { available: true },
         computerUse: {

@@ -229,6 +229,11 @@ type AgentRuntimeCapabilities = {
     todos: boolean
     resumeSession: boolean
   }
+  guard: {
+    toolStorm: 'native' | 'observe' | 'unsupported'
+    toolBudget: 'native' | 'observe' | 'unsupported'
+    stuckDetection: 'native' | 'observe' | 'unsupported'
+  }
   storage: {
     guiOwnedThreads: boolean
     backendThreadIdStable: boolean
@@ -242,6 +247,11 @@ type AgentRuntimeCapabilities = {
 `CapabilityState` 的共享形状是
 `{ available: boolean; reason?: string; degraded?: boolean }`。默认 capability
 只能把未实现功能声明为 unavailable，不能通过省略字段让 renderer 猜测为可用。
+
+`guard` 声明保护由谁负责：`native` 表示 runtime 在原生执行边界实施，`observe`
+表示 host 只能依据归一事件观察并纠偏，`unsupported` 表示当前没有该保证。三类保护
+分别覆盖工具风暴、工具事件预算和卡死检测；公共 guard code taxonomy 只分类稳定的
+跨 runtime code，不关闭 `AgentRuntimeEvent.code` 的 runtime 私有扩展空间。
 
 `tools.subagents.available` 表示当前 runtime 可以在统一 children/transcript UI 中展示
 child/subagent 工作，并按 runtime 能力使用 multi-agent 链路。`maxParallel` 和

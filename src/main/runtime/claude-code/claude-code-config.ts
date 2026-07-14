@@ -17,6 +17,7 @@ import {
   type GuiMcpRegistryInput
 } from '../../gui-mcp-registry'
 import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
+import { sanitizeAgentRuntimeEnv } from '../../agent-runtime-env'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -182,7 +183,7 @@ export function claudeCodeRuntimeEnv(
     model: string
   }
 ): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...baseEnv }
+  const env = sanitizeAgentRuntimeEnv(baseEnv)
   for (const key of UPSTREAM_PROVIDER_SECRET_ENV_NAMES) {
     delete env[key]
   }

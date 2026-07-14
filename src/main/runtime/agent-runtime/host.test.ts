@@ -142,7 +142,9 @@ function capabilities(runtimeId: AgentRuntimeId): AgentRuntimeCapabilities {
       resumeSession: false
     },
     guard: {
-      toolStorm: runtimeId === 'sciforge' ? 'native' : 'observe'
+      toolStorm: runtimeId === 'sciforge' ? 'native' : 'observe',
+      toolBudget: runtimeId === 'sciforge' ? 'native' : 'unsupported',
+      stuckDetection: runtimeId === 'sciforge' ? 'native' : 'unsupported'
     },
     storage: {
       guiOwnedThreads: false,

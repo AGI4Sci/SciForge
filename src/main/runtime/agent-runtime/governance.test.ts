@@ -8,7 +8,11 @@ import { RuntimeGovernanceSupervisor } from './governance'
 
 const baseCapabilities = {
   runtimeId: 'codex',
-  guard: { toolStorm: 'observe' }
+  guard: {
+    toolStorm: 'observe',
+    toolBudget: 'unsupported',
+    stuckDetection: 'unsupported'
+  }
 } as AgentRuntimeCapabilities
 
 const strictBudgetSettings: RuntimeGuardSettingsV1 = {
