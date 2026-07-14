@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, webUtils } from 'electron'
+import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
 
@@ -63,6 +63,12 @@ function isDevPreviewNavigatePayload(value: unknown): value is DevPreviewNavigat
 
 const api = {
   platform: process.platform,
+  setUiZoomFactor: (factor: number) => {
+    const normalized = Number.isFinite(factor)
+      ? Math.min(2, Math.max(0.5, factor))
+      : 1
+    webFrame.setZoomFactor(normalized)
+  },
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (partial) =>
     ipcRenderer.invoke('settings:set', partial),
