@@ -30,6 +30,7 @@ import type {
   AgentRuntimeId,
   AgentRuntimeItem,
   AgentRuntimeMemoryRecord,
+  AgentRuntimeNativeToolContext,
   AgentRuntimeThread,
   AgentRuntimeThreadGoal,
   AgentRuntimeThreadGuiPlan,
@@ -107,6 +108,13 @@ export type AgentRuntimeHostServices = {
   visibleContext?: VisibleContextService
   goals?: RuntimeGoalService
   contextLedger?: RuntimeContextLedgerService
+  nativeToolContext?: {
+    resolve: (input: {
+      runtimeId: AgentRuntimeId
+      threadId: string
+      workspace: string
+    }) => AgentRuntimeNativeToolContext | undefined | Promise<AgentRuntimeNativeToolContext | undefined>
+  }
 }
 
 export type AgentRuntimeHostOptions = {
@@ -115,6 +123,39 @@ export type AgentRuntimeHostOptions = {
     | AgentRuntimeAdapter[]
     | Partial<Record<AgentRuntimeId, AgentRuntimeAdapter>>
   services?: AgentRuntimeHostServices
+}
+
+export type AgentRuntimeContinuationPreStartDecision =
+  | { allow: true }
+  | {
+      allow: false
+      reason: string
+      details?: Readonly<Record<string, unknown>>
+    }
+
+/**
+ * Host-only continuation controls. These are deliberately separate from
+ * AgentRuntimeTurnStartInput so renderer/user turns cannot supply a privileged
+ * pre-start callback through IPC.
+ */
+export type AgentRuntimeContinuationStartOptions = {
+  beforeStart?: () => Promise<AgentRuntimeContinuationPreStartDecision>
+}
+
+/** A durable background continuation was intentionally superseded, not failed. */
+export class AgentRuntimeContinuationSuppressedError extends Error {
+  readonly code = 'agent_runtime_continuation_suppressed' as const
+  readonly retryable = false as const
+  readonly details: Readonly<Record<string, unknown>> | undefined
+
+  constructor(
+    readonly reason: string,
+    details?: Readonly<Record<string, unknown>>
+  ) {
+    super(`Agent runtime continuation suppressed: ${reason}`)
+    this.name = 'AgentRuntimeContinuationSuppressedError'
+    this.details = details
+  }
 }
 
 export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentRuntimeHost {
@@ -143,6 +184,7 @@ type ThreadTurnActivity = {
 export class AgentRuntimeHost {
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
   private readonly turnQueues = new Map<string, Promise<unknown>>()
+  private readonly foregroundEpochs = new Map<string, number>()
   private readonly activeThreadTurns = new Map<string, ActiveThreadTurn>()
   private readonly terminalWaiters = new Map<string, Set<() => void>>()
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
@@ -214,25 +256,64 @@ export class AgentRuntimeHost {
   }
 
   async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
-    return this.startTurnInternal(input, { includeSharedContext: true })
+    this.advanceForegroundEpoch(input.runtimeId, input.threadId)
+    return this.startTurnInternal(input, {
+      includeSharedContext: true,
+      activeTurnPolicy: 'steer',
+      trustHostRequestId: false
+    })
+  }
+
+  /**
+   * Queue a host-generated continuation behind the current turn.
+   *
+   * Background services must not steer a result-ready notification into an
+   * in-flight model request: the model can finish before it reaches the
+   * steering queue, which silently loses the continuation. Waiting also keeps
+   * the one-main-turn invariant while guaranteeing the continuation receives
+   * a complete tool/model setup of its own.
+   */
+  async startContinuationTurn(
+    input: AgentRuntimeTurnStartInput,
+    options: AgentRuntimeContinuationStartOptions = {}
+  ): Promise<AgentRuntimeTurnHandle> {
+    return this.startTurnInternal(input, {
+      includeSharedContext: true,
+      activeTurnPolicy: 'wait',
+      trustHostRequestId: true,
+      continuation: {
+        ...(options.beforeStart ? { beforeStart: options.beforeStart } : {}),
+        foregroundEpoch: this.foregroundEpoch(input.runtimeId, input.threadId)
+      }
+    })
   }
 
   private async startTurnInternal(
     input: AgentRuntimeTurnStartInput,
-    options: { includeSharedContext: boolean }
+    options: {
+      includeSharedContext: boolean
+      activeTurnPolicy: 'steer' | 'wait'
+      trustHostRequestId: boolean
+      continuation?: {
+        beforeStart?: () => Promise<AgentRuntimeContinuationPreStartDecision>
+        foregroundEpoch: number
+      }
+    }
   ): Promise<AgentRuntimeTurnHandle> {
-    const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-    await this.autoCompactThreadIfNeeded(adapter, context, input)
-    const safeInput = this.withWorkspaceRelativeFileReferences(context, input)
+    const requestInput = sanitizeHostRequestId(input, options.trustHostRequestId)
+    const { adapter, context } = await this.resolveRequiredRuntime(requestInput.runtimeId)
+    await this.autoCompactThreadIfNeeded(adapter, context, requestInput)
+    const safeInput = this.withWorkspaceRelativeFileReferences(context, requestInput)
+    const nativeContextInput = await this.withNativeToolContext(adapter.id, context, safeInput)
     const sharedInput = options.includeSharedContext
       ? await this.withSharedGoalInstruction(
           adapter.id,
           await this.withSharedContextLedger(
             adapter.id,
-            this.withSharedContextState(adapter.id, await this.withSharedMemory(context, safeInput))
+            this.withSharedContextState(adapter.id, await this.withSharedMemory(context, nativeContextInput))
           )
         )
-      : safeInput
+      : nativeContextInput
     const visualRequestText = safeInput.displayText ?? (options.includeSharedContext ? safeInput.text : '')
     const visualRequired = requiresVerifiedVisualInspection(visualRequestText)
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput, visualRequired)
@@ -245,7 +326,7 @@ export class AgentRuntimeHost {
     const modelAlias = modelRouter.model
     const auditId = this.options.services?.modelAudit?.start({
       runtimeId: adapter.id,
-      threadId: input.threadId,
+      threadId: requestInput.threadId,
       provider: 'model-router',
       model: modelAlias,
       modelRouterUrl: modelRouter.baseUrl,
@@ -258,12 +339,18 @@ export class AgentRuntimeHost {
       request: turnInput
     })
     try {
-      const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
+      const handle = await this.enqueueThreadTurnStart(
+        adapter,
+        context,
+        turnInput,
+        options.activeTurnPolicy,
+        options.continuation
+      )
       if (auditId) {
         this.options.services?.modelAudit?.attachTurn(
           auditId,
           adapter.id,
-          handle.threadId || input.threadId,
+          handle.threadId || requestInput.threadId,
           handle.turnId
         )
       }
@@ -276,11 +363,13 @@ export class AgentRuntimeHost {
   }
 
   async interruptTurn(input: AgentRuntimeTurnTargetInput): Promise<void> {
+    this.advanceForegroundEpoch(input.runtimeId, input.threadId)
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     await adapter.interruptTurn(context, input)
   }
 
   async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
+    this.advanceForegroundEpoch(input.runtimeId, input.threadId)
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     await adapter.steerTurn(context, input)
   }
@@ -796,7 +885,7 @@ export class AgentRuntimeHost {
       ...(governanceProfile(payload.governanceProfile) ? { governanceProfile: governanceProfile(payload.governanceProfile) } : {}),
       ...(attachmentIds ? { attachmentIds } : {}),
       ...(fileReferences ? { fileReferences } : {})
-    }, { includeSharedContext: false })
+    }, { includeSharedContext: false, activeTurnPolicy: 'steer', trustHostRequestId: false })
     if (targetThreadId && title) {
       await targetAdapter.renameThread(targetContext, {
         runtimeId: targetRuntimeId,
@@ -1180,9 +1269,18 @@ export class AgentRuntimeHost {
     triggerText: string
   ): Promise<AgentRuntimeTurnStartInput> {
     const service = this.options.services?.visibleContext
-    if (!service || !shouldAttachVisibleContextLookupHint(triggerText)) return input
+    const generalLookupRequested = shouldAttachVisibleContextLookupHint(triggerText)
+    const biologyContextRequested = shouldAttachBiologyRoomContext(triggerText)
+    if (!service || (!generalLookupRequested && !biologyContextRequested)) return input
     const snapshot = await service.get().catch(() => service.peek())
-    const hint = renderVisibleContextLookupHint(snapshot)
+    const activeBiologyRoom = snapshot.components.find((component) =>
+      component.visible && component.component === 'biology-room'
+    )
+    const hint = activeBiologyRoom
+      ? renderActiveBiologyRoomContext(activeBiologyRoom)
+      : generalLookupRequested
+        ? renderVisibleContextLookupHint(snapshot)
+        : ''
     if (!hint) return input
     return {
       ...input,
@@ -1205,6 +1303,27 @@ export class AgentRuntimeHost {
       ...input,
       ...(safeReferences.length ? { fileReferences: safeReferences } : { fileReferences: undefined })
     }
+  }
+
+  private async withNativeToolContext(
+    runtimeId: AgentRuntimeId,
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeTurnStartInput
+  ): Promise<AgentRuntimeTurnStartInput> {
+    // This field crosses a privilege boundary. Never trust a value carried by
+    // an arbitrary caller; only the main-process resolver may activate it.
+    const { nativeToolContext: _ignored, ...withoutCallerContext } = input
+    const resolver = this.options.services?.nativeToolContext
+    const threadId = input.threadId.trim()
+    const workspace = input.workspace?.trim() || context.settings.workspaceRoot?.trim() || ''
+    if (!resolver || !threadId || !workspace) return withoutCallerContext
+    const resolved = await Promise.resolve(
+      resolver.resolve({ runtimeId, threadId, workspace })
+    ).catch(() => undefined)
+    const activeToolNames = resolved?.activeToolNames.filter((name) => name === 'biogym_design') ?? []
+    return activeToolNames.length > 0
+      ? { ...withoutCallerContext, nativeToolContext: { activeToolNames: ['biogym_design'] } }
+      : withoutCallerContext
   }
 
   private async withSharedGoalsOnThreads(
@@ -1290,21 +1409,28 @@ export class AgentRuntimeHost {
   private enqueueThreadTurnStart(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
-    input: AgentRuntimeTurnStartInput
+    input: AgentRuntimeTurnStartInput,
+    activeTurnPolicy: 'steer' | 'wait' = 'steer',
+    continuation?: {
+      beforeStart?: () => Promise<AgentRuntimeContinuationPreStartDecision>
+      foregroundEpoch: number
+    }
   ): Promise<AgentRuntimeTurnHandle> {
     const threadId = input.threadId.trim()
     const key = threadTurnKey(adapter.id, threadId)
     if (!threadId) {
-      return this.startAdapterTurn(adapter, context, input)
+      return this.startTurnAfterContinuationGuard(adapter, context, input, continuation)
     }
     const previous = this.turnQueues.get(key) ?? Promise.resolve()
     const task = previous
       .catch(() => undefined)
       .then(async () => {
-        const steered = await this.steerActiveTurnIfSupported(adapter, context, input)
-        if (steered) return steered
+        if (activeTurnPolicy === 'steer') {
+          const steered = await this.steerActiveTurnIfSupported(adapter, context, input)
+          if (steered) return steered
+        }
         await this.waitForThreadTerminal(adapter, context, input)
-        return this.startAdapterTurn(adapter, context, input)
+        return this.startTurnAfterContinuationGuard(adapter, context, input, continuation)
       })
     this.turnQueues.set(key, task)
     void task
@@ -1315,20 +1441,75 @@ export class AgentRuntimeHost {
     return task
   }
 
+  private async startTurnAfterContinuationGuard(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeTurnStartInput,
+    continuation?: {
+      beforeStart?: () => Promise<AgentRuntimeContinuationPreStartDecision>
+      foregroundEpoch: number
+    }
+  ): Promise<AgentRuntimeTurnHandle> {
+    if (continuation) {
+      this.assertContinuationForegroundEpoch(adapter.id, input.threadId, continuation.foregroundEpoch)
+      if (continuation.beforeStart) {
+        const decision = await continuation.beforeStart()
+        // A user action may arrive while the durable pre-start check is doing
+        // I/O. Recheck after its await and before interpreting/starting.
+        this.assertContinuationForegroundEpoch(adapter.id, input.threadId, continuation.foregroundEpoch)
+        if (!decision.allow) {
+          throw new AgentRuntimeContinuationSuppressedError(
+            decision.reason.trim() || 'pre_start_guard_rejected',
+            decision.details
+          )
+        }
+      }
+    }
+    return this.startAdapterTurn(adapter, context, input)
+  }
+
+  private foregroundEpoch(runtimeId: AgentRuntimeId, threadId: string): number {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return 0
+    return this.foregroundEpochs.get(threadTurnKey(runtimeId, normalizedThreadId)) ?? 0
+  }
+
+  private advanceForegroundEpoch(runtimeId: AgentRuntimeId, threadId: string): void {
+    const normalizedThreadId = threadId.trim()
+    if (!normalizedThreadId) return
+    const key = threadTurnKey(runtimeId, normalizedThreadId)
+    this.foregroundEpochs.set(key, (this.foregroundEpochs.get(key) ?? 0) + 1)
+  }
+
+  private assertContinuationForegroundEpoch(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    expectedEpoch: number
+  ): void {
+    const currentEpoch = this.foregroundEpoch(runtimeId, threadId)
+    if (currentEpoch === expectedEpoch) return
+    throw new AgentRuntimeContinuationSuppressedError('foreground_action', {
+      expectedForegroundEpoch: expectedEpoch,
+      currentForegroundEpoch: currentEpoch
+    })
+  }
+
   private async startAdapterTurn(
     adapter: AgentRuntimeAdapter,
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
     const handle = await adapter.startTurn(context, input)
-    this.rememberTurnGovernanceProfile(adapter.id, input, handle)
-    this.executionIntegrity.rememberTurn(
-      adapter.id,
-      input,
-      handle.threadId || input.threadId,
-      handle.turnId
-    )
-    this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
+    if (!handle.reused) {
+      this.rememberTurnGovernanceProfile(adapter.id, input, handle)
+      this.executionIntegrity.rememberTurn(
+        adapter.id,
+        input,
+        handle.threadId || input.threadId,
+        handle.turnId
+      )
+      this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
+    }
     return handle
   }
 
@@ -2536,6 +2717,42 @@ function shouldAttachVisibleContextLookupHint(text: string): boolean {
     /(右侧|右栏|右边|侧栏|预览|可见|看到|屏幕|界面|当前打开|批注|注释|标注)/u.test(text)
 }
 
+function shouldAttachBiologyRoomContext(text: string): boolean {
+  return /\b(biology\s*room|fasta|genbank|gff3?|vcf|mmcif|pdb|dna|rna|genom(?:e|ic)|plasmid|contig|sequence|protein\s+structure|residue|molecular|variant|genome\s+track|active\s+site|selection|chain|atom)\b/i.test(text) ||
+    /(生物工作台|生物房间|基因组|质粒|序列|蛋白结构|残基|分子结构|变异|基因轨道|活性位点|选择区域|原子|分子链)/u.test(text)
+}
+
+function renderActiveBiologyRoomContext(component: VisibleContextComponentSnapshot): string {
+  const roomResource = component.resources?.find((resource) => resource.role === 'active-room')
+  const activeAssetId = typeof component.state?.activeAssetId === 'string'
+    ? component.state.activeAssetId
+    : null
+  const activeAsset = component.resources?.find((resource) =>
+    resource.role === 'biology-room-asset' &&
+    (resource.metadata?.active === true || resource.metadata?.assetId === activeAssetId)
+  )
+  const lines = [
+    'Active Biology Room context:',
+    truncateUtf8Text(component.summary, 600),
+    `Room ID: ${String(component.state?.roomId ?? roomResource?.metadata?.roomId ?? '')}`,
+    `Revision: ${String(component.state?.revision ?? roomResource?.metadata?.revision ?? '')}`
+  ]
+  if (activeAsset) {
+    lines.push(`Active asset: ${activeAsset.relativePath ?? activeAsset.path ?? activeAsset.title ?? ''}`)
+    if (typeof activeAsset.metadata?.sha256 === 'string') {
+      lines.push(`Source SHA-256: ${activeAsset.metadata.sha256}`)
+    }
+    if (typeof activeAsset.metadata?.readiness === 'string') {
+      lines.push(`Readiness: ${activeAsset.metadata.readiness}`)
+    }
+  }
+  lines.push(
+    'This bounded active-room summary is already available; do not call `gui_visible_context` merely to rediscover it.',
+    'Call `biology_room_observe` only when the task needs room details not present above. Use `biology_room_apply` only for a requested, typed room-state change; Biology Room tools never modify source bytes.'
+  )
+  return lines.filter((line) => line.trim()).join('\n')
+}
+
 function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot): string {
   const lines = [
     'Visible GUI context lookup:',
@@ -2797,6 +3014,25 @@ function escapeXmlText(value: string): string {
 
 function threadTurnKey(runtimeId: AgentRuntimeId, threadId: string): string {
   return `${runtimeId}:${threadId.trim()}`
+}
+
+function sanitizeHostRequestId(
+  input: AgentRuntimeTurnStartInput,
+  trusted: boolean
+): AgentRuntimeTurnStartInput {
+  const candidate = input as AgentRuntimeTurnStartInput & { beforeStart?: unknown }
+  // `beforeStart` is a host-only callback accepted as a separate argument by
+  // startContinuationTurn. Never forward an input-shaped lookalike.
+  const {
+    hostRequestId: _callerValue,
+    beforeStart: _callerGuard,
+    ...withoutHostRequestId
+  } = candidate
+  if (!trusted) return withoutHostRequestId
+  const hostRequestId = input.hostRequestId?.trim()
+  return hostRequestId
+    ? { ...withoutHostRequestId, hostRequestId }
+    : withoutHostRequestId
 }
 
 function turnGovernanceKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {

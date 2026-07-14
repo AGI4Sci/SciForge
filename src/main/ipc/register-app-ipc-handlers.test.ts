@@ -22,13 +22,16 @@ import {
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const queueRoots: string[] = []
+const protocolHandlers = new Map<string, (request: Request) => Response | Promise<Response>>()
 
 vi.mock('electron', () => ({
   app: {
     getFileIcon: vi.fn(async () => ({ isEmpty: () => false })),
     quit: vi.fn()
   },
-  dialog: {},
+  dialog: {
+    showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] }))
+  },
   shell: {
     openExternal: vi.fn(async () => undefined)
   },
@@ -39,6 +42,12 @@ vi.mock('electron', () => ({
     handle: vi.fn((channel: string, handler: (event: unknown, payload?: unknown) => Promise<unknown>) => {
       handlers.set(channel, handler)
     })
+  },
+  protocol: {
+    handle: vi.fn((scheme: string, handler: (request: Request) => Response | Promise<Response>) => {
+      protocolHandlers.set(scheme, handler)
+    }),
+    isProtocolHandled: vi.fn((scheme: string) => protocolHandlers.has(scheme))
   }
 }))
 

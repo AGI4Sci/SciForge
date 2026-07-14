@@ -16,8 +16,9 @@ import {
   type KeyboardShortcutCommandId
 } from '@shared/keyboard-shortcuts'
 import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
+import type { BioGymRunEvent } from '@shared/biogym'
 import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
-import type { ClipboardImageReadResult } from '@shared/workspace-file'
+import type { ClipboardImageReadResult, WorkspaceFileTarget } from '@shared/workspace-file'
 import type { AgentRuntimeChild, AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
 import type { AgentProviderCapabilities, AttachmentReference, ChatBlock, NormalizedThread } from '../agent/types'
 import type { LocalRuntimeInfoJson, LocalRuntimeSkillJson } from '../agent/local-runtime-contract'
@@ -144,6 +145,12 @@ import {
   type AnchoredCommentsAddToConversationDetail
 } from './anchored-comments'
 import { scheduleMolecularMolstarPrewarm } from '../workspace-preview/molecular-prewarm'
+import { subscribeBioGymRunEvents } from '../lib/biogym-api'
+import {
+  mergeBioGymRunEvent,
+  shouldMarkBioGymEventPending,
+  shouldOpenPendingBioGymRun
+} from '../biology-room/biogym-run-ui'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -169,6 +176,11 @@ const PluginMarketplaceView = lazy(() =>
 const WorkspaceFilePreviewPanelBridge = lazy(() =>
   import('./WorkspaceFilePreviewPanelBridge').then((module) => ({
     default: module.WorkspaceFilePreviewPanelBridge
+  }))
+)
+const BiologyRoomPanelBridge = lazy(() =>
+  import('./BiologyRoomPanelBridge').then((module) => ({
+    default: module.BiologyRoomPanelBridge
   }))
 )
 const PlanPanel = lazy(() =>
@@ -202,6 +214,8 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'File preview'
     case 'browser':
       return 'Dev browser'
+    case 'biology':
+      return 'Biology Room'
     case 'child-agents':
       return 'Child agents'
     case 'changes':
@@ -817,6 +831,7 @@ export function Workbench(): ReactElement {
   )
 
   const prevThreadId = useRef<string | null>(null)
+  const biologyRoomManualOverrideThreadRef = useRef<string | null>(null)
   const inputRef = useRef('')
   const sddUpgradeInFlightRef = useRef(false)
   const sddUpgradeTargetRef = useRef<PendingSddPlanTarget | null>(null)
@@ -1252,6 +1267,35 @@ export function Workbench(): ReactElement {
     )
   }, [activeThreadId])
   const [fileTreeInitialDirectory, setFileTreeInitialDirectory] = useState<FileTreeInitialDirectory | null>(null)
+  const [biologyRoomTarget, setBiologyRoomTarget] = useState<WorkspaceFileTarget | null>(null)
+  const [biologyRunEvent, setBiologyRunEvent] = useState<BioGymRunEvent | null>(null)
+  const [bioGymEventsByThread, setBioGymEventsByThread] = useState<Record<string, BioGymRunEvent>>({})
+  const [pendingBioGymThreadIds, setPendingBioGymThreadIds] = useState<Set<string>>(() => new Set())
+  const activeBioGymRunEvent = activeThreadId ? bioGymEventsByThread[activeThreadId] ?? null : null
+
+  useEffect(() => {
+    return subscribeBioGymRunEvents(window.sciforge, (event) => {
+      setBioGymEventsByThread((current) => {
+        const merged = mergeBioGymRunEvent(current[event.threadId], event)
+        return merged === current[event.threadId]
+          ? current
+          : { ...current, [event.threadId]: merged }
+      })
+      if (shouldMarkBioGymEventPending(event)) {
+        setPendingBioGymThreadIds((current) => {
+          if (current.has(event.threadId)) return current
+          const next = new Set(current)
+          next.add(event.threadId)
+          return next
+        })
+      }
+    }, (error) => {
+      if (typeof window.sciforge?.logError !== 'function') return
+      void window.sciforge.logError('biogym-replay', 'Failed to replay persisted BioGym runs', {
+        message: error instanceof Error ? error.message : String(error)
+      }).catch(() => undefined)
+    })
+  }, [])
   const {
     activeGuiPlan,
     buildGuiPlan,
@@ -1659,6 +1703,63 @@ export function Workbench(): ReactElement {
     setRightPanelMode('file')
   }
 
+  const openBiologyRoom = useCallback((target?: WorkspaceFileTarget | null): void => {
+    biologyRoomManualOverrideThreadRef.current = target ? activeThreadId : null
+    setBiologyRoomTarget(target ?? null)
+    setBiologyRunEvent(target ? null : activeBioGymRunEvent)
+    setRightSidebarWidth((width) => Math.max(width, 900))
+    setRightPanelMode('biology')
+  }, [activeBioGymRunEvent, activeThreadId, setRightPanelMode, setRightSidebarWidth])
+
+  useEffect(() => {
+    const state = {
+      route,
+      activeThreadId,
+      event: activeBioGymRunEvent,
+      pendingThreadIds: pendingBioGymThreadIds
+    }
+    if (!shouldOpenPendingBioGymRun(state)) return
+    if (biologyRoomManualOverrideThreadRef.current === state.activeThreadId) return
+    biologyRoomManualOverrideThreadRef.current = null
+    setBiologyRunEvent(state.event)
+    setBiologyRoomTarget(state.event.activeAssetPath ? {
+      path: state.event.activeAssetPath,
+      workspaceRoot: state.event.workspaceRoot
+    } : null)
+    setPendingBioGymThreadIds((current) => {
+      const next = new Set(current)
+      next.delete(state.activeThreadId)
+      return next
+    })
+    setRightSidebarWidth((width) => Math.max(width, 900))
+    setRightPanelMode('biology')
+  }, [
+    activeBioGymRunEvent,
+    activeThreadId,
+    pendingBioGymThreadIds,
+    route,
+    setRightPanelMode,
+    setRightSidebarWidth
+  ])
+
+  useEffect(() => {
+    if (rightPanelMode !== 'biology') return
+    if (biologyRoomManualOverrideThreadRef.current === activeThreadId) return
+    if (activeBioGymRunEvent) {
+      if (biologyRunEvent?.eventId === activeBioGymRunEvent.eventId) return
+      setBiologyRunEvent(activeBioGymRunEvent)
+      setBiologyRoomTarget(activeBioGymRunEvent.activeAssetPath ? {
+        path: activeBioGymRunEvent.activeAssetPath,
+        workspaceRoot: activeBioGymRunEvent.workspaceRoot
+      } : null)
+      return
+    }
+    if (biologyRunEvent) {
+      setBiologyRunEvent(null)
+      setBiologyRoomTarget(null)
+    }
+  }, [activeBioGymRunEvent, activeThreadId, biologyRunEvent, rightPanelMode])
+
   const openFileTreeDirectory = useCallback((target: { workspaceRoot: string; path: string }): void => {
     const nextWorkspaceRoot = normalizeWorkspaceRoot(
       target.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot
@@ -1701,6 +1802,25 @@ export function Workbench(): ReactElement {
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
+    if (mode === 'biology') {
+      setRightSidebarWidth((width) => Math.max(width, 900))
+      if (rightPanelMode !== 'biology') {
+        biologyRoomManualOverrideThreadRef.current = null
+        setBiologyRunEvent(activeBioGymRunEvent)
+        setBiologyRoomTarget(activeBioGymRunEvent?.activeAssetPath ? {
+          path: activeBioGymRunEvent.activeAssetPath,
+          workspaceRoot: activeBioGymRunEvent.workspaceRoot
+        } : null)
+        if (activeThreadId) {
+          setPendingBioGymThreadIds((current) => {
+            if (!current.has(activeThreadId)) return current
+            const next = new Set(current)
+            next.delete(activeThreadId)
+            return next
+          })
+        }
+      }
+    }
     if (mode === 'evidence' || mode === 'project-dag') setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     toggleRightPanelMode(mode)
   }
@@ -2612,6 +2732,11 @@ export function Workbench(): ReactElement {
       setFilePreviewReturnContext(null)
       return
     }
+    if (rightPanelMode === 'biology') {
+      biologyRoomManualOverrideThreadRef.current = null
+      setBiologyRoomTarget(null)
+      setBiologyRunEvent(null)
+    }
     setRightPanelMode(null)
     setFilePreviewTarget(null)
     setFilePreviewReturnContext(null)
@@ -2700,7 +2825,19 @@ export function Workbench(): ReactElement {
           </div>
           <div className="min-h-0 flex-1">
             <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-            {rightPanelMode === 'file' ? (
+            {rightPanelMode === 'biology' ? (
+              <BiologyRoomPanelBridge
+                workspaceRoot={biologyRunEvent?.workspaceRoot || biologyRoomTarget?.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot}
+                initialTarget={biologyRoomTarget}
+                initialRoomId={biologyRunEvent?.roomId}
+                runEvent={biologyRunEvent}
+                className="h-full max-h-full w-full"
+                onAddSelectionToChat={(context) => {
+                  setInput((current) => current.trim() ? `${current.trimEnd()}\n\n${context}` : context)
+                }}
+                onClose={closeRightPanel}
+              />
+            ) : rightPanelMode === 'file' ? (
               <div className="relative h-full max-h-full w-full overflow-hidden">
                 <ChatFileTreePanel
                   workspaceRoot={fileTreeWorkspaceRoot}
@@ -2743,6 +2880,7 @@ export function Workbench(): ReactElement {
                           annotationQuestionBridge={annotationQuestionBridge}
                           onClose={closeFilePreview}
                           onOpenDirectory={openFileTreeDirectory}
+                          onOpenBiologyRoom={openBiologyRoom}
                         />
                       </div>
                     </div>
@@ -3068,6 +3206,7 @@ export function Workbench(): ReactElement {
                     onOpenSideChat={
                       activeThreadId && sideConversationsSupported ? openSideChat : undefined
                     }
+                    biologyRunUnreadCount={pendingBioGymThreadIds.size}
                   />
                 </div>
               </div>

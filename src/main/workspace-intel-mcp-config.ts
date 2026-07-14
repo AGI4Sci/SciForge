@@ -1,4 +1,5 @@
 import type { AppSettingsV1 } from '../shared/app-settings'
+import { BIOLOGY_ROOM_MCP_TOOL_NAMES } from './biology-room-mcp-tools'
 import { GUI_WORKSPACE_INTEL_MCP_LAUNCH_FLAG } from './workspace-intel-mcp-server'
 import { WorkspaceIntelToolNames } from '../../packages/workers/workspace-intel/src/contract'
 import {
@@ -90,7 +91,7 @@ export function workspaceIntelMcpEnv(
 }
 
 export function workspaceIntelMcpEnabledTools(): string[] {
-  return [...WorkspaceIntelToolNames]
+  return [...WorkspaceIntelToolNames, ...BIOLOGY_ROOM_MCP_TOOL_NAMES]
 }
 
 export function buildWorkspaceIntelMcpServerConfig(

@@ -6,7 +6,12 @@ import { JsonSettingsStore } from '../settings-store'
 import { BiologyRoomService } from './biology-room-service'
 import { BioGymRuntimeService } from './biogym-runtime-service'
 
-const REAL_BEAM_ENABLED = process.env.SCIFORGE_BIOGYM_REAL_BEAM === '1'
+const REAL_BIOGYM_CLI_PATH = process.env.SCIFORGE_BIOGYM_CLI_PATH?.trim() ?? ''
+const REAL_BIOGYM_SSH_HOST = process.env.SCIFORGE_BIOGYM_SSH_HOST?.trim() ?? ''
+const REAL_BIOGYM_REMOTE_ROOT = process.env.SCIFORGE_BIOGYM_REMOTE_ROOT?.trim() ?? ''
+const REAL_BIOGYM_LOCAL_ROOT = process.env.SCIFORGE_BIOGYM_LOCAL_ROOT?.trim() ?? ''
+const REAL_BEAM_ENABLED = process.env.SCIFORGE_BIOGYM_REAL_BEAM === '1' &&
+  Boolean(REAL_BIOGYM_CLI_PATH && REAL_BIOGYM_SSH_HOST && REAL_BIOGYM_REMOTE_ROOT && REAL_BIOGYM_LOCAL_ROOT)
 const REAL_TEST_TIMEOUT_MS = 3 * 60 * 60_000
 const roots: string[] = []
 
@@ -14,7 +19,11 @@ const roots: string[] = []
  * Expensive, explicitly opt-in acceptance coverage. These tests submit real
  * receiver GPU jobs and therefore never run in the normal test suite.
  *
- * SCIFORGE_BIOGYM_REAL_BEAM=1 npx vitest run \
+ * SCIFORGE_BIOGYM_REAL_BEAM=1 \
+ * SCIFORGE_BIOGYM_CLI_PATH=/path/to/biogym/.venv/bin/biogym \
+ * SCIFORGE_BIOGYM_LOCAL_ROOT=/path/to/biogym \
+ * SCIFORGE_BIOGYM_SSH_HOST=my-biogym-host \
+ * SCIFORGE_BIOGYM_REMOTE_ROOT=/srv/biogym npx vitest run \
  *   src/main/services/biogym-runtime-service.beam.test.ts
  */
 describe.skipIf(!REAL_BEAM_ENABLED)('BioGymRuntimeService real Beam acceptance', () => {
@@ -132,7 +141,7 @@ async function createHarness(label: string): Promise<{
   const userData = join(root, 'user-data')
   const inputDirectory = join(workspace, 'inputs')
   await mkdir(inputDirectory, { recursive: true })
-  const sourceRoot = join(process.cwd(), '..', 'biogym', 'examples', 'inputs')
+  const sourceRoot = join(REAL_BIOGYM_LOCAL_ROOT, 'examples', 'inputs')
   const backbone = join(inputDirectory, 'toy_backbone.pdb')
   const target = join(inputDirectory, 'toy_bindcraft_target.pdb')
   await copyFile(join(sourceRoot, basename(backbone)), backbone)
@@ -142,9 +151,9 @@ async function createHarness(label: string): Promise<{
   await store.patch({
     biogym: {
       enabled: true,
-      cliPath: join(process.cwd(), '..', 'biogym', '.venv', 'bin', 'biogym'),
-      sshHost: 'beam-root',
-      remoteRoot: '/mnt/shared-storage-user/beam/chengkaiyao/bio_world'
+      cliPath: REAL_BIOGYM_CLI_PATH,
+      sshHost: REAL_BIOGYM_SSH_HOST,
+      remoteRoot: REAL_BIOGYM_REMOTE_ROOT
     }
   })
   const service = new BioGymRuntimeService({

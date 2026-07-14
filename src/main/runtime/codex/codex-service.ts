@@ -69,6 +69,12 @@ import {
 import type { ScheduleMcpLaunchConfig } from '../../schedule-mcp-config'
 import type { WorkflowMcpLaunchConfig } from '../../workflow-mcp-config'
 import type { WorkspaceIntelMcpLaunchConfig } from '../../workspace-intel-mcp-config'
+import {
+  BIOLOGY_ROOM_APPLY_TOOL_NAME,
+  BIOLOGY_ROOM_MCP_TOOL_NAMES,
+  type BiologyRoomMcpToolName
+} from '../../biology-room-mcp-tools'
+import { biologyRoomApplyRequiresApproval } from '../../biology-room-tool-policy'
 import type { PaperRadarMcpLaunchConfig } from '../../paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from '../../write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from '../../runtime-inspector-mcp-config'
@@ -257,6 +263,11 @@ type CodexRuntimeEventSubscriber = {
   closed: boolean
 }
 
+type CodexDynamicToolApprovalEntry = {
+  request: CodexAppServerPendingRequest
+  resolve: (decision: CodexAppServerResolveApprovalInput['decision']) => void
+}
+
 export class CodexRuntimeService {
   private client: CodexAppServerJsonRpcClient | null = null
   private clientPromise: Promise<CodexAppServerJsonRpcClient> | null = null
@@ -289,6 +300,8 @@ export class CodexRuntimeService {
     request: CodexAppServerPendingRequest
     resolve: (allowed: boolean) => void
   }>()
+  private readonly pendingDynamicToolApprovals = new Map<string, CodexDynamicToolApprovalEntry>()
+  private nextDynamicToolApprovalId = 1
 
   constructor(private readonly options: CodexRuntimeServiceOptions) {
     this.threadStore = options.storageRoot ? new CodexThreadStore({ rootDir: options.storageRoot }) : null
@@ -765,6 +778,10 @@ export class CodexRuntimeService {
       const { client } = await this.ensureConnectedClient()
       this.dynamicMcpBridge?.abortRequestsForTurn(threadId, turnId, 'user_stop')
       this.multiAgentBridge?.abortRequestsForTurn(threadId, turnId)
+      this.cancelDynamicToolApprovals('cancelled', { threadId: codexThreadId, turnId })
+      if (codexThreadId !== threadId) {
+        this.cancelDynamicToolApprovals('cancelled', { threadId, turnId })
+      }
       await client.interruptTurn({ threadId: codexThreadId, turnId })
       if (options.discard) await this.stop('user_stop')
       return { ok: true }
@@ -848,7 +865,8 @@ export class CodexRuntimeService {
       : []
     return [
       ...clientPending,
-      ...[...this.pendingWorkspacePatchApprovals.values()].map((entry) => entry.request)
+      ...[...this.pendingWorkspacePatchApprovals.values()].map((entry) => entry.request),
+      ...[...this.pendingDynamicToolApprovals.values()].map((entry) => entry.request)
     ]
   }
 
@@ -858,6 +876,12 @@ export class CodexRuntimeService {
       if (local) {
         this.pendingWorkspacePatchApprovals.delete(String(input.requestId))
         local.resolve(input.decision === 'allowed' || input.decision === 'allowed_for_session')
+        return { ok: true }
+      }
+      const dynamicEntry = this.pendingDynamicToolApprovals.get(String(input.requestId))
+      if (dynamicEntry) {
+        this.pendingDynamicToolApprovals.delete(String(input.requestId))
+        dynamicEntry.resolve(input.decision)
         return { ok: true }
       }
       if (!this.client) throw new Error('No Codex app-server request is pending.')
@@ -881,6 +905,7 @@ export class CodexRuntimeService {
   async stop(reason: CodexDynamicMcpReleaseReason = 'service_shutdown'): Promise<void> {
     const client = this.client
     const dynamicMcpBridge = this.dynamicMcpBridge
+    this.cancelDynamicToolApprovals('cancelled')
     await this.finalizeActiveTurnsBeforeTeardown({
       code: reason === 'user_stop' ? 'aborted' : 'runtime_stopped',
       message: reason === 'user_stop'
@@ -911,6 +936,7 @@ export class CodexRuntimeService {
   private async discardClientAfterFailure(): Promise<void> {
     const client = this.client
     const dynamicMcpBridge = this.dynamicMcpBridge
+    this.cancelDynamicToolApprovals('cancelled')
     await this.finalizeActiveTurnsBeforeTeardown({
       code: 'runtime_disconnected',
       message: CODEX_TURN_DISCONNECTED_MESSAGE,
@@ -1142,12 +1168,55 @@ export class CodexRuntimeService {
         success: false
       }
     }
-    const workspaceRequest = await this.requestWithThreadWorkspace(contextualRequest)
-    const response = await bridge.callTool(workspaceRequest)
-    if (response.success && workspaceIntelToolNameForRequest(workspaceRequest) === 'gui_workspace_read') {
-      await this.rememberWorkspaceRead(workspaceRequest)
+    try {
+      const scopedRequest = await this.requestWithThreadWorkspace(contextualRequest)
+      const toolName = workspaceIntelToolNameForRequest(scopedRequest)
+      const args = dynamicToolArgumentsRecord(scopedRequest.arguments)
+      if (toolName === BIOLOGY_ROOM_APPLY_TOOL_NAME && !stringValue(scopedRequest.threadId).trim()) {
+        return {
+          contentItems: [{
+            type: 'inputText',
+            text: 'Biology Room changes require an active task context.'
+          }],
+          success: false
+        }
+      }
+      if (
+        toolName === BIOLOGY_ROOM_APPLY_TOOL_NAME &&
+        args &&
+        biologyRoomApplyRequiresApproval(args) &&
+        getCodexRuntimeSettings(settings).approvalPolicy !== 'never'
+      ) {
+        const decision = await this.requestDynamicToolApproval(scopedRequest, args)
+        if (decision !== 'allowed' && decision !== 'allowed_for_session') {
+          return {
+            contentItems: [{
+              type: 'inputText',
+              text: decision === 'cancelled'
+                ? 'Biology Room change was cancelled.'
+                : 'Biology Room change was denied by the user.'
+            }],
+            success: false
+          }
+        }
+      }
+      const response = await bridge.callTool(scopedRequest)
+      if (response.success && toolName === 'gui_workspace_read') {
+        await this.rememberWorkspaceRead(scopedRequest)
+      }
+      return response
+    } catch (error) {
+      const name = contextualRequest.namespace
+        ? `${contextualRequest.namespace}.${contextualRequest.tool}`
+        : contextualRequest.tool
+      return {
+        contentItems: [{
+          type: 'inputText',
+          text: `MCP dynamic tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+        }],
+        success: false
+      }
     }
-    return response
   }
 
   private async publishDynamicToolExecutionFact(
@@ -1207,12 +1276,76 @@ export class CodexRuntimeService {
     const settings = await this.options.settings()
     const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
 
+    const argumentsWithWorkspace = {
+      ...args,
+      ...(workspaceRoot ? { workspaceRoot } : {})
+    }
     return {
       ...request,
-      arguments: {
-        ...args,
-        workspaceRoot
+      arguments: toolName === BIOLOGY_ROOM_APPLY_TOOL_NAME && threadId
+        ? {
+            ...argumentsWithWorkspace,
+            actor: {
+              kind: 'agent',
+              taskId: storedThread?.guiThreadId || threadId,
+              ...(request.turnId ? { turnId: request.turnId } : {})
+            }
+          }
+        : argumentsWithWorkspace
+    }
+  }
+
+  private async requestDynamicToolApproval(
+    request: CodexAppServerDynamicToolCallRequest,
+    args: Record<string, unknown>
+  ): Promise<CodexAppServerResolveApprovalInput['decision']> {
+    const threadId = stringValue(request.threadId).trim()
+    if (!threadId) return 'denied'
+    const operationTypes = arrayValue(args.operations)
+      .map(asRecord)
+      .map((operation) => stringValue(operation?.type).trim())
+      .filter(Boolean)
+    const requestId = `biology-room-${this.nextDynamicToolApprovalId++}-${String(request.requestId)}`
+    const pendingRequest: CodexAppServerPendingRequest = {
+      requestId,
+      method: 'item/fileChange/requestApproval',
+      kind: 'approval',
+      threadId,
+      ...(request.turnId ? { turnId: request.turnId } : {}),
+      itemId: request.callId || String(request.requestId),
+      summary: operationTypes.length
+        ? `Biology Room change approval requested (${operationTypes.join(', ')})`
+        : 'Biology Room change approval requested',
+      params: {
+        tool: BIOLOGY_ROOM_APPLY_TOOL_NAME,
+        operationTypes,
+        roomId: stringValue(args.roomId),
+        baseRevision: args.baseRevision
       }
+    }
+    const decision = new Promise<CodexAppServerResolveApprovalInput['decision']>((resolve) => {
+      this.pendingDynamicToolApprovals.set(requestId, { request: pendingRequest, resolve })
+    })
+    try {
+      await this.publishPendingServerRequest(pendingRequest)
+    } catch (error) {
+      const entry = this.pendingDynamicToolApprovals.get(requestId)
+      this.pendingDynamicToolApprovals.delete(requestId)
+      entry?.resolve('cancelled')
+      throw error
+    }
+    return decision
+  }
+
+  private cancelDynamicToolApprovals(
+    decision: CodexAppServerResolveApprovalInput['decision'],
+    target?: { threadId: string; turnId?: string }
+  ): void {
+    for (const [requestId, entry] of this.pendingDynamicToolApprovals) {
+      if (target && entry.request.threadId !== target.threadId) continue
+      if (target?.turnId && entry.request.turnId !== target.turnId) continue
+      this.pendingDynamicToolApprovals.delete(requestId)
+      entry.resolve(decision)
     }
   }
 
@@ -3531,19 +3664,27 @@ function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallRespo
   if (!text) return response.success ? 'Dynamic tool completed successfully.' : 'Dynamic tool failed.'
   return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
 }
+type WorkspaceScopedGuiToolName = WorkspaceIntelToolName | BiologyRoomMcpToolName
 
 function workspaceIntelToolNameForRequest(
   request: CodexAppServerDynamicToolCallRequest
-): WorkspaceIntelToolName | null {
+): WorkspaceScopedGuiToolName | null {
   const tool = request.tool.trim()
   if (!tool) return null
-  return WorkspaceIntelToolNames.find((name) => tool === name || tool.endsWith(`_${name}`)) ?? null
+  const names: readonly WorkspaceScopedGuiToolName[] = [
+    ...WorkspaceIntelToolNames,
+    ...BIOLOGY_ROOM_MCP_TOOL_NAMES
+  ]
+  return names.find((name) => tool === name || tool.endsWith(`_${name}`)) ?? null
 }
 
-const WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS = new Set<WorkspaceIntelToolName>(
-  WorkspaceIntelToolNames.filter((name) => (
-    name !== 'gui_visible_context' && name !== 'gui_visual_capture'
-  ))
+const WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS = new Set<WorkspaceScopedGuiToolName>(
+  [
+    ...WorkspaceIntelToolNames.filter((name) => (
+      name !== 'gui_visible_context' && name !== 'gui_visual_capture'
+    )),
+    ...BIOLOGY_ROOM_MCP_TOOL_NAMES
+  ]
 )
 
 function arrayValue(value: unknown): unknown[] {

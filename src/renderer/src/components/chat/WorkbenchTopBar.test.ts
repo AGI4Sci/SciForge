@@ -40,14 +40,35 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
     expect(html).toContain('aria-pressed="true"')
   })
 
-  it('shows Project DAG as a right panel item', () => {
+  it('shows Project evidence as a right panel item', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'project-dag',
       onToggleRightPanelMode: vi.fn()
     }))
 
-    expect(html).toContain('Project DAG')
+    expect(html).toContain('Project evidence')
     expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('shows and marks Biology Room as a right panel item', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'biology',
+      onToggleRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('Biology Room')
+    expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('shows pending BioGym result count on the Biology Room control', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      biologyRunUnreadCount: 3
+    }))
+
+    expect(html).toContain('aria-label="3 new BioGym results"')
+    expect(html).toContain('>3</span>')
   })
 
   it('keeps right-panel controls reachable in narrow workbench widths', () => {

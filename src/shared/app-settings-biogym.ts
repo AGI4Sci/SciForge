@@ -4,8 +4,8 @@ import type {
   BioGymSettingsV1
 } from './app-settings-types'
 
-export const DEFAULT_BIOGYM_SSH_HOST = 'beam-root'
-export const DEFAULT_BIOGYM_REMOTE_ROOT = '/mnt/shared-storage-user/beam/chengkaiyao/bio_world'
+export const DEFAULT_BIOGYM_SSH_HOST = ''
+export const DEFAULT_BIOGYM_REMOTE_ROOT = ''
 
 export function defaultBioGymSettings(): BioGymSettingsV1 {
   return {

@@ -12,6 +12,7 @@ import {
   Code2,
   ClipboardList,
   Download,
+  Dna,
   ExternalLink,
   FileEdit,
   GitMerge,
@@ -35,6 +36,7 @@ export type RightPanelMode =
   | 'todo'
   | 'changes'
   | 'browser'
+  | 'biology'
   | 'evidence'
   | 'project-dag'
   | 'file'
@@ -64,6 +66,7 @@ type Props = {
   onOpenChildAgents?: () => void
   terminalOpen?: boolean
   onToggleTerminal?: () => void
+  biologyRunUnreadCount?: number
 }
 
 export function WorkbenchTopBar({
@@ -83,7 +86,8 @@ export function WorkbenchTopBar({
   childAgentsOpen = false,
   onOpenChildAgents,
   terminalOpen = false,
-  onToggleTerminal
+  onToggleTerminal,
+  biologyRunUnreadCount = 0
 }: Props): ReactElement {
   const { t } = useTranslation(['common', 'settings'])
   const [editors, setEditors] = useState<EditorInfo[]>([])
@@ -103,6 +107,7 @@ export function WorkbenchTopBar({
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
     { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },
     { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
+    { mode: 'biology' as const, label: t('rightPanelBiologyRoom'), icon: Dna },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
     { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw },
@@ -527,7 +532,7 @@ export function WorkbenchTopBar({
             <button
               type="button"
               onClick={() => onToggleRightPanelMode(item.mode)}
-              className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+              className={`relative rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
                 active
                   ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
                   : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
@@ -537,6 +542,14 @@ export function WorkbenchTopBar({
               title={item.label}
             >
               <Icon className="h-4 w-4" strokeWidth={1.75} />
+              {item.mode === 'biology' && biologyRunUnreadCount > 0 ? (
+                <span
+                  className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-500 px-1 text-[9px] font-semibold leading-none text-white"
+                  aria-label={`${biologyRunUnreadCount} new BioGym result${biologyRunUnreadCount === 1 ? '' : 's'}`}
+                >
+                  {Math.min(biologyRunUnreadCount, 9)}
+                </span>
+              ) : null}
             </button>
             {isChanges && onToggleTerminal ? (
               <button

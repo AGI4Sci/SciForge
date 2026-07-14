@@ -1,7 +1,7 @@
-import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
+import { app, dialog, ipcMain, nativeImage, protocol, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
-import { dirname, join } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { mainPerformanceMonitor } from '../performance-monitor'
@@ -29,6 +29,7 @@ import type {
   WorkspacePickResult
 } from '../../shared/sciforge-api'
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
+import { BIOLOGY_ROOM_SUPPORTED_EXTENSIONS } from '../../shared/biology-room'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
   agentRuntimeConnectPayloadSchema,
@@ -62,6 +63,14 @@ import {
   agentRuntimeTurnTargetPayloadSchema,
   agentRuntimeUsagePayloadSchema,
   agentRuntimeUserInputResolvePayloadSchema,
+  biologyRoomApplyPayloadSchema,
+  biologyRoomCreatePayloadSchema,
+  biologyRoomHistoryPayloadSchema,
+  biologyRoomListPayloadSchema,
+  biologyRoomLoadPayloadSchema,
+  biologyRoomObservePayloadSchema,
+  biologyRoomOpenOrCreatePayloadSchema,
+  biologyRoomRefreshPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   computerUsePermissionKindSchema,
@@ -320,6 +329,7 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
+import { BiologyRoomService } from '../services/biology-room-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
 import {
   acknowledgeEvidenceDagSnapshot,
@@ -331,7 +341,9 @@ import {
   type EvidenceDagQueueStatus,
   type EvidenceSnapshot
 } from '../runtime/evidence-dag-feed'
+import { installWorkspacePreviewAssetProtocol } from '../workspace-preview-asset-protocol'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
+import type { BioGymDoctorResult } from '../../shared/biogym'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
 
@@ -443,6 +455,20 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
+  biologyRoomService?: Pick<BiologyRoomService,
+    | 'create'
+    | 'openOrCreate'
+    | 'load'
+    | 'list'
+    | 'observe'
+    | 'apply'
+    | 'refresh'
+    | 'history'
+  >
+  getBioGymRuntimeService?: () => {
+    doctor: () => Promise<BioGymDoctorResult>
+    replayRunSnapshots: () => Promise<{ replayed: number }>
+  } | null
   workspacePreviewHost?: Pick<WorkspacePreviewHost,
     | 'listPlugins'
     | 'open'
@@ -1317,6 +1343,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    biologyRoomService: providedBiologyRoomService,
+    getBioGymRuntimeService = () => null,
     workspacePreviewHost: providedWorkspacePreviewHost,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
@@ -1343,6 +1371,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ensureProjectDagReady,
     transcribeSpeech = requestSpeechTranscription
   } = options
+  const biologyRoomService = providedBiologyRoomService ?? new BiologyRoomService()
   const workspacePreviewHost = providedWorkspacePreviewHost ?? new WorkspacePreviewHost({
     loadSettings: () => store.load()
   })
@@ -1351,6 +1380,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()
   const workspacePreviewSessionOwnerIds = new Map<string, number>()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
+
+  installWorkspacePreviewAssetProtocol(protocol, {
+    // Electron's protocol handler does not expose the initiating WebContents.
+    // The unguessable session id therefore remains the protocol bearer token;
+    // every IPC session method below additionally checks the sender owner.
+    isSessionAuthorized: (sessionId) => workspacePreviewSessionOwnerIds.has(sessionId),
+    describeAsset: (sessionId) => workspacePreviewHost.describeAsset(sessionId),
+    readRange: (sessionId, range) => workspacePreviewHost.readRange(sessionId, range)
+  })
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
@@ -1470,6 +1508,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (released) cleanupWorkspacePreviewSessionOwnership(sessionId)
     return released
   }
+
+  const ownsWorkspacePreviewSession = (sender: AppBridgeSender, sessionId: string): boolean =>
+    workspacePreviewSessionOwnerIds.get(sessionId) === sender.id
+
+  const workspacePreviewSessionAccessDenied = () => ({
+    ok: false as const,
+    message: 'Workspace preview session is not owned by this renderer.'
+  })
 
   const disposeWorkspacePreviewSessionsForSender = (sender: AppBridgeSender): void => {
     const record = workspacePreviewSenderSessions.get(sender.id)
@@ -2284,6 +2330,35 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
+  handleInvoke('biologyRoom:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+    const { workspaceRoot } = parseIpcPayload(
+      'biologyRoom:pick-file',
+      z.object({ workspaceRoot: workspaceRootSchema }).strict(),
+      payload
+    )
+    const extensions = [...new Set(BIOLOGY_ROOM_SUPPORTED_EXTENSIONS.flatMap((suffix) => {
+      const extension = suffix.slice(1)
+      return extension.endsWith('.gz') ? [extension, 'gz'] : [extension]
+    }))]
+    const options: Electron.OpenDialogOptions = {
+      title: 'Choose biology file',
+      defaultPath: workspaceRoot,
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: [
+        { name: 'Biology files', extensions },
+        { name: 'All Files', extensions: ['*'] }
+      ]
+    }
+    const mainWindow = getMainWindow()
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options)
+    return {
+      canceled: result.canceled,
+      path: result.canceled ? null : (result.filePaths[0] ?? null)
+    }
+  })
+
   handleInvoke(
     'skill:save-file',
     async (_, payload: unknown) => {
@@ -2831,6 +2906,56 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
     )
   )
+  handleInvoke('biologyRoom:create', async (_, payload: unknown) =>
+    biologyRoomService.create(
+      parseIpcPayload('biologyRoom:create', biologyRoomCreatePayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:openOrCreate', async (_, payload: unknown) =>
+    biologyRoomService.openOrCreate(
+      parseIpcPayload('biologyRoom:openOrCreate', biologyRoomOpenOrCreatePayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:load', async (_, payload: unknown) =>
+    biologyRoomService.load(
+      parseIpcPayload('biologyRoom:load', biologyRoomLoadPayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:list', async (_, payload: unknown) =>
+    biologyRoomService.list(
+      parseIpcPayload('biologyRoom:list', biologyRoomListPayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:observe', async (_, payload: unknown) =>
+    biologyRoomService.observe(
+      parseIpcPayload('biologyRoom:observe', biologyRoomObservePayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:apply', async (_, payload: unknown) =>
+    biologyRoomService.apply(
+      parseIpcPayload('biologyRoom:apply', biologyRoomApplyPayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:refresh', async (_, payload: unknown) =>
+    biologyRoomService.refresh(
+      parseIpcPayload('biologyRoom:refresh', biologyRoomRefreshPayloadSchema, payload)
+    )
+  )
+  handleInvoke('biologyRoom:history', async (_, payload: unknown) =>
+    biologyRoomService.history(
+      parseIpcPayload('biologyRoom:history', biologyRoomHistoryPayloadSchema, payload)
+    )
+  )
+  handleInvoke('biogym:doctor', async () => {
+    const service = getBioGymRuntimeService()
+    if (!service) return { ok: false, message: 'BioGym runtime service is not initialized.' }
+    return service.doctor()
+  })
+  handleInvoke('biogym:replay', async () => {
+    const service = getBioGymRuntimeService()
+    if (!service) return { replayed: 0 }
+    return service.replayRunSnapshots()
+  })
   handleInvoke('workspacePreview:listPlugins', async (_, payload: unknown) => {
     parseIpcPayload('workspacePreview:listPlugins', workspacePreviewListPluginsPayloadSchema, payload ?? {})
     return workspacePreviewHost.listPlugins()
@@ -2842,76 +2967,101 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     if (result.ok) trackWorkspacePreviewSessionForSender(event.sender, result.session.id)
     return result
   })
-  handleInvoke('workspacePreview:observe', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:observe', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:observe',
       workspacePreviewObservePayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.observe(request.sessionId)
   })
-  handleInvoke('workspacePreview:releaseSession', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:releaseSession', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:releaseSession',
       workspacePreviewReleaseSessionPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) return false
     return releaseWorkspacePreviewSession(request.sessionId)
   })
-  handleInvoke('workspacePreview:describeAsset', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:describeAsset', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:describeAsset',
       workspacePreviewDescribeAssetPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.describeAsset(request.sessionId)
   })
-  handleInvoke('workspacePreview:readRange', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:readRange', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:readRange',
       workspacePreviewReadRangePayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.readRange(request.sessionId, request.range)
   })
-  handleInvoke('workspacePreview:prepareArtifact', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:prepareArtifact', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:prepareArtifact',
       workspacePreviewPrepareArtifactPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.prepareArtifact(request.sessionId, request.request)
   })
-  handleInvoke('workspacePreview:readArtifactRange', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:readArtifactRange', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:readArtifactRange',
       workspacePreviewReadArtifactRangePayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.readArtifactRange(request.sessionId, request.request)
   })
-  handleInvoke('workspacePreview:applyEdit', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:applyEdit', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:applyEdit',
       workspacePreviewApplyEditPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.applyEdit(request.sessionId, request.operation)
   })
-  handleInvoke('workspacePreview:export', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:export', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:export',
       workspacePreviewExportPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.exportPreview(request.sessionId, request.target)
   })
-  handleInvoke('workspacePreview:invokeAction', async (_, payload: unknown) => {
+  handleInvoke('workspacePreview:invokeAction', async (event, payload: unknown) => {
     const request = parseIpcPayload(
       'workspacePreview:invokeAction',
       workspacePreviewInvokeActionPayloadSchema,
       payload
     )
+    if (!ownsWorkspacePreviewSession(event.sender, request.sessionId)) {
+      return workspacePreviewSessionAccessDenied()
+    }
     return workspacePreviewHost.invokeAction(request.sessionId, request.action)
   })
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
@@ -3014,7 +3164,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
 
     const watchId = randomUUID()
     try {
-      const watcher = watch(watchedPath, { persistent: false }, () => {
+      const watchedName = basename(watchedPath)
+      const watcher = watch(dirname(watchedPath), { persistent: false }, (_eventType, filename) => {
+        // Watching the containing directory survives editor save patterns that
+        // atomically replace the inode. A missing filename is treated
+        // conservatively because some platforms omit it.
+        if (filename !== null && basename(String(filename)) !== watchedName) return
         scheduleWorkspaceFileChange(watchId)
       })
       workspaceFileWatchers.set(watchId, {

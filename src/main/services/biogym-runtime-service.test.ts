@@ -250,8 +250,8 @@ describe('BioGymRuntimeService', () => {
       loadSettings: async () => testSettings({
         enabled: true,
         cliPath: process.execPath,
-        sshHost: 'beam-root',
-        remoteRoot: '/mnt/shared-storage-user/beam/chengkaiyao/bio_world'
+        sshHost: 'test-biogym-host',
+        remoteRoot: '/srv/biogym'
       }),
       biologyRoomService: new BiologyRoomService(),
       cliRunner: cli.run,

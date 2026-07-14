@@ -10,6 +10,7 @@ import {
 } from './workspace-intel-mcp-config'
 import { GUI_WORKSPACE_INTEL_MCP_LAUNCH_FLAG } from './workspace-intel-mcp-server'
 import { WorkspaceIntelToolNames } from '../../packages/workers/workspace-intel/src/contract'
+import { BIOLOGY_ROOM_MCP_TOOL_NAMES } from './biology-room-mcp-tools'
 import {
   MODEL_ROUTER_BASE_URL_ENV,
   MODEL_ROUTER_RUNTIME_API_KEY_ENV,
@@ -79,7 +80,10 @@ describe('workspace intel MCP config', () => {
       GUI_WORKSPACE_INTEL_MCP_LAUNCH_FLAG,
       '--include-global-skills'
     ])
-    expect(workspaceIntelMcpEnabledTools()).toEqual([...WorkspaceIntelToolNames])
+    expect(workspaceIntelMcpEnabledTools()).toEqual([
+      ...WorkspaceIntelToolNames,
+      ...BIOLOGY_ROOM_MCP_TOOL_NAMES
+    ])
   })
 
   it('preserves string env while forcing Electron node mode', () => {

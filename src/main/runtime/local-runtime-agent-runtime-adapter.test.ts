@@ -386,6 +386,63 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
     })
   })
 
+  it('forwards trusted native tool context to the local runtime startTurn request', async () => {
+    const captured: CapturedRequest[] = []
+    const adapter = adapterWithCapturedRequests(captured)
+
+    await adapter.startTurn({ settings: buildSettings() }, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      text: '请查看结果并继续',
+      nativeToolContext: { activeToolNames: ['biogym_design'] }
+    })
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toMatchObject({
+      pathAndQuery: '/v1/threads/thread-1/turns',
+      body: { nativeToolContext: { activeToolNames: ['biogym_design'] } }
+    })
+  })
+
+  it('forwards a trusted host continuation id and maps a reused handle', async () => {
+    const captured: CapturedRequest[] = []
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({
+      request: vi.fn(async (_settings, pathAndQuery, init) => {
+        if (init.body) {
+          captured.push({
+            pathAndQuery,
+            body: JSON.parse(init.body) as Record<string, unknown>
+          })
+        }
+        return jsonResponse({
+          threadId: 'thread-1',
+          turnId: 'turn-existing',
+          userMessageItemId: 'item_turn-existing_user',
+          reused: true
+        })
+      })
+    })
+
+    const handle = await adapter.startTurn({ settings: buildSettings() }, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      text: 'BioGym stage completed',
+      hostRequestId: ' biogym:run-1:stage:8 '
+    })
+
+    expect(captured).toHaveLength(1)
+    expect(captured[0]).toMatchObject({
+      pathAndQuery: '/v1/threads/thread-1/turns',
+      body: { hostRequestId: 'biogym:run-1:stage:8' }
+    })
+    expect(handle).toEqual({
+      threadId: 'thread-1',
+      turnId: 'turn-existing',
+      userMessageItemId: 'item_turn-existing_user',
+      reused: true
+    })
+  })
+
   it.each(MODEL_ROUTER_MODEL_CASES)(
     'routes resumeSession %s model through the resolved Model Router alias',
     async (_name, model) => {
@@ -969,6 +1026,63 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
           question: 'Choose scope',
           options: [{ label: 'Demo', description: 'Small run' }]
         }]
+      })
+    ])
+  })
+
+  it('maps local runtime approval status onto the shared decision shape', async () => {
+    const adapter = createLocalRuntimeAgentRuntimeAdapter({
+      request: vi.fn(async () => jsonResponse({})),
+      events: async function* () {
+        yield {
+          kind: 'approval_requested',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          approvalId: 'approval-1',
+          toolName: 'biogym_design',
+          status: 'pending',
+          summary: 'Run biogym_design(operation="start")',
+          seq: 9,
+          timestamp: '2026-06-02T00:00:03.000Z'
+        }
+        yield {
+          kind: 'approval_resolved',
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          approvalId: 'approval-1',
+          toolName: 'biogym_design',
+          status: 'allowed',
+          summary: 'Run biogym_design(operation="start")',
+          seq: 10,
+          timestamp: '2026-06-02T00:00:04.000Z'
+        }
+      }
+    })
+
+    const events = []
+    for await (const event of adapter.subscribeEvents?.(
+      { settings: buildSettings() },
+      { runtimeId: 'sciforge', threadId: 'thread-1', sinceSeq: 0 }
+    ) ?? []) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'approval_requested',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        approvalId: 'approval-1',
+        toolName: 'biogym_design',
+        summary: 'Run biogym_design(operation="start")'
+      }),
+      expect.objectContaining({
+        kind: 'approval_resolved',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        approvalId: 'approval-1',
+        decision: 'allowed',
+        message: 'Run biogym_design(operation="start")'
       })
     ])
   })

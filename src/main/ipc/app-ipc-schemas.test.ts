@@ -24,6 +24,14 @@ import {
   agentRuntimeEventSubscribePayloadSchema,
   agentRuntimeUserInputResolvePayloadSchema,
   agentRuntimeStartTurnPayloadSchema,
+  biologyRoomApplyPayloadSchema,
+  biologyRoomCreatePayloadSchema,
+  biologyRoomHistoryPayloadSchema,
+  biologyRoomListPayloadSchema,
+  biologyRoomLoadPayloadSchema,
+  biologyRoomObservePayloadSchema,
+  biologyRoomOpenOrCreatePayloadSchema,
+  biologyRoomRefreshPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
   evidenceDagUpdatePayloadSchema,
@@ -138,6 +146,18 @@ describe('app-ipc-schemas', () => {
         runtimeId: 'codex',
         threadId: 'thread-1',
         text: ' '
+      })
+    ).toThrow()
+  })
+
+  it('rejects renderer attempts to forge main-derived native tool context', () => {
+    expect(() =>
+      agentRuntimeStartTurnPayloadSchema.parse({
+        runtimeId: 'sciforge',
+        threadId: 'thread-1',
+        text: 'continue',
+        workspace: '/tmp/workspace',
+        nativeToolContext: { activeToolNames: ['biogym_design'] }
       })
     ).toThrow()
   })
@@ -783,6 +803,63 @@ describe('app-ipc-schemas', () => {
         target: { kind: 'workspace-file', format: 'pdb' }
       })
     ).toThrow()
+  })
+
+  it('uses the shared Biology Room schemas at the IPC boundary', () => {
+    expect(biologyRoomCreatePayloadSchema.parse({
+      workspaceRoot: ' /tmp/workspace ',
+      roomId: ' room-1 ',
+      title: ' Genome room ',
+      assets: [{ path: './data\\genome.fa', asReference: true }]
+    })).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1',
+      title: 'Genome room',
+      assets: [{ path: 'data/genome.fa', asReference: true, indexPaths: [] }]
+    })
+    expect(biologyRoomOpenOrCreatePayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      path: 'data/genome.fa'
+    })).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      path: 'data/genome.fa',
+      indexPaths: []
+    })
+    expect(biologyRoomLoadPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1'
+    })).toEqual({ workspaceRoot: '/tmp/workspace', roomId: 'room-1' })
+    expect(biologyRoomListPayloadSchema.parse({ workspaceRoot: '/tmp/workspace' })).toEqual({
+      workspaceRoot: '/tmp/workspace',
+      limit: 100
+    })
+    expect(biologyRoomObservePayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1'
+    })).toMatchObject({
+      assetLimit: 32,
+      annotationLimit: 50,
+      contigLimit: 50
+    })
+    expect(biologyRoomApplyPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1',
+      baseRevision: 1,
+      operations: [{ type: 'setActiveAsset', assetId: null }]
+    })).toMatchObject({ dryRun: false, baseRevision: 1 })
+    expect(biologyRoomRefreshPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1'
+    })).toEqual({ workspaceRoot: '/tmp/workspace', roomId: 'room-1' })
+    expect(biologyRoomHistoryPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      roomId: 'room-1'
+    })).toEqual({ workspaceRoot: '/tmp/workspace', roomId: 'room-1', limit: 50 })
+
+    expect(() => biologyRoomOpenOrCreatePayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      path: '../outside.fa'
+    })).toThrow(/stay within the workspace/)
   })
 
   it('accepts speech transcription payloads without provider override settings', () => {

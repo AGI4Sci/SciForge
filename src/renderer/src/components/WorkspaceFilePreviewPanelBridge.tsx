@@ -1,4 +1,5 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import { biologyRoomFormatFromPath } from '@shared/biology-room'
 import type {
   VisibleContextComponentSnapshot,
   VisibleContextResource
@@ -7,7 +8,7 @@ import {
   isDeferredNonLifeScienceExtension,
   type WorkspaceObservation
 } from '@shared/workspace-preview'
-import { FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
+import { Dna, FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
 import {
   useEffect,
   useMemo,
@@ -43,6 +44,7 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
+  onOpenBiologyRoom?: (target: WorkspaceFileTarget) => void
 }
 
 export type WorkspacePreviewIntegrityNotice =
@@ -112,7 +114,8 @@ export function WorkspaceFilePreviewPanelBridge({
   className,
   annotationQuestionBridge,
   onClose,
-  onOpenDirectory
+  onOpenDirectory,
+  onOpenBiologyRoom
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
   const targetPath = target?.path
   const route = useMemo(
@@ -135,6 +138,7 @@ export function WorkspaceFilePreviewPanelBridge({
           annotationQuestionBridge={annotationQuestionBridge}
           onClose={onClose}
           onOpenDirectory={onOpenDirectory}
+          onOpenBiologyRoom={onOpenBiologyRoom}
         />
       )}
     </WorkspacePreviewPanelShell>
@@ -249,7 +253,8 @@ function WorkspacePreviewShellBody({
   workspaceRoot,
   annotationQuestionBridge,
   onClose,
-  onOpenDirectory
+  onOpenDirectory,
+  onOpenBiologyRoom
 }: {
   context: WorkspacePreviewPanelShellContext
   target: WorkspaceFileTarget | null
@@ -258,6 +263,7 @@ function WorkspacePreviewShellBody({
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
+  onOpenBiologyRoom?: (target: WorkspaceFileTarget) => void
 }): ReactElement {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const lastEditSummary = context.state.lastEditSummary
@@ -267,6 +273,7 @@ function WorkspacePreviewShellBody({
     state: context.state,
     assetError: context.assetError
   })
+  const canOpenBiologyRoom = Boolean(target && biologyRoomFormatFromPath(target.path) && onOpenBiologyRoom)
   const visibleContextComponent = useMemo(
     () => buildWorkspacePreviewVisibleContextComponent({
       context,
@@ -329,6 +336,24 @@ function WorkspacePreviewShellBody({
         >
           <RefreshCw className={compactClassName('h-4 w-4', context.refreshing ? 'animate-spin' : undefined)} aria-hidden="true" />
         </button>
+        {canOpenBiologyRoom ? (
+          <button
+            type="button"
+            className="inline-flex h-7 items-center justify-center gap-1.5 rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 text-[10.5px] font-medium text-emerald-700 hover:bg-emerald-500/15 dark:text-emerald-300"
+            title="Open in Biology Room"
+            aria-label="Open in Biology Room"
+            onClick={() => {
+              if (!target || !onOpenBiologyRoom) return
+              onOpenBiologyRoom({
+                ...target,
+                workspaceRoot: target.workspaceRoot?.trim() || workspaceRoot
+              })
+            }}
+          >
+            <Dna className="h-3.5 w-3.5" aria-hidden="true" />
+            Biology Room
+          </button>
+        ) : null}
         {canOpenDirectory ? (
           <button
             type="button"

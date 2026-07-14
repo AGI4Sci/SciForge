@@ -665,6 +665,7 @@
   "sideConversationNeedsActiveThread": "Pick a thread before opening a side conversation.",
   "inspector": "Changes",
   "rightPanelFiles": "Files",
+  "rightPanelBiologyRoom": "Biology Room",
   "rightPanelChanges": "Changes",
   "rightPanelBrowser": "Preview",
   "rightPanelCheckpoints": "Checkpoints",

@@ -2192,7 +2192,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.startThread).not.toHaveBeenCalled()
   })
 
-  it('injects the thread workspace into workspace-intel dynamic MCP calls', async () => {
+  it('injects the thread workspace into workspace-intel and Biology Room dynamic MCP calls', async () => {
     const client = controllableClient()
     const storageRoot = await tempRoot()
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
@@ -2202,17 +2202,51 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
     const mcpClient: CodexDynamicMcpClient = {
       listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_workspace_read',
-          description: 'Read workspace file.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string' },
-              workspaceRoot: { type: 'string' }
+        tools: [
+          {
+            name: 'gui_workspace_read',
+            description: 'Read workspace file.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                path: { type: 'string' },
+                workspaceRoot: { type: 'string' }
+              }
+            }
+          },
+          {
+            name: 'biology_room_observe',
+            description: 'Observe active Biology Room.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                roomId: { type: 'string' },
+                workspaceRoot: { type: 'string' }
+              }
+            }
+          },
+          {
+            name: 'biology_room_apply',
+            description: 'Apply active Biology Room operations.',
+            inputSchema: {
+              type: 'object',
+              properties: {
+                roomId: { type: 'string' },
+                workspaceRoot: { type: 'string' },
+                baseRevision: { type: 'number' },
+                operations: { type: 'array', items: { type: 'object' } },
+                actor: {
+                  type: 'object',
+                  properties: {
+                    kind: { type: 'string' },
+                    taskId: { type: 'string' },
+                    turnId: { type: 'string' }
+                  }
+                }
+              }
             }
           }
-        }]
+        ]
       })),
       callTool,
       close: vi.fn(async () => undefined)
@@ -2275,6 +2309,258 @@ describe('CodexRuntimeService compatibility operations', () => {
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
     )
+
+    callTool.mockClear()
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'tool-request-2',
+      threadId: 'thread-1',
+      tool: 'biology_room_observe',
+      arguments: { roomId: 'protein-room' }
+    })).resolves.toMatchObject({ success: true })
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'biology_room_observe',
+        arguments: {
+          roomId: 'protein-room',
+          workspaceRoot: '/tmp/awesome-ai-scientist'
+        }
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+    )
+
+    callTool.mockClear()
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'tool-request-3',
+      threadId: 'thread-1',
+      turnId: 'turn-3',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 3,
+        operations: [{ type: 'setSelection', selection: null }],
+        actor: { kind: 'user', taskId: 'spoofed-task' }
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'biology_room_apply',
+        arguments: {
+          roomId: 'protein-room',
+          baseRevision: 3,
+          operations: [{ type: 'setSelection', selection: null }],
+          workspaceRoot: '/tmp/awesome-ai-scientist',
+          actor: {
+            kind: 'agent',
+            taskId: 'thread-1',
+            turnId: 'turn-3'
+          }
+        }
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+    )
+
+    callTool.mockClear()
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'tool-request-4',
+      threadId: 'thread-1',
+      turnId: 'turn-4',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        workspaceRoot: '/tmp/explicit-workspace',
+        baseRevision: 4,
+        operations: [{ type: 'setViewport', viewport: { start: 10, end: 20 } }],
+        actor: { kind: 'agent', taskId: 'spoofed-agent', turnId: 'spoofed-turn' }
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(callTool).toHaveBeenCalledWith(
+      {
+        name: 'biology_room_apply',
+        arguments: {
+          roomId: 'protein-room',
+          workspaceRoot: '/tmp/explicit-workspace',
+          baseRevision: 4,
+          operations: [{ type: 'setViewport', viewport: { start: 10, end: 20 } }],
+          actor: {
+            kind: 'agent',
+            taskId: 'thread-1',
+            turnId: 'turn-4'
+          }
+        }
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
+    )
+  })
+
+  it('approves persistent Biology Room changes but not viewer-only operations or dry runs', async () => {
+    const client = {
+      ...controllableClient(),
+      pendingServerRequests: vi.fn(() => [])
+    } as unknown as CodexAppServerJsonRpcClient
+    const storageRoot = await tempRoot()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const sink = { send: vi.fn() }
+    const callTool = vi.fn(async () => ({
+      content: [{ type: 'text', text: 'applied' }]
+    }))
+    const mcpClient: CodexDynamicMcpClient = {
+      listTools: vi.fn(async () => ({
+        tools: [{
+          name: 'biology_room_apply',
+          description: 'Apply active Biology Room operations.',
+          inputSchema: { type: 'object' }
+        }]
+      })),
+      callTool,
+      close: vi.fn(async () => undefined)
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      storageRoot,
+      workspaceIntelMcpLaunch: {
+        appPath: '/tmp/sciforge-test-app',
+        execPath: '/tmp/sciforge-test-app/SciForge',
+        isPackaged: false
+      },
+      mcpClientFactory: async () => mcpClient,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(service.startThread({
+      title: 'Biology approvals',
+      workspace: '/tmp/biology-workspace'
+    })).resolves.toMatchObject({ ok: true })
+
+    const protectedCall = Promise.resolve(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'protected-change',
+      callId: 'biology-call-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 1,
+        operations: [{ type: 'removeAsset', assetId: 'asset-1' }]
+      }
+    }))
+    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
+    const approval = service.pendingServerRequests()[0]!
+    expect(approval).toMatchObject({
+      kind: 'approval',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      itemId: 'biology-call-1',
+      summary: expect.stringContaining('removeAsset'),
+      params: {
+        tool: 'biology_room_apply',
+        operationTypes: ['removeAsset'],
+        roomId: 'protein-room',
+        baseRevision: 1
+      }
+    })
+    expect(callTool).not.toHaveBeenCalled()
+    await expect(service.resolveApproval({
+      requestId: approval.requestId,
+      decision: 'allowed'
+    })).resolves.toEqual({ ok: true })
+    await expect(protectedCall).resolves.toMatchObject({ success: true })
+    expect(callTool).toHaveBeenCalledTimes(1)
+
+    callTool.mockClear()
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'viewer-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 2,
+        operations: [{ type: 'setMolecularView', representation: 'cartoon' }]
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(service.pendingServerRequests()).toEqual([])
+    expect(callTool).toHaveBeenCalledTimes(1)
+
+    callTool.mockClear()
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'dry-run-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 2,
+        dryRun: true,
+        operations: [{ type: 'restoreRevision', revision: 1 }]
+      }
+    })).resolves.toMatchObject({ success: true })
+    expect(service.pendingServerRequests()).toEqual([])
+    expect(callTool).toHaveBeenCalledTimes(1)
+
+    callTool.mockClear()
+    const deniedCall = Promise.resolve(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'denied-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 2,
+        operations: [{ type: 'upsertAnnotation', annotation: { id: 'annotation-1' } }]
+      }
+    }))
+    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
+    const deniedApproval = service.pendingServerRequests()[0]!
+    await service.resolveApproval({ requestId: deniedApproval.requestId, decision: 'denied' })
+    await expect(deniedCall).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: 'inputText', text: expect.stringContaining('denied') }]
+    })
+    expect(callTool).not.toHaveBeenCalled()
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'missing-task-context',
+      tool: 'biology_room_apply',
+      arguments: {
+        workspaceRoot: '/tmp/biology-workspace',
+        roomId: 'protein-room',
+        baseRevision: 2,
+        operations: [{ type: 'setSelection', selection: null }],
+        actor: { kind: 'agent', taskId: 'spoofed-task' }
+      }
+    })).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: 'inputText', text: expect.stringContaining('active task context') }]
+    })
+    expect(callTool).not.toHaveBeenCalled()
+
+    await expect(service.startTurn({
+      threadId: 'thread-1',
+      text: 'Apply one more protected room change.'
+    })).resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+    const cancelledCall = Promise.resolve(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'cancelled-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'biology_room_apply',
+      arguments: {
+        roomId: 'protein-room',
+        baseRevision: 2,
+        operations: [{ type: 'deleteAnnotation', annotationId: 'annotation-1' }]
+      }
+    }))
+    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
+    await expect(service.interruptTurn('thread-1', 'turn-1')).resolves.toEqual({ ok: true })
+    await expect(cancelledCall).resolves.toMatchObject({
+      success: false,
+      contentItems: [{ type: 'inputText', text: expect.stringContaining('cancelled') }]
+    })
+    expect(service.pendingServerRequests()).toEqual([])
+    expect(callTool).not.toHaveBeenCalled()
   })
 
   it('advertises the workspace patch tool, requests approval in workspace mode, and auto-applies in full access', async () => {

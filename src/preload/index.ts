@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
+import { BIOGYM_RUN_EVENT_CHANNEL } from '../shared/biogym'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
 import { workspacePreviewAssetSourceUrl } from '../shared/workspace-preview-asset-url'
 
@@ -262,7 +263,6 @@ const api = {
       ipcRenderer.invoke('workspacePreview:releaseSession', { sessionId }),
     watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
     unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
-    getAssetSourceUrl: workspacePreviewAssetSourceUrl,
     onChanged: (handler) => {
       const wrapped = (
         _: Electron.IpcRendererEvent,
@@ -270,6 +270,30 @@ const api = {
       ) => handler(payload)
       ipcRenderer.on('workspacePreview:changed', wrapped)
       return () => ipcRenderer.removeListener('workspacePreview:changed', wrapped)
+    },
+    getAssetSourceUrl: workspacePreviewAssetSourceUrl
+  },
+  biologyRoom: {
+    pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
+    create: (input) => ipcRenderer.invoke('biologyRoom:create', input),
+    openOrCreate: (input) => ipcRenderer.invoke('biologyRoom:openOrCreate', input),
+    load: (input) => ipcRenderer.invoke('biologyRoom:load', input),
+    list: (input) => ipcRenderer.invoke('biologyRoom:list', input),
+    observe: (input) => ipcRenderer.invoke('biologyRoom:observe', input),
+    apply: (input) => ipcRenderer.invoke('biologyRoom:apply', input),
+    refresh: (input) => ipcRenderer.invoke('biologyRoom:refresh', input),
+    history: (input) => ipcRenderer.invoke('biologyRoom:history', input)
+  },
+  biogym: {
+    doctor: () => ipcRenderer.invoke('biogym:doctor'),
+    replay: () => ipcRenderer.invoke('biogym:replay'),
+    onRunEvent: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        payload: Parameters<typeof handler>[0]
+      ) => handler(payload)
+      ipcRenderer.on(BIOGYM_RUN_EVENT_CHANNEL, wrapped)
+      return () => ipcRenderer.removeListener(BIOGYM_RUN_EVENT_CHANNEL, wrapped)
     }
   },
   biologyRoom: {

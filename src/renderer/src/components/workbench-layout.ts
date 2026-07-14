@@ -238,13 +238,17 @@ function persistBoolean(key: string, value: boolean): void {
 
 export function readStoredRightPanelMode(): RightPanelMode {
   const raw = readBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
-  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'visual-review'
+  if (raw === 'sciforge-canvas') {
+    writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, 'visual-review')
+    return 'visual-review'
+  }
+  return raw === 'changes' || raw === 'browser' || raw === 'biology' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'visual-review'
     ? raw
     : null
 }
 
 export function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'visual-review') {
+  if (mode === 'changes' || mode === 'browser' || mode === 'biology' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'visual-review') {
     writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
   } else {
     removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)

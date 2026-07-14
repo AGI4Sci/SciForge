@@ -11,12 +11,12 @@ Open **Settings → Remote Resources → BioGym protein design** and set:
 
 - BioGym CLI path: an absolute path such as
   `/path/to/biogym/.venv/bin/biogym`;
-- SSH alias: `beam-root`;
-- remote root: `/mnt/shared-storage-user/beam/chengkaiyao/bio_world`.
+- SSH alias: an alias from the user's SSH config with access to the BioGym host;
+- remote root: the absolute BioGym project path on that host.
 
-Use **Check BioGym readiness**, then enable the integration. The current
-development checkout is discovered automatically and enabled only after the
-remote doctor succeeds. Packaged/fresh installations remain disabled.
+Use **Check BioGym readiness**, then enable the integration. Fresh and
+packaged installations remain disabled until all three values are configured
+explicitly and the remote doctor succeeds.
 
 On macOS, the BioGym root CLI must use a standard wheel install, not a
 setuptools editable install. Python 3.12 skips `.pth` files when macOS reapplies

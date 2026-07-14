@@ -176,6 +176,8 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
       if (input.guiPlan) body.guiPlan = input.guiPlan
       if (input.remoteTargetId?.trim()) body.remoteTargetId = input.remoteTargetId.trim()
       if (input.metadata) body.metadata = input.metadata
+      if (input.hostRequestId?.trim()) body.hostRequestId = input.hostRequestId.trim()
+      if (input.nativeToolContext) body.nativeToolContext = input.nativeToolContext
       if (input.attachmentIds?.length) body.attachmentIds = input.attachmentIds
       const modelObjectReferences = input.fileReferences
         ?.filter((reference) => reference.modelRouterObject === true && reference.relativePath.trim())
@@ -976,7 +978,8 @@ function mapTurnHandle(value: unknown, fallbackThreadId: string): AgentRuntimeTu
   return {
     threadId: stringValue(record.threadId) || fallbackThreadId,
     turnId: stringValue(record.turnId) || stringValue(record.id),
-    userMessageItemId: optionalString(record.userMessageItemId)
+    userMessageItemId: optionalString(record.userMessageItemId),
+    ...(record.reused === true ? { reused: true } : {})
   }
 }
 
@@ -1180,6 +1183,49 @@ function mapLocalRuntimeEvent(value: unknown, fallbackThreadId: string): AgentRu
       status: localRuntimeUserInputStatus(record.status),
       answers: localRuntimeInputAnswers(record.answers),
       message: optionalString(record.message) ?? optionalString(record.error)
+    }
+  }
+
+  if (kind === 'approval_requested') {
+    const approvalId = stringValue(record.approvalId)
+    const toolName = optionalString(record.toolName)
+    return {
+      kind: 'approval_requested',
+      threadId,
+      runtimeId: SCIFORGE_RUNTIME_ID,
+      seq,
+      createdAt,
+      turnId,
+      itemId: itemId || optionalString(record.itemId),
+      approvalId,
+      summary: stringValue(record.summary) || (toolName ? `Run ${toolName}` : 'Approval required'),
+      ...(toolName ? { toolName } : {})
+    }
+  }
+
+  if (kind === 'approval_resolved') {
+    const approvalId = stringValue(record.approvalId)
+    const status = stringValue(record.status) || stringValue(record.decision)
+    const decision = status === 'allowed'
+      ? 'allowed' as const
+      : status === 'denied' || status === 'expired'
+        ? 'denied' as const
+        : 'error' as const
+    const message = optionalString(record.message) ??
+      optionalString(record.error) ??
+      optionalString(record.summary) ??
+      (decision === 'error' ? 'Approval resolution status was unavailable.' : undefined)
+    return {
+      kind: 'approval_resolved',
+      threadId,
+      runtimeId: SCIFORGE_RUNTIME_ID,
+      seq,
+      createdAt,
+      turnId,
+      itemId: itemId || optionalString(record.itemId),
+      approvalId,
+      decision,
+      ...(message ? { message } : {})
     }
   }
 

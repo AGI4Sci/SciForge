@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray } from 'electron'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -107,6 +107,8 @@ import {
   configuredFeedbackGatewayToken,
   configuredFeedbackGatewayUrl
 } from './services/feedback-gateway-client'
+import { BiologyRoomService } from './services/biology-room-service'
+import { BioGymRuntimeService } from './services/biogym-runtime-service'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
 import {
   createPaperRadarWorkerService,
@@ -171,12 +173,16 @@ import { webhookUrl } from './remote-channel-runtime-helpers'
 import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
 import {
   resolveAvailableLocalRuntimePort,
+  setLocalRuntimeBioGymBridge,
   setLocalRuntimeUnexpectedExitHandler,
   type LocalRuntimeUnexpectedExitInfo
 } from './local-runtime-process'
 import { RestartBudget, type LocalRuntimeStatus } from './local-runtime-supervisor'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
+import { registerWorkspacePreviewAssetScheme } from './workspace-preview-asset-protocol'
+
+registerWorkspacePreviewAssetScheme(protocol)
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const HIDDEN_START_ARG = '--hidden'
@@ -383,6 +389,7 @@ let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
 let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
+let bioGymRuntimeService: BioGymRuntimeService | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 type RuntimeIdleListThreads = NonNullable<Parameters<typeof waitForRuntimeTurnsIdle>[0]['listThreads']>
@@ -675,6 +682,9 @@ async function stopManagedRuntimes(): Promise<void> {
       evidenceArtifactLifecycle = null
       paperRadarWorkerService?.close()
       paperRadarWorkerService = null
+      setLocalRuntimeBioGymBridge(null)
+      await bioGymRuntimeService?.stop()
+      bioGymRuntimeService = null
       await stopEvidenceDagSidecar()
       await stopProjectDagSidecar()
       await stopModelRouterSidecar()
@@ -1761,6 +1771,7 @@ app.whenReady().then(async () => {
     })
   })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
+  const biologyRoomService = new BiologyRoomService()
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     adapters: [
@@ -1781,7 +1792,16 @@ app.whenReady().then(async () => {
       memory: sharedMemoryService,
       workspaceReferences: workspaceReferenceService,
       visibleContext: visibleContextService,
-      goals: runtimeGoalService
+      goals: runtimeGoalService,
+      nativeToolContext: {
+        resolve: async ({ runtimeId, threadId, workspace }) => {
+          const service = bioGymRuntimeService
+          if (!service || runtimeId !== 'sciforge') return undefined
+          return await service.hasActiveDesignRun({ runtimeId, threadId, workspace })
+            ? { activeToolNames: ['biogym_design'] }
+            : undefined
+        }
+      }
     }
   })
   configureEvidenceDagUpdateQueue({
@@ -1847,6 +1867,46 @@ app.whenReady().then(async () => {
     })
   })
   runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
+
+  bioGymRuntimeService = new BioGymRuntimeService({
+    userDataPath: app.getPath('userData'),
+    loadSettings: () => store.load(),
+    biologyRoomService,
+    emitRunEvent: (channel, event) => {
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (!window.isDestroyed()) window.webContents.send(channel, event)
+      }
+      devBrowserBridgeServer?.send(channel, event)
+    },
+    continueAgent: async (input) => {
+      return agentRuntimeHost.startContinuationTurn({
+        runtimeId: input.runtimeId,
+        threadId: input.threadId,
+        text: input.text,
+        displayText: input.metadata.event === 'remote_ready'
+          ? 'BioGym is ready. SciForge is starting the protein-design workflow.'
+          : input.metadata.event === 'diagnostic'
+            ? 'BioGym needs attention. SciForge is reviewing the diagnostic.'
+          : 'BioGym stage completed. SciForge is reviewing the new protein-design results.',
+        workspace: input.workspace,
+        metadata: input.metadata,
+        hostRequestId: input.hostRequestId
+      }, {
+        beforeStart: async () => {
+          const service = bioGymRuntimeService
+          if (!service) {
+            return {
+              allow: false,
+              reason: 'biogym_runtime_unavailable'
+            }
+          }
+          return service.checkContinuationFreshness(input.freshness)
+        }
+      })
+    }
+  })
+  const bioGymInternalServer = await bioGymRuntimeService.start()
+  setLocalRuntimeBioGymBridge(bioGymInternalServer)
 
   workflowRuntime = createWorkflowRuntime({
     store,
@@ -2225,6 +2285,8 @@ app.whenReady().then(async () => {
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
+    biologyRoomService,
+    getBioGymRuntimeService: () => bioGymRuntimeService,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     ensureEvidenceDagReady: async () => {

@@ -25,6 +25,10 @@ const allowedKunBoundaryImports = new Map<string, string[]>([
     ['kun/src/config/kun-config.js', 'kun/src/contracts/capabilities.js']
   ],
   [
+    'src/main/biogym-tool-schema-contract.ts',
+    ['kun/src/adapters/tool/biogym-design-tool.js']
+  ],
+  [
     'src/shared/gui-plan.test.ts',
     ['kun/src/shared/gui-plan']
   ]

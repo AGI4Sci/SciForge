@@ -560,6 +560,8 @@ export type AgentRuntimeTurnHandle = {
   threadId: string
   turnId: string
   userMessageItemId?: string
+  /** True when the runtime reused a previously accepted host-generated turn. */
+  reused?: boolean
 }
 
 export type AgentRuntimeThreadListInput = {
@@ -597,11 +599,30 @@ export type AgentRuntimeThreadSidebarProbe = {
   text: string | null
 }
 
+/**
+ * Main-process-derived native tool availability for a turn.
+ *
+ * Renderer IPC deliberately does not accept this field. The runtime host
+ * overwrites it from trusted service state before forwarding a turn to the
+ * local SciForge runtime.
+ */
+export type AgentRuntimeNativeToolContext = {
+  activeToolNames: Array<'biogym_design'>
+}
+
 export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
   metadata?: Record<string, unknown>
+  /**
+   * Idempotency key for a trusted host-generated continuation.
+   *
+   * AgentRuntimeHost strips this field from ordinary startTurn calls. Only
+   * startContinuationTurn is allowed to forward it to the local runtime.
+   */
+  hostRequestId?: string
+  nativeToolContext?: AgentRuntimeNativeToolContext
   workspace?: string
   mode?: string
   model?: string

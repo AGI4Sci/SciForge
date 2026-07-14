@@ -245,8 +245,8 @@ describe('preload agentRuntime bridge', () => {
         releaseSession(sessionId: string): Promise<boolean>
         watch(payload: unknown): Promise<unknown>
         unwatch(watchId: string): Promise<unknown>
-        getAssetSourceUrl(sessionId: string): string | null
         onChanged(handler: (payload: unknown) => void): () => void
+        getAssetSourceUrl(sessionId: string): string | null
       }
     }
     const openInput = {
@@ -282,7 +282,9 @@ describe('preload agentRuntime bridge', () => {
     await api.workspacePreview.releaseSession('session-1')
     await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.workspacePreview.unwatch('watch-1')
-    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session 1')
+    expect(api.workspacePreview.getAssetSourceUrl('session-1')).toBe(
+      'sciforge-preview://asset/session-1'
+    )
     const changed = vi.fn()
     const unsubscribe = api.workspacePreview.onChanged(changed)
     const wrapped = on.mock.calls.find(([channel]) => channel === 'workspacePreview:changed')?.[1]
@@ -336,14 +338,71 @@ describe('preload agentRuntime bridge', () => {
       workspaceRoot: '/tmp/workspace'
     })
     expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
-    expect(assetSourceUrl).toContain('http://127.0.0.1:5174/workspace-preview/assets/session%201')
-    expect(assetSourceUrl).toContain('clientId=electron-preload-')
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
     expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
       path: 'paper.pdf',
       workspaceRoot: '/tmp/workspace'
     })
+  })
+
+  it('exposes the Biology Room service on canonical IPC channels', async () => {
+    const api = exposedApi as {
+      biologyRoom: {
+        pickFile: (workspaceRoot: string) => Promise<unknown>
+      } & Record<
+        'create' | 'openOrCreate' | 'load' | 'list' | 'observe' | 'apply' | 'refresh' | 'history',
+        (input: unknown) => Promise<unknown>
+      >
+    }
+    const payloads = {
+      create: { workspaceRoot: '/tmp/workspace', title: 'Genome room' },
+      openOrCreate: { workspaceRoot: '/tmp/workspace', path: 'genome.fa' },
+      load: { workspaceRoot: '/tmp/workspace', roomId: 'room-1' },
+      list: { workspaceRoot: '/tmp/workspace' },
+      observe: { workspaceRoot: '/tmp/workspace', roomId: 'room-1' },
+      apply: {
+        workspaceRoot: '/tmp/workspace',
+        roomId: 'room-1',
+        baseRevision: 1,
+        operations: [{ type: 'setActiveAsset', assetId: null }]
+      },
+      refresh: { workspaceRoot: '/tmp/workspace', roomId: 'room-1' },
+      history: { workspaceRoot: '/tmp/workspace', roomId: 'room-1' }
+    } as const
+
+    await api.biologyRoom.pickFile('/tmp/workspace')
+    expect(invoke).toHaveBeenCalledWith('biologyRoom:pick-file', {
+      workspaceRoot: '/tmp/workspace'
+    })
+
+    for (const [method, payload] of Object.entries(payloads)) {
+      await api.biologyRoom[method as keyof typeof payloads](payload)
+      expect(invoke).toHaveBeenCalledWith(`biologyRoom:${method}`, payload)
+    }
+  })
+
+  it('exposes BioGym doctor and run events on canonical IPC channels', async () => {
+    const api = exposedApi as {
+      biogym: {
+        doctor(): Promise<unknown>
+        replay(): Promise<unknown>
+        onRunEvent(handler: (payload: unknown) => void): () => void
+      }
+    }
+    await api.biogym.doctor()
+    await api.biogym.replay()
+    const handler = vi.fn()
+    const unsubscribe = api.biogym.onRunEvent(handler)
+    const wrapped = on.mock.calls.find(([channel]) => channel === 'biogym:run-event')?.[1]
+    const payload = { eventId: 'event-1', designRunId: 'run-1', roomId: 'room-1' }
+    wrapped?.({}, payload)
+    unsubscribe()
+
+    expect(invoke).toHaveBeenCalledWith('biogym:doctor')
+    expect(invoke).toHaveBeenCalledWith('biogym:replay')
+    expect(handler).toHaveBeenCalledWith(payload)
+    expect(removeListener).toHaveBeenCalledWith('biogym:run-event', wrapped)
   })
 
   it('exposes speech-to-text transcription IPC', async () => {

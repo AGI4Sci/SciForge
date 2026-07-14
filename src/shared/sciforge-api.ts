@@ -1209,9 +1209,10 @@ export type SciForgeApi = {
     refresh: (input: BiologyRoomRefreshInput) => Promise<BiologyRoomApplyResult>
     history: (input: BiologyRoomHistoryInput) => Promise<BiologyRoomHistoryResult>
   }
-  /** Optional until the BioGym service PR is installed. */
+  /** Optional while connecting to an older Electron main process. */
   biogym?: {
     doctor: () => Promise<BioGymDoctorResult>
+    /** Re-emits persisted run snapshots after the renderer has subscribed. */
     replay?: () => Promise<void>
     onRunEvent: (handler: (event: BioGymRunEvent) => void) => () => void
   }

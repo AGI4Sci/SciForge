@@ -35,7 +35,10 @@ import {
 } from '../../../shared/agent-runtime-contract'
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
-import { createAgentRuntimeHost } from './host'
+import {
+  AgentRuntimeContinuationSuppressedError,
+  createAgentRuntimeHost
+} from './host'
 import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
 import { createLocalRuntimeAgentRuntimeAdapter } from '../local-runtime-agent-runtime-adapter'
@@ -826,6 +829,195 @@ describe('AgentRuntimeHost', () => {
       })
     }
   )
+  it('pins a native tool only when trusted main-process state resolves it for the owner', async () => {
+    const adapter = fakeAdapter('sciforge', {
+      id: 'local-thread',
+      runtimeId: 'sciforge',
+      title: 'Local',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    const resolve = vi.fn(async (input: { runtimeId: AgentRuntimeId; threadId: string; workspace: string }) =>
+      input.runtimeId === 'sciforge' && input.threadId === 'local-thread' && input.workspace === '/tmp/workspace'
+        ? { activeToolNames: ['biogym_design'] as Array<'biogym_design'> }
+        : undefined
+    )
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('sciforge'),
+      adapters: [adapter],
+      services: { nativeToolContext: { resolve } }
+    })
+
+    await host.startTurn({
+      runtimeId: 'sciforge',
+      threadId: 'local-thread',
+      workspace: '/tmp/workspace',
+      text: '请查看结果并继续'
+    })
+
+    expect(resolve).toHaveBeenCalledWith({
+      runtimeId: 'sciforge', threadId: 'local-thread', workspace: '/tmp/workspace'
+    })
+    expect(adapter.startTurn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        nativeToolContext: { activeToolNames: ['biogym_design'] }
+      })
+    )
+  })
+
+  it('strips a caller-forged native tool context when trusted state does not resolve it', async () => {
+    const adapter = fakeAdapter('sciforge', {
+      id: 'other-thread',
+      runtimeId: 'sciforge',
+      title: 'Local',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('sciforge'),
+      adapters: [adapter],
+      services: { nativeToolContext: { resolve: async () => undefined } }
+    })
+
+    await host.startTurn({
+      runtimeId: 'sciforge',
+      threadId: 'other-thread',
+      workspace: '/tmp/workspace',
+      text: 'ordinary request',
+      nativeToolContext: { activeToolNames: ['biogym_design'] }
+    })
+
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(dispatched?.nativeToolContext).toBeUndefined()
+  })
+
+  it('strips a caller-provided host request id from an ordinary turn', async () => {
+    const adapter = fakeAdapter('sciforge', {
+      id: 'local-thread',
+      runtimeId: 'sciforge',
+      title: 'Local',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('sciforge'),
+      adapters: [adapter]
+    })
+
+    await host.startTurn({
+      runtimeId: 'sciforge',
+      threadId: 'local-thread',
+      text: 'ordinary user turn',
+      hostRequestId: 'forged-host-id'
+    })
+
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1].hostRequestId).toBeUndefined()
+  })
+
+  it('does not accept or forward an input-shaped continuation guard on an ordinary turn', async () => {
+    const adapter = fakeAdapter('sciforge', {
+      id: 'local-thread',
+      runtimeId: 'sciforge',
+      title: 'Local',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('sciforge'),
+      adapters: [adapter]
+    })
+    const forgedGuard = vi.fn(async () => ({ allow: false as const, reason: 'forged' }))
+
+    await host.startTurn({
+      runtimeId: 'sciforge',
+      threadId: 'local-thread',
+      text: 'ordinary user turn',
+      beforeStart: forgedGuard
+    } as never)
+
+    expect(forgedGuard).not.toHaveBeenCalled()
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1]).not.toHaveProperty('beforeStart')
+  })
+
+  it('forwards a normalized host request id only for a host continuation', async () => {
+    const adapter = fakeAdapter('sciforge', {
+      id: 'local-thread',
+      runtimeId: 'sciforge',
+      title: 'Local',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('sciforge'),
+      adapters: [adapter]
+    })
+
+    await host.startContinuationTurn({
+      runtimeId: 'sciforge',
+      threadId: 'local-thread',
+      text: 'BioGym stage completed',
+      hostRequestId: ' biogym:run-1:stage:9 '
+    })
+
+    expect(vi.mocked(adapter.startTurn).mock.calls[0]?.[1].hostRequestId)
+      .toBe('biogym:run-1:stage:9')
+  })
+
+  it('injects an active Biology Room summary directly without a redundant GUI lookup', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-11T00:00:00.000Z'
+    })
+    const visibleContext = {
+      get: vi.fn(async () => ({
+        schemaVersion: 1,
+        updatedAt: '2026-07-11T00:00:00.000Z',
+        workspaceRoot: '/tmp/workspace',
+        components: [{
+          id: 'biology-room:protein-room',
+          region: 'main-workspace',
+          component: 'biology-room',
+          title: 'Protein review',
+          visible: true,
+          updatedAt: '2026-07-11T00:00:00.000Z',
+          summary: 'Biology Room Protein review at revision 7; selection: chain A residue 42.',
+          state: { roomId: 'protein-room', revision: 7, activeAssetId: 'protein' },
+          resources: [{
+            kind: 'workspaceFile',
+            role: 'biology-room-asset',
+            relativePath: 'structures/protein.cif',
+            metadata: {
+              assetId: 'protein',
+              active: true,
+              sha256: 'a'.repeat(64),
+              readiness: 'ready'
+            }
+          }]
+        }]
+      })),
+      peek: vi.fn(() => ({ schemaVersion: 1, updatedAt: '1970-01-01T00:00:00.000Z', components: [] }))
+    }
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { visibleContext: visibleContext as never }
+    })
+    const userText = 'Annotate the active-site residue in the protein structure.'
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: userText,
+      displayText: userText
+    })
+
+    const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(visibleContext.get).toHaveBeenCalled()
+    expect(dispatched?.text).toContain('Active Biology Room context')
+    expect(dispatched?.text).toContain('protein-room')
+    expect(dispatched?.text).toContain('structures/protein.cif')
+    expect(dispatched?.text).toContain('do not call `gui_visible_context`')
+    expect(dispatched?.text).toContain('biology_room_observe')
+    expect(dispatched?.displayText).toBe(userText)
+  })
 
   it('streams events through the selected adapter', async () => {
     const local = fakeAdapter('sciforge', {
@@ -4219,6 +4411,183 @@ describe('AgentRuntimeHost', () => {
       }
     )
 
+    it('queues a host continuation until the active turn is terminal instead of steering it', async () => {
+      const adapter = fakeAdapter(runtimeId, {
+        id: `${runtimeId}-thread`,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-06-10T00:00:00.000Z'
+      })
+      vi.mocked(adapter.capabilities).mockResolvedValue({
+        ...capabilities(runtimeId),
+        controls: {
+          ...capabilities(runtimeId).controls,
+          steer: supportsSteer
+        }
+      })
+      vi.mocked(adapter.readThread)
+        .mockResolvedValueOnce({
+          id: `${runtimeId}-thread`,
+          runtimeId,
+          title: runtimeId,
+          updatedAt: '2026-06-10T00:00:00.000Z',
+          latestSeq: 1,
+          latestTurnId: 'turn-active',
+          latestTurnStatus: 'running',
+          turns: [{ id: 'turn-active', threadId: `${runtimeId}-thread`, status: 'running' }]
+        })
+        .mockResolvedValueOnce({
+          id: `${runtimeId}-thread`,
+          runtimeId,
+          title: runtimeId,
+          updatedAt: '2026-06-10T00:00:01.000Z',
+          latestSeq: 2,
+          latestTurnId: 'turn-active',
+          latestTurnStatus: 'completed',
+          turns: [{ id: 'turn-active', threadId: `${runtimeId}-thread`, status: 'completed' }]
+        })
+      vi.mocked(adapter.startTurn).mockResolvedValueOnce({
+        threadId: `${runtimeId}-thread`,
+        turnId: 'turn-continuation'
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      vi.useFakeTimers()
+      try {
+        const continuation = host.startContinuationTurn({
+          runtimeId,
+          threadId: `${runtimeId}-thread`,
+          text: 'background result is ready'
+        })
+        await Promise.resolve()
+        expect(adapter.steerTurn).not.toHaveBeenCalled()
+        expect(adapter.startTurn).not.toHaveBeenCalled()
+
+        await vi.advanceTimersByTimeAsync(1_000)
+
+        await expect(continuation).resolves.toEqual({
+          threadId: `${runtimeId}-thread`,
+          turnId: 'turn-continuation'
+        })
+        expect(adapter.steerTurn).not.toHaveBeenCalled()
+        expect(adapter.startTurn).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ text: 'background result is ready' })
+        )
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('runs a continuation pre-start guard after terminal convergence and immediately before start', async () => {
+      const adapter = fakeAdapter(runtimeId, {
+        id: `${runtimeId}-thread`,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-06-10T00:00:00.000Z'
+      })
+      vi.mocked(adapter.readThread)
+        .mockResolvedValueOnce({
+          id: `${runtimeId}-thread`,
+          runtimeId,
+          title: runtimeId,
+          updatedAt: '2026-06-10T00:00:00.000Z',
+          latestSeq: 1,
+          latestTurnId: 'turn-active',
+          latestTurnStatus: 'running',
+          turns: [{ id: 'turn-active', threadId: `${runtimeId}-thread`, status: 'running' }]
+        })
+        .mockResolvedValueOnce({
+          id: `${runtimeId}-thread`,
+          runtimeId,
+          title: runtimeId,
+          updatedAt: '2026-06-10T00:00:01.000Z',
+          latestSeq: 2,
+          latestTurnId: 'turn-active',
+          latestTurnStatus: 'completed',
+          turns: [{ id: 'turn-active', threadId: `${runtimeId}-thread`, status: 'completed' }]
+        })
+      const order: string[] = []
+      vi.mocked(adapter.startTurn).mockImplementationOnce(async (_context, input) => {
+        order.push('start')
+        return { threadId: input.threadId, turnId: 'turn-continuation' }
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      vi.useFakeTimers()
+      try {
+        const continuation = host.startContinuationTurn({
+          runtimeId,
+          threadId: `${runtimeId}-thread`,
+          text: 'background result is ready'
+        }, {
+          beforeStart: async () => {
+            order.push('guard')
+            return { allow: true }
+          }
+        })
+        await Promise.resolve()
+        expect(order).toEqual([])
+
+        await vi.advanceTimersByTimeAsync(1_000)
+
+        await expect(continuation).resolves.toMatchObject({ turnId: 'turn-continuation' })
+        expect(order).toEqual(['guard', 'start'])
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('reports a rejected continuation guard as a typed non-retryable suppression', async () => {
+      const adapter = fakeAdapter(runtimeId, {
+        id: `${runtimeId}-thread`,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-06-10T00:00:00.000Z'
+      })
+      vi.mocked(adapter.readThread).mockResolvedValue({
+        id: `${runtimeId}-thread`,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: '2026-06-10T00:00:00.000Z',
+        latestSeq: 2,
+        latestTurnId: 'turn-terminal',
+        latestTurnStatus: 'completed',
+        turns: [{ id: 'turn-terminal', threadId: `${runtimeId}-thread`, status: 'completed' }]
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+
+      const result = await host.startContinuationTurn({
+        runtimeId,
+        threadId: `${runtimeId}-thread`,
+        text: 'stale background result'
+      }, {
+        beforeStart: async () => ({
+          allow: false,
+          reason: 'run_revision_changed',
+          details: { expectedRevision: 3, currentRevision: 4 }
+        })
+      }).catch((error: unknown) => error)
+
+      expect(result).toBeInstanceOf(AgentRuntimeContinuationSuppressedError)
+      expect(result).toMatchObject({
+        code: 'agent_runtime_continuation_suppressed',
+        retryable: false,
+        reason: 'run_revision_changed',
+        details: { expectedRevision: 3, currentRevision: 4 }
+      })
+      expect(adapter.startTurn).not.toHaveBeenCalled()
+    })
+
     it.each(['completed', 'failed', 'cancelled', 'aborted'] as const)(
       'starts a fresh turn after terminal %s',
       async (terminalState) => {
@@ -4270,6 +4639,91 @@ describe('AgentRuntimeHost', () => {
       }
     )
   })
+
+  it.each(['startTurn', 'steerTurn', 'interruptTurn'] as const)(
+    'suppresses a waiting host continuation after a newer foreground %s action',
+    async (action) => {
+      const adapter = fakeAdapter('sciforge', {
+        id: 'local-thread',
+        runtimeId: 'sciforge',
+        title: 'Local',
+        updatedAt: '2026-07-13T00:00:00.000Z'
+      })
+      vi.mocked(adapter.readThread).mockResolvedValue({
+        id: 'local-thread',
+        runtimeId: 'sciforge',
+        title: 'Local',
+        updatedAt: '2026-07-13T00:00:00.000Z',
+        latestSeq: 1,
+        latestTurnId: 'turn-terminal',
+        latestTurnStatus: 'completed',
+        turns: [{ id: 'turn-terminal', threadId: 'local-thread', status: 'completed' }]
+      })
+      vi.mocked(adapter.startTurn).mockImplementation(async (_context, input) => ({
+        threadId: input.threadId,
+        turnId: input.text === 'new user request' ? 'turn-user' : 'turn-continuation'
+      }))
+      const host = createAgentRuntimeHost({
+        settings: async () => settings('sciforge'),
+        adapters: [adapter]
+      })
+      const guardEntered = deferred<void>()
+      const releaseGuard = deferred<void>()
+      const continuationResult = host.startContinuationTurn({
+        runtimeId: 'sciforge',
+        threadId: 'local-thread',
+        text: 'background result is ready'
+      }, {
+        beforeStart: async () => {
+          guardEntered.resolve()
+          await releaseGuard.promise
+          return { allow: true }
+        }
+      }).catch((error: unknown) => error)
+      await guardEntered.promise
+
+      let foregroundStart: Promise<AgentRuntimeTurnHandle> | undefined
+      if (action === 'startTurn') {
+        foregroundStart = host.startTurn({
+          runtimeId: 'sciforge',
+          threadId: 'local-thread',
+          text: 'new user request'
+        })
+      } else if (action === 'steerTurn') {
+        await host.steerTurn({
+          runtimeId: 'sciforge',
+          threadId: 'local-thread',
+          turnId: 'turn-terminal',
+          text: 'new user request'
+        })
+      } else {
+        await host.interruptTurn({
+          runtimeId: 'sciforge',
+          threadId: 'local-thread',
+          turnId: 'turn-terminal'
+        })
+      }
+      releaseGuard.resolve()
+
+      const result = await continuationResult
+      expect(result).toBeInstanceOf(AgentRuntimeContinuationSuppressedError)
+      expect(result).toMatchObject({
+        retryable: false,
+        reason: 'foreground_action',
+        details: { expectedForegroundEpoch: 0, currentForegroundEpoch: 1 }
+      })
+      if (foregroundStart) {
+        await expect(foregroundStart).resolves.toMatchObject({ turnId: 'turn-user' })
+        expect(adapter.startTurn).toHaveBeenCalledTimes(1)
+        expect(adapter.startTurn).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({ text: 'new user request' })
+        )
+      } else {
+        expect(adapter.startTurn).not.toHaveBeenCalled()
+      }
+    }
+  )
 
   it('routes neutral usage queries through the selected adapter', async () => {
     const local = fakeAdapter('sciforge', {

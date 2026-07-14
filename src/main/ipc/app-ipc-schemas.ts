@@ -50,6 +50,16 @@ import {
   workspacePreviewReadArtifactRangeRequestSchema,
   workspaceStructuredSelectionSchema
 } from '../../shared/workspace-preview'
+import {
+  biologyRoomApplyInputSchema,
+  biologyRoomCreateInputSchema,
+  biologyRoomHistoryInputSchema,
+  biologyRoomListInputSchema,
+  biologyRoomObserveInputSchema,
+  biologyRoomOpenOrCreateInputSchema,
+  biologyRoomRefreshInputSchema,
+  biologyRoomTargetSchema
+} from '../../shared/biology-room'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
 export {
   visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
@@ -564,6 +574,7 @@ const localRuntimePatchSchema = z.object({
   }).strict().optional(),
   insecure: z.boolean().optional(),
   mcpSearch: z.object({
+    defaultsRevision: z.number().int().positive().optional(),
     enabled: z.boolean().optional(),
     mode: mcpSearchModeSchema.optional(),
     autoThresholdToolCount: z.number().int().positive().optional(),
@@ -1974,6 +1985,15 @@ export const workspacePreviewInvokeActionPayloadSchema = z
     action: workspacePreviewPluginActionInputSchema
   })
   .strict()
+
+export const biologyRoomCreatePayloadSchema = biologyRoomCreateInputSchema
+export const biologyRoomOpenOrCreatePayloadSchema = biologyRoomOpenOrCreateInputSchema
+export const biologyRoomLoadPayloadSchema = biologyRoomTargetSchema
+export const biologyRoomListPayloadSchema = biologyRoomListInputSchema
+export const biologyRoomObservePayloadSchema = biologyRoomObserveInputSchema
+export const biologyRoomApplyPayloadSchema = biologyRoomApplyInputSchema
+export const biologyRoomRefreshPayloadSchema = biologyRoomRefreshInputSchema
+export const biologyRoomHistoryPayloadSchema = biologyRoomHistoryInputSchema
 
 export const workspaceDirectoryTargetPayloadSchema = z
   .object({

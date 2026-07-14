@@ -665,6 +665,7 @@
   "sideConversationNeedsActiveThread": "请先选择主会话，再开启旁支对话。",
   "inspector": "变更",
   "rightPanelFiles": "文件",
+  "rightPanelBiologyRoom": "生物工作室",
   "rightPanelChanges": "变更",
   "rightPanelBrowser": "预览",
   "rightPanelCheckpoints": "Checkpoint",
