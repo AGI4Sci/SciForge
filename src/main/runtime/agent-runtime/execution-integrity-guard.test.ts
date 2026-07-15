@@ -364,6 +364,27 @@ describe('execution integrity input policy', () => {
     expect(guarded.text).toContain('"effectClass":"local_write"')
   })
 
+  it('does not let an English safety prohibition broaden a read-only check into a write', () => {
+    const input = baseInput('sciforge', 'Do not edit or write files. Run the existing read-only checks and report the result.')
+    const guarded = withExecutionIntegrityRequirement(input)
+
+    expect(guarded.text).toContain('"effectClass":"command_execution"')
+    expect(guarded.text).not.toContain('"effectClass":"local_write"')
+  })
+
+  it('does not let a Chinese safety prohibition broaden a command request into a write', () => {
+    const input = baseInput('sciforge', '不要修改或删除文件，只运行现有检查并报告结果。')
+    const guarded = withExecutionIntegrityRequirement(input)
+
+    expect(guarded.text).toContain('"effectClass":"command_execution"')
+    expect(guarded.text).not.toContain('"effectClass":"local_write"')
+  })
+
+  it('does not create an execution obligation from a prohibition alone', () => {
+    const input = baseInput('codex', 'Do not open, copy, execute, or display any protected data. Explain the prior failure.')
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
   it('injects a replay marker for explicit execution while preserving display text', () => {
     const input = baseInput('codex', 'Run the unit tests.')
     const guarded = withExecutionIntegrityRequirement(input)

@@ -189,13 +189,30 @@ export function withExecutionIntegrityRequirement(
 }
 
 export function requiresRuntimeExecution(text: string): boolean {
-  const value = text.trim()
+  const value = executionIntentText(text).trim()
   if (!value) return false
   return [
-    /(?:^|[，。；;!?\n])\s*(?:请|麻烦|现在|直接|继续)?\s*(?:帮我)?\s*(?:调用|使用|执行|运行|修改|编辑|创建|新增|删除|移除|发送|提交|安装|打开|点击|搜索|查询|读取|下载|上传|渲染|生成|部署|发布|修复|实现)/iu,
+    /(?:^|[，。；;!?\n])\s*(?:请|麻烦|现在|直接|继续|只)?\s*(?:帮我)?\s*(?:调用|使用|执行|运行|修改|编辑|创建|新增|删除|移除|发送|提交|安装|打开|点击|搜索|查询|读取|下载|上传|渲染|生成|部署|发布|修复|实现)/iu,
     /(?:需要|必须|务必|请).{0,12}(?:真正|实际|确实)?(?:调用|使用|执行|运行|修改|编辑|创建|删除|发送|提交|安装|渲染|生成|部署|发布)/u,
     /\b(?:please\s+|now\s+|actually\s+)?(?:run|execute|call|invoke|use|edit|modify|create|delete|remove|send|submit|install|open|click|search|download|upload|render|generate|deploy|publish|implement|fix)\b/iu
   ].some((pattern) => pattern.test(value))
+}
+
+/**
+ * Policy text often contains explicit safety boundaries such as "do not edit"
+ * or "禁止删除" next to the action that is actually requested. Those negated
+ * phrases must not broaden the receipt obligation into a write or mutation.
+ */
+function executionIntentText(text: string): string {
+  return text
+    .replace(
+      /\b(?:(?:do|does|did)\s+not|don't|doesn't|didn't|must\s+not|should\s+not|cannot|can't|never)\b[^.!?;\n]*?(?=(?:[.!?;\n]|,\s*(?:but|however|instead|only|then)\b|$))/giu,
+      ' '
+    )
+    .replace(
+      /(?:不要|不得|禁止|无需|无须|不应|不能|不可|不需要|切勿|勿)[^。；;!！?？\n]*?(?=(?:[。；;!！?？\n]|[，,]\s*(?:但|但是|不过|而是|只|仅|然后|并且|且|同时)|$))/gu,
+      ' '
+    )
 }
 
 function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionObligation[] {
@@ -559,7 +576,7 @@ function isAcceptedAsyncResult(meta: Record<string, unknown>): boolean {
 }
 
 function requestedExecutionObligation(text: string): ExecutionObligation {
-  const value = text.toLowerCase()
+  const value = executionIntentText(text).toLowerCase()
   if (
     /(?:发送|提交|上传|部署|发布|创建).{0,12}(?:消息|邮件|工单|issue|pr|pull request)/u.test(value) ||
     /\b(?:send|submit|upload|deploy|publish|create|open)\b.{0,16}\b(?:message|email|issue|ticket|pr|pull request)\b/iu.test(value)
