@@ -46,6 +46,10 @@ type ToolReceipt = {
   effectClass: ExecutionEffectClass
   resultDigest?: string
   errorCode?: string
+  /** Stable executor handle shared by an asynchronous launch and later poll calls. */
+  asyncHandle?: string
+  /** True only when the executor reports that the asynchronous handle is terminal. */
+  asyncTerminal?: boolean
   trustedSuccess: boolean
   visualSuccess: boolean
 }
@@ -290,6 +294,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     evidenceStrength === 'executor_receipt' ||
     evidenceStrength === 'attested'
   )
+  const asyncReceipt = asyncReceiptFromMeta(meta)
   return {
     callId: rawCallId.trim(),
     toolName,
@@ -311,6 +316,8 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
           ...(stringValue(meta.resultDigest) ? { resultDigest: stringValue(meta.resultDigest) } : {}),
           ...(stringValue(meta.errorCode) ? { errorCode: stringValue(meta.errorCode) } : {})
         }),
+    ...(asyncReceipt.handle ? { asyncHandle: asyncReceipt.handle } : {}),
+    ...(asyncReceipt.terminal ? { asyncTerminal: true } : {}),
     trustedSuccess,
     visualSuccess
   }
@@ -330,6 +337,7 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
   const existing = state.calls.get(key)
   if (!existing) {
     state.calls.set(key, receipt)
+    closeCorrelatedAsyncReceipts(state, key, receipt)
     return
   }
   if (
@@ -354,8 +362,60 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
     ...receipt,
     callId: existing.callId,
     toolName: receipt.toolName || existing.toolName,
-    effectClass: receipt.effectClass === 'other' ? existing.effectClass : receipt.effectClass
+    effectClass: receipt.effectClass === 'other' ? existing.effectClass : receipt.effectClass,
+    asyncHandle: receipt.asyncHandle || existing.asyncHandle,
+    asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal
   })
+  closeCorrelatedAsyncReceipts(state, key, receipt)
+}
+
+/**
+ * A long-running executor launch and its poll/write/stop operations have
+ * different model call ids, but share the same executor session id. Once a
+ * terminal receipt arrives for that session, every still-open receipt for the
+ * same tool/session is terminal too; otherwise the launch remains permanently
+ * "dispatched" even after a successful poll.
+ */
+function closeCorrelatedAsyncReceipts(
+  state: ExecutionIntegrityState,
+  terminalKey: string,
+  terminal: ToolReceipt
+): void {
+  if (!terminal.asyncHandle || terminal.asyncTerminal !== true || !isTerminalPhase(terminal.phase)) return
+  for (const [key, existing] of state.calls) {
+    if (
+      key === terminalKey ||
+      isTerminalPhase(existing.phase) ||
+      existing.toolName !== terminal.toolName ||
+      existing.asyncHandle !== terminal.asyncHandle
+    ) {
+      continue
+    }
+    state.calls.set(key, {
+      ...terminal,
+      callId: existing.callId,
+      toolName: existing.toolName,
+      effectClass: existing.effectClass,
+      asyncHandle: existing.asyncHandle,
+      asyncTerminal: true
+    })
+  }
+}
+
+function asyncReceiptFromMeta(meta: Record<string, unknown>): { handle: string; terminal: boolean } {
+  const output = recordValue(meta.output ?? meta.result)
+  const argumentsRecord = recordValue(meta.arguments)
+  const sessionId = stringValue(
+    output.session_id ?? output.sessionId ?? argumentsRecord.session_id ?? argumentsRecord.sessionId
+  ).trim()
+  if (!sessionId) return { handle: '', terminal: false }
+  const status = stringValue(output.status).trim().toLowerCase()
+  const exitCode = output.exit_code ?? output.exitCode
+  return {
+    handle: `session:${sessionId}`,
+    terminal: status === 'completed' || status === 'failed' || status === 'stopped' ||
+      status === 'aborted' || status === 'cancelled' || typeof exitCode === 'number'
+  }
 }
 
 function rememberChildReceipt(

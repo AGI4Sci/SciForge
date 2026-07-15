@@ -194,6 +194,96 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
+  it('closes an asynchronous command launch when a later poll for the same session succeeds', () => {
+    const guard = rememberedGuard('sciforge', 'Run the checks.')
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-run',
+      itemId: 'bash-run'
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'bash-run',
+      itemId: 'bash-run-result',
+      meta: { output: { status: 'running', session_id: 'bash-session-1' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-poll',
+      itemId: 'bash-poll',
+      meta: { arguments: { action: 'poll', session_id: 'bash-session-1' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'bash-poll',
+      itemId: 'bash-poll-result',
+      meta: { output: { status: 'completed', exit_code: 0, session_id: 'bash-session-1' } }
+    })
+
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('closes an asynchronous command launch when its terminal poll reports failure', () => {
+    const guard = rememberedGuard('sciforge', 'Explain the command result.')
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-run',
+      itemId: 'bash-run'
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'bash-run',
+      itemId: 'bash-run-result',
+      meta: { output: { status: 'running', session_id: 'bash-session-2' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-poll',
+      itemId: 'bash-poll',
+      meta: { arguments: { action: 'poll', session_id: 'bash-session-2' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'failed'),
+      callId: 'bash-poll',
+      itemId: 'bash-poll-result',
+      meta: { output: { status: 'completed', exit_code: 1, session_id: 'bash-session-2' } }
+    })
+
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('keeps an asynchronous launch open when a session action returns a non-terminal receipt', () => {
+    const guard = rememberedGuard('sciforge', 'Explain the command state.')
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-run',
+      itemId: 'bash-run'
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'bash-run',
+      itemId: 'bash-run-result',
+      meta: { output: { status: 'running', session_id: 'bash-session-3' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      callId: 'bash-write',
+      itemId: 'bash-write',
+      meta: { arguments: { action: 'write', session_id: 'bash-session-3' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'bash-write',
+      itemId: 'bash-write-result',
+      meta: { output: { status: 'running', exit_code: null, session_id: 'bash-session-3' } }
+    })
+
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toMatchObject({
+      code: 'runtime_execution_incomplete',
+      openCallIds: expect.arrayContaining(['bash-run', 'bash-write'])
+    })
+  })
+
   it('reconstructs only marked policy turns during replay', () => {
     const guarded = withExecutionIntegrityRequirement(baseInput('claude', 'Run the checks.'))
     const guard = new RuntimeExecutionIntegrityGuard()

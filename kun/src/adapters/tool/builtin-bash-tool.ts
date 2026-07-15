@@ -584,7 +584,12 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
           return { output: payload, isError: session.status === 'running' || session.status === 'failed' }
         }
         await waitForSessionExitOrDelay(session, normalizeYieldSeconds(args.yield_seconds) * 1000)
-        return { output: await sessionPayload(session), isError: session.status === 'failed' }
+        const payload = await sessionPayload(session)
+        return {
+          output: payload,
+          isError: session.status === 'failed' ||
+            (session.status === 'completed' && session.exitCode !== null && session.exitCode !== 0)
+        }
       }
 
       const command = typeof args.command === 'string' ? args.command : ''

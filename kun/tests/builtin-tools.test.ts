@@ -704,6 +704,38 @@ describe('Local runtime built-in tools', () => {
     expect(String(polled.output)).toContain('done')
   })
 
+  it('marks a polled bash session with a non-zero exit code as an error', async () => {
+    const launched = await host.execute(
+      {
+        callId: 'call_bash_nonzero_launch',
+        toolName: 'bash',
+        arguments: { command: 'sleep 2; exit 7', yield_seconds: 1, timeout: 10 }
+      },
+      buildContext(workspace)
+    )
+    expect(launched.item.kind).toBe('tool_result')
+    if (launched.item.kind !== 'tool_result') throw new Error('expected tool_result')
+    const launchedOutput = launched.item.output as Record<string, unknown>
+    expect(launchedOutput.status).toBe('running')
+
+    const polled = await host.execute(
+      {
+        callId: 'call_bash_nonzero_poll',
+        toolName: 'bash',
+        arguments: {
+          action: 'poll',
+          session_id: String(launchedOutput.session_id),
+          yield_seconds: 10
+        }
+      },
+      buildContext(workspace)
+    )
+    expect(polled.item.kind).toBe('tool_result')
+    if (polled.item.kind !== 'tool_result') throw new Error('expected tool_result')
+    expect(polled.item.isError).toBe(true)
+    expect((polled.item.output as Record<string, unknown>).exit_code).toBe(7)
+  })
+
   it('blocks the poll action for at least yield_seconds while the session keeps running', async () => {
     const output = await executeTool(host, workspace, 'bash', {
       command: 'echo ready; sleep 5; echo done',
