@@ -572,13 +572,15 @@ describe('JsonSettingsStore', () => {
       agents: {
         sciforge: {
           model: 'deepseek-reasoner',
-          approvalPolicy: 'on-request'
+          approvalPolicy: 'on-request',
+          sandboxMode: 'workspace-write'
         }
       }
     })
 
     expect(saved.agents.sciforge.model).toBe('deepseek-reasoner')
     expect(saved.agents.sciforge.approvalPolicy).toBe('on-request')
+    expect(saved.agents.sciforge.sandboxMode).toBe('workspace-write')
   })
 
   it('merges desktop behavior patches without keeping invalid startup state', async () => {

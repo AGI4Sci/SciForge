@@ -86,6 +86,22 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
+  it.each([
+    ['Run the auto-fix command.', 'eslint --fix src'],
+    ['Run rm -f temp.txt.', 'rm -f temp.txt'],
+    ['Delete temp.txt.', 'rm -f temp.txt']
+  ])('accepts all effects proved by one command receipt: %s', (request, command) => {
+    const guard = rememberedGuard('codex', request)
+    const receipt = {
+      ...tool('codex', 'succeeded'),
+      toolKind: 'command_execution' as const,
+      meta: { arguments: { command } }
+    }
+    guard.observe('codex', receipt)
+
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
   it('marks an affirmative claim without a receipt as unverified', () => {
     const guard = rememberedGuard('claude', 'Summarize what happened.')
     guard.observe('claude', {
@@ -284,6 +300,47 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
+  it('correlates a terminal poll across tool names by the shared async handle', () => {
+    const guard = rememberedGuard('sciforge', 'Run the checks.')
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'launch',
+      itemId: 'launch',
+      toolName: 'exec_command',
+      meta: { output: { status: 'running', session_id: 'session-a' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'poll',
+      itemId: 'poll',
+      toolName: 'write_stdin',
+      meta: { output: { status: 'completed', exit_code: 0, session_id: 'session-a' } }
+    })
+
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('does not correlate same-tool terminal receipts from different async handles', () => {
+    const guard = rememberedGuard('sciforge', 'Run the checks.')
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'launch-a',
+      itemId: 'launch-a',
+      meta: { output: { status: 'running', session_id: 'session-a' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      callId: 'terminal-b',
+      itemId: 'terminal-b',
+      meta: { output: { status: 'completed', exit_code: 0, session_id: 'session-b' } }
+    })
+
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toMatchObject({
+      code: 'runtime_execution_incomplete',
+      openCallIds: ['launch-a']
+    })
+  })
+
   it('reconstructs only marked policy turns during replay', () => {
     const guarded = withExecutionIntegrityRequirement(baseInput('claude', 'Run the checks.'))
     const guard = new RuntimeExecutionIntegrityGuard()
@@ -383,6 +440,182 @@ describe('execution integrity input policy', () => {
   it('does not create an execution obligation from a prohibition alone', () => {
     const input = baseInput('codex', 'Do not open, copy, execute, or display any protected data. Explain the prior failure.')
     expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
+  it.each([
+    ['Do not edit, but run the tests.', '"effectClass":"command_execution"'],
+    ['Do not open protected data, only read public.txt.', 'requested-execution'],
+    ['不要修改，但是运行测试。', '"effectClass":"command_execution"']
+  ])('keeps an affirmative action after a negated clause: %s', (text, marker) => {
+    expect(withExecutionIntegrityRequirement(baseInput('sciforge', text)).text).toContain(marker)
+  })
+
+  it('does not treat an action token in a status label as a write request', () => {
+    const input = baseInput(
+      'sciforge',
+      'You are reviewing a POST-FIX acceptance run. Do not edit artifacts. Read the files and verify their hashes.'
+    )
+    const guarded = withExecutionIntegrityRequirement(input)
+
+    expect(guarded.text).toContain('requested-execution')
+    expect(guarded.text).not.toContain('"effectClass":"local_write"')
+  })
+
+  it.each([
+    'Explain the POST-FIX acceptance report.',
+    'Run 8c50d482 failed. Explain why.',
+    'Run history shows the prior failure. Summarize it.',
+    'Fix is a status label. Explain it.',
+    'Read-only mode is enabled. Explain it.',
+    'Create Loop is open. Describe the UI.',
+    'Delete operation failed. Explain it.',
+    'Update job succeeded.',
+    'Publish task failed.',
+    'Patch failed validation.',
+    '运行已失败，请解释。',
+    '创建 Loop 已完成。',
+    '发布任务失败。'
+  ])('does not create an obligation from an action token used only in a status label: %s', (text) => {
+    const input = baseInput('sciforge', text)
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
+  it.each([
+    'Explain why you must fix the file.',
+    'Tell me whether I should delete the file.',
+    '解释为什么我们必须修改这个文件。'
+  ])('does not treat a subordinate action mention as the requested root action: %s', (text) => {
+    const input = baseInput('sciforge', text)
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
+  it.each([
+    'Explain why I should read the file and then delete it.',
+    'Tell me whether I should run tests and also publish the result.'
+  ])('ignores coordinated actions inside a non-execution subordinate clause: %s', (text) => {
+    const input = baseInput('sciforge', text)
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
+  it.each([
+    ['We need to run the tests.', '"effectClass":"command_execution"'],
+    ['I need to edit the file.', '"effectClass":"local_write"'],
+    ['Could you please run the tests?', '"effectClass":"command_execution"'],
+    ['Would you kindly edit the file?', '"effectClass":"local_write"'],
+    ['We need to actually run the tests.', '"effectClass":"command_execution"'],
+    ['I need you to please edit the file.', '"effectClass":"local_write"'],
+    ['我们需要运行测试。', '"effectClass":"command_execution"'],
+    ['我们需要修改文件。', '"effectClass":"local_write"'],
+    ['必须运行测试。', '"effectClass":"command_execution"'],
+    ['需要修改文件。', '"effectClass":"local_write"'],
+    ['请务必运行测试。', '"effectClass":"command_execution"'],
+    ['请你运行测试。', '"effectClass":"command_execution"'],
+    ['麻烦你修改文件。', '"effectClass":"local_write"'],
+    ['你需要运行测试。', '"effectClass":"command_execution"'],
+    ['请实际运行测试。', '"effectClass":"command_execution"'],
+    ['重新运行测试。', '"effectClass":"command_execution"'],
+    ['请你务必运行测试。', '"effectClass":"command_execution"'],
+    ['麻烦你重新运行测试。', '"effectClass":"command_execution"'],
+    ['我需要你实际修改文件。', '"effectClass":"local_write"'],
+    ['Task: run the tests.', '"effectClass":"command_execution"'],
+    ['Please do the following: edit the file.', '"effectClass":"local_write"']
+  ])('recognizes a root action request with an explicit subject: %s', (text, marker) => {
+    expect(withExecutionIntegrityRequirement(baseInput('codex', text)).text).toContain(marker)
+  })
+
+  it.each([
+    'The docs say: run the tests.',
+    'Explain this example: delete the file.'
+  ])('does not promote a quoted colon suffix into an execution request: %s', (text) => {
+    const input = baseInput('codex', text)
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
+  })
+
+  it.each([
+    'Fix the file and run the tests.',
+    'Please patch the module.',
+    '请修改这个文件。',
+    'Create a local summary for the issue.',
+    'Update the local report about the ticket.',
+    'Delete the cached message file.',
+    'Create a file describing the pull request.',
+    '创建一份关于议题的本地报告。',
+    '更新关于工单的本地笔记。'
+  ])('preserves a real local write request: %s', (text) => {
+    expect(withExecutionIntegrityRequirement(baseInput('codex', text)).text)
+      .toContain('"effectClass":"local_write"')
+  })
+
+  it('classifies a command whose name mentions a write effect by its requested root action', () => {
+    expect(withExecutionIntegrityRequirement(baseInput('codex', 'Run the auto-fix command.')).text)
+      .toContain('"effectClass":"command_execution"')
+  })
+
+  it.each([
+    ['Open an issue.', 'open_issue'],
+    ['Create a pull request.', 'create_pull_request'],
+    ['Create a message.', 'create_message'],
+    ['Delete the issue.', 'delete_issue'],
+    ['Update the ticket.', 'update_ticket']
+  ])('accepts a matching external mutation receipt: %s', (request, toolName) => {
+    const guard = rememberedGuard('codex', request)
+    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
+  it.each([
+    'delete_file',
+    'delete_file_for_issue'
+  ])('does not accept a local file deletion for an external issue deletion: %s', (toolName) => {
+    const guard = rememberedGuard('codex', 'Delete the issue.')
+    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it.each([
+    ['Publish the release.', 'github_search_issues'],
+    ['Submit the job.', 'github_list_jobs']
+  ])('does not accept an unrelated provider read for an external mutation: %s', (request, toolName) => {
+    const guard = rememberedGuard('codex', request)
+    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it.each([
+    ['Deploy the app.', 'npm run deploy'],
+    ['Deploy the app.', 'kubectl apply -f deploy.yaml'],
+    ['Deploy the app.', 'kubectl apply -n production -f deploy.yaml'],
+    ['Publish the image.', 'docker push example/image:latest'],
+    ['Publish the release.', 'git -C repo push origin main']
+  ])('accepts an external mutation performed by an explicit command: %s', (request, command) => {
+    const guard = rememberedGuard('codex', request)
+    guard.observe('codex', {
+      ...tool('codex', 'succeeded'),
+      toolKind: 'command_execution',
+      meta: { arguments: { command } }
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
+  it.each([
+    ['Publish the release.', 'git push --dry-run origin main'],
+    ['Publish the release.', 'git push -n origin main'],
+    ['Publish the package.', 'npm publish --dry-run'],
+    ['Deploy the app.', 'kubectl apply --dry-run=client -f deploy.yaml']
+  ])('does not accept a dry-run command as an external mutation: %s', (request, command) => {
+    const guard = rememberedGuard('codex', request)
+    guard.observe('codex', {
+      ...tool('codex', 'succeeded'),
+      toolKind: 'command_execution',
+      meta: { arguments: { command } }
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['requested-execution']
+    })
   })
 
   it('injects a replay marker for explicit execution while preserving display text', () => {

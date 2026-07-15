@@ -35,6 +35,7 @@ import {
 } from '../../../shared/agent-runtime-contract'
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
+import { withExecutionIntegrityRequirement } from './execution-integrity-guard'
 import { createAgentRuntimeHost } from './host'
 import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
@@ -1401,10 +1402,16 @@ describe('AgentRuntimeHost', () => {
         services: { modelAudit }
       })
 
+      const requestText = `Read /Users/alice/private-${runtimeId} using token=runtime-secret`
+      const guardedRequestText = withExecutionIntegrityRequirement({
+        runtimeId,
+        threadId: `${runtimeId}-thread`,
+        text: requestText
+      }).text
       await host.startTurn({
         runtimeId,
         threadId: `${runtimeId}-thread`,
-        text: `Read /Users/alice/private-${runtimeId} using token=runtime-secret`,
+        text: requestText,
         workspace: '/tmp/workspace'
       })
       const visibleEvents: AgentRuntimeEvent[] = []
@@ -1441,7 +1448,7 @@ describe('AgentRuntimeHost', () => {
             endpointRoute: 'responses',
             requestBodySummary: {
               schema: 'model-router.responses.runtime',
-              inputTextChars: `Read /Users/alice/private-${runtimeId} using token=runtime-secret`.length,
+              inputTextChars: guardedRequestText.length,
               attachmentCount: 0,
               fileReferenceCount: 0,
               hasGuiPlan: false
@@ -1450,7 +1457,7 @@ describe('AgentRuntimeHost', () => {
           request: {
             bodySummary: {
               schema: 'agent-runtime.turnStart',
-            textChars: `Read /Users/alice/private-${runtimeId} using token=runtime-secret`.length,
+            textChars: guardedRequestText.length,
             attachmentCount: 0,
             fileReferenceCount: 0,
             hasGuiPlan: false

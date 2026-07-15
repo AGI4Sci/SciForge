@@ -43,7 +43,7 @@ type ToolReceipt = {
   factSource: AgentRuntimeToolFactSource
   evidenceStrength: AgentRuntimeToolEvidenceStrength
   attempt: number
-  effectClass: ExecutionEffectClass
+  effectClasses: ExecutionEffectClass[]
   resultDigest?: string
   errorCode?: string
   /** Stable executor handle shared by an asynchronous launch and later poll calls. */
@@ -189,13 +189,7 @@ export function withExecutionIntegrityRequirement(
 }
 
 export function requiresRuntimeExecution(text: string): boolean {
-  const value = executionIntentText(text).trim()
-  if (!value) return false
-  return [
-    /(?:^|[，。；;!?\n])\s*(?:请|麻烦|现在|直接|继续|只)?\s*(?:帮我)?\s*(?:调用|使用|执行|运行|修改|编辑|创建|新增|删除|移除|发送|提交|安装|打开|点击|搜索|查询|读取|下载|上传|渲染|生成|部署|发布|修复|实现)/iu,
-    /(?:需要|必须|务必|请).{0,12}(?:真正|实际|确实)?(?:调用|使用|执行|运行|修改|编辑|创建|删除|发送|提交|安装|渲染|生成|部署|发布)/u,
-    /\b(?:please\s+|now\s+|actually\s+)?(?:run|execute|call|invoke|use|edit|modify|create|delete|remove|send|submit|install|open|click|search|download|upload|render|generate|deploy|publish|implement|fix)\b/iu
-  ].some((pattern) => pattern.test(value))
+  return requestedExecutionClass(text) !== null
 }
 
 /**
@@ -319,7 +313,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     factSource,
     evidenceStrength,
     attempt,
-    effectClass: effectClassFromEvent(event, toolName, meta),
+    effectClasses: effectClassesFromEvent(event, toolName, meta),
     ...(event.kind === 'tool_event'
       ? {
           ...(event.resultDigest || stringValue(meta.resultDigest)
@@ -347,7 +341,10 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
     const candidates = [...state.calls.entries()].filter(([, value]) => (
       !isTerminalPhase(value.phase) &&
       receipt.toolName !== '' &&
-      value.toolName === receipt.toolName
+      value.toolName === receipt.toolName &&
+      (receipt.asyncHandle || value.asyncHandle
+        ? Boolean(receipt.asyncHandle && value.asyncHandle && receipt.asyncHandle === value.asyncHandle)
+        : true)
     ))
     if (candidates.length === 1) key = candidates[0][0]
   }
@@ -379,11 +376,19 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
     ...receipt,
     callId: existing.callId,
     toolName: receipt.toolName || existing.toolName,
-    effectClass: receipt.effectClass === 'other' ? existing.effectClass : receipt.effectClass,
+    effectClasses: mergeEffectClasses(existing.effectClasses, receipt.effectClasses),
     asyncHandle: receipt.asyncHandle || existing.asyncHandle,
     asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal
   })
   closeCorrelatedAsyncReceipts(state, key, receipt)
+}
+
+function mergeEffectClasses(
+  existing: ExecutionEffectClass[],
+  incoming: ExecutionEffectClass[]
+): ExecutionEffectClass[] {
+  const concrete = new Set([...existing, ...incoming].filter((effect) => effect !== 'other'))
+  return concrete.size > 0 ? [...concrete] : ['other']
 }
 
 /**
@@ -403,7 +408,6 @@ function closeCorrelatedAsyncReceipts(
     if (
       key === terminalKey ||
       isTerminalPhase(existing.phase) ||
-      existing.toolName !== terminal.toolName ||
       existing.asyncHandle !== terminal.asyncHandle
     ) {
       continue
@@ -412,7 +416,7 @@ function closeCorrelatedAsyncReceipts(
       ...terminal,
       callId: existing.callId,
       toolName: existing.toolName,
-      effectClass: existing.effectClass,
+      effectClasses: mergeEffectClasses(existing.effectClasses, terminal.effectClasses),
       asyncHandle: existing.asyncHandle,
       asyncTerminal: true
     })
@@ -458,7 +462,7 @@ function rememberChildReceipt(
     factSource: 'runtime_lifecycle',
     evidenceStrength: 'runtime_lifecycle',
     attempt: 1,
-    effectClass: 'child_agent',
+    effectClasses: ['child_agent'],
     trustedSuccess: phase === 'succeeded',
     visualSuccess: false
   })
@@ -475,13 +479,13 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
       return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
     }
     if (obligation.kind === 'effect') {
-      return !trusted.some((item) => item.effectClass === obligation.effectClass)
+      return !trusted.some((item) => obligation.effectClass !== undefined && item.effectClasses.includes(obligation.effectClass))
     }
     return trusted.length === 0
   })
   const claimedEffect = affirmativeExecutionClaim(state.assistantText)
   const claimUnverified = claimedEffect !== null && !trusted.some((item) => (
-    claimedEffect === 'any' || item.effectClass === claimedEffect
+    claimedEffect === 'any' || item.effectClasses.includes(claimedEffect)
   ))
   if (!open.length && !unsatisfied.length && !claimUnverified) return null
 
@@ -576,83 +580,193 @@ function isAcceptedAsyncResult(meta: Record<string, unknown>): boolean {
 }
 
 function requestedExecutionObligation(text: string): ExecutionObligation {
-  const value = executionIntentText(text).toLowerCase()
-  if (
-    /(?:发送|提交|上传|部署|发布|创建).{0,12}(?:消息|邮件|工单|issue|pr|pull request)/u.test(value) ||
-    /\b(?:send|submit|upload|deploy|publish|create|open)\b.{0,16}\b(?:message|email|issue|ticket|pr|pull request)\b/iu.test(value)
-  ) {
-    return {
-      id: 'requested-execution',
-      kind: 'effect',
-      effectClass: 'external_mutation',
-      source: 'user'
-    }
-  }
-  if (
-    /(?:修改|编辑|新增|创建|删除|移除|安装|修复|实现).{0,16}(?:文件|代码|项目|应用|依赖|功能)?/u.test(value) ||
-    /\b(?:edit|modify|create|delete|remove|install|implement|fix|patch|write)\b/iu.test(value)
-  ) {
-    return {
-      id: 'requested-execution',
-      kind: 'effect',
-      effectClass: 'local_write',
-      source: 'user'
-    }
-  }
-  if (
-    /(?:发送|提交|上传|部署|发布)/u.test(value) ||
-    /\b(?:send|submit|upload|deploy|publish)\b/iu.test(value)
-  ) {
-    return {
-      id: 'requested-execution',
-      kind: 'effect',
-      effectClass: 'external_mutation',
-      source: 'user'
-    }
-  }
-  if (/(?:执行|运行)/u.test(value) || /\b(?:run|execute)\b/iu.test(value)) {
-    return {
-      id: 'requested-execution',
-      kind: 'effect',
-      effectClass: 'command_execution',
-      source: 'user'
-    }
+  const effectClass = requestedExecutionClass(text)
+  if (effectClass && effectClass !== 'any_success') {
+    return { id: 'requested-execution', kind: 'effect', effectClass, source: 'user' }
   }
   return { id: 'requested-execution', kind: 'any_success', source: 'user' }
 }
 
-function effectClassFromEvent(
+type RequestedExecutionClass = ExecutionEffectClass | 'any_success'
+
+/** Classify affirmative action requests, not incidental action-word mentions. */
+function requestedExecutionClass(text: string): RequestedExecutionClass | null {
+  const value = executionIntentText(text).toLowerCase().trim()
+  if (!value) return null
+  const requested = new Set<RequestedExecutionClass>()
+  for (const clause of value.split(/[.!?;,，。；！？？\n]+/u)) {
+    for (const root of requestedClauseRoots(clause)) collectRequestedClauseEffects(root, requested)
+  }
+  if (requested.has('external_mutation')) return 'external_mutation'
+  if (requested.has('local_write')) return 'local_write'
+  if (requested.has('command_execution')) return 'command_execution'
+  return requested.has('any_success') ? 'any_success' : null
+}
+
+const ENGLISH_ACTION = /^(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/iu
+const CHINESE_ACTION = /^(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/u
+const EXTERNAL_OBJECT_ACTIONS = new Set([
+  'create', 'open', 'delete', 'remove', 'update', '创建', '新建', '打开', '删除', '移除', '更新'
+])
+
+function requestedClauseRoots(clause: string): string[] {
+  const value = clause.trim()
+  const separator = value.search(/[:：]/u)
+  if (separator < 0) return [value]
+  const header = value.slice(0, separator).trim()
+  const body = value.slice(separator + 1).trim()
+  if (
+    /^(?:task|action|required action|instruction|next step|step|please (?:do|perform) (?:the )?following|do (?:the )?following)$/iu.test(header) ||
+    /^(?:任务|操作|必要操作|指令|下一步|步骤|请(?:执行|完成)以下(?:任务|操作|步骤)?)$/u.test(header)
+  ) return [body]
+  return [header]
+}
+
+function collectRequestedClauseEffects(clause: string, requested: Set<RequestedExecutionClass>): void {
+  const english = requestedEnglishRoot(clause)
+  const englishRoot = ENGLISH_ACTION.exec(english)
+  if (englishRoot && !isStatusDescription(englishRoot[1], english.slice(englishRoot[0].length))) {
+    requested.add(effectForRequestedAction(englishRoot[1], english.slice(englishRoot[0].length)))
+    const coordinated = /\b(?:and|then|also)(?:\s+(?:then|also))?\s+(?:(?:please|kindly|actually|now)\s+)*(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/giu
+    for (const match of english.matchAll(coordinated)) {
+      requested.add(effectForRequestedAction(match[1], english.slice((match.index ?? 0) + match[0].length)))
+    }
+    return
+  }
+
+  const chinese = requestedChineseRoot(clause)
+  const chineseRoot = CHINESE_ACTION.exec(chinese)
+  if (!chineseRoot || isStatusDescription(chineseRoot[1], chinese.slice(chineseRoot[0].length))) return
+  requested.add(effectForRequestedAction(chineseRoot[1], chinese.slice(chineseRoot[0].length)))
+  const coordinated = /(?:并且|然后|同时|且|再)\s*(?:(?:请|务必|直接)\s*)*(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/gu
+  for (const match of chinese.matchAll(coordinated)) {
+    requested.add(effectForRequestedAction(match[1], chinese.slice((match.index ?? 0) + match[0].length)))
+  }
+}
+
+function requestedEnglishRoot(clause: string): string {
+  return clause.trim()
+    .replace(/^(?:[-*]\s*|\d+[.)]\s*)/u, '')
+    .replace(/^(?:(?:but|however|instead|only|then)\s+)/iu, '')
+    .replace(
+      /^(?:(?:(?:can|could|would|will)\s+you\s+)(?:(?:please|kindly|actually|now)\s+)*|(?:i|we)\s+(?:(?:need|want)\s+(?:you\s+)?to|must|should|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|you\s+(?:must|should|need\s+to|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|(?:(?:please|kindly|now|actually|just|must|should|need\s+to|have\s+to)\s+)+)/iu,
+      ''
+    )
+}
+
+function requestedChineseRoot(clause: string): string {
+  let value = clause.trim()
+    .replace(/^(?:[-*]\s*|\d+[.)、]\s*)/u, '')
+    .replace(/^(?:但是|不过|而是|然后|并且|同时|但|只|仅|且)\s*/u, '')
+  let prefixRemoved = false
+  for (;;) {
+    const before = value
+    value = value
+      .replace(/^(?:我|我们)\s*(?:需要|必须|务必|希望|想让)\s*/u, '')
+      .replace(/^(?:请|麻烦|现在|直接|继续|只|仅|务必|必须|需要|实际|真正|确实|重新|帮我)\s*/u, '')
+    if (value !== before) prefixRemoved = true
+    if (prefixRemoved) value = value.replace(/^你\s*/u, '')
+    else value = value.replace(/^你\s*(?=(?:需要|必须|务必|希望|想让))/u, '')
+    if (value === before) break
+  }
+  return value
+}
+
+function isStatusDescription(action: string, remainder: string): boolean {
+  if (remainder.startsWith('-')) return true
+  if (/^[a-z]/iu.test(action)) {
+    return /^(?:\s+[\w@./:-]+){0,5}\s+(?:is|are|was|were|shows?|failed|succeeded|completed|enabled|open|closed|pending)\b/iu
+      .test(remainder)
+  }
+  return /^.{0,20}?(?:已|已经|曾经|当前|仍然)?(?:失败|成功|完成|开启|打开|关闭|待处理|运行中)$/u
+    .test(remainder.trim())
+}
+
+function effectForRequestedAction(action: string, remainder: string): RequestedExecutionClass {
+  if (isExternalObjectMutation(action, remainder)) return 'external_mutation'
+  if (/^(?:send|submit|upload|deploy|publish|发送|提交|上传|部署|发布)$/iu.test(action)) {
+    return 'external_mutation'
+  }
+  if (/^(?:edit|modify|create|delete|remove|update|install|implement|fix|patch|write|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入)$/iu.test(action)) {
+    return 'local_write'
+  }
+  if (/^(?:run|execute|执行|运行)$/iu.test(action)) return 'command_execution'
+  return 'any_success'
+}
+
+function isExternalObjectMutation(action: string, objectText: string): boolean {
+  return EXTERNAL_OBJECT_ACTIONS.has(action.toLowerCase()) && hasExternalObject(objectText)
+}
+
+function hasExternalObject(value: string): boolean {
+  const normalized = value.replace(/[_-]+/gu, ' ')
+  if (
+    /(?:^|\s)(?:file|report|summary|cache|cached|note|artifact|document|record|copy|folder|directory|code)(?:\s|$)/iu.test(normalized) ||
+    /(?:文件|报告|摘要|缓存|笔记|制品|文档|记录|副本|目录|代码)/u.test(normalized)
+  ) return false
+  return /(?:^|\s)(?:message|email|issue|ticket|pr|pull\s+request|comment|release)(?:\s|$)/iu.test(normalized) ||
+    /(?:消息|邮件|工单|议题|评论|发布项)/u.test(normalized)
+}
+
+function isExternalMutationToolName(name: string): boolean {
+  if (/(?:^|_)(?:send|submit|upload|deploy|publish)(?:_|$)/u.test(name)) return true
+  const match = name.match(/(?:^|_)(create|open|delete|remove|update)_(.+)$/u)
+  return Boolean(match && isExternalObjectMutation(match[1], match[2]))
+}
+
+function isExternalMutationCommand(command: string): boolean {
+  return command.split(/&&|\|\||[;|\n]/u).some((part) => {
+    const segment = part.trim()
+    if (!segment || /(?:^|\s)--(?:dry[-_]?run|preview|no[-_]?act|noop)(?:[=\s]|$)/iu.test(segment)) {
+      return false
+    }
+    const shortNoOp = /(?:^|\s)-n(?:\s|$)/u.test(segment) &&
+      /^(?:sudo\s+)?(?:git\b|(?:npm|pnpm|yarn)\b)/iu.test(segment)
+    if (shortNoOp) return false
+    return [
+      /^(?:sudo\s+)?(?:deploy|publish|submit|upload|send)(?:\s|$)/iu,
+      /^(?:sudo\s+)?git(?:\s+(?:-[a-z]\s+\S+|--[\w-]+(?:=\S+)?))*\s+push(?:\s|$)/iu,
+      /^(?:sudo\s+)?gh\s+(?:issue|pr|release)\s+(?:create|edit|delete|close|reopen|merge|upload)(?:\s|$)/iu,
+      /^(?:sudo\s+)?(?:docker|podman)\s+push(?:\s|$)/iu,
+      /^(?:sudo\s+)?kubectl\s+(?:apply|create|delete|patch|replace|set|rollout)(?:\s|$)/iu,
+      /^(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:deploy|publish)(?:\s|$)/iu
+    ].some((pattern) => pattern.test(segment))
+  })
+}
+
+function effectClassesFromEvent(
   event: Extract<AgentRuntimeEvent, { kind: 'tool_event' | 'item_snapshot' }>,
   toolName: string,
   meta: Record<string, unknown>
-): ExecutionEffectClass {
+): ExecutionEffectClass[] {
   const toolKind = event.kind === 'tool_event' ? event.toolKind : event.item.toolKind
-  if (toolKind === 'file_change') return 'local_write'
   const name = normalizedToolName(toolName)
-  if (/(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) {
-    return 'local_write'
-  }
-  if (/(?:^|_)(?:send|submit|upload|deploy|publish|create_issue|github|slack)(?:_|$)/u.test(name)) {
-    return 'external_mutation'
-  }
+  const effects = new Set<ExecutionEffectClass>()
+  const isCommand = toolKind === 'command_execution' ||
+    /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(name)
+  if (isCommand) effects.add('command_execution')
+
   const argumentsValue = recordValue(meta.arguments)
   const command = [
     stringValue(meta.command),
     stringValue(argumentsValue.command),
     stringValue(argumentsValue.cmd)
   ].filter(Boolean).join(' ')
+  const externalTool = isExternalMutationToolName(name)
   if (
-    toolKind === 'command_execution' &&
-    /(?:^|\s)(?:apply_patch|rm|mv|cp|mkdir|touch|install)(?:\s|$)|(?:sed\s+-i|>>?|\btee\b)/iu.test(command)
+    toolKind === 'file_change' ||
+    (!externalTool && /(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) ||
+    (isCommand && /(?:^|\s)(?:apply_patch|rm|mv|cp|mkdir|touch|install)(?:\s|$)|(?:sed\s+-i|>>?|\btee\b|--(?:fix|write)\b)/iu.test(command))
   ) {
-    return 'local_write'
+    effects.add('local_write')
   }
-  if (
-    toolKind === 'command_execution' ||
-    /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(name)
-  ) return 'command_execution'
-  if (/(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(name)) return 'read'
-  return 'other'
+  if (externalTool || (isCommand && isExternalMutationCommand(command))) {
+    effects.add('external_mutation')
+  }
+  if (/(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(name)) {
+    effects.add('read')
+  }
+  return effects.size > 0 ? [...effects] : ['other']
 }
 
 function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined {
