@@ -7,6 +7,7 @@ const MAX_ARGUMENT_STRING_CHARS = 6_000;
 const MAX_ARGUMENT_ARRAY_ITEMS = 32;
 const ARGUMENT_ARRAY_PREVIEW_ITEMS = 6;
 const MARKER_KEY = '__sciforge_request_hygiene__';
+const OMITTED_SHELL_COMMAND = ': # sciforge request hygiene omitted prior shell command; inspect paired tool result';
 
 export function hygienizeChatProviderBody(body: Record<string, unknown>): Record<string, unknown> {
   return hygienizeValue(body, { source: 'chat_request' }) as Record<string, unknown>;
@@ -53,6 +54,7 @@ function hygienizeArgumentValue(value: unknown, source: string): unknown {
   if (typeof value === 'string') {
     const text = replaceEncodedPayloads(value, source);
     if (text.length <= MAX_ARGUMENT_STRING_CHARS) return text;
+    if (isShellCommandSource(source)) return OMITTED_SHELL_COMMAND;
     return markerText(source, 'large_argument_string', value, safeSummary(text));
   }
   if (Array.isArray(value)) {
@@ -70,6 +72,10 @@ function hygienizeArgumentValue(value: unknown, source: string): unknown {
   return Object.fromEntries(
     Object.entries(value).map(([key, entry]) => [key, hygienizeArgumentValue(entry, `${source}.${key}`)]),
   );
+}
+
+function isShellCommandSource(source: string): boolean {
+  return /(?:^|\.)(?:cmd|command)$/u.test(source);
 }
 
 function hygienizeText(value: string, context: HygieneContext): string {
