@@ -1134,7 +1134,7 @@ describe('AgentLoop', () => {
     )).toBe(true)
   })
 
-  it('runs an internal checkpoint and forces a final answer at a phase budget', async () => {
+  it('runs an internal checkpoint whose phase decision can request a final answer', async () => {
     let executions = 0
     const requests: ModelRequest[] = []
     const echoTool = LocalToolHost.defineTool({
@@ -1167,7 +1167,7 @@ describe('AgentLoop', () => {
         if (request.responseFormat === 'json_object') {
           yield {
             kind: 'assistant_text_delta',
-            text: '{"decision":"finish","summary":"enough evidence","remaining":[],"nextPlan":[]}'
+            text: '{"decision":"finish","summary":"enough evidence","evidenceDelta":["behavior verified"],"remaining":[],"nextPlan":[],"stopCondition":["answer delivered"]}'
           }
           yield { kind: 'completed', stopReason: 'stop' }
           return
@@ -1229,8 +1229,8 @@ describe('AgentLoop', () => {
           yield {
             kind: 'assistant_text_delta',
             text: checkpointCalls === 1
-              ? '{"decision":"continue","summary":"A checked","remaining":["B"],"nextPlan":["check B"]}'
-              : '{"decision":"finish","summary":"B checked","remaining":[],"nextPlan":[]}'
+              ? '{"decision":"continue","summary":"A checked","evidenceDelta":["A"],"remaining":["B"],"nextPlan":["check B"],"stopCondition":["B checked"]}'
+              : '{"decision":"finish","summary":"B checked","evidenceDelta":["B"],"remaining":[],"nextPlan":[],"stopCondition":["complete"]}'
           }
           yield { kind: 'completed', stopReason: 'stop' }
           return
@@ -1337,6 +1337,76 @@ describe('AgentLoop', () => {
     )).toBe(true)
   })
 
+  it('executes a complete same-step batch across a phase checkpoint interval', async () => {
+    let executions = 0
+    let normalCalls = 0
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => ({ output: { sequence: executions += 1 } })
+    })
+    const h = makeHarness(
+      {
+        provider: 'phase-checkpoint-batch-model',
+        model: 'phase-checkpoint-batch-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          if (request.responseFormat === 'json_object') {
+            yield {
+              kind: 'assistant_text_delta',
+              text: '{"decision":"finish","summary":"batch complete","evidenceDelta":["two results"],"remaining":[],"nextPlan":[],"stopCondition":["final answer"]}'
+            }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
+          normalCalls += 1
+          if (normalCalls === 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_echo_batch_1',
+              toolName: 'echo',
+              arguments: { text: 'first' }
+            }
+            yield {
+              kind: 'tool_call_complete',
+              callId: 'call_echo_batch_2',
+              toolName: 'echo',
+              arguments: { text: 'second' }
+            }
+            yield { kind: 'completed', stopReason: 'tool_calls' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'Both batch results were retained.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      {
+        tools: [echoTool],
+        toolBudgetProfile: 'implementation',
+        toolBudget: {
+          profiles: {
+            implementation: { softLimit: 1, hardLimit: 1, maxAutomaticPhases: 1, totalLimit: 2 }
+          }
+        }
+      }
+    )
+    await bootstrapThread(h, { request: { prompt: 'Implement and verify both independent checks' } })
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(2)
+    expect(events.some((event) =>
+      event.kind === 'tool_storm_suppressed' && event.message.includes('tool budget exhausted')
+    )).toBe(false)
+  })
+
   it('recovers when a no-tool budget step emits internal tool-call markup instead of final text', async () => {
     let executions = 0
     const requests: ModelRequest[] = []
@@ -1414,7 +1484,66 @@ describe('AgentLoop', () => {
     ]))
   })
 
-  it('fails after recovery when the model repeats suppressed tool calls', async () => {
+  it('recovers provider tool-call markup through the native dispatcher', async () => {
+    const requests: ModelRequest[] = []
+    let executions = 0
+    const echoTool = LocalToolHost.defineTool({
+      name: 'echo',
+      description: 'Echo text',
+      inputSchema: {
+        type: 'object',
+        properties: { text: { type: 'string' } },
+        required: ['text']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: true } }
+      }
+    })
+    const internalMarkup = [
+      '<｜｜DSML｜｜tool_calls>',
+      '<｜｜DSML｜｜invoke name="echo">',
+      '<｜｜DSML｜｜parameter name="text" string="true">retry</｜｜DSML｜｜parameter>',
+      '</｜｜DSML｜｜invoke>',
+      '</｜｜DSML｜｜tool_calls>'
+    ].join('\n')
+    let calls = 0
+    const h = makeHarness(
+      {
+        provider: 'markup-recovery-with-tools-model',
+        model: 'markup-recovery-with-tools-model',
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+          calls += 1
+          requests.push(request)
+          if (calls === 1) {
+            yield { kind: 'assistant_text_delta', text: internalMarkup }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
+          yield { kind: 'assistant_text_delta', text: 'Recovered final answer without tool syntax.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+        }
+      },
+      { tools: [echoTool] }
+    )
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(1)
+    expect(requests[0]?.tools.map((tool) => tool.name)).toContain('echo')
+    expect(requests[1]?.tools.map((tool) => tool.name)).toContain('echo')
+    expect(events.some((event) =>
+      event.kind === 'error' && event.code === 'internal_tool_call_markup_recovered'
+    )).toBe(true)
+    expect(JSON.stringify(items)).not.toContain('DSML')
+  })
+
+  it('pauses with a resumable blocker after recovery when the model repeats suppressed tool calls', async () => {
     let executions = 0
     const echoTool = LocalToolHost.defineTool({
       name: 'echo',
@@ -1435,8 +1564,16 @@ describe('AgentLoop', () => {
       {
         provider: 'storm-recovery-exhausted',
         model: 'storm-recovery-exhausted',
-        async *stream(): AsyncIterable<ModelStreamChunk> {
+        async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
           calls += 1
+          if (request.tools.length === 0) {
+            yield {
+              kind: 'assistant_text_delta',
+              text: 'Paused: repeated calls produced no new evidence; resume with a different query.'
+            }
+            yield { kind: 'completed', stopReason: 'stop' }
+            return
+          }
           yield {
             kind: 'tool_call_complete',
             callId: `call_echo_${calls}`,
@@ -1454,14 +1591,14 @@ describe('AgentLoop', () => {
     const items = await h.sessionStore.loadItems(h.threadId)
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
 
-    expect(status).toBe('failed')
-    expect(calls).toBe(4)
+    expect(status).toBe('completed')
+    expect(calls).toBe(5)
     expect(executions).toBe(2)
     expect(events.some((event) =>
       event.kind === 'error' && event.code === 'tool_loop_recovery'
     )).toBe(true)
     expect(items.some((item) =>
-      item.kind === 'error' && item.code === 'tool_loop_recovery_exhausted'
+      item.kind === 'error' && item.code === 'tool_loop_recovery_paused' && item.severity === 'warning'
     )).toBe(true)
   })
 
@@ -1526,7 +1663,7 @@ describe('AgentLoop', () => {
     expect(observedInstructions[3]).toContain('Tool loop recovery')
   })
 
-  it('fails when recovery ends with a generic trivial answer', async () => {
+  it('pauses without failing when recovery ends with a generic trivial answer', async () => {
     const echoTool = LocalToolHost.defineTool({
       name: 'echo',
       description: 'Echo text',
@@ -1566,9 +1703,9 @@ describe('AgentLoop', () => {
     const status = await h.loop.runTurn(h.threadId, h.turnId)
     const items = await h.sessionStore.loadItems(h.threadId)
 
-    expect(status).toBe('failed')
+    expect(status).toBe('completed')
     expect(items.some((item) =>
-      item.kind === 'error' && item.code === 'tool_loop_trivial_final'
+      item.kind === 'error' && item.code === 'tool_loop_trivial_final' && item.severity === 'warning'
     )).toBe(true)
   })
 
@@ -1900,7 +2037,8 @@ describe('AgentLoop', () => {
         title: 'demo',
         workspace: '/tmp',
         model: 'fake',
-        approvalPolicy: 'untrusted'
+        approvalPolicy: 'untrusted',
+        sandboxMode: 'workspace-write'
       })
     )
     const response = await h.turns.startTurn({

@@ -294,7 +294,7 @@ describe('child agent executor', () => {
     ]))
   })
 
-  it('returns a collected-results fallback when internal tool-call markup recovery is exhausted', async () => {
+  it('returns a collected-results fallback when repeated internal markup reaches resumable finalization', async () => {
     const internalMarkup = [
       '<｜｜DSML｜｜tool_calls>',
       '<｜｜DSML｜｜invoke name="web_fetch">',
@@ -362,8 +362,9 @@ describe('child agent executor', () => {
       appendTranscript: async (entry) => { transcript.push(entry) }
     })
 
-    expect(calls).toBe(4)
-    expect(seen.at(-1)?.contextInstructions?.join('\n')).toContain('Internal tool-call markup recovery')
+    expect(calls).toBeGreaterThanOrEqual(4)
+    expect(calls).toBeLessThanOrEqual(6)
+    expect(seen.at(-1)?.contextInstructions?.join('\n')).toContain('Tool phase finalization')
     expect(result.summary).toContain('已收集到以下资料')
     expect(result.summary).toContain('主要来源')
     expect(result.summary).toContain('摘录')

@@ -131,6 +131,32 @@ describe('BiologyRoomService', () => {
     expect(linked.manifest.assets.find((asset) => asset.id === 'reference-1')?.modality).toBe('genome-reference')
   })
 
+  it('blocks direct room opening when the expected source digest does not match', async () => {
+    const workspaceRoot = await tempWorkspace()
+    const structurePath = join(workspaceRoot, 'protein.pdb')
+    await writeFile(structurePath, 'HEADER    TEST STRUCTURE\nEND\n', 'utf8')
+    const service = new BiologyRoomService()
+
+    await expect(service.openOrCreate({
+      workspaceRoot,
+      path: 'protein.pdb',
+      expectedSha256: '0'.repeat(64)
+    })).rejects.toThrow(/integrity mismatch/)
+    const expectedSha256 = await sha256(structurePath)
+    await expect(service.openOrCreate({
+      workspaceRoot,
+      path: 'protein.pdb',
+      expectedSha256
+    })).resolves.toMatchObject({ created: true })
+
+    await writeFile(structurePath, 'HEADER    CHANGED STRUCTURE\nEND\n', 'utf8')
+    await expect(service.openOrCreate({
+      workspaceRoot,
+      path: 'protein.pdb',
+      expectedSha256
+    })).rejects.toThrow(/integrity mismatch/)
+  })
+
   it('rejects zero-overlap track linking and reports partial contig mismatches', async () => {
     const workspaceRoot = await tempWorkspace()
     await writeFile(join(workspaceRoot, 'reference.fa'), '>chr1\nAAAA\n', 'utf8')

@@ -7,13 +7,16 @@ rewrites FASTA, GenBank, PDB/mmCIF, GFF, BED, or VCF bytes.
 
 ## Open a room
 
-- Open a supported file in Files/Preview and choose **Open in Biology Room**.
-- Or choose **Biology Room** in the workbench toolbar and add an asset.
+- Open any supported file from Files, chat scientific objects, or another workspace-file link;
+  SciForge routes it directly into Biology Room.
 - A GFF3, BED, or VCF track can be opened before its reference. The viewer stays
   blocked until the user selects a real FASTA assembly.
 
 The workbench contains an Assets/Tracks rail, a central lazy-loaded viewer, and
-Selection, Annotations, Versions, and Provenance inspectors. **Add selection to
+Selection, Annotations, Versions, and Provenance inspectors. Its single component
+tree adapts from the full three-pane layout to a horizontal asset rail and stacked
+inspector in a narrow right sidebar, so the scientific viewer keeps a usable width.
+**Add selection to
 chat** sends the source path and SHA-256, a human-readable coordinate label, the
 exact zero-based half-open selection JSON, room revision, and matching
 non-orphaned annotations to the composer.

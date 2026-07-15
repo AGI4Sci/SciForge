@@ -19,16 +19,10 @@ import {
 } from '@shared/biology-room'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { BioGymRunEvent } from '@shared/biogym'
-import type {
-  WorkspaceObservation,
-  WorkspacePreviewAssetTransportDescriptor,
-  WorkspacePreviewByteRange,
-  WorkspaceStructuredSelection
-} from '@shared/workspace-preview'
-import type { WorkspacePreviewReadRangeResult } from '@shared/sciforge-api'
 import {
   BiologyRoomShell,
   biologyRoomAssetBlockingIssue,
+  biologySelectionFromWorkspaceSelection,
   biologyRoomWatchPaths,
   buildBiologyRoomVisibleContextComponent,
   isBiologyRoomTrack,
@@ -53,17 +47,14 @@ import { createBiologyPreviewSessionLease } from '../biology-room/preview-sessio
 
 type PreviewTransportState = {
   planKey: string | null
-  observation: WorkspaceObservation | null
-  descriptor: WorkspacePreviewAssetTransportDescriptor | null
+  status: 'loading' | 'ready' | 'error'
   assetSources: BiologyRoomAssetSources
-  activeSourceUrl: string | null
-  activeSessionId: string | null
   error: string | null
 }
 
 type BiologyPreviewTransportAsset = Pick<
   BiologyRoomAsset,
-  'id' | 'path' | 'indexPaths' | 'sha256'
+  'id' | 'path' | 'indexPaths' | 'indexFingerprints' | 'sha256'
 >
 
 type BiologyPreviewTransportPlan = {
@@ -78,11 +69,8 @@ type PendingBiologyRoomMutation = {
 
 const EMPTY_PREVIEW_TRANSPORT: PreviewTransportState = {
   planKey: null,
-  observation: null,
-  descriptor: null,
+  status: 'loading',
   assetSources: {},
-  activeSourceUrl: null,
-  activeSessionId: null,
   error: null
 }
 
@@ -117,12 +105,19 @@ export function BiologyRoomPanelBridge({
   const [conflict, setConflict] = useState<BiologyRoomRevisionConflict | null>(null)
   const [followRun, setFollowRun] = useState(true)
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const initialTargetRef = useRef(initialTarget)
+  const initialOpenCoordinatorRef = useRef<BiologyRoomInitialOpenCoordinator | null>(null)
   const roomRef = useRef<BiologyRoomManifest | null>(null)
   const mutationQueueRef = useRef<PendingBiologyRoomMutation[]>([])
   const mutationRunningRef = useRef(false)
   const followRunRef = useRef(true)
   const pinnedAssetIdRef = useRef<string | null>(null)
   const runEventRef = useRef<BioGymRunEvent | null>(runEvent ?? null)
+  if (!initialOpenCoordinatorRef.current) {
+    initialOpenCoordinatorRef.current = createBiologyRoomInitialOpenCoordinator()
+  }
+  initialTargetRef.current = initialTarget
+  const initialTargetKey = biologyRoomInitialTargetKey(workspaceRoot, initialTarget)
 
   const loadHistory = useCallback(async (manifest: BiologyRoomManifest): Promise<void> => {
     const api = window.sciforge?.biologyRoom
@@ -168,19 +163,57 @@ export function BiologyRoomPanelBridge({
     setWarning(result.warnings.length ? result.warnings.join(' ') : null)
   }, [acceptRoom, workspaceRoot])
 
-  const openPath = useCallback(async (rawPath: string, asReference?: boolean): Promise<void> => {
+  const openPath = useCallback(async (
+    rawPath: string,
+    options: { asReference?: boolean; target?: WorkspaceFileTarget } = {}
+  ): Promise<void> => {
     const api = window.sciforge?.biologyRoom
     if (!api) throw new Error('Biology Room desktop bridge is unavailable.')
     const path = relativeBiologyPath(rawPath, workspaceRoot)
+    const expectedSha256 = normalizeExpectedSha256(options.target?.integrity?.expectedDigest)
     const result = await api.openOrCreate({
       workspaceRoot,
       path,
-      ...(asReference !== undefined ? { asReference } : {}),
+      ...(expectedSha256 ? { expectedSha256 } : {}),
+      ...(options.asReference !== undefined ? { asReference: options.asReference } : {}),
       actor: { kind: 'user' }
     })
-    if (result.created) acceptRoom(result.manifest)
-    else await acceptRefreshedRoom(result.manifest)
-  }, [acceptRefreshedRoom, acceptRoom, workspaceRoot])
+    let manifest = result.manifest
+    let refreshWarnings: string[] = []
+    if (!result.created) {
+      const refreshed = await api.refresh({
+        workspaceRoot,
+        roomId: manifest.roomId,
+        actor: { kind: 'system' }
+      })
+      manifest = refreshed.manifest
+      refreshWarnings = refreshed.warnings
+    }
+    const targetAsset = manifest.assets.find((asset) => asset.path === path)
+    if (!targetAsset) throw new Error(`Biology Room did not register ${path}.`)
+    const operations: BiologyRoomMutationOperation[] = []
+    if (manifest.activeAssetId !== targetAsset.id) {
+      operations.push({ type: 'setActiveAsset', assetId: targetAsset.id })
+    }
+    if (options.target?.selection) {
+      const selection = biologySelectionFromWorkspaceSelection(
+        targetAsset.id,
+        options.target.selection
+      )
+      if (selection !== undefined) operations.push({ type: 'setSelection', selection })
+    }
+    if (operations.length) {
+      manifest = (await api.apply({
+        workspaceRoot,
+        roomId: manifest.roomId,
+        baseRevision: manifest.revision,
+        operations,
+        actor: { kind: 'user' }
+      })).manifest
+    }
+    acceptRoom(manifest, targetAsset.id)
+    setWarning(refreshWarnings.length ? refreshWarnings.join(' ') : null)
+  }, [acceptRoom, workspaceRoot])
 
   const loadLatestRoom = useCallback(async (): Promise<void> => {
     const api = window.sciforge?.biologyRoom
@@ -200,14 +233,22 @@ export function BiologyRoomPanelBridge({
   useEffect(() => {
     let cancelled = false
     setBusy(true)
-    const targetPath = initialTarget?.path?.trim()
+    const directTarget = initialTargetRef.current
+    const targetPath = directTarget?.path?.trim()
     const targetRoomId = initialRoomId?.trim()
     const api = window.sciforge?.biologyRoom
     const task = targetRoomId && api
       ? api.load({ workspaceRoot, roomId: targetRoomId }).then((manifest) =>
           acceptRefreshedRoom(manifest)
         )
-      : targetPath ? openPath(targetPath) : loadLatestRoom()
+      : targetPath && directTarget && initialTargetKey
+        ? (() => {
+            return initialOpenCoordinatorRef.current!.run(
+              initialTargetKey,
+              () => openPath(targetPath, { target: directTarget })
+            )
+          })()
+        : loadLatestRoom()
     void task
       .catch((cause) => {
         if (!cancelled) setError(formatBiologyRoomError(cause))
@@ -218,7 +259,14 @@ export function BiologyRoomPanelBridge({
     return () => {
       cancelled = true
     }
-  }, [acceptRefreshedRoom, initialRoomId, initialTarget?.path, loadLatestRoom, openPath, workspaceRoot])
+  }, [
+    acceptRefreshedRoom,
+    initialRoomId,
+    initialTargetKey,
+    loadLatestRoom,
+    openPath,
+    workspaceRoot
+  ])
 
   useEffect(() => {
     if (!runEvent) return
@@ -477,7 +525,12 @@ export function BiologyRoomPanelBridge({
       .catch((cause) => {
         sessionLease.releaseAll()
         if (!cancelled) {
-          setPreview({ ...EMPTY_PREVIEW_TRANSPORT, planKey: transportPlanJson, error: errorMessage(cause) })
+          setPreview({
+            ...EMPTY_PREVIEW_TRANSPORT,
+            planKey: transportPlanJson,
+            status: 'error',
+            error: errorMessage(cause)
+          })
         }
       })
     return () => {
@@ -509,25 +562,6 @@ export function BiologyRoomPanelBridge({
       detail: biologyRoomProvenanceDetail(entry.event)
     }] : []), [history])
 
-  const roomSelectionJson = JSON.stringify(room?.selection ?? null)
-  const stableRoomSelection = useMemo(
-    () => JSON.parse(roomSelectionJson) as BiologyRoomSelection | null,
-    [roomSelectionJson]
-  )
-  const observation = useMemo(
-    () => resolvedPreview.observation
-      ? observationWithRoomSelection(resolvedPreview.observation, stableRoomSelection ?? undefined)
-      : null,
-    [resolvedPreview.observation, stableRoomSelection]
-  )
-  const activePreviewSessionId = resolvedPreview.activeSessionId
-  const readRange = useCallback((
-    range: WorkspacePreviewByteRange
-  ): Promise<WorkspacePreviewReadRangeResult> => {
-    if (!activePreviewSessionId) throw new Error('The active preview session is unavailable.')
-    return window.sciforge.workspacePreview.readRange(activePreviewSessionId, range)
-  }, [activePreviewSessionId])
-
   const pickAsset = useCallback(async (
     asReference = false,
     targetTrackId?: string
@@ -543,7 +577,7 @@ export function BiologyRoomPanelBridge({
     if (!room) {
       setBusy(true)
       try {
-        await openPath(picked.path, asReference)
+        await openPath(picked.path, { asReference })
       } catch (cause) {
         setError(formatBiologyRoomError(cause))
       } finally {
@@ -591,14 +625,8 @@ export function BiologyRoomPanelBridge({
   return (
     <BiologyRoomShell
       room={room}
-      observation={observation}
-      viewerPreview={{
-        asset: resolvedPreview.descriptor,
-        assetStatus: resolvedPreview.descriptor ? 'ready' : resolvedPreview.error ? 'error' : 'loading',
-        assetError: resolvedPreview.error,
-        sourceUrl: resolvedPreview.activeSourceUrl,
-        readRange: activePreviewSessionId ? readRange : undefined
-      }}
+      transportStatus={resolvedPreview.status}
+      transportError={resolvedPreview.error}
       assetSources={resolvedPreview.assetSources}
       busy={busy}
       error={error}
@@ -641,14 +669,24 @@ async function prepareRoomPreviewTransport(
   const previewApi = window.sciforge.workspacePreview
   const active = plan.assets.find((asset) => asset.id === plan.activeAssetId)
   if (!active) return EMPTY_PREVIEW_TRANSPORT
-  const paths = new Set<string>()
+  const expectedSha256ByPath = new Map<string, string>()
   for (const asset of plan.assets) {
-    paths.add(asset.path)
-    for (const indexPath of asset.indexPaths) paths.add(indexPath)
+    expectedSha256ByPath.set(asset.path, asset.sha256)
+    for (const index of asset.indexFingerprints ?? []) {
+      expectedSha256ByPath.set(index.path, index.sha256)
+    }
   }
   const sessions = new Map<string, string>()
-  for (const path of paths) {
-    const opened = await previewApi.open({ path, workspaceRoot, mode: 'inspect' })
+  for (const [path, expectedSha256] of expectedSha256ByPath) {
+    const opened = await previewApi.open({
+      path,
+      workspaceRoot,
+      mode: 'inspect',
+      integrity: {
+        algorithm: 'sha256',
+        expectedDigest: `sha256:${expectedSha256}`
+      }
+    })
     if (!opened.ok) throw new Error(opened.message)
     onSessionOpened(opened.session.id)
     sessions.set(path, opened.session.id)
@@ -660,30 +698,24 @@ async function prepareRoomPreviewTransport(
   const assetSources: Record<string, { sourceUrl: string; indexUrls?: Record<string, string> }> = {}
   for (const asset of plan.assets) {
     const sourceUrl = sourceForPath(asset.path)
-    if (!sourceUrl) continue
+    if (!sourceUrl) throw new Error(`Preview source URL was not created for ${asset.path}.`)
     const indexUrls = Object.fromEntries(asset.indexPaths.flatMap((path) => {
       const url = sourceForPath(path)
       return url ? [[path, url]] : []
     }))
+    if (Object.keys(indexUrls).length !== asset.indexPaths.length) {
+      throw new Error(`Preview source URL was not created for every index of ${asset.path}.`)
+    }
     assetSources[asset.id] = {
       sourceUrl,
       ...(Object.keys(indexUrls).length ? { indexUrls } : {})
     }
   }
-  const activeSessionId = sessions.get(active.path) ?? null
-  if (!activeSessionId) throw new Error(`Preview session was not created for ${active.path}.`)
-  const [observed, described] = await Promise.all([
-    previewApi.observe(activeSessionId),
-    previewApi.describeAsset(activeSessionId)
-  ])
   return {
     planKey: null,
-    observation: observed.ok ? observed.observation : null,
-    descriptor: described.ok ? described.descriptor : null,
+    status: 'ready',
     assetSources,
-    activeSourceUrl: sourceForPath(active.path),
-    activeSessionId,
-    error: !observed.ok ? observed.message : !described.ok ? described.message : null
+    error: null
   }
 }
 
@@ -700,6 +732,7 @@ function biologyPreviewTransportPlan(room: BiologyRoomManifest): BiologyPreviewT
       id: asset.id,
       path: asset.path,
       indexPaths: asset.indexPaths,
+      indexFingerprints: asset.indexFingerprints,
       sha256: asset.sha256
       }))
   }
@@ -725,53 +758,6 @@ function uniqueAssets(assets: BiologyRoomAsset[]): BiologyRoomAsset[] {
     seen.add(asset.id)
     return true
   })
-}
-
-function observationWithRoomSelection(
-  observation: WorkspaceObservation,
-  selection: BiologyRoomSelection | undefined
-): WorkspaceObservation {
-  const workspaceSelection = workspaceSelectionFromBiologySelection(selection)
-  return workspaceSelection ? { ...observation, selection: workspaceSelection } : observation
-}
-
-function workspaceSelectionFromBiologySelection(
-  selection: BiologyRoomSelection | undefined
-): WorkspaceStructuredSelection | undefined {
-  if (!selection) return undefined
-  if (selection.kind === 'sequence') {
-    return {
-      kind: 'sequence',
-      ...(selection.sequenceId ? { sequenceId: selection.sequenceId } : {}),
-      ranges: selection.ranges
-    }
-  }
-  if (selection.kind === 'genomic') {
-    return {
-      kind: 'sequence',
-      sequenceId: selection.refName,
-      ranges: [{ start: selection.start, end: selection.end, ...(selection.strand ? { strand: selection.strand } : {}) }]
-    }
-  }
-  return {
-    kind: 'molecular',
-    chains: uniqueStrings(selection.locators.flatMap((locator) => locator.chainId ? [locator.chainId] : [])),
-    residues: selection.locators.flatMap((locator) => locator.residueNumber === undefined ? [] : [{
-      ...(locator.chainId ? { chain: locator.chainId } : {}),
-      index: locator.residueNumber,
-      ...(locator.insertionCode ? { insertionCode: locator.insertionCode } : {}),
-      ...(locator.residueName ? { name: locator.residueName } : {})
-    }]),
-    atoms: selection.locators.flatMap((locator) => locator.atomId === undefined && !locator.atomName ? [] : [{
-      ...(typeof locator.atomId === 'string' ? { id: locator.atomId } : {}),
-      ...(typeof locator.atomId === 'number' ? { index: locator.atomId } : {}),
-      ...(locator.atomName ? { element: locator.atomName } : {})
-    }])
-  }
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values)]
 }
 
 function biologyMutationCoalesceKey(operation: BiologyRoomMutationOperation): string | null {
@@ -800,6 +786,44 @@ function relativeBiologyPath(rawPath: string, workspaceRoot: string): string {
     throw new Error('Biology Room files must be inside the active workspace.')
   }
   return normalizeRelativePath(path.slice(root.length + (path === root ? 0 : 1)))
+}
+
+function normalizeExpectedSha256(value?: string): string | undefined {
+  if (!value) return undefined
+  const normalized = value.trim().toLowerCase().replace(/^sha256:/u, '')
+  if (!/^[a-f0-9]{64}$/u.test(normalized)) {
+    throw new Error('Expected SHA-256 digest is invalid.')
+  }
+  return normalized
+}
+
+export function biologyRoomInitialTargetKey(
+  workspaceRoot: string,
+  target?: WorkspaceFileTarget | null
+): string | null {
+  if (!target?.path.trim()) return null
+  return JSON.stringify([
+    workspaceRoot.trim().replaceAll('\\', '/').replace(/\/+$/, ''),
+    target.path.trim().replaceAll('\\', '/'),
+    target.integrity?.expectedDigest?.trim().toLowerCase() ?? null,
+    target.selection ?? null
+  ])
+}
+
+export type BiologyRoomInitialOpenCoordinator = {
+  run: (key: string, start: () => Promise<void>) => Promise<void>
+}
+
+export function createBiologyRoomInitialOpenCoordinator(): BiologyRoomInitialOpenCoordinator {
+  let current: { key: string; task: Promise<void> } | null = null
+  return {
+    run: (key, start) => {
+      if (current?.key === key) return current.task
+      const task = start()
+      current = { key, task }
+      return task
+    }
+  }
 }
 
 function normalizeRelativePath(path: string): string {

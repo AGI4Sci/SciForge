@@ -78,9 +78,17 @@ function molecularRoom(asset: BiologyRoomAsset): BiologyRoomManifest {
         colorScheme: 'uniform',
         uniformColor: '#336699',
         camera: {
+          mode: 'perspective',
+          fov: Math.PI / 4,
           position: [1, 2, 3],
           target: [0, 0, 0],
-          up: [0, 1, 0]
+          up: [0, 1, 0],
+          radius: 10,
+          radiusMax: 20,
+          fog: 50,
+          clipFar: true,
+          minNear: 5,
+          minFar: 0
         }
       }
     },

@@ -96,7 +96,7 @@ describe('scientificObjectCardViewModel', () => {
 })
 
 describe('ScientificObjectCard', () => {
-  it('renders a compact, accessible molecular card with workspace, lazy 3D, and selection actions', () => {
+  it('renders a compact molecular card with one workspace action and selection context', () => {
     const object = objectFixture(
       'molecular',
       { molecular: { modelCount: 1, chains: ['A'], ligands: ['ATP'] } },
@@ -112,23 +112,9 @@ describe('ScientificObjectCard', () => {
     expect(html).toContain('<article')
     expect(html).toContain('data-scientific-object-modality="molecular"')
     expect(html).toContain('Open in workspace')
-    expect(html).toContain('Show interactive 3D preview')
-    expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('Ask about current selection')
     expect(html).toContain('molecular · 1 chains')
-    expect(html).not.toContain('Loading 3D preview')
-  })
-
-  it('mounts the lazy molecular preview only when controlled expansion is enabled', () => {
-    const html = renderToStaticMarkup(createElement(ScientificObjectCard, {
-      object: objectFixture('molecular'),
-      compact: true,
-      molecularPreviewExpanded: true
-    }))
-
-    expect(html).toContain('aria-expanded="true"')
-    expect(html).toContain('Hide interactive 3D preview')
-    expect(html).toContain('Loading 3D preview')
+    expect(html).not.toContain('interactive 3D')
   })
 
   it('uses a static placeholder for non-molecular modalities and exposes an injectable preview seam', () => {

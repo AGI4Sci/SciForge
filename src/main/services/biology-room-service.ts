@@ -189,6 +189,12 @@ export class BiologyRoomService {
     const source = await resolveSourceFile(workspaceRoot, parsed.path)
 
     return this.enqueue(`${workspaceRoot}:open:${source.relativePath}`, async () => {
+      if (parsed.expectedSha256) {
+        const fingerprint = await fingerprintFile(source.absolutePath)
+        if (fingerprint.sha256 !== parsed.expectedSha256) {
+          throw new Error(`Biology Room integrity mismatch for ${source.relativePath}.`)
+        }
+      }
       const manifests = await listManifests(workspaceRoot)
       const existing = manifests.find((manifest) =>
         manifest.assets.some((asset) => asset.path === source.relativePath)
@@ -220,6 +226,7 @@ export class BiologyRoomService {
         assets: [{
           path: source.relativePath,
           ...(parsed.format ? { format: parsed.format } : {}),
+          ...(parsed.expectedSha256 ? { expectedSha256: parsed.expectedSha256 } : {}),
           ...(parsed.asReference !== undefined ? { asReference: parsed.asReference } : {}),
           indexPaths: parsed.indexPaths,
           ...(parsed.referenceAssetId ? { referenceAssetId: parsed.referenceAssetId } : {})
@@ -1027,6 +1034,9 @@ async function materializeAsset(
 ): Promise<BiologyRoomAsset> {
   const source = await resolveSourceFile(workspaceRoot, definition.path)
   const fingerprint = await fingerprintFile(source.absolutePath)
+  if (definition.expectedSha256 && fingerprint.sha256 !== definition.expectedSha256) {
+    throw new Error(`Biology Room integrity mismatch for ${source.relativePath}.`)
+  }
   const requestedIndexPaths = definition.indexPaths.length > 0
     ? definition.indexPaths
     : await discoverAdjacentIndexPaths(workspaceRoot, source.relativePath, definition.format)

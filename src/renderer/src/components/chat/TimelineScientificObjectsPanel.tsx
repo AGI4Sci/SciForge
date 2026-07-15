@@ -9,6 +9,7 @@ import {
   type ScientificObjectRef,
   type WorkspaceStructuredSelection
 } from '@shared/scientific-objects'
+import { biologyRoomFormatFromPath } from '@shared/biology-room'
 import { workspaceStructuredSelectionSchema } from '@shared/workspace-preview'
 import type { ChatBlock } from '../../agent/types'
 import { browserStorage } from '../../lib/browser-storage'
@@ -108,12 +109,10 @@ export function TimelineScientificObjectsPanel({
 }: TimelineScientificObjectsPanelProps): ReactElement | null {
   const { t, i18n } = useTranslation('common')
   const data = useMemo(() => scientificObjectDataFromTimelineBlocks(blocks), [blocks])
-  const [selections, setSelections] = useState<Record<string, WorkspaceStructuredSelection>>({})
   const [annotationStore, setAnnotationStore] = useState<ScientificObjectAnnotationStore>(() =>
     readScientificObjectAnnotationStore(browserStorage())
   )
   const [showGeneratedComparison, setShowGeneratedComparison] = useState(false)
-  const [expandedMolecularObjectId, setExpandedMolecularObjectId] = useState<string | null>(null)
 
   useEffect(() => {
     writeScientificObjectAnnotationStore(browserStorage(), annotationStore)
@@ -126,25 +125,15 @@ export function TimelineScientificObjectsPanel({
     : null
 
   const openObject = (object: ScientificObjectRef): void => {
-    const selection = selections[scientificObjectIdentityKey(object)] ?? object.selection
     previewWorkspaceFile({
       path: object.path,
       workspaceRoot: object.workspaceRoot || workspaceRoot,
-      ...(selection ? { selection } : {}),
+      ...(object.selection ? { selection: object.selection } : {}),
       integrity: {
         algorithm: object.hash.algorithm,
         expectedDigest: `${object.hash.algorithm}:${object.hash.digest}`
       }
     })
-  }
-
-  const updateSelection = (object: ScientificObjectRef, value: unknown): void => {
-    const selection = workspaceStructuredSelectionSchema.safeParse(value)
-    if (!selection.success) return
-    setSelections((current) => ({
-      ...current,
-      [scientificObjectIdentityKey(object)]: selection.data
-    }))
   }
 
   const askAboutSelection = (object: ScientificObjectRef, value: unknown): void => {
@@ -162,7 +151,7 @@ export function TimelineScientificObjectsPanel({
       current,
       object,
       text,
-      selections[scientificObjectIdentityKey(object)] ?? object.selection
+      object.selection
     ))
   }
 
@@ -183,13 +172,12 @@ export function TimelineScientificObjectsPanel({
         <ScientificObjectCard
           key={scientificObjectIdentityKey(object)}
           object={object}
-          selection={selections[scientificObjectIdentityKey(object)] ?? object.selection}
+          selection={object.selection}
           annotations={annotationsForScientificObject(object, annotationStore)}
           labels={{
-            openWorkspace: t('scientificObjectOpenWorkspace'),
-            expand3d: t('scientificObjectExpand3d'),
-            collapse3d: t('scientificObjectCollapse3d'),
-            previewLoading: t('scientificObjectPreviewLoading'),
+            openWorkspace: biologyRoomFormatFromPath(object.path)
+              ? t('scientificObjectOpenBiologyRoom')
+              : t('scientificObjectOpenWorkspace'),
             askAboutSelection: t('scientificObjectAskSelection'),
             selectionRequired: t('scientificObjectSelectionRequired'),
             annotations: t('scientificObjectAnnotations'),
@@ -201,7 +189,6 @@ export function TimelineScientificObjectsPanel({
             unnamedObject: t('scientificObjectUnnamed'),
             unknownValue: t('scientificObjectUnknown')
           }}
-          molecularPreviewExpanded={expandedMolecularObjectId === scientificObjectIdentityKey(object)}
           renderStaticPreview={(item, fallback) => item.preview ? (
             <TimelineImageGallery
               variant="assistant"
@@ -217,10 +204,7 @@ export function TimelineScientificObjectsPanel({
               }]}
             />
           ) : fallback}
-          onMolecularPreviewExpandedChange={(item, expanded) =>
-            setExpandedMolecularObjectId(expanded ? scientificObjectIdentityKey(item) : null)}
           onOpenWorkspace={openObject}
-          onSelectionChange={updateSelection}
           onAskAboutSelection={onContinuePrompt ? askAboutSelection : undefined}
           onAddAnnotation={addAnnotation}
           onDeleteAnnotation={deleteAnnotation}

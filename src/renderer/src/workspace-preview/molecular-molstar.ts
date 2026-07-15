@@ -288,18 +288,91 @@ export const renderMolecularWorkbenchWithMolstar: MolecularWorkbenchRenderer = a
   await resetMolecularMolstarViewport(viewer)
   applyMolecularMolstarSelection(viewer, selection)
 
+  let disposed = false
+  const resizeController = createMolecularMolstarResizeController(viewer, {
+    refocusOnInitialResize: true
+  })
+
   return {
     setSelection: (nextSelection) => {
       applyMolecularMolstarSelection(viewer, nextSelection)
     },
-    resize: () => viewer.handleResize(),
-    dispose: () => viewer.dispose()
+    resize: resizeController.resize,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      resizeController.dispose()
+      viewer.dispose()
+    }
   }
 }
 
 const BIOLOGY_MOLECULAR_CAMERA_DEBOUNCE_MS = 320
+const BIOLOGY_MOLECULAR_CAMERA_SETTLE_MS = 750
 const BIOLOGY_MOLECULAR_SELECTION_DEBOUNCE_MS = 80
 const BIOLOGY_MOLECULAR_MAX_LOCATORS = 10_000
+const MOLECULAR_MOLSTAR_INITIAL_RESIZE_WINDOW_MS = 2_000
+const MOLECULAR_MOLSTAR_RESIZE_DEBOUNCE_MS = 120
+
+export type MolecularMolstarResizeController = {
+  resize: () => void
+  disableInitialRefocus: () => void
+  dispose: () => void
+}
+
+export function createMolecularMolstarResizeController(
+  viewer: MolstarViewer,
+  options: {
+    refocusOnInitialResize: boolean
+    initialWindowMs?: number
+    debounceMs?: number
+    now?: () => number
+    onBeforeRefocus?: () => void
+    onAfterRefocus?: () => void
+  }
+): MolecularMolstarResizeController {
+  const now = options.now ?? Date.now
+  const deadline = now() + (options.initialWindowMs ?? MOLECULAR_MOLSTAR_INITIAL_RESIZE_WINDOW_MS)
+  const debounceMs = options.debounceMs ?? MOLECULAR_MOLSTAR_RESIZE_DEBOUNCE_MS
+  let refocusActive = options.refocusOnInitialResize
+  let disposed = false
+  let timer: ReturnType<typeof setTimeout> | null = null
+
+  const disableInitialRefocus = (): void => {
+    refocusActive = false
+    if (timer) {
+      clearTimeout(timer)
+      timer = null
+    }
+  }
+
+  return {
+    resize: () => {
+      if (disposed) return
+      viewer.handleResize()
+      // Host panels can animate or restore their width immediately after Mol*
+      // mounts. Reframe once after that layout settles, then preserve the
+      // user's camera for the rest of the viewer lifetime.
+      if (!refocusActive || now() > deadline) return
+      if (timer) clearTimeout(timer)
+      timer = setTimeout(() => {
+        timer = null
+        if (disposed || !refocusActive) return
+        refocusActive = false
+        options.onBeforeRefocus?.()
+        void resetMolecularMolstarViewport(viewer, 0)
+          .catch(() => undefined)
+          .finally(() => options.onAfterRefocus?.())
+      }, debounceMs)
+    },
+    disableInitialRefocus,
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      disableInitialRefocus()
+    }
+  }
+}
 
 export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkbenchRenderer = async ({
   element,
@@ -319,7 +392,9 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
   let disposed = false
   let applyingSelection = false
   let applyingCamera = false
+  let suppressingInitialCameraEvents = !viewState.camera
   let cameraTimer: ReturnType<typeof setTimeout> | null = null
+  let cameraSettleTimer: ReturnType<typeof setTimeout> | null = null
   let selectionTimer: ReturnType<typeof setTimeout> | null = null
   let currentViewState = viewState
   let requestedVisualSignature = biologyMolecularVisualStateSignature(viewState)
@@ -335,12 +410,32 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
     collectMolstarAtomicRecordsFromViewer(viewer, runtime)
   )
   applyingSelection = true
-  applyBiologyMolecularSelection(viewer, selection, runtime, !viewState.camera)
+  applyBiologyMolecularSelection(viewer, selection, runtime)
   applyingSelection = false
   if (viewState.camera) {
     applyingCamera = true
     applyBiologyMolecularCamera(viewer, viewState.camera, runtime)
     applyingCamera = false
+  }
+  const resizeController = createMolecularMolstarResizeController(viewer, {
+    refocusOnInitialResize: !viewState.camera,
+    onBeforeRefocus: () => {
+      applyingCamera = true
+    },
+    onAfterRefocus: () => {
+      applyingCamera = false
+      suppressingInitialCameraEvents = false
+      if (cameraSettleTimer) {
+        clearTimeout(cameraSettleTimer)
+        cameraSettleTimer = null
+      }
+    }
+  })
+  if (suppressingInitialCameraEvents) {
+    cameraSettleTimer = setTimeout(() => {
+      cameraSettleTimer = null
+      suppressingInitialCameraEvents = false
+    }, BIOLOGY_MOLECULAR_CAMERA_SETTLE_MS)
   }
 
   const selectionSubscription = viewer.subscribe(
@@ -368,7 +463,7 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
   const cameraSubscription = viewer.subscribe(
     viewer.plugin.canvas3d?.camera.changed,
     () => {
-      if (disposed || applyingCamera) return
+      if (disposed || applyingCamera || suppressingInitialCameraEvents) return
       if (cameraTimer) clearTimeout(cameraTimer)
       cameraTimer = setTimeout(() => {
         cameraTimer = null
@@ -393,7 +488,7 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
       if (signature === currentSelectionSignature) return
       currentSelectionSignature = signature
       applyingSelection = true
-      applyBiologyMolecularSelection(viewer, nextSelection, runtime, true)
+      applyBiologyMolecularSelection(viewer, nextSelection, runtime)
       applyingSelection = false
     },
     setViewState: async (nextViewState) => {
@@ -409,20 +504,26 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
         })
       }
       if (nextViewState.camera && nextCameraSignature !== previousCameraSignature) {
+        suppressingInitialCameraEvents = false
+        if (cameraSettleTimer) {
+          clearTimeout(cameraSettleTimer)
+          cameraSettleTimer = null
+        }
+        resizeController.disableInitialRefocus()
         applyingCamera = true
         applyBiologyMolecularCamera(viewer, nextViewState.camera, runtime)
         applyingCamera = false
       }
       await viewUpdateQueue
     },
-    resize: () => {
-      if (!disposed) viewer.handleResize()
-    },
+    resize: resizeController.resize,
     dispose: () => {
       if (disposed) return
       disposed = true
       if (cameraTimer) clearTimeout(cameraTimer)
+      if (cameraSettleTimer) clearTimeout(cameraSettleTimer)
       if (selectionTimer) clearTimeout(selectionTimer)
+      resizeController.dispose()
       selectionSubscription.unsubscribe()
       cameraSubscription.unsubscribe()
       viewer.dispose()
@@ -430,14 +531,115 @@ export const renderBiologyMolecularWorkbenchWithMolstar: BiologyMolecularWorkben
   }
 }
 
-async function resetMolecularMolstarViewport(viewer: MolstarViewer): Promise<void> {
+const MOLECULAR_MOLSTAR_SCENE_READY_TIMEOUT_MS = 2_500
+
+export async function resetMolecularMolstarViewport(
+  viewer: MolstarViewer,
+  sceneReadyTimeoutMs = MOLECULAR_MOLSTAR_SCENE_READY_TIMEOUT_MS
+): Promise<void> {
   viewer.handleResize()
-  viewer.plugin.canvas3d?.requestCameraReset({ durationMs: 0 })
-  viewer.plugin.managers.camera.reset(undefined, 0)
+
+  const canvas = viewer.plugin.canvas3d
+  if (!canvas) {
+    viewer.plugin.managers.camera.reset(undefined, 0)
+    return
+  }
+
+  // Loading a structure resolves before Mol* necessarily commits its render
+  // representations. Resetting the camera during that gap frames an empty
+  // scene at the origin and leaves off-origin structures outside the viewport.
+  // Wait for a real, visible scene sphere and focus that sphere explicitly.
+  await waitForMolecularMolstarScene(canvas, sceneReadyTimeoutMs)
+  viewer.handleResize()
   await waitForNextFrame()
-  viewer.handleResize()
-  viewer.plugin.canvas3d?.requestCameraReset({ durationMs: 0 })
+
+  const visibleSphere = canvas.boundingSphereVisible
+  if (isVisibleMolecularMolstarScene(canvas.reprCount.value, visibleSphere.radius)) {
+    viewer.plugin.managers.camera.focusSphere({
+      center: visibleSphere.center,
+      radius: molecularMolstarFramingRadius(
+        visibleSphere.radius,
+        canvas.camera.viewport.width,
+        canvas.camera.viewport.height
+      )
+    }, {
+      durationMs: 0,
+      extraRadius: 2
+    })
+    canvas.requestDraw()
+    return
+  }
+
+  // Preserve a bounded fallback for unusual formats that do not expose a
+  // representation-backed visible sphere.
+  canvas.requestCameraReset({ durationMs: 0 })
   viewer.plugin.managers.camera.reset(undefined, 0)
+}
+
+export function molecularMolstarFramingRadius(
+  radius: number,
+  viewportWidth: number,
+  viewportHeight: number
+): number {
+  if (!Number.isFinite(radius) || radius <= 0) return radius
+  if (!Number.isFinite(viewportWidth) || !Number.isFinite(viewportHeight) ||
+    viewportWidth <= 0 || viewportHeight <= 0 || viewportWidth >= viewportHeight) return radius
+
+  // Mol* camera focus is sphere-based and can fill a portrait sidebar beyond
+  // its horizontal field of view. Add bounded portrait compensation while
+  // keeping the structure large enough to remain visually useful.
+  const portraitScale = Math.min(2.25, Math.sqrt(viewportHeight / viewportWidth))
+  return radius * portraitScale
+}
+
+type MolecularMolstarSceneCanvas = NonNullable<MolstarViewer['plugin']['canvas3d']>
+
+function waitForMolecularMolstarScene(
+  canvas: MolecularMolstarSceneCanvas,
+  timeoutMs: number
+): Promise<boolean> {
+  if (isVisibleMolecularMolstarScene(
+    canvas.reprCount.value,
+    canvas.boundingSphereVisible.radius
+  )) return Promise.resolve(true)
+
+  return new Promise<boolean>((resolve) => {
+    let settled = false
+    let commitSubscription: { unsubscribe: () => void } | undefined
+    let representationSubscription: { unsubscribe: () => void } | undefined
+    let timer: ReturnType<typeof setTimeout> | undefined
+
+    const finish = (ready: boolean) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      commitSubscription?.unsubscribe()
+      representationSubscription?.unsubscribe()
+      resolve(ready)
+    }
+    const check = () => {
+      if (isVisibleMolecularMolstarScene(
+        canvas.reprCount.value,
+        canvas.boundingSphereVisible.radius
+      )) finish(true)
+    }
+
+    timer = setTimeout(() => finish(false), Math.max(0, timeoutMs))
+    commitSubscription = canvas.commited.subscribe(check)
+    if (settled) commitSubscription.unsubscribe()
+    if (!settled) {
+      representationSubscription = canvas.reprCount.subscribe(check)
+      if (settled) representationSubscription.unsubscribe()
+    }
+    check()
+  })
+}
+
+function isVisibleMolecularMolstarScene(
+  representationCount: number,
+  radius: number
+): boolean {
+  return representationCount > 0 && Number.isFinite(radius) && radius > 0
 }
 
 async function waitForNextFrame(): Promise<void> {
@@ -563,6 +765,7 @@ export function biologyMolecularLocatorsToMolstarSchemaItems(
       : {}),
     ...(locator.residueName ? { auth_comp_id: locator.residueName } : {}),
     ...(locator.atomName ? { auth_atom_id: locator.atomName } : {}),
+    ...(locator.elementSymbol ? { type_symbol: locator.elementSymbol } : {}),
     ...(typeof locator.atomId === 'number'
       ? { atom_id: locator.atomId }
       : typeof locator.atomId === 'string' && !locator.atomName
@@ -649,15 +852,13 @@ export function biologyMolecularVisualStateSignature(state: BiologyMolecularView
 function applyBiologyMolecularSelection(
   viewer: MolstarViewer,
   selection: BiologyMolecularSelection | null | undefined,
-  runtime: BiologyMolecularMolstarModule,
-  focus = false
+  runtime: BiologyMolecularMolstarModule
 ): void {
   const { StructureElement } = runtime
   const manager = viewer.plugin.managers.structure.selection
   manager.clear()
   if (!selection?.locators.length) return
 
-  const loci: StructureElement.Loci[] = []
   for (const structureRef of viewer.plugin.managers.structure.hierarchy.current.structures) {
     const structure = structureRef.cell.obj?.data
     if (!structure) continue
@@ -669,13 +870,6 @@ function applyBiologyMolecularSelection(
     const next = StructureElement.Loci.fromSchema(structure, { items })
     if (StructureElement.Loci.isEmpty(next)) continue
     manager.fromLoci('add', next, false)
-    loci.push(next)
-  }
-  if (focus && loci.length) {
-    viewer.plugin.managers.camera.focusLoci(loci, {
-      durationMs: 0,
-      extraRadius: 3
-    })
   }
 }
 
@@ -732,9 +926,17 @@ function applyBiologyMolecularCamera(
   if (!camera) return
   const { Vec3 } = runtime
   viewer.plugin.managers.camera.setSnapshot({
+    mode: camera.mode,
+    fov: camera.fov,
     position: Vec3.create(...camera.position),
     target: Vec3.create(...camera.target),
-    up: Vec3.create(...camera.up)
+    up: Vec3.create(...camera.up),
+    radius: camera.radius,
+    radiusMax: camera.radiusMax,
+    fog: camera.fog,
+    clipFar: camera.clipFar,
+    minNear: camera.minNear,
+    minFar: camera.minFar
   }, 0)
 }
 
@@ -745,9 +947,17 @@ function biologyMolecularCameraFromViewer(
   if (!camera) return null
   const snapshot = camera.getSnapshot()
   return {
+    mode: snapshot.mode,
+    fov: snapshot.fov,
     position: vectorTuple(snapshot.position),
     target: vectorTuple(snapshot.target),
-    up: vectorTuple(snapshot.up)
+    up: vectorTuple(snapshot.up),
+    radius: snapshot.radius,
+    radiusMax: snapshot.radiusMax,
+    fog: snapshot.fog,
+    clipFar: snapshot.clipFar,
+    minNear: snapshot.minNear,
+    minFar: snapshot.minFar
   }
 }
 
@@ -756,9 +966,17 @@ function biologyMolecularCameraSignature(
 ): string {
   if (!camera) return 'none'
   return JSON.stringify([
+    camera.mode,
+    roundCoordinate(camera.fov),
     ...camera.position.map(roundCoordinate),
     ...camera.target.map(roundCoordinate),
-    ...camera.up.map(roundCoordinate)
+    ...camera.up.map(roundCoordinate),
+    roundCoordinate(camera.radius),
+    roundCoordinate(camera.radiusMax),
+    roundCoordinate(camera.fog),
+    camera.clipFar,
+    roundCoordinate(camera.minNear),
+    roundCoordinate(camera.minFar)
   ])
 }
 

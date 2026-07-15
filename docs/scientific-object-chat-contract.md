@@ -64,9 +64,10 @@ result.
 ## Interaction boundary
 
 - The timeline initially renders a static, accessible card.
-- Only one molecular card in a turn mounts the lightweight Mol* preview at a time.
-- The inline preview uses a bounded workspace-preview session and verifies the source SHA-256.
-- Opening the full workspace preserves the current structured selection and integrity expectation.
+- The card has one open action. Supported biology formats route directly to Biology Room;
+  other formats use the ordinary workspace preview.
+- Opening preserves the structured selection and SHA-256 integrity expectation. Chat does not
+  create a second viewer session or maintain a parallel selection state.
 - “Ask about current selection” writes a provenance-bound prompt into the composer; it does not
   silently start a turn.
 - Remote or text-only surfaces can fall back to the title, modality, path, hash, and observation
@@ -81,6 +82,5 @@ npx vitest run \
   src/shared/scientific-objects.test.ts \
   src/renderer/src/components/chat/ScientificObjectCard.test.ts \
   src/renderer/src/components/chat/ScientificObjectComparisonPanel.test.ts \
-  src/renderer/src/components/chat/ScientificObjectMolecularPreview.test.ts \
   src/renderer/src/components/chat/TimelineScientificObjectsPanel.test.ts
 ```

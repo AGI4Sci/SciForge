@@ -1,10 +1,8 @@
-import type { ComponentType, FormEvent, ReactElement, ReactNode } from 'react'
-import { lazy, Suspense, useEffect, useId, useMemo, useState } from 'react'
+import type { FormEvent, ReactElement, ReactNode } from 'react'
+import { useId, useMemo, useState } from 'react'
 import {
   Atom,
   BarChart3,
-  ChevronDown,
-  ChevronUp,
   Dna,
   ExternalLink,
   ImageIcon,
@@ -42,9 +40,6 @@ export type ScientificObjectCardViewModel = {
 
 export type ScientificObjectCardLabels = {
   openWorkspace: string
-  expand3d: string
-  collapse3d: string
-  previewLoading: string
   askAboutSelection: string
   selectionRequired: string
   annotations: string
@@ -64,34 +59,15 @@ export type ScientificObjectCardProps = {
   compact?: boolean
   className?: string
   labels?: Partial<ScientificObjectCardLabels>
-  molecularPreviewExpanded?: boolean
   renderStaticPreview?: (object: ScientificObjectRef, fallback: ReactElement) => ReactNode
-  onMolecularPreviewExpandedChange?: (object: ScientificObjectRef, expanded: boolean) => void
   onOpenWorkspace?: (object: ScientificObjectRef) => void
-  onSelectionChange?: (object: ScientificObjectRef, selection: unknown) => void
   onAskAboutSelection?: (object: ScientificObjectRef, selection: unknown) => void
   onAddAnnotation?: (object: ScientificObjectRef, text: string) => void
   onDeleteAnnotation?: (object: ScientificObjectRef, annotation: ScientificObjectAnnotation) => void
 }
 
-type MolecularPreviewProps = {
-  object: ScientificObjectRef
-  selection?: unknown
-  className?: string
-  onSelectionChange?: (selection: unknown) => void
-}
-
-const LazyScientificObjectMolecularPreview = lazy<ComponentType<MolecularPreviewProps>>(() =>
-  import('./ScientificObjectMolecularPreview').then((module) => ({
-    default: module.ScientificObjectMolecularPreview as ComponentType<MolecularPreviewProps>
-  }))
-)
-
 const DEFAULT_LABELS: ScientificObjectCardLabels = {
   openWorkspace: 'Open in workspace',
-  expand3d: 'Show interactive 3D preview',
-  collapse3d: 'Hide interactive 3D preview',
-  previewLoading: 'Loading 3D preview…',
   askAboutSelection: 'Ask about current selection',
   selectionRequired: 'Select a chain, residue, atom, or ligand first',
   annotations: 'Annotations',
@@ -484,34 +460,23 @@ export function ScientificObjectCard({
   compact = false,
   className,
   labels: labelOverrides,
-  molecularPreviewExpanded,
   renderStaticPreview,
-  onMolecularPreviewExpandedChange,
   onOpenWorkspace,
-  onSelectionChange,
   onAskAboutSelection,
   onAddAnnotation,
   onDeleteAnnotation
 }: ScientificObjectCardProps): ReactElement {
   const labels = { ...DEFAULT_LABELS, ...labelOverrides }
   const model = useMemo(() => scientificObjectCardViewModel(object), [object])
-  const [localExpanded3d, setLocalExpanded3d] = useState(false)
   const [annotationEditorOpen, setAnnotationEditorOpen] = useState(false)
   const [annotationDraft, setAnnotationDraft] = useState('')
-  const initialSelection = selection ?? selectionFromObject(object)
-  const [currentSelection, setCurrentSelection] = useState<unknown>(initialSelection)
+  const currentSelection = selection ?? selectionFromObject(object)
   const titleId = useId()
   const annotationInputId = useId()
   const resolvedAnnotations = annotations ?? annotationsFromObject(object)
   const meta = MODALITY_META[model.modality]
   const Icon = meta.icon
   const selectionSummary = summarizeScientificObjectSelection(currentSelection)
-  const expanded3d = molecularPreviewExpanded ?? localExpanded3d
-
-  useEffect(() => {
-    setCurrentSelection(selection ?? selectionFromObject(object))
-    if (molecularPreviewExpanded === undefined) setLocalExpanded3d(false)
-  }, [model.id, molecularPreviewExpanded, object, selection])
 
   const submitAnnotation = (event: FormEvent<HTMLFormElement>): void => {
     event.preventDefault()
@@ -590,22 +555,6 @@ export function ScientificObjectCard({
         <p className="mx-3.5 mb-3 truncate text-[10.5px] text-ds-faint" title={model.provenanceLabel}>{model.provenanceLabel}</p>
       ) : null}
 
-      {model.modality === 'molecular' && expanded3d ? (
-        <div className="border-t border-ds-border-muted/70 bg-black/[0.025] p-2 dark:bg-black/10">
-          <Suspense fallback={<div role="status" className="flex h-44 items-center justify-center text-[12px] text-ds-faint">{labels.previewLoading}</div>}>
-            <LazyScientificObjectMolecularPreview
-              object={object}
-              selection={currentSelection}
-              className="h-52 min-h-44 w-full overflow-hidden rounded-xl"
-              onSelectionChange={(nextSelection) => {
-                setCurrentSelection(nextSelection)
-                onSelectionChange?.(object, nextSelection)
-              }}
-            />
-          </Suspense>
-        </div>
-      ) : null}
-
       {selectionSummary ? (
         <div className="flex items-center gap-1.5 border-t border-ds-border-muted/70 px-3.5 py-2 text-[11px] text-ds-muted">
           <MessageSquareQuote className="h-3.5 w-3.5 shrink-0 text-accent" aria-hidden="true" />
@@ -664,21 +613,6 @@ export function ScientificObjectCard({
           >
             <ExternalLink className="h-3.5 w-3.5 text-accent" aria-hidden="true" />
             {labels.openWorkspace}
-          </button>
-        ) : null}
-        {model.modality === 'molecular' ? (
-          <button
-            type="button"
-            onClick={() => {
-              const next = !expanded3d
-              if (molecularPreviewExpanded === undefined) setLocalExpanded3d(next)
-              onMolecularPreviewExpandedChange?.(object, next)
-            }}
-            aria-expanded={expanded3d}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11.5px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
-          >
-            {expanded3d ? <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />}
-            {expanded3d ? labels.collapse3d : labels.expand3d}
           </button>
         ) : null}
         {onAskAboutSelection ? (

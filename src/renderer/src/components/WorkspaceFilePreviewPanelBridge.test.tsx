@@ -585,18 +585,40 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     })
   })
 
-  it('routes life-science and deferred science formats through the workspace preview shell', () => {
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'protein.pdb' })).toEqual({
+  it('routes supported biology formats only through Biology Room', () => {
+    for (const [path, format] of [
+      ['protein.pdb', 'pdb'],
+      ['structure.mmcif', 'mmcif'],
+      ['reads.fasta', 'fasta'],
+      ['record.gbk', 'genbank'],
+      ['features.gff3.gz', 'gff3'],
+      ['regions.bed.gz', 'bed'],
+      ['variants.vcf.gz', 'vcf']
+    ] as const) {
+      expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path })).toEqual({
+        kind: 'biology-room',
+        format
+      })
+    }
+    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'ligand.sdf' })).toEqual({
       kind: 'workspace-preview-shell',
       reason: 'registered-plugin',
       pluginId: 'molecular',
       modality: 'molecular'
     })
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'reads.fasta' })).toEqual({
+    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'reads.fastq' })).toEqual({
       kind: 'workspace-preview-shell',
       reason: 'registered-plugin',
       pluginId: 'sequence-genomics',
       modality: 'sequence'
+    })
+    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'structure.pdb.gz' })).toEqual({
+      kind: 'workspace-preview-shell',
+      reason: 'unregistered-format'
+    })
+    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'record.gbk.gz' })).toEqual({
+      kind: 'workspace-preview-shell',
+      reason: 'unregistered-format'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'cells.ome.tiff' })).toEqual({
       kind: 'workspace-preview-shell',
@@ -610,7 +632,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     })
   })
 
-  it('renders every resolved route through the workspace preview shell', () => {
+  it('renders Biology Room directly and keeps other formats on the workspace preview shell', () => {
     const unregisteredHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'legacy.xls', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
@@ -663,22 +685,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(markdownHtml).toContain('data-shell-class-name="ds-no-drag"')
     expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
-    expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
-    expect(molecularHtml).toContain('data-route-reason="registered-plugin"')
-    expect(molecularHtml).toContain('aria-label="Open in Biology Room"')
-    expect(molecularHtml).toContain('data-mock-molecular-viewer="true"')
-    expect(molecularHtml).toContain('data-asset-status="ready"')
-    expect(molecularHtml).toContain('data-has-apply-edit="true"')
-    expect(workspacePreviewMock.latestMolecularProps).toMatchObject({
-      assetStatus: 'ready',
-      asset: {
-        primary: 'byte-range',
-        range: {
-          size: 4
-        }
-      }
-    })
-    expect(typeof workspacePreviewMock.latestMolecularProps?.readRange).toBe('function')
+    expect(molecularHtml).toContain('data-biology-room-loading="true"')
+    expect(molecularHtml).not.toContain('data-mock-workspace-preview-shell="true"')
     expect(tabularHtml).toContain('data-route-reason="registered-plugin"')
     expect(tabularHtml).toContain('data-mock-tabular-viewer="true"')
     expect(tabularHtml).toContain('data-has-apply-edit="true"')
@@ -691,10 +699,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(deckHtml).toContain('data-route-reason="registered-plugin"')
     expect(deckHtml).toContain('data-mock-deck-viewer="true"')
     expect(deckHtml).toContain('data-has-apply-edit="true"')
-    expect(sequenceHtml).toContain('data-route-reason="registered-plugin"')
-    expect(sequenceHtml).toContain('aria-label="Open in Biology Room"')
-    expect(sequenceHtml).toContain('data-mock-sequence-viewer="true"')
-    expect(sequenceHtml).toContain('data-has-set-selection="true"')
+    expect(sequenceHtml).toContain('data-biology-room-loading="true"')
+    expect(sequenceHtml).not.toContain('data-mock-workspace-preview-shell="true"')
     expect(deferredHtml).toContain('data-route-reason="deferred-non-life-science"')
   })
 
@@ -793,14 +799,14 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
 
   it('connects molecular selection edits to the workspace preview host and refreshes observation', async () => {
     renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
-      target: { path: 'protein.pdb', workspaceRoot: '/workspace/lab' },
+      target: { path: 'ligand.sdf', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
       onClose: vi.fn()
     }))
 
     const operation = {
       kind: 'molecular.setSelection' as const,
-      path: '/workspace/lab/protein.pdb',
+      path: '/workspace/lab/ligand.sdf',
       selection: {
         kind: 'molecular' as const,
         chains: ['A']
@@ -814,14 +820,14 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
 
   it('connects sequence marker selections to the workspace preview host and refreshes observation', async () => {
     renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
-      target: { path: 'reads.fasta', workspaceRoot: '/workspace/lab' },
+      target: { path: 'reads.fastq', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
       onClose: vi.fn()
     }))
 
     const operation = {
       kind: 'workspace.setSelection' as const,
-      path: '/workspace/lab/reads.fasta',
+      path: '/workspace/lab/reads.fastq',
       selection: {
         kind: 'sequence' as const,
         sequenceId: 'read1',

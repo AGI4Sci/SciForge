@@ -4,6 +4,7 @@ import type {
   BiologyRoomManifest,
   BiologyRoomSelection
 } from '@shared/biology-room'
+import type { WorkspaceStructuredSelection } from '@shared/workspace-preview'
 
 export type BiologyRoomInspectorTab = 'selection' | 'annotations' | 'versions' | 'provenance'
 export type BiologyRoomViewerKind = 'sequence' | 'genome' | 'molecular' | 'unsupported'
@@ -29,6 +30,50 @@ export type BiologyRoomRevisionConflict = {
   expectedRevision: number
   actualRevision: number
   message?: string
+}
+
+export function biologySelectionFromWorkspaceSelection(
+  assetId: string,
+  selection: WorkspaceStructuredSelection
+): BiologyRoomSelection | null | undefined {
+  if (selection.kind === 'sequence') {
+    if (selection.ranges.length === 0) return null
+    return {
+      kind: 'sequence',
+      assetId,
+      ...(selection.sequenceId ? { sequenceId: selection.sequenceId } : {}),
+      ranges: selection.ranges.map((range) => ({
+        start: range.start,
+        end: range.end,
+        ...(range.strand ? { strand: range.strand } : {})
+      })),
+      ...(selection.features?.length
+        ? { featureIds: selection.features.map((feature) => feature.id).filter((id): id is string => Boolean(id)) }
+        : {})
+    }
+  }
+
+  if (selection.kind === 'molecular') {
+    const locators: Extract<BiologyRoomSelection, { kind: 'molecular' }>['locators'] = []
+    for (const chainId of selection.chains ?? []) locators.push({ chainId })
+    for (const residue of selection.residues ?? []) {
+      locators.push({
+        ...(residue.chain ? { chainId: residue.chain } : {}),
+        residueNumber: residue.index,
+        ...(residue.insertionCode ? { insertionCode: residue.insertionCode } : {}),
+        ...(residue.name ? { residueName: residue.name } : {})
+      })
+    }
+    for (const ligand of selection.ligands ?? []) locators.push({ residueName: ligand })
+    for (const atom of selection.atoms ?? []) {
+      if (atom.id !== undefined) locators.push({ atomId: atom.id })
+      else if (atom.index !== undefined) locators.push({ atomId: atom.index })
+      else if (atom.element !== undefined) locators.push({ elementSymbol: atom.element })
+    }
+    return locators.length ? { kind: 'molecular', assetId, locators } : null
+  }
+
+  return undefined
 }
 
 const SEQUENCE_FORMATS = new Set(['fa', 'fasta', 'fna', 'faa', 'gb', 'gbk', 'genbank'])

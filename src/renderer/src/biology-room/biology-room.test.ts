@@ -10,6 +10,7 @@ import {
   biologyRoomAssetBlockingIssue,
   biologyRoomAssetWarning,
   biologyRoomWatchPaths,
+  biologySelectionFromWorkspaceSelection,
   biologyRoomNeedsReference,
   buildBiologyRoomSelectionChatContext,
   clampBiologyRoomWidth,
@@ -21,9 +22,6 @@ import {
   biologyRoomVisibleContextComponentId,
   buildBiologyRoomVisibleContextComponent
 } from './visible-context'
-import {
-  biologySelectionFromWorkspaceSelection
-} from './BiologyRoomViewerOutlet'
 import {
   biologySequenceSelectionFromSeqViz,
   buildSeqVizProps,
@@ -110,11 +108,18 @@ describe('Biology Room renderer models', () => {
     expect(biologySelectionFromWorkspaceSelection('structure', {
       kind: 'molecular',
       chains: ['A'],
-      residues: [{ chain: 'A', index: 42, name: 'GLY' }]
+      residues: [{ chain: 'A', index: 42, name: 'GLY' }],
+      ligands: ['ATP'],
+      atoms: [{ element: 'Zn' }]
     })).toEqual({
       kind: 'molecular',
       assetId: 'structure',
-      locators: [{ chainId: 'A' }, { chainId: 'A', residueNumber: 42, residueName: 'GLY' }]
+      locators: [
+        { chainId: 'A' },
+        { chainId: 'A', residueNumber: 42, residueName: 'GLY' },
+        { residueName: 'ATP' },
+        { elementSymbol: 'Zn' }
+      ]
     })
   })
 
@@ -577,6 +582,28 @@ describe('Biology Room shell', () => {
     expect(html).toContain('data-biology-room-warning="true"')
     expect(html).toContain('data-biology-room-source-fingerprints="true"')
     expect(html).toContain('sha256')
+  })
+
+  it('keeps the viewer as a named pane and stacks it in narrow sidebar containers', async () => {
+    const structure = asset({
+      id: 'structure',
+      path: 'models/protein.pdb',
+      format: 'pdb',
+      modality: 'structure'
+    })
+    const html = renderToStaticMarkup(createElement(BiologyRoomShell, {
+      room: manifest({ assets: [structure], activeAssetId: structure.id }),
+      resizable: false
+    }))
+    const nodeFs = 'node:fs/promises'
+    const { readFile } = await import(/* @vite-ignore */ nodeFs)
+    const css = await readFile(new URL('../styles/base-shell.css', import.meta.url), 'utf8')
+
+    expect(html).toContain('biology-room-layout')
+    expect(html).toContain('biology-room-viewer')
+    expect(css).toContain('@container biology-room (max-width: 560px)')
+    expect(css).toContain('grid-template-rows: 78px minmax(260px, 1fr) 180px')
+    expect(css).toContain('.biology-room-viewer')
   })
 
   it('renders a standalone conflict banner and creates schema-ready annotations', () => {

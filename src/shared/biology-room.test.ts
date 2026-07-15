@@ -25,6 +25,8 @@ describe('Biology Room contract', () => {
     expect(biologyRoomFormatFromPath('annotations.GFF3.GZ')).toBe('gff3')
     expect(biologyRoomFormatFromPath('variants.vcf.gz')).toBe('vcf')
     expect(biologyRoomFormatFromPath('structure.cif')).toBe('mmcif')
+    expect(biologyRoomFormatFromPath('structure.pdb.gz')).toBeNull()
+    expect(biologyRoomFormatFromPath('record.gbk.gz')).toBeNull()
     expect(biologyRoomFormatFromPath('reads.fastq')).toBeNull()
     expect(biologyRoomFormatFromPath('alignment.bam')).toBeNull()
   })
@@ -59,10 +61,22 @@ describe('Biology Room contract', () => {
       start: 10,
       end: 20
     })).toThrow()
-    expect(() => biologyMolecularCameraSchema.parse({
+    const camera = {
+      mode: 'perspective' as const,
+      fov: Math.PI / 4,
       position: [1, 2, 3],
       target: [0, 0, 0],
       up: [0, 1, 0],
+      radius: 10,
+      radiusMax: 20,
+      fog: 50,
+      clipFar: true,
+      minNear: 5,
+      minFar: 0
+    }
+    expect(biologyMolecularCameraSchema.parse(camera)).toMatchObject(camera)
+    expect(() => biologyMolecularCameraSchema.parse({
+      ...camera,
       zoom: 2
     })).toThrow()
   })
@@ -74,6 +88,13 @@ describe('Biology Room contract', () => {
       locators: [{ modelId: 1, chainId: 'A', residueNumber: 42, insertionCode: 'B', atomName: 'CA' }]
     })
     expect(selection.kind).toBe('molecular')
+    expect(biologyRoomSelectionSchema.parse({
+      kind: 'molecular',
+      assetId: 'structure-1',
+      locators: [{ residueName: 'ATP' }]
+    })).toMatchObject({
+      locators: [{ residueName: 'ATP' }]
+    })
     expect(() => biologyRoomSelectionSchema.parse({
       kind: 'molecular',
       assetId: 'structure-1',

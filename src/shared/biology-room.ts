@@ -104,6 +104,9 @@ export type BiologyRoomRelativePath = z.infer<typeof biologyRoomRelativePathSche
 
 export function biologyRoomFormatFromPath(path: string): BiologyRoomFormat | null {
   const lower = path.trim().toLowerCase().replaceAll('\\', '/')
+  if (!BIOLOGY_ROOM_SUPPORTED_EXTENSIONS.some((extension) => lower.endsWith(extension))) {
+    return null
+  }
   const uncompressed = lower.endsWith('.gz') ? lower.slice(0, -3) : lower
   if (/\.(?:fa|fasta|fna|faa)$/.test(uncompressed)) return 'fasta'
   if (/\.(?:gb|gbk)$/.test(uncompressed)) return 'genbank'
@@ -172,6 +175,7 @@ export const biologyRoomAssetInputSchema = z.object({
   id: biologyRoomEntityIdSchema.optional(),
   path: biologyRoomRelativePathSchema,
   format: biologyRoomFormatSchema.optional(),
+  expectedSha256: sha256Schema.optional(),
   asReference: z.boolean().optional(),
   indexPaths: z.array(biologyRoomRelativePathSchema).max(4).default([]),
   referenceAssetId: biologyRoomEntityIdSchema.optional()
@@ -217,10 +221,12 @@ export const biologyMolecularLocatorSchema = z.object({
   insertionCode: z.string().trim().max(16).optional(),
   residueName: z.string().trim().max(64).optional(),
   atomName: z.string().trim().max(64).optional(),
-  atomId: z.union([z.string().trim().min(1).max(256), nonNegativeIntegerSchema]).optional()
+  atomId: z.union([z.string().trim().min(1).max(256), nonNegativeIntegerSchema]).optional(),
+  elementSymbol: z.string().trim().min(1).max(8).optional()
 }).strict().refine(
   (locator) => locator.modelId !== undefined || locator.chainId !== undefined ||
-    locator.residueNumber !== undefined || locator.atomName !== undefined || locator.atomId !== undefined,
+    locator.residueNumber !== undefined || locator.residueName !== undefined ||
+    locator.atomName !== undefined || locator.atomId !== undefined || locator.elementSymbol !== undefined,
   'A molecular locator must identify at least a model, chain, residue, or atom.'
 )
 
@@ -300,9 +306,17 @@ export const biologyGenomeViewStateSchema = z.object({
 const vector3Schema = z.tuple([finiteNumberSchema, finiteNumberSchema, finiteNumberSchema])
 
 export const biologyMolecularCameraSchema = z.object({
+  mode: z.enum(['perspective', 'orthographic']),
+  fov: finiteNumberSchema.positive().max(Math.PI),
   position: vector3Schema,
   target: vector3Schema,
-  up: vector3Schema
+  up: vector3Schema,
+  radius: finiteNumberSchema.nonnegative(),
+  radiusMax: finiteNumberSchema.positive(),
+  fog: finiteNumberSchema.nonnegative().max(100),
+  clipFar: z.boolean(),
+  minNear: finiteNumberSchema.nonnegative(),
+  minFar: finiteNumberSchema.nonnegative()
 }).strict()
 
 export const biologyMolecularViewStateSchema = z.object({
@@ -432,6 +446,7 @@ export const biologyRoomCreateInputSchema = z.object({
 export const biologyRoomOpenOrCreateInputSchema = z.object({
   workspaceRoot: z.string().trim().min(1).max(4_096),
   path: biologyRoomRelativePathSchema,
+  expectedSha256: sha256Schema.optional(),
   title: z.string().trim().min(1).max(300).optional(),
   format: biologyRoomFormatSchema.optional(),
   asReference: z.boolean().optional(),

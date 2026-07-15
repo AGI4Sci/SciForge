@@ -1309,12 +1309,10 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     wideControl
                     control={
                       <div className="w-full overflow-x-auto">
-                        <div className="grid min-w-[620px] grid-cols-[minmax(110px,1.4fr)_repeat(4,minmax(92px,1fr))] gap-2 text-[12px] text-ds-muted">
+                        <div className="grid min-w-[420px] grid-cols-[minmax(130px,1.4fr)_repeat(2,minmax(110px,1fr))] gap-2 text-[12px] text-ds-muted">
                           <span />
                           <span>{t('localRuntimeToolBudgetSoft')}</span>
                           <span>{t('localRuntimeToolBudgetHard')}</span>
-                          <span>{t('localRuntimeToolBudgetPhases')}</span>
-                          <span>{t('localRuntimeToolBudgetTotal')}</span>
                           {TOOL_BUDGET_PROFILE_NAMES.flatMap((profileName) => {
                             const profile = runtimeTuning.toolBudget.profiles[profileName]
                             const fieldClass = 'min-w-0 rounded-lg border border-ds-border bg-ds-card px-2 py-1.5 text-[13px] text-ds-ink'
@@ -1327,13 +1325,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                                 onChange={(event) => updateToolBudgetProfile(profileName, { softLimit: Number(event.target.value) })} />,
                               <input key={`${profileName}-hard`} type="number" min={1} max={4096} className={fieldClass}
                                 disabled={!runtimeTuning.toolBudget.enabled} value={profile.hardLimit}
-                                onChange={(event) => updateToolBudgetProfile(profileName, { hardLimit: Number(event.target.value) })} />,
-                              <input key={`${profileName}-phases`} type="number" min={1} max={32} className={fieldClass}
-                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.maxAutomaticPhases}
-                                onChange={(event) => updateToolBudgetProfile(profileName, { maxAutomaticPhases: Number(event.target.value) })} />,
-                              <input key={`${profileName}-total`} type="number" min={1} max={131072} className={fieldClass}
-                                disabled={!runtimeTuning.toolBudget.enabled} value={profile.totalLimit}
-                                onChange={(event) => updateToolBudgetProfile(profileName, { totalLimit: Number(event.target.value) })} />
+                                onChange={(event) => updateToolBudgetProfile(profileName, { hardLimit: Number(event.target.value) })} />
                             ]
                           })}
                         </div>

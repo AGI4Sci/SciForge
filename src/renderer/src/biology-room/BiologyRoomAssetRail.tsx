@@ -50,7 +50,7 @@ export function BiologyRoomAssetRail({
       aria-label="Biology Room assets and tracks"
       data-biology-room-assets
     >
-      <div className="flex shrink-0 items-center justify-between border-b border-ds-border px-3 py-2.5">
+      <div className="biology-room-assets-header flex shrink-0 items-center justify-between border-b border-ds-border px-3 py-2.5">
         <div>
           <h2 className="text-[11.5px] font-semibold uppercase tracking-[0.08em] text-ds-muted">Assets</h2>
           <p className="mt-0.5 text-[10.5px] text-ds-faint">{room.assets.length} in room</p>
@@ -67,11 +67,11 @@ export function BiologyRoomAssetRail({
         </button>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+      <div className="biology-room-assets-scroll min-h-0 flex-1 overflow-y-auto p-2">
         {room.assets.length ? (
-          <div className="space-y-3" aria-label="Biology assets">
+          <div className="biology-room-asset-groups space-y-3" aria-label="Biology assets">
             {assetGroups.map((group) => (
-              <section key={group.id} data-biogym-stage-group={group.stage?.id}>
+              <section className="biology-room-asset-group" key={group.id} data-biogym-stage-group={group.stage?.id}>
                 {assetGroups.length > 1 || group.stage ? (
                   <div className="mb-1 flex items-center justify-between gap-2 px-1.5">
                     <h3 className="truncate text-[9.5px] font-semibold uppercase tracking-[0.08em] text-ds-faint">
@@ -82,7 +82,7 @@ export function BiologyRoomAssetRail({
                     ) : null}
                   </div>
                 ) : null}
-                <ul className="space-y-1">
+                <ul className="biology-room-asset-list space-y-1">
                   {group.assets.map((asset) => (
                     <li key={asset.id}>
                       <BiologyRoomAssetRow
@@ -106,7 +106,7 @@ export function BiologyRoomAssetRail({
         )}
       </div>
 
-      <div className="shrink-0 border-t border-ds-border px-3 py-2 text-[10.5px] leading-4 text-ds-faint">
+      <div className="biology-room-assets-footer shrink-0 border-t border-ds-border px-3 py-2 text-[10.5px] leading-4 text-ds-faint">
         Source files stay read-only. Room state and annotations are versioned separately.
       </div>
     </aside>

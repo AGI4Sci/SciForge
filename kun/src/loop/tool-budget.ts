@@ -1,7 +1,8 @@
-export type ToolBudgetProfileName = 'explanation' | 'review' | 'implementation' | 'long'
+export type ToolBudgetProfileName = 'explanation' | 'review' | 'implementation' | 'scientific' | 'long'
 
 export type ToolBudgetProfile = {
   softLimit: number
+  /** Legacy field name: this is a checkpoint interval, not a hard call cap. */
   hardLimit: number
   maxAutomaticPhases: number
   totalLimit: number
@@ -15,17 +16,22 @@ export type ToolBudgetConfig = {
 export type ToolBudgetCheckpoint = {
   decision: 'continue' | 'finish'
   summary: string
+  evidenceDelta: string[]
   remaining: string[]
   nextPlan: string[]
+  stopCondition: string[]
 }
 
 export const DEFAULT_TOOL_BUDGET_PROFILES: Record<ToolBudgetProfileName, ToolBudgetProfile> = {
   explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
   review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
   implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
+  scientific: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
   long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
 }
 
+const SCIENTIFIC_RESEARCH_INTENT =
+  /\b(?:admet|bioactivity|candidate validation|chembl|docking|drug design|literature|molecul\w*|pdb|protein|pubmed|research|scientific|structure search|target discovery)\b|(?:科研|文献|靶点|分子|蛋白|药物设计|候选验证|结构检索|活性|成药性|对接)/iu
 const IMPLEMENTATION_INTENT =
   /\b(?:add|build|change|create|delete|edit|fix|implement|migrate|modify|patch|refactor|remove|rename|replace|test|update|write)\b|(?:实现|修复|修改|新增|添加|删除|重构|迁移|替换|编写|开发|构建|改一下|改成)/iu
 const EXPLANATION_INTENT =
@@ -59,6 +65,7 @@ export function classifyToolBudgetProfile(input: {
   if (input.explicit) return input.explicit
   if (input.hasActiveGoal) return 'long'
   if (input.planTurnActive) return 'implementation'
+  if (SCIENTIFIC_RESEARCH_INTENT.test(input.prompt)) return 'scientific'
   if (IMPLEMENTATION_INTENT.test(input.prompt)) return 'implementation'
   if (EXPLANATION_INTENT.test(input.prompt)) return 'explanation'
   // Preserve the current coding-agent behavior for ambiguous prompts. A
@@ -77,8 +84,10 @@ export function parseToolBudgetCheckpoint(text: string): ToolBudgetCheckpoint | 
     return {
       decision,
       summary: typeof value.summary === 'string' ? value.summary.trim() : '',
+      evidenceDelta: stringArray(value.evidenceDelta ?? value.evidence_delta),
       remaining: stringArray(value.remaining),
-      nextPlan: stringArray(value.nextPlan ?? value.next_plan)
+      nextPlan: stringArray(value.nextPlan ?? value.next_plan),
+      stopCondition: stringArray(value.stopCondition ?? value.stop_condition)
     }
   } catch {
     return null
@@ -109,7 +118,9 @@ function stringArray(value: unknown): string[] {
 }
 
 function normalizePlan(value: readonly string[]): string {
-  return value.map((entry) => entry.toLowerCase().replace(/\s+/g, ' ').trim()).join('\n')
+  return value
+    .map((entry) => entry.normalize('NFKC').toLowerCase().replace(/[\s\p{P}\p{S}]+/gu, ''))
+    .join('\n')
 }
 
 function firstJsonObject(text: string): string | null {

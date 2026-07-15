@@ -179,6 +179,21 @@ describe('ToolStormBreaker', () => {
     expect(duplicateEvidence.resultHash).toBe(firstEvidence.resultHash)
   })
 
+  it('reports repeated generic scientific results as no new evidence', () => {
+    const breaker = new ToolStormBreaker()
+    const first = genericCall({ query: 'EGFR inhibitors' })
+    const second = genericCall({ query: 'EGFR inhibitor evidence' })
+
+    breaker.inspect(first)
+    const firstEvidence = breaker.recordResult(first, { hits: [{ id: 'CHEMBL25' }] })
+    breaker.inspect(second)
+    const duplicateEvidence = breaker.recordResult(second, { hits: [{ id: 'CHEMBL25' }] })
+
+    expect(firstEvidence.evidenceGained).toBe(true)
+    expect(duplicateEvidence).toMatchObject({ evidenceGained: false, duplicateResult: true })
+    expect(duplicateEvidence.resultHash).toBe(firstEvidence.resultHash)
+  })
+
   it('allows a read after a file-changing call resets read-only history', () => {
     const breaker = new ToolStormBreaker()
 

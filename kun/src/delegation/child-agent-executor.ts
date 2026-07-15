@@ -314,9 +314,21 @@ function summarizeCollectedToolResultsFallback(input: {
   turnId: string
   prompt: string
 }): string {
-  if (input.status !== 'failed') return ''
-  if (input.runtimeError?.kind !== 'error') return ''
-  if (input.runtimeError.code !== 'internal_tool_call_markup_recovery_exhausted') return ''
+  const legacyMarkupFailure =
+    input.status === 'failed' &&
+    input.runtimeError?.kind === 'error' &&
+    input.runtimeError.code === 'internal_tool_call_markup_recovery_exhausted'
+  const resumablePause = input.items.some((item) =>
+    item.turnId === input.turnId &&
+    item.kind === 'error' &&
+    item.severity === 'warning' &&
+    (
+      item.code === 'internal_tool_call_markup_recovery_paused' ||
+      item.code === 'tool_loop_recovery_paused' ||
+      item.code === 'tool_loop_finalization_tool_ignored'
+    )
+  )
+  if (!legacyMarkupFailure && !resumablePause) return ''
 
   const digests = usefulToolResultDigests(input.items, input.turnId)
   if (digests.length === 0) return ''

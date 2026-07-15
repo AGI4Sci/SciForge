@@ -12,20 +12,6 @@ import type {
   BiologyRoomMutationOperation,
   BiologyRoomSelection
 } from '@shared/biology-room'
-import type {
-  WorkspaceObservation,
-  WorkspacePreviewAssetTransportDescriptor,
-  WorkspacePreviewByteRange,
-  WorkspaceStructuredSelection
-} from '@shared/workspace-preview'
-import type { WorkspacePreviewReadRangeResult } from '@shared/sciforge-api'
-import {
-  MolecularWorkspaceViewer,
-  type MolecularWorkspaceViewerProps
-} from '../workspace-preview/MolecularWorkspaceViewer'
-import {
-  SequenceWorkspaceViewer
-} from '../workspace-preview/SequenceWorkspaceViewer'
 import {
   biologyRoomAssetBlockingIssue,
   biologyRoomAssetWarning,
@@ -55,16 +41,6 @@ const LazyMolstarBiologyRoomAdapter = lazy(async () => {
   return { default: module.MolstarBiologyRoomAdapter }
 })
 
-export type BiologyRoomViewerPreviewFallback = {
-  observation?: WorkspaceObservation | null
-  asset?: WorkspacePreviewAssetTransportDescriptor | null
-  assetStatus?: MolecularWorkspaceViewerProps['assetStatus']
-  assetError?: string | null
-  sourceUrl?: string | null
-  readRange?: (range: WorkspacePreviewByteRange) => Promise<WorkspacePreviewReadRangeResult>
-  molecularWorkbenchRenderer?: MolecularWorkspaceViewerProps['workbenchRenderer']
-}
-
 export type BiologyRoomViewerAdapterProps = {
   room: BiologyRoomManifest
   asset: BiologyRoomAsset
@@ -80,7 +56,8 @@ export type BiologyRoomViewerAdapters = Partial<Record<Exclude<BiologyRoomViewer
 
 export type BiologyRoomViewerOutletProps = {
   room: BiologyRoomManifest
-  preview?: BiologyRoomViewerPreviewFallback
+  transportStatus?: 'loading' | 'ready' | 'error'
+  transportError?: string | null
   adapters?: BiologyRoomViewerAdapters
   assetSources?: BiologyRoomAssetSources
   className?: string
@@ -91,7 +68,8 @@ export type BiologyRoomViewerOutletProps = {
 
 export function BiologyRoomViewerOutlet({
   room,
-  preview,
+  transportStatus = 'loading',
+  transportError,
   adapters,
   assetSources,
   className,
@@ -155,29 +133,27 @@ export function BiologyRoomViewerOutlet({
   const assetWarning = biologyRoomAssetWarning(activeAsset)
 
   const source = assetSources?.[activeAsset.id]
-  if (!source && preview?.assetStatus === 'error') {
+  if (!source && transportStatus === 'error') {
     return (
       <ViewerStateFrame className={className} dataState="transport-error">
         <AlertTriangle className="h-7 w-7 text-red-500" strokeWidth={1.6} />
         <h3 className="mt-3 text-[14px] font-semibold text-ds-ink">Biology viewer transport unavailable</h3>
         <p className="mt-1 max-w-md text-center text-[12px] leading-5 text-ds-muted">
-          {preview.assetError || 'SciForge could not establish a read-only preview session for this asset.'}
+          {transportError || 'SciForge could not establish a read-only preview session for this asset.'}
         </p>
       </ViewerStateFrame>
     )
   }
-  if (!source && preview?.assetStatus === 'loading' && !preview.observation) {
+  if (!source) {
     return <BiologyRoomViewerLoadingState />
   }
-  const builtInAdapter = source
-    ? viewerKind === 'sequence'
-      ? LazySeqVizBiologyRoomAdapter
-      : viewerKind === 'genome'
-        ? LazyJBrowseBiologyRoomAdapter
-        : viewerKind === 'molecular'
-          ? LazyMolstarBiologyRoomAdapter
-          : undefined
-    : undefined
+  const builtInAdapter = viewerKind === 'sequence'
+    ? LazySeqVizBiologyRoomAdapter
+    : viewerKind === 'genome'
+      ? LazyJBrowseBiologyRoomAdapter
+      : viewerKind === 'molecular'
+        ? LazyMolstarBiologyRoomAdapter
+        : undefined
   const Adapter = viewerKind === 'unsupported' ? undefined : adapters?.[viewerKind] ?? builtInAdapter
   if (Adapter) {
     return (
@@ -200,58 +176,6 @@ export function BiologyRoomViewerOutlet({
               onApply={onApply}
             />
           </Suspense>
-        </div>
-      </div>
-    )
-  }
-
-  if (viewerKind === 'molecular') {
-    return (
-      <div
-        className={compactClassName('biology-room-viewer-outlet h-full min-h-0 overflow-hidden p-3', className)}
-        data-biology-room-viewer-outlet
-        data-viewer-kind="molecular"
-        data-viewer-source="workspace-preview-fallback"
-      >
-        <MolecularWorkspaceViewer
-          observation={preview?.observation}
-          asset={preview?.asset}
-          assetStatus={preview?.assetStatus}
-          assetError={preview?.assetError}
-          sourceUrl={preview?.sourceUrl}
-          readRange={preview?.readRange}
-          workbenchRenderer={preview?.molecularWorkbenchRenderer}
-          onApplyEdit={(operation) => {
-            const selection = biologySelectionFromWorkspaceSelection(activeAsset.id, operation.selection)
-            if (selection !== undefined) void onApply?.({ type: 'setSelection', selection })
-          }}
-        />
-      </div>
-    )
-  }
-
-  if (viewerKind === 'sequence' || viewerKind === 'genome') {
-    const reference = viewerKind === 'genome' ? resolveBiologyRoomReference(room, activeAsset) : null
-    return (
-      <div
-        className={compactClassName('biology-room-viewer-outlet flex h-full min-h-0 flex-col overflow-hidden', className)}
-        data-biology-room-viewer-outlet
-        data-viewer-kind={viewerKind}
-        data-viewer-source="workspace-preview-fallback"
-      >
-        <div className="shrink-0 border-b border-ds-border bg-ds-subtle px-3 py-2 text-[11.5px] leading-4 text-ds-muted">
-          {viewerKind === 'genome'
-            ? `Using the bounded sequence-map fallback for ${activeAsset.format.toUpperCase()}${reference ? ` against ${basename(reference.path)}` : ''}. The JBrowse adapter can be loaded lazily by the host.`
-            : 'Using SciForge’s bounded sequence-map fallback. The SeqViz adapter can be loaded lazily by the host.'}
-        </div>
-        <div className="min-h-0 flex-1 overflow-hidden">
-          <SequenceWorkspaceViewer
-            observation={preview?.observation}
-            onSetSelection={(operation) => {
-              const selection = biologySelectionFromWorkspaceSelection(activeAsset.id, operation.selection)
-              if (selection !== undefined) void onApply?.({ type: 'setSelection', selection })
-            }}
-          />
         </div>
       </div>
     )
@@ -344,48 +268,6 @@ export function BiologyRoomViewerLoadingState(): ReactElement {
       <p className="mt-3 text-[12px] text-ds-muted">Loading biology viewer…</p>
     </ViewerStateFrame>
   )
-}
-
-export function biologySelectionFromWorkspaceSelection(
-  assetId: string,
-  selection: WorkspaceStructuredSelection
-): BiologyRoomSelection | null | undefined {
-  if (selection.kind === 'sequence') {
-    if (selection.ranges.length === 0) return null
-    return {
-      kind: 'sequence',
-      assetId,
-      ...(selection.sequenceId ? { sequenceId: selection.sequenceId } : {}),
-      ranges: selection.ranges.map((range) => ({
-        start: range.start,
-        end: range.end,
-        ...(range.strand ? { strand: range.strand } : {})
-      })),
-      ...(selection.features?.length
-        ? { featureIds: selection.features.map((feature) => feature.id).filter((id): id is string => Boolean(id)) }
-        : {})
-    }
-  }
-
-  if (selection.kind === 'molecular') {
-    const locators: Extract<BiologyRoomSelection, { kind: 'molecular' }>['locators'] = []
-    for (const chainId of selection.chains ?? []) locators.push({ chainId })
-    for (const residue of selection.residues ?? []) {
-      locators.push({
-        ...(residue.chain ? { chainId: residue.chain } : {}),
-        residueNumber: residue.index,
-        ...(residue.insertionCode ? { insertionCode: residue.insertionCode } : {}),
-        ...(residue.name ? { residueName: residue.name } : {})
-      })
-    }
-    for (const atom of selection.atoms ?? []) {
-      if (atom.id !== undefined) locators.push({ atomId: atom.id })
-      else if (atom.index !== undefined) locators.push({ atomId: atom.index })
-    }
-    return locators.length ? { kind: 'molecular', assetId, locators } : null
-  }
-
-  return undefined
 }
 
 function ViewerStateFrame({

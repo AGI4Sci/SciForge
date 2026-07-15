@@ -66,6 +66,7 @@ export class ToolStormBreaker {
   private readonly maxReadOverlapRatio: number
   private readonly recent: RecentToolCall[] = []
   private readonly readEvidence = new Map<string, ReadEvidence>()
+  private readonly genericResultHashes = new Map<string, Set<string>>()
   private readonly pendingReads = new Map<string, { path: string; start: number; end: number }>()
   private readonly consumedReadOverrides = new Set<string>()
 
@@ -151,8 +152,24 @@ export class ToolStormBreaker {
     context: ToolStormResultContext = {}
   ): ToolEvidenceResult {
     this.pendingReads.delete(call.callId)
-    if (call.toolName !== 'read' || context.isError === true || isErrorOutput(output)) {
+    if (context.isError === true || isErrorOutput(output)) {
       return { evidenceGained: false, duplicateResult: false }
+    }
+    if (isMutatingToolCall(call) || isBashSessionControlCall(call)) {
+      return { evidenceGained: true, duplicateResult: false }
+    }
+    if (call.toolName !== 'read') {
+      const resultHash = hashToolResult(output)
+      const evidenceKey = `${call.providerId ?? ''}\0${call.toolName}`
+      const hashes = this.genericResultHashes.get(evidenceKey) ?? new Set<string>()
+      const duplicateResult = hashes.has(resultHash)
+      hashes.add(resultHash)
+      this.genericResultHashes.set(evidenceKey, hashes)
+      return {
+        evidenceGained: !duplicateResult,
+        duplicateResult,
+        resultHash
+      }
     }
     const requested = this.readDescriptor(call, context)
     if (!requested) return { evidenceGained: false, duplicateResult: false }
@@ -181,6 +198,7 @@ export class ToolStormBreaker {
   reset(): void {
     this.recent.length = 0
     this.readEvidence.clear()
+    this.genericResultHashes.clear()
     this.pendingReads.clear()
     this.consumedReadOverrides.clear()
   }
@@ -353,6 +371,10 @@ function hashReadResult(output: unknown): string {
   const record = asRecord(output)
   const content = typeof record?.content === 'string' ? record.content : stableStringify(output)
   return createHash('sha256').update(content).digest('hex')
+}
+
+function hashToolResult(output: unknown): string {
+  return createHash('sha256').update(stableStringify(output)).digest('hex')
 }
 
 function isMutatingToolCall(call: ToolCallLike): boolean {

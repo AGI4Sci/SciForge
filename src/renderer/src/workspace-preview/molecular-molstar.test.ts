@@ -8,9 +8,12 @@ import {
   biologyMolecularVisualStateSignature,
   buildMolstarSelectionUniverse,
   compactMolstarAtomicSelectionRecordsToBiologyLocators,
+  createMolecularMolstarResizeController,
   createMolecularMolstarRuntimeLoader,
+  molecularMolstarFramingRadius,
   molecularMolstarFormatForPath,
   molecularSelectionToMolstarSchemaItems,
+  resetMolecularMolstarViewport,
   resolveMolecularMolstarSource
 } from './molecular-molstar'
 
@@ -31,6 +34,53 @@ describe('molecular Mol* adapter', () => {
     expect(biologyMolecularRepresentationForComponent('cartoon', 'ligand')).toBe('ball-and-stick')
     expect(biologyMolecularRepresentationForComponent('cartoon', 'water')).toBe('ball-and-stick')
     expect(biologyMolecularRepresentationForComponent('surface', 'ligand')).toBe('surface')
+  })
+
+  it('adds bounded camera margin for narrow sidebar viewports', () => {
+    expect(molecularMolstarFramingRadius(40, 800, 600)).toBe(40)
+    expect(molecularMolstarFramingRadius(40, 300, 750)).toBeCloseTo(40 * Math.sqrt(2.5))
+    expect(molecularMolstarFramingRadius(40, 100, 1_000)).toBe(90)
+  })
+
+  it('refocuses once after an initial host resize and preserves persisted cameras', async () => {
+    vi.useFakeTimers()
+    const handleResize = vi.fn()
+    const reset = vi.fn()
+    const viewer = {
+      handleResize,
+      plugin: {
+        canvas3d: undefined,
+        managers: { camera: { reset } }
+      }
+    }
+    try {
+      const initializing = createMolecularMolstarResizeController(viewer as never, {
+        refocusOnInitialResize: true,
+        debounceMs: 20
+      })
+      initializing.resize()
+      initializing.resize()
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(reset).toHaveBeenCalledOnce()
+      expect(handleResize).toHaveBeenCalledTimes(3)
+
+      initializing.resize()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(reset).toHaveBeenCalledOnce()
+
+      const persisted = createMolecularMolstarResizeController(viewer as never, {
+        refocusOnInitialResize: false,
+        debounceMs: 20
+      })
+      persisted.resize()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(reset).toHaveBeenCalledOnce()
+      persisted.dispose()
+      initializing.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('preloads the Mol* runtime through a reusable async loader', async () => {
@@ -200,6 +250,77 @@ describe('molecular Mol* adapter', () => {
     expect(structureInteractivity.mock.calls[0]?.[0].action).not.toBe('focus')
   })
 
+  it('waits for committed representations before framing an off-origin structure', async () => {
+    let commitListener: (() => void) | undefined
+    const unsubscribe = vi.fn()
+    const visibleSphere = {
+      center: [24.45, 0.53, 53.84],
+      radius: 0
+    }
+    const representationCount = {
+      value: 0,
+      subscribe: vi.fn(() => ({ unsubscribe }))
+    }
+    const focusSphere = vi.fn()
+    const reset = vi.fn()
+    const requestCameraReset = vi.fn()
+    const requestDraw = vi.fn()
+    const handleResize = vi.fn()
+    const viewer = {
+      handleResize,
+      plugin: {
+        canvas3d: {
+          reprCount: representationCount,
+          boundingSphereVisible: visibleSphere,
+          commited: {
+            subscribe: vi.fn((listener: () => void) => {
+              commitListener = listener
+              return { unsubscribe }
+            })
+          },
+          camera: {
+            viewport: { width: 500, height: 500 }
+          },
+          requestCameraReset,
+          requestDraw
+        },
+        managers: {
+          camera: { focusSphere, reset }
+        }
+      }
+    }
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {
+      callback(0)
+      return 1
+    })
+
+    try {
+      const resetPromise = resetMolecularMolstarViewport(viewer as never, 100)
+      await Promise.resolve()
+
+      expect(focusSphere).not.toHaveBeenCalled()
+      representationCount.value = 1
+      visibleSphere.radius = 37
+      commitListener?.()
+      await resetPromise
+
+      expect(handleResize).toHaveBeenCalledTimes(2)
+      expect(focusSphere).toHaveBeenCalledWith({
+        center: visibleSphere.center,
+        radius: visibleSphere.radius
+      }, {
+        durationMs: 0,
+        extraRadius: 2
+      })
+      expect(requestDraw).toHaveBeenCalledOnce()
+      expect(requestCameraReset).not.toHaveBeenCalled()
+      expect(reset).not.toHaveBeenCalled()
+      expect(unsubscribe).toHaveBeenCalled()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
   it('keeps model/chain/residue/atom locator context together for Biology Room selections', () => {
     const items = biologyMolecularLocatorsToMolstarSchemaItems([{
       modelId: 1,
@@ -271,9 +392,17 @@ describe('molecular Mol* adapter', () => {
     expect(biologyMolecularVisualStateSignature(baseView)).toBe(biologyMolecularVisualStateSignature({
       ...baseView,
       camera: {
+        mode: 'perspective',
+        fov: Math.PI / 4,
         position: [1, 2, 3],
         target: [0, 0, 0],
-        up: [0, 1, 0]
+        up: [0, 1, 0],
+        radius: 10,
+        radiusMax: 20,
+        fog: 50,
+        clipFar: true,
+        minNear: 5,
+        minFar: 0
       }
     }))
   })

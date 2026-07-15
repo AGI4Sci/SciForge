@@ -159,6 +159,7 @@ export const RuntimeTuningConfigSchema = z
             explanation: ToolBudgetProfileConfigSchema.optional(),
             review: ToolBudgetProfileConfigSchema.optional(),
             implementation: ToolBudgetProfileConfigSchema.optional(),
+            scientific: ToolBudgetProfileConfigSchema.optional(),
             long: ToolBudgetProfileConfigSchema.optional()
           })
           .strict()

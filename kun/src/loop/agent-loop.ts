@@ -160,6 +160,8 @@ type ToolLoopHealth = {
   consecutiveNonProgressToolSteps: number
   postRecoveryAllSuppressed: number
   toolBudgetExhausted: boolean
+  finalizationRequested: boolean
+  finalizationReason?: string
   softBudgetReached: boolean
   checkpointPending: boolean
   budgetProfileName?: ToolBudgetProfileName
@@ -315,16 +317,26 @@ function toolLoopRecoveryInstruction(): string {
 
 function toolBudgetExhaustedInstruction(): string {
   return [
-    'Tool budget exhausted:',
-    '- No more tool calls are available for this turn.',
+    'Operational tool ceiling reached:',
+    '- An explicit per-turn operational ceiling disabled further tool calls.',
     '- Use the evidence already gathered and produce the best complete answer now.',
-    '- If the gathered evidence is incomplete, state the concrete gaps instead of trying another search.'
+    '- If the gathered evidence is incomplete, state a concrete resumable blocker instead of trying another search.'
+  ].join('\n')
+}
+
+function toolBudgetFinalizationInstruction(reason: string | undefined): string {
+  return [
+    'Tool phase finalization:',
+    `- ${reason || 'The latest checkpoint decided that the current evidence is sufficient.'}`,
+    '- Tools are temporarily unavailable for this response.',
+    '- Produce the best complete user-visible answer now, including concrete outputs, limitations, and any blocker.',
+    '- Do not emit internal tool-call markup.'
   ].join('\n')
 }
 
 function toolBudgetSoftLimitInstruction(health: ToolLoopHealth): string {
   return [
-    'Tool budget checkpoint approaching:',
+    'Tool phase checkpoint approaching:',
     `- Phase ${health.phase} has used ${health.phaseToolCalls} tool call(s).`,
     '- Review the evidence already gathered before requesting more tools.',
     '- Continue only for a concrete unresolved question that the next call can answer.',
@@ -347,9 +359,10 @@ function toolBudgetCheckpointInstruction(health: ToolLoopHealth): string {
   return [
     'Perform an internal tool-budget checkpoint. Tools are unavailable for this checkpoint.',
     'Return one JSON object only with this shape:',
-    '{"decision":"continue|finish","summary":"new evidence gathered in this phase","remaining":["specific unresolved item"],"nextPlan":["specific next-phase action"]}',
-    'Use decision="continue" only when concrete work remains, this phase produced useful new evidence, and the next plan is materially different.',
-    'Use decision="finish" when evidence is sufficient, progress is marginal, or no distinct next plan exists.',
+    '{"decision":"continue|finish","summary":"work completed in this phase","evidenceDelta":["new evidence or artifact"],"remaining":["specific unresolved item"],"nextPlan":["specific next-phase action"],"stopCondition":["condition that would make the task complete"]}',
+    'The call count is a checkpoint cadence, not a reason to finish.',
+    'Use decision="continue" whenever concrete work remains and the next calls can add evidence or artifacts.',
+    'Use decision="finish" only when the user objective is actually satisfied or no meaningful alternative remains.',
     `Current phase: ${health.phase}.`,
     `Calls in current phase: ${health.phaseToolCalls}.`,
     `Successful calls in current phase: ${health.phaseSuccessfulCalls}.`
@@ -359,10 +372,10 @@ function toolBudgetCheckpointInstruction(health: ToolLoopHealth): string {
 function internalToolCallMarkupRecoveryInstruction(): string {
   return [
     'Internal tool-call markup recovery:',
-    '- Your previous response contained only internal tool-call markup instead of a user-visible answer.',
+    '- Your previous response contained internal tool-call markup instead of a native tool call or user-visible answer.',
     '- Do not output DSML, XML-like tool syntax, JSON tool-call syntax, or any hidden tool invocation format.',
-    '- Tools are not available in this recovery step. Write the final natural-language answer from the evidence already gathered.',
-    '- If evidence is incomplete, state the specific gaps in the final answer.'
+    '- If another tool is genuinely needed, call it through the native tool interface now.',
+    '- Otherwise write the final natural-language answer from the evidence already gathered.'
   ].join('\n')
 }
 
@@ -404,6 +417,49 @@ function isInternalToolCallMarkup(text: string): boolean {
   const trimmed = text.trim()
   if (!trimmed) return false
   return /DSML/i.test(trimmed) && /tool_calls/i.test(trimmed) && /invoke\s+name=/i.test(trimmed)
+}
+
+type RecoveredInternalToolCall = {
+  toolName: string
+  arguments: Record<string, unknown>
+}
+
+function parseInternalToolCallMarkup(text: string): RecoveredInternalToolCall[] {
+  if (!isInternalToolCallMarkup(text)) return []
+  const calls: RecoveredInternalToolCall[] = []
+  const invokePattern = /<[^>]*DSML[^>]*invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*DSML[^>]*invoke>/giu
+  for (const invoke of text.matchAll(invokePattern)) {
+    const toolName = decodeMarkupText(invoke[1] ?? '').trim()
+    const body = invoke[2] ?? ''
+    if (!toolName) return []
+    const argumentsValue: Record<string, unknown> = {}
+    const parameterPattern = /<[^>]*DSML[^>]*parameter\s+name="([^"]+)"(?:\s+string="(true|false)")?[^>]*>([\s\S]*?)<\/[^>]*DSML[^>]*parameter>/giu
+    for (const parameter of body.matchAll(parameterPattern)) {
+      const name = decodeMarkupText(parameter[1] ?? '').trim()
+      const raw = decodeMarkupText(parameter[3] ?? '').trim()
+      if (!name) return []
+      if (parameter[2] === 'true') {
+        argumentsValue[name] = raw
+        continue
+      }
+      try {
+        argumentsValue[name] = JSON.parse(raw)
+      } catch {
+        argumentsValue[name] = raw
+      }
+    }
+    calls.push({ toolName, arguments: argumentsValue })
+  }
+  return calls
+}
+
+function decodeMarkupText(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
 }
 
 function normalizeNoToolAssistantText(text: string): string {
@@ -745,29 +801,17 @@ export class AgentLoop {
     )
     for (let step = 0; ; step += 1) {
       if (signal.aborted) return 'aborted'
-      if (step >= maxTurnModelSteps) {
+      if (step > 0 && step % maxTurnModelSteps === 0) {
         const message =
-          `Turn stopped after ${maxTurnModelSteps} model steps without reaching a final response.`
+          `Turn reached ${step} model steps and is continuing because progress and loop guards remain active.`
         await this.opts.events.record({
           kind: 'error',
           threadId,
           turnId,
           message,
-          code: 'turn_step_limit_exceeded',
-          severity: 'error'
+          code: 'turn_step_checkpoint',
+          severity: 'warning'
         })
-        await this.opts.turns.applyItem(
-          threadId,
-          makeErrorItem({
-            id: this.opts.ids.next('item_error'),
-            turnId,
-            threadId,
-            message,
-            code: 'turn_step_limit_exceeded',
-            severity: 'error'
-          })
-        )
-        return 'failed'
       }
       await this.drainSteering(threadId, turnId, signal)
       const stepResult = await this.modelStep(threadId, turnId, signal, step)
@@ -923,7 +967,7 @@ export class AgentLoop {
     if (toolBudgetExhausted) activeGoalInstruction = null
     const internalToolCallMarkupRecoverySteps =
       this.internalToolCallMarkupRecoveryStepsByTurn.get(turnId) ?? 0
-    const effectiveToolSpecs = toolBudgetExhausted
+    const effectiveToolSpecs = toolBudgetExhausted || toolBudgetHealth.finalizationRequested
       ? []
       : resolvePlanModeToolSpecs(toolSpecs, {
           planTurnActive,
@@ -1007,6 +1051,9 @@ export class AgentLoop {
         ? [toolBudgetPhaseContextInstruction(toolBudgetHealth)!]
         : []),
       ...(toolBudgetExhausted ? [toolBudgetExhaustedInstruction()] : []),
+      ...(toolBudgetHealth.finalizationRequested
+        ? [toolBudgetFinalizationInstruction(toolBudgetHealth.finalizationReason)]
+        : []),
       ...(internalToolCallMarkupRecoverySteps > 0 ? [internalToolCallMarkupRecoveryInstruction()] : []),
       ...(activeTodoInstruction ? [activeTodoInstruction] : []),
       ...memoryInstructions(memories),
@@ -1237,6 +1284,15 @@ export class AgentLoop {
         })
       )
     }
+    if (toolBudgetHealth.finalizationRequested && completedToolCalls.length > 0) {
+      await this.pauseToolLoopRecovery(
+        threadId,
+        turnId,
+        'tool_loop_finalization_tool_ignored',
+        'The phase was already finalizing, but the model emitted another tool call while tools were unavailable. The turn was paused with its gathered evidence intact.'
+      )
+      return 'stop'
+    }
     if (stopReason === 'error') {
       if (
         isRecoverableModelStreamError(modelStreamError) &&
@@ -1275,6 +1331,109 @@ export class AgentLoop {
     }
     if (completedToolCalls.length === 0) {
       if (stopReason === 'stop' && isInternalToolCallMarkup(textAccumulator.value)) {
+        if (toolBudgetHealth.finalizationRequested) {
+          await this.failInternalToolCallMarkupRecovery(
+            threadId,
+            turnId,
+            'Tool-call markup recovery paused: the phase was already finalizing and tools were intentionally unavailable.'
+          )
+          return 'stop'
+        }
+        const parsedMarkupCalls = parseInternalToolCallMarkup(textAccumulator.value)
+        const availableToolNames = new Set(toolSpecs.map((tool) => tool.name))
+        if (
+          parsedMarkupCalls.length > 0 &&
+          parsedMarkupCalls.every((call) => availableToolNames.has(call.toolName)) &&
+          !toolBudgetHealth.toolBudgetExhausted &&
+          !toolBudgetHealth.finalizationRequested
+        ) {
+          const recoveredCalls: ToolCallLike[] = []
+          for (const parsedCall of parsedMarkupCalls) {
+            const callId = this.opts.ids.next('call_markup_recovered')
+            const provider = toolProviderMetadata.get(parsedCall.toolName)
+            const toolKind = toolKinds.get(parsedCall.toolName)
+            const repaired = repairDispatchToolArguments(parsedCall.arguments, {
+              toolName: parsedCall.toolName,
+              ...(toolKind ? { toolKind } : {}),
+              ...(this.opts.toolArgumentRepair?.maxStringBytes !== undefined
+                ? { maxStringBytes: this.opts.toolArgumentRepair.maxStringBytes }
+                : {})
+            })
+            recoveredCalls.push({
+              callId,
+              toolName: parsedCall.toolName,
+              ...(provider?.providerId ? { providerId: provider.providerId } : {}),
+              toolKind,
+              arguments: repaired.arguments
+            })
+            const itemId = `item_tool_${turnId}_${callId}`
+            await this.opts.turns.applyItem(
+              threadId,
+              makeToolCallItem({
+                id: itemId,
+                turnId,
+                threadId,
+                callId,
+                toolName: parsedCall.toolName,
+                toolKind,
+                arguments: repaired.arguments,
+                summary: [
+                  'Recovered a provider-emitted internal tool call through the native tool dispatcher.',
+                  ...repaired.notes
+                ].join(' ')
+              })
+            )
+            await this.opts.events.record({
+              kind: 'tool_call_ready',
+              threadId,
+              turnId,
+              itemId,
+              callId,
+              toolName: parsedCall.toolName,
+              readyCount: recoveredCalls.length
+            })
+          }
+          this.internalToolCallMarkupRecoveryStepsByTurn.delete(turnId)
+          await this.opts.events.record({
+            kind: 'error',
+            threadId,
+            turnId,
+            code: 'internal_tool_call_markup_recovered',
+            severity: 'warning',
+            details: { recoveredCallCount: recoveredCalls.length },
+            message:
+              `Recovered ${recoveredCalls.length} internal tool call(s) and routed them through native validation.`
+          })
+          const dispatched = await this.dispatchToolCalls({
+            calls: recoveredCalls,
+            threadId,
+            turnId,
+            workspace,
+            ...(project ? { project } : {}),
+            threadMode: effectiveMode,
+            taskType: memoryTaskType,
+            activePlanContext,
+            remoteTargetId: turn?.remoteTargetId,
+            modelCapabilities,
+            activeSkillIds: skillResolution.activeSkillIds,
+            allowedToolNames,
+            explicitAllowedToolNames: turn?.allowedToolNames,
+            explicitStrictAllowedToolNames: turn?.strictAllowedToolNames,
+            bashCommandPolicy: turn?.bashCommandPolicy,
+            filePathPolicy: turn?.filePathPolicy,
+            toolProviderMetadata,
+            approvalPolicy,
+            sandboxMode,
+            signal
+          })
+          return this.handleToolDispatchOutcome({
+            outcome: dispatched,
+            threadId,
+            turnId,
+            stepIndex,
+            signal
+          })
+        }
         const recoverySteps = (this.internalToolCallMarkupRecoveryStepsByTurn.get(turnId) ?? 0) + 1
         if (recoverySteps <= MAX_INTERNAL_TOOL_CALL_MARKUP_RECOVERY_STEPS) {
           this.internalToolCallMarkupRecoveryStepsByTurn.set(turnId, recoverySteps)
@@ -1284,9 +1443,9 @@ export class AgentLoop {
         await this.failInternalToolCallMarkupRecovery(
           threadId,
           turnId,
-          'Tool-call markup recovery failed: the model kept emitting internal tool-call markup instead of a final answer.'
+          'Tool-call markup recovery paused: the repeated markup could not be mapped to an available native tool.'
         )
-        return 'failed'
+        return 'stop'
       }
       if (request.requiredToolName) {
         if (
@@ -1398,13 +1557,13 @@ export class AgentLoop {
         this.toolLoopHealthByTurn.get(turnId)?.recoveryIssuedAtStep !== undefined &&
         isTrivialToolLoopFinalText(textAccumulator.value)
       ) {
-        await this.failToolLoopRecovery(
+        await this.pauseToolLoopRecovery(
           threadId,
           turnId,
           'tool_loop_trivial_final',
-          'Tool loop recovery failed: the model stopped with a generic or empty final response.'
+          'Tool loop recovery paused: the model stopped with a generic or empty final response. The gathered evidence remains available for a resumable PI follow-up.'
         )
-        return 'failed'
+        return 'stop'
       }
       if (stopReason === 'stop' && activeGoalInstruction) {
         const previousText = this.lastNoToolTextByTurn.get(turnId)
@@ -1575,7 +1734,7 @@ export class AgentLoop {
           }
         )
         if (isSuccessfulToolResult(result)) {
-          if (call.toolName !== 'read' || evidence?.evidenceGained !== false) successCount += 1
+          if (evidence?.evidenceGained !== false) successCount += 1
         } else {
           errorCount += 1
         }
@@ -1649,7 +1808,7 @@ export class AgentLoop {
           }
         )
         if (isSuccessfulToolResult(result.value)) {
-          if (batchCall.toolName !== 'read' || evidence?.evidenceGained !== false) successCount += 1
+          if (evidence?.evidenceGained !== false) successCount += 1
         } else {
           errorCount += 1
         }
@@ -1679,7 +1838,6 @@ export class AgentLoop {
       limits.push(Math.max(0, maxToolCallsPerTurn - health.totalToolCalls))
     }
     if (health.budgetProfile && this.opts.toolBudget?.enabled !== false) {
-      limits.push(Math.max(0, health.budgetProfile.hardLimit - health.phaseToolCalls))
       limits.push(Math.max(0, health.budgetProfile.totalLimit - health.totalToolCalls))
     }
     return limits.length > 0 ? Math.min(...limits) : undefined
@@ -1782,31 +1940,40 @@ export class AgentLoop {
       input.outcome.kind === 'all_suppressed' &&
       health.postRecoveryAllSuppressed >= limits.maxRecoverySteps
     ) {
-      await this.failToolLoopRecovery(
+      health.finalizationRequested = true
+      health.finalizationReason =
+        'Repeated calls were suppressed after recovery guidance; report a concrete resumable blocker to the PI.'
+      await this.pauseToolLoopRecovery(
         input.threadId,
         input.turnId,
-        'tool_loop_recovery_exhausted',
-        'Tool loop recovery failed: the model repeated suppressed tool calls after recovery guidance.'
+        'tool_loop_recovery_paused',
+        health.finalizationReason
       )
-      return 'failed'
+      return 'continue'
     }
     if (health.consecutiveNonProgressToolSteps >= limits.nonProgressThreshold) {
-      await this.failToolLoopRecovery(
+      health.finalizationRequested = true
+      health.finalizationReason =
+        'Tool calls continued without gaining new evidence; report a concrete resumable blocker to the PI.'
+      await this.pauseToolLoopRecovery(
         input.threadId,
         input.turnId,
-        'tool_loop_recovery_exhausted',
-        'Tool loop recovery failed: tool calls continued without successful progress.'
+        'tool_loop_recovery_paused',
+        health.finalizationReason
       )
-      return 'failed'
+      return 'continue'
     }
     if (input.stepIndex - health.recoveryIssuedAtStep >= limits.maxStepsAfterRecovery) {
-      await this.failToolLoopRecovery(
+      health.finalizationRequested = true
+      health.finalizationReason =
+        'The recovery window ended without a distinct evidence-gaining strategy; report a resumable blocker to the PI.'
+      await this.pauseToolLoopRecovery(
         input.threadId,
         input.turnId,
-        'tool_loop_recovery_exhausted',
-        'Tool loop recovery failed: the model exceeded the recovery step budget.'
+        'tool_loop_recovery_paused',
+        health.finalizationReason
       )
-      return 'failed'
+      return 'continue'
     }
     return 'continue'
   }
@@ -1824,6 +1991,7 @@ export class AgentLoop {
       consecutiveNonProgressToolSteps: 0,
       postRecoveryAllSuppressed: 0,
       toolBudgetExhausted: false,
+      finalizationRequested: false,
       softBudgetReached: false,
       checkpointPending: false
     }
@@ -1894,25 +2062,29 @@ export class AgentLoop {
     }
 
     const checkpoint = failed ? null : parseToolBudgetCheckpoint(text)
+    const hasConcreteContinuation = Boolean(
+      checkpoint && checkpointSupportsContinuation(checkpoint, input.health.previousCheckpointPlan)
+    )
     const profile = input.health.budgetProfile
     const canOpenAnotherPhase = Boolean(
+      checkpoint &&
+      hasConcreteContinuation &&
       profile &&
       input.health.phase < profile.maxAutomaticPhases &&
-      input.health.totalToolCalls < profile.totalLimit &&
-      input.health.phaseSuccessfulCalls > 0 &&
-      checkpoint &&
-      checkpointSupportsContinuation(checkpoint, input.health.previousCheckpointPlan)
+      input.health.totalToolCalls < profile.totalLimit
     )
 
     input.health.checkpointPending = false
-    if (canOpenAnotherPhase && checkpoint) {
+    if (canOpenAnotherPhase && checkpoint && profile) {
       const completedPhase = input.health.phase
       const completedPhaseToolCalls = input.health.phaseToolCalls
       input.health.phase += 1
       input.health.phaseToolCalls = 0
       input.health.phaseSuccessfulCalls = 0
       input.health.softBudgetReached = false
-      input.health.checkpointSummary = checkpoint.summary || 'The previous phase produced useful evidence.'
+      input.health.finalizationRequested = false
+      input.health.finalizationReason = undefined
+      input.health.checkpointSummary = checkpoint.summary || 'The previous phase checkpoint approved a distinct continuation plan.'
       input.health.previousCheckpointPlan = checkpoint.nextPlan
       await this.opts.events.record({
         kind: 'error',
@@ -1926,21 +2098,50 @@ export class AgentLoop {
           nextPhase: input.health.phase,
           totalToolCalls: input.health.totalToolCalls,
           phaseToolCalls: completedPhaseToolCalls,
-          remainingItems: checkpoint.remaining.length
+          remainingItems: checkpoint.remaining.length,
+          evidenceDeltaItems: checkpoint.evidenceDelta.length,
+          checkpointParsed: true,
+          continuationPlanChanged: true,
+          maxAutomaticPhases: profile.maxAutomaticPhases,
+          totalLimit: profile.totalLimit
         },
         message:
           `Tool budget checkpoint opened phase ${input.health.phase}; ` +
-          `${checkpoint.remaining.length} concrete item(s) remain.`
+          `${checkpoint.remaining.length} concrete item(s) remain within the configured phase and total limits.`
       })
       return 'continue'
     }
 
-    input.health.toolBudgetExhausted = true
-    await this.warnToolBudgetExhausted(
-      input.threadId,
-      input.turnId,
-      input.health.totalToolCalls
-    )
+    input.health.finalizationRequested = true
+    input.health.finalizationReason = !checkpoint
+      ? 'The agent checkpoint could not be parsed; finalize from gathered evidence without more tools.'
+      : checkpoint.decision === 'finish'
+      ? 'The agent checkpoint reported that the objective is satisfied or no meaningful alternative remains.'
+      : profile && input.health.totalToolCalls >= profile.totalLimit
+        ? `The configured ${profile.totalLimit}-call total limit was reached; finalize from gathered evidence.`
+        : profile && input.health.phase >= profile.maxAutomaticPhases
+          ? `The configured ${profile.maxAutomaticPhases}-phase automatic limit was reached; finalize from gathered evidence.`
+          : 'The checkpoint did not identify non-empty remaining work and a concrete, non-repeating next plan; finalize from gathered evidence.'
+    await this.opts.events.record({
+      kind: 'error',
+      threadId: input.threadId,
+      turnId: input.turnId,
+      code: 'tool_budget_phase_finalizing',
+      severity: 'warning',
+      details: {
+        profile: input.health.budgetProfileName,
+        phase: input.health.phase,
+        totalToolCalls: input.health.totalToolCalls,
+        maxAutomaticPhases: profile?.maxAutomaticPhases,
+        totalLimit: profile?.totalLimit,
+        checkpointDecision: checkpoint?.decision ?? 'unavailable',
+        checkpointParsed: Boolean(checkpoint),
+        remainingItems: checkpoint?.remaining.length ?? 0,
+        nextPlanItems: checkpoint?.nextPlan.length ?? 0,
+        continuationPlanChanged: hasConcreteContinuation
+      },
+      message: input.health.finalizationReason
+    })
     return 'continue'
   }
 
@@ -1961,18 +2162,17 @@ export class AgentLoop {
         totalToolCalls: health.totalToolCalls,
         phaseToolCalls: health.phaseToolCalls,
         successfulCalls: health.phaseSuccessfulCalls,
-        hardLimit: health.budgetProfile?.hardLimit,
-        totalLimit: health.budgetProfile?.totalLimit
+        checkpointInterval: health.budgetProfile?.hardLimit
       },
       message:
-        `Tool phase ${health.phase} reached its ${health.budgetProfile?.hardLimit ?? health.phaseToolCalls}-call budget; ` +
-        'the runtime will perform an internal evidence checkpoint before continuing.'
+        `Tool phase ${health.phase} reached its ${health.budgetProfile?.hardLimit ?? health.phaseToolCalls}-call checkpoint interval; ` +
+        'the runtime will record an internal evidence-and-plan decision before continuing.'
     })
   }
 
   private async warnToolBudgetExhausted(threadId: string, turnId: string, maxToolCalls: number): Promise<void> {
     const message =
-      `Tool budget exhausted after ${maxToolCalls} tool call(s). The next model request must answer from gathered evidence.`
+      `Explicit per-turn operational ceiling reached after ${maxToolCalls} tool call(s). The next model request must report from gathered evidence.`
     await this.opts.events.record({
       kind: 'error',
       threadId,
@@ -1998,7 +2198,7 @@ export class AgentLoop {
 
   private async warnInternalToolCallMarkupRecovery(threadId: string, turnId: string): Promise<void> {
     const message =
-      'Internal tool-call markup was ignored. The next model request must provide a natural-language final answer without tool syntax.'
+      'Internal tool-call markup could not be mapped to an available native tool. The next model request must use the native interface or provide a natural-language answer.'
     await this.opts.events.record({
       kind: 'error',
       threadId,
@@ -2021,8 +2221,8 @@ export class AgentLoop {
         turnId,
         threadId,
         message,
-        code: 'internal_tool_call_markup_recovery_exhausted',
-        severity: 'error'
+        code: 'internal_tool_call_markup_recovery_paused',
+        severity: 'warning'
       })
     )
     await this.opts.events.record({
@@ -2030,15 +2230,15 @@ export class AgentLoop {
       threadId,
       turnId,
       message,
-      code: 'internal_tool_call_markup_recovery_exhausted',
-      severity: 'error'
+      code: 'internal_tool_call_markup_recovery_paused',
+      severity: 'warning'
     })
   }
 
-  private async failToolLoopRecovery(
+  private async pauseToolLoopRecovery(
     threadId: string,
     turnId: string,
-    code: 'tool_loop_recovery_exhausted' | 'tool_loop_trivial_final',
+    code: 'tool_loop_recovery_paused' | 'tool_loop_trivial_final' | 'tool_loop_finalization_tool_ignored',
     message: string
   ): Promise<void> {
     await this.opts.turns.applyItem(
@@ -2049,7 +2249,7 @@ export class AgentLoop {
         threadId,
         message,
         code,
-        severity: 'error'
+        severity: 'warning'
       })
     )
     await this.opts.events.record({
@@ -2058,7 +2258,7 @@ export class AgentLoop {
       turnId,
       message,
       code,
-      severity: 'error'
+      severity: 'warning'
     })
   }
 

@@ -1,6 +1,5 @@
 import {
   useEffect,
-  useMemo,
   useState,
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -22,13 +21,11 @@ import type {
   BiologyRoomMutationOperation,
   BiologyRoomSelection
 } from '@shared/biology-room'
-import type { WorkspaceObservation } from '@shared/workspace-preview'
 import { BiologyRoomAssetRail } from './BiologyRoomAssetRail'
 import { BiologyRoomInspector } from './BiologyRoomInspector'
 import {
   BiologyRoomViewerOutlet,
-  type BiologyRoomViewerAdapters,
-  type BiologyRoomViewerPreviewFallback
+  type BiologyRoomViewerAdapters
 } from './BiologyRoomViewerOutlet'
 import {
   clampBiologyRoomWidth,
@@ -48,8 +45,8 @@ export const BIOLOGY_ROOM_MAX_WIDTH = 1_600
 
 export type BiologyRoomShellProps = {
   room: BiologyRoomManifest
-  observation?: WorkspaceObservation | null
-  viewerPreview?: Omit<BiologyRoomViewerPreviewFallback, 'observation'>
+  transportStatus?: 'loading' | 'ready' | 'error'
+  transportError?: string | null
   viewerAdapters?: BiologyRoomViewerAdapters
   assetSources?: BiologyRoomAssetSources
   busy?: boolean
@@ -83,8 +80,8 @@ export type BiologyRoomShellProps = {
 
 export function BiologyRoomShell({
   room,
-  observation,
-  viewerPreview,
+  transportStatus,
+  transportError,
   viewerAdapters,
   assetSources,
   busy = false,
@@ -121,11 +118,6 @@ export function BiologyRoomShell({
   const activeAsset = resolveActiveBiologyRoomAsset(room)
   const controlsBusy = busy || Boolean(conflict)
   const mutationHandler = conflict ? undefined : onApply
-  const preview = useMemo<BiologyRoomViewerPreviewFallback>(() => ({
-    ...viewerPreview,
-    observation: observation ?? null
-  }), [observation, viewerPreview])
-
   useEffect(() => {
     if (width === undefined) {
       setLocalWidth((current) => clampBiologyRoomWidth(current, minWidth, maxWidth))
@@ -245,7 +237,7 @@ export function BiologyRoomShell({
         <div className="flex shrink-0 items-center gap-1.5">
           <span
             className={compactClassName(
-              'inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium',
+              'biology-room-header-status inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[10px] font-medium',
               busy
                 ? 'bg-blue-500/10 text-blue-600 dark:text-blue-300'
                 : conflict
@@ -292,7 +284,7 @@ export function BiologyRoomShell({
         />
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[184px_minmax(0,1fr)_288px] overflow-hidden">
+      <div className="biology-room-layout grid min-h-0 flex-1 grid-cols-[184px_minmax(0,1fr)_288px] overflow-hidden">
         <BiologyRoomAssetRail
           room={room}
           busy={controlsBusy}
@@ -300,10 +292,11 @@ export function BiologyRoomShell({
           onRequestAddAsset={conflict ? undefined : onRequestAddAsset}
           runSnapshot={runSnapshot}
         />
-        <main className="min-h-0 min-w-0 overflow-hidden bg-ds-canvas" aria-label="Biology viewer">
+        <main className="biology-room-viewer min-h-0 min-w-0 overflow-hidden bg-ds-canvas" aria-label="Biology viewer">
           <BiologyRoomViewerOutlet
             room={room}
-            preview={preview}
+            transportStatus={transportStatus}
+            transportError={transportError}
             adapters={viewerAdapters}
             assetSources={assetSources}
             onApply={mutationHandler}
