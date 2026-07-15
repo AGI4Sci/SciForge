@@ -218,6 +218,28 @@ describe('JsonSettingsStore', () => {
     expect(persisted.modelRouter?.runtimeApiKey).toBe(loaded.modelRouter?.runtimeApiKey)
   })
 
+  it('defaults and persists the Model Router text endpoint format', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const store = new JsonSettingsStore(userDataDir)
+
+    const loaded = await store.load()
+    expect(loaded.modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('chat_completions')
+
+    const patched = await store.patch({
+      modelRouter: {
+        profiles: {
+          default: {
+            textReasoner: { endpointFormat: 'responses' }
+          }
+        }
+      }
+    })
+    expect(patched.modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('responses')
+
+    const reloaded = await new JsonSettingsStore(userDataDir).load()
+    expect(reloaded.modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('responses')
+  })
+
   it('generates and persists schedule and workflow internal HTTP secrets on load', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
     const settingsPath = join(userDataDir, 'sciforge-settings.json')

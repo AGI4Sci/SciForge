@@ -1151,7 +1151,33 @@ describe('app-ipc-schemas', () => {
     })
   })
 
-  it('rejects endpoint format patches in settings API payloads', () => {
+  it('accepts Model Router text endpoint formats without reopening legacy runtime provider formats', () => {
+    expect(settingsPatchSchema.parse({
+      modelRouter: {
+        profiles: {
+          default: {
+            textReasoner: {
+              endpointFormat: 'responses'
+            }
+          }
+        }
+      }
+    }).modelRouter?.profiles?.default?.textReasoner?.endpointFormat).toBe('responses')
+
+    expect(() =>
+      settingsPatchSchema.parse({
+        modelRouter: {
+          profiles: {
+            default: {
+              textReasoner: {
+                endpointFormat: 'messages'
+              }
+            }
+          }
+        }
+      })
+    ).toThrow()
+
     expect(() =>
       settingsPatchSchema.parse({
         agents: {

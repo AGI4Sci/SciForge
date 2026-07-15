@@ -4,6 +4,8 @@ import type {
   AppSettingsV1,
   ModelRouterMemberProviderSettingsPatchV1,
   ModelRouterScientificTranslatorSettingsPatchV1,
+  ModelRouterTextEndpointFormat,
+  ModelRouterTextReasonerSettingsPatchV1,
   SandboxMode
 } from '@shared/app-settings'
 import {
@@ -29,20 +31,24 @@ function ModelRouterRoleFields({
   baseUrl,
   apiKey,
   model,
+  endpointFormat,
   baseUrlPlaceholder,
   modelPlaceholder,
   secretVisible,
   onToggleSecret,
+  onEndpointFormatChange,
   onChange
 }: {
   t: (key: string) => string
   baseUrl: string
   apiKey: string
   model: string
+  endpointFormat?: ModelRouterTextEndpointFormat
   baseUrlPlaceholder: string
   modelPlaceholder: string
   secretVisible: boolean
   onToggleSecret: () => void
+  onEndpointFormatChange?: (endpointFormat: ModelRouterTextEndpointFormat) => void
   onChange: (patch: { baseUrl?: string; apiKey?: string; model?: string }) => void
 }): ReactElement {
   const labelClass = 'text-[12px] font-medium text-ds-muted'
@@ -82,6 +88,19 @@ function ModelRouterRoleFields({
           onChange={(event) => onChange({ model: event.target.value })}
         />
       </label>
+      {endpointFormat && onEndpointFormatChange ? (
+        <label className="grid gap-1">
+          <span className={labelClass}>{t('modelRouterRoleEndpointFormat')}</span>
+          <select
+            className={inputClass}
+            value={endpointFormat}
+            onChange={(event) => onEndpointFormatChange(event.target.value as ModelRouterTextEndpointFormat)}
+          >
+            <option value="chat_completions">{t('modelRouterEndpointFormatChatCompletions')}</option>
+            <option value="responses">{t('modelRouterEndpointFormatResponses')}</option>
+          </select>
+        </label>
+      ) : null}
     </div>
   )
 }
@@ -148,7 +167,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const updateImageGenerationSettings = (patch: ImageGenerationSettingsPatchV1): void => {
     update({ imageGeneration: patch })
   }
-  const updateTextReasoner = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
+  const updateTextReasoner = (patch: ModelRouterTextReasonerSettingsPatchV1): void => {
     update({ modelRouter: { profiles: { default: { textReasoner: patch } } } })
   }
   const updateImageGenerator = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
@@ -219,10 +238,12 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                       baseUrl={defaultModelRouterProfile.textReasoner.baseUrl}
                       apiKey={defaultModelRouterProfile.textReasoner.apiKey}
                       model={defaultModelRouterProfile.textReasoner.model}
+                      endpointFormat={defaultModelRouterProfile.textReasoner.endpointFormat}
                       baseUrlPlaceholder={t('modelRouterTextReasonerBaseUrlPlaceholder')}
                       modelPlaceholder={t('modelRouterTextReasonerModelPlaceholder')}
                       secretVisible={modelRouterSecretVisibility.textReasoner}
                       onToggleSecret={() => toggleModelRouterSecret('textReasoner')}
+                      onEndpointFormatChange={(endpointFormat) => updateTextReasoner({ endpointFormat })}
                       onChange={updateTextReasoner}
                     />
                   }

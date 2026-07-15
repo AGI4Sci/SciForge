@@ -75,6 +75,7 @@ function envModelRouterConfig(): ModelRouterConfig {
           baseUrl: requiredEnv('SCIFORGE_TEXT_BASE_URL'),
           apiKeyEnv: process.env.SCIFORGE_TEXT_API_KEY_ENV || 'SCIFORGE_TEXT_API_KEY',
           model: requiredEnv('SCIFORGE_TEXT_MODEL'),
+          endpointFormat: endpointFormatEnv('SCIFORGE_TEXT_ENDPOINT_FORMAT'),
         },
         ...(imageBaseUrl && imageModel
           ? {
@@ -103,4 +104,11 @@ function numberEnv(name: string) {
   if (!value) return undefined;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function endpointFormatEnv(name: string): 'chat_completions' | 'responses' | undefined {
+  const value = process.env[name]?.trim();
+  if (!value) return undefined;
+  if (value === 'chat_completions' || value === 'responses') return value;
+  throw new Error(`${name} must be "chat_completions" or "responses".`);
 }

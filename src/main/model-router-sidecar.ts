@@ -11,7 +11,9 @@ import {
   type ModelRouterSettingsPatchV1,
   type ModelRouterMemberProviderSettingsV1,
   type ModelRouterScientificTranslatorSettingsPatchV1,
-  type ModelRouterScientificTranslatorSettingsV1
+  type ModelRouterScientificTranslatorSettingsV1,
+  type ModelRouterTextEndpointFormat,
+  type ModelRouterTextReasonerSettingsPatchV1
 } from '../shared/app-settings'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -59,6 +61,10 @@ type ModelRouterProviderConfig = {
   maxSupplementRounds?: number
 }
 
+type ModelRouterTextReasonerConfig = ModelRouterProviderConfig & {
+  endpointFormat: ModelRouterTextEndpointFormat
+}
+
 type ModelRouterScientificTranslatorConfig = {
   baseUrl: string
   tokenEnv: string
@@ -71,7 +77,7 @@ type ModelRouterSidecarConfig = {
   publicModelAlias: string
   profiles: Record<string, {
     traceRoot: string
-    textReasoner: ModelRouterProviderConfig
+    textReasoner: ModelRouterTextReasonerConfig
     imageGenerator?: ModelRouterProviderConfig
     translators: {
       vision?: ModelRouterProviderConfig
@@ -348,7 +354,8 @@ function defaultModelRouterSidecarConfig(
           provider: textReasoner.provider.trim() || 'openai-compatible',
           baseUrl: textReasoner.baseUrl.trim(),
           apiKeyEnv: TEXT_REASONER_KEY_ENV,
-          model: textReasoner.model.trim()
+          model: textReasoner.model.trim(),
+          endpointFormat: textReasoner.endpointFormat
         },
         ...(imageGenerator ? { imageGenerator } : {}),
         translators: {
@@ -490,7 +497,7 @@ async function modelRouterSettingsPatchFromConfigFile(
       : null
   if (!profile) return null
 
-  const textReasoner = memberProviderPatchFromConfig(profile.textReasoner)
+  const textReasoner = textReasonerPatchFromConfig(profile.textReasoner)
   const imageGenerator = memberProviderPatchFromConfig(profile.imageGenerator)
   const translators = isRecord(profile.translators) ? profile.translators : {}
   const vision = memberProviderPatchFromConfig(translators.vision)
@@ -518,6 +525,17 @@ function memberProviderPatchFromConfig(value: unknown): ModelRouterMemberProvide
     ...(stringValue(value.baseUrl) ? { baseUrl: stringValue(value.baseUrl) } : {}),
     ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
     ...(numberValue(value.maxSupplementRounds) === undefined ? {} : { maxSupplementRounds: numberValue(value.maxSupplementRounds) })
+  }
+}
+
+function textReasonerPatchFromConfig(value: unknown): ModelRouterTextReasonerSettingsPatchV1 | null {
+  const provider = memberProviderPatchFromConfig(value)
+  if (!provider || !isRecord(value)) return provider
+  return {
+    ...provider,
+    ...(value.endpointFormat === 'chat_completions' || value.endpointFormat === 'responses'
+      ? { endpointFormat: value.endpointFormat }
+      : {})
   }
 }
 

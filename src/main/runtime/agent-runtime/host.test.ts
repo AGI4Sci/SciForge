@@ -1251,7 +1251,8 @@ describe('AgentRuntimeHost', () => {
                 provider: 'private-provider',
                 baseUrl: 'https://private-provider.example/v1',
                 apiKey: 'private-provider-secret',
-                model: 'private-provider-model'
+                model: 'private-provider-model',
+                endpointFormat: 'chat_completions'
               },
               imageGenerator: {
                 provider: 'private-image',

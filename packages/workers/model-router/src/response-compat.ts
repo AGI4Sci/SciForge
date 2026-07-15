@@ -111,6 +111,107 @@ export function chatToolNameAliasesFromResponsesTools(tools: unknown): Record<st
   return aliases;
 }
 
+/**
+ * Normalize function tools for a native Responses API provider while retaining the
+ * same bounded schemas and provider-safe names used by the chat compatibility path.
+ */
+export function responsesToolsForProvider(
+  tools: unknown,
+  aliases: Record<string, string>,
+): JsonValue[] | undefined {
+  const aliasByOriginal = new Map(Object.entries(aliases).map(([alias, original]) => [original, alias]));
+  const providerTools = responseToolDescriptors(tools).map((tool): JsonObject => compactJsonObject({
+    type: 'function',
+    name: aliasByOriginal.get(tool.responseName) ?? tool.responseName,
+    description: boundedProviderToolString(tool.description) || undefined,
+    parameters: providerSafeChatToolParameters(tool.parameters),
+  }));
+  return providerTools.length > 0 ? providerTools : undefined;
+}
+
+export function responsesToolChoiceForProvider(
+  toolChoice: unknown,
+  aliases: Record<string, string>,
+): unknown {
+  const aliased = responseToolChoiceToChatToolChoice(toolChoice, aliases);
+  if (!isRecord(aliased) || !isRecord(aliased.function)) return aliased;
+  const name = nonEmptyString(aliased.function.name);
+  if (!name) return aliased;
+  return {
+    type: 'function',
+    name,
+  };
+}
+
+export function responsesInputForProvider(
+  input: unknown,
+  aliases: Record<string, string>,
+): JsonValue | undefined {
+  const normalized = jsonValue(input);
+  if (normalized === undefined) return undefined;
+  const aliasByOriginal = new Map(Object.entries(aliases).map(([alias, original]) => [original, alias]));
+  return aliasResponsesInputToolNames(normalized, aliasByOriginal);
+}
+
+function aliasResponsesInputToolNames(value: JsonValue, aliasByOriginal: Map<string, string>): JsonValue {
+  if (Array.isArray(value)) {
+    return value.map((entry) => aliasResponsesInputToolNames(entry, aliasByOriginal));
+  }
+  if (!isRecord(value)) return value;
+  const dropsNonStandardReasoning = value.type === 'function_call'
+    || value.type === 'custom_tool_call'
+    || value.role === 'assistant';
+  const entries = Object.fromEntries(
+    Object.entries(value)
+      .filter(([key]) => key !== 'reasoning_content' || !dropsNonStandardReasoning)
+      .map(([key, entry]) => [key, aliasResponsesInputToolNames(entry, aliasByOriginal)]),
+  ) as JsonObject;
+  if (value.type === 'function_call_output' && entries.output !== undefined) {
+    entries.output = normalizeResponsesFunctionCallOutput(entries.output);
+  }
+  if (value.type !== 'function_call' && value.type !== 'custom_tool_call') return entries;
+  const name = nonEmptyString(value.name);
+  const alias = name ? aliasByOriginal.get(name) : undefined;
+  return alias ? { ...entries, name: alias } : entries;
+}
+
+function normalizeResponsesFunctionCallOutput(output: JsonValue): JsonValue {
+  if (typeof output === 'string') return output;
+  if (isValidResponsesFunctionOutputContent(output)) return output;
+  return stableJsonStringify(output);
+}
+
+function isValidResponsesFunctionOutputContent(value: JsonValue): value is JsonObject[] {
+  if (!Array.isArray(value) || value.length === 0) return false;
+  return value.every((part) => {
+    if (!isRecord(part)) return false;
+    if (part.type === 'input_text') return typeof part.text === 'string';
+    if (part.type === 'input_image') {
+      return typeof part.image_url === 'string' || typeof part.file_id === 'string';
+    }
+    if (part.type === 'input_file') {
+      return typeof part.file_id === 'string'
+        || typeof part.file_data === 'string'
+        || typeof part.file_url === 'string';
+    }
+    return false;
+  });
+}
+
+function stableJsonStringify(value: JsonValue): string {
+  return JSON.stringify(stableJsonValue(value));
+}
+
+function stableJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(stableJsonValue);
+  if (!isRecord(value)) return value;
+  return Object.fromEntries(
+    Object.keys(value)
+      .sort()
+      .map((key) => [key, stableJsonValue(value[key])]),
+  );
+}
+
 export function responsesToChatCompletions(
   request: ResponsesRequest,
   options: { defaultModel?: string } = {},
@@ -720,7 +821,7 @@ function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | 
           ? raw
             .filter((item): item is string => typeof item === 'string' && item.length > 0)
             .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map(boundedProviderToolString)
+            .map((item) => boundedProviderToolString(item))
           : [];
         if (required.length) out.required = [...new Set(required)];
         break;

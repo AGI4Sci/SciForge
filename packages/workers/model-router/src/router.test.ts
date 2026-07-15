@@ -880,6 +880,61 @@ test('chat completions compatibility route normalizes reasoning for chat provide
   }
 });
 
+test('chat completions compatibility preserves tools when the text reasoner uses Responses', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-native-responses-tools-'));
+  const calls: CapturedFetch[] = [];
+  const originalToolName = 'mcp_gui_research.research_search';
+  const providerToolName = 'mcp_gui_research_research_search';
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ textEndpointFormat: 'responses' }),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [responsesApiResponse('resp_chat_native_tool', [{
+      id: 'fc_chat_native_tool',
+      type: 'function_call',
+      status: 'completed',
+      call_id: 'call_chat_native_tool',
+      name: providerToolName,
+      arguments: '{"query":"SciForge"}',
+    }])]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        messages: [{ role: 'user', content: 'Search before answering.' }],
+        tools: [{
+          type: 'function',
+          function: {
+            name: originalToolName,
+            description: 'Search research papers.',
+            parameters: { type: 'object', properties: { query: { type: 'string' } } },
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: originalToolName } },
+        parallel_tool_calls: true,
+        reasoning_effort: 'high',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.choices?.[0]?.finish_reason, 'tool_calls');
+    assert.equal(body.choices?.[0]?.message?.tool_calls?.[0]?.function?.name, originalToolName);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
+    assert.equal((calls[0]?.body.tools as Array<Record<string, unknown>>)?.[0]?.name, providerToolName);
+    assert.deepEqual(calls[0]?.body.tool_choice, { type: 'function', name: providerToolName });
+    assert.equal(calls[0]?.body.parallel_tool_calls, true);
+    assert.deepEqual(calls[0]?.body.reasoning, { effort: 'high' });
+  } finally {
+    await server.close();
+  }
+});
+
 test('chat completions compatibility route sends image_url inputs through vision routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-vision-'));
   const calls: CapturedFetch[] = [];
@@ -2388,6 +2443,357 @@ test('responses tool calls pass through the Model Router API without becoming te
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.body.tool_choice, 'auto');
     assert.equal((calls[0]?.body.tools as Array<{ function?: { name?: string } }> | undefined)?.[0]?.function?.name, 'gui_present');
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses-native text reasoners keep function tools and reasoning effort on the Responses endpoint', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-native-responses-tool-call-'));
+  const calls: CapturedFetch[] = [];
+  const originalToolName = 'mcp_gui_research.research_search';
+  const providerToolName = 'mcp_gui_research_research_search';
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ textEndpointFormat: 'responses' }),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      responsesApiResponse('resp_native_tool', [
+        {
+          id: 'rs_native_tool',
+          type: 'reasoning',
+          summary: [{ type: 'summary_text', text: 'Search before answering.' }],
+        },
+        {
+          id: 'fc_native_tool',
+          type: 'function_call',
+          status: 'completed',
+          call_id: 'call_native_search_1',
+          name: providerToolName,
+          arguments: '{"query":"agentic RL"}',
+        },
+      ], {
+        input_tokens: 90,
+        output_tokens: 12,
+        input_tokens_details: { cached_tokens: 40 },
+        output_tokens_details: { reasoning_tokens: 7 },
+      }),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Search before answering.',
+        tools: [{
+          type: 'function',
+          name: originalToolName,
+          description: 'Search research papers.',
+          parameters: {
+            type: 'object',
+            properties: { query: { type: 'string' } },
+            required: ['query'],
+          },
+        }],
+        tool_choice: { type: 'function', function: { name: originalToolName } },
+        reasoning: { summary: 'detailed' },
+        reasoning_effort: 'max',
+        max_tokens: 512,
+        previous_response_id: 'resp_public_previous',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as { output?: Array<Record<string, unknown>>; usage?: Record<string, unknown> };
+    assert.equal(body.output?.find((item) => item.type === 'function_call')?.name, originalToolName);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
+    assert.equal(calls[0]?.body.model, 'text-model');
+    assert.equal(calls[0]?.body.stream, false);
+    assert.deepEqual(calls[0]?.body.input, 'Search before answering.');
+    assert.deepEqual(calls[0]?.body.reasoning, { summary: 'detailed', effort: 'max' });
+    assert.equal(calls[0]?.body.reasoning_effort, undefined);
+    assert.equal(calls[0]?.body.max_tokens, undefined);
+    assert.equal(calls[0]?.body.max_output_tokens, 512);
+    assert.equal(calls[0]?.body.previous_response_id, undefined);
+    assert.deepEqual(calls[0]?.body.tool_choice, { type: 'function', name: providerToolName });
+    assert.deepEqual(calls[0]?.body.tools, [{
+      type: 'function',
+      name: providerToolName,
+      description: 'Search research papers.',
+      parameters: {
+        type: 'object',
+        properties: { query: { type: 'string' } },
+        required: ['query'],
+      },
+    }]);
+    assert.deepEqual(body.usage, {
+      input_tokens: 90,
+      output_tokens: 12,
+      total_tokens: 102,
+      input_tokens_details: { cached_tokens: 40 },
+      output_tokens_details: { reasoning_tokens: 7 },
+      prompt_tokens: 90,
+      completion_tokens: 12,
+      cached_input_tokens: 40,
+      reasoning_output_tokens: 7,
+    });
+
+    const traceText = await readSingleTraceFile(workspaceRoot, 'trace.json');
+    assert.match(traceText, /"wireApi":\s*"responses"/);
+    assert.match(traceText, /"endpointRoute":\s*"responses"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses-native text reasoners preserve native tool transcripts and synthesize public streams', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-native-responses-stream-'));
+  const calls: CapturedFetch[] = [];
+  const originalToolName = 'mcp_gui_research.research_search';
+  const providerToolName = 'mcp_gui_research_research_search';
+  const encryptedCompactionContent = Buffer
+    .from('compaction-state-0123456789-'.repeat(100))
+    .toString('base64');
+  assert.ok(encryptedCompactionContent.length > 1_000);
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ textEndpointFormat: 'responses' }),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      responsesApiResponse('resp_native_stream', [{
+        id: 'msg_native_stream',
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Native Responses answer.', annotations: [] }],
+      }]),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        stream: true,
+        input: [
+          {
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'I will use the search tool.' }],
+            reasoning_content: 'Non-standard assistant reasoning from the local runtime.',
+          },
+          { type: 'reasoning', id: 'rs_previous', summary: [] },
+          { type: 'compaction', id: 'cmp_previous', encrypted_content: encryptedCompactionContent },
+          {
+            type: 'function_call',
+            id: 'fc_previous',
+            call_id: 'call_previous',
+            name: originalToolName,
+            arguments: '{"query":"SciForge"}',
+            reasoning_content: 'Non-standard function-call reasoning from the local runtime.',
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_previous',
+            output: [{ type: 'input_text', text: '{"title":"SciForge"}' }],
+          },
+        ],
+        tools: [{ type: 'function', name: originalToolName, parameters: { type: 'object', properties: {} } }],
+        reasoning_effort: 'high',
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    assert.deepEqual(events.map((event) => event.type), [
+      'response.created',
+      'response.output_item.added',
+      'response.content_part.added',
+      'response.output_text.delta',
+      'response.output_text.done',
+      'response.content_part.done',
+      'response.output_item.done',
+      'response.completed',
+    ]);
+    assert.equal(events.find((event) => event.type === 'response.output_text.delta')?.delta, 'Native Responses answer.');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
+    assert.equal(calls[0]?.body.stream, false);
+    assert.deepEqual(calls[0]?.body.reasoning, { effort: 'high' });
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.equal(providerInput[0]?.role, 'assistant');
+    assert.equal(providerInput[1]?.type, 'reasoning');
+    assert.equal(providerInput[2]?.type, 'compaction');
+    assert.equal(providerInput[2]?.encrypted_content, encryptedCompactionContent);
+    assert.equal(providerInput[3]?.type, 'function_call');
+    assert.equal(providerInput[3]?.name, providerToolName);
+    assert.equal(providerInput[4]?.type, 'function_call_output');
+    assert.deepEqual(providerInput[4]?.output, [{ type: 'input_text', text: '{"title":"SciForge"}' }]);
+    assert.doesNotMatch(JSON.stringify(providerInput), /reasoning_content/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses-native follow-ups restore the complete reasoning and parallel tool-call block', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-native-responses-follow-up-'));
+  const calls: CapturedFetch[] = [];
+  const firstOriginalName = 'mcp_gui_research.research_search';
+  const secondOriginalName = 'mcp_gui_browser.browser_open';
+  const largeToolOutput = `result:${'large-tool-output-'.repeat(500)}`;
+  const encryptedReasoningContent = Buffer
+    .from('reasoning-state-0123456789-'.repeat(100))
+    .toString('base64');
+  assert.ok(encryptedReasoningContent.length > 1_000);
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ textEndpointFormat: 'responses' }),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      responsesApiResponse('resp_native_parallel_tools', [
+        {
+          id: 'rs_native_parallel',
+          type: 'reasoning',
+          summary: [],
+          encrypted_content: encryptedReasoningContent,
+        },
+        {
+          id: 'fc_native_parallel_1',
+          type: 'function_call',
+          status: 'completed',
+          call_id: 'call_native_parallel_1',
+          name: 'mcp_gui_research_research_search',
+          arguments: '{"query":"SciForge"}',
+        },
+        {
+          id: 'fc_native_parallel_2',
+          type: 'function_call',
+          status: 'completed',
+          call_id: 'call_native_parallel_2',
+          name: 'mcp_gui_browser_browser_open',
+          arguments: '{"url":"https://example.test"}',
+        },
+      ]),
+      responsesApiResponse('resp_native_parallel_final', [{
+        id: 'msg_native_parallel_final',
+        type: 'message',
+        status: 'completed',
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'Both tools completed.', annotations: [] }],
+      }]),
+    ]),
+  });
+
+  const tools = [
+    { type: 'function', name: firstOriginalName, parameters: { type: 'object', properties: {} } },
+    { type: 'function', name: secondOriginalName, parameters: { type: 'object', properties: {} } },
+  ];
+  try {
+    const first = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'Use both tools.', tools }),
+    });
+    assert.equal(first.status, 200);
+    const firstBody = await first.json() as { output?: Array<Record<string, unknown>> };
+    assert.deepEqual(
+      firstBody.output?.filter((item) => item.type === 'function_call').map((item) => item.name),
+      [firstOriginalName, secondOriginalName],
+    );
+
+    const second = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        previous_response_id: firstBody.output?.[0]?.id ?? 'outer-response-id',
+        input: [
+          {
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'Running both tools.' }],
+            reasoning_content: 'Local-runtime assistant reasoning must not reach Responses.',
+          },
+          {
+            type: 'function_call',
+            id: 'fc_native_parallel_1',
+            call_id: 'call_native_parallel_1',
+            name: firstOriginalName,
+            arguments: '{"query":"SciForge"}',
+            reasoning_content: 'Local-runtime function reasoning must not reach Responses.',
+          },
+          { type: 'function_call_output', call_id: 'call_native_parallel_1', output: largeToolOutput },
+          {
+            type: 'function_call_output',
+            call_id: 'call_native_parallel_2',
+            output: { zeta: 2, alpha: { zeta: false, alpha: true } },
+          },
+        ],
+        tools,
+      }),
+    });
+    assert.equal(second.status, 200);
+    assert.equal((await second.json() as { output_text?: string }).output_text, 'Both tools completed.');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[1]?.body.previous_response_id, undefined);
+    const replayed = calls[1]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(replayed.map((item) => item.type), [
+      undefined,
+      'reasoning',
+      'function_call',
+      'function_call',
+      'function_call_output',
+      'function_call_output',
+    ]);
+    assert.equal(replayed[0]?.role, 'assistant');
+    assert.equal(replayed[1]?.id, 'rs_native_parallel');
+    assert.equal(replayed[1]?.encrypted_content, encryptedReasoningContent);
+    assert.equal(replayed[2]?.call_id, 'call_native_parallel_1');
+    assert.equal(replayed[2]?.name, 'mcp_gui_research_research_search');
+    assert.equal(replayed[3]?.call_id, 'call_native_parallel_2');
+    assert.equal(replayed[3]?.name, 'mcp_gui_browser_browser_open');
+    assert.match(String(replayed[4]?.output), /sciforge request_hygiene.*large_tool_output/);
+    assert.doesNotMatch(String(replayed[4]?.output), /large-tool-output-large-tool-output-large-tool-output/);
+    assert.equal(replayed[5]?.output, '{"alpha":{"alpha":true,"zeta":false},"zeta":2}');
+    assert.doesNotMatch(JSON.stringify(replayed), /reasoning_content/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses-native incomplete provider results fail instead of becoming completed public responses', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-native-responses-incomplete-'));
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig({ textEndpointFormat: 'responses' }),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [Response.json({
+      id: 'resp_native_incomplete',
+      object: 'response',
+      status: 'incomplete',
+      incomplete_details: { reason: 'max_output_tokens' },
+      output: [],
+    })]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'Give a complete answer.' }),
+    });
+    assert.equal(response.status, 502);
+    const body = await response.json() as { error?: { code?: string; message?: string } };
+    assert.equal(body.error?.code, 'provider_incomplete_response');
+    assert.match(body.error?.message ?? '', /incomplete Responses API result/i);
   } finally {
     await server.close();
   }
@@ -4931,6 +5337,7 @@ type CapturedFetch = {
 function testConfig(options: {
   traceRoot?: string;
   publicModelAlias?: string | null;
+  textEndpointFormat?: 'chat_completions' | 'responses';
   imageGenerator?: ModelRouterConfig['profiles'][string]['imageGenerator'];
   scientificTranslator?: ModelRouterConfig['profiles'][string]['translators']['scientific'];
 } = {}): ModelRouterConfig {
@@ -4945,6 +5352,7 @@ function testConfig(options: {
           baseUrl: 'https://text.example/v1',
           apiKeyEnv: 'SCIFORGE_TEXT_API_KEY',
           model: 'text-model',
+          ...(options.textEndpointFormat ? { endpointFormat: options.textEndpointFormat } : {}),
         },
         ...(options.imageGenerator ? { imageGenerator: options.imageGenerator } : {}),
         translators: {
@@ -5094,6 +5502,22 @@ function chatCompletion(
       },
       finish_reason: toolCalls ? 'tool_calls' : 'stop',
     }],
+    ...(Object.keys(usage).length ? { usage } : {}),
+  });
+}
+
+function responsesApiResponse(
+  id: string,
+  output: Array<Record<string, unknown>>,
+  usage: Record<string, unknown> = {},
+) {
+  return Response.json({
+    id,
+    object: 'response',
+    created_at: 1_717_171_717,
+    model: 'text-model',
+    status: 'completed',
+    output,
     ...(Object.keys(usage).length ? { usage } : {}),
   });
 }

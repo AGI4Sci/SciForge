@@ -23,7 +23,8 @@ function settings(): AppSettingsV1 {
     provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
-    model: 'text-model'
+    model: 'text-model',
+    endpointFormat: 'chat_completions'
   }
   provider.apiKey = 'sk-remote-provider'
   provider.baseUrl = 'https://remote-provider.example/v1'

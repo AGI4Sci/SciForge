@@ -55,7 +55,8 @@ function configuredModelRouterSettings(baseUrl: string) {
     provider: 'openai-compatible',
     baseUrl: 'https://text.example/v1',
     apiKey: 'text-provider-key',
-    model: 'text-model'
+    model: 'text-model',
+    endpointFormat: 'chat_completions'
   }
   return modelRouter
 }
@@ -105,7 +106,8 @@ function modelRouterConfig(): ModelRouterConfig {
           provider: 'test-text-provider',
           baseUrl: 'https://text.example/v1',
           apiKeyEnv: 'TEXT_PROVIDER_KEY',
-          model: 'text-model'
+          model: 'text-model',
+          endpointFormat: 'chat_completions'
         },
         translators: {}
       }

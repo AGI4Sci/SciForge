@@ -425,6 +425,84 @@ describe('ModelRouterModelClient', () => {
     ])
   })
 
+  it('preserves supported reasoning effort levels for Responses requests', async () => {
+    const cases = [
+      ['off', 'none'],
+      ['disabled', 'none'],
+      ['none', 'none'],
+      ['false', 'none'],
+      ['low', 'low'],
+      ['minimal', 'low'],
+      ['medium', 'medium'],
+      ['mid', 'medium'],
+      ['high', 'high'],
+      ['max', 'max'],
+      ['maximum', 'max'],
+      ['xhigh', 'xhigh']
+    ] as const
+    const sentBodies: Array<Record<string, unknown>> = []
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        id: 'resp_reasoning_effort',
+        status: 'completed',
+        output_text: 'done'
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const client = new ModelRouterModelClient({
+      baseUrl: 'https://example.com/v1',
+      apiKey: 'k',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      fetchImpl,
+      nonStreaming: true
+    })
+
+    for (const [requested, expected] of cases) {
+      const request = buildRequest(new AbortController().signal)
+      request.reasoningEffort = requested
+      for await (const _chunk of client.stream(request)) {
+        // drain
+      }
+      expect(sentBodies.at(-1)?.reasoning, requested).toEqual({ effort: expected })
+    }
+  })
+
+  it('omits Responses reasoning for automatic or unknown effort values', async () => {
+    const sentBodies: Array<Record<string, unknown>> = []
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      sentBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      return new Response(JSON.stringify({
+        id: 'resp_reasoning_omitted',
+        status: 'completed',
+        output_text: 'done'
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const client = new ModelRouterModelClient({
+      baseUrl: 'https://example.com/v1',
+      apiKey: 'k',
+      model: 'gpt-5.6-sol',
+      endpointFormat: 'responses',
+      fetchImpl,
+      nonStreaming: true
+    })
+
+    for (const requested of ['auto', 'unsupported']) {
+      const request = buildRequest(new AbortController().signal)
+      request.reasoningEffort = requested
+      for await (const _chunk of client.stream(request)) {
+        // drain
+      }
+      expect(sentBodies.at(-1), requested).not.toHaveProperty('reasoning')
+    }
+  })
+
   it('preserves assistant reasoning_content when serializing history to Responses input', async () => {
     const sentBodies: Array<{ input?: Array<Record<string, unknown>> }> = []
     const fetchImpl: typeof fetch = async (_url, init) => {

@@ -14,6 +14,9 @@ import {
   estimateAnthropicMessagesInputTokens,
   makeId,
   messageOutputItem,
+  responsesInputForProvider,
+  responsesToolChoiceForProvider,
+  responsesToolsForProvider,
   responseToAnthropicMessage,
   responsesToChatCompletions,
   type AnthropicMessagesRequest,
@@ -35,6 +38,7 @@ export interface ModelRouterProviderConfig {
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  endpointFormat?: 'chat_completions' | 'responses';
   maxSupplementRounds?: number;
 }
 
@@ -118,10 +122,10 @@ type ProviderCallRecord = {
   providerBindingSha256: string;
   providerAliasSha256: string;
   modelAliasSha256: string;
-  wireApi: 'chat.completions';
+  wireApi: 'chat.completions' | 'responses';
   wireRequest: {
     urlSha256: string;
-    endpointRoute: 'chat.completions';
+    endpointRoute: 'chat.completions' | 'responses';
     bodyShape: {
       modelAliasSha256: string;
       messageCount: number;
@@ -197,7 +201,12 @@ type RoutedResponse = {
   usage: ResponseUsage;
 };
 
-type ToolCallCache = Map<string, JsonObject>;
+type ToolCallCacheEntry = {
+  call: JsonObject;
+  replayBlock: JsonObject[];
+};
+
+type ToolCallCache = Map<string, ToolCallCacheEntry>;
 
 type TextControl =
   | { type: 'final_answer'; content: string }
@@ -535,7 +544,7 @@ function providerDiagnosticCategory(
 ): ModelRouterUpstreamDiagnostic['category'] | null {
   if (/^provider_http_40[13]$/.test(code) || status === 401 || status === 403) return 'provider-auth';
   if (/^provider_exception_(?:timeout|network|fetch_failed)/.test(code)) return 'provider-network';
-  if (code === 'provider_invalid_json' || code === 'provider_error_payload') return 'provider-bad-response';
+  if (code === 'provider_invalid_json' || code === 'provider_error_payload' || code === 'provider_incomplete_response') return 'provider-bad-response';
   if (code.startsWith('provider_http_') || code.startsWith('provider_exception_')) return 'provider-error';
   return null;
 }
@@ -1049,12 +1058,19 @@ async function routeResponsesRequest(
   const usage = emptyResponseUsage();
   const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
   const hasAssistantReasoningInput = responseInputHasAssistantReasoning(request.input);
+  const hydratedToolTranscriptInput = hasToolTranscriptInput
+    ? hydrateFunctionCallTranscript(
+      request.input,
+      context.toolCallCache,
+      providerEndpointFormat(profile.textReasoner) === 'responses',
+    )
+    : request.input;
   const requestForTextReasoner = hasToolTranscriptInput
     ? {
       ...request,
-      input: repairResponseToolTranscriptInput(
-        hydrateFunctionCallTranscript(request.input, context.toolCallCache),
-      ),
+      input: providerEndpointFormat(profile.textReasoner) === 'responses'
+        ? hydratedToolTranscriptInput
+        : repairResponseToolTranscriptInput(hydratedToolTranscriptInput),
     }
     : request;
   const textReasonerRequestOptions = chatRequestOptionsFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model);
@@ -1236,7 +1252,7 @@ async function routeResponsesRequest(
         observations,
         visualFailure: degraded,
         calls,
-        request,
+        request: requestForTextReasoner,
         requestOptions: textReasonerRequestOptions,
         toolNameAliases,
         signal: context.providerSignal,
@@ -1470,11 +1486,18 @@ function validateProviderConfig(config: ModelRouterProviderConfig, role: string)
   if (!config.provider || !config.baseUrl || !config.apiKeyEnv || !config.model) {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" is missing required provider configuration.`);
   }
+  if (config.endpointFormat !== undefined && config.endpointFormat !== 'chat_completions' && config.endpointFormat !== 'responses') {
+    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid endpoint format.`);
+  }
   try {
     new URL(config.baseUrl);
   } catch {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
   }
+}
+
+function providerEndpointFormat(config: ModelRouterProviderConfig): 'chat_completions' | 'responses' {
+  return config.endpointFormat ?? 'chat_completions';
 }
 
 function secretForProvider(config: ModelRouterProviderConfig, env: Record<string, string | undefined>, roleAlias: string) {
@@ -2468,17 +2491,42 @@ async function callTextReasoner(options: {
       'If any image observation has status=not_sent, the final answer must explicitly state that the image was not sent to the active text-only model and could not be inspected.',
     ].join(' ')
     : undefined;
+  const evidenceText = options.observations.length
+    ? [
+      options.userText ? `User request:\n${options.userText}` : 'User request is empty.',
+      'Modality evidence:',
+      ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
+      options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
+    ].filter(Boolean).join('\n\n')
+    : undefined;
+
+  if (providerEndpointFormat(options.profile.textReasoner) === 'responses') {
+    return await callResponsesProvider({
+      provider: options.profile.textReasoner,
+      secret: options.secret,
+      fetchImpl: options.fetchImpl,
+      body: responsesProviderRequestBody({
+        provider: options.profile.textReasoner,
+        request: options.request,
+        userText: options.userText,
+        evidenceText,
+        controlInstruction,
+        toolNameAliases: options.toolNameAliases,
+      }),
+      role: 'textReasoner',
+      phase: options.observations.length ? 'text-control-or-final' : 'text-direct',
+      calls: options.calls,
+      toolNameAliases: options.toolNameAliases,
+      signal: options.signal,
+    });
+  }
+
   const messages: JsonObject[] = options.observations.length
     ? [
       ...(controlInstruction ? [{ role: 'system', content: controlInstruction }] : []),
       {
       role: 'user',
-      content: [
-        options.userText ? `User request:\n${options.userText}` : 'User request is empty.',
-        'Modality evidence:',
-        ...options.observations.map((observation, index) => `Observation ${index + 1}:\n${observation}`),
-        options.visualFailure ? 'Router degradation: at least one referenced modality could not be inspected.' : '',
-      ].filter(Boolean).join('\n\n'),
+      content: evidenceText ?? '',
       },
     ]
     : options.messages.length > 0 ? options.messages : [{ role: 'user', content: options.userText }];
@@ -2498,6 +2546,123 @@ async function callTextReasoner(options: {
     toolNameAliases: options.toolNameAliases,
     signal: options.signal,
   });
+}
+
+function responsesProviderRequestBody(options: {
+  provider: ModelRouterProviderConfig;
+  request: Record<string, unknown>;
+  userText: string;
+  evidenceText?: string;
+  controlInstruction?: string;
+  toolNameAliases: Record<string, string>;
+}): Record<string, unknown> {
+  const request = { ...options.request };
+  const input = options.evidenceText !== undefined
+    ? [{
+      role: 'user',
+      content: [{ type: 'input_text', text: options.evidenceText }],
+    }]
+    : responsesInputForProvider(request.input ?? options.userText, options.toolNameAliases);
+  const tools = responsesToolsForProvider(request.tools, options.toolNameAliases);
+  const reasoning = responsesReasoningFromRequest(request);
+  const maxOutputTokens = request.max_output_tokens ?? request.max_tokens;
+
+  const body: Record<string, unknown> = {
+    ...request,
+    model: options.provider.model,
+    // The router already materializes its public stream after routing completes. A
+    // non-streaming provider call keeps both public response modes on one parsing path.
+    stream: false,
+    input,
+    tools,
+    tool_choice: responsesToolChoiceForProvider(request.tool_choice, options.toolNameAliases),
+    reasoning,
+    max_output_tokens: maxOutputTokens,
+    ...(options.evidenceText !== undefined ? { instructions: options.controlInstruction } : {}),
+  };
+  delete body.reasoning_effort;
+  delete body.max_tokens;
+  delete body.include_reasoning;
+  // Router response ids are not upstream response ids, so they cannot safely be
+  // used to continue provider-owned state.
+  delete body.previous_response_id;
+  return body;
+}
+
+function responsesReasoningFromRequest(request: Record<string, unknown>): JsonObject | undefined {
+  const existing = isRecord(request.reasoning) ? jsonValueField(request.reasoning) : undefined;
+  const reasoning = isRecord(existing) ? existing : {};
+  const effort = stringField(request.reasoning_effort);
+  if (effort && reasoning.effort === undefined) reasoning.effort = effort;
+  return Object.keys(reasoning).length > 0 ? reasoning as JsonObject : undefined;
+}
+
+async function callResponsesProvider(options: {
+  provider: ModelRouterProviderConfig;
+  secret: string;
+  fetchImpl: typeof fetch;
+  body: Record<string, unknown>;
+  role: ProviderCallRecord['role'];
+  phase: string;
+  calls: ProviderCallRecord[];
+  toolNameAliases?: Record<string, string>;
+  signal?: AbortSignal;
+}) {
+  const startedAt = Date.now();
+  const body = hygienizeChatProviderBody(options.body);
+  let response: Response;
+  try {
+    response = await options.fetchImpl(providerResponsesUrl(options.provider.baseUrl), {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${options.secret}`,
+      },
+      body: JSON.stringify(body),
+      signal: options.signal,
+    });
+  } catch (error) {
+    const errorSummary = providerExceptionSummary(error, 'fetch_failed');
+    recordFailedProviderCall({ ...options, body, wireApi: 'responses' }, Date.now() - startedAt, errorSummary);
+    throw routerError(500, errorSummary, `Provider request failed (${errorSummary}).`);
+  }
+  const latencyMs = Date.now() - startedAt;
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    const errorSummary = `provider_http_${response.status}`;
+    recordFailedProviderCall({ ...options, body, wireApi: 'responses' }, latencyMs, errorSummary);
+    throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, options.provider, options.secret, errorText));
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    const errorSummary = 'provider_invalid_json';
+    recordFailedProviderCall({ ...options, body, wireApi: 'responses' }, latencyMs, errorSummary);
+    throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON Responses API response.');
+  }
+  if (isResponsesProviderErrorPayload(payload)) {
+    const errorSummary = 'provider_error_payload';
+    recordFailedProviderCall({ ...options, body, wireApi: 'responses' }, latencyMs, errorSummary);
+    throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of a completed response.');
+  }
+  if (isRecord(payload) && payload.status === 'incomplete') {
+    const errorSummary = 'provider_incomplete_response';
+    recordFailedProviderCall({ ...options, body, wireApi: 'responses' }, latencyMs, errorSummary);
+    throw routerError(502, errorSummary, 'Provider returned an incomplete Responses API result.');
+  }
+  options.calls.push({
+    role: options.role,
+    phase: options.phase,
+    status: 'ok',
+    roleAlias: roleAliasForCall(options.role),
+    providerBindingSha256: providerBindingHash(options.provider),
+    ...providerCallTraceFields(options.provider, body, 'responses'),
+    wireApi: 'responses',
+    latencyMs,
+    stopReason: responsesProviderStopReason(payload),
+  });
+  return responsesProviderResult(payload, options.toolNameAliases);
 }
 
 async function callChatProvider(options: {
@@ -2581,8 +2746,56 @@ function isProviderErrorPayload(payload: unknown): boolean {
   return payload.error !== undefined && !Array.isArray(payload.choices);
 }
 
+function isResponsesProviderErrorPayload(payload: unknown): boolean {
+  if (!isRecord(payload)) return true;
+  return payload.status === 'failed' || (payload.error !== undefined && payload.error !== null);
+}
+
+function responsesProviderResult(
+  payload: unknown,
+  toolNameAliases: Record<string, string> = {},
+): { outputText: string; outputItems: JsonObject[]; usage: ResponseUsage } {
+  const response = isRecord(payload) ? payload : {};
+  const outputItems = Array.isArray(response.output)
+    ? response.output.filter(isRecord).map((item) => restoreResponseToolName(item, toolNameAliases))
+    : [];
+  const outputText = typeof response.output_text === 'string'
+    ? response.output_text
+    : responseOutputText(outputItems);
+  return {
+    outputText,
+    outputItems,
+    usage: responseUsageFromResponses(response),
+  };
+}
+
+function restoreResponseToolName(item: Record<string, unknown>, aliases: Record<string, string>): JsonObject {
+  const normalized = jsonValueField(item);
+  const outputItem = isRecord(normalized) ? normalized as JsonObject : {};
+  if (item.type !== 'function_call' && item.type !== 'custom_tool_call') return outputItem;
+  const name = stringField(item.name);
+  const originalName = name ? aliases[name] : undefined;
+  return originalName ? { ...outputItem, name: originalName } : outputItem;
+}
+
+function responsesProviderStopReason(payload: unknown): ProviderCallRecord['stopReason'] {
+  const response = isRecord(payload) ? payload : {};
+  const output = Array.isArray(response.output) ? response.output.filter(isRecord) : [];
+  if (output.some((item) => item.type === 'function_call' || item.type === 'custom_tool_call')) return 'tool_calls';
+  if (response.status === 'failed') return 'error';
+  if (response.status === 'incomplete') {
+    const details = isRecord(response.incomplete_details) ? response.incomplete_details : {};
+    return details.reason === 'max_output_tokens' ? 'length' : 'unknown';
+  }
+  return 'stop';
+}
+
 function providerChatCompletionsUrl(baseUrl: string): string {
   return buildProviderEndpointUrl(baseUrl, 'chat/completions');
+}
+
+function providerResponsesUrl(baseUrl: string): string {
+  return buildProviderEndpointUrl(baseUrl, 'responses');
 }
 
 function providerImageGenerationsUrl(baseUrl: string): string {
@@ -2673,18 +2886,20 @@ function recordFailedProviderCall(
     role: ProviderCallRecord['role'];
     phase: string;
     calls: ProviderCallRecord[];
+    wireApi?: ProviderCallRecord['wireApi'];
   },
   latencyMs: number,
   errorSummary: string,
 ) {
+  const wireApi = options.wireApi ?? 'chat.completions';
   options.calls.push({
     role: options.role,
     phase: options.phase,
     status: 'failed',
     roleAlias: roleAliasForCall(options.role),
     providerBindingSha256: providerBindingHash(options.provider),
-    ...providerCallTraceFields(options.provider, options.body ?? {}),
-    wireApi: 'chat.completions',
+    ...providerCallTraceFields(options.provider, options.body ?? {}, wireApi),
+    wireApi,
     latencyMs,
     stopReason: 'error',
     errorSummary: boundedProviderTraceText(errorSummary, options.provider, options.secret ? [options.secret] : []),
@@ -2749,10 +2964,20 @@ function responseInputHasAssistantReasoning(input: unknown): boolean {
   });
 }
 
-function hydrateFunctionCallTranscript(input: unknown, cache: ToolCallCache): unknown {
+function hydrateFunctionCallTranscript(
+  input: unknown,
+  cache: ToolCallCache,
+  includeReasoningBlock: boolean,
+): unknown {
   if (!Array.isArray(input)) return input;
   let changed = false;
   const seenFunctionCallIds = new Set<string>();
+  const seenItemIds = new Set(input.flatMap((item) => {
+    if (!isRecord(item)) return [];
+    const id = stringField(item.id);
+    return id ? [id] : [];
+  }));
+  const restoredReasoningBlocks = new Set<JsonObject[]>();
   const hydrated: unknown[] = [];
   for (const item of input) {
     if (!isRecord(item)) {
@@ -2762,13 +2987,36 @@ function hydrateFunctionCallTranscript(input: unknown, cache: ToolCallCache): un
 
     if (item.type === 'function_call') {
       const callId = stringField(item.call_id) ?? stringField(item.id);
-      if (callId) seenFunctionCallIds.add(callId);
       const cached = callId ? cache.get(callId) : undefined;
-      if (cached && !stringField(item.reasoning_content) && stringField(cached.reasoning_content)) {
+      if (includeReasoningBlock && cached && !restoredReasoningBlocks.has(cached.replayBlock)) {
+        for (const blockItem of cached.replayBlock) {
+          if (blockItem.type === 'reasoning') {
+            const blockItemId = stringField(blockItem.id);
+            if (blockItemId && seenItemIds.has(blockItemId)) continue;
+            hydrated.push({ ...blockItem });
+            if (blockItemId) seenItemIds.add(blockItemId);
+            continue;
+          }
+          if (blockItem.type !== 'function_call') continue;
+          const blockCallId = stringField(blockItem.call_id) ?? stringField(blockItem.id);
+          if (!blockCallId || seenFunctionCallIds.has(blockCallId)) continue;
+          hydrated.push({ ...blockItem });
+          seenFunctionCallIds.add(blockCallId);
+        }
+        restoredReasoningBlocks.add(cached.replayBlock);
+        changed = true;
+        continue;
+      }
+      if (includeReasoningBlock && callId && seenFunctionCallIds.has(callId)) {
+        changed = true;
+        continue;
+      }
+      if (callId) seenFunctionCallIds.add(callId);
+      if (cached && !stringField(item.reasoning_content) && stringField(cached.call.reasoning_content)) {
         changed = true;
         hydrated.push({
           ...item,
-          reasoning_content: cached.reasoning_content,
+          reasoning_content: cached.call.reasoning_content,
         });
       } else {
         hydrated.push(item);
@@ -2781,8 +3029,22 @@ function hydrateFunctionCallTranscript(input: unknown, cache: ToolCallCache): un
       const cached = callId ? cache.get(callId) : undefined;
       if (callId && cached && !seenFunctionCallIds.has(callId)) {
         changed = true;
-        hydrated.push({ ...cached });
-        seenFunctionCallIds.add(callId);
+        for (const blockItem of cached.replayBlock) {
+          if (blockItem.type === 'reasoning') {
+            if (!includeReasoningBlock) continue;
+            const blockItemId = stringField(blockItem.id);
+            if (blockItemId && seenItemIds.has(blockItemId)) continue;
+            hydrated.push({ ...blockItem });
+            if (blockItemId) seenItemIds.add(blockItemId);
+            continue;
+          }
+          if (blockItem.type !== 'function_call') continue;
+          const blockCallId = stringField(blockItem.call_id) ?? stringField(blockItem.id);
+          if (!blockCallId || seenFunctionCallIds.has(blockCallId)) continue;
+          hydrated.push({ ...blockItem });
+          seenFunctionCallIds.add(blockCallId);
+        }
+        restoredReasoningBlocks.add(cached.replayBlock);
       }
     }
 
@@ -2894,12 +3156,18 @@ function responseMessageRole(item: Record<string, unknown>): string {
 }
 
 function rememberFunctionCalls(cache: ToolCallCache, outputItems: JsonObject[]): void {
-  for (const item of outputItems) {
+  const replayBlock = outputItems
+    .filter((item) => item.type === 'reasoning' || item.type === 'function_call')
+    .map((item) => ({ ...item }));
+  for (const item of replayBlock) {
     if (item.type !== 'function_call') continue;
     const callId = stringField(item.call_id) ?? stringField(item.id);
     if (!callId) continue;
     cache.delete(callId);
-    cache.set(callId, { ...item });
+    cache.set(callId, {
+      call: { ...item },
+      replayBlock,
+    });
   }
   while (cache.size > MAX_TOOL_CALL_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
@@ -2982,6 +3250,33 @@ function responseUsageFromChatCompletion(payload: unknown): ResponseUsage {
     || usageInteger(completionDetails, 'reasoning_tokens');
   const reportedTotal = usageInteger(usage, 'total_tokens');
   const totalTokens = reportedTotal || inputTokens + outputTokens + reasoningTokens;
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: totalTokens,
+    input_tokens_details: {
+      cached_tokens: cachedTokens,
+    },
+    output_tokens_details: {
+      reasoning_tokens: reasoningTokens,
+    },
+    prompt_tokens: inputTokens,
+    completion_tokens: outputTokens,
+    cached_input_tokens: cachedTokens,
+    reasoning_output_tokens: reasoningTokens,
+  };
+}
+
+function responseUsageFromResponses(payload: unknown): ResponseUsage {
+  const response = isRecord(payload) ? payload : {};
+  const usage = isRecord(response.usage) ? response.usage : {};
+  const inputDetails = isRecord(usage.input_tokens_details) ? usage.input_tokens_details : {};
+  const outputDetails = isRecord(usage.output_tokens_details) ? usage.output_tokens_details : {};
+  const inputTokens = usageInteger(usage, 'input_tokens', 'prompt_tokens');
+  const outputTokens = usageInteger(usage, 'output_tokens', 'completion_tokens');
+  const cachedTokens = usageInteger(usage, 'cached_input_tokens') || usageInteger(inputDetails, 'cached_tokens');
+  const reasoningTokens = usageInteger(usage, 'reasoning_output_tokens') || usageInteger(outputDetails, 'reasoning_tokens');
+  const totalTokens = usageInteger(usage, 'total_tokens') || inputTokens + outputTokens;
   return {
     input_tokens: inputTokens,
     output_tokens: outputTokens,
@@ -3134,6 +3429,9 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
     ...(body.top_p !== undefined ? { top_p: body.top_p } : {}),
     ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+    ...(body.tools !== undefined ? { tools: body.tools } : {}),
+    ...(body.tool_choice !== undefined ? { tool_choice: body.tool_choice } : {}),
+    ...(body.parallel_tool_calls !== undefined ? { parallel_tool_calls: body.parallel_tool_calls } : {}),
     ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
     ...(body.reasoning !== undefined ? { reasoning: body.reasoning } : {}),
     ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
@@ -3766,11 +4064,14 @@ function publicModalityRef(ref: ModalityRef): JsonObject {
 }
 
 function providerTrace(roleAlias: string, provider: ModelRouterProviderConfig, publicModelAlias: string): JsonObject {
+  const wireApi = roleAlias === 'textReasoner' && providerEndpointFormat(provider) === 'responses'
+    ? 'responses'
+    : 'chat.completions';
   return {
     roleAlias,
     publicModelAlias,
     providerBindingSha256: providerBindingHash(provider),
-    wireApi: 'chat.completions',
+    wireApi,
   };
 }
 
@@ -3791,6 +4092,7 @@ function providerBindingHash(provider: ModelRouterProviderConfig) {
     provider.baseUrl,
     provider.model,
     provider.apiKeyEnv,
+    providerEndpointFormat(provider),
   ].join('\n'));
 }
 
@@ -3802,28 +4104,34 @@ function scientificTranslatorBindingHash(service: ModelRouterScientificTranslato
   ].join('\n'));
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/u, '');
-}
-
 function providerCallTraceFields(
   provider: ModelRouterProviderConfig,
   body: Record<string, unknown>,
+  endpointRoute: ProviderCallRecord['wireApi'] = 'chat.completions',
 ): Pick<ProviderCallRecord, 'providerAliasSha256' | 'modelAliasSha256' | 'wireRequest'> {
   const modelAliasSha256 = hashForTrace(stringField(body.model) || provider.model || '');
+  const requestContent = endpointRoute === 'responses'
+    ? [body.instructions, body.input]
+    : body.messages;
+  const endpointUrl = endpointRoute === 'responses'
+    ? providerResponsesUrl(provider.baseUrl)
+    : providerChatCompletionsUrl(provider.baseUrl);
+  const messageInput = endpointRoute === 'responses' ? body.input : body.messages;
   return {
     providerAliasSha256: hashForTrace(provider.provider || ''),
     modelAliasSha256,
     wireRequest: {
-      urlSha256: hashForTrace(`${trimTrailingSlash(provider.baseUrl)}/chat/completions`),
-      endpointRoute: 'chat.completions',
+      urlSha256: hashForTrace(endpointUrl),
+      endpointRoute,
       bodyShape: {
         modelAliasSha256,
-        messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+        messageCount: Array.isArray(messageInput)
+          ? messageInput.length
+          : endpointRoute === 'responses' && body.input !== undefined ? 1 : 0,
         toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
-        hasImageParts: hasImageParts(body.messages),
-        textCharCount: textCharCount(body.messages),
-        maxTokensSet: body.max_tokens !== undefined || body.max_completion_tokens !== undefined,
+        hasImageParts: hasImageParts(requestContent),
+        textCharCount: textCharCount(requestContent),
+        maxTokensSet: body.max_tokens !== undefined || body.max_completion_tokens !== undefined || body.max_output_tokens !== undefined,
         temperatureSet: body.temperature !== undefined,
       },
     },

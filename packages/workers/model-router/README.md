@@ -17,6 +17,8 @@ export SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS=sciforge-router
 export SCIFORGE_TEXT_BASE_URL=https://text-provider.example/v1
 export SCIFORGE_TEXT_MODEL=private-text-model
 export SCIFORGE_TEXT_API_KEY=...
+# Use "responses" for Responses-only reasoners; omitted defaults to "chat_completions".
+export SCIFORGE_TEXT_ENDPOINT_FORMAT=responses
 export SCIFORGE_VISION_BASE_URL=https://vision-provider.example/v1
 export SCIFORGE_VISION_MODEL=private-vision-model
 export SCIFORGE_VISION_API_KEY=...
@@ -42,6 +44,11 @@ Ambiguous `.fasta` and `.fa` uploads are classified locally and conservatively: 
 protein sequence is translated, while DNA/RNA or nucleotide-ambiguous content fails closed.
 
 `SCIFORGE_MODEL_ROUTER_CONFIG=/path/to/router.config.json` can provide the same `ModelRouterConfig` shape exported by `src/router.ts`. Relative profile `traceRoot` values resolve under `SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT` or the platform state-data default, never under the workspace. Public UI and audits should show only the router alias/profile/role readiness; provider URLs, API keys, and raw model slugs remain private router configuration.
+
+For a Responses-only text reasoner, set `profiles.<id>.textReasoner.endpointFormat` to
+`"responses"`. The default is `"chat_completions"`. Native Responses routing preserves function
+tools, reasoning configuration, and tool-call transcripts while the router continues to own its
+public response and stream ids.
 
 ## Trace Audit
 

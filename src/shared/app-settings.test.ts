@@ -1286,6 +1286,32 @@ describe('agent runtime settings', () => {
     expect(modelRouter.baseUrl).toBe('http://localhost:49876/v1')
   })
 
+  it('defaults legacy text reasoners to Chat Completions and preserves explicit Responses API settings', () => {
+    const legacy = defaultModelRouterSettings()
+    delete (legacy.profiles.default.textReasoner as { endpointFormat?: unknown }).endpointFormat
+
+    expect(normalizeAppSettings({
+      ...settings(),
+      modelRouter: legacy
+    }).modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('chat_completions')
+
+    const responses = defaultModelRouterSettings()
+    responses.profiles.default.textReasoner.endpointFormat = 'responses'
+    expect(normalizeAppSettings({
+      ...settings(),
+      modelRouter: responses
+    }).modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('responses')
+
+    const invalid = defaultModelRouterSettings() as unknown as {
+      profiles: { default: { textReasoner: { endpointFormat: string } } }
+    }
+    invalid.profiles.default.textReasoner.endpointFormat = 'messages'
+    expect(normalizeAppSettings({
+      ...settings(),
+      modelRouter: invalid
+    } as unknown as AppSettingsV1).modelRouter?.profiles.default.textReasoner.endpointFormat).toBe('chat_completions')
+  })
+
   it('defaults missing Model Router image generator models to gpt-image-2', () => {
     expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('gpt-image-2')
 

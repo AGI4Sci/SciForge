@@ -46,7 +46,8 @@ function settings(): AppSettingsV1 {
             provider: 'openai-compatible',
             baseUrl: 'https://text-provider.example/v1',
             apiKey: 'text-secret',
-            model: 'text-model'
+            model: 'text-model',
+            endpointFormat: 'chat_completions'
           },
           imageGenerator: {
             provider: 'openai-compatible',
@@ -234,7 +235,8 @@ describe('buildModelRouterSidecarLaunch', () => {
       provider: 'openai-compatible',
       baseUrl: 'https://text-provider.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY',
-      model: 'text-model'
+      model: 'text-model',
+      endpointFormat: 'chat_completions'
     })
     expect(JSON.stringify(result.launch.config)).not.toContain('text-secret')
     expect(JSON.stringify(result.launch.config)).not.toContain('vision-secret')
@@ -332,7 +334,8 @@ describe('buildModelRouterSidecarLaunch', () => {
       provider: 'openai-compatible',
       baseUrl: '',
       apiKey: '',
-      model: ''
+      model: '',
+      endpointFormat: 'chat_completions'
     }
 
     const result = buildModelRouterSidecarLaunch(current, {
@@ -354,7 +357,8 @@ describe('buildModelRouterSidecarLaunch', () => {
         provider: 'openai-compatible',
         baseUrl: '',
         apiKey: '',
-        model: ''
+        model: '',
+        endpointFormat: 'chat_completions'
       }
 
       const created = await ensureModelRouterConfigFile(current, { userDataDir })
@@ -366,6 +370,7 @@ describe('buildModelRouterSidecarLaunch', () => {
       expect(content).toContain('"baseUrl": ""')
       expect(content).toContain('"apiKeyEnv": "SCIFORGE_MODEL_ROUTER_TEXT_API_KEY"')
       expect(content).toContain('"model": ""')
+      expect(content).toContain('"endpointFormat": "chat_completions"')
 
       await writeFile(created.path, '', 'utf8')
       const repaired = await ensureModelRouterConfigFile(current, { userDataDir })
@@ -382,6 +387,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     try {
       const current = settings()
       current.modelRouter!.profiles.default.textReasoner.baseUrl = 'https://text-sync.example/v1'
+      current.modelRouter!.profiles.default.textReasoner.endpointFormat = 'responses'
       current.modelRouter!.profiles.default.imageGenerator.model = 'image-sync-model'
       current.modelRouter!.profiles.default.translators.scientific.model = 'scientific-sync-model'
 
@@ -389,6 +395,7 @@ describe('buildModelRouterSidecarLaunch', () => {
       const parsed = JSON.parse(await readFile(synced.path, 'utf8'))
 
       expect(parsed.profiles.default.textReasoner.baseUrl).toBe('https://text-sync.example/v1')
+      expect(parsed.profiles.default.textReasoner.endpointFormat).toBe('responses')
       expect(parsed.profiles.default.imageGenerator.model).toBe('image-sync-model')
       expect(parsed.profiles.default.translators.scientific.model).toBe('scientific-sync-model')
       expect(JSON.stringify(parsed)).not.toContain('text-secret')
@@ -414,7 +421,8 @@ describe('buildModelRouterSidecarLaunch', () => {
               provider: 'file-text-provider',
               baseUrl: 'https://file-text.example/v1',
               apiKeyEnv: 'TEXT_KEY',
-              model: 'file-text-model'
+              model: 'file-text-model',
+              endpointFormat: 'responses'
             },
             imageGenerator: {
               provider: 'file-image-provider',
@@ -449,7 +457,8 @@ describe('buildModelRouterSidecarLaunch', () => {
         provider: 'file-text-provider',
         baseUrl: 'https://file-text.example/v1',
         apiKey: 'text-secret',
-        model: 'file-text-model'
+        model: 'file-text-model',
+        endpointFormat: 'responses'
       })
       expect(profile.imageGenerator).toMatchObject({
         provider: 'file-image-provider',
@@ -560,7 +569,8 @@ describe('buildModelRouterSidecarLaunch', () => {
       provider: 'openai-compatible',
       baseUrl: 'https://fresh-text-provider.example/v1',
       apiKey: 'fresh-text-secret',
-      model: 'fresh-text-model'
+      model: 'fresh-text-model',
+      endpointFormat: 'chat_completions'
     }
     const child = fakeChildProcess()
     const spawnImpl = vi.fn(() => child) as unknown as typeof spawn

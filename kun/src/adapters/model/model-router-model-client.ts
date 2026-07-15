@@ -1573,9 +1573,18 @@ function splitToolImageMessagesForOpenAi(messages: ChatMessage[]): ChatMessage[]
   return out
 }
 
-function responsesReasoningForEffort(effort: string | undefined): Record<string, unknown> | null {
+type ResponsesReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+
+function responsesReasoningForEffort(
+  effort: string | undefined
+): { effort: ResponsesReasoningEffort } | null {
   const normalized = effort?.trim().toLowerCase()
   switch (normalized) {
+    case 'off':
+    case 'disabled':
+    case 'none':
+    case 'false':
+      return { effort: 'none' }
     case 'low':
     case 'minimal':
       return { effort: 'low' }
@@ -1583,10 +1592,12 @@ function responsesReasoningForEffort(effort: string | undefined): Record<string,
     case 'mid':
       return { effort: 'medium' }
     case 'high':
+      return { effort: 'high' }
     case 'max':
     case 'maximum':
+      return { effort: 'max' }
     case 'xhigh':
-      return { effort: 'high' }
+      return { effort: 'xhigh' }
     default:
       return null
   }

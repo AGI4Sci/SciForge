@@ -461,7 +461,8 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
               provider: 'openai-compatible',
               baseUrl: 'https://text-member.example/v1',
               apiKey: 'text-key',
-              model: 'text-model'
+              model: 'text-model',
+              endpointFormat: 'chat_completions'
             },
             imageGenerator: {
               provider: 'openai-compatible',

@@ -22,6 +22,9 @@ const labels: Record<string, string> = {
   modelRouterRoleBaseUrl: 'Base URL',
   modelRouterRoleApiKey: 'API key',
   modelRouterRoleModel: 'Model name',
+  modelRouterRoleEndpointFormat: 'Upstream endpoint format',
+  modelRouterEndpointFormatChatCompletions: 'Chat Completions API (/v1/chat/completions)',
+  modelRouterEndpointFormatResponses: 'Responses API (/v1/responses)',
   modelRouterTextReasoner: 'Text understanding and reasoning',
   modelRouterTextReasonerDesc: 'Default model.',
   modelRouterTextReasonerBaseUrlPlaceholder: 'https://api.example.com/v1',
@@ -166,6 +169,9 @@ describe('GeneralSettingsSection', () => {
 
     expect(html).toContain('Model Router models')
     expect(html).toContain('Text understanding and reasoning')
+    expect(html).toContain('Upstream endpoint format')
+    expect(html).toContain('Chat Completions API (/v1/chat/completions)')
+    expect(html).toContain('Responses API (/v1/responses)')
     expect(html).toContain('Image understanding')
     expect(html).toContain('Image generation')
     expect(html).toContain('Scientific modality translation')

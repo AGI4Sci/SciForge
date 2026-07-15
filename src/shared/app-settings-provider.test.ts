@@ -24,7 +24,8 @@ function settings(): AppSettingsV1 {
     provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'sk-text',
-    model: 'text-model'
+    model: 'text-model',
+    endpointFormat: 'chat_completions'
   }
 
   return {

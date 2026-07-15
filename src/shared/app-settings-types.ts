@@ -22,6 +22,9 @@ export type RemoteChannelModel = ScheduleModel
 export const DEFAULT_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
 export const DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router'
 export const DEFAULT_MODEL_ROUTER_PROVIDER_ID = 'sciforge-model-router'
+export const MODEL_ROUTER_TEXT_ENDPOINT_FORMATS = ['chat_completions', 'responses'] as const
+export type ModelRouterTextEndpointFormat = typeof MODEL_ROUTER_TEXT_ENDPOINT_FORMATS[number]
+export const DEFAULT_MODEL_ROUTER_TEXT_ENDPOINT_FORMAT: ModelRouterTextEndpointFormat = 'chat_completions'
 export const DEFAULT_DEEPSEEK_BASE_URL = DEFAULT_MODEL_ROUTER_BASE_URL
 export const DEFAULT_REMOTE_CHANNEL_MODEL = 'auto'
 export const REMOTE_CHANNEL_MODEL_IDS = ['auto', 'deepseek-v4-pro', 'deepseek-v4-flash'] as const
@@ -73,6 +76,10 @@ export type ModelRouterMemberProviderSettingsV1 = {
   maxSupplementRounds?: number
 }
 
+export type ModelRouterTextReasonerSettingsV1 = ModelRouterMemberProviderSettingsV1 & {
+  endpointFormat: ModelRouterTextEndpointFormat
+}
+
 export type ModelRouterScientificTranslatorSettingsV1 = {
   baseUrl: string
   apiKey: string
@@ -81,7 +88,7 @@ export type ModelRouterScientificTranslatorSettingsV1 = {
 }
 
 export type ModelRouterProfileSettingsV1 = {
-  textReasoner: ModelRouterMemberProviderSettingsV1
+  textReasoner: ModelRouterTextReasonerSettingsV1
   imageGenerator: ModelRouterMemberProviderSettingsV1
   translators: {
     vision: ModelRouterMemberProviderSettingsV1
@@ -103,11 +110,14 @@ export type ModelRouterSettingsV1 = {
 export type ModelRouterMemberProviderSettingsPatchV1 =
   Partial<ModelRouterMemberProviderSettingsV1>
 
+export type ModelRouterTextReasonerSettingsPatchV1 =
+  Partial<ModelRouterTextReasonerSettingsV1>
+
 export type ModelRouterScientificTranslatorSettingsPatchV1 =
   Partial<ModelRouterScientificTranslatorSettingsV1>
 
 export type ModelRouterProfileSettingsPatchV1 = {
-  textReasoner?: ModelRouterMemberProviderSettingsPatchV1
+  textReasoner?: ModelRouterTextReasonerSettingsPatchV1
   imageGenerator?: ModelRouterMemberProviderSettingsPatchV1
   translators?: {
     vision?: ModelRouterMemberProviderSettingsPatchV1

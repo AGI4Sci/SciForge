@@ -58,8 +58,9 @@ export type ModelRequest = {
   /** Optional structured response mode for short JSON classifier paths. */
   responseFormat?: 'json_object'
   /**
-   * Optional DeepSeek-style thinking control. `off` disables thinking;
-   * `high` and `max` enable it with a concrete reasoning effort.
+   * Optional provider reasoning control. The adapter maps the turn-level
+   * values to each endpoint's native vocabulary without lowering the
+   * requested effort (for example, Responses `off` -> `none`).
    */
   reasoningEffort?: string
   abortSignal: AbortSignal

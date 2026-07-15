@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import {
+  MODEL_ROUTER_TEXT_ENDPOINT_FORMATS,
   REMOTE_CHANNEL_MODEL_IDS,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
@@ -498,6 +499,10 @@ const modelRouterMemberProviderPatchSchema = z.object({
   maxSupplementRounds: z.number().int().min(0).max(3).optional()
 }).strict()
 
+const modelRouterTextReasonerPatchSchema = modelRouterMemberProviderPatchSchema.extend({
+  endpointFormat: z.enum(MODEL_ROUTER_TEXT_ENDPOINT_FORMATS).optional()
+}).strict()
+
 const modelRouterScientificTranslatorPatchSchema = z.object({
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
@@ -513,7 +518,7 @@ const modelRouterPatchSchema = z.object({
   runtimeApiKey: z.string().max(MAX_BODY_BYTES).optional(),
   profiles: z.object({
     default: z.object({
-      textReasoner: modelRouterMemberProviderPatchSchema.optional(),
+      textReasoner: modelRouterTextReasonerPatchSchema.optional(),
       imageGenerator: modelRouterMemberProviderPatchSchema.optional(),
       translators: z.object({
         vision: modelRouterMemberProviderPatchSchema.optional(),

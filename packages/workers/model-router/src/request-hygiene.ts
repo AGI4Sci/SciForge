@@ -28,11 +28,13 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (isStructuredImagePart(value)) return value;
 
   const role = stringField(value.role);
+  const itemType = stringField(value.type) || context.itemType;
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
     out[key] = hygienizeValue(entry, {
       key,
       role,
+      itemType,
       source: sourceForRecordEntry(context, role, key),
     });
   }
@@ -73,7 +75,20 @@ function hygienizeArgumentValue(value: unknown, source: string): unknown {
 }
 
 function hygienizeText(value: string, context: HygieneContext): string {
+  if (
+    context.key === 'encrypted_content'
+    && (context.itemType === 'reasoning' || context.itemType === 'compaction')
+  ) {
+    return value;
+  }
   const source = sourceForContext(context, context.source);
+  if (context.itemType === 'function_call_output' && context.key === 'output') {
+    const replaced = replaceEncodedPayloads(value, 'function_call_output.output');
+    if (value.length > MAX_TOOL_OUTPUT_CHARS || replaced.length > MAX_TOOL_OUTPUT_CHARS) {
+      return markerText('function_call_output.output', 'large_tool_output', value, safeSummary(replaced));
+    }
+    return replaced;
+  }
   if (context.role === 'tool' && context.key === 'content' && value.length > MAX_TOOL_OUTPUT_CHARS) {
     return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaceEncodedPayloads(value, 'tool_message.content')));
   }
@@ -183,5 +198,6 @@ function stringField(value: unknown) {
 type HygieneContext = {
   key?: string;
   role?: string;
+  itemType?: string;
   source: string;
 };

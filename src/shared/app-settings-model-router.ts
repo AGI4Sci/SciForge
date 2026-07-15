@@ -1,4 +1,5 @@
 import {
+  DEFAULT_MODEL_ROUTER_TEXT_ENDPOINT_FORMAT,
   DEFAULT_MODEL_ROUTER_BASE_URL,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   type AppSettingsV1,
@@ -7,7 +8,10 @@ import {
   type ModelRouterScientificTranslatorSettingsPatchV1,
   type ModelRouterScientificTranslatorSettingsV1,
   type ModelRouterSettingsPatchV1,
-  type ModelRouterSettingsV1
+  type ModelRouterSettingsV1,
+  type ModelRouterTextEndpointFormat,
+  type ModelRouterTextReasonerSettingsPatchV1,
+  type ModelRouterTextReasonerSettingsV1
 } from './app-settings-types'
 import {
   isLocalModelRouterBaseUrl,
@@ -26,7 +30,7 @@ export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
     runtimeApiKey: '',
     profiles: {
       default: {
-        textReasoner: defaultModelRouterMemberProvider('openai-compatible'),
+        textReasoner: defaultModelRouterTextReasoner(),
         imageGenerator: defaultModelRouterMemberProvider(
           'openai-compatible',
           DEFAULT_MODEL_ROUTER_IMAGE_GENERATOR_MODEL
@@ -54,7 +58,7 @@ export function normalizeModelRouterSettings(
     runtimeApiKey: optionalString(input?.runtimeApiKey),
     profiles: {
       default: {
-        textReasoner: normalizeModelRouterMemberProvider(
+        textReasoner: normalizeModelRouterTextReasoner(
           rawDefaultProfile?.textReasoner,
           defaultProfile.textReasoner
         ),
@@ -165,6 +169,27 @@ function defaultModelRouterMemberProvider(
     apiKey: '',
     model
   }
+}
+
+function defaultModelRouterTextReasoner(): ModelRouterTextReasonerSettingsV1 {
+  return {
+    ...defaultModelRouterMemberProvider('openai-compatible'),
+    endpointFormat: DEFAULT_MODEL_ROUTER_TEXT_ENDPOINT_FORMAT
+  }
+}
+
+function normalizeModelRouterTextReasoner(
+  input: ModelRouterTextReasonerSettingsPatchV1 | undefined,
+  defaults: ModelRouterTextReasonerSettingsV1
+): ModelRouterTextReasonerSettingsV1 {
+  return {
+    ...normalizeModelRouterMemberProvider(input, defaults),
+    endpointFormat: normalizeModelRouterTextEndpointFormat(input?.endpointFormat)
+  }
+}
+
+export function normalizeModelRouterTextEndpointFormat(value: unknown): ModelRouterTextEndpointFormat {
+  return value === 'responses' ? 'responses' : DEFAULT_MODEL_ROUTER_TEXT_ENDPOINT_FORMAT
 }
 
 function normalizeModelRouterImageGenerator(
