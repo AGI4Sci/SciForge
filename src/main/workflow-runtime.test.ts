@@ -364,6 +364,63 @@ describe('WorkflowRuntime internal HTTP facade', () => {
     }
   })
 
+  it('returns the latest active run and its actual id when status is queried by workflow id', async () => {
+    const port = await findAvailablePort()
+    const base = makeWorkflow()
+    const workflow = makeWorkflow({
+      nodes: [
+        ...base.nodes,
+        {
+          id: 'approval-1',
+          type: 'human-approval',
+          name: 'Confirm',
+          position: { x: 220, y: 0 },
+          disabled: false,
+          config: { title: 'Confirm', instruction: '{{text}}', timeoutMs: 0, onTimeout: 'rejected' }
+        }
+      ],
+      connections: [{
+        id: 'edge-1',
+        source: 'trigger-1',
+        sourceHandle: 'out',
+        target: 'approval-1',
+        targetHandle: 'in'
+      }]
+    })
+    const store = createStore(settingsWith([workflow], port))
+    const runtime = new WorkflowRuntime({
+      store: store as never,
+      agentRuntime: unusedAgentRuntime(),
+      logError: vi.fn()
+    })
+    runtime.sync(store.read())
+
+    try {
+      const started = await runtime.runWorkflow('workflow-1', { topic: 'biology' })
+      expect(started.ok).toBe(true)
+      if (!started.ok) throw new Error(started.message)
+      await waitFor(async () => (await runtime.status()).pendingApprovals.length === 1)
+
+      await expect(requestInternal(port, '/workflow/internal/status', { workflowId: 'workflow-1' })).resolves.toMatchObject({
+        status: 200,
+        json: {
+          ok: true,
+          runId: started.runId,
+          workflowId: 'workflow-1',
+          status: 'running',
+          runtime: { runningWorkflowIds: ['workflow-1'] },
+          run: { id: started.runId, status: 'running' }
+        }
+      })
+
+      const pending = (await runtime.status()).pendingApprovals[0]
+      expect(runtime.resolveApproval(pending.token, 'approved')).toBe(true)
+      await waitFor(async () => !(await runtime.status()).runningWorkflowIds.includes('workflow-1'))
+    } finally {
+      runtime.stop()
+    }
+  })
+
   it('denies internal HTTP requests when the stored workflow secret is empty', async () => {
     const port = await findAvailablePort()
     const store = createStore(settingsWith([makeWorkflow()], port, ''))

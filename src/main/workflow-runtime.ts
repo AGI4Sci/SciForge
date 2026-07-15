@@ -1624,9 +1624,10 @@ export class WorkflowRuntime {
       const runId = stringField(parsed, 'runId')
       const workflowId = stringField(parsed, 'workflowId')
       const located = runId || workflowId ? this.findWorkflowRun(settings, { runId, workflowId }) : null
+      const locatedRunId = located?.run?.id
       writeJson(res, 200, {
         ok: true,
-        ...(runId ? { runId } : {}),
+        ...(locatedRunId ? { runId: locatedRunId } : {}),
         ...(workflowId || located?.workflow.id ? { workflowId: workflowId || located?.workflow.id } : {}),
         status: located?.run?.status,
         runtime,
@@ -1787,7 +1788,7 @@ export class WorkflowRuntime {
       ? settings.workflow.workflows.filter((workflow) => workflow.id === workflowId)
       : settings.workflow.workflows
     for (const workflow of workflows) {
-      const run = runId ? workflow.runs.find((entry) => entry.id === runId) : undefined
+      const run = runId ? workflow.runs.find((entry) => entry.id === runId) : workflow.runs.at(-1)
       if (!runId || run) return { workflow, run }
     }
     return null

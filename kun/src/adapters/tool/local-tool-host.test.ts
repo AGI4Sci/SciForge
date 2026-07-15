@@ -54,6 +54,149 @@ function bashTool(exec: (command: unknown) => void) {
   })
 }
 
+function lifecycleTool(
+  execute: Parameters<typeof LocalToolHost.defineTool>[0]['execute']
+) {
+  return LocalToolHost.defineTool({
+    name: 'lifecycle',
+    description: 'test execution lifecycle',
+    inputSchema: { type: 'object', properties: {}, required: [] },
+    policy: 'auto',
+    execute
+  })
+}
+
+function lifecycleCall() {
+  return {
+    callId: 'call-lifecycle',
+    toolName: 'lifecycle',
+    arguments: {}
+  }
+}
+
+describe('LocalToolHost execution updates', () => {
+  it('drains a started fire-and-forget update before returning the terminal result', async () => {
+    let markUpdateStarted!: () => void
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve
+    })
+    let releaseUpdate!: () => void
+    const updateGate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve
+    })
+    const statuses: string[] = []
+    const host = new LocalToolHost({
+      tools: [
+        lifecycleTool(async (_args, _context, onUpdate) => {
+          void onUpdate?.({ output: { partial: true } })
+          return { output: { done: true } }
+        })
+      ]
+    })
+
+    let returned = false
+    const execution = host.execute(lifecycleCall(), fakeContext(), async (item) => {
+      markUpdateStarted()
+      await updateGate
+      statuses.push(item.status)
+    }).then((result) => {
+      returned = true
+      statuses.push(result.item.status)
+      return result
+    })
+
+    await updateStarted
+    expect(returned).toBe(false)
+    releaseUpdate()
+    const result = await execution
+
+    expect(result.item).toMatchObject({ status: 'completed', output: { done: true } })
+    expect(statuses).toEqual(['running', 'completed'])
+  })
+
+  it('ignores updates emitted after the tool execution has returned', async () => {
+    let emitLateUpdate: Parameters<Parameters<typeof LocalToolHost.defineTool>[0]['execute']>[2]
+    const onUpdate = vi.fn()
+    const host = new LocalToolHost({
+      tools: [
+        lifecycleTool(async (_args, _context, update) => {
+          emitLateUpdate = update
+          return { output: { done: true } }
+        })
+      ]
+    })
+
+    const result = await host.execute(lifecycleCall(), fakeContext(), onUpdate)
+    await emitLateUpdate?.({ output: { tooLate: true } })
+
+    expect(result.item).toMatchObject({ status: 'completed', output: { done: true } })
+    expect(onUpdate).not.toHaveBeenCalled()
+  })
+
+  it('observes a fire-and-forget update rejection until the lifecycle drain reports it', async () => {
+    let finishExecution!: () => void
+    const executionGate = new Promise<void>((resolve) => {
+      finishExecution = resolve
+    })
+    const host = new LocalToolHost({
+      tools: [
+        lifecycleTool(async (_args, _context, update) => {
+          void update?.({ output: { partial: true } })
+          await executionGate
+          return { output: { done: true } }
+        })
+      ]
+    })
+
+    const execution = host.execute(lifecycleCall(), fakeContext(), async () => {
+      throw new Error('update write failed')
+    })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    finishExecution()
+
+    await expect(execution).resolves.toMatchObject({
+      item: {
+        status: 'completed',
+        isError: true,
+        output: {
+          code: 'tool_execution_failed',
+          error: 'update write failed'
+        }
+      }
+    })
+  })
+
+  it('delivers updates while the tool execution is still running', async () => {
+    let finishExecution!: () => void
+    const executionGate = new Promise<void>((resolve) => {
+      finishExecution = resolve
+    })
+    const onUpdate = vi.fn()
+    const host = new LocalToolHost({
+      tools: [
+        lifecycleTool(async (_args, _context, update) => {
+          await update?.({ output: { partial: true } })
+          await executionGate
+          return { output: { done: true } }
+        })
+      ]
+    })
+
+    const execution = host.execute(lifecycleCall(), fakeContext(), onUpdate)
+    await vi.waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith(expect.objectContaining({
+        status: 'running',
+        output: { partial: true }
+      }))
+    })
+    finishExecution()
+
+    await expect(execution).resolves.toMatchObject({
+      item: { status: 'completed', output: { done: true } }
+    })
+  })
+})
+
 describe('LocalToolHost bash git staging safety', () => {
   it.each([
     'git add .',

@@ -199,10 +199,14 @@ export class LocalToolHost implements ToolHost {
     if (context.abortSignal.aborted) {
       throw new Error('tool call aborted while waiting for approval')
     }
-    let result: Awaited<ReturnType<LocalTool['execute']>>
+    let executionOutcome:
+      | { status: 'succeeded'; result: Awaited<ReturnType<LocalTool['execute']>> }
+      | { status: 'failed'; error: unknown }
+    let acceptingUpdates = true
+    const pendingUpdates: Promise<void>[] = []
     try {
-      result = await tool.execute(activeCall.arguments, context, async (update) => {
-        if (!onUpdate) return
+      const result = await tool.execute(activeCall.arguments, context, (update) => {
+        if (!acceptingUpdates || !onUpdate) return
         const partialItem = makeToolResultItem({
           id: `item_${activeCall.callId}`,
           turnId: context.turnId,
@@ -214,16 +218,35 @@ export class LocalToolHost implements ToolHost {
           isError: update.isError,
           status: 'running'
         })
-        await onUpdate(partialItem)
+        const pendingUpdate = (async () => {
+          await onUpdate(partialItem)
+        })()
+        // Keep fire-and-forget failures handled until the lifecycle drain reports them.
+        void pendingUpdate.catch(() => undefined)
+        pendingUpdates.push(pendingUpdate)
+        return pendingUpdate
       })
+      executionOutcome = { status: 'succeeded', result }
     } catch (error) {
-      if (context.abortSignal.aborted) throw error
-      const message = error instanceof Error ? error.message : String(error)
+      executionOutcome = { status: 'failed', error }
+    }
+    acceptingUpdates = false
+    const updateResults = await Promise.allSettled(pendingUpdates)
+    const rejectedUpdate = updateResults.find(
+      (updateResult): updateResult is PromiseRejectedResult => updateResult.status === 'rejected'
+    )
+    if (executionOutcome.status === 'failed' || rejectedUpdate) {
+      const terminalError = executionOutcome.status === 'failed'
+        ? executionOutcome.error
+        : rejectedUpdate?.reason
+      if (context.abortSignal.aborted) throw terminalError
+      const message = terminalError instanceof Error ? terminalError.message : String(terminalError)
       return {
         item: this.errorToolResult(context, activeCall, tool, message, 'tool_execution_failed'),
         approved: true
       }
     }
+    const result = executionOutcome.result
     let postHookResults
     try {
       postHookResults = await runToolHooks({
