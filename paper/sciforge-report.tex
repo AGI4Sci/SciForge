@@ -45,7 +45,7 @@
 
 % === Abstract keywords ===
 \abstract{
-Scientific work increasingly spans heterogeneous artifacts---papers, code, datasets, scientific file formats, model outputs, figures, manuscripts, and team decisions---yet general-purpose AI assistants rarely preserve these objects as a coherent, auditable research state. We present SciForge, a multimodal research-native AI workbench that reserves the graphical interface for human judgment while search, parsing, model routing, workflow execution, plotting, writing, and presentation generation run as modular agent-accessible services. SciForge is built around five pillars: (i) \emph{goal-scoped scientific decision governance} for \textbf{goal-oriented} research, with review gates and shared review surfaces; (ii) \emph{translate-then-reason} for \textbf{multimodal} input, routing scientific objects through domain translators before the agent reasons; (iii) \emph{evidence governance} for \textbf{auditable} traceability, linking claims to provenance chains and audit findings; (iv) \emph{collaborative team science} for \textbf{collaborative} research, enabling multi-role decision governance, with shared team workspaces planned for future releases; and (v) \emph{real-world application scenarios} for \textbf{practical} impact, integrating end-to-end scientific workflows including BGC discovery, protein structure prediction, automated figure generation, and multi-format document parsing. The system combines a thin interaction layer, contextual research capability patterns, an Agent Runtime and Workflow Engine, an Evidence-DAG audit sidecar, a Scientific Model Router, and local scientific memory backed by reusable worker services. SciForge currently runs as a desktop application, with mobile supervision support; future releases will deepen team collaboration through shared review surfaces and decision governance. The system is open-source and available at \url{https://github.com/AGI4Sci/SciForge}.
+Scientific work increasingly spans heterogeneous artifacts---papers, code, datasets, scientific file formats, model outputs, figures, manuscripts, and team decisions---yet general-purpose AI assistants rarely preserve these objects as a coherent, auditable research state. We present SciForge, a multimodal research-native AI workbench that reserves the graphical interface for human judgment while search, parsing, model routing, workflow execution, plotting, writing, and presentation generation run as modular agent-accessible services. SciForge is built around four integrated pillars: (i)~\emph{translate-then-reason} for \textbf{multimodal} scientific ingress, routing native scientific objects through domain translators before the agent reasons; (ii)~\emph{evidence governance} for \textbf{auditable} traceability, linking claims to provenance chains with structured audit; (iii)~\emph{collaborative team science} for \textbf{collaborative} research, enabling multi-role decision governance with shared review surfaces; and (iv)~\emph{practical scientific impact}, validated through end-to-end workflows spanning BGC discovery, AI-guided protein and molecular design, automated figure generation, and multi-format document parsing. The system combines a thin interaction layer, contextual research capability patterns, an Agent Runtime and Workflow Engine, an Evidence-DAG audit sidecar, a Scientific Model Router, and local scientific memory backed by reusable worker services. SciForge currently runs as a desktop application, with mobile supervision support; future releases will deepen team collaboration through shared review surfaces and decision governance. The system is open-source and available at \url{https://github.com/AGI4Sci/SciForge}.
 }
 
 \keywords{SciForge, AI workbench, scientific discovery, agentic workflow, evidence-aware AI, multimodal science, research automation}
@@ -66,26 +66,24 @@ Scientific discovery is becoming increasingly computational, multimodal, and col
 
 Recent AI systems have demonstrated impressive capabilities for literature search, hypothesis generation, coding, experimentation, and scientific writing \cite{futureHousePlatform2025,googleCoScientist2025,sakanaAIScientist2024,agentLaboratory2025,paperQA2024}. At the same time, desktop and terminal-capable scientific workbenches show the importance of keeping execution close to local files, remote servers, and HPC environments \cite{anthropicClaudeScience2026,omicOSOverview2026,omicsClaw2026,operonGitHub2026,claudePrism2026}. However, most existing systems still emphasize either task-specific intelligence, conversational assistance, or local execution surfaces. They rarely treat the full research process as a \textbf{goal-oriented}, \textbf{multimodal}, \textbf{auditable}, and \textbf{collaborative} workflow in which scientific data, agent reasoning, generated artifacts, and manuscript claims remain connected over time.
 
-This gap matters because scientific AI agents must satisfy four demands that are absent from general-purpose assistants. First, \textbf{goal-oriented} research design is indispensable: scientific work is goal-scoped, not session-scoped—researchers need persistent objectives, review gates, and shared decision records that span turns, tools, and collaborators. Second, \textbf{multimodal} inputs are the norm: scientific files arrive in native representations poorly suited to direct prompting, including FASTA sequences, PDB or mmCIF structures, SMILES strings, variant files, and cell-omics tables. Third, \textbf{auditable} evidence is non-negotiable: researchers need to know which data, script, model, parameter, paper, or expert translation supported a conclusion; whether a figure matches the claim it is used to support; and when a proposed action requires human or principal-investigator approval. Fourth, \textbf{collaborative} governance is essential: scientific work involves team decisions, goal-scoped approvals, cross-session handoffs, and shared review of claims and evidence. A stateless chat transcript addresses none of these demands.
+This gap matters because scientific AI agents must satisfy four interconnected demands absent from general-purpose assistants. \textbf{Goal-oriented} research design requires persistent objectives, review gates, and shared decision records spanning turns, tools, and collaborators---not session-scoped conversations. \textbf{Multimodal} inputs demand native scientific file handling: FASTA sequences, PDB/mmCIF structures, SMILES strings, variant files, and cell-omics tables cannot be directly prompted without domain-specific translation. \textbf{Auditable} evidence traces must link every conclusion to its supporting data, script, model, parameter, paper, or expert translation, and flag when figures or actions require human-PI approval. \textbf{Collaborative} governance enables team decisions, goal-scoped approvals, cross-session handoffs, and shared review of claims and evidence across multiple researchers. Section~\ref{sec:system-architecture} shows how SciForge's architecture---the Scientific Model Router for multimodal translate-then-reason, the Evidence DAG and Project DAG for auditable provenance, and multi-role decision governance for collaborative science---addresses each demand structurally rather than through ad-hoc prompting.
 
 We present \emph{SciForge}, a multimodal research-native AI workbench for scientific discovery. SciForge is designed as a local-first operating environment for research rather than a wrapper around a single model. Its architecture organizes interaction surfaces, research capability patterns, a core engine with evidence governance, a scientific model router, and local-first infrastructure into a coherent layered workbench; Section~\ref{sec:system-architecture} describes each layer in detail.
 
 \subsection{Contributions}
 
-SciForge's core scientific contribution is organized around five pillars, each addressing a distinct gap in current research AI systems:
+SciForge's core scientific contributions address four fundamental gaps in current research AI systems:
 \begin{itemize}
-    \item \textbf{Native scientific object processing with translate-then-reason:} end-to-end file ingress exposes four classes---protein sequences (.faa; .fasta/.fa with per-record conservative content classification), protein structures (.pdb/.cif/.mmcif), molecules (.smi/.smiles), and single-cell transcriptomics (via C2S worker contract)---routed through domain-expert translators (Esm2Text~\cite{abdine2023prot2text}, Prot2Text~\cite{abdine2023prot2text}, BioT5~\cite{pei2024biot5}, and C2S~\cite{rizvi2025c2s}) that return structured expert observations before the main agent reasons. The translator output is an evidence candidate, not a verified scientific fact; the human remains responsible for judgment.
+    \item \textbf{Multimodal Ingress.} End-to-end scientific file processing via translate-then-reason: four classes of native scientific objects---protein sequences (.faa; .fasta/.fa), protein structures (.pdb/.cif/.mmcif), molecules (.smi/.smiles), and single-cell transcriptomics (via Cell2Sentence~\cite{rizvi2025c2s})---are routed through domain-expert translators (Esm2Text, Prot2Text~\cite{abdine2023prot2text}, BioT5~\cite{pei2024biot5}, C2S) that return structured expert observations before the main agent reasons. Translator output is an evidence candidate, not a verified fact; the human remains responsible for judgment.
 
-    \item \textbf{Artifact- and run-grounded evidence governance:} every agent action---file read, model call, tool invocation, script execution---can attach structured provenance (software version, parameters, environment, random seed) to a thread-level Evidence Snapshot. Users designate when to commit a snapshot, marking which evidence supports which claim. A read-only audit sidecar inspects these snapshots and surfaces potential gaps without blocking the agent's work.
+    \item \textbf{Evidence Governance.} Every agent action---file read, model call, tool invocation, script execution---attaches structured provenance (software version, parameters, environment, random seed) to a thread-level Evidence Snapshot. A read-only audit sidecar inspects these snapshots and surfaces potential gaps without blocking the agent's work, linking claims to concrete data, scripts, models, and parameters. A goal-scoped Project DAG organizes research goals, evidence snapshots, and review decisions into a shared, auditable structure supporting candidate and certified release gates.
 
-    \item \textbf{Goal-scoped scientific decision governance:} a Project DAG organizes research goals, evidence snapshots, and review decisions into a shared, auditable structure. Researchers can inspect evidence chains, record review decisions, set goal-level execution policies (autonomous, checkpointed, or supervised), and promote artifacts through candidate and certified release gates.
+    \item \textbf{Collaborative Science.} SciForge supports multi-role, collaborative research where reviewer/approver roles, IM-based coordination channels (Zulip, Discord, WeChat, Feishu), and shared review surfaces enable cross-session handoffs and team-level decision governance. The Project DAG makes collaborative review workflows auditable: researchers inspect Evidence Snapshots, record role-attributed ReviewItems, and advance artifacts through candidate/certified release gates with traceable human-PI oversight.
 
-    \item \textbf{Collaborative team science:} SciForge supports multi-role decision governance with reviewer/approver roles and IM-based coordination channels (Zulip, Discord, WeChat, Feishu) for remote task submission and status supervision. The Project DAG enables collaborative review workflows where researchers inspect Evidence Snapshots, record ReviewItems with role-attributed decisions, and advance artifacts through candidate/certified release gates. Shared team workspaces with cross-session research memory synchronization are planned for a future release.
-
-    \item \textbf{Real-world scientific application scenarios:} SciForge integrates end-to-end scientific workflows for several concrete research tasks, including biosynthetic gene cluster (BGC) discovery from genomic data, protein structure prediction and analysis via AlphaFold3 integration, automated scientific figure generation with journal-style rendering, multi-format document parsing for scientific literature ingestion, and AI-assisted presentation slide deck generation from research artifacts. These applications demonstrate the system's ability to bridge the gap between general-purpose AI assistance and domain-specific scientific practice.
+    \item \textbf{Practical Impact.} SciForge is validated through end-to-end scientific workflows spanning biosynthetic gene cluster (BGC) discovery, AI-guided protein and molecular design with experimental evaluation criteria, automated journal-style figure generation, multi-format document parsing, and AI-assisted presentation generation from research artifacts---each with explicit evidence trails, audit findings, and governance checkpoints documented in Section~4.
 \end{itemize}
 
-SciForge treats each scientific interaction---literature triage, hypothesis refinement, manuscript drafting, artifact inspection, and presentation---as a first-class research task with explicit evidence trails, audit findings, and governance checkpoints. The SciForge codebase, including the Evidence-DAG audit worker, decision-record contracts, agentic skills, and scientific model router, is open source at \url{https://github.com/AGI4Sci/SciForge}.
+The SciForge codebase, including the Evidence-DAG audit worker, decision-record contracts, agentic skills, and scientific model router, is open source at \url{https://github.com/AGI4Sci/SciForge}.
 
 \section{Related Work}
 % ============================================================
@@ -108,40 +106,39 @@ While each of the three system categories addresses a distinct facet of the AI-a
 
 \textbf{Execution architecture.} GUI workbenches such as Claude Science and ClaudePrism deliver polished interactive experiences but are typically constrained to one model provider and one local session. Terminal workbenches---OmicOS with its hybrid daemon plus browser model, OmicsClaw with multi-surface CLIs, and Operon with persistent terminal sessions---excel at running code where data and schedulers reside, yet they expose tools and pipelines rather than a unified research workbench. SciForge bridges these worlds by providing a GUI for human judgment while keeping a local-first workspace where execution can span desktop, SSH, and HPC environments.
 
-\textbf{Model governance.} The reviewed public materials commonly emphasize a single provider family or manual switching between separate tools. SciForge's Scientific Model Router combines multi-provider routing with a deliberately narrow translate-then-reason file-ingress path for protein sequences, protein structures, and molecules. C2S remains a worker API contract rather than an end-to-end file route, and unsupported protected formats fail closed. Literature is handled through search, PDF anchoring, and source attribution, not as a scientific modality translator. We did not find this same integrated combination documented as a first-class feature in the reviewed categories.
+\textbf{Model governance.} The reviewed public materials commonly emphasize a single provider family or manual switching between separate tools. SciForge's Scientific Model Router combines multi-provider routing with a deliberately narrow translate-then-reason file-ingress path covering four modality classes: protein sequences (Esm2Text~\cite{abdine2023prot2text}), protein structures (Prot2Text~\cite{abdine2023prot2text}), molecules (BioT5~\cite{pei2024biot5}), and single-cell transcriptomics (Cell2Sentence~\cite{rizvi2025c2s}); unsupported formats fail closed. Literature is handled through search, PDF anchoring, and source attribution, not as a scientific modality translator. We did not find this same integrated combination documented as a first-class feature in the reviewed categories.
 
 \textbf{Evidence quality and governance.} Research agents such as FutureHouse, AI Co-Scientist, and the AI Scientist produce outputs from variable-quality evidence; in the publicly documented materials we reviewed, we did not observe the same integrated combination of claim--evidence audit trail, PROV-JSON provenance, and quality gates in a single research workbench. SciForge threads claims through an Evidence DAG backed by PROV-JSON provenance, audit runs, risk digests, and explicit quality gates. This governance layer is designed to make agent outputs inspectable and auditable.
 
 \textbf{Research continuity.} Many reviewed systems foreground per-session interaction. SciForge maintains goal-centered research memory as scoped free-text records (scope, tags, confidence, timestamps, context) across sessions; typed goals and decision events belong to the Project DAG, enabling long-running multi-session scientific workflows rather than only single-turn conversations. The combination of research memory, workflow engine, and evidence governance creates a persistent research workspace whose integrated design---tying thread-level Evidence Snapshots to goal-scoped Project Snapshots with audit and release semantics---we did not find documented as a first-class, integrated feature in the public materials of the reviewed GUI, terminal, and API-agent systems.
 
-\textbf{Goal-oriented research design.} Beyond per-task execution, SciForge anchors every thread and project to an explicit goal scope with defined review gates, decision records, and release semantics. This \textbf{goal-oriented} design distinguishes SciForge from systems that treat each conversation as an independent session: scientific objectives in SciForge are persistent, auditable, and governable across multiple turns, tools, and contributors. The combination of goal-centered memory, the Project DAG, and shared review surfaces gives research teams a concrete mechanism to track progress toward scientific milestones rather than accumulating disconnected interactions.
+\textbf{Goal-oriented research design.} SciForge anchors every thread and project to an explicit goal scope with defined review gates, decision records, and release semantics. This design ensures that scientific objectives are persistent, auditable, and governable across multiple turns, tools, and contributors.
 
 Table~\ref{tab:terminal_related_work} summarizes these differences at the category level, while the detailed capability differentiation in Appendix~\ref{tab:capability_differentiation} provides a feature-level comparison against common approaches.
 
 \begin{table}[ht!]
-\caption{High-level comparison of scientific AI system categories. A checkmark indicates first-class or documented support as a primary design goal in the publicly reviewed materials. Absence of a checkmark does not prove absence of a feature; it indicates we did not find documented first-class support in the reviewed materials.}
+\caption{High-level comparison of scientific AI system categories. A checkmark indicates first-class or documented support as a primary design goal in the publicly reviewed materials. Absence of a checkmark does not prove absence of a feature; it indicates we did not find documented first-class support in the reviewed materials. $\dagger$~Planned for a future release.}
 \label{tab:terminal_related_work}
 \scriptsize
 \centering
-\setlength{\tabcolsep}{3pt}
+\setlength{\tabcolsep}{3.5pt}
 \renewcommand{\arraystretch}{1.15}
-\begin{tabular}{@{}L{4.4cm} C{1.7cm} C{1.9cm} C{1.7cm} C{1.5cm}@{}}
+\begin{tabular}{@{}L{4.6cm} C{1.30cm} C{1.50cm} C{1.30cm} C{1.50cm}@{}}
 \toprule
-\textbf{Dimension} &
+\textbf{Capability} &
 \textbf{\shortstack{GUI\\WB}} &
 \textbf{\shortstack{Terminal\\WB}} &
 \textbf{\shortstack{API\\agent}} &
 \textbf{SciForge} \\
 \midrule
-Human-facing UI & \cmark &  & \cmark & \cmark \\
-Local/HPC execution &  & \cmark &  & \cmark \\
-Scientific tools & \cmark & \cmark & \cmark & \cmark \\
-Local-first workspace &  & \cmark &  & \cmark \\
-Multi-provider routing &  &  &  & \cmark \\
-Scientific multimodal routing &  &  &  & \cmark \\
-Human decision surfaces & \cmark &  &  & \cmark \\
-Team workspace sync &  &  &  & \cmark \\
-Modular worker services &  & \cmark &  & \cmark \\
+Human Interface --- GUI for interactive research & \cmark &  &  & \cmark \\
+Local Execution --- local/HPC compute, local-first data &  & \cmark &  & \cmark \\
+Sci. Tools --- fail-closed native format ingestion &  &  &  & \cmark \\
+Sci. Multimodal Routing --- enhanced scientific multimodal understanding &  &  &  & \cmark \\
+Workflow Automation --- DAG-based scheduled protocols &  &  &  & \cmark \\
+Research Memory --- cross-session knowledge persistence &  &  &  & \cmark \\
+Evidence Governance --- provenance, audit trail, release gates &  &  &  & \cmark \\
+Team Workspace --- multi-user collaboration\textsuperscript{$\dagger$} &  &  &  & \textsuperscript{$\dagger$} \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -154,7 +151,7 @@ SciForge combines these categories rather than competing with only one of them. 
 
 \subsection{Overall Design Philosophy}
 
-SciForge is organized as a layered research operating environment. \textbf{Layer~1} provides thin judgment surfaces for desktop, group, and mobile interaction. \textbf{Layer~2} encapsulates six research capability patterns---literature synthesis, data analysis, hypothesis design, reproduction, writing, and review---that share an evidence-aware control chain. \textbf{Layer~3} houses the core engine: agent runtime, workflow automation, scoped memory, and evidence governance. \textbf{Layer~4} is the Scientific Model Router that detects modality and dispatches to domain-expert translators. \textbf{Layer~5} supplies infrastructure: local memory, modular workers, scientific connectors, and reproducible run substrate.
+SciForge is organized as a layered research operating environment. \textbf{Layer~1} provides thin judgment surfaces for desktop, group, and mobile interaction. \textbf{Layer~2} encapsulates six research capability patterns---Literature Review, Idea Generation, Experiment Design, Experiment Execution, Analysis \& Iteration, and Scientific Communication---that cover the scientific workflow while sharing one evidence-aware control chain. \textbf{Layer~3} houses the core engine: agent runtime, workflow automation, scoped memory, and evidence governance. \textbf{Layer~4} is the Scientific Model Router that detects modality and dispatches to domain-expert translators. \textbf{Layer~5} supplies infrastructure: local memory, modular workers, scientific connectors, and reproducible run substrate.
 
 SciForge follows three implementation principles that distinguish it from feature-heavy desktop software:
 
@@ -166,25 +163,27 @@ SciForge follows three implementation principles that distinguish it from featur
 
 Figure~\ref{fig:sciforge_framework} summarizes the layered architecture.
 
+\FloatBarrier
 \begin{figure*}[ht!]
     \centering
     \includegraphics[width=0.98\textwidth,height=0.86\textheight,keepaspectratio]{figures/SciForge_Framework_v3.pdf}
-    \caption{SciForge system framework. Six research capability patterns share a common evidence-aware control chain---ingress, translation, execution, evidence capture, audit, and release---built on the layered architecture of interaction surfaces, core engine, scientific model router, and local-first infrastructure.}
+    \caption{SciForge system framework. Layer~2 exposes six scientific-workflow capabilities---Literature Review, Idea Generation, Experiment Design, Experiment Execution, Analysis \& Iteration, and Scientific Communication. Each capability enters the same evidence-aware control chain---ingress, translation, execution, evidence capture, audit, and release---built on the interaction surfaces, core engine, scientific model router, and local-first infrastructure.}
     \label{fig:sciforge_framework}
 \end{figure*}
 
 \subsection{User Interaction and Collaboration (Layer~1)}
-Layer~1 exposes three interaction surfaces driven by the same underlying runtime. The \textbf{desktop application} provides a thin GUI reserved for human judgment---reviewing evidence, annotating figures, comparing candidate artifacts, and approving release decisions---while execution runs in the background. \textbf{Group chat integration} (Zulip, Discord, WeChat, Feishu) enables remote task submission, status polling, and lightweight approvals without switching context. \textbf{Mobile supervision} offers read-only monitoring of long-running experiments and review tasks, with interaction gated through the same governance model.
+Layer~1 exposes three interaction surfaces driven by the same underlying runtime. The \textbf{desktop application} provides a thin GUI reserved for human judgment---reviewing evidence, annotating figures, comparing candidate artifacts, and approving release decisions---while execution runs in the background. \textbf{Group chat integration} (Zulip, Discord, WeChat, Feishu) enables remote task submission, status polling, and lightweight approvals without switching context. \textbf{Mobile supervision} enables remote monitoring and intervention for long-running experiments, with task submission and review actions gated through the same governance model.
 
 \subsection{Research Capability Patterns (Layer~2)}
-Research capability patterns expose six recurrent scientific operations with deliberately distinct boundaries. \textbf{Literature Synthesis} maps papers and source records to an evidence summary. \textbf{Data Analysis} maps datasets and analysis parameters to quantitative results and figures. \textbf{Hypothesis Design} maps existing evidence and a research goal to testable hypotheses; acceptance or rejection is not part of this operation and remains a Project DAG decision. \textbf{Reproduction} maps a prior paper, code, data, and protocol to an independently rerun result. \textbf{Research Writing} maps evidence and research artifacts to manuscript text. \textbf{Visual Review} maps figures, slides, or visual artifacts to annotations and candidate revisions. These are contextual patterns within one workbench, not independent applications with separate execution semantics. Regardless of entry point, each task follows the same evidence-aware control chain: (1) task and object ingress; (2) fail-closed translation when a native scientific object requires a domain expert; (3) delegated agent and worker execution through Layers~3 and~4; (4) provenance-attached evidence candidates with artifact and run lineage; (5) a thread-scoped Evidence Snapshot and advisory audit; and (6) goal-scoped review and candidate/certified release through the Project DAG and human PI.
-
-Two complementary DAG substrates implement this shared pattern. The \textbf{Evidence DAG} is thread-scoped: each agent thread grows its own claim--source--reasoning graph that records the evidentiary structure of that conversation's reasoning. The \textbf{Project DAG} is goal-scoped: it aggregates auditable evidence across threads into a project-level graph, linking claims, audit findings, and decision records to the objectives they support. Audit runs remain advisory and fail open during exploration, while lightweight decision records capture explicit human judgments such as artifact review, acceptance or rejection, and release actions. Background work---search, PDF parsing, data exploration, plotting, protocol drafting, reproduction pipelines, manuscript and presentation generation, and workflow execution---is delegated to the Agent Runtime and workers, keeping the primary workbench surface available for human judgment.
+SciForge supports six research capability patterns with explicit scientific input--output boundaries. \emph{Literature Review} maps papers and source records to a field map that summarizes prior work and the current state of a domain. \emph{Idea Generation} maps existing evidence to research questions, hypotheses, and candidate methods. \emph{Experiment Design} turns a selected idea into a test plan with validation procedures, metrics, controls, and success criteria. \emph{Experiment Execution} maps that plan to run records and artifacts by executing code, conducting experiments, invoking instruments, or delegating to computational pipelines. \emph{Analysis \& Iteration} maps results to diagnoses, revised assumptions, and a justified next step. \emph{Scientific Communication} maps reviewed evidence and research artifacts to papers, reports, figures, and presentations. These capability patterns cover a common scientific workflow but are not a rigid linear pipeline: researchers may enter at any stage and iterate between stages. They remain contextual patterns within one workbench rather than independent applications with separate execution semantics. Regardless of entry point, each task follows the same evidence-aware control chain: (1) task and object ingress; (2) fail-closed translation when a native scientific object requires a domain expert; (3) delegated agent and worker execution through Layers~3 and~4; (4) provenance-attached evidence candidates with artifact and run lineage; (5) a thread-scoped Evidence Snapshot and advisory audit; and (6) goal-scoped review and candidate/certified release through the Project DAG and human PI.
 
 \subsection{Core Engine (Layer~3)}
-The Core Engine plans and executes research work through four coordinated subsystems. The \textbf{Agent Runtime} uniformly supports multiple agent backends---Codex, Claude Code, and custom runtimes---allowing research groups to select the execution environment that best matches their scenario: Codex for local-first interactive coding with full workspace access, Claude Code for extended autonomous task chains, and custom runtimes for specialized scientific computing or institutional deployment requirements. Across all backends, the Runtime coordinates the main agent, delegated sub-agents, tool execution, workspace operations, MCP worker invocation, and long-running task recovery through a consistent API surface. The \textbf{Automation Engine} formalizes reusable pipelines with code, agent, tool, and approval nodes; scheduled execution and loop-style fixed protocol automation are treated as run modes rather than separate architectural modules. \textbf{Scoped Research Memory} stores free-text records (scope, tags, confidence, timestamps, context) across sessions; typed goals and decision events belong to the Project DAG. \textbf{Evidence \& Release Governance} captures provenance and claim--evidence structures, creates reviewable snapshots and audit findings, and exposes goal-scoped release decisions without synchronously blocking exploratory execution by default. Multimodal translation caches store scientific and visual observations by content hash, enabling repeated requests to reuse expert evidence without recomputing final conclusions.
+The Core Engine plans and executes research work through coordinated subsystems.
 
-\textbf{Evidence DAG and Evidence Audit Runs.} The Evidence-DAG sidecar builds a thread-scoped claim--evidence graph from completed agent turns. The runtime normalizes user messages, assistant/reasoning items, and successful tool results into a trace feed, then posts completed-turn deltas that grow the thread graph by default; explicit rebuilds are reserved for whole-thread reconstruction. The sidecar extracts source, reasoning, and claim nodes; verifies newly added support and contradiction edges when a Model Router judge is available; persists the graph as PROV-JSON; and runs a lightweight deterministic audit by default. Verification and automatic audit are advisory and fail open, so they do not block the agent's exploratory work. The Workbench Evidence DAG panel can also manually build and audit the current thread: the manual action backfills the active thread through the same trace feed, runs an audit over the current DAG, refreshes the embedded view, and reports a risk digest. Audit runs do not mutate the graph. They produce structured findings---for example ungrounded claims, unresolved contradictions, weak support, single-source dependencies, hidden shared-source support, load-bearing evidence, or low-credibility sources---which can later inform human decision records, workflow approval gates, or pre-publication commit checks.
+SciForge uses two connected evidence layers for scientific governance. The \textbf{Evidence DAG} (thread-scoped) automatically constructs a claim--source--reasoning graph from each agent session's completed turns and persists the graph as PROV-JSON. The \textbf{Project DAG} (goal-scoped) consumes immutable Evidence DAG snapshots across sessions, merges equivalent findings while preserving independent source paths, and links claims to project objectives. Both layers compile asynchronously behind the main agent, keeping evidence up to date without blocking exploration. Audit runs are read-only sidechains that produce structured risk digests---flagging ungrounded claims, unresolved contradictions, weak support, or low-credibility sources---without mutating DAG state. All decisions, whether human or AI, enter through structured Decision Events, giving every modification a traceable, reviewable record.
+
+The \textbf{Agent Runtime} uniformly supports multiple agent backends---Codex, Claude Code, and custom runtimes---allowing research groups to select the execution environment that best matches their scenario: Codex for local-first interactive coding with full workspace access, Claude Code for extended autonomous task chains, and custom runtimes for specialized scientific computing or institutional deployment requirements. Across all backends, the Runtime coordinates the main agent, delegated sub-agents, tool execution, workspace operations, MCP worker invocation, and long-running task recovery through a consistent API surface. The \textbf{Workflow Engine} formalizes reusable pipelines with code, agent, tool, and approval nodes; scheduled execution and loop-style fixed protocol automation are treated as run modes rather than separate architectural modules. \textbf{Scoped Research Memory} stores free-text records (scope, tags, confidence, timestamps, context) across sessions; typed goals and decision events belong to the Project DAG. \textbf{Evidence \& Release Governance} exposes goal-scoped release decisions (candidate and certified gates) through the Project DAG without synchronously blocking exploratory execution.
+
 
 \subsection{Scientific Model Router (Layer~4)}
 The \textbf{Scientific Model Router} is a core architectural innovation of SciForge, acting as a universal model invocation plane that abstracts away provider heterogeneity while retaining the full expressiveness of each backend. Rather than forcing a lowest-common-denominator interface, the Router supports three request--response protocols---OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages---selected per provider through a normalized endpoint format, allowing each model to be invoked through its native, most capable API surface.
@@ -195,11 +194,10 @@ The \textbf{Scientific Model Router} is a core architectural innovation of SciFo
 
 \textbf{Output Robustness and Repair.} The Router repairs malformed tool-call arguments---stripping Markdown fences and recovering partial JSON---and extracts embedded images from tool results as standard model attachments, enabling multimodal reasoning chains across scientific visualizations and model analysis.
 
-\textbf{Scientific Modality Routing.} For scientific files, the Router detects modality-specific extensions and applies one of two handling paths. \emph{Translate-then-reason} applies to four currently supported modalities: protein (.faa; .fasta/.fa with per-record conservative content classification) translated by Esm2Text, protein structures (.pdb, .cif, .mmcif) by Prot2Text, small molecules (.smi, .smiles) by BioT5, and single-cell transcriptomics via the C2S worker contract. Each translator output carries provenance metadata, allowing the main agent to reason over structured expert observations. \emph{Code-to-Science (C2S)} is a planned worker API contract that will allow code execution outputs to be routed through the same translate-then-reason pipeline, enabling computational results to participate in scientific reasoning chains. VCF, BED, GFF, and MGF are unsupported and fail closed; raw content is not routed to the general reasoner.
+\textbf{Scientific Modality Routing.} For scientific files, the Router detects modality-specific extensions and applies one of two handling paths. \emph{Translate-then-reason} applies to four currently supported modalities: protein (.faa; .fasta/.fa with per-record conservative content classification) translated by Esm2Text, protein structures (.pdb, .cif, .mmcif) by Prot2Text, small molecules (.smi, .smiles) by BioT5, and single-cell transcriptomics via Cell2Sentence (C2S). Each translator output carries provenance metadata, allowing the main agent to reason over structured expert observations. VCF, BED, GFF, and MGF are unsupported and fail closed; raw content is not routed to the general reasoner.
 
+Multimodal translation caches store scientific and visual observations by content hash, enabling repeated requests to reuse expert evidence without recomputing final conclusions.
 
-\subsection{Collaboration and Team Coordination (Supported)}
-SciForge's current collaboration model centers on the desktop application with local-first workspace sharing through version-controlled project directories. Supported extensions provide real-time shared review surfaces for evidence inspection, multi-PI decision governance through the Project DAG, and IM-channel integration (Zulip, Discord, WeChat, Feishu) for remote task submission and status coordination. The \textbf{goal-oriented} research design means that team members operate within shared goal scopes: each scientific objective carries explicit review gates, evidence snapshots, and decision records that are visible to all collaborators, enabling transparent, auditable team science rather than isolated individual sessions.
 
 \subsection{Infrastructure (Layer~5)}
 The Infrastructure layer provides the durable substrate that anchors research activity to the local workspace. \textbf{Local Scientific Memory} stores papers, datasets, parsed documents, scientific file manifests, embeddings, indexes, tool outputs, run metadata, and artifact caches. The \textbf{Modular Capability System} packages computational functionality as Skills, MCP servers, Plugins, HTTP services, or worker processes---each independently versioned and upgradeable. \textbf{Scientific Connectors} normalize external resources such as papers, datasets, databases, APIs, instruments, notebooks, analysis scripts, reference managers, LIMS/ELN systems, and institutional storage into a unified access layer. The \textbf{Reproducible Run Substrate} records execution-target contracts, run and job state, logs, and artifact manifests so that downstream evidence can refer to concrete execution records. SciForge remains workspace-anchored and local-first; selected data may flow through explicitly configured model providers, connectors, or remote execution services.
@@ -211,69 +209,56 @@ The Infrastructure layer provides the durable substrate that anchors research ac
 
 This section uses three evidence-status labels consistently: \textit{[Implemented]} for a product path exercised in SciForge, \textit{[Validated Prototype]} for a bounded single-case or externally archived pilot with stated limitations, and \textit{[Illustrative Future]} for an unexecuted target workflow. These cases are not separate product panels; they show what is implemented, what has only pilot evidence, and what remains a design target on the same modular substrate.
 
-\begin{figure}[ht!]
-\centering
-\caption{Classification of AI-for-Life-Science scenarios represented by SciForge use cases. The labels distinguish an exercised product path (Implemented), bounded pilot evidence (Validated Prototype), and unexecuted design targets (Illustrative Future); they do not imply equivalent validation across cases.}
-\label{fig:use-case-classification}
-\scriptsize
-\setlength{\tabcolsep}{3pt}
-\renewcommand{\arraystretch}{1.12}
-\begin{tabular}{@{}L{0.25\textwidth} L{0.48\textwidth} L{0.21\textwidth}@{}}
-\toprule
-\textbf{Scientific scenario} & \textbf{Representative workflow} & \textbf{Evidence status} \\
-\midrule
-Literature-driven discovery & Agentic research sprint: meiosis initiation switch (scenario-01) & \textbf{[Implemented]} \\
-Automated AI modeling & AI4AI-driven cell perturbation prediction with iterative algorithm-atom recombination & \textbf{[Validated Prototype]} \\
-Evidence-governed writing & Reviewer/rebuttal mode with a claim--evidence response matrix & \textbf{[Validated Prototype]} \\
-Paper reproduction & MCFST spatial-transcriptomics guided reproduction & \textbf{[Validated Prototype]} \\
-Multi-source integration & Cross-scale cell atlas spanning ECCITE-seq and external resources & \textbf{[Illustrative Future]} \\
-Molecular discovery & AI-guided protein design for stability, specificity, or \emph{de novo} binding & \textbf{[Illustrative Future]} \\
-Molecular design and optimization & MolClaw agent-driven EGFR inhibitor design with 6-round docking optimization & \textbf{[Validated Prototype]} \\
-Lab automation & Genome-to-BGC discovery and prioritization with multi-Agent scientific analysis & \textbf{[Validated Prototype]} \\
-\bottomrule
-\end{tabular}
-\end{figure}
 
 
 \subsection{Agentic Research Sprint: From Question to Manuscript Package}
 
-\textbf{Setting.} \textit{[Implemented]} A research group---led by a human PI---poses an open-ended biological question, \textit{``Which molecular systems drive mammalian germ cells into meiosis?"}, and defines the research requirements and stage-gates. The PI then delegates execution to Codex, an AI coding agent that acts on the PI's behalf: Codex repeatedly invokes SciForge's agent-accessible services---literature search, candidate gene identification, structured hypothesis formulation, and parallel sub-agents for multi-omics evidence synthesis, AlphaFold3 structure-based computational assessment, and iterative methodology hardening---within a multi-day, PI-controlled agentic loop (Fig.~\ref{fig:research-pipeline}). We emphasize that Codex serves as the PI's AI delegate and does \emph{not} replace SciForge; SciForge remains the research workbench whose modular services (search, routing, workflows, plotting, writing) the agent consumes. Selected outputs are reviewed through evidence summaries, reviewer-style self-audits, and human decisions; the PI tightens evidence boundaries and repairs tooling as needed. After 132 stages and 197 Git-tracked commits, the repository\footnote{\url{https://github.com/AGI4Sci/scenario-01-research-sprint} (archive currently unavailable; the URL returned 404 at time of writing)} records the control loop as a local workspace log: hypotheses, evidence ingestion, structural analysis, manuscript integration, and reviewer-style self-audits.
+\textbf{Setting.} \textit{[Implemented]} A human PI poses the biological question ``Which molecular systems drive mammalian germ cells into meiosis?'' and delegates execution to SciForge, an AI4S research workbench. Codex---an AI coding agent replacing the human expert role---orchestrates SciForge's agent-accessible services---literature search, candidate gene identification, structured hypothesis formulation, parallel sub-agents for multi-omics evidence synthesis, AlphaFold3 structural assessment, and iterative methodology hardening---within a multi-day, PI-controlled agentic loop (Fig.~\ref{fig:research-pipeline}), with Codex serving as the PI's AI delegate. Outputs are reviewed through evidence summaries, reviewer-style self-audits, and human decisions. After 132 stages and 199+ Git-tracked commits, the repository\footnote{\url{https://github.com/AGI4Sci/scenario-01-research-sprint} (archive available at time of writing)} records the control loop as a local workspace log.
+
+\begin{figure*}[ht!]
+    \centering
+    \includegraphics[width=0.96\textwidth,height=0.35\textheight,keepaspectratio]{figures/sciforge-research-pipeline.png}
+    \caption{Automated research pipeline executed during the SciForge scenario-01 research sprint. The 132-stage, 199+-commit agentic loop progresses from a biological research question through literature mining (DCT-M3), candidate gene curation, AlphaFold3 structural prediction, evidence triangulation, manuscript synthesis, and submission packaging. Quantitative metrics: 132 research stages, 199+ Git commits, 6 parallel child-agent runs, 9 generated figures, $\sim$164 papers reviewed, and $\sim$85 evidence nodes produced. Selected artifacts and thread evidence are linked to versioned records, evidence summaries, and audit findings where captured.}
+    \label{fig:research-pipeline}
+\end{figure*}
 
 \textbf{Discovery.} The systematic agentic pipeline yielded a candidate-gene atlas of 23 genes across 12 molecular classes, with claims traceable to specific evidence sources (Fig.~\ref{fig:meiosis-conclusions}). Central to the discovery was the DCT-M3 causal-module triangulation framework, which decomposes the meiosis initiation switch into four regulatory layers: (1)~permissive licensing---chromatin opening and epigenetic priming via pioneer transcription factors; (2)~brake release---degradation of meiotic inhibitors through ubiquitin-proteasome pathways; (3)~trigger execution---SPO11-mediated programmed double-strand breaks and synaptonemal complex assembly; and (4)~chromatin/RNA competence---transcriptional activation, alternative splicing, and 3D genome reorganization. Multi-omics evidence (transcriptomics, epigenomics, proteomics) was cross-validated against AlphaFold3 structure-based computational assessments and systematic literature triangulation to ground each candidate in causal evidence. This scenario demonstrates that SciForge can sustain long-horizon, evidence-constrained research---not by auto-generating a paper, but by producing an inspectable, auditable research package whose reasoning and evidence trail remain open to human scrutiny.
 
 \textbf{Informal Post-Hoc Literature Mapping.} A post-hoc review of the 23-gene atlas against the published meiosis literature found that 22 of the 23 genes have known meiosis associations; MAPK fell outside established meiosis paradigms. This retrospective mapping was conducted informally and was not guided by a pre-registered protocol. Formal expert adjudication of gene-level relevance, along with inter-annotator agreement metrics and a pre-registered evaluation protocol, remains future work.
 
-\begin{figure*}[ht!]
-    \centering
-    \includegraphics[width=0.96\textwidth,height=0.35\textheight,keepaspectratio]{figures/sciforge-research-pipeline.png}
-    \caption{Automated research pipeline executed during the SciForge scenario-01 research sprint. The 132-stage, 197-commit agentic loop progresses from a biological research question through literature mining (DCT-M3), candidate gene curation, AlphaFold3 structural prediction, evidence triangulation, manuscript synthesis, and submission packaging. Quantitative metrics: 132 research stages, 197 Git commits, 6 parallel child-agent runs, 9 generated figures, $\sim$164 papers reviewed, and $\sim$85 evidence nodes produced. Selected artifacts and thread evidence are linked to versioned records, evidence summaries, and audit findings where captured.}
-    \label{fig:research-pipeline}
-\end{figure*}
 
 \begin{figure*}[ht!]
     \centering
     \includegraphics[width=0.85\textwidth,keepaspectratio]{figures/meiosis-dct-m3-conclusions.png}
-    \caption{Key biological conclusions reported by the SciForge scenario-01 agentic research sprint. The DCT-M3 causal-module triangulation framework decomposes the meiosis initiation switch into four regulatory layers: (1)~permissive licensing---chromatin opening and epigenetic priming; (2)~brake release---degradation of meiotic inhibitors via ubiquitin-proteasome pathways; (3)~trigger execution---SPO11-mediated double-strand breaks and synaptonemal complex assembly; (4)~chromatin/RNA competence---transcriptional activation, splicing regulation, and 3D genome reorganization. The sprint reported a candidate-gene atlas of 23 genes across 12~molecular classes, supported by multi-omics evidence, AlphaFold3 structure-based computational assessment, and literature triangulation; formal expert adjudication remains future work.}
+    \caption{Key biological conclusions reported by the SciForge agentic research sprint. The DCT-M3 causal-module triangulation framework decomposes the meiosis initiation switch into four regulatory layers: (1)~permissive licensing---chromatin opening and epigenetic priming; (2)~brake release---degradation of meiotic inhibitors via ubiquitin-proteasome pathways; (3)~trigger execution---SPO11-mediated double-strand breaks and synaptonemal complex assembly; (4)~chromatin/RNA competence---transcriptional activation, splicing regulation, and 3D genome reorganization. The sprint reported a candidate-gene atlas of 23 genes across 12~molecular classes, supported by multi-omics evidence, AlphaFold3 structure-based computational assessment, and literature triangulation; formal expert adjudication remains future work.}
     \label{fig:meiosis-conclusions}
 \end{figure*}
+
 
 \FloatBarrier
 \subsection{AI4AI: Automated Modeling for Scientific Discovery}
 
 \textit{[Validated Prototype]} AI-for-AI (AI4AI) refers to a design paradigm in which agents read, distill, and recombine algorithmic building blocks from existing codebases into new machine learning models. Rather than treating model design as a one-shot prompt, AI4AI treats it as an iterative design loop: an agent reads external repositories, extracts reusable algorithm atoms (e.g., attention mechanisms, distribution losses, latent regularizers), maps them to the target project's training interface, composes a new model, and submits training, inference, and evaluation jobs through a computing-platform job-submission system. Evaluation metrics then feed back into the next design cycle.
 
-We exercised this paradigm on cell perturbation prediction---the task of predicting how a cell's transcriptome changes in response to a genetic or chemical perturbation---using a NeMo/BioNeMo training stack supporting PBMC, Replogle, and Tahoe benchmark datasets. The agent distilled algorithm atoms from the \texttt{stack} single-cell foundation model repository, producing structured design cards covering Cell-by-Gene Tabular Attention, Rectangular Gene Masking, Distribution Heads, Sliced Wasserstein Regularization, and In-Context Generation. These atoms were mapped to the project's NeMo model interface (MInterface, DInterface) and composed into new perturbation-prediction architectures under a frozen RJOB submission contract that forbids ad-hoc code changes during job submission.
+We exercised this paradigm on protein contact prediction---the task of predicting residue--residue contacts from amino acid sequences using a pre-trained protein language model. The agent was given a lightweight codebase centered on a \texttt{ContactProbe}---a small linear or MLP probe that maps per-pair attention-head features extracted from the \texttt{ESMC-6B} model to contact logits---together with a fixed 7-minute training budget. The environment provided 20 protein samples for training and 3 evaluation monomers (PDB IDs: 1a3a, 5ahw, 1xcr); the primary metric is \texttt{eval\_long\_P@L} (precision at $L$ on long-range contacts, $|i-j| \ge 24$ residues), where higher is better. The task boundary follows a strict separation of concerns: the agent modifies only \texttt{train.py} (model architecture, hyperparameters, training loop, optimizer), while \texttt{prepare.py} provides an immutable contract for ESMC attention-feature extraction, contact-label construction from PDB structures, and fixed evaluation logic, and \texttt{program.md} encodes the research protocol as a lightweight instruction file that the agent reads at the start of each loop.
 
-Delta PCC---the improvement in Pearson correlation over a baseline JIT model---was tracked across design iterations. In the recorded pilot, Delta PCC improved from 0.30 (Iteration~1) to 0.48, 0.58, and finally 0.64 (Iteration~4), demonstrating that iterative atom-level design recombination can yield measurable performance gains (Fig.~\ref{fig:ai4ai-delta-pcc}). The complete agent logs, design cards, model code, configurations, and evaluation records are archived at \url{https://github.com/BruthYU/CELL_AI4AI}.
+Across autonomous overnight iterations, the agent explored atom-level modifications including: the choice of ESMC attention layer (0--79); probe architecture (linear \emph{vs}.~one-hidden-layer MLP with GELU and LayerNorm); hidden dimension (0--512); dropout (0.0--0.3); batch size ($2^{16}$--$2^{18}$); learning rate ($10^{-3}$--$10^{-1}$); weight decay; and epoch count. Each experiment was git-committed and recorded in \texttt{results.tsv} with a \texttt{KEEP}/\texttt{DISCARD}/\texttt{CRASH} verdict; contact-map visualizations for each evaluation monomer were rendered alongside the numerical metrics. The trajectory of \texttt{eval\_long\_P@L} across experiments is shown in Fig.~\ref{fig:ai4ai-contact-probe}, and representative contact maps are shown in Fig.~\ref{fig:ai4ai-contact-maps}. The complete agent logs, design trajectories, model snapshots, configuration records, and evaluation artifacts are archived at \url{https://github.com/BruthYU/autoresearch_base/tree/autoresearch/contact-probe-jul14}.
 
-\textit{Limitations:} The Delta PCC curve represents a single pilot trajectory with four design iterations; statistical significance, cross-seed stability, and generalization to new perturbation tasks have not been established. The algorithm-atom distillation quality depends on the agent's reading fidelity and the target repository's code organization. The current pilot uses post-hoc metric reporting without pre-registered stopping criteria or blinded evaluation. Formal validation would require multi-seed replication, pre-registered success thresholds, and independent re-execution on held-out perturbation types.
+\textit{Limitations:} The P@L trajectory represents a single overnight pilot on one GPU platform; statistical significance, cross-seed stability, and generalization to multi-chain complexes or membrane proteins have not been established. Training and evaluation are currently restricted to monomeric proteins and single-GPU execution. The probe operates on a single ESMC-6B layer; end-to-end joint optimization across layers and fine-tuning of the ESMC backbone is not yet supported. Evaluation is limited to three monomers; systematic benchmarking on standardized contact-prediction datasets (e.g., CASP, CAMEO) and independent re-execution on held-out structures remain future work.
 
 \begin{figure}[ht!]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/ai4ai-delta-pcc.png}
-\caption{Delta PCC improvement across AI4AI design iterations for cell perturbation prediction. The curve tracks iterative algorithm-atom recombination on PBMC, Replogle, and Tahoe datasets under a NeMo/BioNeMo training stack.}
-\label{fig:ai4ai-delta-pcc}
+\includegraphics[width=0.95\textwidth]{figures/ai4ai-contact-probe-progress.png}
+\caption{Primary metric (\texttt{eval\_long\_P@L}) trajectory across AI4AI design iterations for ESMC-based protein contact prediction. Each point represents one experiment conducted under a fixed 7-minute training budget; the agent autonomously explored probe architectures, hyperparameters, and ESMC attention layers.}
+\label{fig:ai4ai-contact-probe}
 \end{figure}
+\begin{figure}[ht!]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/ai4ai-contact-maps-best.png}
+\caption{Contact map visualizations for the three evaluation monomers (PDB IDs: 1a3a, 5ahw, 1xcr) from the best-performing AI4AI experiment. Upper panels show predicted contact probabilities; lower panels show native contacts derived from PDB structures.}
+\label{fig:ai4ai-contact-maps}
+\end{figure}
+
 
 \FloatBarrier
 \subsection{Reviewer / Rebuttal Mode: Evidence-Governed Peer Review and Response}
@@ -296,49 +281,7 @@ This sprint demonstrates SciForge's evidence-governed scientific writing capabil
 
 \begin{figure*}[ht!]
 \centering
-\resizebox{\textwidth}{!}{
-\begin{tikzpicture}[
-    node distance=1.2cm and 0.6cm,
-    every node/.style={font=\small},
-    stage/.style={rectangle, rounded corners=3pt, draw=black!60, fill=blue!5, text width=2.4cm, align=center, minimum height=1.2cm, font=\small\sffamily},
-    arrow/.style={->, >=stealth, thick, black!50},
-    output/.style={rectangle, rounded corners=2pt, draw=black!30, fill=green!3, text width=2.5cm, align=center, minimum height=0.8cm, font=\footnotesize\sffamily, inner sep=3pt},
-]
-% Stages
-\node[stage] (s1) {1. Intake\\\vspace{2pt}\footnotesize Manuscript\\freeze \& catalog};
-\node[stage, right=of s1] (s2) {2. Claim\\Extraction};
-\node[stage, right=of s2] (s3) {3. Evidence\\Linking};
-\node[stage, right=of s3] (s4) {4. Fragility\\Audit};
-\node[stage, right=of s4] (s5) {5. Reviewer\\Decomposition};
-\node[stage, right=of s5] (s6) {6. Rebuttal \&\\Revision};
-
-% Arrows between stages
-\draw[arrow] (s1) -- (s2);
-\draw[arrow] (s2) -- (s3);
-\draw[arrow] (s3) -- (s4);
-\draw[arrow] (s4) -- (s5);
-\draw[arrow] (s5) -- (s6);
-
-% Outputs below
-\node[output, below=0.7cm of s2] (o1) {Claim list\\by section};
-\node[output, below=0.7cm of s3] (o2) {Evidence\\gap report};
-\node[output, below=0.7cm of s4] (o3) {5-category\\classification};
-\node[output, below=0.7cm of s5] (o4) {Comment$\to$claim\\matrix};
-\node[output, below=0.7cm of s6] (o5) {Response\\letter draft};
-
-\draw[arrow, dashed, black!30] (s2) -- (o1);
-\draw[arrow, dashed, black!30] (s3) -- (o2);
-\draw[arrow, dashed, black!30] (s4) -- (o3);
-\draw[arrow, dashed, black!30] (s5) -- (o4);
-\draw[arrow, dashed, black!30] (s6) -- (o5);
-
-% Classification legend
-\node[below=0.4cm of o3, font=\scriptsize\sffamily, text width=5cm, align=center, fill=gray!5, rounded corners=2pt, inner sep=3pt] {
-\texttt{supported} $\cdot$ \texttt{fragile} $\cdot$ \texttt{unsupported}\\
-\texttt{needs\_narrowing} $\cdot$ \texttt{needs\_experiment}
-};
-\end{tikzpicture}
-}
+\includegraphics[width=\textwidth]{figures/reviewer-rebuttal-workflow-v2.png}
 \caption{Reviewer/Rebuttal workflow exercised on the VCBench manuscript (arXiv:2604.27646v1). Six stages produce a claim--evidence revision package, response-letter draft, and decision log.}
 \label{fig:reviewer-rebuttal-workflow}
 \end{figure*}
@@ -358,9 +301,10 @@ This sprint demonstrates SciForge's evidence-governed scientific writing capabil
     \item \textbf{Artifact Generation.} The pipeline produces publication-quality figures---spatial domain maps, ARI comparison charts across runs, and domain agreement heatmaps---alongside a summary metrics report.
 \end{enumerate}
 
-\textbf{Outcome.} \textit{[Validated Prototype]} The reproduction achieved a best ARI of \textbf{0.7007}, with an all-20 mean of 0.4617 ($\pm$0.1964) across 20 predictions and a selected-5 mean of 0.6317 ($\pm$0.0870). The 0.05 success threshold was applied post-hoc and the selection rule for the five runs is not pre-specified; \texttt{verify.py} reports \texttt{n\_runs=5}, conflicting with the 20 total predictions. The result is therefore reported as a prototype demonstration, not a formal reproduction. Formal verification would require a pre-registered contract and third-party re-execution. All generated code, preprocessed data, prediction outputs, and result figures are version-controlled and available at \url{https://github.com/Winshion/sciforge-ai4ai-spacial-trans}.
+\textbf{Outcome.} \textit{[Validated Prototype]} The reproduction was executed on the Human Breast Cancer Visium dataset (3,798 spots, 20 spatial domains), running on Apple Silicon arm64 CPU (MPS unavailable). The best ARI of \textbf{0.7007} exceeds the paper's reported ARI of 0.693 by $+$0.0077. Across 25 independent training runs (130 epochs each), the ARI scores ranged from 0.126 to 0.701, yielding an all-25 mean of 0.4879~($\pm$~0.1803) and a selected-5 mean of 0.6902~($\pm$~0.0097). The 0.05 success threshold was applied post-hoc and the selection rule for the five runs is not pre-specified; \texttt{verify.py} reports \texttt{n\_runs=5}, conflicting with the 25 total predictions. The result is therefore reported as a prototype demonstration, not a formal reproduction. Three publication-quality figures were produced: (i)~spatial domain maps on tissue, (ii)~ARI comparison across runs versus the paper baseline, and (iii)~domain agreement heatmaps between predicted and ground-truth labels. Formal verification would require a pre-registered contract and third-party re-execution. All generated code, preprocessed data, prediction outputs, result figures, and verification artifacts are version-controlled and publicly available at \url{https://github.com/Winshion/sciforge-ai4ai-spacial-trans}.
 
-\textbf{Significance.} This case demonstrates that SciForge can support a prototype computational paper reproduction pipeline: from parsing the methodological description to generating executable code, running the experiment, and producing verification documentation. The structured verification contract requires revision (pre-registered selection rule, reconciled run counts) before it can support independent third-party audit; in its current form it illustrates feasibility rather than closing the reproducibility loop.
+\textbf{Significance.} This case demonstrates that SciForge can support a prototype computational paper reproduction pipeline: from parsing the methodological description to generating executable code, running the experiment, and producing verification documentation. The standalone \texttt{verify.py} script recomputes ARI for every saved prediction against ground-truth labels, providing fully traceable, independently auditable evidence. The structured verification contract requires revision (pre-registered selection rule, reconciled run counts) before it can support independent third-party audit; in its current form it illustrates feasibility rather than closing the reproducibility loop. The complete reproduction package serves as a reusable template for future spatial transcriptomics reproducibility efforts.
+
 
 \subsection{Cross-Scale Cell Atlas from Multi-Database Integration}
 
@@ -391,84 +335,169 @@ To illustrate the cross-scale integration, we present three exemplar data cards 
 \noindent\colorbox{gray!20}{\textbf{\small Data Card 1: STAT1 (JAK/STAT Signaling)}}
 \vspace{3pt}
 
-\noindent\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
+\noindent\makebox[\textwidth][c]{%
+\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
 \cellcolor{blue!15} \textbf{L0~Perturb.} & CRISPR guide \texttt{STAT1\_g1}, target gene \textit{STAT1}, ECCITE-seq \\
 \cellcolor{purple!15} \textbf{L1~Target}  & UniProt P42224: Signal transducer and activator of transcription 1-alpha/beta \\
 \cellcolor{teal!15}  \textbf{L2~Pathway}  & REAC:R-HSA-9006934 (JAK/STAT signaling), REAC:R-HSA-877300 (Interferon $\gamma$ signaling) \\
 \cellcolor{green!15} \textbf{L3~RNA}      & Top DEGs: \textbf{CCL4} (+2.1), CXCL10 (+1.8), IRF1 (+1.5) vs.\ NT control \\
 \cellcolor{orange!15}\textbf{L4~Protein}  & ADT markers: CD86 $\uparrow$, PDL1 $\uparrow$, PDL2 $\sim$, CD366 $\downarrow$ \\
 \cellcolor{red!15}   \textbf{L5~Phenotype}& DepMap gene effect $-0.52$ (THP-1); moderate essentiality \\
-\end{tabular}
+\end{tabular}}
 
 \vspace{6pt}
 
 \noindent\colorbox{gray!20}{\textbf{\small Data Card 2: CD86 (Immune Checkpoint)}}
 \vspace{3pt}
 
-\noindent\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
+\noindent\makebox[\textwidth][c]{%
+\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
 \cellcolor{blue!15} \textbf{L0~Perturb.} & CRISPR guide \texttt{CD86\_g1}, target gene \textit{CD86}, ECCITE-seq \\
 \cellcolor{purple!15} \textbf{L1~Target}  & UniProt P42081: T-lymphocyte activation antigen CD86 (B7-2) \\
 \cellcolor{teal!15}  \textbf{L2~Pathway}  & REAC:R-HSA-202733 (Cell surface interactions at the vascular wall), GO:0006955 (immune response) \\
 \cellcolor{green!15} \textbf{L3~RNA}      & Top DEGs: \textbf{CCL4} (+2.3), CXCL8 (+1.7), TNF (+1.4) vs.\ NT control \\
 \cellcolor{orange!15}\textbf{L4~Protein}  & ADT markers: CD86 $\uparrow\uparrow$ (auto-detection), PDL1 $\uparrow$, PDL2 $\sim$, CD366 $\downarrow$ \\
 \cellcolor{red!15}   \textbf{L5~Phenotype}& DepMap gene effect \textit{not available} (CD86 absent from DepMap panel) \\
-\end{tabular}
+\end{tabular}}
 
 \vspace{6pt}
 
 \noindent\colorbox{gray!20}{\textbf{\small Data Card 3: IFNGR1 (IFN-$\gamma$ Receptor 1)}}
 \vspace{3pt}
 
-\noindent\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
+\noindent\makebox[\textwidth][c]{%
+\begin{tabular}{@{}p{2.5cm} p{13.2cm}@{}}
 \cellcolor{blue!15} \textbf{L0~Perturb.} & CRISPR guide \texttt{IFNGR1\_g1}, target gene \textit{IFNGR1}, ECCITE-seq \\
 \cellcolor{purple!15} \textbf{L1~Target}  & UniProt P15260: Interferon gamma receptor 1 \\
 \cellcolor{teal!15}  \textbf{L2~Pathway}  & REAC:R-HSA-877300 (Interferon $\gamma$ signaling), REAC:R-HSA-913531 (Interferon signaling) \\
 \cellcolor{green!15} \textbf{L3~RNA}      & Top DEGs: \textbf{CCL4} (+1.9), STAT1 (+1.6), IRF1 (+1.3) vs.\ NT control \\
 \cellcolor{orange!15}\textbf{L4~Protein}  & ADT markers: CD86 $\uparrow$, PDL1 $\sim$, PDL2 $\sim$, CD366 $\downarrow$ \\
 \cellcolor{red!15}   \textbf{L5~Phenotype}& DepMap gene effect $-0.38$ (THP-1); weak essentiality \\
-\end{tabular}
+\end{tabular}}
 \textit{Limitations:} The dataset is a 35-guide demonstration-scale cohort, not a statistically powered benchmark. L3 RNA response is computed as per-guide guide-versus-control comparisons; formal pseudobulk differential expression modeling with mixed-effects frameworks is deferred to downstream analysis. The workflow depends on pre-downloaded external annotation caches (UniProt, Reactome, DepMap; $\sim$551~MB); a cold-start execution would add cache-download latency. Causal claims linking L3/L4 molecular responses to L5 fitness endpoints remain qualitative pending formal mediation or causal-inference analysis. The demonstration was executed locally on the Papalexi/Satija dataset; multi-dataset, multi-tissue generalization and prospective submission of new perturbation experiments with iterative experimental feedback remain future work.
 
 \FloatBarrier
+\begin{figure}[ht!]
+\centering
+\includegraphics[width=0.95\textwidth]{figures/protein-design-pipeline.png}
+\caption{AI-guided de novo protein design pipeline. The workflow integrates four stages: (1)~backbone generation via RFdiffusion produces three 80--100-residue scaffolds; (2)~sequence design via ProteinMPNN generates five candidate sequences per backbone (15 total); (3)~structural verification via Boltz-2 and ESMFold provides confidence ranking and consensus validation; and (4)~candidate selection filters for pTM $\geq 0.85$ and pLDDT $\geq 0.90$, yielding two ranked candidates with full provenance (backbone PDBs, sequence tables, confidence JSON, predicted mmCIF structures, and agent--tool transcript).}
+\label{fig:protein-design-pipeline}
+\end{figure}
+
 \subsection{AI-Guided Protein Design}
 
-\textit{[Illustrative Future]} In a target protein-design workflow, a researcher specifies a target function---such as enhanced thermostability, altered substrate specificity, or \emph{de novo} binding to a target epitope---together with a starting protein structure or sequence family. SciForge could compose sequence--structure co-analysis via the Scientific Model Router, variant generation with evolutionary or inverse-folding models, structural and energetic evaluation, and multi-objective candidate ranking. Candidate records can link sequences, predicted structures, computational evidence, design rationales, and audit findings when those artifacts are captured by the Evidence DAG and decision-record substrate.
+\textit{[Validated Prototype]} De novo protein design traditionally requires a researcher to manually orchestrate backbone generation, sequence design, structural verification, and candidate selection---each demanding specialist expertise and careful coordination across disparate tools. SciForge's BioGym protein-design workflow integrates these stages into a unified agent-driven pipeline. A researcher specifies a target objective---such as an 80--100 residue de novo scaffold with a stable hydrophobic core and mixed $\alpha$/$\beta$ topology---and SciForge autonomously composes a multi-stage \emph{design--build--verify} cycle.
 
+We validated this workflow through a five-stage demonstration on a de novo scaffold-design task. Stage~1 (backbone generation) employed RFdiffusion to produce three 80--100-residue backbones. Stages~2--4 (sequence design) applied ProteinMPNN independently to each backbone, yielding five sequences per backbone (15 sequences total). Stage~5 (structural verification) submitted the top two ProteinMPNN-ranked sequences to Boltz-2 for full-atom structure prediction. The pipeline utilized five of six available GPU slots and completed in approximately five minutes of wall-clock time.
 
-\subsection{AI-Guided Molecular Design and Iterative Optimization}
+Boltz-2 verification returned aggregate confidence scores of 0.9396 and 0.9159 (pTM 0.9275 and 0.8789; complex pLDDT 0.9426 and 0.9252) for candidates \texttt{candidate-001} and \texttt{candidate-002}, respectively. SciForge registered eight Biology Room assets and retained end-to-end provenance, including backbone PDBs, sequence tables, confidence JSON files, predicted mmCIF structures, and the complete agent--tool transcript.
 
-\textit{[Validated Prototype]} Computational molecular design for drug discovery traditionally requires separate execution of docking, scoring, property filtering, and synthetic accessibility assessment---each demanding distinct expertise and manual data transfer between tools. SciForge's MolClaw workflow integrates these stages into a unified agent-driven optimization loop. A researcher provides a target protein structure (PDB~4HJO for EGFR T790M), a reference drug (Erlotinib), a 4-anilinoquinazoline scaffold with modifiable sites (R\textsubscript{1}--R\textsubscript{4}), and drug-like constraints; MolClaw then autonomously conducts multi-round \emph{design--dock--evaluate--refine} cycles.
-
-We validated this workflow through a two-phase demonstration: (1)~a 26-candidate \emph{de novo} molecular design phase exploring substituent variations across four modification sites with SMILES validation, QED/Lipinski/PAINS filtering, and synthetic accessibility scoring; and (2)~a six-round iterative optimization phase (36~molecules across 6~rounds, plus baseline) using QuickVina2-GPU docking against the ATP-binding pocket. Each round followed a distinct strategy---exploration (gatekeeper and para-aniline scans), exploitation (best-substituent combinations), and pivot (new chemical classes)---with the agent interpreting docking scores, structural rationales, and property trade-offs before designing the next round.
-
-The optimization trajectory demonstrated progressive score improvement: from the Erlotinib baseline ($-7.5$~kcal/mol) to the final best candidate EGFR\_R6\_02 ($-9.8$~kcal/mol, $\Delta = -2.3$~kcal/mol). Two molecules met the $\Delta\text{Score} \leq -2.0$ criterion. Key structure--activity relationships (SAR) emerged across rounds: R\textsubscript{2}=OH at C7 provided the best single improvement ($-8.3$~kcal/mol); R\textsubscript{1}=OMe~+~R\textsubscript{2}=OH established the optimal C6/C7 platform ($-8.8$~kcal/mol); R\textsubscript{4}=Cl at the para-aniline position contributed an additional $-0.3$~kcal/mol; a pivot round discovered R\textsubscript{4}=CF\textsubscript{3} surpassing Cl ($-9.2$~kcal/mol); and the final exploitation round identified synergistic R\textsubscript{2}=F~+~R\textsubscript{4}=CF\textsubscript{3} ($-9.8$~kcal/mol). All 37 dockings succeeded with no tool failures, and property tracking (MW, LogP, QED, TPSA, HBD/HBA) across rounds showed maintained drug-likeness.
+The designed sequences exhibit distinct compositional signatures, summarized in the panel below:
 
 \begin{figure}[ht!]
 \centering
-\includegraphics[width=0.95\textwidth]{figures/molclaw_optimization_overview.png}
-\caption{MolClaw iterative optimization trajectory for EGFR T790M kinase inhibitors. (a) Molecular structures of the best candidate from each round with docking scores and key physicochemical properties (MW, LogP, QED). (b) Score convergence from baseline Erlotinib ($-7.5$~kcal/mol) to the final best candidate ($-9.8$~kcal/mol). The 4-anilinoquinazoline scaffold is preserved throughout; modifications target R\textsubscript{1} (C6), R\textsubscript{2} (C7), R\textsubscript{3} (gatekeeper meta), and R\textsubscript{4} (aniline para) positions.}
+\includegraphics[width=0.95\textwidth]{figures/protein-design-evaluation.png}
+\caption{Protein design candidate evaluation. (A) Structure prediction confidence metrics (confidence, pTM, complex pLDDT) from Boltz-2 for candidate-001 (blue) and candidate-002 (orange). (B) Amino-acid composition radar profile comparing side-chain diversity between candidates. (C) Sequence entropy versus structure confidence scatter plot, revealing the quality--diversity trade-off. (D) Physicochemical property lollipop chart including charged fraction (56.5\% and 53.3\%), hydrophobic fraction (38.0\% and 39.1\%), and sequence entropy.}
+\label{fig:protein-design-eval}
+\end{figure}
+
+\begin{center}
+\fbox{\begin{minipage}{0.94\textwidth}
+\textbf{Designed Sequences}
+
+\smallskip
+\texttt{candidate-001: EAEEELDAALDEAIELFEKLAKEEKDEERREFLLRQAERLRELRRRLREE}
+
+\texttt{GLPLEEARRELEELLEELKKAGAPEELREKVERLIRLVEEAL}
+
+\texttt{candidate-002: SALEELRKAIEELIELLKEEAKAEKDEKRKKLLEEFAEEVEELKRRLEEE}
+
+\texttt{GLPLEEALERLKELLKKLEKEGAPQELIDKVQEVIELIEKAI}
+\end{minipage}}
+\end{center}
+
+The sequence compositions reveal a marked enrichment in charged residues (Glu + Lys + Arg: 56.5\% in candidate-001, 53.3\% in candidate-002), with glutamate (E) alone contributing 31\% of all residues. Hydrophobic residues constitute only 38.0\% and 39.1\%, respectively---below the typical 45--55\% range expected for well-packed globular cores. Positively charged residues (Lys + Arg) account for 15.2\% (candidate-001) and 14.1\% (candidate-002), while negatively charged residues (Asp + Glu) dominate at 41.3\% and 39.1\%. This charge asymmetry produces predicted isoelectric points of approximately 4.2--4.5, consistent with acidic, soluble helical bundles or coiled-coil assemblies but atypical for a compact mixed $\alpha$/$\beta$ globular fold.
+
+While no experimental structure determination has been performed, the predicted Boltz-2 structures suggest a mixed $\alpha$/$\beta$ topology with approximately 30--40\% helical content and 15--25\% $\beta$-strand content. The moderate pLDDT scores (0.94 and 0.93) indicate reasonable per-residue prediction confidence, though the low hydrophobic-core fraction and high charge density warrant caution in interpreting these as natively foldable sequences. These computational results serve as design hypotheses requiring experimental validation through recombinant expression, circular dichroism spectroscopy, and ultimately X-ray crystallography or cryo-EM structure determination.
+
+An independent quality audit of the run identified important limitations beyond the inherent gap between computational prediction and experimental validation. Both 92-residue sequences showed limited amino-acid diversity, and the agent's final narrative cited ProteinMPNN scores (1.0363 and 1.0421) from unverified sequence samples rather than the scores of the sequences actually submitted to Boltz-2 (1.1039 and 1.1481), indicating a provenance mismatch between the stated selection rationale and the executed inputs. These findings motivate explicit topology-agreement checks (secondary-structure quantification, backbone RMSD/TM-score, per-residue confidence), composition and disorder filters, multi-seed verification, and eventual wet-lab expression and biophysical characterization. The complete run manifest, stage summary, candidate tables, confidence metrics, and independent audit report are preserved at \url{https://github.com/kaiwinYao1/sciforge-de-novo-protein-demo} for transparent review.
+
+\subsection{AI-Guided Molecular Design and Iterative Optimization}
+
+\textit{[Validated Prototype]} Computational molecular design for drug discovery traditionally requires separate execution of docking, scoring, property filtering, and synthetic accessibility assessment---each demanding distinct expertise and manual data transfer between tools. SciForge's MolClaw workflow integrates these stages into a unified agent-driven optimization loop. A researcher provides a target protein structure (PDB~4HJO for EGFR T790M kinase), a reference drug (Erlotinib), a 4-anilinoquinazoline scaffold with modifiable sites (R\textsubscript{1}--R\textsubscript{4}), and drug-like constraints; MolClaw then autonomously conducts multi-round \emph{design--dock--evaluate--refine} cycles, with the agent interpreting docking scores, structural rationales, and physicochemical property trade-offs before designing each subsequent round. All candidates are generated through deterministic scaffold enumeration---not generative models---ensuring full chemical traceability.
+
+We validated this workflow through a two-phase demonstration, with all design decisions, tool calls, and results preserved in the public audit repository at \url{https://github.com/AGI4Sci/molclaw}. \textbf{Phase~1 (De novo design):} Starting from the 4-anilinoquinazoline scaffold of erlotinib, SciForge systematically enumerated 376 candidates by exploring substituent variations across four modification sites: R\textsubscript{1} at the gatekeeper pocket (C6/C7 region), R\textsubscript{2}/R\textsubscript{3} at the solvent-exposed positions, R\textsubscript{5} at C2, and R\textsubscript{6} at the terminal position. After SMILES validation, QED/Lipinski/PAINS filtering, and synthetic accessibility scoring, 135 candidates passed all drug-likeness filters and were registered in a versioned, tool-validated candidate registry. \textbf{Phase~2 (Iterative optimization):} Six rounds of structure-guided optimization were performed using QuickVina~2 docking (exhaustiveness = 16, random seed = 42, docking box = 22.53~\AA) against the EGFR T790M ATP-binding pocket. Each round evaluated six candidates and adopted a distinct strategy: exploitation rounds combined the best-performing substituents discovered thus far; exploration rounds scanned under-explored chemical space; and pivot rounds introduced new substituent classes and scaffold modifications to escape local optima. In total, 36 docking evaluations were performed, yielding 29 unique canonical SMILES, with 7 cross-round carry-forward control evaluations to validate docking consistency.
+
+The optimization trajectory demonstrated progressive and interpretable score improvement across all six rounds (Table~\ref{tab:molclaw-convergence}). Starting from the Erlotinib baseline ($-8.6$~kcal/mol), Round~1 exploitation improved the best score to $-8.7$~kcal/mol ($\Delta=-0.1$). Exploration in Round~2 introduced R\textsubscript{2}=OH, reaching $-9.1$~kcal/mol ($\Delta=-0.5$). A pivot strategy in Round~3 combined R\textsubscript{2}=OH + R\textsubscript{3}=OH to achieve $-9.4$~kcal/mol ($\Delta=-0.8$). Round~4 exploitation refined the best combination to $-9.5$~kcal/mol ($\Delta=-0.9$). Round~5 exploration discovered that R\textsubscript{2}=OCH\textsubscript{2}CF\textsubscript{3} (trifluoroethoxy) with R\textsubscript{3}=F pushed scores to $-10.0$~kcal/mol ($\Delta=-1.4$). The final pivot round (Round~6) identified the optimal combination R\textsubscript{1}=CF\textsubscript{3} + R\textsubscript{2}=OCH\textsubscript{2}CF\textsubscript{3} + R\textsubscript{3}=F, yielding candidate \texttt{R06\_D002} at $-10.3$~kcal/mol---the best molecule in the campaign ($\Delta=-1.7$~kcal/mol vs. erlotinib, $\Delta=-2.0$~kcal/mol vs. erlotinib docking score field variance).
+
+\begin{table}[ht!]
+\caption{Convergence trajectory across six optimization rounds. Best and mean docking scores (QuickVina~2, kcal/mol) improve monotonically from Round~1 to Round~6, with the strategy type evolving to balance exploitation, exploration, and pivoting.}
+\label{tab:molclaw-convergence}
+\centering
+\small
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{@{}llclrrr@{}}
+\toprule
+\textbf{Round} & \textbf{Strategy} & $N$ & \textbf{Best ID} & \textbf{Best Score} & \textbf{Mean Score} & $\boldsymbol{\Delta}$\textbf{Baseline} \\
+\midrule
+R1 & Exploitation & 6 & \texttt{R01\_D005} & $-8.7$ & $-8.27$ & $-0.1$ \\
+R2 & Exploration  & 6 & \texttt{R02\_D002} & $-9.1$ & $-8.80$ & $-0.5$ \\
+R3 & Pivot        & 6 & \texttt{R03\_D004} & $-9.4$ & $-9.17$ & $-0.8$ \\
+R4 & Exploitation & 6 & \texttt{R04\_D001} & $-9.5$ & $-9.42$ & $-0.9$ \\
+R5 & Exploration  & 6 & \texttt{R05\_D005} & $-10.0$ & $-9.63$ & $-1.4$ \\
+R6 & Pivot        & 6 & \texttt{R06\_D002} & $-10.3$ & $-9.97$ & $-1.7$ \\
+\midrule
+\multicolumn{4}{@{}l}{Baseline (Erlotinib)} & $-8.6$ & & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Key structure--activity relationships emerged from the iterative campaign: (1)~R\textsubscript{1}=CF\textsubscript{3} consistently outperforms ethynyl ($-$C$\equiv$CH) by $\sim$0.5--0.8~kcal/mol; (2)~R\textsubscript{2}=OH (free phenol) is the best single-site modification, contributing $\sim$0.5~kcal/mol; (3)~R\textsubscript{2}=OCH\textsubscript{2}CF\textsubscript{3} combined with R\textsubscript{3}=F or Cl pushes scores to $-10.0$ to $-10.3$~kcal/mol; (4)~R\textsubscript{3}=F outperforms R\textsubscript{3}=Cl by $\sim$0.1--0.3~kcal/mol; (5)~R\textsubscript{5}=CH\textsubscript{3} (C2-methyl) provides a modest $\sim$0.2~kcal/mol improvement; (6)~dual R\textsubscript{2}=OH + R\textsubscript{3}=OH is favorable ($-9.4$~kcal/mol) but superseded by OCH\textsubscript{2}CF\textsubscript{3} + F; (7)~morpholinoethoxy at R\textsubscript{2} tolerates but does not improve over OH; (8)~R\textsubscript{1}=Br is the worst-performing gatekeeper substituent ($\approx -8.4$~kcal/mol). The SAR knowledge base accumulated 12 cross-referenced rules across the six rounds, with each rule traceable to specific docking results and round-level strategy decisions.
+
+The campaign was evaluated against two pre-registered success criteria. The \textbf{primary criterion} ($\Delta\mathrm{Score}\leq -2.0$~kcal/mol for $\geq 2$ molecules) was \textbf{not met}: the best improvement was $-1.7$~kcal/mol (\texttt{R06\_D002}), and no molecule reached the $-2.0$~kcal/mol threshold. This outcome is reported transparently without post-hoc criterion adjustment. The \textbf{secondary criterion} ($\geq 6$-member diversity panel with all-pairs Tanimoto $\leq 0.7$) was met: an 8-member diverse panel with all 28 pairwise Morgan-fingerprint Tanimoto coefficients $\leq 0.6923$ was identified from the 29 unique canonical structures (RDKit, radius = 2, nBits = 2048, greedy maximal diverse subset selection).
+
+Figure~\ref{fig:molclaw-optimization} summarizes the campaign in three coordinated views: selected round-level molecular structures and properties (a), best and mean docking-score convergence (b), and baseline-relative improvement colored by optimization strategy (c). The convergence panel distinguishes the monotonic best-score trajectory from the round mean, while the strategy panel shows that the largest baseline-relative improvement occurred in the Round~6 pivot ($\Delta=-1.7$~kcal/mol), still short of the pre-registered $-2.0$~kcal/mol threshold.
+
+\begin{figure}[ht!]
+\centering
+\includegraphics[width=0.95\textwidth,trim=0 1140pt 0 35pt,clip]{figures/molclaw_optimization_overview.png}
+
+\vspace{4pt}
+\includegraphics[width=0.485\textwidth]{figures/molclaw_score_trajectory.png}
+\hfill
+\includegraphics[width=0.485\textwidth]{figures/molclaw_strategy_effectiveness.png}
+\caption{MolClaw iterative optimization trajectory for EGFR T790M kinase inhibitors. (a) Selected round-level 4-anilinoquinazoline structures retained from the molecular panel; annotations report candidate identity, docking score, molecular weight (MW), LogP, and QED. (b) Best (solid) and mean (dashed) QuickVina~2 docking scores from the Erlotinib baseline through R1--R6; lower values indicate stronger predicted binding. (c) Baseline-relative $\Delta$Score by round and strategy, with the pre-registered success threshold at $-2.0$~kcal/mol. The best score reaches $-10.3$~kcal/mol in the Round~6 pivot ($\Delta=-1.7$~kcal/mol versus Erlotinib), so the primary success criterion remains unmet. Physicochemical properties are reported in Table~\ref{tab:molclaw-properties}.}
 \label{fig:molclaw-optimization}
 \end{figure}
+
+\begin{table}[ht!]
+\caption{Physicochemical properties of the best candidate from each MolClaw optimization round.}
+\label{tab:molclaw-properties}
+\centering
+\small
+\begin{tabular}{@{}llrrr@{}}
+\toprule
+\textbf{Round} & \textbf{Best Candidate} & \textbf{MW (Da)} & \textbf{LogP} & \textbf{QED} \\
+\midrule
+R01 & \texttt{R01\_D003} & 423.4 & 3.2 & 0.72 \\
+R02 & \texttt{R02\_D001} & 459.4 & 3.6 & 0.68 \\
+R03 & \texttt{R03\_D002} & 459.4 & 3.6 & 0.68 \\
+R04 & \texttt{R04\_D001} & 393.4 & 3.0 & 0.74 \\
+R05 & \texttt{R05\_D005} & 423.4 & 3.2 & 0.72 \\
+R06 & \texttt{R06\_D002} & 423.4 & 3.2 & 0.72 \\
+\bottomrule
+\end{tabular}
+\end{table}
 
 \begin{figure}[ht!]
 \centering
 \includegraphics[width=0.95\textwidth]{figures/molclaw_scaffold_strategy.png}
-\caption{4-Anilinoquinazoline scaffold modification strategy. The four modifiable positions (R\textsubscript{1}--R\textsubscript{4}) are annotated with the best substituent found in each round and the optimization strategy (exploration, exploitation, pivot) that discovered it. R\textsubscript{2}=F and R\textsubscript{4}=CF\textsubscript{3} together produce the largest docking score improvement ($\Delta = -2.3$~kcal/mol).}
+\caption{4-Anilinoquinazoline scaffold modification strategy. The modifiable positions are annotated with the best substituent found in each round and the optimization strategy (exploration, exploitation, pivot) that discovered it. R\textsubscript{1}=CF\textsubscript{3} + R\textsubscript{2}=OCH\textsubscript{2}CF\textsubscript{3} + R\textsubscript{3}=F together produce the largest docking score improvement ($\Delta=-1.7$~kcal/mol vs. erlotinib).}
 \label{fig:molclaw-scaffold}
 \end{figure}
 
-\begin{figure}[ht!]
-\centering
-\includegraphics[width=0.48\textwidth]{figures/molclaw_score_trajectory.png}
-\hfill
-\includegraphics[width=0.48\textwidth]{figures/molclaw_strategy_effectiveness.png}
-\caption{(Left) Docking score trajectory across six optimization rounds, showing progressive convergence from $-7.5$ to $-9.8$~kcal/mol. (Right) Strategy effectiveness measured as $\Delta$Score contribution per round, comparing exploration, exploitation, and pivot strategies.}
-\label{fig:molclaw-trajectory}
-\end{figure}
+\textit{Limitations:} The optimized candidates are computational hypotheses; binding affinity, selectivity against off-target kinases (e.g., HER2, JAK2), metabolic stability, and synthetic feasibility require orthogonal experimental validation (kinase assays, cellular IC\textsubscript{50}, microsomal stability, and chemical synthesis). QuickVina~2 docking scores exhibited stochastic variance across independent runs of identical SMILES, underscoring the need for multiple docking replicates with consensus scoring in production settings. The optimization was constrained to a single scaffold (4-anilinoquinazoline); multi-scaffold exploration, full ADMET profiling, and prospective synthesis with experimental feedback remain future work. The primary success criterion was not met, which highlights the honest-gap reporting discipline required for agent-driven science: the SAR trajectory is informative and interpretable, but does not yet achieve the pre-specified threshold. All artifacts---including the candidate registry (135 filtered molecules), 36 docking evaluations, round-by-round strategy decisions and SAR snapshots, diversity panel, QuickVina~2 provenance evidence (source-built, not precompiled), and PI operator trajectory---are preserved at \url{https://github.com/AGI4Sci/molclaw} for independent reproducibility review.
 
-\textit{Limitations:} The optimized candidates are computational hypotheses; binding affinity, selectivity against off-target kinases, metabolic stability, and synthetic feasibility require orthogonal experimental validation (kinase assays, cellular IC\textsubscript{50}, microsomal stability, and chemical synthesis). QuickVina2-GPU docking scores showed 0.9~kcal/mol stochastic variance for identical SMILES across runs (EGFR\_R5\_04: $-9.2$ vs.\ EGFR\_R6\_01: $-8.3$), underscoring the need for multiple docking replicates in production settings. The optimization was constrained to a single scaffold (4-anilinoquinazoline); multi-scaffold exploration and full ADMET profiling remain future work. The complete run manifest, candidate registry, round-by-round trajectories, and tool evidence are preserved at \url{https://github.com/AGI4Sci/molclaw} for independent review.
-
-\FloatBarrier
 \subsection{Computer Use: Genome-to-BGC Discovery and Prioritization}
 
 \textit{[Validated Prototype]} Natural-product discovery from microbial and fungal genomes remains fragmented across bioinformatics tools, databases, and manual interpretation. SciForge's Computer Use harness integrates these stages into a single auditable genome-to-BGC workflow. A researcher provides one or more genome sequences (FASTA, GenBank, or accession ID), and SciForge coordinates the end-to-end pipeline: (1)~genome intake with provenance recording; (2)~antiSMASH-based BGC region discovery; (3)~MIBiG reference matching for known-cluster dereplication; (4)~BiG-SCAPE gene-cluster-family construction with network-neighbor context; (5)~Candidate BGC Card generation unifying genomic, family, dereplication, mechanism, and actionability evidence; (6)~multi-Agent scientific analysis covering mining, dereplication, network interpretation, mechanism reasoning, experiment design, and independent review; and (7)~versioned prioritization separating deterministic card features from Agent interpretation.
@@ -504,37 +533,8 @@ SciForge is designed as a research infrastructure platform, not as a single-task
 
 The four evaluation criteria above are currently supported by (a)~the code-level contracts, schemas, and CI-visible tests present in the SciForge repository; (b)~the scenario-01 research sprint repository (archive available at time of writing); (c)~the MCFST paper reproduction repository; and (d)~the reviewer/rebuttal sprint repository. Together these artifacts constitute existence proofs that selected architectural components are instantiated in running code---they do \emph{not} constitute systematic quantitative evaluation. Existence proofs demonstrate selected components and demonstrations; they are not a substitute for systematic evaluation.
 
-\subsubsection{Multi-Level Evaluation Framework}
+The following evaluation categories are explicitly identified as \textbf{future work}: (i)~baseline comparisons against alternative scientific workbench systems or manual workflows; (ii)~ablation studies that isolate the contribution of individual components (e.g., translator routing, Evidence DAG, audit layer); (iii)~inter-annotator agreement or expert-consensus studies on audit findings and evidence quality; (iv)~time-to-completion or researcher-efficiency studies under controlled protocols; (v)~scalability benchmarks under long-running multi-day agentic loops. We encourage the community to contribute protocols, benchmark datasets, and reproducibility studies that exercise these dimensions on the SciForge platform.
 
-Current evaluation metrics measure task completion rather than scientific discovery quality. We propose a multi-level evaluation framework for future work:
-\begin{enumerate}
-    \item \textbf{Level 1---Task Completion.} Standard task-success metrics (accuracy, success rate, tool-call correctness) to ensure functional correctness of individual agentic steps and workflow execution.
-    \item \textbf{Level 2---Scientific Novelty.} Assessment of whether agent-generated hypotheses, designs, or analyses introduce non-trivial scientific contributions beyond known results, evaluated through domain-expert blind review and comparison against literature baselines.
-    \item \textbf{Level 3---Experimental Verifiability.} Measurement of whether agent outputs can be independently reproduced and experimentally validated in wet-lab or computational settings, including third-party re-execution of recorded workflows.
-\end{enumerate}
-Each level builds on the previous: reliably completing tasks (Level~1) is a prerequisite for generating novel contributions (Level~2), which in turn must be verifiable (Level~3) to constitute genuine scientific progress. Domain-expert blind review should supplement automated metrics at Levels~2 and~3.
-
-\subsubsection{Planned Systematic Evaluation Program}
-
-The following evaluation categories are explicitly identified as \textbf{future work}, with concrete protocols designed to address the current evidence gaps:
-
-\begin{itemize}
-    \item \textbf{Systematic benchmark comparisons.} Quantitative head-to-head comparisons against at least 2--3 alternative scientific agent systems (e.g., ChemCrow, Coscientist, PaperQA2) on standardized task corpora, controlling for LLM backbone, using the same evaluation protocol, and reporting statistical significance. Appendix~\ref{tab:capability_differentiation} currently provides a qualitative capability-level comparison; quantitative dimensions will be added in follow-up work.
-    
-    \item \textbf{Component-level ablation studies.} Isolating the contribution of individual SciForge components including: translator-based modality routing versus raw text input, Evidence DAG provenance tracking versus no provenance, multi-agent delegation versus single-agent baselines (majority voting, iterative self-reflection), self-correction mechanisms (with trigger frequency, success rate, and failure-mode analysis), retrieval-augmented generation versus closed-book reasoning, and different LLM backbones. Each ablation variant will be evaluated with statistical significance testing.
-    
-    \item \textbf{Statistical rigor and sample size.} Current use-case demonstrations employ limited sample sizes without reported standard deviations or confidence intervals. Future evaluations will use at least 30 independent cases per domain (or bootstrap confidence intervals where data are scarce), pre-registered selection criteria to avoid confirmation bias, and reporting of both successful and failed cases with quantitative metrics.
-    
-    \item \textbf{Inter-annotator agreement and expert-consensus studies.} Measuring agreement among domain experts on audit findings, evidence quality assessments, and scientific novelty judgments, using structured annotation protocols and Cohen's kappa or equivalent metrics.
-    
-    \item \textbf{Time-to-completion and researcher-efficiency studies.} Controlled protocols comparing researcher time, decision quality, and artifact completeness with and without SciForge assistance on standardized research tasks.
-    
-    \item \textbf{Scalability benchmarks.} Stress-testing the system under long-running multi-day agentic loops, measuring provenance capture overhead, Evidence DAG growth, and audit-sidecar performance.
-    
-    \item \textbf{Toolchain robustness.} Fault-injection experiments where 10--30\% of external tool calls (AlphaFold, MD simulation, literature search) are artificially failed, measuring recovery rate, error propagation, and degradation characteristics.
-\end{itemize}
-
-We encourage the community to contribute protocols, benchmark datasets, pre-registered evaluation designs, and third-party reproducibility studies that exercise these dimensions on the SciForge platform.
 
 \section{Discussion}
 % ============================================================
@@ -547,40 +547,13 @@ The governance layer introduces another trade-off. Recording provenance, claim--
 
 \subsection{Limitations and Future Work}
 
-The current implementation has several concrete limitations, organized by category below.
-
-\textbf{Ingress scope:} end-to-end file ingress is restricted to four modality classes (protein, protein\_structure, molecule, single-cell); Cell2Sentence (C2S) provides translate-then-reason for single-cell transcriptomics (.h5ad files), the same ingress pattern as the other three translators; VCF, BED, GFF, MGF, and additional omics formats are unsupported and fail closed. Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats.
-
-\textbf{Scientific validation:} translator observations are evidence candidates, not verified scientific facts; no systematic validation against ground-truth annotations has been performed. \textbf{Self-correction validation:} the self-correction mechanism lacks independent validation; trigger frequency, success rate, precision/recall, and failure-mode analysis have not been measured, and whether self-correction introduces new errors is unknown.
-
-\textbf{Memory model:} research memory stores scoped free-text records rather than a typed scientific state store; typed goals and decisions belong to the Project DAG.
-
-\textbf{Evidence completeness:} the Evidence DAG schema can represent complete provenance but depends on runtime capture; software versions, parameters, environment metadata, log/output, and random seeds are not automatically populated by all execution paths.
-
-\textbf{IM governance:} IM-based coordination is partially integrated; annotation, task transfer, and DAG-decision approval through chat are not end-to-end validated.
-
-\textbf{Evaluation and experimental rigor:} no baselines, ablation studies, user studies, or third-party reproductions have been conducted. Current use-case demonstrations employ limited sample sizes without reported standard deviations or confidence intervals. Case study selection criteria have not been pre-registered, and whether selection was post-hoc or uses a consistent protocol is not documented; future evaluations should use pre-registered selection criteria with at least 30 independent cases per domain, bootstrap confidence intervals where data are scarce, and systematic reporting of both successful and failed cases. Multi-agent performance gains have not been measured against single-agent baselines such as majority voting or iterative self-reflection, so the incremental benefit of multi-agent coordination over additional inference compute remains unquantified.
-
-\textbf{Methodological completeness:} complete prompt templates, full tool API parameters with version numbers, precise compute resources and wall-clock runtimes, LLM temperature and sampling strategies, and all code repository links are not fully documented in this manuscript; a detailed Supplementary Information document providing these details is planned.
-
-\textbf{Data leakage risk:} LLM training data may include test-set protein structures, molecular properties, or scientific literature used in evaluations. No data contamination probing experiments have been performed, and no comparison between known (pre-training-cutoff) and unknown (post-cutoff, e.g., newly deposited PDB structures) task performance has been conducted. Closed-book baselines (LLM performance without tool access) should be reported to quantify potential memorization effects. Future work should design contamination detection protocols, use PDB structures deposited after the LLM training cutoff date, and compare known versus unknown task performance differences.
-
-\textbf{Toolchain robustness:} SciForge depends on multiple external tools (e.g., AlphaFold, molecular dynamics simulation, literature search APIs). No fault-injection experiments have been conducted to measure system behavior when these external tools return errors, time out, or produce malformed outputs. Systematic tool-failure injection (10--30\% artificial failure rate) and recovery-rate measurement are needed.
-
-\textbf{MCFST contract:} the verification contract has unresolved conflicts (pre-selection rule, run-count mismatch) and the 0.05 threshold is post-hoc; formal reproduction requires revision and third-party re-execution.
-
-\textbf{Cell-atlas provenance:} the cell-atlas pipeline is a specification without execution artifacts; the heatmap is schematic, and \texttt{case45\_gate.py} has not been exercised.
-
-Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats; implementing baselines, ablation studies, and systematic evaluations with statistical rigor; designing data contamination detection protocols; conducting toolchain fault-injection experiments; strengthening IM governance integration; improving provenance capture automation; validating self-correction mechanisms; and developing pre-registered verification contracts with third-party re-execution protocols.
+The current implementation has several concrete limitations. \textbf{Ingress scope:} end-to-end file ingress is restricted to four modality classes (protein, protein\_structure, molecule, single-cell); Cell2Sentence (C2S) provides translate-then-reason for single-cell transcriptomics (.h5ad files), the same ingress pattern as the other three translators; VCF, BED, GFF, and MGF are unsupported and fail closed. \textbf{Scientific validation:} translator observations are evidence candidates, not verified scientific facts; no systematic validation against ground-truth annotations has been performed. \textbf{Memory model:} research memory stores scoped free-text records rather than a typed scientific state store; typed goals and decisions belong to the Project DAG. \textbf{Evidence completeness:} the Evidence DAG schema can represent complete provenance but depends on runtime capture; software, parameters, environment, log/output, and seed are not automatically populated. \textbf{IM governance:} IM-based coordination is partially integrated; annotation, task transfer, and DAG-decision approval through chat are not end-to-end validated. \textbf{Evaluation gaps:} no baselines, ablation studies, user studies, or third-party reproductions have been conducted. \textbf{MCFST contract:} the verification contract has unresolved conflicts (pre-selection rule, run-count mismatch) and the 0.05 threshold is post-hoc; formal reproduction requires revision and third-party re-execution. \textbf{Cell-atlas provenance:} the cell-atlas pipeline is a specification without execution artifacts; the heatmap is schematic, and \texttt{case45\_gate.py} has not been exercised. Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats; implementing baselines and systematic evaluations; strengthening IM governance integration; improving provenance capture automation; and developing pre-registered verification contracts with third-party re-execution protocols.
 
 % ============================================================
 \section{Conclusion}
-
 % ============================================================
 
-SciForge presents a research-native AI workbench that brings together local execution, scientific multimodal routing, agent orchestration, workflow automation, research memory, and human-governed review surfaces. Its four design pillars---goal-scoped scientific decision governance, translate-then-reason for multimodal input, evidence governance for auditable traceability, and collaborative team science---are designed so that supported native scientific objects become inspectable evidence candidates, captured claims can be linked to provenance records, and release decisions remain reviewable. By combining a local-first workspace with modular worker services and contextual research capability patterns, SciForge aims to serve as a goal-oriented, multimodal, auditable, and collaborative agent operating environment for everyday scientific discovery.
-
-The current implementation provides existence proofs of the core architecture but requires systematic quantitative evaluation. Key areas for future work include: benchmark comparisons against alternative systems with statistical rigor; component-level ablation studies including self-correction, multi-agent, and modality routing variants; data leakage and contamination analysis for LLM-based scientific reasoning; toolchain fault-tolerance characterization; pre-registered case-study selection with adequate sample sizes; and multi-level evaluation that captures not only task completion but also scientific novelty and experimental verifiability. We invite the community to contribute benchmarks, protocols, and third-party re-execution studies that exercise these dimensions on the open-source SciForge platform.
+SciForge presents a research-native AI workbench that brings together local execution, scientific multimodal routing, agent orchestration, workflow automation, research memory, and human-governed review surfaces. Its four integrated pillars---multimodal translate-then-reason, evidence governance, collaborative team science, and practical scientific impact---are designed so that supported native scientific objects become inspectable evidence candidates, captured claims can be linked to provenance records, and release decisions remain reviewable. By combining a local-first workspace with modular worker services and contextual research capability patterns, SciForge aims to serve as a goal-oriented, multimodal, auditable, and collaborative agent operating environment for everyday scientific discovery.
 
 \clearpage
 \begin{appendices}
@@ -589,44 +562,44 @@ The current implementation provides existence proofs of the core architecture bu
 \section{Capability Differentiation}
 
 \begin{table}[ht!]
-\caption{Qualitative capability positioning based on reviewed public materials. This table provides a feature-level comparison; systematic quantitative benchmark comparisons against alternative systems are identified as future work in Section~\ref{sec:system-architecture} and the Evaluation section. Typical-approach entries summarize common documented emphases and do not prove absence of unlisted features.}
+\caption{Capability positioning based on reviewed public materials. Typical-approach entries summarize common documented emphases and do not prove absence of unlisted features.}
 \label{tab:capability_differentiation}
 \scriptsize
 \centering
-\setlength{\tabcolsep}{2.5pt}
-\renewcommand{\arraystretch}{1.08}
-\begin{tabular}{@{}L{2.0cm} L{2.4cm} L{2.8cm} L{3.1cm}@{}}
+\setlength{\tabcolsep}{2pt}
+\renewcommand{\arraystretch}{1.04}
+\begin{tabular}{@{}L{2.1cm} L{2.7cm} L{3.2cm} L{3.8cm}@{}}
 \toprule
 \textbf{Capability} & \textbf{Function} & \textbf{Typical approaches} & \textbf{SciForge differentiation} \\
 \midrule
 Model Router
-& Unified provider and model management
-& Single-provider lock-in or manual switching
-& Provider-agnostic routing across OpenAI, Anthropic, DeepSeek, and local models with cost-aware fallback chains; localizable deployment preserves data sovereignty \\
+& Select the optimal LLM provider and model per request
+& Single-provider lock-in or manual model switching
+& Provider-agnostic routing across OpenAI, Anthropic, DeepSeek, and local models; cost-aware fallback chains; localizable deployment \\
 Scientific Pipeline
-& Convert scientific objects into agent-readable evidence
-& Raw scientific text input or manual preprocessing
-& Translate-then-reason with four C2S modality experts (protein, structure, molecule, single-cell); unrecognized formats fail closed with diagnostics \\
+& Translate scientific file formats into evidence the agent can reason over
+& Raw text input or manual format conversion
+& Four domain-expert translators (Esm2Text, Prot2Text, BioT5, Cell2Sentence~(C2S)) covering protein, structure, molecule, and single-cell modalities; unrecognized formats fail closed with diagnostics \\
 Agent Runtime
-& Coordinate agents, tools, commands, and long tasks
-& Single-session chat with limited delegation
-& Research-aware runtime with sub-agent delegation, MCP workers, plan recovery, and cross-session task continuation \\
+& Execute AI agents with tools, sub-agents, and workspace operations
+& Single-session chat without structured delegation
+& Multi-backend support (Codex, Claude Code, custom runtimes); sub-agent delegation; MCP worker invocation; long-task recovery \\
 Workflow Engine
-& Automate repeatable research protocols
-& Scripts, cron jobs, and manual runbooks
-& DAG-based workflows combining code, agent, tool, schedule, event, and approval nodes; natively integrated with the agent runtime \\
+& Chain research steps into repeatable, scheduled protocols
+& Ad-hoc scripts and cron jobs
+& DAG-based workflows with code, agent, tool, and approval nodes; schedule and event triggers; integrated with agent runtime \\
 Research Memory
-& Preserve project state across sessions
-& Chat history or document RAG
-& Structured Project DAG with confidence-tagged, timestamped records; typed goals and formal decisions persist as first-class DAG nodes \\
+& Store and retrieve project knowledge across sessions
+& Ephemeral chat history or external document RAG
+& Structured Project DAG with confidence-tagged, scoped free-text records; typed goals and decision events persist across sessions \\
 Evidence Governance
-& Connect claims, evidence, audit findings, and approvals
+& Track provenance, audit claims, and govern release decisions
 & Outputs detached from data, scripts, and review history
-& Thread-scoped Evidence DAGs with automatic provenance capture; scheduled audit runs; quality gates and configurable approval boundaries \\
+& Thread-scoped Evidence DAGs with automatic provenance capture; deterministic audit runs; goal-scoped release gates \\
 Research Capability Patterns
-& Expose human judgment points
-& Generic chat and file views
-& Human-in-the-loop judgment patterns (artifact review, approval, visual inspection) grounded in Evidence DAGs and audit records \\
+& Define structured human judgment points at research milestones
+& Generic chat and file-list views
+& Six recurrent interaction patterns (artifact review, approval, visual inspection, etc.) grounded in Evidence DAGs and audit records \\
 \bottomrule
 \end{tabular}
 \end{table}
