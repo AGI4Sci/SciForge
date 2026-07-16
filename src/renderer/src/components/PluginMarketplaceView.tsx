@@ -148,11 +148,19 @@ function buildSkillContent(id: string, title: string, description: string, instr
 }
 
 function itemTitle(item: MarketplaceItem, t: (key: string) => string): string {
-  return item.title ?? (item.titleKey ? t(item.titleKey) : item.id)
+  const catalogItem = item.group === 'personal'
+    ? RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
+    : undefined
+  const displayItem = catalogItem ?? item
+  return displayItem.title ?? (displayItem.titleKey ? t(displayItem.titleKey) : displayItem.id)
 }
 
 function itemDescription(item: MarketplaceItem, t: (key: string) => string): string {
-  return item.description ?? (item.descriptionKey ? t(item.descriptionKey) : '')
+  const catalogItem = item.group === 'personal'
+    ? RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
+    : undefined
+  const displayItem = catalogItem ?? item
+  return displayItem.description ?? (displayItem.descriptionKey ? t(displayItem.descriptionKey) : '')
 }
 
 export function skillMarketplaceItemsFromDiscoveredSkills(
@@ -256,6 +264,21 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
           trustedWorkspaceRoots: [workspaceRoot || '/path/to/project']
         }
       )
+  },
+  {
+    id: 'dataset_api',
+    kind: 'mcp',
+    titleKey: 'pluginMcpDatasetApiTitle',
+    descriptionKey: 'pluginMcpDatasetApiDesc',
+    group: 'recommended',
+    mcpConfig: async (workspaceRoot) => {
+      if (typeof window.sciforge?.buildDatasetApiMcpConfig !== 'function') {
+        throw new Error('Dataset API MCP config is unavailable in this build.')
+      }
+      const result = await window.sciforge.buildDatasetApiMcpConfig(workspaceRoot || undefined)
+      if (!result.ok) throw new Error(result.message)
+      return result.config
+    }
   },
   {
     id: 'playwright',
@@ -1508,6 +1531,7 @@ function PluginSection({
             return (
               <div
                 key={itemKey}
+                data-plugin-id={item.id}
                 className="flex min-h-[92px] items-center gap-5 border-b border-ds-border-muted py-5"
               >
                 <div className="min-w-0 flex-1">
@@ -1532,6 +1556,7 @@ function PluginSection({
                   disabled={installed || busy}
                   onClick={() => void onAdd(item)}
                   title={installed ? t('pluginAdded') : t('pluginAdd')}
+                  aria-label={`${installed ? t('pluginAdded') : t('pluginAdd')}: ${itemTitle(item, t)}`}
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition ${
                     installed
                       ? 'text-ds-faint'

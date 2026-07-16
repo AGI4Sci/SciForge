@@ -140,6 +140,8 @@ const api = {
     ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
   buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
+  buildDatasetApiMcpConfig: (workspaceRoot) =>
+    ipcRenderer.invoke('mcp:dataset-api-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:image-generation-config', { workspaceRoot }),
   buildPptMasterMcpConfig: (workspaceRoot) =>

@@ -1807,6 +1807,53 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
+  it('retries the built-in Dataset MCP catalog before starting a thread', async () => {
+    const client = controllableClient()
+    const datasetToolNames = [
+      'dataset_api_catalog',
+      'dataset_api_register_provider',
+      'dataset_api_list',
+      'dataset_api_register',
+      'dataset_api_metadata',
+      'dataset_api_raw_data'
+    ]
+    const mcpClient: CodexDynamicMcpClient = {
+      listTools: vi.fn(async () => ({
+        tools: datasetToolNames.map((name) => ({
+          name,
+          description: name,
+          inputSchema: { type: 'object', properties: {} }
+        }))
+      })),
+      callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
+      close: vi.fn(async () => undefined)
+    }
+    const mcpClientFactory = vi.fn(async () => {
+      if (mcpClientFactory.mock.calls.length === 1) throw new Error('transient Dataset MCP startup failure')
+      return mcpClient
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      datasetApiMcpLaunch: {
+        appPath: '/tmp/sciforge-test-app',
+        execPath: '/tmp/electron',
+        isPackaged: false
+      },
+      mcpClientFactory,
+      createClient: () => client
+    })
+
+    await expect(service.startThread({ title: 'Dataset retry thread' })).resolves.toMatchObject({ ok: true })
+    expect(mcpClientFactory).toHaveBeenCalledTimes(2)
+    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      dynamicTools: expect.arrayContaining([
+        expect.objectContaining({ name: 'dataset_api_metadata' }),
+        expect.objectContaining({ name: 'dataset_api_raw_data' })
+      ])
+    }))
+  })
+
   it('returns the persisted GUI thread with resolved workspace after starting a thread', async () => {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codex-runtime-service-'))
     const client = controllableClient()

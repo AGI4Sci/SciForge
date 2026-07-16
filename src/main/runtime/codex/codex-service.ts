@@ -72,6 +72,10 @@ import type { WorkspaceIntelMcpLaunchConfig } from '../../workspace-intel-mcp-co
 import type { PaperRadarMcpLaunchConfig } from '../../paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from '../../write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from '../../runtime-inspector-mcp-config'
+import {
+  datasetApiMcpEnabledTools,
+  type DatasetApiMcpLaunchConfig
+} from '../../dataset-api-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from '../../scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
@@ -137,6 +141,7 @@ export type CodexRuntimeServiceOptions = {
   paperRadarMcpLaunch?: PaperRadarMcpLaunchConfig
   writeAssistMcpLaunch?: WriteAssistMcpLaunchConfig
   runtimeInspectorMcpLaunch?: RuntimeInspectorMcpLaunchConfig
+  datasetApiMcpLaunch?: DatasetApiMcpLaunchConfig
   scientificSkillsMcpLaunch?: ScientificSkillsMcpLaunchConfig
   scientificPlottingMcpLaunch?: ScientificPlottingMcpLaunchConfig
   bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
@@ -206,6 +211,8 @@ const EMPTY_CODEX_TURN_USAGE: AgentRuntimeUsage = {
 }
 
 const FIRST_CODEX_ACTIVITY_TIMEOUT_MS = 75_000
+const DATASET_API_CATALOG_ATTEMPTS = 3
+const DATASET_API_CATALOG_RETRY_BASE_MS = 150
 const INTERRUPT_TIMED_OUT_TURN_MS = 5_000
 const CODEX_PENDING_TOOL_COMPLETION_GRACE_MS = 5_000
 const CODEX_TURN_DISCONNECTED_MESSAGE = 'Codex runtime disconnected before this turn completed. The stuck turn was closed so you can retry.'
@@ -1084,11 +1091,30 @@ export class CodexRuntimeService {
   ): Promise<CodexAppServerDynamicToolSpec[]> {
     const current = settings ?? await this.options.settings()
     const includeMultiAgent = options.includeMultiAgent !== false
-    return [
-      ...this.workspacePatchTool.dynamicTools(),
-      ...(includeMultiAgent ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? [] : []),
-      ...(await this.dynamicMcpBridge?.dynamicTools() ?? [])
-    ]
+    const expectedDatasetTools = this.options.datasetApiMcpLaunch
+      ? datasetApiMcpEnabledTools()
+      : []
+    const attempts = expectedDatasetTools.length > 0 ? DATASET_API_CATALOG_ATTEMPTS : 1
+    let tools: CodexAppServerDynamicToolSpec[] = []
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      tools = [
+        ...this.workspacePatchTool.dynamicTools(),
+        ...(includeMultiAgent ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? [] : []),
+        ...(await this.dynamicMcpBridge?.dynamicTools() ?? [])
+      ]
+      const availableNames = new Set(tools.map((tool) => tool.name))
+      const missingDatasetTools = expectedDatasetTools.filter((name) => !availableNames.has(name))
+      if (missingDatasetTools.length === 0) return tools
+      if (attempt < attempts) {
+        await delay(DATASET_API_CATALOG_RETRY_BASE_MS * attempt)
+        continue
+      }
+      throw new Error(
+        `Dataset API MCP catalog is unavailable; missing tools: ${missingDatasetTools.join(', ')}. ` +
+        'The turn was not started so the model cannot incorrectly report that Dataset API is unsupported.'
+      )
+    }
+    return tools
   }
 
   private async handleDynamicToolCall(
@@ -1161,6 +1187,9 @@ export class CodexRuntimeService {
     const callId = stringValue(request.callId).trim() || String(request.requestId)
     const toolName = stringValue(request.tool).trim() || 'dynamic_tool'
     const terminal = phase !== 'dispatched'
+    const datasetApi = terminal && response
+      ? datasetApiDisplayMetadata(toolName, response)
+      : undefined
     const event: CodexThreadEventPayload = {
       threadId,
       turnId,
@@ -1177,6 +1206,7 @@ export class CodexRuntimeService {
           factSource: terminal ? 'executor_result' : 'runtime_lifecycle',
           evidenceStrength: terminal ? 'executor_receipt' : 'runtime_lifecycle',
           ...(terminal ? { success: response?.success === true } : {}),
+          ...(datasetApi ? { datasetApi } : {}),
           ...(request.namespace ? { namespace: request.namespace } : {})
         }
       }
@@ -2825,6 +2855,9 @@ function codexDynamicMcpServers(
     runtimeInspectorMcp: options.runtimeInspectorMcpLaunch && settings
       ? { settings, launch: options.runtimeInspectorMcpLaunch }
       : undefined,
+    datasetApiMcp: options.datasetApiMcpLaunch && settings
+      ? { settings, launch: options.datasetApiMcpLaunch }
+      : undefined,
     scientificSkillsMcp: options.scientificSkillsMcpLaunch && settings
       ? { settings, launch: options.scientificSkillsMcpLaunch }
       : undefined,
@@ -3497,6 +3530,10 @@ function elapsedMs(startedAtMs: number): number {
   return Math.max(0, Date.now() - startedAtMs)
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function failure(error: unknown): { ok: false; message: string; recoverable: true } {
   return { ok: false, message: error instanceof Error ? error.message : String(error), recoverable: true }
 }
@@ -3530,6 +3567,68 @@ function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallRespo
     .trim()
   if (!text) return response.success ? 'Dynamic tool completed successfully.' : 'Dynamic tool failed.'
   return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
+}
+
+export function datasetApiDisplayMetadata(
+  toolName: string,
+  response: CodexAppServerDynamicToolCallResponse
+): Record<string, unknown> | undefined {
+  const normalizedToolName = toolName.split('__').at(-1) ?? toolName
+  if (!normalizedToolName.startsWith('dataset_api_')) return undefined
+  for (const item of response.contentItems) {
+    if (item.type !== 'inputText') continue
+    const marker = 'structuredContent:\n'
+    const markerIndex = item.text.indexOf(marker)
+    if (markerIndex < 0) continue
+    try {
+      const structured = asRecord(JSON.parse(item.text.slice(markerIndex + marker.length)) as unknown)
+      if (!structured) continue
+      return {
+        toolName: normalizedToolName,
+        success: response.success,
+        ...boundedDatasetApiStructuredContent(structured)
+      }
+    } catch {
+      continue
+    }
+  }
+  return undefined
+}
+
+function boundedDatasetApiStructuredContent(value: Record<string, unknown>): Record<string, unknown> {
+  if (value.error !== undefined) return { error: boundedDatasetApiValue(value.error) }
+  const result = asRecord(value.result)
+  if (!result) return { result: boundedDatasetApiValue(value) }
+  return {
+    result: {
+      ...result,
+      ...(result.metadata !== undefined
+        ? { metadata: boundedDatasetApiValue(result.metadata) }
+        : {}),
+      ...(Array.isArray(result.providers)
+        ? { providers: result.providers.slice(0, 50).map(boundedDatasetApiValue) }
+        : {}),
+      ...(Array.isArray(result.sources)
+        ? { sources: result.sources.slice(0, 50).map(boundedDatasetApiValue) }
+        : {})
+    }
+  }
+}
+
+function boundedDatasetApiValue(value: unknown, depth = 0): unknown {
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') return value
+  if (typeof value === 'string') return value.length <= 1_000 ? value : `${value.slice(0, 1_000)}…`
+  if (depth >= 5) return Array.isArray(value) ? `[${value.length} items]` : '[nested object]'
+  if (Array.isArray(value)) {
+    return value.slice(0, 20).map((item) => boundedDatasetApiValue(item, depth + 1))
+  }
+  const record = asRecord(value)
+  if (!record) return String(value)
+  return Object.fromEntries(
+    Object.entries(record)
+      .slice(0, 40)
+      .map(([key, item]) => [key, boundedDatasetApiValue(item, depth + 1)])
+  )
 }
 
 function workspaceIntelToolNameForRequest(

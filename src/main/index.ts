@@ -130,6 +130,7 @@ import type { WorkspaceIntelMcpLaunchConfig } from './workspace-intel-mcp-config
 import type { PaperRadarMcpLaunchConfig } from './paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
+import type { DatasetApiMcpLaunchConfig } from './dataset-api-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
@@ -281,6 +282,14 @@ function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
     execPath: process.execPath,
     isPackaged: app.isPackaged,
     checkpointDataDir: app.getPath('userData')
+  }
+}
+
+function getDatasetApiMcpLaunchConfig(): DatasetApiMcpLaunchConfig {
+  return {
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    isPackaged: app.isPackaged
   }
 }
 
@@ -574,6 +583,7 @@ function getCodexRuntime(): CodexRuntimeService {
     paperRadarMcpLaunch: getPaperRadarMcpLaunchConfig(),
     writeAssistMcpLaunch: getWriteAssistMcpLaunchConfig(),
     runtimeInspectorMcpLaunch: getRuntimeInspectorMcpLaunchConfig(),
+    datasetApiMcpLaunch: getDatasetApiMcpLaunchConfig(),
     scientificSkillsMcpLaunch: getScientificSkillsMcpLaunchConfig(),
     scientificPlottingMcpLaunch: getScientificPlottingMcpLaunchConfig(),
     bgcDiscoveryMcpLaunch: getBgcDiscoveryMcpLaunchConfig(),
@@ -601,6 +611,7 @@ function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
       paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
       writeAssistMcp: { launch: getWriteAssistMcpLaunchConfig() },
       runtimeInspectorMcp: { launch: getRuntimeInspectorMcpLaunchConfig() },
+      datasetApiMcp: { launch: getDatasetApiMcpLaunchConfig() },
       scientificSkillsMcp: { launch: getScientificSkillsMcpLaunchConfig() },
       scientificPlottingMcp: { launch: getScientificPlottingMcpLaunchConfig() },
       bgcDiscoveryMcp: { launch: getBgcDiscoveryMcpLaunchConfig() },

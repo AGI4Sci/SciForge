@@ -183,6 +183,7 @@ import {
   buildBgcDiscoveryMcpConfigFragment,
   type BgcDiscoveryMcpLaunchConfig
 } from '../bgc-discovery-mcp-config'
+import { buildDatasetApiMcpConfigFragment } from '../dataset-api-mcp-config'
 import {
   buildImageGenerationMcpConfigFragment,
   type ImageGenerationMcpLaunchConfig
@@ -2479,6 +2480,29 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return {
         ok: true as const,
         config: buildBgcDiscoveryMcpConfigFragment(launch, request.workspaceRoot)
+      }
+    } catch (error) {
+      return {
+        ok: false as const,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  })
+
+  handleInvoke('mcp:dataset-api-config', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'mcp:dataset-api-config',
+      scientificPlottingMcpConfigPayloadSchema,
+      payload
+    )
+    try {
+      return {
+        ok: true as const,
+        config: buildDatasetApiMcpConfigFragment({
+          appPath: app.getAppPath(),
+          execPath: process.execPath,
+          isPackaged: app.isPackaged
+        }, request.workspaceRoot)
       }
     } catch (error) {
       return {

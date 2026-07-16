@@ -25,6 +25,7 @@
     "packages/workers/paper-radar",
     "packages/workers/sci-modality-router",
     "packages/workers/evidence-dag",
+    "packages/workers/dataset-api",
     "packages/workers/project-dag",
     "packages/workers/runtime-inspector",
     "packages/workers/remote-executor",

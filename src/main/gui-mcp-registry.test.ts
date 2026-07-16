@@ -101,6 +101,7 @@ describe('GUI MCP runtime registry', () => {
       'gui_paper_radar',
       'gui_write_assist',
       'gui_runtime_inspector',
+      'dataset_api',
       'scientific_skills',
       'scientific_plotting',
       'image_generation',
@@ -305,6 +306,7 @@ describe('GUI MCP runtime registry', () => {
     const settings = createSettings()
     const localRuntime = buildLocalRuntimeManagedGuiMcpServers({
       settings,
+      datasetApiMcp: { settings, launch },
       scientificSkillsMcp: { launch },
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
@@ -313,6 +315,7 @@ describe('GUI MCP runtime registry', () => {
     }) as Record<string, { args?: string[] }>
     const codex = buildCodexManagedGuiMcpServers({
       settings,
+      datasetApiMcp: { settings, launch },
       scientificSkillsMcp: { launch },
       scientificPlottingMcp: { launch },
       imageGenerationMcp: { launch },
@@ -320,12 +323,31 @@ describe('GUI MCP runtime registry', () => {
       visualDocumentMcp: { launch }
     })
 
-    for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
+    for (const id of ['dataset_api', 'scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
       expect(localRuntime[id]?.args).toEqual(expect.arrayContaining(['--workspace-root', '/tmp/project']))
       expect(codex.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
     }
+
+    expect(codex.find((server) => server.id === 'dataset_api')).toMatchObject({
+      args: expect.arrayContaining(['--dataset-api-mcp-server', '--workspace-root', '/tmp/project']),
+      enabledTools: expect.arrayContaining([
+        'dataset_api_catalog',
+        'dataset_api_register_provider',
+        'dataset_api_list',
+        'dataset_api_metadata',
+        'dataset_api_raw_data'
+      ])
+    })
+    expect(buildClaudeCodeManagedGuiMcpServers({
+      settings,
+      datasetApiMcp: { settings, launch }
+    }).dataset_api).toMatchObject({
+      type: 'stdio',
+      args: expect.arrayContaining(['--dataset-api-mcp-server', '--workspace-root', '/tmp/project']),
+      alwaysLoad: true
+    })
 
     expect(codex.find((server) => server.id === 'image_generation')?.enabledTools).toEqual(
       expect.arrayContaining([

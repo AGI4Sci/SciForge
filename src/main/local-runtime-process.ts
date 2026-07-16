@@ -55,6 +55,7 @@ import type { RemoteExecutorMcpLaunchConfig } from './remote-executor-mcp-config
 import type { PaperRadarMcpLaunchConfig } from './paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
+import type { DatasetApiMcpLaunchConfig } from './dataset-api-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
@@ -389,6 +390,14 @@ async function startLocalRuntimeChildOnce(
         checkpointDataDir: app.getPath('userData')
       }
     },
+    datasetApiMcp: {
+      settings,
+      launch: {
+        appPath: app.getAppPath(),
+        execPath: process.execPath,
+        isPackaged: app.isPackaged
+      }
+    },
     scientificSkillsMcp: {
       settings,
       launch: {
@@ -572,6 +581,10 @@ export async function syncGuiManagedLocalRuntimeConfig(
       settings: AppSettingsV1
       launch: RuntimeInspectorMcpLaunchConfig
     }
+    datasetApiMcp?: {
+      settings: AppSettingsV1
+      launch: DatasetApiMcpLaunchConfig
+    }
     scientificSkillsMcp?: {
       settings: AppSettingsV1
       launch: ScientificSkillsMcpLaunchConfig
@@ -639,6 +652,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
     paperRadarMcp: options?.paperRadarMcp,
     writeAssistMcp: options?.writeAssistMcp,
     runtimeInspectorMcp: options?.runtimeInspectorMcp,
+    datasetApiMcp: options?.datasetApiMcp,
     scientificSkillsMcp: options?.scientificSkillsMcp,
     scientificPlottingMcp: options?.scientificPlottingMcp,
     bgcDiscoveryMcp: options?.bgcDiscoveryMcp,
@@ -686,6 +700,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
           options?.paperRadarMcp ||
           options?.writeAssistMcp ||
           options?.runtimeInspectorMcp ||
+          options?.datasetApiMcp ||
           options?.scientificSkillsMcp ||
           options?.scientificPlottingMcp ||
           options?.bgcDiscoveryMcp ||

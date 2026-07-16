@@ -122,6 +122,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'log:get-path',
   'log:open-dir',
   'mcp:bgc-discovery-config',
+  'mcp:dataset-api-config',
   'mcp:image-generation-config',
   'mcp:ppt-master-config',
   'mcp:scientific-plotting-config',

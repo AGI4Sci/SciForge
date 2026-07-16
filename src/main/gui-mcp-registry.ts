@@ -1,5 +1,15 @@
 import type { AppSettingsV1 } from '../shared/app-settings'
 import {
+  buildDatasetApiLocalRuntimeMcpServerConfig,
+  buildDatasetApiMcpArgs,
+  datasetApiMcpEnabledTools,
+  GUI_DATASET_API_MCP_DESCRIPTOR,
+  GUI_DATASET_API_MCP_SERVER_NAME,
+  GUI_DATASET_API_MCP_TIMEOUT_MS,
+  resolveDatasetApiMcpCommand,
+  type DatasetApiMcpLaunchConfig
+} from './dataset-api-mcp-config'
+import {
   buildScheduleMcpArgs,
   buildScheduleLocalRuntimeMcpServerConfig,
   scheduleMcpEnabledTools,
@@ -217,6 +227,10 @@ export type GuiMcpRegistryInput = {
     settings?: AppSettingsV1
     launch: RuntimeInspectorMcpLaunchConfig
   }
+  datasetApiMcp?: {
+    settings?: AppSettingsV1
+    launch: DatasetApiMcpLaunchConfig
+  }
   scientificSkillsMcp?: {
     settings?: AppSettingsV1
     launch: ScientificSkillsMcpLaunchConfig
@@ -258,6 +272,7 @@ export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
   GUI_PAPER_RADAR_MCP_DESCRIPTOR,
   GUI_WRITE_ASSIST_MCP_DESCRIPTOR,
   GUI_RUNTIME_INSPECTOR_MCP_DESCRIPTOR,
+  GUI_DATASET_API_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_SKILLS_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_PLOTTING_MCP_DESCRIPTOR,
   GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
@@ -403,6 +418,17 @@ function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, 
       () => buildRuntimeInspectorLocalRuntimeMcpServerConfig(
         runtimeInspectorSettings,
         input.runtimeInspectorMcp!.launch
+      )
+    ])
+  }
+  const datasetApiSettings = input.datasetApiMcp?.settings ?? settings
+  if (input.datasetApiMcp && datasetApiSettings) {
+    builders.push([
+      GUI_DATASET_API_MCP_SERVER_NAME,
+      () => buildDatasetApiLocalRuntimeMcpServerConfig(
+        input.datasetApiMcp!.launch,
+        undefined,
+        datasetApiSettings.workspaceRoot
       )
     ])
   }
@@ -579,6 +605,20 @@ function managedRuntimeServerConfigs(
       env: runtimeInspectorMcpEnv(),
       timeoutMs: RUNTIME_INSPECTOR_MCP_TIMEOUT_MS,
       enabledTools: runtimeInspectorMcpEnabledTools()
+    })
+  }
+  const datasetApiSettings = input.datasetApiMcp?.settings ?? settings
+  if (input.datasetApiMcp && datasetApiSettings) {
+    servers.push({
+      id: GUI_DATASET_API_MCP_SERVER_NAME,
+      command: resolveDatasetApiMcpCommand(input.datasetApiMcp.launch),
+      args: buildDatasetApiMcpArgs(
+        input.datasetApiMcp.launch,
+        datasetApiSettings.workspaceRoot
+      ),
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+      timeoutMs: GUI_DATASET_API_MCP_TIMEOUT_MS,
+      enabledTools: datasetApiMcpEnabledTools()
     })
   }
   const scientificSkillsSettings = input.scientificSkillsMcp?.settings ?? settings

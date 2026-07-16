@@ -1,0 +1,146 @@
+import { describe, expect, it } from 'vitest'
+import type { ChatBlock } from '../../agent/types'
+import {
+  datasetResultsFromTimelineBlocks,
+  datasetTextPreview,
+  metadataHighlights
+} from './TimelineDatasetResultsPanel'
+
+describe('TimelineDatasetResultsPanel', () => {
+  it('extracts bounded Dataset API metadata persisted by the Codex runtime', () => {
+    const blocks: ChatBlock[] = [{
+      kind: 'tool',
+      id: 'metadata-1',
+      summary: 'mcp__sciforge_dataset_api__dataset_api_metadata',
+      status: 'success',
+      meta: {
+        toolName: 'mcp__sciforge_dataset_api__dataset_api_metadata',
+        datasetApi: {
+          toolName: 'dataset_api_metadata',
+          success: true,
+          result: {
+            source: { id: 'uniprot', name: 'UniProt REST' },
+            response: { status: 200, bytes: 869335 },
+            metadata: { primaryAccession: 'P04637', genes: [{ geneName: { value: 'TP53' } }] },
+            metadataTruncated: true
+          }
+        }
+      }
+    }]
+
+    const [result] = datasetResultsFromTimelineBlocks(blocks)
+    expect(result).toMatchObject({
+      toolName: 'dataset_api_metadata',
+      kind: 'metadata',
+      success: true,
+      result: { metadata: { primaryAccession: 'P04637' } }
+    })
+  })
+
+  it('extracts raw-data artifacts from structuredContent tool detail', () => {
+    const structured = {
+      result: {
+        source: { id: 'ncbi-eutils', name: 'NCBI E-utilities' },
+        response: { status: 200, bytes: 19431 },
+        artifact: { path: '/workspace/tp53.fasta', format: 'fasta', sha256: 'abc' }
+      }
+    }
+    const blocks: ChatBlock[] = [{
+      kind: 'tool',
+      id: 'raw-1',
+      summary: 'dataset_api_raw_data',
+      status: 'success',
+      meta: { toolName: 'dataset_api_raw_data' },
+      detail: `Downloaded raw data.\nstructuredContent:\n${JSON.stringify(structured)}`
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)[0]).toMatchObject({
+      kind: 'raw-data',
+      result: { artifact: { path: '/workspace/tp53.fasta', format: 'fasta' } }
+    })
+  })
+
+  it('extracts persisted MCP inputText content blocks', () => {
+    const blocks: ChatBlock[] = [{
+      kind: 'tool',
+      id: 'persisted-uniprot',
+      summary: 'dataset_api_metadata',
+      status: 'success',
+      detail: JSON.stringify([
+        { type: 'inputText', text: 'Read metadata.' },
+        {
+          type: 'inputText',
+          text: 'structuredContent:\n{"result":{"source":{"name":"UniProt REST"},"response":{"status":200,"bytes":490},"metadata":{"primaryAccession":"P04637"}}}'
+        }
+      ])
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([{
+      toolName: 'dataset_api_metadata',
+      success: true,
+      result: {
+        source: { name: 'UniProt REST' },
+        metadata: { primaryAccession: 'P04637' }
+      }
+    }])
+  })
+
+  it('surfaces structured Dataset API failures and ignores unrelated tools', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'tool',
+        id: 'error-1',
+        summary: 'dataset_api_metadata',
+        status: 'error',
+        meta: {
+          toolName: 'dataset_api_metadata',
+          output: {
+            structuredContent: {
+              error: { code: 'DATASET_API_NETWORK_ERROR', message: 'DNS failed', retryable: true }
+            }
+          }
+        }
+      },
+      {
+        kind: 'tool',
+        id: 'incomplete-dataset-result',
+        summary: 'dataset_api_metadata',
+        status: 'success',
+        meta: { toolName: 'dataset_api_metadata' },
+        detail: 'Read metadata bytes, but the historical structured payload was truncated.'
+      },
+      { kind: 'tool', id: 'bash-1', summary: 'bash', status: 'success', detail: 'ok' }
+    ]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toEqual([
+      expect.objectContaining({
+        id: 'error-1',
+        kind: 'metadata',
+        success: false,
+        error: expect.objectContaining({ code: 'DATASET_API_NETWORK_ERROR' })
+      })
+    ])
+  })
+
+  it('extracts useful biology fields from bounded UniProt metadata summaries', () => {
+    expect(metadataHighlights({
+      primaryAccession: 'P04637',
+      organism: { scientificName: 'Homo sapiens' },
+      genes: { sample: [{ geneName: { value: 'TP53' } }] },
+      sequence: { length: 393 }
+    })).toEqual([
+      { label: 'Accession', value: 'P04637' },
+      { label: 'Gene', value: 'TP53' },
+      { label: 'Organism', value: 'Homo sapiens' },
+      { label: 'Sequence', value: '393 aa' }
+    ])
+  })
+
+  it('bounds FASTA and pretty-prints JSON raw-data previews', () => {
+    const fasta = ['>sp|P04637|P53_HUMAN', ...Array.from({ length: 20 }, (_, index) => `SEQ${index}`)].join('\n')
+    expect(datasetTextPreview(fasta, 'fasta', 'P04637.fasta').split('\n')).toHaveLength(10)
+    expect(datasetTextPreview('{"id":"P04637","length":393}', 'json', 'P04637.json')).toContain(
+      '\n  "length": 393\n'
+    )
+  })
+})

@@ -29,6 +29,7 @@ import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import { performanceMonitor } from '../../lib/performance-monitor'
 import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
+import { TimelineDatasetResultsPanel } from './TimelineDatasetResultsPanel'
 
 export { summarizeToolBlock } from './message-timeline-process'
 
@@ -488,6 +489,11 @@ function MessageTurn({
       ) : null}
 
       <TimelineImageResultsPanel blocks={toolResultImageBlocks} onOpenVisualReview={onOpenImageArtifactInVisualReview} />
+
+      <TimelineDatasetResultsPanel
+        blocks={isProcessing ? [] : turn.blocks}
+        workspaceRoot={workspaceRoot}
+      />
 
       <TimelineScientificObjectsPanel
         blocks={isProcessing ? [] : turn.blocks}
