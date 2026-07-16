@@ -56,7 +56,7 @@ describe('RuntimeVisualExecutionGuard', () => {
         summary: 'gui_visual_capture',
         detail: JSON.stringify({
           ok: true,
-          inspection: { provider: 'model-router-vision', attestation: ATTESTATION }
+          evidence: { provider: 'model-router', attestation: ATTESTATION }
         }),
         meta: { toolName: 'gui_visual_capture' }
       }
@@ -81,7 +81,7 @@ describe('RuntimeVisualExecutionGuard', () => {
     }
   })
 
-  it('accepts a successful native view_image tool event', () => {
+  it('rejects native view_image as an unattested inspection side path', () => {
     const guard = new RuntimeVisualExecutionGuard()
     guard.rememberTurn('codex', requiredInput('codex'), 'codex-thread', 'codex-turn')
     guard.observe('codex', {
@@ -96,8 +96,44 @@ describe('RuntimeVisualExecutionGuard', () => {
 
     expect(guard.observe('codex', completedEvent('codex')).event).toMatchObject({
       kind: 'turn_lifecycle',
-      state: 'completed'
+      state: 'failed'
     })
+  })
+
+  it('requires a passing artifact review after a visual production route starts', () => {
+    const guard = new RuntimeVisualExecutionGuard()
+    guard.rememberTurn('codex', requiredInput('codex'), 'codex-thread', 'codex-turn')
+    guard.observe('codex', toolEvent('visual_generate', {
+      ok: true,
+      routeLocked: true,
+      execution: { nextCall: { tool: 'image_generation_prepare' } }
+    }))
+    guard.observe('codex', toolEvent('view_image', { ok: true }))
+    expect(guard.observe('codex', completedEvent('codex')).event).toMatchObject({ state: 'failed' })
+
+    const reviewed = new RuntimeVisualExecutionGuard()
+    reviewed.rememberTurn('codex', requiredInput('codex'), 'codex-thread', 'codex-turn')
+    reviewed.observe('codex', toolEvent('scientific_plotting_render', { ok: true }))
+    reviewed.observe('codex', toolEvent('visual_artifact_review', {
+      ok: true,
+      status: 'publication_ready',
+      semantic: { pass: true }
+    }))
+    expect(reviewed.observe('codex', completedEvent('codex')).event).toMatchObject({ state: 'completed' })
+  })
+
+  it('does not accept a failed or needs-context artifact review', () => {
+    for (const result of [
+      { ok: false, status: 'review_failed' },
+      { ok: true, status: 'needs_context' },
+      { ok: true, status: 'repair_required', semantic: { pass: false } }
+    ]) {
+      const guard = new RuntimeVisualExecutionGuard()
+      guard.rememberTurn('codex', requiredInput('codex'), 'codex-thread', 'codex-turn')
+      guard.observe('codex', toolEvent('image_generation_render', { ok: true }))
+      guard.observe('codex', toolEvent('visual_artifact_review', result))
+      expect(guard.observe('codex', completedEvent('codex')).event).toMatchObject({ state: 'failed' })
+    }
   })
 
   it('reconstructs the gate from replayed runtime events after a host restart', () => {
@@ -196,7 +232,7 @@ function attestedCaptureEvent(runtimeId: AgentRuntimeId): AgentRuntimeEvent {
     summary: 'gui_visual_capture',
     detail: JSON.stringify({
       ok: true,
-      inspection: { provider: 'model-router-vision', attestation: ATTESTATION }
+      evidence: { provider: 'model-router', attestation: ATTESTATION }
     }),
     meta: { toolName: 'gui_visual_capture' }
   }
@@ -212,10 +248,7 @@ function captureOnlyEvent(): AgentRuntimeEvent {
     status: 'success',
     summary: 'gui_visual_capture',
     detail: JSON.stringify({ ok: true }),
-    meta: {
-      toolName: 'gui_visual_capture',
-      arguments: { requireSemanticInspection: false }
-    }
+    meta: { toolName: 'gui_visual_capture' }
   }
 }
 
@@ -229,5 +262,19 @@ function reasoningOnlyEvent(): AgentRuntimeEvent {
     text: 'I used view_image and it returned nothing.',
     visibility: 'summary',
     source: 'runtime_summary'
+  }
+}
+
+function toolEvent(toolName: string, detail: unknown): AgentRuntimeEvent {
+  return {
+    kind: 'tool_event',
+    runtimeId: 'codex',
+    threadId: 'codex-thread',
+    turnId: 'codex-turn',
+    itemId: `${toolName}-result`,
+    status: 'success',
+    summary: toolName,
+    detail: JSON.stringify(detail),
+    meta: { toolName }
   }
 }

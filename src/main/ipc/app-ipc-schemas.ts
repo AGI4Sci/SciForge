@@ -39,21 +39,15 @@ import {
   RESEARCH_CARD_STATUSES
 } from '../../shared/research-cards'
 import {
-  workspacePreviewByteRangeSchema,
-  workspacePreviewEditOperationSchema,
-  workspacePreviewExportTargetSchema,
   workspacePreviewAnchorSchema,
   workspacePreviewIntegrityExpectationSchema,
   workspacePreviewModeSchema,
-  workspacePreviewPrepareArtifactRequestSchema,
-  workspacePreviewPluginActionInputSchema,
-  workspacePreviewReadArtifactRangeRequestSchema,
   workspaceStructuredSelectionSchema
 } from '../../shared/workspace-preview'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
 export {
   visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
-  visibleContextSnapshotSchema as visibleContextPublishPayloadSchema
+  visibleContextPublishInputSchema as visibleContextPublishPayloadSchema
 } from '../../shared/visible-context'
 
 const MAX_BODY_BYTES = 2_000_000
@@ -1479,6 +1473,9 @@ const settingsPatchObjectSchema = z.object({
   provider: modelProviderPatchSchema.optional(),
   modelRouter: modelRouterPatchSchema.optional(),
   runtimeGuards: runtimeGuardPatchSchema.optional(),
+  evidenceDag: z.object({
+    enabled: z.boolean().optional()
+  }).strict().optional(),
   agentCapabilities: agentCapabilityPatchSchema.optional(),
   imageGeneration: imageGenerationPatchSchema.optional(),
   computerUse: computerUsePatchSchema.optional(),
@@ -1892,8 +1889,6 @@ export const workspaceFileTargetPayloadSchema = z
   })
   .strict()
 
-export const workspacePreviewListPluginsPayloadSchema = z.object({}).strict()
-
 export const workspacePreviewOpenPayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),
@@ -1905,74 +1900,6 @@ export const workspacePreviewOpenPayloadSchema = z
     selection: workspaceStructuredSelectionSchema.optional(),
     anchor: workspacePreviewAnchorSchema.optional(),
     integrity: workspacePreviewIntegrityExpectationSchema.optional()
-  })
-  .strict()
-
-export const workspacePreviewObservePayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const workspacePreviewReleaseSessionPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const workspacePreviewDescribeAssetPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-export const workspacePreviewReadRangePayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    range: workspacePreviewByteRangeSchema
-  })
-  .strict()
-
-export const workspacePreviewPrepareArtifactPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    request: workspacePreviewPrepareArtifactRequestSchema
-  })
-  .strict()
-
-export const workspacePreviewReadArtifactRangePayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    request: workspacePreviewReadArtifactRangeRequestSchema
-  })
-  .strict()
-
-export const workspacePreviewApplyEditPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    operation: workspacePreviewEditOperationSchema
-  })
-  .strict()
-
-const workspacePreviewIpcExportTargetSchema = workspacePreviewExportTargetSchema.refine(
-  (target) => target.kind !== 'workspace-file' || Boolean(target.path?.trim()),
-  {
-    path: ['path'],
-    message: 'workspace-file export targets require a path over IPC.'
-  }
-)
-
-export const workspacePreviewExportPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    target: workspacePreviewIpcExportTargetSchema
-  })
-  .strict()
-
-export const workspacePreviewInvokeActionPayloadSchema = z
-  .object({
-    sessionId: trimmedString(MAX_ID_LENGTH),
-    action: workspacePreviewPluginActionInputSchema
   })
   .strict()
 

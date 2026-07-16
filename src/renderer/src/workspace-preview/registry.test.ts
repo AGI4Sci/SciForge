@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
   WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
@@ -41,7 +40,7 @@ describe('renderer workspace preview registry', () => {
 
     for (const descriptor of DEFAULT_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS) {
       const manifest = workspacePreviewPluginManifestSchema.parse(descriptor.manifest)
-      expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
+      expect(manifest.capabilities).not.toHaveProperty('agent')
     }
   })
 

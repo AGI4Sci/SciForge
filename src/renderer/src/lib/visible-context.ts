@@ -3,7 +3,7 @@ import {
   VISIBLE_CONTEXT_SCHEMA_VERSION,
   type VisibleContextBounds,
   type VisibleContextComponentSnapshot,
-  type VisibleContextSnapshot,
+  type VisibleContextPublishInput,
   type VisualContextTarget
 } from '@shared/visible-context'
 
@@ -27,7 +27,6 @@ let nextSensitiveTargetId = 0
 let shell: VisibleContextShell = {}
 let publishTimer: number | null = null
 let revision = 0
-const rendererWindowId = createRendererWindowId()
 
 export function setVisibleContextShell(next: VisibleContextShell): void {
   ensureVisibleContextRefreshListener()
@@ -188,9 +187,8 @@ function publishVisibleContext(): void {
   if (typeof publish !== 'function') return
   const publishedAt = new Date().toISOString()
   revision += 1
-  const snapshot: VisibleContextSnapshot = {
+  const snapshot: VisibleContextPublishInput = {
     schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
-    windowId: rendererWindowId,
     revision,
     publishedAt,
     freshness: {
@@ -257,9 +255,4 @@ function uninstallVisualTargetListenersWhenIdle(): void {
   visualTargetListenersInstalled = false
   window.removeEventListener('resize', handleVisualTargetLayoutChange)
   window.removeEventListener('scroll', handleVisualTargetLayoutChange, true)
-}
-
-function createRendererWindowId(): string {
-  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID()
-  return `renderer-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`
 }

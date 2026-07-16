@@ -6,11 +6,11 @@ import { readFile } from 'node:fs/promises'
 import {
   VISIBLE_CONTEXT_RESOURCE_URI,
   VisualCaptureInputSchema,
+  WorkspaceImageInspectInputSchema,
   WORKSPACE_FILE_RESOURCE_URI_TEMPLATE,
   WORKSPACE_TREE_RESOURCE_URI,
   VisibleContextInputSchema,
   WorkspaceListInputSchema,
-  WorkspacePreviewInputSchema,
   WorkspaceReadInputSchema,
   WorkspaceReferenceListInputSchema,
   WorkspaceReferencePreviewInputSchema,
@@ -53,7 +53,7 @@ export function createWorkspaceIntelMcpServer(
   )
 
   server.registerTool('gui_visible_context', {
-    description: 'Inspect the GUI visible-context registry, including active right-sidebar components and resource pointers, without injecting full file or PDF contents.',
+    description: 'Inspect the current GUI surface registry. The returned snapshotToken is required by gui_visual_capture and binds capture to this exact window, thread, and revision.',
     inputSchema: VisibleContextInputSchema,
     annotations: READ_ONLY_TOOL_ANNOTATIONS
   }, async (args) => {
@@ -64,23 +64,44 @@ export function createWorkspaceIntelMcpServer(
   })
 
   server.registerTool('gui_visual_capture', {
-    description: 'Capture and semantically inspect the current SciForge window or one visual target published by gui_visible_context. Semantic inspection is enabled by default and runs through Model Router vision before success, returning an attested textual observation plus the PNG. Set requireSemanticInspection=false only for capture-only diagnostics; capture-only results do not satisfy visual QA. Arbitrary coordinates are not accepted.',
+    description: 'Capture and visually understand the exact SciForge surface identified by a fresh gui_visible_context snapshotToken. Accepts a general task, normalized regions, truth locks, and output intent. Target identifiers must come from the same snapshot; arbitrary coordinates and cross-surface fallback are forbidden.',
     inputSchema: VisualCaptureInputSchema,
     annotations: READ_ONLY_TOOL_ANNOTATIONS
   }, async (args) => {
     const result = await service.visualCapture(args)
     if (!result.ok) return toolResult(result, result.error.message)
     const bytes = await readFile(result.resource.path)
-    const inspectionText = result.inspection
-      ? visualInspectionText(result.inspection)
-      : 'Semantic visual inspection was explicitly disabled; this capture is not visual QA evidence.'
     return {
       content: [
         {
           type: 'text',
-          text: `Captured ${result.resource.role} visual context to ${result.resource.path}.\n${inspectionText}`
+          text: `Captured ${result.resource.role} visual context to ${result.resource.path}.\n${visualEvidenceText(result.evidence)}`
         },
         { type: 'image', data: bytes.toString('base64'), mimeType: result.resource.mimeType }
+      ],
+      structuredContent: result
+    }
+  })
+
+  server.registerTool('gui_workspace_image_inspect', {
+    description: 'Run a general visual-understanding task over one or more workspace-confined PNG, JPEG, or WebP artifacts. Supports normalized regions, truth locks, comparison and structured output intent; all model inference goes through the SciForge Model Router.',
+    inputSchema: WorkspaceImageInspectInputSchema,
+    annotations: READ_ONLY_TOOL_ANNOTATIONS
+  }, async (args) => {
+    const result = await service.inspectWorkspaceImages(args)
+    if (!result.ok) return toolResult(result, result.error.message)
+    const images = await Promise.all(result.artifacts.map(async (artifact) => ({
+      artifact,
+      bytes: await readFile(artifact.path)
+    })))
+    return {
+      content: [
+        { type: 'text', text: visualEvidenceText(result.evidence) },
+        ...images.map(({ artifact, bytes }) => ({
+          type: 'image' as const,
+          data: bytes.toString('base64'),
+          mimeType: artifact.mimeType
+        }))
       ],
       structuredContent: result
     }
@@ -117,15 +138,6 @@ export function createWorkspaceIntelMcpServer(
     return toolResult(result, result.ok
       ? `Read ${result.bytesRead} byte(s) from ${result.relativePath}${result.truncated ? '; more bytes are available.' : '.'}`
       : result.error.message)
-  })
-
-  server.registerTool('gui_workspace_preview', {
-    description: 'Preview a workspace file or directory without returning unbounded payloads.',
-    inputSchema: WorkspacePreviewInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.preview(args)
-    return toolResult(result, result.ok ? result.contentSummary : result.error.message)
   })
 
   server.registerTool('gui_workspace_reference_list', {
@@ -204,15 +216,15 @@ export function createWorkspaceIntelMcpServer(
   return server
 }
 
-function visualInspectionText(inspection: VisualInspectionEvidence): string {
+function visualEvidenceText(evidence: VisualInspectionEvidence): string {
   const lines = [
-    `Semantic visual inspection completed. Attestation: ${inspection.attestation}`,
-    `Summary: ${inspection.summary}`,
-    `Confidence: ${inspection.confidence}`
+    `Visual understanding completed through Model Router. Attestation: ${evidence.attestation}`,
+    `Summary: ${evidence.summary}`
   ]
-  if (inspection.visibleFacts.length) lines.push(`Visible facts: ${inspection.visibleFacts.join(' | ')}`)
-  if (inspection.layoutIssues.length) lines.push(`Layout issues: ${inspection.layoutIssues.join(' | ')}`)
-  if (inspection.recommendedActions.length) lines.push(`Recommended actions: ${inspection.recommendedActions.join(' | ')}`)
+  if (evidence.claims.length) {
+    lines.push(`Claims: ${evidence.claims.map((claim) => `[${claim.kind}; ${claim.artifactId}; ${claim.confidence}] ${claim.text}`).join(' | ')}`)
+  }
+  if (evidence.uncertainties.length) lines.push(`Uncertainties: ${evidence.uncertainties.join(' | ')}`)
   return lines.join('\n')
 }
 

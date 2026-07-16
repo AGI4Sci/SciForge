@@ -94,11 +94,11 @@ import {
 import { useComposerDraft } from './use-composer-draft'
 import {
   composerDraftContextKey,
+  createComposerDraftPersistence,
   mergeComposerInputHistory,
   readComposerDraft,
   readComposerInputHistory,
-  rememberComposerInput,
-  writeComposerDraft
+  rememberComposerInput
 } from './composer-input-memory'
 import {
   SPEECH_TRANSCRIPTION_MAX_DURATION_MS,
@@ -867,6 +867,10 @@ export function FloatingComposer({
   )
   const activeDraftKeyRef = useRef<string | null>(null)
   const skipDraftPersistenceRef = useRef(false)
+  const draftPersistenceRef = useRef<ReturnType<typeof createComposerDraftPersistence> | null>(null)
+  if (!draftPersistenceRef.current) {
+    draftPersistenceRef.current = createComposerDraftPersistence()
+  }
   const [composerCursor, setComposerCursor] = useState(() => input.length)
   const [dismissedFileMentionKey, setDismissedFileMentionKey] = useState<string | null>(null)
   const draft = useComposerDraft({
@@ -904,7 +908,9 @@ export function FloatingComposer({
     if (!remembersComposerInput) return
     const previousKey = activeDraftKeyRef.current
     if (previousKey === composerDraftKey) return
-    if (previousKey) writeComposerDraft(previousKey, input)
+    // Commit any pending value for the previous thread before restoring the
+    // next one. This avoids both data loss and synchronous writes per keypress.
+    draftPersistenceRef.current?.flush()
     const restored = readComposerDraft(composerDraftKey)
     activeDraftKeyRef.current = composerDraftKey
     skipDraftPersistenceRef.current = true
@@ -917,8 +923,12 @@ export function FloatingComposer({
       skipDraftPersistenceRef.current = false
       return
     }
-    writeComposerDraft(composerDraftKey, input)
+    draftPersistenceRef.current?.schedule(composerDraftKey, input)
   }, [composerDraftKey, input, remembersComposerInput])
+
+  useEffect(() => () => {
+    draftPersistenceRef.current?.flush()
+  }, [])
 
   useEffect(() => {
     imageGenerationModeRef.current = imageGenerationMode
@@ -1490,6 +1500,7 @@ export function FloatingComposer({
 
   const primaryActionRef = useRef<() => void>(() => undefined)
   primaryActionRef.current = (): void => {
+    if (remembersComposerInput) draftPersistenceRef.current?.flush()
     if (highlightedSlashCommand) {
       if (highlightedSlashCommand.disabled) return
       applySlashCommand(highlightedSlashCommand.id)
@@ -2303,14 +2314,16 @@ export function FloatingComposer({
             disabled={!canEditComposer}
             onChange={(e) => {
               draft.resetHistoryNavigation(e.target.value)
-              if (remembersComposerInput) writeComposerDraft(composerDraftKey, e.target.value)
               setInput(e.target.value)
               setComposerCursor(e.target.selectionStart ?? e.target.value.length)
               setDismissedFileMentionKey(null)
             }}
             onSelect={(e) => syncComposerCursor(e.currentTarget)}
             onFocus={draft.onFocus}
-            onBlur={draft.onBlur}
+            onBlur={() => {
+              draft.onBlur()
+              if (remembersComposerInput) draftPersistenceRef.current?.flush()
+            }}
             onCompositionStart={draft.onCompositionStart}
             onCompositionEnd={draft.onCompositionEnd}
             onKeyDown={handleComposerKeyDown}

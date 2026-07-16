@@ -43,6 +43,47 @@ protein sequence is translated, while DNA/RNA or nucleotide-ambiguous content fa
 
 `SCIFORGE_MODEL_ROUTER_CONFIG=/path/to/router.config.json` can provide the same `ModelRouterConfig` shape exported by `src/router.ts`. Relative profile `traceRoot` values resolve under `SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT` or the platform state-data default, never under the workspace. Public UI and audits should show only the router alias/profile/role readiness; provider URLs, API keys, and raw model slugs remain private router configuration.
 
+## Capability discovery
+
+Authenticated runtimes negotiate the active registered profile through the same router control plane:
+
+```bash
+curl -H "Authorization: Bearer $SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY" \
+  http://127.0.0.1:3892/v1/capabilities
+```
+
+The `sciforge.model-router.capabilities.v1` response contains only the public model alias,
+selected profile id, role readiness, accepted visual MIME/input limits, and image
+generation/edit/reference/mask/size features. It never returns provider URLs, provider names,
+credential environment names, raw model slugs, or keys. Use
+`x-sciforge-model-router-profile` to inspect a registered non-default profile; unknown profiles
+fail closed.
+
+Profiles may narrow the router defaults with a public capability registration:
+
+```json
+{
+  "capabilities": {
+    "vision": {
+      "mimeTypes": ["image/png", "image/jpeg", "image/webp"],
+      "maxInputBytes": 8388608
+    },
+    "images": {
+      "generation": true,
+      "editing": true,
+      "referenceImages": true,
+      "masks": true,
+      "sizeSelection": true,
+      "sizes": ["512x512", "1024x1024"]
+    }
+  }
+}
+```
+
+Feature availability is the intersection of this registration, the profile's registered roles,
+and current credential readiness. If no size list is registered, `sizes.mode` is
+`provider-defined`; clients should omit `size` and use the provider default instead of guessing.
+
 ## Trace Audit
 
 Trace bundles are refs-first evidence. They should contain role aliases, hashes, public router alias/profile, bounded call status, and sanitized summaries only. After a live or staging provider run, scan the trace root before using it as release evidence:

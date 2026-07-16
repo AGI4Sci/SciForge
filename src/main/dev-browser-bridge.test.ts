@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { AddressInfo } from 'node:net'
 import { request } from 'node:http'
 import { readFileSync } from 'node:fs'
+import { z } from 'zod'
+import { CapabilityBroker } from './capabilities/broker'
+import { registerCapabilityIpc } from './capabilities/ipc'
+import { CapabilityRegistry, defineCapability } from './capabilities/registry'
 import {
   DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS,
   startDevBrowserBridgeServer,
@@ -162,86 +166,114 @@ describe('dev browser bridge server', () => {
     )
   })
 
-  it('serves workspace preview assets through session-scoped byte range transport', async () => {
-    const bytes = Buffer.from('%PDF')
-    const invoke = vi.fn(async (channel, payload) => {
-      if (channel === 'workspacePreview:describeAsset') {
-        return {
-          ok: true,
-          descriptor: {
-            schemaVersion: 1,
-            sessionId: 'session-pdf',
-            assetId: 'asset:session-pdf',
-            pluginId: 'pdf',
-            modality: 'document',
-            file: {
-              name: 'paper.pdf',
-              relativePath: 'paper.pdf',
-              mimeType: 'application/pdf',
-              size: bytes.length
-            },
-            primary: 'byte-range',
-            eagerRead: {
-              allowed: false,
-              reason: 'lazy asset transport'
-            },
-            range: {
-              available: true,
-              maxChunkBytes: 4,
-              recommendedChunkBytes: 4,
-              size: bytes.length
-            },
-            strategies: [{
-              kind: 'byte-range',
-              status: 'available',
-              reason: 'bounded reads',
-              maxChunkBytes: 4
-            }]
-          }
-        }
-      }
-      if (channel === 'workspacePreview:readRange') {
-        const request = payload as { range: { offset: number; length: number } }
-        const chunk = bytes.subarray(request.range.offset, request.range.offset + request.range.length)
-        return {
-          ok: true,
-          sessionId: 'session-pdf',
-          assetId: 'asset:session-pdf',
-          offset: request.range.offset,
-          length: chunk.length,
-          size: bytes.length,
-          dataBase64: chunk.toString('base64'),
-          mimeType: 'application/pdf'
-        }
-      }
-      return { ok: false, message: `Unexpected channel ${channel}` }
+  it('routes browser capability calls through the same generic broker handlers as Electron', async () => {
+    const broker = new CapabilityBroker(new CapabilityRegistry([defineCapability({
+      id: 'workspace-preview.list',
+      version: '1',
+      title: 'List preview providers',
+      description: 'Lists preview providers through the generic browser capability transport.',
+      audiences: ['ui'],
+      scope: 'global',
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.array(z.object({ id: z.string() })),
+      handler: async () => ({ output: [{ id: 'pdf' }] })
+    })]))
+    const ipc = {
+      removeHandler: vi.fn(),
+      handle: vi.fn()
+    }
+    const capabilityDispatcher = registerCapabilityIpc({ broker, ipc: ipc as never })
+
+    server = await startDevBrowserBridgeServer({
+      dispatcher: capabilityDispatcher,
+      port: 0
     })
+
+    const response = await postJson('/invoke', {
+      channel: 'capability:invoke',
+      payload: {
+        request: {
+          actionId: 'workspace-preview.list',
+          input: {}
+        }
+      }
+    })
+
+    expect(response.status).toBe(200)
+    expect(JSON.parse(response.body)).toMatchObject({
+      ok: true,
+      payload: {
+        actionId: 'workspace-preview.list',
+        output: [{ id: 'pdf' }],
+        changed: false
+      }
+    })
+  })
+
+  it('serves generic broker-managed resource content with HTTP byte ranges', async () => {
+    const resource = {
+      token: `cap_${'a'.repeat(32)}`,
+      semanticRevision: '1',
+      expiresAt: '2026-07-16T14:00:00.000Z'
+    }
+    const describe = vi.fn(async () => ({
+      size: 8,
+      mimeType: 'application/pdf',
+      fileName: 'paper.pdf',
+      maxChunkBytes: 4,
+      recommendedChunkBytes: 4
+    }))
+    const readRange = vi.fn(async (payload: unknown) => {
+      const range = (payload as { range: { offset: number; length: number } }).range
+      return {
+        offset: range.offset,
+        length: range.length,
+        size: 8,
+        dataBase64: Buffer.from('PDF-DATA'.slice(range.offset, range.offset + range.length)).toString('base64')
+      }
+    })
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke: vi.fn() },
+      resourceContent: { describe, readRange },
+      port: 0
+    })
+    const query = new URLSearchParams({
+      clientId: 'browser-resource',
+      access: JSON.stringify({ workspaceId: '/workspace', resource })
+    })
+
+    const response = await readFromResponse(`/capability/resources/content?${query}`, {
+      headers: { Range: 'bytes=4-7' }
+    })
+
+    expect(response.status).toBe(206)
+    expect(response.body).toBe('DATA')
+    expect(response.headers['content-type']).toBe('application/pdf')
+    expect(response.headers['content-range']).toBe('bytes 4-7/8')
+    expect(describe).toHaveBeenCalledWith(
+      { workspaceId: '/workspace', resource },
+      expect.objectContaining({ id: expect.any(Number) })
+    )
+    expect(readRange).toHaveBeenCalledWith(
+      { workspaceId: '/workspace', resource, range: { offset: 4, length: 4 } },
+      expect.objectContaining({ id: expect.any(Number) })
+    )
+  })
+
+  it('does not retain the legacy session-scoped Workspace Preview asset route', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }))
     const dispatcher: DevBrowserBridgeDispatcher = { invoke }
 
     server = await startDevBrowserBridgeServer({ dispatcher, port: 0 })
 
-    const response = await readFromResponse('/workspace-preview/assets/session-pdf?clientId=browser-1', {
-      headers: { Range: 'bytes=1-3' }
-    })
+    const response = await readFromResponse('/workspace-preview/assets/session-pdf?clientId=browser-1')
 
-    expect(response.status).toBe(206)
-    expect(response.headers['content-type']).toBe('application/pdf')
-    expect(response.headers['accept-ranges']).toBe('bytes')
-    expect(response.headers['content-range']).toBe(`bytes 1-3/${bytes.length}`)
-    expect(response.body).toBe('PDF')
-    expect(invoke).toHaveBeenCalledWith(
-      'workspacePreview:describeAsset',
-      { sessionId: 'session-pdf' },
-      expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
-    )
-    expect(invoke).toHaveBeenCalledWith(
-      'workspacePreview:readRange',
-      {
-        sessionId: 'session-pdf',
-        range: { offset: 1, length: 3 }
-      },
-      expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
-    )
+    expect(response.status).toBe(404)
+    expect(JSON.parse(response.body)).toEqual({ ok: false, message: 'Not found.' })
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('rejects invoke requests from non-local origins', async () => {
@@ -503,6 +535,7 @@ describe('dev browser bridge server', () => {
 
     server = await startDevBrowserBridgeServer({ dispatcher, port: 0 })
     const sse = await openSse('/events?clientId=browser-2')
+    expect(server.hasClient(1)).toBe(true)
 
     const response = await postJson('/invoke', {
       channel: 'agentRuntime:subscribeEvents',
@@ -514,6 +547,12 @@ describe('dev browser bridge server', () => {
       expect(sse.chunks.join('')).toContain('"channel":"agentRuntime:event"')
       expect(sse.chunks.join('')).toContain('"streamId":"stream-1"')
     })
+    expect(server.sendTo(1, 'visibleContext:refresh-requested')).toBe(true)
+    await vi.waitFor(() => {
+      expect(sse.chunks.join('')).toContain('"channel":"visibleContext:refresh-requested"')
+    })
+    expect(server.sendTo(999, 'visibleContext:refresh-requested')).toBe(false)
+    expect(server.hasClient(999)).toBe(false)
     sse.close()
   })
 

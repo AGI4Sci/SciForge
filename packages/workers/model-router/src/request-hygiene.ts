@@ -7,7 +7,8 @@ const MAX_ARGUMENT_STRING_CHARS = 6_000;
 const MAX_ARGUMENT_ARRAY_ITEMS = 32;
 const ARGUMENT_ARRAY_PREVIEW_ITEMS = 6;
 const MARKER_KEY = '__sciforge_request_hygiene__';
-const OMITTED_SHELL_COMMAND = ': # sciforge request hygiene omitted prior shell command; inspect paired tool result';
+const OMITTED_SHELL_COMMAND =
+  'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
 
 export function hygienizeChatProviderBody(body: Record<string, unknown>): Record<string, unknown> {
   return hygienizeValue(body, { source: 'chat_request' }) as Record<string, unknown>;
@@ -53,6 +54,7 @@ function hygienizeToolArguments(value: string, source: string): string {
 function hygienizeArgumentValue(value: unknown, source: string): unknown {
   if (typeof value === 'string') {
     const text = replaceEncodedPayloads(value, source);
+    if (isShellCommandSource(source) && isShellHistoryPlaceholder(text)) return OMITTED_SHELL_COMMAND;
     if (text.length <= MAX_ARGUMENT_STRING_CHARS) return text;
     if (isShellCommandSource(source)) return OMITTED_SHELL_COMMAND;
     return markerText(source, 'large_argument_string', value, safeSummary(text));
@@ -75,7 +77,16 @@ function hygienizeArgumentValue(value: unknown, source: string): unknown {
 }
 
 function isShellCommandSource(source: string): boolean {
-  return /(?:^|\.)(?:cmd|command)$/u.test(source);
+  return /(?:^|\.)(?:cmd|command|shell_command|shellcommand)$/iu.test(source);
+}
+
+function isShellHistoryPlaceholder(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith('[cache hygiene:') ||
+    trimmed.startsWith('[sciforge request_hygiene') ||
+    /^(?::|false)\s*#\s*sciforge\s+(?:history metadata only|history omitted prior (?:bash|shell) command|request hygiene omitted prior shell command)\b/iu.test(trimmed)
+  );
 }
 
 function hygienizeText(value: string, context: HygieneContext): string {

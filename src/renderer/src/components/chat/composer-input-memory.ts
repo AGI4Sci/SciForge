@@ -17,6 +17,13 @@ type ComposerInputMemory = {
   history: string[]
 }
 
+type ComposerInputMemoryCacheEntry = {
+  raw: string | null
+  memory: ComposerInputMemory
+}
+
+const memoryCache = new WeakMap<BrowserStorageLike, ComposerInputMemoryCacheEntry>()
+
 export type ComposerHistoryNavigationState = {
   cursor: number | null
   draft: string
@@ -53,13 +60,26 @@ function normalizeHistory(value: unknown): string[] {
 function readMemory(storage: BrowserStorageLike | null = browserStorage()): ComposerInputMemory {
   try {
     const raw = storage?.getItem(COMPOSER_INPUT_MEMORY_STORAGE_KEY)
-    if (!raw) return emptyMemory()
+    if (!storage) return emptyMemory()
+    const cached = memoryCache.get(storage)
+    if (cached && cached.raw === raw) return cached.memory
+    if (!raw) {
+      const memory = emptyMemory()
+      memoryCache.set(storage, { raw: null, memory })
+      return memory
+    }
     if (raw.length > MAX_STORAGE_CHARS) {
       storage?.removeItem?.(COMPOSER_INPUT_MEMORY_STORAGE_KEY)
-      return emptyMemory()
+      const memory = emptyMemory()
+      memoryCache.set(storage, { raw: null, memory })
+      return memory
     }
     const parsed = JSON.parse(raw) as Record<string, unknown>
-    if (!parsed || parsed.version !== 1) return emptyMemory()
+    if (!parsed || parsed.version !== 1) {
+      const memory = emptyMemory()
+      memoryCache.set(storage, { raw, memory })
+      return memory
+    }
     const rawDrafts = parsed.drafts && typeof parsed.drafts === 'object' && !Array.isArray(parsed.drafts)
       ? parsed.drafts as Record<string, unknown>
       : {}
@@ -73,7 +93,9 @@ function readMemory(storage: BrowserStorageLike | null = browserStorage()): Comp
         : 0
       if (text) drafts[key] = { text, updatedAt }
     }
-    return { drafts, history: normalizeHistory(parsed.history) }
+    const memory = { drafts, history: normalizeHistory(parsed.history) }
+    memoryCache.set(storage, { raw, memory })
+    return memory
   } catch {
     return emptyMemory()
   }
@@ -82,7 +104,9 @@ function readMemory(storage: BrowserStorageLike | null = browserStorage()): Comp
 function writeMemory(memory: ComposerInputMemory, storage: BrowserStorageLike | null = browserStorage()): boolean {
   try {
     if (!storage) return false
-    storage.setItem(COMPOSER_INPUT_MEMORY_STORAGE_KEY, JSON.stringify({ version: 1, ...memory }))
+    const raw = JSON.stringify({ version: 1, ...memory })
+    storage.setItem(COMPOSER_INPUT_MEMORY_STORAGE_KEY, raw)
+    memoryCache.set(storage, { raw, memory })
     return true
   } catch {
     return false
@@ -114,8 +138,13 @@ export function writeComposerDraft(
 ): boolean {
   const key = contextKey.trim()
   if (!key) return false
-  const memory = readMemory(storage)
+  const previous = readMemory(storage)
   const text = safeText(value, true)
+  if ((previous.drafts[key]?.text ?? '') === (text ?? '')) return storage !== null
+  const memory: ComposerInputMemory = {
+    drafts: { ...previous.drafts },
+    history: previous.history
+  }
   if (text) memory.drafts[key] = { text, updatedAt: now }
   else delete memory.drafts[key]
   const retained = Object.entries(memory.drafts)
@@ -128,19 +157,72 @@ export function writeComposerDraft(
 export function readComposerInputHistory(
   storage: BrowserStorageLike | null = browserStorage()
 ): string[] {
-  return readMemory(storage).history
+  return [...readMemory(storage).history]
 }
 
 export function rememberComposerInput(
   value: string,
   storage: BrowserStorageLike | null = browserStorage()
 ): string[] {
-  const memory = readMemory(storage)
+  const previous = readMemory(storage)
   const text = safeText(value)
-  if (!text) return memory.history
-  memory.history = normalizeHistory([...memory.history, text])
+  if (!text) return previous.history
+  const memory: ComposerInputMemory = {
+    drafts: previous.drafts,
+    history: normalizeHistory([...previous.history, text])
+  }
   writeMemory(memory, storage)
   return memory.history
+}
+
+export type ComposerDraftPersistence = {
+  schedule: (contextKey: string, value: string) => void
+  flush: () => boolean
+  cancel: () => void
+}
+
+export function createComposerDraftPersistence(options: {
+  storage?: BrowserStorageLike | null
+  delayMs?: number
+  now?: () => number
+} = {}): ComposerDraftPersistence {
+  const storage = options.storage === undefined ? browserStorage() : options.storage
+  const delayMs = Math.max(0, options.delayMs ?? 400)
+  const now = options.now ?? Date.now
+  let timer: ReturnType<typeof setTimeout> | null = null
+  let pending: { contextKey: string; value: string } | null = null
+
+  const cancelTimer = (): void => {
+    if (timer === null) return
+    clearTimeout(timer)
+    timer = null
+  }
+
+  const flush = (): boolean => {
+    cancelTimer()
+    if (!pending) return true
+    const next = pending
+    pending = null
+    return writeComposerDraft(next.contextKey, next.value, storage, now())
+  }
+
+  return {
+    schedule: (contextKey, value) => {
+      const key = contextKey.trim()
+      if (!key) return
+      pending = { contextKey: key, value }
+      cancelTimer()
+      timer = setTimeout(() => {
+        timer = null
+        flush()
+      }, delayMs)
+    },
+    flush,
+    cancel: () => {
+      cancelTimer()
+      pending = null
+    }
+  }
 }
 
 export function mergeComposerInputHistory(...groups: ReadonlyArray<readonly string[]>): string[] {

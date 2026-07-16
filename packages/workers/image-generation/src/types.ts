@@ -391,7 +391,7 @@ export type DiagramLayerManifest = {
   layers: DiagramLayer[]
 }
 
-export type ImageGenerationProvider = 'image-endpoint' | 'placeholder' | 'controlled-edit'
+export type ImageGenerationProvider = 'image-endpoint' | 'placeholder'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 
 export type ImageGenerationRecipe = {
@@ -544,7 +544,7 @@ export type VisualArtifactReviewScore = {
 export type VisualArtifactReviewResult =
   | {
       ok: true
-      status: 'publication_ready' | 'draft_ready' | 'needs_context'
+      status: 'publication_ready' | 'draft_ready' | 'repair_required' | 'needs_context'
       reviewedArtifactPath: string
       reviewedArtifactHash: string
       reviewedAt: string
@@ -557,6 +557,12 @@ export type VisualArtifactReviewResult =
         repairInstructions: string[]
       }
       repairable: boolean
+      nextAction?: {
+        kind: 'same_route_repair'
+        route: VisualProductionHandoff['route']
+        maxAttempts: 2
+        instructions: string[]
+      }
       warnings: string[]
     }
   | {

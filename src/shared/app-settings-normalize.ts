@@ -10,6 +10,8 @@ import {
   type RemoteExecutorSettingsPatchV1,
   type GuiUpdateConfigV1,
   type ImageGenerationSettingsPatchV1,
+  type EvidenceDagSettingsPatchV1,
+  type EvidenceDagSettingsV1,
   type NotificationConfigV1,
   type ScheduleSettingsPatchV1,
   type SpeechToTextSettingsPatchV1,
@@ -64,6 +66,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     speechToText?: SpeechToTextSettingsPatchV1
     guiUpdate?: Partial<GuiUpdateConfigV1>
     runtimeGuards?: Parameters<typeof normalizeRuntimeGuardSettings>[0]
+    evidenceDag?: EvidenceDagSettingsPatchV1
     agentCapabilities?: AgentCapabilitySettingsPatchV1
     imageGeneration?: ImageGenerationSettingsPatchV1
     computerUse?: ComputerUseSettingsPatchV1
@@ -88,6 +91,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     provider: normalizeModelProviderSettings(maybeSettings.provider),
     modelRouter: normalizeModelRouterSettings(maybeSettings.modelRouter),
     runtimeGuards: normalizeRuntimeGuardSettings(maybeSettings.runtimeGuards),
+    evidenceDag: normalizeEvidenceDagSettings(maybeSettings.evidenceDag),
     agentCapabilities: normalizeAgentCapabilitySettings(maybeSettings.agentCapabilities),
     imageGeneration: normalizeImageGenerationSettings(maybeSettings.imageGeneration),
     computerUse: normalizeComputerUseSettings(maybeSettings.computerUse),
@@ -121,6 +125,16 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     },
     codePromptPrefix: typeof maybeSettings.codePromptPrefix === 'string' ? maybeSettings.codePromptPrefix : ''
   }
+}
+
+export function normalizeEvidenceDagSettings(
+  settings?: EvidenceDagSettingsPatchV1
+): EvidenceDagSettingsV1 {
+  return { enabled: settings?.enabled === true }
+}
+
+export function isEvidenceDagEnabled(settings: Pick<AppSettingsV1, 'evidenceDag'>): boolean {
+  return normalizeEvidenceDagSettings(settings.evidenceDag).enabled
 }
 
 export function normalizeAppBehaviorSettings(

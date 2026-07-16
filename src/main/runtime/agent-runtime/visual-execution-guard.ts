@@ -12,6 +12,7 @@ type VisualExecutionState = {
   required: boolean
   satisfied: boolean
   evidenceTool?: string
+  visualProductionStarted?: boolean
 }
 
 export type VisualExecutionObservation = {
@@ -60,7 +61,18 @@ export class RuntimeVisualExecutionGuard {
       return { event }
     }
 
+    const observedTool = normalizedToolName(visualToolName(event))
+    if (isVisualProductionEvent(observedTool, event)) {
+      state.visualProductionStarted = true
+      state.satisfied = false
+      this.states.set(key, state)
+      return { event }
+    }
+
     if (isVerifiedVisualExecutionEvent(event)) {
+      if (state.visualProductionStarted && !isVisualArtifactReviewTool(observedTool)) {
+        return { event }
+      }
       state.satisfied = true
       state.evidenceTool = visualToolName(event)
       this.states.set(key, state)
@@ -86,7 +98,7 @@ export class RuntimeVisualExecutionGuard {
         code: 'runtime_visual_execution_missing',
         message: 'Visual completion rejected because no verified visual inspection executed.',
         detail: [
-          'This turn required visual inspection, but no successful attested gui_visual_capture, visual_artifact_review, or native view_image event was observed.',
+          'This turn required visual inspection, but no successful Model Router-attested gui_visual_capture, gui_workspace_image_inspect, or visual_artifact_review event was observed.',
           'Rendering, compiling, checking file size, or claiming that an image tool returned empty does not satisfy the visual execution gate.'
         ].join(' ')
       }
@@ -124,8 +136,9 @@ export function withVisualExecutionRequirement(
   const instruction = [
     'Runtime-enforced visual completion gate:',
     '- This turn requires real visual inspection after the final render or UI state is available.',
-    '- Call `gui_visual_capture` with semantic inspection enabled (the default) and pass an inspectionPrompt matching the user request. The tool itself runs Model Router vision and returns an attestation plus textual visual evidence, so it works even for text-only runtimes.',
-    '- A capture-only call with requireSemanticInspection=false, successful compilation, file existence, dimensions, or self-reported inspection does not satisfy the gate.',
+    '- For a visible GUI surface, call `gui_visible_context`, then pass its fresh snapshotToken and visual task to `gui_visual_capture`. For local workspace images, call `gui_workspace_image_inspect` with one task and an artifacts array.',
+    '- If this turn creates or revises a visual, completion requires a successful `visual_artifact_review`; screenshots and file inspection do not replace artifact review.',
+    '- Unattested capture output, successful compilation, file existence, dimensions, or self-reported inspection does not satisfy the gate.',
     '- Do not claim visual verification unless the tool returned a successful semantic inspection. If it is unavailable, report the blocker instead of claiming completion.'
   ].join('\n')
   return {
@@ -152,12 +165,40 @@ export function isVerifiedVisualExecutionEvent(event: AgentRuntimeEvent): boolea
   const tool = visualToolEvent(event)
   if (!tool || tool.status !== 'success') return false
   const name = normalizedToolName(tool.name)
-  if (name === 'view_image' || name.endsWith('_view_image')) return true
-  if (name === 'visual_artifact_review' || name.endsWith('_visual_artifact_review')) return true
-  if (name !== 'gui_visual_capture' && !name.endsWith('_gui_visual_capture')) return false
-  const args = recordValue(tool.meta).arguments
-  if (recordValue(args).requireSemanticInspection === false) return false
+  if (isVisualArtifactReviewTool(name)) return hasSuccessfulVisualArtifactReview(tool)
+  const isSemanticInspection = name === 'gui_visual_capture' || name.endsWith('_gui_visual_capture') ||
+    name === 'gui_workspace_image_inspect' || name.endsWith('_gui_workspace_image_inspect')
+  if (!isSemanticInspection) return false
   return hasVisualInspectionAttestation(tool)
+}
+
+function isVisualProductionEvent(name: string, event: AgentRuntimeEvent): boolean {
+  const tool = visualToolEvent(event)
+  if (!tool || tool.status !== 'success') return false
+  if (name === 'visual_generate' || name.endsWith('_visual_generate')) {
+    const serialized = `${tool.detail ?? ''}\n${safeJson(tool.meta)}`
+    return /["']?routeLocked["']?\s*[:=]\s*true/iu.test(serialized)
+  }
+  return [
+    'image_generation_render',
+    'image_generation_edit_from_visual_review_packet',
+    'scientific_plotting_render',
+    'scientific_plotting_composite'
+  ].some((tool) => name === tool || name.endsWith(`_${tool}`))
+}
+
+function isVisualArtifactReviewTool(name: string): boolean {
+  return name === 'visual_artifact_review' || name.endsWith('_visual_artifact_review')
+}
+
+function hasSuccessfulVisualArtifactReview(tool: {
+  detail?: string
+  meta?: Record<string, unknown>
+}): boolean {
+  const serialized = `${tool.detail ?? ''}\n${safeJson(tool.meta)}`
+  return /["']?ok["']?\s*[:=]\s*true/iu.test(serialized) &&
+    /["']?status["']?\s*[:=]\s*["']?(?:publication_ready|draft_ready)/iu.test(serialized) &&
+    /["']?pass["']?\s*[:=]\s*true/iu.test(serialized)
 }
 
 function isGuardedVisualUserMessage(event: AgentRuntimeEvent): boolean {
@@ -199,7 +240,7 @@ function hasVisualInspectionAttestation(tool: {
 }): boolean {
   const serialized = `${tool.detail ?? ''}\n${safeJson(tool.meta)}`
   return /(?:attestation["']?\s*[:=]\s*["']?|Attestation:\s*)sha256:[a-f0-9]{64}/iu.test(serialized) &&
-    /model-router-vision|Semantic visual inspection completed/iu.test(serialized)
+    /["']?provider["']?\s*[:=]\s*["']?model-router\b|Semantic visual inspection completed/iu.test(serialized)
 }
 
 function normalizedToolName(value: string): string {

@@ -72,7 +72,7 @@ export type EnqueueEvidenceDagUpdateInput = {
 }
 
 export type EvidenceDagQueueStatus = {
-  state: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'degraded'
+  state: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'paused' | 'degraded'
   pendingCount: number
   phase?: QueueJobPhase
   attempts?: number
@@ -144,6 +144,8 @@ export type EvidenceDagQueueCoordinatorOptions = {
   fetchImpl?: typeof fetch
   ensureEvidenceDagReady?: () => Promise<void>
   ensureProjectDagReady?: () => Promise<void>
+  /** Dynamic app-level feature gate. Disabled queues remain on disk but do no work. */
+  isEnabled?: () => boolean | Promise<boolean>
   resolveProjectContext?: (input: {
     runtimeId: string
     threadId: string
@@ -608,11 +610,17 @@ export class EvidenceDagUpdateQueue {
   constructor(private readonly options: EvidenceDagQueueCoordinatorOptions) {}
 
   async start(): Promise<void> {
+    if (!await this.isEnabled()) return
     await this.exclusive(async () => {
       await this.loadUnlocked()
     })
     await this.recoverMissingProjectContexts()
     this.schedule(0)
+  }
+
+  pause(): void {
+    if (this.timer) clearTimeout(this.timer)
+    this.timer = undefined
   }
 
   private async recoverMissingProjectContexts(): Promise<void> {
@@ -657,6 +665,7 @@ export class EvidenceDagUpdateQueue {
   }
 
   async enqueue(input: EnqueueEvidenceDagUpdateInput): Promise<EnqueueEvidenceDagUpdateResult> {
+    this.assertEnabled(await this.isEnabled())
     const trace = toEvidenceDagTraceItems(input.items)
     if (trace.length === 0 && input.reason !== 'artifact_changed') {
       throw new Error('Evidence DAG update has no visible trace items.')
@@ -740,6 +749,13 @@ export class EvidenceDagUpdateQueue {
   }
 
   async status(runtimeId: string, threadId: string): Promise<EvidenceDagQueueStatus> {
+    if (!await this.isEnabled()) {
+      return {
+        state: 'paused',
+        pendingCount: 0,
+        lastError: 'Evidence DAG is disabled in Settings.'
+      }
+    }
     return this.exclusive(async () => {
       await this.loadUnlocked()
       const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
@@ -786,6 +802,7 @@ export class EvidenceDagUpdateQueue {
   }
 
   async retry(runtimeId: string, threadId: string): Promise<EvidenceDagQueueStatus> {
+    this.assertEnabled(await this.isEnabled())
     const status = await this.exclusive(async () => {
       await this.loadUnlocked()
       const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
@@ -805,6 +822,7 @@ export class EvidenceDagUpdateQueue {
   }
 
   async prioritize(runtimeId: string, threadId: string): Promise<EvidenceDagQueueStatus> {
+    this.assertEnabled(await this.isEnabled())
     const status = await this.exclusive(async () => {
       await this.loadUnlocked()
       const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
@@ -882,21 +900,25 @@ export class EvidenceDagUpdateQueue {
 
   private async drain(): Promise<void> {
     if (this.draining) return
+    if (!await this.isEnabled()) return
     this.draining = true
     try {
       const concurrency = Math.max(1, Math.floor(this.options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY))
       await Promise.all(Array.from({ length: concurrency }, () => this.drainWorker()))
     } finally {
       this.draining = false
-      await this.scheduleNextRetry()
-      if (await this.hasRunnableWorkBlockedByActivity()) {
-        this.schedule(this.options.activityPollMs ?? DEFAULT_ACTIVITY_POLL_MS)
+      if (await this.isEnabled()) {
+        await this.scheduleNextRetry()
+        if (await this.hasRunnableWorkBlockedByActivity()) {
+          this.schedule(this.options.activityPollMs ?? DEFAULT_ACTIVITY_POLL_MS)
+        }
       }
     }
   }
 
   private async drainWorker(): Promise<void> {
     while (true) {
+      if (!await this.isEnabled()) return
       const job = await this.takeNextJob()
       if (!job) return
       try {
@@ -1301,6 +1323,14 @@ export class EvidenceDagUpdateQueue {
     const configured = Number(env[EVIDENCE_DAG_TIMEOUT_MS_ENV] ?? DEFAULT_EVIDENCE_DAG_TIMEOUT_MS)
     return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_EVIDENCE_DAG_TIMEOUT_MS
   }
+
+  private async isEnabled(): Promise<boolean> {
+    return (await this.options.isEnabled?.()) !== false
+  }
+
+  private assertEnabled(enabled: boolean): asserts enabled {
+    if (!enabled) throw new Error('Evidence DAG is disabled in Settings.')
+  }
 }
 
 let defaultQueue: EvidenceDagUpdateQueue | undefined
@@ -1309,6 +1339,12 @@ export function configureEvidenceDagUpdateQueue(options: EvidenceDagQueueCoordin
   defaultQueue = new EvidenceDagUpdateQueue(options)
   void defaultQueue.start()
   return defaultQueue
+}
+
+export async function syncEvidenceDagUpdateQueue(enabled: boolean): Promise<void> {
+  if (!defaultQueue) return
+  if (enabled) await defaultQueue.start()
+  else defaultQueue.pause()
 }
 
 function configuredQueue(): EvidenceDagUpdateQueue {

@@ -258,7 +258,7 @@ export function shellRuntimeInstruction(config: ShellConfig = shellConfig()): st
     `  <shell>${shell.name}</shell>`,
     `  <path>${shell.shell}</path>`,
     `  <syntax>${shell.syntax}</syntax>`,
-    '  <hygiene_markers>[cache hygiene: ...] and [sciforge request_hygiene ...] are model-context metadata only; never copy them into shell commands or other tool arguments.</hygiene_markers>',
+    '  <hygiene_markers>[cache hygiene: ...], [sciforge request_hygiene ...], and commands beginning "false # sciforge history metadata only" are model-context metadata only; never execute or copy them into tool arguments. Create a fresh smaller action from current task state.</hygiene_markers>',
     '  <git_hygiene>Stage explicit paths only. Broad repository staging commands such as git add ., git add -A, git add --all, git add -u, and git commit -a are blocked.</git_hygiene>',
     '</shell_environment>'
   ].join('\n')

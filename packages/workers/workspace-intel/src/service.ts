@@ -36,6 +36,8 @@ import {
   type WorkspaceIntelError,
   type WorkspaceIntelErrorCode,
   type WorkspaceIntelFailure,
+  type WorkspaceImageInspectInput,
+  type WorkspaceImageInspectResult,
   type WorkspaceListInput,
   type WorkspaceListResult,
   type WorkspacePreviewInput,
@@ -59,7 +61,9 @@ import {
   type WorkspaceTreeResult
 } from './contract.js'
 import {
+  GUI_QUALITY_REVIEW_TASK,
   modelRouterVisualInspectorFromEnv,
+  type VisualArtifactMimeType,
   type VisualInspector
 } from './visual-inspection.js'
 
@@ -114,6 +118,8 @@ const DEFAULT_VISUAL_CAPTURE_POLL_INTERVAL_MS = 40
 const MIN_VISUAL_CAPTURE_TIMEOUT_MS = 100
 const MAX_VISUAL_CAPTURE_TIMEOUT_MS = 25_000
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+const MAX_INSPECTABLE_IMAGE_BYTES = 32 * 1024 * 1024
+const MAX_INSPECTABLE_IMAGE_SET_BYTES = 64 * 1024 * 1024
 
 const IMAGE_MIME_BY_EXT = new Map([
   ['.png', 'image/png'],
@@ -202,7 +208,11 @@ export class WorkspaceIntelService {
     return this.captureFailure(async () => {
       const target = await this.resolveWorkspaceTarget(input.workspaceRoot, input.path)
       if (!target.stats.isDirectory()) {
-        throw serviceError('not_directory', 'Target path is not a directory.', 'Use gui_workspace_read or gui_workspace_preview for files.')
+        throw serviceError(
+          'not_directory',
+          'Target path is not a directory.',
+          'Use gui_workspace_read for text or gui_workspace_reference_preview for a bounded reference summary.'
+        )
       }
 
       const limit = this.limitFor(input.limit)
@@ -272,7 +282,11 @@ export class WorkspaceIntelService {
     return this.captureFailure(async () => {
       const target = await this.resolveWorkspaceTarget(input.workspaceRoot, input.path)
       if (target.stats.isDirectory()) {
-        throw serviceError('is_directory', 'Cannot read a directory as a file.', 'Use gui_workspace_list or gui_workspace_preview for directories.')
+        throw serviceError(
+          'is_directory',
+          'Cannot read a directory as a file.',
+          'Use gui_workspace_list for directory entries.'
+        )
       }
 
       const read = await readTextChunk(target.absolutePath, target.stats, {
@@ -496,6 +510,7 @@ export class WorkspaceIntelService {
         snapshotPath: this.visibleContextPath,
         ...(snapshot.windowId ? { windowId: snapshot.windowId } : {}),
         ...(snapshot.revision !== undefined ? { revision: snapshot.revision } : {}),
+        ...(snapshot.snapshotToken ? { snapshotToken: snapshot.snapshotToken } : {}),
         ...(snapshot.publishedAt ? { publishedAt: snapshot.publishedAt } : {}),
         ...(snapshot.freshness ? { freshness: snapshot.freshness } : {}),
         ...(snapshot.activeThreadId !== undefined ? { activeThreadId: snapshot.activeThreadId } : {}),
@@ -517,6 +532,27 @@ export class WorkspaceIntelService {
         )
       }
 
+      const snapshotRaw = await readFile(this.visibleContextPath, 'utf8').catch((error) => {
+        if (isNodeErrorCode(error, 'ENOENT')) return ''
+        throw error
+      })
+      if (!snapshotRaw.trim()) {
+        throw serviceError(
+          'visible_context_unavailable',
+          'No visible context snapshot has been published yet.',
+          'Call gui_visible_context after the GUI has finished rendering.'
+        )
+      }
+      const snapshot = parseVisibleContextSnapshot(snapshotRaw)
+      if (!snapshot.snapshotToken || snapshot.snapshotToken !== input.snapshotToken) {
+        throw serviceError(
+          'stale_snapshot_token',
+          'The supplied snapshot token is no longer current.',
+          'Call gui_visible_context again and retry with its snapshotToken.',
+          true
+        )
+      }
+
       const brokerDirectory = join(dirname(this.visibleContextPath), 'capture-requests')
       const requestId = randomUUID()
       const requestPath = join(brokerDirectory, `${requestId}.request.json`)
@@ -527,6 +563,10 @@ export class WorkspaceIntelService {
         requestId,
         requestedAt: new Date(now).toISOString(),
         expiresAt: new Date(now + this.visualCaptureTimeoutMs).toISOString(),
+        snapshotToken: snapshot.snapshotToken,
+        windowId: snapshot.windowId,
+        revision: snapshot.revision,
+        ...(snapshot.activeThreadId !== undefined ? { activeThreadId: snapshot.activeThreadId } : {}),
         scope: input.scope,
         ...(input.scope === 'target'
           ? { componentId: input.componentId, targetId: input.targetId }
@@ -545,43 +585,127 @@ export class WorkspaceIntelService {
             response.error.retryable
           )
         }
+        if (
+          response.capture.windowId !== snapshot.windowId ||
+          response.capture.revision !== snapshot.revision
+        ) {
+          throw serviceError(
+            'visual_capture_failed',
+            'The capture broker returned pixels from a different visible surface revision.',
+            'Call gui_visible_context again and retry.',
+            true
+          )
+        }
         await validateVisualCaptureAsset(response.capture.path, this.visibleContextPath)
-        const requireSemanticInspection = input.requireSemanticInspection !== false
-        let inspection
-        if (requireSemanticInspection) {
-          if (!this.visualInspector) {
-            throw serviceError(
-              'visual_inspection_unavailable',
-              'The screenshot was captured, but semantic visual inspection is unavailable.',
-              'Configure the local SciForge Model Router vision translator and retry.'
-            )
-          }
-          const inspected = await this.visualInspector({
+        if (!this.visualInspector) {
+          throw serviceError(
+            'visual_inspection_unavailable',
+            'The screenshot was captured, but visual understanding is unavailable.',
+            'Configure the local SciForge Model Router vision translator and retry.'
+          )
+        }
+        const inspected = await this.visualInspector({
+          task: input.task ?? GUI_QUALITY_REVIEW_TASK,
+          artifacts: [{
+            id: 'capture',
             imagePath: response.capture.path,
-            ...(input.inspectionPrompt ? { prompt: input.inspectionPrompt } : {}),
-            ...(input.truthLockedElements ? { truthLockedElements: input.truthLockedElements } : {})
-          })
-          if (inspected.status !== 'inspected') {
-            throw serviceError(
-              inspected.status,
-              inspected.message,
-              'Check the Model Router vision translator health and retry.',
-              true
-            )
-          }
-          inspection = inspected
+            mimeType: 'image/png',
+            ...(input.regions ? { regions: input.regions } : {})
+          }],
+          ...(input.truthLocks ? { truthLocks: input.truthLocks } : {}),
+          outputIntent: input.outputIntent ?? { kind: 'quality-review' }
+        })
+        if (inspected.status !== 'inspected') {
+          throw serviceError(
+            inspected.status,
+            inspected.message,
+            'Check the Model Router vision translator health and retry.',
+            true
+          )
         }
         return {
           ok: true,
           requestId,
           resource: response.capture,
-          ...(inspection ? { inspection } : {})
+          evidence: inspected
         }
       } finally {
         await Promise.all([
           rm(requestPath, { force: true }),
           rm(responsePath, { force: true })
         ])
+      }
+    })
+  }
+
+  async inspectWorkspaceImages(
+    input: WorkspaceImageInspectInput
+  ): Promise<WorkspaceImageInspectResult> {
+    return this.captureFailure(async () => {
+      if (!this.visualInspector) {
+        throw serviceError(
+          'visual_inspection_unavailable',
+          'Visual understanding is unavailable.',
+          'Configure the local SciForge Model Router vision translator and retry.'
+        )
+      }
+      const artifacts = await Promise.all(input.artifacts.map(async (artifact) => {
+        const target = await this.resolveWorkspaceTarget(input.workspaceRoot, artifact.path)
+        if (!target.stats.isFile()) {
+          throw serviceError('is_directory', `Visual artifact ${artifact.id} must be a file.`)
+        }
+        if (target.stats.size <= 0 || target.stats.size > MAX_INSPECTABLE_IMAGE_BYTES) {
+          throw serviceError(
+            'image_too_large',
+            `Each visual artifact must be between 1 byte and ${MAX_INSPECTABLE_IMAGE_BYTES} bytes.`
+          )
+        }
+        const mimeType = await detectInspectableImageMime(target.absolutePath)
+        return { artifact, target, mimeType }
+      }))
+      const totalBytes = artifacts.reduce((total, { target }) => total + target.stats.size, 0)
+      if (totalBytes > MAX_INSPECTABLE_IMAGE_SET_BYTES) {
+        throw serviceError(
+          'image_too_large',
+          `The visual artifact set must not exceed ${MAX_INSPECTABLE_IMAGE_SET_BYTES} bytes.`
+        )
+      }
+      const evidence = await this.visualInspector({
+        task: input.task,
+        artifacts: artifacts.map(({ artifact, target, mimeType }) => ({
+          id: artifact.id,
+          imagePath: target.absolutePath,
+          mimeType,
+          ...(artifact.regions ? { regions: artifact.regions } : {})
+        })),
+        ...(input.truthLocks ? { truthLocks: input.truthLocks } : {}),
+        ...(input.outputIntent ? { outputIntent: input.outputIntent } : {})
+      })
+      if (evidence.status !== 'inspected') {
+        throw serviceError(
+          evidence.status,
+          evidence.message,
+          'Check the Model Router vision translator health and retry.',
+          true
+        )
+      }
+      const evidenceArtifacts = new Map(evidence.artifacts.map((artifact) => [artifact.id, artifact]))
+      if (input.artifacts.some(({ id }) => !evidenceArtifacts.has(id))) {
+        throw serviceError('visual_inspection_invalid', 'Visual evidence is missing an input artifact attestation.')
+      }
+      return {
+        ok: true,
+        workspaceRoot: artifacts[0]?.target.workspaceRoot ?? '',
+        artifacts: artifacts.map(({ artifact, target, mimeType }) => ({
+          id: artifact.id,
+          relativePath: target.relativePath,
+          path: target.absolutePath,
+          mimeType,
+          size: target.stats.size,
+          mtimeMs: target.stats.mtimeMs,
+          sha256: evidenceArtifacts.get(artifact.id)?.sha256 ?? ''
+        })),
+        evidence
       }
     })
   }
@@ -916,7 +1040,11 @@ async function readTextChunk(path: string, stats: Stats, options: {
   nextOffset?: number
 }> {
   if (await isLikelyBinaryFile(path, stats)) {
-    throw serviceError('binary_file', 'This file appears to be binary; text content is omitted.', 'Use gui_workspace_preview for metadata only.')
+    throw serviceError(
+      'binary_file',
+      'This file appears to be binary; text content is omitted.',
+      'Use gui_workspace_reference_preview for a bounded binary metadata summary.'
+    )
   }
 
   const offset = clampInteger(options.offset ?? 0, 0, Number.MAX_SAFE_INTEGER)
@@ -1397,6 +1525,7 @@ function stringValue(value: unknown): string {
 type VisibleContextSnapshotRecord = {
   windowId?: string
   revision?: number
+  snapshotToken?: string
   publishedAt?: string
   freshness?: { stale: boolean; ageMs: number; staleAfterMs: number }
   activeThreadId?: string | null
@@ -1426,10 +1555,12 @@ function parseVisibleContextSnapshot(raw: string): VisibleContextSnapshotRecord 
   const windowId = stringValue(record.windowId)
   const revision = numberValue(record.revision)
   const publishedAt = stringValue(record.publishedAt)
+  const snapshotToken = stringValue(record.snapshotToken)
   const declaredFreshness = recordValue(record.freshness)
   const staleAfterMs = numberValue(declaredFreshness?.staleAfterMs)
   if (
     !windowId || revision === undefined || !Number.isInteger(revision) || revision < 0 ||
+    !/^vc_[a-f0-9]{64}$/u.test(snapshotToken) ||
     !publishedAt || !Number.isFinite(Date.parse(publishedAt)) ||
     staleAfterMs === undefined || !Number.isInteger(staleAfterMs) || staleAfterMs < 1 ||
     !Array.isArray(record.components)
@@ -1454,12 +1585,42 @@ function parseVisibleContextSnapshot(raw: string): VisibleContextSnapshotRecord 
   return {
     windowId,
     revision,
+    snapshotToken,
     publishedAt,
     freshness: { stale: ageMs > boundedStaleAfterMs, ageMs, staleAfterMs: boundedStaleAfterMs },
     activeThreadId: record.activeThreadId === null ? null : stringValue(record.activeThreadId) || undefined,
     workspaceRoot: stringValue(record.workspaceRoot) || undefined,
     route: stringValue(record.route) || undefined,
     components
+  }
+}
+
+async function detectInspectableImageMime(path: string): Promise<VisualArtifactMimeType> {
+  const handle = await openFile(path, 'r')
+  try {
+    const header = Buffer.alloc(12)
+    const { bytesRead } = await handle.read(header, 0, header.length, 0)
+    const bytes = header.subarray(0, bytesRead)
+    if (bytes.length >= PNG_SIGNATURE.length && bytes.subarray(0, PNG_SIGNATURE.length).equals(PNG_SIGNATURE)) {
+      return 'image/png'
+    }
+    if (bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+      return 'image/jpeg'
+    }
+    if (
+      bytes.length >= 12 &&
+      bytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      bytes.subarray(8, 12).toString('ascii') === 'WEBP'
+    ) {
+      return 'image/webp'
+    }
+    throw serviceError(
+      'unsupported_image_format',
+      'Visual understanding supports PNG, JPEG, and WebP image content.',
+      'Convert the artifact to PNG, JPEG, or WebP and retry.'
+    )
+  } finally {
+    await handle.close()
   }
 }
 
@@ -1542,7 +1703,31 @@ function visibleContextResourceFromUnknown(value: unknown): VisibleContextResour
     openThreadCount: numberValue(record.openThreadCount),
     selectedThreadId: record.selectedThreadId === null ? null : stringValue(record.selectedThreadId) || undefined,
     updatedAt: stringValue(record.updatedAt) || undefined,
+    capability: visibleContextCapabilityFromUnknown(record.capability),
     metadata: recordValue(record.metadata) ?? undefined
+  }
+}
+
+function visibleContextCapabilityFromUnknown(
+  value: unknown
+): VisibleContextResource['capability'] | undefined {
+  const binding = recordValue(value)
+  const resource = recordValue(binding?.resource)
+  const token = stringValue(resource?.token)
+  const semanticRevision = stringValue(resource?.semanticRevision)
+  const expiresAt = stringValue(resource?.expiresAt)
+  if (!binding || !resource || !token || !semanticRevision || !expiresAt || !Array.isArray(binding.operations)) {
+    return undefined
+  }
+  const operations = binding.operations
+    .map((operation) => recordValue(operation))
+    .filter((operation): operation is Record<string, unknown> => operation !== null)
+    .filter((operation) => Boolean(stringValue(operation.id)))
+    .map((operation) => ({ ...operation, id: stringValue(operation.id) }))
+  return {
+    resource: { token, semanticRevision, expiresAt },
+    ...(stringValue(binding.resourceRef) ? { resourceRef: stringValue(binding.resourceRef) } : {}),
+    operations
   }
 }
 
@@ -1616,6 +1801,9 @@ function visualCaptureErrorCode(code: string): WorkspaceIntelErrorCode {
   switch (code) {
     case 'invalid_visual_capture_request':
     case 'stale_visible_context':
+    case 'stale_snapshot_token':
+    case 'surface_capture_unsupported':
+    case 'capture_surface_unavailable':
     case 'visual_target_not_found':
     case 'visual_target_bounds_unavailable':
     case 'visual_capture_request_expired':

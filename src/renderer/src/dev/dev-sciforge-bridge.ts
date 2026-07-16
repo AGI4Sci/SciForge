@@ -1,4 +1,6 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
+import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
+import { createCapabilityFacades } from '../../../preload/capability-facades'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
 const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
@@ -23,14 +25,6 @@ const channelHandlers = new Map<string, Set<ChannelHandler>>()
 function defaultBridgeUrl(): string {
   const origin = typeof window !== 'undefined' ? window.location?.origin : ''
   return origin ? `${origin}${DEV_BRIDGE_PROXY_PATH}` : 'http://127.0.0.1:5174'
-}
-
-function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
-  const trimmed = sessionId.trim()
-  if (!trimmed || !bridgeUrl || !clientId) return null
-  const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/workspace-preview/assets/${encodeURIComponent(trimmed)}`)
-  url.searchParams.set('clientId', clientId)
-  return url.toString()
 }
 
 function detectPlatform(): string {
@@ -122,6 +116,15 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
 }
 
 function createApi(): SciForgeApi {
+  const capabilityFacades = createCapabilityFacades({
+    invoke,
+    createResourceContentUrl: (access) => {
+      const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/capability/resources/content`)
+      url.searchParams.set('clientId', clientId)
+      url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
+      return url.toString()
+    }
+  })
   const getConnectPhoneStatus: SciForgeApi['getConnectPhoneStatus'] = () => invoke('connectPhone:status')
   const startConnectPhoneInstallQr: SciForgeApi['startConnectPhoneInstallQr'] = (provider, options) =>
     invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
@@ -277,38 +280,22 @@ function createApi(): SciForgeApi {
     watchWorkspaceFile: (payload) => invoke('file:watch-workspace', payload),
     unwatchWorkspaceFile: (watchId) => invoke('file:unwatch-workspace', watchId),
     onWorkspaceFileChanged: (handler) => onChannel('file:workspace-changed', handler),
+    capabilities: {
+      discover: (input = {}) => invoke('capability:discover', input),
+      observe: (input) => invoke('capability:observe', input),
+      invoke: (input) => invoke('capability:invoke', input),
+      events: (input = {}) => invoke('capability:events', input),
+      subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),
+      unsubscribe: (subscriptionId) => invoke('capability:unsubscribe', { subscriptionId }),
+      onEvent: (handler) => onChannel('capability:event', handler)
+    },
     workspacePreview: {
-      listPlugins: () => invoke('workspacePreview:listPlugins'),
-      open: (input) => invoke('workspacePreview:open', input),
-      observe: (sessionId) => invoke('workspacePreview:observe', { sessionId }),
-      describeAsset: (sessionId) => invoke('workspacePreview:describeAsset', { sessionId }),
-      readRange: (sessionId, range) => invoke('workspacePreview:readRange', { sessionId, range }),
-      prepareArtifact: (sessionId, request) =>
-        invoke('workspacePreview:prepareArtifact', { sessionId, request }),
-      readArtifactRange: (sessionId, request) =>
-        invoke('workspacePreview:readArtifactRange', { sessionId, request }),
-      applyEdit: (sessionId, operation) =>
-        invoke('workspacePreview:applyEdit', { sessionId, operation }),
-      export: (sessionId, target) => invoke('workspacePreview:export', { sessionId, target }),
-      invokeAction: (sessionId, action) =>
-        invoke('workspacePreview:invokeAction', { sessionId, action }),
-      releaseSession: (sessionId) =>
-        invoke('workspacePreview:releaseSession', { sessionId }),
-      watch: (payload) => invoke('workspacePreview:watch', payload),
-      unwatch: (watchId) => invoke('workspacePreview:unwatch', watchId),
-      onChanged: (handler) => onChannel('workspacePreview:changed', handler),
-      getAssetSourceUrl: workspacePreviewAssetSourceUrl
+      ...capabilityFacades.workspacePreview,
+      onChanged: (handler) => onChannel('file:workspace-changed', handler)
     },
     biologyRoom: {
       pickFile: (workspaceRoot) => invoke('biologyRoom:pick-file', { workspaceRoot }),
-      create: (input) => invoke('biologyRoom:create', input),
-      openOrCreate: (input) => invoke('biologyRoom:openOrCreate', input),
-      load: (input) => invoke('biologyRoom:load', input),
-      list: (input) => invoke('biologyRoom:list', input),
-      observe: (input) => invoke('biologyRoom:observe', input),
-      apply: (input) => invoke('biologyRoom:apply', input),
-      refresh: (input) => invoke('biologyRoom:refresh', input),
-      history: (input) => invoke('biologyRoom:history', input)
+      ...capabilityFacades.biologyRoom
     },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),

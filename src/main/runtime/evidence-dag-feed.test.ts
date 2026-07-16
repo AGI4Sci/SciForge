@@ -54,6 +54,29 @@ function projectContext() {
 }
 
 describe('Evidence DAG runtime feed', () => {
+  it('does not load, enqueue, or run the durable queue while the app feature is disabled', async () => {
+    const storagePath = await queuePath()
+    const fetchImpl = vi.fn() as typeof fetch
+    const queue = new EvidenceDagUpdateQueue({
+      storagePath,
+      fetchImpl,
+      isEnabled: () => false
+    })
+
+    await queue.start()
+    await expect(queue.status('sciforge', 'thread-1')).resolves.toMatchObject({
+      state: 'paused',
+      pendingCount: 0,
+      lastError: 'Evidence DAG is disabled in Settings.'
+    })
+    await expect(queue.enqueue({
+      runtimeId: 'sciforge', threadId: 'thread-1', items: [], targetWatermark: '1',
+      reason: 'artifact_changed', projectContext: projectContext()
+    })).rejects.toThrow('disabled in Settings')
+    await expect(readFile(storagePath, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(fetchImpl).not.toHaveBeenCalled()
+  })
+
   it('bounds oversized trace content and splits historical backfills below the service body cap', () => {
     const batches = evidenceTraceBatches(Array.from({ length: 80 }, (_, index) => ({
       id: `item-${index}`,

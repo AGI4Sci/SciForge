@@ -94,22 +94,6 @@ export const DOCX_WORKSPACE_PREVIEW_PLUGIN_ID = 'docx'
 export const TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID = 'tabular'
 export const DECK_WORKSPACE_PREVIEW_PLUGIN_ID = 'deck'
 
-export const WORKSPACE_PREVIEW_AGENT_ACCESS = {
-  observe: true,
-  select: true,
-  proposeEdit: true,
-  applyEdit: true,
-  save: true
-} as const
-
-export const WORKSPACE_PREVIEW_NO_AGENT_ACCESS = {
-  observe: false,
-  select: false,
-  proposeEdit: false,
-  applyEdit: false,
-  save: false
-} as const
-
 export const workspacePreviewModalitySchema = z.enum([
   'text',
   'document',
@@ -141,14 +125,7 @@ export const workspacePreviewCapabilitySchema = z.object({
   inspect: z.boolean(),
   structuredSelection: z.boolean(),
   annotations: z.boolean().optional(),
-  export: z.array(z.string().trim().min(1).max(64)).max(32).optional(),
-  agent: z.object({
-    observe: z.boolean(),
-    select: z.boolean(),
-    proposeEdit: z.boolean(),
-    applyEdit: z.boolean(),
-    save: z.boolean()
-  }).strict().default(WORKSPACE_PREVIEW_AGENT_ACCESS)
+  export: z.array(z.string().trim().min(1).max(64)).max(32).optional()
 }).strict()
 
 export type WorkspacePreviewCapability = z.infer<typeof workspacePreviewCapabilitySchema>

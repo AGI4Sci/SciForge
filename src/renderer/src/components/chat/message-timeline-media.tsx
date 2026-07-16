@@ -1,5 +1,5 @@
 import type { ComponentPropsWithRef, ReactElement, ReactNode } from 'react'
-import { createContext, useContext, useEffect, useMemo, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { Check, Copy, Download, ExternalLink, FileText, ImageIcon, Loader2, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
@@ -14,6 +14,7 @@ import { openSafeExternalUrl } from '../../lib/open-external'
 import { useChatStore } from '../../store/chat-store'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { ImagePreviewLightbox } from './ImagePreviewLightbox'
+import { registerVisibleContextVisualTarget } from '../../lib/visible-context'
 
 export type TimelineImageReference = {
   id?: string
@@ -935,6 +936,16 @@ function imageKey(image: TimelineImageReference): string {
   )
 }
 
+function imageVisualTargetId(image: TimelineImageReference): string {
+  const value = imageKey(image)
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return `artifact.image.${(hash >>> 0).toString(16).padStart(8, '0')}`
+}
+
 function visualReviewArtifactKey(artifact: TimelineVisualReviewArtifactReference | TimelineVisualReviewArtifact): string {
   return (
     artifact.artifactManifestPath ||
@@ -1215,6 +1226,8 @@ function TimelineImageTile({
 }): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const activeThreadId = useChatStore((s) => s.activeThreadId)
+  const visualTargetRef = useRef<HTMLElement>(null)
   const [previewOpen, setPreviewOpen] = useState(false)
   const [downloadState, setDownloadState] = useState<ImageActionState>('idle')
   const [copyState, setCopyState] = useState<ImageActionState>('idle')
@@ -1241,6 +1254,26 @@ function TimelineImageTile({
         : 'h-28 w-36 overflow-hidden rounded-lg border border-ds-border-muted bg-ds-card shadow-sm'
   const iconButtonClass =
     'inline-flex h-7 w-7 items-center justify-center rounded-md border border-ds-border-muted bg-ds-card/92 text-ds-muted shadow-sm backdrop-blur transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50'
+
+  useEffect(() => {
+    if (!src) return
+    return registerVisibleContextVisualTarget({
+      componentId: 'chat.timeline',
+      target: {
+        id: imageVisualTargetId(image),
+        kind: 'region',
+        contentType: image.mimeType || 'image/*',
+        active: true,
+        metadata: {
+          artifactKind: image.artifactKind || image.source,
+          threadId: image.threadId || activeThreadId,
+          path: sourcePath,
+          manifestPath: image.artifactManifestPath || image.manifestPath
+        }
+      },
+      element: () => visualTargetRef.current
+    })
+  }, [activeThreadId, image, sourcePath, src])
 
   useEffect(() => {
     if (downloadState === 'idle' && copyState === 'idle' && openState === 'idle') return
@@ -1317,7 +1350,7 @@ function TimelineImageTile({
 
   if (src) {
     return (
-      <figure className={`${tileClass} group/image relative`} title={title}>
+      <figure ref={visualTargetRef} className={`${tileClass} group/image relative`} title={title}>
         <button
           type="button"
           onClick={handlePrimaryOpen}

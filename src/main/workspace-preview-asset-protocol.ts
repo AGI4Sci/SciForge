@@ -4,12 +4,13 @@ import {
   type WorkspacePreviewByteRange
 } from '../shared/workspace-preview'
 import type {
-  WorkspacePreviewDescribeAssetResult,
-  WorkspacePreviewReadRangeResult
-} from '../shared/sciforge-api'
+  CapabilityResourceContentAccess,
+  CapabilityResourceContentDescriptor,
+  CapabilityResourceContentRange
+} from '../shared/capability-broker'
 import {
-  WORKSPACE_PREVIEW_ASSET_SCHEME,
-  workspacePreviewSessionIdFromAssetUrl
+  CAPABILITY_RESOURCE_CONTENT_SCHEME,
+  capabilityResourceContentAccessFromUrl
 } from '../shared/workspace-preview-asset-url'
 
 type ProtocolHandler = (request: Request) => Response | Promise<Response>
@@ -23,28 +24,27 @@ export type WorkspacePreviewAssetSchemeRegistrar = {
   registerSchemesAsPrivileged: (schemes: Electron.CustomScheme[]) => void
 }
 
-export type WorkspacePreviewAssetBackend = {
-  isSessionAuthorized: (sessionId: string) => boolean
-  describeAsset: (
-    sessionId: string
-  ) => WorkspacePreviewDescribeAssetResult | Promise<WorkspacePreviewDescribeAssetResult>
+export type CapabilityResourceContentBackend = {
+  describe: (
+    access: CapabilityResourceContentAccess
+  ) => CapabilityResourceContentDescriptor | Promise<CapabilityResourceContentDescriptor>
   readRange: (
-    sessionId: string,
+    access: CapabilityResourceContentAccess,
     range: WorkspacePreviewByteRange
-  ) => WorkspacePreviewReadRangeResult | Promise<WorkspacePreviewReadRangeResult>
+  ) => CapabilityResourceContentRange | Promise<CapabilityResourceContentRange>
 }
 
 type ParsedByteRange =
   | { ok: true; start: number; end: number }
   | { ok: false; message: string }
 
-let activeBackend: WorkspacePreviewAssetBackend | null = null
+let activeBackend: CapabilityResourceContentBackend | null = null
 
-export function registerWorkspacePreviewAssetScheme(
+export function registerCapabilityResourceContentScheme(
   registrar: WorkspacePreviewAssetSchemeRegistrar
 ): void {
   registrar.registerSchemesAsPrivileged([{
-    scheme: WORKSPACE_PREVIEW_ASSET_SCHEME,
+    scheme: CAPABILITY_RESOURCE_CONTENT_SCHEME,
     privileges: {
       standard: true,
       secure: true,
@@ -55,16 +55,16 @@ export function registerWorkspacePreviewAssetScheme(
   }])
 }
 
-export function installWorkspacePreviewAssetProtocol(
+export function installCapabilityResourceContentProtocol(
   protocolApi: WorkspacePreviewAssetProtocolApi,
-  backend: WorkspacePreviewAssetBackend
+  backend: CapabilityResourceContentBackend
 ): void {
   activeBackend = backend
-  if (protocolApi.isProtocolHandled(WORKSPACE_PREVIEW_ASSET_SCHEME)) return
-  protocolApi.handle(WORKSPACE_PREVIEW_ASSET_SCHEME, handleWorkspacePreviewAssetRequest)
+  if (protocolApi.isProtocolHandled(CAPABILITY_RESOURCE_CONTENT_SCHEME)) return
+  protocolApi.handle(CAPABILITY_RESOURCE_CONTENT_SCHEME, handleCapabilityResourceContentRequest)
 }
 
-export async function handleWorkspacePreviewAssetRequest(request: Request): Promise<Response> {
+export async function handleCapabilityResourceContentRequest(request: Request): Promise<Response> {
   const cors = corsHeaders(request)
   if (!cors) {
     return Response.json({ ok: false, message: 'Workspace preview origin is not allowed.' }, {
@@ -79,35 +79,30 @@ export async function handleWorkspacePreviewAssetRequest(request: Request): Prom
     return errorResponse(405, 'Only GET and HEAD are supported.', cors, { Allow: 'GET, HEAD, OPTIONS' })
   }
 
-  const sessionId = workspacePreviewSessionIdFromAssetUrl(request.url)
+  const access = capabilityResourceContentAccessFromUrl(request.url)
   const backend = activeBackend
-  if (!sessionId || !backend?.isSessionAuthorized(sessionId)) {
-    return errorResponse(404, 'Workspace preview asset was not found.', cors)
+  if (!access || !backend) {
+    return errorResponse(404, 'Capability resource content was not found.', cors)
   }
 
-  const described = await backend.describeAsset(sessionId)
-  if (!described.ok) return errorResponse(404, described.message, cors)
-  const descriptor = described.descriptor
-  if (!descriptor.range.available) {
-    return errorResponse(409, 'Byte-range transport is not available for this asset.', cors)
-  }
+  const descriptor = await backend.describe(access)
 
-  const parsedRange = parseHttpByteRange(request.headers.get('range'), descriptor.range.size)
+  const parsedRange = parseHttpByteRange(request.headers.get('range'), descriptor.size)
   if (parsedRange && !parsedRange.ok) {
     return errorResponse(416, parsedRange.message, cors, {
-      'Content-Range': `bytes */${descriptor.range.size}`
+      'Content-Range': `bytes */${descriptor.size}`
     })
   }
 
   const start = parsedRange?.start ?? 0
-  const end = parsedRange?.end ?? descriptor.range.size - 1
-  const contentLength = descriptor.range.size === 0 ? 0 : Math.max(0, end - start + 1)
+  const end = parsedRange?.end ?? descriptor.size - 1
+  const contentLength = descriptor.size === 0 ? 0 : Math.max(0, end - start + 1)
   const headers = new Headers(cors)
   headers.set('Accept-Ranges', 'bytes')
   headers.set('Cache-Control', 'no-store')
-  headers.set('Content-Type', descriptor.file.mimeType || 'application/octet-stream')
+  headers.set('Content-Type', descriptor.mimeType)
   headers.set('Content-Length', String(contentLength))
-  if (parsedRange) headers.set('Content-Range', `bytes ${start}-${end}/${descriptor.range.size}`)
+  if (parsedRange) headers.set('Content-Range', `bytes ${start}-${end}/${descriptor.size}`)
 
   const status = parsedRange ? 206 : 200
   if (request.method === 'HEAD' || contentLength === 0) {
@@ -115,8 +110,8 @@ export async function handleWorkspacePreviewAssetRequest(request: Request): Prom
   }
 
   const chunkBytes = Math.max(1, Math.min(
-    descriptor.range.recommendedChunkBytes || WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
-    descriptor.range.maxChunkBytes || WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+    descriptor.recommendedChunkBytes || WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+    descriptor.maxChunkBytes || WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
     WORKSPACE_PREVIEW_MAX_RANGE_BYTES
   ))
   let offset = start
@@ -127,11 +122,7 @@ export async function handleWorkspacePreviewAssetRequest(request: Request): Prom
         return
       }
       const length = Math.min(chunkBytes, end - offset + 1)
-      const result = await backend.readRange(sessionId, { offset, length })
-      if (!result.ok) {
-        controller.error(new Error(result.message))
-        return
-      }
+      const result = await backend.readRange(access, { offset, length })
       const chunk = Buffer.from(result.dataBase64, 'base64')
       if (chunk.length === 0) {
         controller.error(new Error('Workspace preview asset ended before the requested byte range.'))

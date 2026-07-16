@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray, webContents, type WebContents } from 'electron'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,6 +18,7 @@ import {
   agentRuntimeSettingsEnvelope,
   getLocalRuntimeSettings,
   getActiveAgentRuntime,
+  isEvidenceDagEnabled,
   mergeConnectPhoneSettings,
   mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
@@ -74,7 +75,8 @@ import {
 import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   configureEvidenceDagUpdateQueue,
-  evidenceDagQueuePath
+  evidenceDagQueuePath,
+  syncEvidenceDagUpdateQueue
 } from './runtime/evidence-dag-feed'
 import { EvidenceArtifactLifecycle } from './runtime/evidence-artifact-lifecycle'
 import { createLocalRuntimeAgentRuntimeAdapter } from './runtime/local-runtime-agent-runtime-adapter'
@@ -96,7 +98,10 @@ import { WorkspaceReferenceService } from './services/workspace-reference-servic
 import {
   VisibleContextService,
   visibleContextSnapshotPath,
-  type CapturedVisualPage
+  type CapturedVisualPage,
+  type SurfaceCaptureProvider,
+  type SurfaceCaptureRequest,
+  type SurfaceCaptureResult
 } from './services/visible-context-service'
 import type { VisibleContextBounds } from '../shared/visible-context'
 import { AnchoredCommentService } from './services/anchored-comment-service'
@@ -146,9 +151,17 @@ import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import { WorkspacePreviewHost } from './services/workspace-preview'
+import { BiologyRoomService } from './services/biology-room-service'
+import { CapabilityBroker } from './capabilities/broker'
+import { createAppCapabilityRegistry } from './capabilities/app-registry'
+import { registerCapabilityIpc } from './capabilities/ipc'
 import {
-  installWorkspacePreviewAssetProtocol,
-  registerWorkspacePreviewAssetScheme
+  createCapabilityAgentToolSurface,
+  type CapabilityAgentToolSurface
+} from './capabilities/agent-tools'
+import {
+  installCapabilityResourceContentProtocol,
+  registerCapabilityResourceContentScheme
 } from './workspace-preview-asset-protocol'
 import {
   startDevBrowserBridgeServer,
@@ -370,7 +383,7 @@ traceStartup('main module evaluated')
 // whenReady 副作用污染。
 configureAppIdentity()
 configureLinuxWaylandImeSwitches()
-registerWorkspacePreviewAssetScheme(protocol)
+registerCapabilityResourceContentScheme(protocol)
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID)
@@ -385,6 +398,7 @@ let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
+let capabilityAgentTools: CapabilityAgentToolSurface | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
@@ -413,9 +427,87 @@ let remoteChannelActiveThreadContext: {
 async function captureMainWindowPage(bounds?: VisibleContextBounds): Promise<CapturedVisualPage> {
   const window = mainWindow
   if (!window || window.isDestroyed()) throw new Error('SciForge window is unavailable.')
+  return captureBrowserWindowPage(window, bounds)
+}
+
+async function captureVisibleContextSurface(
+  request: SurfaceCaptureRequest
+): Promise<SurfaceCaptureResult> {
+  const surface = parseVisibleContextSurfaceId(request.windowId)
+  if (surface?.kind === 'electron') {
+    const contents = webContents.fromId(surface.numericId)
+    const window = contents ? BrowserWindow.fromWebContents(contents) : null
+    if (!contents || contents.isDestroyed() || !window || window.isDestroyed()) {
+      return surfaceCaptureUnavailable(
+        'capture_surface_unavailable',
+        `Visible surface ${request.windowId} is no longer available.`,
+        true
+      )
+    }
+    return {
+      ok: true,
+      page: await captureBrowserWindowPage(window, request.bounds, contents)
+    }
+  }
+
+  if (surface?.kind === 'browser') {
+    if (!devBrowserBridgeServer?.hasClient(surface.numericId)) {
+      return surfaceCaptureUnavailable(
+        'capture_surface_unavailable',
+        `Browser surface ${request.windowId} is no longer connected.`,
+        true
+      )
+    }
+    // The development bridge transports semantic IPC and SSE events, but has no
+    // attested browser pixel source. Renderer-supplied image bytes would not be a
+    // trusted capture of the surface bound to this snapshot token.
+    return surfaceCaptureUnavailable(
+      'surface_capture_unsupported',
+      `Browser surface ${request.windowId} does not provide trusted pixel capture.`,
+      false
+    )
+  }
+
+  return surfaceCaptureUnavailable(
+    'surface_capture_unsupported',
+    `Visible surface ${request.windowId} uses an unsupported surface identity.`,
+    false
+  )
+}
+
+type VisibleContextSurfaceId = {
+  kind: 'electron' | 'browser'
+  numericId: number
+}
+
+function parseVisibleContextSurfaceId(windowId: string): VisibleContextSurfaceId | null {
+  const match = /^(electron|browser):(\d+)$/u.exec(windowId)
+  if (!match) return null
+  const numericId = Number(match[2])
+  if (!Number.isSafeInteger(numericId) || numericId < 1) return null
+  return { kind: match[1] as VisibleContextSurfaceId['kind'], numericId }
+}
+
+const visibleContextSurfaceCaptureProvider: SurfaceCaptureProvider = {
+  capture: captureVisibleContextSurface
+}
+
+function surfaceCaptureUnavailable(
+  code: 'surface_capture_unsupported' | 'capture_surface_unavailable',
+  message: string,
+  retryable: boolean
+): SurfaceCaptureResult {
+  return { ok: false, reason: { code, message, retryable } }
+}
+
+async function captureBrowserWindowPage(
+  window: BrowserWindow,
+  bounds?: VisibleContextBounds,
+  captureContents: WebContents = window.webContents
+): Promise<CapturedVisualPage> {
   const [viewportWidth, viewportHeight] = window.getContentSize()
   const clippedBounds = bounds ? clipCaptureBounds(bounds, viewportWidth, viewportHeight) : undefined
-  const image = await window.webContents.capturePage(clippedBounds)
+  const image = await captureContents.capturePage(clippedBounds)
   const imageSize = image.getSize()
   const cssWidth = clippedBounds?.width ?? Math.max(1, viewportWidth)
   return {
@@ -442,11 +534,20 @@ function clipCaptureBounds(
   return { x, y, width: right - x, height: bottom - y }
 }
 
-function emitVisibleContextRendererEvent(channel: string, payload?: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload)
+function emitVisibleContextRendererEvent(
+  channel: string,
+  payload: unknown,
+  windowId: string
+): void {
+  const surface = parseVisibleContextSurfaceId(windowId)
+  if (surface?.kind === 'electron') {
+    const contents = webContents.fromId(surface.numericId)
+    if (contents && !contents.isDestroyed()) contents.send(channel, payload)
+    return
   }
-  devBrowserBridgeServer?.send(channel, payload)
+  if (surface?.kind === 'browser') {
+    devBrowserBridgeServer?.sendTo(surface.numericId, channel, payload)
+  }
 }
 
 type GuiUpdaterModule = typeof import('./gui-updater')
@@ -558,6 +659,9 @@ function startModelRouterConfigWatcher(
 
 function getCodexRuntime(): CodexRuntimeService {
   if (codexRuntime) return codexRuntime
+  if (!capabilityAgentTools) {
+    throw new Error('Capability agent tools must be registered before the Codex runtime starts.')
+  }
   const codexStorageRoot = join(app.getPath('userData'), 'codex-runtime')
   codexRuntime = new CodexRuntimeService({
     settings: async () => store.load(),
@@ -580,7 +684,8 @@ function getCodexRuntime(): CodexRuntimeService {
     imageGenerationMcpLaunch: getImageGenerationMcpLaunchConfig(),
     pptMasterMcpLaunch: getPptMasterMcpLaunchConfig(),
     visualDocumentMcpLaunch: getVisualDocumentMcpLaunchConfig(),
-    computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
+    computerUseMcpLaunch: getComputerUseMcpLaunchConfig(),
+    capabilityAgentTools
   })
   return codexRuntime
 }
@@ -1734,15 +1839,17 @@ app.whenReady().then(async () => {
       message: error instanceof Error ? error.message : String(error)
     })
   })
-  void ensureEvidenceDagSidecar(initial, {
-    userDataDir: app.getPath('userData'),
-    appRoot: app.getAppPath(),
-    log: (message) => logWarn('evidence-dag', message)
-  }).catch((error) => {
-    logWarn('evidence-dag', 'Failed to auto-start Evidence DAG.', {
-      message: error instanceof Error ? error.message : String(error)
+  if (isEvidenceDagEnabled(initial)) {
+    void ensureEvidenceDagSidecar(initial, {
+      userDataDir: app.getPath('userData'),
+      appRoot: app.getAppPath(),
+      log: (message) => logWarn('evidence-dag', message)
+    }).catch((error) => {
+      logWarn('evidence-dag', 'Failed to auto-start Evidence DAG.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
     })
-  })
+  }
   codeNavigationService = new LspCodeNavigationService()
   const modelAuditRecorder = new ModelRequestAuditRecorder()
   const contextStateService = new RuntimeContextStateService()
@@ -1752,13 +1859,30 @@ app.whenReady().then(async () => {
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
   const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
+  const workspacePreviewHost = new WorkspacePreviewHost({
+    loadSettings: () => store.load()
+  })
+  const biologyRoomService = new BiologyRoomService()
+  const capabilityBroker = new CapabilityBroker(createAppCapabilityRegistry({
+    workspacePreviewHost,
+    biologyRoomService
+  }))
+  capabilityAgentTools = createCapabilityAgentToolSurface({
+    broker: capabilityBroker,
+    resolveCaller: (context) => ({
+      audience: 'agent',
+      callerId: context.threadId ? `codex:${context.threadId}` : `codex-request:${context.requestId}`,
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
+    })
+  })
+  const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const visibleContextService = new VisibleContextService(app.getPath('userData'), {
-    captureProvider: { capturePage: captureMainWindowPage },
-    requestContextRefresh: () => {
-      emitVisibleContextRendererEvent('visibleContext:refresh-requested')
+    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
+    requestContextRefresh: (windowId) => {
+      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
     },
-    onCaptureState: (active) => {
-      emitVisibleContextRendererEvent('visibleContext:capture-state', active)
+    onCaptureState: (windowId, active) => {
+      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
     }
   })
   void visibleContextService.startCaptureRequestBroker().catch((error) => {
@@ -1792,6 +1916,7 @@ app.whenReady().then(async () => {
   })
   configureEvidenceDagUpdateQueue({
     storagePath: evidenceDagQueuePath(app.getPath('userData')),
+    isEnabled: async () => isEvidenceDagEnabled(await store.load()),
     // Evidence extraction performs several LLM-backed verification passes.
     // Serializing jobs avoids a startup recovery stampede against one Model Router.
     maxConcurrency: 1,
@@ -1847,11 +1972,13 @@ app.whenReady().then(async () => {
     },
     log: (message, details) => logWarn('evidence-artifact', message, details)
   })
-  void evidenceArtifactLifecycle.start().catch((error) => {
-    logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
-      message: error instanceof Error ? error.message : String(error)
+  if (isEvidenceDagEnabled(initial)) {
+    void evidenceArtifactLifecycle.start().catch((error) => {
+      logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
+        message: error instanceof Error ? error.message : String(error)
+      })
     })
-  })
+  }
   runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
 
   workflowRuntime = createWorkflowRuntime({
@@ -2053,6 +2180,18 @@ app.whenReady().then(async () => {
     }
     queueRuntimeSettingsApply(prev, saved)
     scheduleCodexRuntimePrewarm(saved, 'settings-switch')
+    if (isEvidenceDagEnabled(prev) !== isEvidenceDagEnabled(saved)) {
+      await syncEvidenceDagUpdateQueue(isEvidenceDagEnabled(saved))
+      if (isEvidenceDagEnabled(saved)) {
+        void evidenceArtifactLifecycle?.start().catch((error) => {
+          logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
+            message: error instanceof Error ? error.message : String(error)
+          })
+        })
+      } else {
+        evidenceArtifactLifecycle?.stop()
+      }
+    }
     if (partial.modelRouter) {
       suppressModelRouterConfigFileWatch()
       await syncModelRouterConfigFileFromSettings(saved, {
@@ -2072,12 +2211,19 @@ app.whenReady().then(async () => {
           message: error instanceof Error ? error.message : String(error)
         })
       })
+    }
+    if (partial.evidenceDag && !isEvidenceDagEnabled(saved)) {
+      await Promise.all([
+        stopEvidenceDagSidecar(),
+        stopProjectDagSidecar()
+      ])
+    } else if (isEvidenceDagEnabled(saved) && (partial.modelRouter || partial.evidenceDag)) {
       void ensureEvidenceDagSidecar(saved, {
         userDataDir: app.getPath('userData'),
         appRoot: app.getAppPath(),
         log: (message) => logWarn('evidence-dag', message)
       }).catch((error) => {
-        logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after settings change.', {
+        logWarn('evidence-dag', 'Failed to synchronize Evidence DAG after settings change.', {
           message: error instanceof Error ? error.message : String(error)
         })
       })
@@ -2164,15 +2310,17 @@ app.whenReady().then(async () => {
           message: error instanceof Error ? error.message : String(error)
         })
       })
-      void ensureEvidenceDagSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      }).catch((error) => {
-        logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after config file change.', {
-          message: error instanceof Error ? error.message : String(error)
+      if (isEvidenceDagEnabled(saved)) {
+        void ensureEvidenceDagSidecar(saved, {
+          userDataDir: app.getPath('userData'),
+          appRoot: app.getAppPath(),
+          log: (message) => logWarn('evidence-dag', message)
+        }).catch((error) => {
+          logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after config file change.', {
+            message: error instanceof Error ? error.message : String(error)
+          })
         })
-      })
+      }
       scheduleRuntime?.sync(saved)
       workflowRuntime?.sync(saved)
       remoteChannelRuntime?.sync(saved)
@@ -2193,13 +2341,17 @@ app.whenReady().then(async () => {
 
   startModelRouterConfigWatcher(app.getPath('userData'), applyExternalModelRouterConfigFileChange)
 
-  const workspacePreviewHost = new WorkspacePreviewHost({
-    loadSettings: () => store.load()
-  })
-  installWorkspacePreviewAssetProtocol(protocol, {
-    isSessionAuthorized: (sessionId) => workspacePreviewHost.getSession(sessionId) !== null,
-    describeAsset: (sessionId) => workspacePreviewHost.describeAsset(sessionId),
-    readRange: (sessionId, range) => workspacePreviewHost.readRange(sessionId, range)
+  installCapabilityResourceContentProtocol(protocol, {
+    describe: (access) => capabilityBroker.describeResourceContent({
+      audience: 'ui',
+      callerId: 'electron:resource-content',
+      ...(access.workspaceId ? { workspaceId: access.workspaceId } : {})
+    }, access.resource),
+    readRange: (access, range) => capabilityBroker.readResourceContentRange({
+      audience: 'ui',
+      callerId: 'electron:resource-content',
+      ...(access.workspaceId ? { workspaceId: access.workspaceId } : {})
+    }, access.resource, range)
   })
 
   const appBridgeDispatcher = registerAppIpcHandlers({
@@ -2240,7 +2392,6 @@ app.whenReady().then(async () => {
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
-    workspacePreviewHost,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
     ensureEvidenceDagReady: async () => {
@@ -2270,7 +2421,14 @@ app.whenReady().then(async () => {
 
   if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
     void startDevBrowserBridgeServer({
-      dispatcher: appBridgeDispatcher,
+      dispatcher: {
+        invoke: (channel, payload, sender) => (
+          capabilityIpcRegistration.handles(channel)
+            ? capabilityIpcRegistration.invoke(channel, payload, sender)
+            : appBridgeDispatcher.invoke(channel, payload, sender)
+        )
+      },
+      resourceContent: capabilityIpcRegistration.resourceContent,
       allowAllChannels: true
     }).then((server) => {
       devBrowserBridgeServer = server

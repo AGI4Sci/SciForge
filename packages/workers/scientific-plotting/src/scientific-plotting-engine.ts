@@ -3,6 +3,7 @@ import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { basename, isAbsolute, join, relative, resolve } from 'node:path'
+import { visualSceneToScientificData } from '@sciforge/image-generation/visual-scene'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import type {
   FigureStyleSpec,
@@ -137,6 +138,7 @@ const MAX_SERIES = 12
 const MAX_POINTS = 5000
 const MAX_HEATMAP_CELLS = 40_000
 const MAX_SCHEMATIC_NODES = 50
+const MAX_SCHEMATIC_PRIMITIVES = 500
 const MAX_FLOWCHART_NODES = 12
 const MAX_FLOWCHART_LABEL_CHARS = 720
 const MAX_DISTRIBUTION_GROUPS = 24
@@ -517,6 +519,15 @@ export async function mapScientificPlottingData(
       warnings
     }
   }
+  if (!request.visualPlan.scene && isRecord(request.data) && Array.isArray(request.data.primitives)) {
+    return {
+      ok: false,
+      status: 'invalid_request',
+      message: 'Vector scenes must be declared once as requirements.scene in visual_generate; raw data.primitives is not a public scene input.',
+      missingInputs: ['visualPlan.scene'],
+      warnings
+    }
+  }
   try {
     const workspaceRoot = await resolveWorkspaceRoot(request.workspaceRoot)
     const styleProfile = styleProfileForPlanning(
@@ -541,13 +552,17 @@ export async function mapScientificPlottingData(
     const recommendedProfile = styleProfile
       ? shapeStyleProfileForResult(styleProfile, false)
       : styleProfileMatches?.[0]?.profile
+    const sceneData = request.visualPlan.scene
+      ? visualSceneToScientificData(request.visualPlan.scene)
+      : undefined
+    const mappedInput = sceneData ?? request.data
     const taskSignals = inferTemplateSignalsFromText(task)
     const taskTemplate = taskSignals[0] ?? 'line'
-    const candidates = buildDataMappingCandidates(request.data, {
+    const candidates = buildDataMappingCandidates(mappedInput, {
       task,
       labels: request.labels,
       taskTemplate,
-      templateHint: request.templateHint,
+      templateHint: sceneData ? 'schematic-grid' : request.templateHint,
       referenceProfile
     })
     if (candidates.length === 0) {
@@ -562,7 +577,7 @@ export async function mapScientificPlottingData(
       }
     }
     const selected = selectDataMappingCandidate(candidates, {
-      templateHint: request.templateHint,
+      templateHint: sceneData ? 'schematic-grid' : request.templateHint,
       taskTemplate,
       referenceProfile
     })
@@ -592,6 +607,7 @@ export async function mapScientificPlottingData(
       visualPlan: request.visualPlan,
       template: selected.template,
       data: selected.data,
+      reviewTask: task,
       ...(Object.keys(labels).length > 0 ? { labels } : {}),
       ...(request.figureId ? { figureId: request.figureId } : {}),
       ...(request.styleSpec ? { styleSpec: request.styleSpec } : {}),
@@ -1289,6 +1305,7 @@ function compositeErrorStatus(
 }
 
 function isControlledPlottingPlan(value: ScientificPlottingRenderRequest['visualPlan'] | undefined): boolean {
+  const sceneOwners = new Set(value?.scene?.layers.map((layer) => layer.owner) ?? [])
   return Boolean(
     value
     && typeof value.planId === 'string'
@@ -1298,11 +1315,11 @@ function isControlledPlottingPlan(value: ScientificPlottingRenderRequest['visual
     && (value.route === 'code' || value.route === 'hybrid')
     && Array.isArray(value.sourceArtifacts)
     && Array.isArray(value.reproducibleInputs)
-    && value.reproducibleInputs.length > 0
+    && (value.reproducibleInputs.length > 0 || Boolean(value.inlineSpecification?.trim()) || Boolean(value.scene))
     && Array.isArray(value.lockedElements)
-    && value.lockedElements.length > 0
+    && (value.lockedElements.length > 0 || sceneOwners.has('code'))
     && Array.isArray(value.modelOwnedElements)
-    && (value.route !== 'hybrid' || value.modelOwnedElements.length > 0)
+    && (value.route !== 'hybrid' || value.modelOwnedElements.length > 0 || sceneOwners.has('model'))
     && (value.contextStatus === 'ready' || value.contextStatus === 'budget_exhausted')
     && Array.isArray(value.contextEvidenceIds)
     && Array.isArray(value.unresolvedContext)
@@ -1404,6 +1421,11 @@ function parseRendererDiagnostics(stdout: string): { rendererDiagnostics?: Rende
       diagnostics.schematicEdgeCount >= 0
       ? diagnostics.schematicEdgeCount
       : undefined
+    const schematicPrimitiveCount = typeof diagnostics.schematicPrimitiveCount === 'number' &&
+      Number.isInteger(diagnostics.schematicPrimitiveCount) &&
+      diagnostics.schematicPrimitiveCount >= 0
+      ? diagnostics.schematicPrimitiveCount
+      : undefined
     const schematicExplicitPositions = typeof diagnostics.schematicExplicitPositions === 'boolean'
       ? diagnostics.schematicExplicitPositions
       : undefined
@@ -1427,6 +1449,7 @@ function parseRendererDiagnostics(stdout: string): { rendererDiagnostics?: Rende
         ...(multiPanelCount !== undefined ? { multiPanelCount } : {}),
         ...(schematicNodeCount !== undefined ? { schematicNodeCount } : {}),
         ...(schematicEdgeCount !== undefined ? { schematicEdgeCount } : {}),
+        ...(schematicPrimitiveCount !== undefined ? { schematicPrimitiveCount } : {}),
         ...(schematicExplicitPositions !== undefined ? { schematicExplicitPositions } : {}),
         ...(typography ? { typography } : {}),
         ...(layoutQuality ? { layoutQuality } : {}),
@@ -3410,12 +3433,25 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
     return
   }
   if (template === 'schematic-grid' || template === 'flowchart') {
-    const nodes = data.nodes
+    const nodes = data.nodes === undefined ? [] : data.nodes
+    const primitives = template === 'schematic-grid' && data.primitives !== undefined
+      ? data.primitives
+      : []
     const maxNodes = template === 'flowchart' ? MAX_FLOWCHART_NODES : MAX_SCHEMATIC_NODES
-    if (!Array.isArray(nodes) || nodes.length === 0 || nodes.length > maxNodes) {
-      throw new Error(template === 'flowchart'
-        ? `flowchart data.nodes must include 1-${MAX_FLOWCHART_NODES} compact nodes for the locked code route.`
-        : `${template} data.nodes must include 1-${MAX_SCHEMATIC_NODES} nodes.`)
+    if (!Array.isArray(nodes) || nodes.length > maxNodes) {
+      throw new Error(`${template} data.nodes must be an array with at most ${maxNodes} entries for the locked code route.`)
+    }
+    if (template === 'flowchart' && nodes.length === 0) {
+      throw new Error(`flowchart data.nodes must include 1-${MAX_FLOWCHART_NODES} compact nodes for the locked code route.`)
+    }
+    if (template === 'schematic-grid') {
+      if (!Array.isArray(primitives) || primitives.length > MAX_SCHEMATIC_PRIMITIVES) {
+        throw new Error(`schematic-grid data.primitives must be an array with at most ${MAX_SCHEMATIC_PRIMITIVES} entries.`)
+      }
+      if (nodes.length === 0 && primitives.length === 0) {
+        throw new Error('schematic-grid requires at least one node or vector primitive.')
+      }
+      validateSchematicPrimitives(primitives)
     }
     const labels: string[] = []
     for (const node of nodes) {
@@ -3434,6 +3470,49 @@ function validateTemplateData(template: ScientificPlottingTemplate, data: unknow
           throw new Error('flowchart edges must include from and to.')
         }
       }
+    }
+  }
+}
+
+function validateSchematicPrimitives(primitives: unknown[]): void {
+  const shapes = new Set(['circle', 'ellipse', 'rectangle', 'rect', 'triangle', 'polygon'])
+  const linear = new Set(['line', 'arrow'])
+  const finite = (value: unknown): boolean => typeof value === 'number' && Number.isFinite(value)
+  for (const primitive of primitives) {
+    if (!isRecord(primitive)) throw new Error('schematic-grid primitives must be objects.')
+    const type = typeof primitive.type === 'string'
+      ? primitive.type.trim().toLowerCase()
+      : typeof primitive.kind === 'string'
+        ? primitive.kind.trim().toLowerCase()
+        : ''
+    if (type === 'text') {
+      if (typeof primitive.text !== 'string' || !finite(primitive.x) || !finite(primitive.y)) {
+        throw new Error('Text primitives require text and finite x/y coordinates.')
+      }
+      continue
+    }
+    if (linear.has(type)) {
+      if (![primitive.x1, primitive.y1, primitive.x2, primitive.y2].every(finite)) {
+        throw new Error(`${type} primitives require finite x1/y1/x2/y2 coordinates.`)
+      }
+      continue
+    }
+    if (!shapes.has(type) || !finite(primitive.x) || !finite(primitive.y)) {
+      throw new Error('Shape primitives require a supported type and finite x/y coordinates.')
+    }
+    if (type === 'polygon') {
+      if (!Array.isArray(primitive.points) || primitive.points.length < 3 || primitive.points.length > 256) {
+        throw new Error('Polygon primitives require 3-256 points.')
+      }
+      if (!primitive.points.every((point) => isRecord(point) && finite(point.x) && finite(point.y))) {
+        throw new Error('Polygon primitive points require finite x/y coordinates.')
+      }
+      continue
+    }
+    const hasPositiveSize = [primitive.radius, primitive.diameter, primitive.width, primitive.w]
+      .some((value) => finite(value) && Number(value) > 0)
+    if (!hasPositiveSize) {
+      throw new Error(`${type} primitives require a positive radius, diameter, width, or w value.`)
     }
   }
 }
@@ -4338,7 +4417,7 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
 from matplotlib.colors import LinearSegmentedColormap, to_rgb
-from matplotlib.patches import Rectangle, FancyArrowPatch
+from matplotlib.patches import Rectangle, FancyArrowPatch, Ellipse, Polygon
 
 payload = json.load(sys.stdin)
 
@@ -5313,6 +5392,7 @@ elif template == "flowchart":
 elif template == "schematic-grid":
     nodes = data.get("nodes") or []
     edges = data.get("edges") or []
+    primitives = data.get("primitives") or []
     columns = int(math.ceil(math.sqrt(len(nodes))))
     rows = int(math.ceil(len(nodes) / max(1, columns)))
     positions = {}
@@ -5326,6 +5406,8 @@ elif template == "schematic-grid":
         ax.set_xlim(0, columns)
         ax.set_ylim(0, rows)
     ax.axis("off")
+    if primitives or any(str(node.get("shape") or "rectangle").lower() not in ("rectangle", "rect") for node in nodes):
+        ax.set_aspect("equal", adjustable="box")
     def first_present(mapping, *keys):
         for key in keys:
             value = mapping.get(key)
@@ -5380,6 +5462,80 @@ elif template == "schematic-grid":
             return fallback if luminance >= 0.48 else "#ffffff"
         except Exception:
             return fallback
+    def add_shape(shape, center_x, center_y, width, height, facecolor, edgecolor, linewidth, alpha, zorder, points=None):
+        kind = str(shape or "rectangle").strip().lower()
+        if kind in ("circle", "ellipse"):
+            if kind == "circle":
+                width = height = min(width, height)
+            patch = Ellipse((center_x, center_y), width=width, height=height, facecolor=facecolor, edgecolor=edgecolor, linewidth=linewidth, alpha=alpha, zorder=zorder)
+        elif kind == "triangle":
+            patch = Polygon([
+                (center_x, center_y + height / 2),
+                (center_x - width / 2, center_y - height / 2),
+                (center_x + width / 2, center_y - height / 2),
+            ], closed=True, facecolor=facecolor, edgecolor=edgecolor, linewidth=linewidth, alpha=alpha, zorder=zorder)
+        elif kind == "polygon" and isinstance(points, list) and len(points) >= 3:
+            vertices = [
+                (as_float(point.get("x"), 0), as_float(point.get("y"), 0))
+                for point in points
+                if isinstance(point, dict)
+            ]
+            if len(vertices) < 3:
+                raise ValueError("Polygon primitives require at least three valid points.")
+            patch = Polygon(vertices, closed=True, facecolor=facecolor, edgecolor=edgecolor, linewidth=linewidth, alpha=alpha, zorder=zorder)
+        elif kind in ("rectangle", "rect"):
+            patch = Rectangle((center_x - width / 2, center_y - height / 2), width, height, facecolor=facecolor, edgecolor=edgecolor, linewidth=linewidth, alpha=alpha, zorder=zorder)
+        else:
+            raise ValueError("Unsupported vector primitive shape: " + kind)
+        ax.add_patch(patch)
+    for primitive in primitives:
+        if not isinstance(primitive, dict):
+            continue
+        primitive_type = str(primitive.get("type") or primitive.get("kind") or "").strip().lower()
+        color = primitive.get("fill") or primitive.get("color") or "none"
+        edgecolor = primitive.get("stroke") or mpl.rcParams.get("axes.edgecolor", "#222222")
+        linewidth = clamp(as_float(primitive.get("strokeWidth"), 1.0), 0.0, 12.0)
+        alpha = clamp(as_float(primitive.get("opacity"), 1.0), 0.0, 1.0)
+        zorder = as_float(primitive.get("z"), 2)
+        if primitive_type in ("line", "arrow"):
+            x1 = as_float(first_present(primitive, "x1", "x"), 0)
+            y1 = as_float(first_present(primitive, "y1", "y"), 0)
+            x2 = as_float(primitive.get("x2"), x1)
+            y2 = as_float(primitive.get("y2"), y1)
+            if primitive_type == "arrow":
+                ax.add_patch(FancyArrowPatch((x1, y1), (x2, y2), arrowstyle="-|>", mutation_scale=11, linewidth=linewidth, color=edgecolor, alpha=alpha, zorder=zorder))
+            else:
+                ax.plot([x1, x2], [y1, y2], color=edgecolor, linewidth=linewidth, alpha=alpha, zorder=zorder)
+        elif primitive_type == "text":
+            ax.text(
+                as_float(primitive.get("x"), 0.5),
+                as_float(primitive.get("y"), 0.5),
+                str(primitive.get("text") or ""),
+                ha=str(primitive.get("horizontalAlign") or "center"),
+                va=str(primitive.get("verticalAlign") or "center"),
+                fontsize=clamp(as_float(primitive.get("fontSize"), mpl.rcParams.get("font.size", 8)), 4, 72),
+                color=primitive.get("textColor") or edgecolor,
+                alpha=alpha,
+                zorder=zorder,
+            )
+        else:
+            width = clamp(as_float(first_present(primitive, "width", "w", "diameter"), 0.18), 0.001, 2.0)
+            height = clamp(as_float(first_present(primitive, "height", "h", "diameter"), width), 0.001, 2.0)
+            if primitive_type == "circle" and isinstance(primitive.get("radius"), (int, float)):
+                width = height = clamp(float(primitive.get("radius")) * 2, 0.001, 2.0)
+            add_shape(
+                primitive_type,
+                as_float(primitive.get("x"), 0.5),
+                as_float(primitive.get("y"), 0.5),
+                width,
+                height,
+                color,
+                edgecolor,
+                linewidth,
+                alpha,
+                zorder,
+                primitive.get("points"),
+            )
     def has_wrapped_label(original, wrapped):
         original_text = str(original or "").replace("\r\n", "\n").replace("\r", "\n").strip()
         wrapped_text = str(wrapped or "").strip()
@@ -5427,8 +5583,19 @@ elif template == "schematic-grid":
         color = node.get("color") or node.get("fill") or palette[index % len(palette)]
         alpha = clamp(as_float(first_present(node, "alpha", "opacity"), 0.18), 0.08, 1.0)
         text_color = first_present(node, "textColor", "labelColor", "fontColor") or contrast_text_color(color, alpha)
-        rect = Rectangle((x, y), width, height, facecolor=color, edgecolor=mpl.rcParams.get("axes.edgecolor", "#222222"), linewidth=0.9, alpha=alpha, zorder=2)
-        ax.add_patch(rect)
+        add_shape(
+            node.get("shape") or "rectangle",
+            center_x,
+            center_y,
+            width,
+            height,
+            color,
+            node.get("stroke") or mpl.rcParams.get("axes.edgecolor", "#222222"),
+            clamp(as_float(node.get("strokeWidth"), 0.9), 0.0, 12.0),
+            alpha,
+            2,
+            node.get("points"),
+        )
         ax.text(center_x, center_y, label, ha="center", va="center", fontsize=node_font_size(label), color=text_color, wrap=True, linespacing=0.95, zorder=3)
         node_id = str(node.get("id") or str(index))
         positions[node_id] = (center_x, center_y)
@@ -5488,6 +5655,7 @@ elif template == "schematic-grid":
     add_layout_note(f"Rendered {drawn_edges} of {len(edges)} schematic edges.")
     renderer_diagnostics["schematicNodeCount"] = len(nodes)
     renderer_diagnostics["schematicEdgeCount"] = drawn_edges
+    renderer_diagnostics["schematicPrimitiveCount"] = len(primitives)
     renderer_diagnostics["schematicExplicitPositions"] = bool(explicit_positions)
     if drawn_edges < len(edges):
         add_layout_note("Skipped schematic edges with missing source or target ids.")

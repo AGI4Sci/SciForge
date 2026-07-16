@@ -1,4 +1,5 @@
 import type { BiologyRoomManifest } from '@shared/biology-room'
+import type { CapabilityResourceBinding } from '@shared/capability-broker'
 import type {
   VisibleContextComponentSnapshot,
   VisibleContextResource
@@ -19,7 +20,7 @@ export function biologyRoomVisibleContextComponentId(roomId: string): string {
 }
 
 export function buildBiologyRoomVisibleContextComponent(input: {
-  room: BiologyRoomManifest
+  room: BiologyRoomManifest & { capability?: CapabilityResourceBinding }
   workspaceRoot: string
   updatedAt?: string
   conflicted?: boolean
@@ -38,24 +39,24 @@ export function buildBiologyRoomVisibleContextComponent(input: {
       kind: 'biologyRoom',
       role: 'active-room',
       title: room.title,
-      accessHint: 'Use biology_room_observe for bounded room state and biology_room_apply for validated room operations.',
       workspaceRoot,
       path: absoluteWorkspacePath(workspaceRoot, roomRelativePath),
       relativePath: roomRelativePath,
       resourceUri: workspaceFileResourceUri(roomRelativePath),
       annotationCount: room.annotations.length,
       updatedAt: room.updatedAt,
+      capability: room.capability,
       metadata: {
         roomId: room.roomId,
         revision: room.revision,
-        activeAssetId: activeAsset?.id ?? null
+        activeAssetId: activeAsset?.id ?? null,
+        operationIds: room.capability?.operations.map((operation) => operation.id) ?? []
       }
     },
     ...orderedAssets.slice(0, BIOLOGY_ROOM_VISIBLE_CONTEXT_RESOURCE_LIMIT).map((asset): VisibleContextResource => ({
       kind: 'workspaceFile',
       role: 'biology-room-asset',
       title: basename(asset.path),
-      accessHint: 'Read the source through workspace file tools; Biology Room operations never modify source bytes.',
       workspaceRoot,
       path: absoluteWorkspacePath(workspaceRoot, asset.path),
       relativePath: asset.path,

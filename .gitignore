@@ -68,3 +68,4 @@ docs/R2_RELEASE.md
 
 ### Local end-to-end run artifacts
 temp/
+.tmp/

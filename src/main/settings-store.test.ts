@@ -38,6 +38,35 @@ describe('JsonSettingsStore', () => {
       closeToTray: false
     })
     expect(loaded.speechToText).toEqual(defaultSpeechToTextSettings())
+    expect(loaded.evidenceDag).toEqual({ enabled: false })
+  })
+
+  it('persists the opt-in Evidence DAG feature switch', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const store = new JsonSettingsStore(userDataDir)
+
+    const enabled = await store.patch({ evidenceDag: { enabled: true } })
+    const disabled = await store.patch({ evidenceDag: { enabled: false } })
+
+    expect(enabled.evidenceDag).toEqual({ enabled: true })
+    expect(disabled.evidenceDag).toEqual({ enabled: false })
+    const raw = JSON.parse(await readFile(join(userDataDir, 'sciforge-settings.json'), 'utf8'))
+    expect(raw.evidenceDag).toEqual({ enabled: false })
+  })
+
+  it('migrates older settings to an explicit disabled Evidence DAG switch', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const settingsPath = join(userDataDir, 'sciforge-settings.json')
+    await new JsonSettingsStore(userDataDir).load()
+    const legacy = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
+    delete legacy.evidenceDag
+    await writeFile(settingsPath, JSON.stringify(legacy), 'utf8')
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+
+    expect(loaded.evidenceDag).toEqual({ enabled: false })
+    const migrated = JSON.parse(await readFile(settingsPath, 'utf8')) as Record<string, unknown>
+    expect(migrated.evidenceDag).toEqual({ enabled: false })
   })
 
   it('patches shared agent capability settings', async () => {

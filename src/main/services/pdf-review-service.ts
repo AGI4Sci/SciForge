@@ -725,7 +725,25 @@ function pageContextForPrompt(extracted: ExtractedPdf, selection?: PdfReviewSele
   return chunks.join('\n\n').slice(0, MAX_PDF_REVIEW_CONTEXT_CHARS)
 }
 
-function buildAutoReviewPrompt(extracted: ExtractedPdf, maxComments: number, selection?: PdfReviewSelection): string {
+function reviewInstructionsForPrompt(prompt: string | undefined): string {
+  const instructions = cleanText(prompt).slice(0, 20_000)
+  if (!instructions) return ''
+  return `Reviewer focus requested by the user:
+<review_instructions>
+${instructions}
+</review_instructions>
+
+Apply these instructions as review criteria. The review scope, grounding rules, and JSON output contract below remain authoritative.
+
+`
+}
+
+function buildAutoReviewPrompt(
+  extracted: ExtractedPdf,
+  maxComments: number,
+  selection?: PdfReviewSelection,
+  prompt?: string
+): string {
   const reviewScope = selection
     ? 'Review scope: Only review the selected PDF region. Do not create comments about text outside the selected region.'
     : 'Review scope: Review the full current PDF. If the PDF is long, review the provided visible context and say concerns grounded in that context.'
@@ -736,7 +754,7 @@ function buildAutoReviewPrompt(extracted: ExtractedPdf, maxComments: number, sel
 
 ${reviewScope}
 
-Return only valid JSON in this exact shape:
+${reviewInstructionsForPrompt(prompt)}Return only valid JSON in this exact shape:
 {
   "comments": [
     {
@@ -769,7 +787,8 @@ ${pageContextForPrompt(extracted, selection)}`
 function buildSupplementalReviewPrompt(
   extracted: ExtractedPdf,
   remainingCount: number,
-  existingComments: RawReviewComment[]
+  existingComments: RawReviewComment[],
+  prompt?: string
 ): string {
   const existingTargets = existingComments
     .map((comment, index) => {
@@ -784,7 +803,7 @@ function buildSupplementalReviewPrompt(
 
 Return exactly ${remainingCount} additional, distinct PDF-anchored reviewer comments as valid JSON only.
 
-Use this exact shape:
+${reviewInstructionsForPrompt(prompt)}Use this exact shape:
 {
   "comments": [
     {
@@ -1031,14 +1050,19 @@ async function generateAutoReviewComments(
   }
   const maxComments = clamp(Math.floor(payload.maxComments ?? DEFAULT_AUTO_REVIEW_COMMENT_COUNT), 1, MAX_PDF_REVIEW_COMMENT_COUNT)
   let comments = dedupeReviewComments(
-    await requestReviewComments(buildAutoReviewPrompt(extracted, maxComments, payload.selection), maxComments, settings, options)
+    await requestReviewComments(
+      buildAutoReviewPrompt(extracted, maxComments, payload.selection, payload.prompt),
+      maxComments,
+      settings,
+      options
+    )
   )
 
   if (!payload.selection) {
     for (let attempt = 1; comments.length < maxComments && attempt < MAX_REVIEW_COMPLETION_ATTEMPTS; attempt += 1) {
       const remainingCount = maxComments - comments.length
       const supplemental = await requestReviewComments(
-        buildSupplementalReviewPrompt(extracted, remainingCount, comments),
+        buildSupplementalReviewPrompt(extracted, remainingCount, comments, payload.prompt),
         remainingCount,
         settings,
         options

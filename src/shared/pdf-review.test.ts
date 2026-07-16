@@ -12,6 +12,7 @@ describe('PDF review action contracts', () => {
   it('validates bounded PDF review generation inputs', () => {
     const parsed = pdfReviewGenerateActionInputSchema.parse({
       maxComments: 12,
+      prompt: '  Focus on reproducibility and missing controls.  ',
       replaceExisting: false,
       selection: {
         text: '  Selected claim text  ',
@@ -23,9 +24,11 @@ describe('PDF review action contracts', () => {
 
     expect(PDF_REVIEW_GENERATE_ACTION_ID).toBe('annotation.review.generate')
     expect(parsed.maxComments).toBe(12)
+    expect(parsed.prompt).toBe('Focus on reproducibility and missing controls.')
     expect(parsed.replaceExisting).toBe(false)
     expect(parsed.selection?.text).toBe('Selected claim text')
     expect(() => pdfReviewGenerateActionInputSchema.parse({ maxComments: 51 })).toThrow()
+    expect(() => pdfReviewGenerateActionInputSchema.parse({ prompt: '   ' })).toThrow()
     expect(() => pdfReviewGenerateActionInputSchema.parse({ selection: {} })).toThrow()
   })
 

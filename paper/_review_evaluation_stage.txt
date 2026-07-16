@@ -1,0 +1,23 @@
+\section{Evaluation}
+% ============================================================
+
+SciForge is designed as a research infrastructure platform, not as a single-task algorithm whose performance is measured by a scalar metric. We therefore frame evaluation around four questions that are relevant for a goal-oriented, multimodal, auditable, and collaborative research workbench, and identify what the current codebase and public scenario artifacts can support versus what requires future systematic evaluation.
+
+\subsection{Evaluation Questions and Criteria}
+
+\begin{enumerate}
+    \item \textbf{Modality Routing Coverage.} Does the Scientific Model Router correctly detect modality, select the configured translator, and attach provenance-annotated observations? \textit{Current evidence:} four translator paths (Esm2Text, Prot2Text, BioT5, C2S) are implemented with unit-level integration in the codebase; Cell2Sentence (C2S) provides translate-then-reason for single-cell transcriptomics (.h5ad files), the same ingress pattern as the other three translators; VCF/BED/GFF/MGF are unsupported and fail closed. \textit{Future:} systematic coverage benchmarks across standard bioinformatics file corpora, false-positive/negative routing rates, and comparison against manual modality annotation.
+    \item \textbf{Provenance Completeness.} Does the Evidence DAG capture artifact identity, source anchors, software versions, parameters, and execution traces? \textit{Current evidence:} PROV-JSON schemas and audit-sidecar contracts are present in the codebase; scenario-01, MCFST, and reviewer/rebuttal repositories archive selected workflow artifacts. Commit count alone does not constitute provenance or scientific validity evidence. \textit{Future:} completeness audits against a ground-truth provenance corpus, measurement of missing-link rates under long-running agentic loops, and comparison against manual lab-notebook logging.
+    \item \textbf{Reproducibility.} Can a third party re-execute a recorded workflow from versioned artifacts and scripts? \textit{Current evidence:} the cell-atlas pipeline is an illustrative specification (no execution artifacts are available); scenario-01 and MCFST repositories archive outputs but have not undergone third-party re-execution. \textit{Future:} third-party re-execution trials with environment recreation, runtime variability measurement, and comparison against containerized workflow systems.
+    \item \textbf{Audit and Decision Governance.} Does the audit layer flag fragile claims, and does the release gate correctly distinguish blocking from non-blocking findings? \textit{Current evidence:} lightweight decision-record contracts and the five-category fragility taxonomy are defined; the reviewer/rebuttal sprint exercises these on a single manuscript as a prototype demonstration, not a validated deployment. \textit{Future:} controlled injection studies with known-weak and known-strong claims, measurement of false-positive and false-negative audit rates, and user studies on decision-making efficiency under audit guidance.
+\end{enumerate}
+
+\subsection{Current Evidence Scope and Future Evaluation}
+
+The four evaluation criteria above are currently supported by (a)~the code-level contracts, schemas, and CI-visible tests present in the SciForge repository; (b)~the scenario-01 research sprint repository (archive available at time of writing); (c)~the MCFST paper reproduction repository; and (d)~the reviewer/rebuttal sprint repository. Together these artifacts constitute existence proofs that selected architectural components are instantiated in running code---they do \emph{not} constitute systematic quantitative evaluation. Existence proofs demonstrate selected components and demonstrations; they are not a substitute for systematic evaluation.
+
+The following evaluation categories are explicitly identified as \textbf{future work}: (i)~baseline comparisons against alternative scientific workbench systems or manual workflows; (ii)~ablation studies that isolate the contribution of individual components (e.g., translator routing, Evidence DAG, audit layer); (iii)~inter-annotator agreement or expert-consensus studies on audit findings and evidence quality; (iv)~time-to-completion or researcher-efficiency studies under controlled protocols; (v)~scalability benchmarks under long-running multi-day agentic loops. We encourage the community to contribute protocols, benchmark datasets, and reproducibility studies that exercise these dimensions on the SciForge platform.
+
+
+\section{Discussion}
+% 

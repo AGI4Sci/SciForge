@@ -8,7 +8,6 @@ import {
   PDF_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
   TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
   TEXT_WORKSPACE_PREVIEW_PLUGIN_ID as SHARED_TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
@@ -80,16 +79,13 @@ export const DECK_WORKSPACE_PREVIEW_PLUGIN_ID = SHARED_DECK_WORKSPACE_PREVIEW_PL
 
 const CORE_PREVIEW_VERSION = '0.1.0'
 
-function capabilities(
-  overrides: Partial<Omit<WorkspacePreviewCapability, 'agent'>> = {}
-): WorkspacePreviewCapability {
+function capabilities(overrides: Partial<WorkspacePreviewCapability> = {}): WorkspacePreviewCapability {
   return {
     preview: true,
     edit: false,
     inspect: true,
     structuredSelection: false,
-    ...overrides,
-    agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+    ...overrides
   }
 }
 

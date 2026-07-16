@@ -1,0 +1,11 @@
+\section{Use Cases}\label{sec:use-cases}
+% ============================================================
+
+
+This section uses three evidence-status labels consistently: \textit{[Implemented]} for a product path exercised in SciForge, \textit{[Validated Prototype]} for a bounded single-case or externally archived pilot with stated limitations, and \textit{[Illustrative Future]} for an unexecuted target workflow. These cases are not separate product panels; they show what is implemented, what has only pilot evidence, and what remains a design target on the same modular substrate.
+
+
+
+\subsection{Agentic Research Sprint: From Question to Manuscript Package}
+
+\textbf{Setting.} \textit{[Implemented]} A human PI poses the biological question ``Which molecular systems drive mammalian germ cells into meiosis?'' and delegates execution to SciForge, an AI4S research workbench. Cod

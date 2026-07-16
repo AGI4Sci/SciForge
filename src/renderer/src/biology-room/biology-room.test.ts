@@ -5,6 +5,7 @@ import type {
   BiologyRoomAsset,
   BiologyRoomManifest
 } from '@shared/biology-room'
+import type { CapabilityResourceBinding } from '@shared/capability-broker'
 import type { BioGymRunSnapshot } from '@shared/biogym'
 import {
   biologyRoomAssetBlockingIssue,
@@ -137,7 +138,32 @@ describe('Biology Room renderer models', () => {
         mtimeMs: 2
       }]
     })
-    const room = manifest({ assets: [fasta], activeAssetId: fasta.id })
+    const room = {
+      ...manifest({ assets: [fasta], activeAssetId: fasta.id }),
+      capability: {
+        resource: {
+          token: 'cap_abcdefghijklmnopqrstuvwxyz',
+          semanticRevision: '4',
+          expiresAt: '2026-07-16T14:00:00.000Z'
+        },
+        operations: [{
+          contractVersion: 1,
+          id: 'biology-room.apply',
+          version: '1.0.0',
+          title: 'Apply Biology Room operations',
+          description: 'Apply registered Biology Room operations.',
+          audiences: ['ui', 'agent', 'system'],
+          scope: 'resource',
+          resourceKinds: ['biology-room'],
+          effect: 'workspace-write',
+          approval: 'none',
+          concurrency: { revision: 'optimistic', idempotency: 'required' },
+          inputSchema: { type: 'object' },
+          outputSchema: { type: 'object' },
+          tags: ['biology']
+        }]
+      } satisfies CapabilityResourceBinding
+    }
     const component = buildBiologyRoomVisibleContextComponent({
       room,
       workspaceRoot: '/workspace/lab',
@@ -152,6 +178,14 @@ describe('Biology Room renderer models', () => {
       workspaceRoot: '/workspace/lab',
       revision: room.revision,
       conflicted: true
+    })
+    expect(component.resources?.[0]).toMatchObject({
+      kind: 'biologyRoom',
+      capability: {
+        resource: { token: 'cap_abcdefghijklmnopqrstuvwxyz', semanticRevision: '4' },
+        operations: [{ id: 'biology-room.apply' }]
+      },
+      metadata: { operationIds: ['biology-room.apply'] }
     })
     expect(component.resources?.[1]).toMatchObject({
       kind: 'workspaceFile',
@@ -328,7 +362,7 @@ describe('JBrowse local config', () => {
   it('rejects remote URLs and compressed tracks without an index', () => {
     expect(isLocalBiologyAssetUrl('https://example.com/genome.fa')).toBe(false)
     expect(isLocalBiologyAssetUrl('sciforge-evil://asset/session')).toBe(false)
-    expect(isLocalBiologyAssetUrl('sciforge-preview://asset/session')).toBe(true)
+    expect(isLocalBiologyAssetUrl('sciforge-resource://asset/session')).toBe(true)
     expect(isLocalBiologyAssetUrl('http://localhost:5173/genome.fa')).toBe(true)
 
     const reference = asset({ id: 'reference', path: 'genome.fa', format: 'fasta', modality: 'genome-reference' })
@@ -428,12 +462,12 @@ describe('JBrowse local config', () => {
       room: manifest({ assets: [reference, track], activeAssetId: track.id }),
       activeTrack: track,
       assetSources: {
-        reference: { sourceUrl: 'sciforge-preview://asset/reference' },
+        reference: { sourceUrl: 'sciforge-resource://asset/reference' },
         variants: {
-          sourceUrl: 'sciforge-preview://asset/variants',
+          sourceUrl: 'sciforge-resource://asset/variants',
           indexUrls: {
-            'variants.vcf.gz.tbi': 'sciforge-preview://asset/variants-tbi',
-            'variants.vcf.gz.csi': 'sciforge-preview://asset/variants-csi'
+            'variants.vcf.gz.tbi': 'sciforge-resource://asset/variants-tbi',
+            'variants.vcf.gz.csi': 'sciforge-resource://asset/variants-csi'
           }
         }
       }
@@ -444,7 +478,7 @@ describe('JBrowse local config', () => {
     const index = adapter.index as Record<string, unknown>
     const location = index.location as Record<string, unknown>
     expect(index.indexType).toBe('TBI')
-    expect(location.uri).toBe('sciforge-preview://asset/variants-tbi')
+    expect(location.uri).toBe('sciforge-resource://asset/variants-tbi')
   })
 
   it('surfaces partial contig evidence and skips incompatible secondary tracks', () => {
@@ -493,9 +527,9 @@ describe('JBrowse local config', () => {
       room: manifest({ assets: [reference, active, incompatible], activeAssetId: active.id }),
       activeTrack: active,
       assetSources: {
-        reference: { sourceUrl: 'sciforge-preview://asset/reference' },
-        genes: { sourceUrl: 'sciforge-preview://asset/genes' },
-        variants: { sourceUrl: 'sciforge-preview://asset/variants' }
+        reference: { sourceUrl: 'sciforge-resource://asset/reference' },
+        genes: { sourceUrl: 'sciforge-resource://asset/genes' },
+        variants: { sourceUrl: 'sciforge-resource://asset/variants' }
       }
     })
 
@@ -542,8 +576,8 @@ describe('JBrowse local config', () => {
       }),
       activeTrack: active,
       assetSources: {
-        reference: { sourceUrl: 'sciforge-preview://asset/reference' },
-        genes: { sourceUrl: 'sciforge-preview://asset/genes' }
+        reference: { sourceUrl: 'sciforge-resource://asset/reference' },
+        genes: { sourceUrl: 'sciforge-resource://asset/genes' }
       }
     })
 

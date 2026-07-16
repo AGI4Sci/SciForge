@@ -431,6 +431,7 @@ export function DocumentAnnotationPanelController({
   const generatePdfReview = useCallback(async (input: {
     scope: 'document' | 'selection'
     maxComments: number
+    prompt: string
   }): Promise<void> => {
     if (!sessionId || !canGeneratePdfReview) return
     const selection = input.scope === 'selection'
@@ -448,6 +449,7 @@ export function DocumentAnnotationPanelController({
         actionId: PDF_REVIEW_GENERATE_ACTION_ID,
         input: {
           maxComments: input.maxComments,
+          prompt: input.prompt,
           replaceExisting: input.scope === 'document',
           ...(selection ? { selection } : {})
         }

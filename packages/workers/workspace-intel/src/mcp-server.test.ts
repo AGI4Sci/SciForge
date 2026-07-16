@@ -14,6 +14,9 @@ import {
 } from './contract.js'
 import { createWorkspaceIntelMcpServer } from './mcp-server.js'
 import { createWorkspaceIntelService } from './service.js'
+import type { VisualInspectionRequest } from './visual-inspection.js'
+
+const SNAPSHOT_TOKEN = `vc_${'e'.repeat(64)}`
 
 test('serves structured workspace tool results and resource reads over MCP', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-mcp-'))
@@ -25,9 +28,10 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   await writeFile(join(workspaceRoot, 'notes.txt'), 'hello from MCP\n', 'utf8')
   const visibleContextPath = join(tempRoot, 'visible-context.json')
   await writeFile(visibleContextPath, JSON.stringify({
-    schemaVersion: 2,
+    schemaVersion: 3,
     windowId: 'window-1',
     revision: 3,
+    snapshotToken: SNAPSHOT_TOKEN,
     publishedAt: new Date().toISOString(),
     freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
     activeThreadId: 'thread-1',
@@ -71,21 +75,7 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const service = createWorkspaceIntelService({
     workspaceRoot,
     visibleContextPath,
-    visualInspector: async ({ prompt }) => ({
-      status: 'inspected',
-      provider: 'model-router-vision',
-      model: 'sciforge-model-router',
-      inspectedAt: '2026-07-13T00:00:00.000Z',
-      captureSha256: 'a'.repeat(64),
-      observationSha256: 'b'.repeat(64),
-      attestation: `sha256:${'c'.repeat(64)}`,
-      prompt: prompt ?? 'Inspect the captured SciForge interface.',
-      summary: 'The captured window is visible.',
-      visibleFacts: ['The preview occupies the right sidebar.'],
-      layoutIssues: [],
-      recommendedActions: [],
-      confidence: 0.98
-    })
+    visualInspector: async (request) => visualEvidence(request)
   })
   const server = createWorkspaceIntelMcpServer(service)
   const client = new Client({ name: 'workspace-intel-test', version: '0.1.0' })
@@ -105,8 +95,8 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   assert.deepEqual(toolNames, [
     'gui_visible_context',
     'gui_visual_capture',
+    'gui_workspace_image_inspect',
     'gui_workspace_list',
-    'gui_workspace_preview',
     'gui_workspace_read',
     'gui_workspace_reference_list',
     'gui_workspace_reference_preview',
@@ -131,6 +121,7 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   assert.equal(structuredVisibleContext.ok, true)
   assert.equal(structuredVisibleContext.componentCount, 1)
   assert.equal(structuredVisibleContext.windowId, 'window-1')
+  assert.equal(structuredVisibleContext.snapshotToken, SNAPSHOT_TOKEN)
   assert.equal(asRecord((structuredVisibleContext.components as unknown[])[0]).component, 'workspace-preview')
 
   const captureDirectory = join(tempRoot, 'captures')
@@ -141,12 +132,12 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   await writeFile(capturePath, pngBytes)
   const capturePromise = client.callTool({
     name: 'gui_visual_capture',
-    arguments: { scope: 'window' }
+    arguments: { scope: 'window', snapshotToken: SNAPSHOT_TOKEN }
   })
   const requestName = await waitForFileName(requestDirectory, '.request.json')
   const captureRequest = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
   await writeFile(join(requestDirectory, `${captureRequest.requestId}.response.json`), JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     requestId: captureRequest.requestId,
     completedAt: new Date().toISOString(),
     ok: true,
@@ -167,15 +158,39 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   const structuredCapture = asRecord(capture.structuredContent)
   assert.equal(structuredCapture.ok, true)
   assert.equal(asRecord(structuredCapture.resource).kind, 'visualSnapshot')
-  assert.match(String(asRecord(structuredCapture.inspection).attestation), /^sha256:[a-f0-9]{64}$/u)
+  assert.match(String(asRecord(structuredCapture.evidence).attestation), /^sha256:[a-f0-9]{64}$/u)
   const textContent = capture.content.find((item) => item.type === 'text')
-  assert.match(textContent?.type === 'text' ? textContent.text : '', /Semantic visual inspection completed/u)
+  assert.match(textContent?.type === 'text' ? textContent.text : '', /Visual understanding completed through Model Router/u)
   const imageContent = capture.content.find((item) => item.type === 'image')
   assert.equal(imageContent?.type, 'image')
   if (imageContent?.type === 'image') {
     assert.equal(imageContent.mimeType, 'image/png')
     assert.deepEqual(Buffer.from(imageContent.data, 'base64'), pngBytes)
   }
+
+  const jpegBytes = Buffer.from([0xff, 0xd8, 0xff, 0xdb])
+  const webpBytes = Buffer.from('RIFF0000WEBP', 'ascii')
+  await Promise.all([
+    writeFile(join(workspaceRoot, 'sample.jpg'), jpegBytes),
+    writeFile(join(workspaceRoot, 'render.webp'), webpBytes)
+  ])
+  const visualTask = await client.callTool({
+    name: 'gui_workspace_image_inspect',
+    arguments: {
+      task: 'Compare the sample with the render.',
+      artifacts: [
+        { id: 'sample', path: 'sample.jpg' },
+        { id: 'render', path: 'render.webp' }
+      ],
+      outputIntent: { kind: 'comparison' }
+    }
+  })
+  const structuredVisualTask = asRecord(visualTask.structuredContent)
+  assert.equal(structuredVisualTask.ok, true)
+  assert.equal((structuredVisualTask.artifacts as unknown[]).length, 2)
+  assert.equal(asRecord(structuredVisualTask.evidence).task, 'Compare the sample with the render.')
+  const visualImages = visualTask.content.filter((item) => item.type === 'image')
+  assert.deepEqual(visualImages.map((item) => item.type === 'image' ? item.mimeType : ''), ['image/jpeg', 'image/webp'])
 
   const read = await client.callTool({
     name: 'gui_workspace_read',
@@ -185,14 +200,6 @@ test('serves structured workspace tool results and resource reads over MCP', asy
   assert.equal(structuredRead.ok, true)
   assert.equal(structuredRead.relativePath, 'notes.txt')
   assert.match(String(structuredRead.content), /hello from MCP/)
-
-  const preview = await client.callTool({
-    name: 'gui_workspace_preview',
-    arguments: { path: 'notes.txt', maxChars: 20 }
-  })
-  const structuredPreview = asRecord(preview.structuredContent)
-  assert.equal(structuredPreview.ok, true)
-  assert.equal(structuredPreview.kind, 'text')
 
   const references = await client.callTool({
     name: 'gui_workspace_reference_list',
@@ -273,4 +280,30 @@ async function waitForFileName(directory: string, suffix: string): Promise<strin
     await new Promise((resolve) => setTimeout(resolve, 5))
   }
   throw new Error(`Timed out waiting for ${suffix} in ${directory}`)
+}
+
+function visualEvidence(request: VisualInspectionRequest) {
+  return {
+    status: 'inspected' as const,
+    provider: 'model-router' as const,
+    model: 'sciforge-model-router',
+    inspectedAt: '2026-07-13T00:00:00.000Z',
+    task: request.task,
+    artifacts: request.artifacts.map(({ id, mimeType }, index) => ({
+      id,
+      mimeType,
+      sha256: String(index + 1).repeat(64)
+    })),
+    requestSha256: 'a'.repeat(64),
+    evidenceSha256: 'b'.repeat(64),
+    attestation: `sha256:${'c'.repeat(64)}`,
+    summary: 'The requested visual evidence is available.',
+    claims: request.artifacts.map(({ id }) => ({
+      kind: 'observation' as const,
+      text: `Artifact ${id} is visible.`,
+      artifactId: id,
+      confidence: 0.9
+    })),
+    uncertainties: []
+  }
 }

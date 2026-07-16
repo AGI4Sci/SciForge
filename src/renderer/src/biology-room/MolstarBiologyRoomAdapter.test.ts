@@ -20,7 +20,7 @@ describe('MolstarBiologyRoomAdapter', () => {
       room,
       asset,
       selection: room.selection ?? null,
-      source: { sourceUrl: 'sciforge-preview://asset/molecular-session' },
+      source: { sourceUrl: 'sciforge-resource://asset/molecular-session' },
       onApply: () => true
     }))
 

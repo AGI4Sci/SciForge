@@ -1,10 +1,12 @@
 export type * from './types.js'
+export type * from './visual-scene.js'
 export {
   IMAGE_DRAWING_INTENTS,
   IMAGE_EDIT_MODES,
   IMAGE_GENERATION_MODES,
   IMAGE_OUTPUT_FORMATS
 } from './types.js'
+export { VISUAL_SCENE_VERSION } from './visual-scene.js'
 
 export const IMAGE_GENERATION_MCP_FLAG = '--image-generation-mcp-server'
 

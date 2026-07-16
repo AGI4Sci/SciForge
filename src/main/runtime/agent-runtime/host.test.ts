@@ -72,6 +72,7 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },
+    evidenceDag: { enabled: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
@@ -356,6 +357,70 @@ describe('AgentRuntimeHost', () => {
     expect(codex.subscribeEvents).not.toHaveBeenCalled()
   })
 
+  it('coalesces concurrent reads of the same runtime thread', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const readResolvers: Array<(detail: AgentRuntimeThreadDetail) => void> = []
+    vi.mocked(adapter.readThread).mockImplementation(() => new Promise<AgentRuntimeThreadDetail>((resolve) => {
+      readResolvers.push(resolve)
+    }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    const first = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    const second = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    await vi.waitFor(() => expect(adapter.readThread).toHaveBeenCalledTimes(1))
+
+    readResolvers.shift()?.({ ...thread, latestSeq: 0, items: [] })
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+
+    const third = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    await vi.waitFor(() => expect(adapter.readThread).toHaveBeenCalledTimes(2))
+    readResolvers.shift()?.({ ...thread, latestSeq: 0, items: [] })
+    await expect(third).resolves.toMatchObject({ id: 'codex-thread' })
+  })
+
+  it('coalesces and briefly caches child-agent tree reads', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const resolvers: Array<(value: unknown) => void> = []
+    const auxiliary = vi.fn(() => new Promise<unknown>((resolve) => {
+      resolvers.push(resolve)
+    }))
+    adapter.auxiliary = auxiliary
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      operation: 'listThreadChildren' as const,
+      payload: { threadId: 'codex-thread', limit: 80 }
+    }
+
+    const first = host.auxiliary(input)
+    const second = host.auxiliary(input)
+    await vi.waitFor(() => expect(auxiliary).toHaveBeenCalledTimes(1))
+
+    const response = { children: [], degraded: false }
+    resolvers.shift()?.(response)
+    await expect(Promise.all([first, second])).resolves.toEqual([response, response])
+    await expect(host.auxiliary(input)).resolves.toBe(response)
+    expect(auxiliary).toHaveBeenCalledTimes(1)
+  })
+
   it('requires explicit runtime ids for thread-bound auxiliary operations', async () => {
     const codexThread = {
       id: 'codex-thread',
@@ -515,7 +580,7 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
-  it('adds an on-demand visible GUI lookup hint for right-sidebar PDF annotation requests', async () => {
+  it('adds an on-demand capability lookup for right-sidebar PDF annotation requests', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -538,14 +603,21 @@ describe('AgentRuntimeHost', () => {
           updatedAt: '2026-07-04T00:00:00.000Z',
           summary: 'Previewing pdf file paper.pdf.',
           resources: [{
-            kind: 'pdfAnnotations',
-            role: 'annotation-sidecar',
+            kind: 'workspaceFile',
+            role: 'preview-target',
             workspaceRoot: '/tmp/workspace',
-            relativePath: '.sciforge/pdf-annotations/sha.json',
+            relativePath: 'paper.pdf',
             annotationCount: 2,
             threadCount: 2,
             openThreadCount: 2,
-            accessHint: 'Use gui_workspace_read when annotation details are needed.'
+            capability: {
+              resource: {
+                token: 'cap_abcdefghijklmnopqrstuvwxyz',
+                semanticRevision: 'revision-2',
+                expiresAt: '2026-07-16T14:00:00.000Z'
+              },
+              operations: [{ id: 'workspace-preview.apply-edit' }]
+            }
           }]
         }]
       })),
@@ -572,8 +644,9 @@ describe('AgentRuntimeHost', () => {
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(visibleContext.get).toHaveBeenCalled()
     expect(dispatched?.text).toContain('gui_visible_context')
-    expect(dispatched?.text).toContain('pdfAnnotations')
-    expect(dispatched?.text).toContain('.sciforge/pdf-annotations/sha.json')
+    expect(dispatched?.text).toContain('sciforge_resource_observe')
+    expect(dispatched?.text).toContain('cap_abcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('workspace-preview.apply-edit')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
   })

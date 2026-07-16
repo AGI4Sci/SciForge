@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
   LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
   WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
@@ -128,11 +127,11 @@ describe('workspace preview contract', () => {
     expect(() => normalizeWorkspacePreviewSha256Digest('not-a-digest')).toThrow(/64 hexadecimal/)
   })
 
-  it('validates plugin manifests with full agent permissions', () => {
+  it('validates plugin manifests without a parallel agent-access contract', () => {
     const manifest = workspacePreviewPluginManifestSchema.parse(LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS[0])
 
     expect(manifest.id).toBe('molecular')
-    expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
+    expect(manifest.capabilities).not.toHaveProperty('agent')
     expect(manifest.capabilities.structuredSelection).toBe(true)
   })
 
@@ -149,13 +148,13 @@ describe('workspace preview contract', () => {
     ]))
   })
 
-  it('keeps life-science file write capabilities explicit without lowering agent authority', () => {
+  it('keeps life-science file write capabilities explicit', () => {
     for (const manifest of LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS) {
       expect(manifest.capabilities.preview).toBe(true)
       expect(manifest.capabilities.inspect).toBe(true)
       expect(manifest.capabilities.structuredSelection).toBe(true)
       expect(manifest.capabilities.edit).toBe(false)
-      expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
+      expect(manifest.capabilities).not.toHaveProperty('agent')
     }
   })
 
@@ -189,8 +188,7 @@ describe('workspace preview contract', () => {
         preview: true,
         edit: true,
         inspect: true,
-        structuredSelection: true,
-        agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+        structuredSelection: true
       }
     }
 

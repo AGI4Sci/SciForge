@@ -78,6 +78,7 @@ import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config
 import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
+import type { CapabilityAgentToolSurface } from '../../capabilities/agent-tools'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured,
@@ -146,6 +147,7 @@ export type CodexRuntimeServiceOptions = {
   computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
   managedMcpServers?: readonly CodexDynamicMcpServerConfig[]
   mcpClientFactory?: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
+  capabilityAgentTools?: CapabilityAgentToolSurface
   createClient?: (options: CodexAppServerJsonRpcClientOptions) => CodexAppServerJsonRpcClient
 }
 
@@ -220,7 +222,7 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   SCIENTIFIC_VISUAL_RUNTIME_POLICY,
   'For requests about the current GUI, visible panes, right sidebar, previews, PDF annotations, selected text, or component state, first use `gui_visible_context` to discover the visible component/resource index, then follow the returned access hints.',
-  'When visual inspection is needed, call `gui_visual_capture` for the whole window or for a componentId/targetId returned by `gui_visible_context`. Leave semantic inspection enabled and pass an inspectionPrompt matching the task. A successful result already contains attested Model Router vision evidence in runtime-portable text plus the PNG; do not substitute OS-level screenshots or claim that a local image tool ran when no tool event exists.',
+  'When visual inspection is needed, call `gui_visible_context` first, then pass its fresh snapshotToken and task to `gui_visual_capture`; any componentId/targetId must come from that same snapshot. For local workspace PNG, JPEG, or WebP files, use `gui_workspace_image_inspect` with one task and an artifacts array. Do not substitute OS-level screenshots.',
   'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
   ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
@@ -1084,10 +1086,21 @@ export class CodexRuntimeService {
   ): Promise<CodexAppServerDynamicToolSpec[]> {
     const current = settings ?? await this.options.settings()
     const includeMultiAgent = options.includeMultiAgent !== false
-    return [
+    const capabilityTools = this.options.capabilityAgentTools?.tools() ?? []
+    const reservedNames = new Set<string>(capabilityTools.map((tool) => tool.name))
+    const otherTools = [
       ...this.workspacePatchTool.dynamicTools(),
       ...(includeMultiAgent ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? [] : []),
       ...(await this.dynamicMcpBridge?.dynamicTools() ?? [])
+    ].filter((tool) => !reservedNames.has(tool.name))
+    return [
+      ...capabilityTools.map((tool) => ({
+        type: tool.type,
+        name: tool.name,
+        description: tool.description,
+        inputSchema: tool.inputSchema
+      })),
+      ...otherTools
     ]
   }
 
@@ -1122,6 +1135,9 @@ export class CodexRuntimeService {
     contextualRequest: CodexAppServerDynamicToolCallRequest,
     settings: AppSettingsV1
   ): Promise<CodexAppServerDynamicToolCallResponse> {
+    if (this.canHandleCapabilityAgentTool(contextualRequest)) {
+      return this.handleCapabilityAgentToolCall(contextualRequest, settings)
+    }
     if (this.workspacePatchTool.canHandle(contextualRequest)) {
       return this.handleWorkspacePatchToolCall(contextualRequest, settings)
     }
@@ -1148,6 +1164,38 @@ export class CodexRuntimeService {
       await this.rememberWorkspaceRead(workspaceRequest)
     }
     return response
+  }
+
+  private canHandleCapabilityAgentTool(request: CodexAppServerDynamicToolCallRequest): boolean {
+    if (request.namespace || !this.options.capabilityAgentTools) return false
+    return this.options.capabilityAgentTools.tools().some((tool) => tool.name === request.tool)
+  }
+
+  private async handleCapabilityAgentToolCall(
+    request: CodexAppServerDynamicToolCallRequest,
+    settings: AppSettingsV1
+  ): Promise<CodexAppServerDynamicToolCallResponse> {
+    const surface = this.options.capabilityAgentTools
+    if (!surface) return failedDynamicToolCall('The SciForge capability agent surface is not configured.')
+    const threadId = stringValue(request.threadId).trim()
+    if (!threadId) return failedDynamicToolCall('SciForge capability tools require a thread context.')
+    const storedThread = await this.findStoredThread(threadId)
+    const workspaceId = resolveCodexWorkspace(settings, storedThread?.workspace)
+    const result = await surface.call({
+      name: request.tool,
+      arguments: request.arguments,
+      context: {
+        requestId: request.requestId,
+        threadId,
+        workspaceId,
+        ...(request.turnId ? { turnId: request.turnId } : {}),
+        ...(request.callId ? { callId: request.callId } : {})
+      }
+    })
+    return {
+      success: true,
+      contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }]
+    }
   }
 
   private async publishDynamicToolExecutionFact(

@@ -101,7 +101,7 @@ export type WritePdfAnnotationsPanelProps = {
     summary: PdfAnnotationThreadSummary,
     options?: { intent?: 'question' | 'translate' }
   ) => void
-  onGeneratePdfReview?: (input: { scope: WritePdfReviewScope; maxComments: number }) => void
+  onGeneratePdfReview?: (input: { scope: WritePdfReviewScope; maxComments: number; prompt: string }) => void
   onImproveAnnotation?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onExportPackage?: () => void
   onExportPdf?: () => void
@@ -121,6 +121,7 @@ const EDIT_TEXTAREA_DEFAULT_HEIGHT = 164
 const PDF_REVIEW_DEFAULT_MAX_COMMENTS = 8
 const PDF_REVIEW_MIN_COMMENTS = 1
 const PDF_REVIEW_MAX_COMMENTS = 50
+const PDF_REVIEW_MAX_PROMPT_LENGTH = 20_000
 
 function clampPdfReviewMaxComments(value: number): number {
   if (!Number.isFinite(value)) return PDF_REVIEW_DEFAULT_MAX_COMMENTS
@@ -337,6 +338,8 @@ export function WritePdfAnnotationsPanel({
   const [textareaHeights, setTextareaHeights] = useState<Record<string, number>>({})
   const [pdfReviewScope, setPdfReviewScope] = useState<WritePdfReviewScope>('document')
   const [pdfReviewMaxComments, setPdfReviewMaxComments] = useState(PDF_REVIEW_DEFAULT_MAX_COMMENTS)
+  const [pdfReviewPromptOpen, setPdfReviewPromptOpen] = useState(false)
+  const [pdfReviewPrompt, setPdfReviewPrompt] = useState('')
   const page = pageValue.trim() ? Number(pageValue) : null
   const summaries = useMemo(() => {
     if (!sidecar) return []
@@ -397,8 +400,30 @@ export function WritePdfAnnotationsPanel({
   useEffect(() => {
     if (!pdfReviewHasSelection && pdfReviewScope === 'selection') {
       setPdfReviewScope('document')
+      setPdfReviewPromptOpen(false)
     }
   }, [pdfReviewHasSelection, pdfReviewScope])
+
+  const selectPdfReviewScope = (scope: WritePdfReviewScope): void => {
+    onClearPdfReviewNotice?.()
+    setPdfReviewScope(scope)
+    setPdfReviewPromptOpen(false)
+  }
+
+  const openPdfReviewPrompt = (): void => {
+    onClearPdfReviewNotice?.()
+    setPdfReviewPrompt(t(pdfReviewScope === 'selection'
+      ? 'writePdfReviewPromptSelectionDefault'
+      : 'writePdfReviewPromptDocumentDefault'))
+    setPdfReviewPromptOpen(true)
+  }
+
+  const confirmPdfReview = (): void => {
+    const prompt = pdfReviewPrompt.trim()
+    if (!prompt || pdfReviewGenerating) return
+    setPdfReviewPromptOpen(false)
+    onGeneratePdfReview?.({ scope: pdfReviewScope, maxComments: pdfReviewMaxComments, prompt })
+  }
 
   const startEditing = (summary: PdfAnnotationThreadSummary): void => {
     const firstAnnotation = summary.firstAnnotation
@@ -491,10 +516,7 @@ export function WritePdfAnnotationsPanel({
               <div className="grid h-8 min-w-0 grid-cols-2 overflow-hidden rounded-md border border-ds-border-muted bg-ds-card">
                 <button
                   type="button"
-                  onClick={() => {
-                    onClearPdfReviewNotice?.()
-                    setPdfReviewScope('document')
-                  }}
+                  onClick={() => selectPdfReviewScope('document')}
                   className={`flex min-w-0 items-center justify-center gap-1.5 px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'document' ? 'bg-accent/10 text-accent' : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'
                   }`}
@@ -507,10 +529,7 @@ export function WritePdfAnnotationsPanel({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    onClearPdfReviewNotice?.()
-                    setPdfReviewScope('selection')
-                  }}
+                  onClick={() => selectPdfReviewScope('selection')}
                   disabled={!pdfReviewHasSelection}
                   className={`flex min-w-0 items-center justify-center gap-1.5 border-l border-ds-border-muted px-2 text-[11.5px] font-semibold transition ${
                     pdfReviewScope === 'selection'
@@ -529,10 +548,7 @@ export function WritePdfAnnotationsPanel({
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  onClearPdfReviewNotice?.()
-                  onGeneratePdfReview?.({ scope: pdfReviewScope, maxComments: pdfReviewMaxComments })
-                }}
+                onClick={openPdfReviewPrompt}
                 disabled={pdfReviewGenerating || (pdfReviewScope === 'selection' && !pdfReviewHasSelection)}
                 className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-accent/25 bg-accent/10 text-accent transition hover:bg-accent/15 disabled:cursor-not-allowed disabled:border-ds-border-muted disabled:bg-ds-surface-subtle disabled:text-ds-faint"
                 aria-label={t('writePdfReviewRun')}
@@ -567,6 +583,53 @@ export function WritePdfAnnotationsPanel({
                 />
               </label>
             </div>
+            {pdfReviewPromptOpen ? (
+              <form
+                className="grid gap-2 rounded-md border border-accent/25 bg-ds-card p-2.5 shadow-sm"
+                onSubmit={(event) => {
+                  event.preventDefault()
+                  confirmPdfReview()
+                }}
+              >
+                <div>
+                  <div className="text-[11.5px] font-semibold text-ds-ink">
+                    {t('writePdfReviewPromptTitle')}
+                  </div>
+                  <div className="mt-0.5 text-[10.5px] leading-4 text-ds-faint">
+                    {t('writePdfReviewPromptDescription')}
+                  </div>
+                </div>
+                <textarea
+                  value={pdfReviewPrompt}
+                  onChange={(event) => setPdfReviewPrompt(event.currentTarget.value)}
+                  maxLength={PDF_REVIEW_MAX_PROMPT_LENGTH}
+                  rows={6}
+                  autoFocus
+                  className="min-h-28 w-full resize-y rounded-md border border-ds-border-muted bg-ds-canvas px-2.5 py-2 text-[11.5px] leading-5 text-ds-ink outline-none transition placeholder:text-ds-faint focus:border-accent"
+                  aria-label={t('writePdfReviewPromptLabel')}
+                  placeholder={t('writePdfReviewPromptPlaceholder')}
+                />
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPdfReviewPromptOpen(false)}
+                    className="h-8 rounded-md px-3 text-[11.5px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                  >
+                    {t('writePdfReviewPromptCancel')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!pdfReviewPrompt.trim() || pdfReviewGenerating}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-accent px-3 text-[11.5px] font-semibold text-white transition hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {pdfReviewGenerating
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.9} />
+                      : <Sparkles className="h-3.5 w-3.5" strokeWidth={1.9} />}
+                    {t('writePdfReviewPromptConfirm')}
+                  </button>
+                </div>
+              </form>
+            ) : null}
             {pdfReviewNotice ? (
               <div
                 className={`min-w-0 truncate text-[11px] ${

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "renderer": "sciforge-image-generation-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "image_generation_render",
+  "createdAt": "2026-07-15T11:33:50.482Z",
+  "requestHash": "f39304b2b0c830d3",
+  "workspaceRoot": "/Applications/workspace/ailab/research/app/DeepSeek-GUI",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/ceramic-robot-studio.png",
+  "outputHash": "605fedfe2e8df9ab281ecf5d59977ab9c25d155dde7f187b0433d3a84c006dee",
+  "recipe": {
+    "mode": "text_to_image",
+    "prompt": "生成一张 1:1 的写实影棚产品摄影：一只小型钴蓝色陶瓷机器人站在浅桃色圆柱台座上，机器人右侧恰好三片绿色叶子，柔和侧光和清晰自然阴影，奶油色无缝背景，高质感陶瓷釉面；画面中不要出现任何文字、边框、图标或水印。",
+    "size": {
+      "width": 1024,
+      "height": 1024
+    },
+    "outputFormat": "png",
+    "intent": "general_image",
+    "visualPlan": {
+      "planId": "visual-plan-dbedffa3",
+      "route": "model",
+      "routeLocked": true,
+      "rationale": "No exact elements require deterministic ownership and generative visual value dominates.",
+      "sourceArtifacts": [],
+      "reproducibleInputs": [],
+      "lockedElements": [],
+      "modelOwnedElements": [
+        "robot",
+        "pedestal",
+        "leaves",
+        "lighting",
+        "shadows",
+        "background",
+        "ceramic_texture"
+      ],
+      "contextStatus": "ready",
+      "contextStopReason": "sufficient",
+      "contextEvidenceIds": [],
+      "unresolvedContext": [],
+      "releaseCeiling": "publication_ready",
+      "fallbackPolicy": "fail_closed"
+    }
+  },
+  "intent": "general_image",
+  "visualPlan": {
+    "planId": "visual-plan-dbedffa3",
+    "route": "model",
+    "routeLocked": true,
+    "rationale": "No exact elements require deterministic ownership and generative visual value dominates.",
+    "sourceArtifacts": [],
+    "reproducibleInputs": [],
+    "lockedElements": [],
+    "modelOwnedElements": [
+      "robot",
+      "pedestal",
+      "leaves",
+      "lighting",
+      "shadows",
+      "background",
+      "ceramic_texture"
+    ],
+    "contextStatus": "ready",
+    "contextStopReason": "sufficient",
+    "contextEvidenceIds": [],
+    "unresolvedContext": [],
+    "releaseCeiling": "publication_ready",
+    "fallbackPolicy": "fail_closed"
+  },
+  "provider": "image-endpoint",
+  "warnings": []
+}

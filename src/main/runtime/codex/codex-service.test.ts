@@ -33,6 +33,12 @@ import type {
 import type { CodexThreadEventPayload } from './codex-runtime-api'
 import type { CodexDynamicMcpClient } from './codex-dynamic-mcp-tools'
 import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  createCapabilityAgentToolSurface
+} from '../../capabilities/agent-tools'
+import { CapabilityBroker } from '../../capabilities/broker'
+import { CapabilityRegistry } from '../../capabilities/registry'
 
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
@@ -1980,6 +1986,89 @@ describe('CodexRuntimeService compatibility operations', () => {
     ])
   })
 
+  it('advertises fixed capability tools and routes them first with trusted thread workspace context', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const duplicateMcpCall = vi.fn(async () => ({ content: [{ type: 'text', text: 'wrong-route' }] }))
+    const mcpClient: CodexDynamicMcpClient = {
+      listTools: vi.fn(async () => ({
+        tools: [{
+          name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+          description: 'Conflicting external capability tool.',
+          inputSchema: { type: 'object', properties: {} }
+        }]
+      })),
+      callTool: duplicateMcpCall,
+      close: vi.fn(async () => undefined)
+    }
+    const broker = new CapabilityBroker(new CapabilityRegistry())
+    const discover = vi.spyOn(broker, 'discover')
+    const resolveCaller = vi.fn((toolContext: {
+      requestId: string | number
+      threadId?: string
+      workspaceId?: string
+    }) => ({
+      audience: 'agent' as const,
+      callerId: toolContext.threadId ?? String(toolContext.requestId),
+      workspaceId: toolContext.workspaceId,
+      approvals: []
+    }))
+    const capabilityAgentTools = createCapabilityAgentToolSurface({ broker, resolveCaller })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      capabilityAgentTools,
+      managedMcpServers: [{ id: 'conflicting-capability', command: '/bin/conflicting-mcp' }],
+      mcpClientFactory: async () => mcpClient,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await expect(service.startThread({
+      title: 'Capability thread',
+      workspace: '/tmp/capability-workspace'
+    })).resolves.toMatchObject({ ok: true })
+
+    const startParams = vi.mocked(client.startThread).mock.calls[0]?.[0] as {
+      dynamicTools?: Array<{ name: string }>
+    }
+    const dynamicTools = startParams.dynamicTools ?? []
+    expect(dynamicTools).toEqual(expect.arrayContaining(
+      Object.values(CAPABILITY_AGENT_TOOL_NAMES).map((name) => expect.objectContaining({ name }))
+    ))
+    expect(dynamicTools.filter((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)).toHaveLength(1)
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'capability-request-1',
+      callId: 'capability-call-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {}
+    })).resolves.toEqual({
+      success: true,
+      contentItems: [{ type: 'inputText', text: '[]' }]
+    })
+    expect(resolveCaller).toHaveBeenCalledWith({
+      requestId: 'capability-request-1',
+      callId: 'capability-call-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      workspaceId: '/tmp/capability-workspace'
+    })
+    expect(discover).toHaveBeenCalledWith({
+      audience: 'agent',
+      callerId: 'thread-1',
+      workspaceId: '/tmp/capability-workspace',
+      approvals: []
+    }, {})
+    expect(duplicateMcpCall).not.toHaveBeenCalled()
+  })
+
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
     const queued = clientWithQueuedEvents()
     const storageRoot = await tempRoot()
@@ -2701,8 +2790,8 @@ describe('CodexRuntimeService compatibility operations', () => {
                   inputSchema: { type: 'object', properties: {} }
                 }]
               : [{
-                  name: 'gui_workspace_preview',
-                  description: 'Preview workspace content.',
+                  name: 'gui_workspace_reference_preview',
+                  description: 'Preview a bounded workspace reference.',
                   inputSchema: { type: 'object', properties: { path: { type: 'string' } } }
                 }]
           })),
@@ -2739,7 +2828,7 @@ describe('CodexRuntimeService compatibility operations', () => {
           '--gui-workspace-intel-mcp-server',
           '--include-global-skills'
         ],
-        enabledTools: expect.arrayContaining(['gui_workspace_list', 'gui_workspace_preview'])
+        enabledTools: expect.arrayContaining(['gui_workspace_list', 'gui_workspace_reference_preview'])
       })
     ])
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
@@ -2749,7 +2838,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       dynamicTools: expect.arrayContaining([
         expect.objectContaining({ name: 'gui_workflow_list' }),
-        expect.objectContaining({ name: 'gui_workspace_preview' })
+        expect.objectContaining({ name: 'gui_workspace_reference_preview' })
       ]),
       developerInstructions: expect.stringContaining('specialized MCP tools')
     }))
@@ -4841,6 +4930,24 @@ describe('CodexRuntimeService compatibility operations', () => {
         activeDays: 1
       }
     })
+
+    const usagePath = join(rootDir, 'usage', 'codex-usage.jsonl')
+    const rowsAfterFirstBackfill = (await readFile(usagePath, 'utf8')).trim().split('\n')
+    expect(rowsAfterFirstBackfill).toHaveLength(1)
+
+    const restartedService = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot: rootDir,
+      createClient: () => controllableClient()
+    })
+    await restartedService.usage({
+      groupBy: 'thread',
+      threadId: 'gui-thread-1',
+      timezone: 'UTC'
+    })
+    const rowsAfterRestartedBackfill = (await readFile(usagePath, 'utf8')).trim().split('\n')
+    expect(rowsAfterRestartedBackfill).toHaveLength(1)
   })
 
   it('omits app-server startup status events when a Codex turn starts after prewarm', async () => {

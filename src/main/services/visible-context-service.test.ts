@@ -10,7 +10,9 @@ import {
 } from '../../shared/visible-context'
 import {
   VisibleContextService,
-  visibleContextCaptureRequestsPath
+  visibleContextCaptureRequestsPath,
+  type CapturedVisualPage,
+  type SurfaceCaptureProvider
 } from './visible-context-service'
 
 const cleanup: string[] = []
@@ -68,12 +70,33 @@ function snapshot(overrides: Partial<VisibleContextSnapshot> = {}): VisibleConte
   }
 }
 
+function captureIdentity(value: VisibleContextSnapshot) {
+  if (!value.snapshotToken) throw new Error('Expected a bound visible-context snapshot token.')
+  return {
+    snapshotToken: value.snapshotToken,
+    windowId: value.windowId,
+    revision: value.revision,
+    activeThreadId: value.activeThreadId ?? null
+  }
+}
+
+function successfulSurfaceCaptureProvider(
+  capturePage: (windowId: string, bounds?: { x: number; y: number; width: number; height: number }) => Promise<CapturedVisualPage>
+): SurfaceCaptureProvider {
+  return {
+    capture: async (request) => ({
+      ok: true,
+      page: await capturePage(request.windowId, request.bounds)
+    })
+  }
+}
+
 describe('VisibleContextService', () => {
   it('derives freshness and rejects out-of-order publishes for the same window', async () => {
     const userDataDir = await temporaryUserData()
     let now = new Date('2026-07-11T03:00:01.000Z')
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: { capturePage: vi.fn() },
+      surfaceCaptureProvider: { capture: vi.fn() },
       now: () => now
     })
 
@@ -109,19 +132,20 @@ describe('VisibleContextService', () => {
       })
     const captureStates: boolean[] = []
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: { capturePage },
-      onCaptureState: (active) => captureStates.push(active),
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
+      onCaptureState: (_windowId, active) => captureStates.push(active),
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    await service.publish(snapshot())
+    const published = await service.publish(snapshot())
 
     const target = await service.capture({
       requestId: 'capture-target',
+      ...captureIdentity(published),
       scope: 'target',
       componentId: 'preview',
       targetId: 'page-10'
     })
-    expect(capturePage).toHaveBeenNthCalledWith(1, { x: -5, y: 20, width: 300, height: 400 })
+    expect(capturePage).toHaveBeenNthCalledWith(1, 'window-1', { x: -5, y: 20, width: 300, height: 400 })
     expect(target).toMatchObject({
       ok: true,
       resource: {
@@ -139,8 +163,8 @@ describe('VisibleContextService', () => {
     expect(target.resource.path.startsWith(userDataDir)).toBe(true)
     expect([...await readFile(target.resource.path)]).toEqual([1, 2, 3])
 
-    const fullWindow = await service.capture({ requestId: 'capture-window', scope: 'window' })
-    expect(capturePage).toHaveBeenNthCalledWith(2, undefined)
+    const fullWindow = await service.capture({ requestId: 'capture-window', ...captureIdentity(published), scope: 'window' })
+    expect(capturePage).toHaveBeenNthCalledWith(2, 'window-1', undefined)
     expect(fullWindow).toMatchObject({ ok: true, resource: { role: 'window' } })
     if (!fullWindow.ok) throw new Error('Expected window capture to succeed.')
     expect(fullWindow.resource.path).not.toBe(target.resource.path)
@@ -154,13 +178,14 @@ describe('VisibleContextService', () => {
     const userDataDir = await temporaryUserData()
     const capturePage = vi.fn()
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: { capturePage },
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
       now: () => new Date('2026-07-11T03:00:10.000Z')
     })
-    await service.publish(snapshot())
+    const published = await service.publish(snapshot())
 
     await expect(service.capture({
       requestId: 'capture-target',
+      ...captureIdentity(published),
       scope: 'target',
       componentId: 'preview',
       targetId: 'page-10'
@@ -171,7 +196,93 @@ describe('VisibleContextService', () => {
     expect(capturePage).not.toHaveBeenCalled()
   })
 
-  it('requests one immediate publish and waits for a newer revision before target capture', async () => {
+  it('captures the surface bound to the requested token even after another window publishes', async () => {
+    const userDataDir = await temporaryUserData()
+    const capture = vi.fn(async () => ({
+      ok: true as const,
+      page: {
+        png: Uint8Array.from([7]),
+        width: 100,
+        height: 80,
+        scaleFactor: 1
+      }
+    }))
+    const service = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: { capture },
+      now: () => new Date('2026-07-11T03:00:01.000Z')
+    })
+    const first = await service.publish(snapshot({ windowId: 'electron:11' }))
+    await service.publish(snapshot({ windowId: 'electron:22' }))
+
+    const result = await service.capture({
+      requestId: 'capture-first-surface',
+      ...captureIdentity(first),
+      scope: 'window'
+    })
+
+    expect(result).toMatchObject({ ok: true, resource: { windowId: 'electron:11' } })
+    expect(capture).toHaveBeenCalledWith({
+      windowId: 'electron:11',
+      revision: 1,
+      snapshotToken: first.snapshotToken,
+      activeThreadId: null
+    })
+  })
+
+  it('returns typed provider capability failures without treating them as capture exceptions', async () => {
+    const userDataDir = await temporaryUserData()
+    const capture = vi.fn(async () => ({
+      ok: false as const,
+      reason: {
+        code: 'surface_capture_unsupported' as const,
+        message: 'This surface has no trusted pixel source.',
+        retryable: false
+      }
+    }))
+    const service = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: { capture },
+      now: () => new Date('2026-07-11T03:00:01.000Z')
+    })
+    const published = await service.publish(snapshot({ windowId: 'browser:4' }))
+
+    await expect(service.capture({
+      requestId: 'capture-browser-surface',
+      ...captureIdentity(published),
+      scope: 'window'
+    })).resolves.toEqual({
+      ok: false,
+      requestId: 'capture-browser-surface',
+      error: {
+        code: 'surface_capture_unsupported',
+        message: 'This surface has no trusted pixel source.',
+        retryable: false
+      }
+    })
+    expect(capture).toHaveBeenCalledOnce()
+  })
+
+  it('rejects an old token after the same surface publishes a newer revision', async () => {
+    const userDataDir = await temporaryUserData()
+    const capturePage = vi.fn()
+    const service = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
+      now: () => new Date('2026-07-11T03:00:01.000Z')
+    })
+    const first = await service.publish(snapshot())
+    await service.publish(snapshot({ revision: 2, publishedAt: '2026-07-11T03:00:01.000Z' }))
+
+    await expect(service.capture({
+      requestId: 'capture-old-token',
+      ...captureIdentity(first),
+      scope: 'window'
+    })).resolves.toMatchObject({
+      ok: false,
+      error: { code: 'stale_snapshot_token', retryable: true }
+    })
+    expect(capturePage).not.toHaveBeenCalled()
+  })
+
+  it('requests a targeted refresh but refuses to capture a stale bound revision', async () => {
     const userDataDir = await temporaryUserData()
     const capturePage = vi.fn(async () => ({
       png: Uint8Array.from([1]),
@@ -180,47 +291,42 @@ describe('VisibleContextService', () => {
       scaleFactor: 1,
       bounds: { x: 0, y: 20, width: 295, height: 400 }
     }))
-    let service: VisibleContextService
-    const requestContextRefresh = vi.fn(() => {
-      void service.publish(snapshot({
-        revision: 2,
-        publishedAt: '2026-07-11T03:00:10.000Z'
-      }))
-    })
-    service = new VisibleContextService(userDataDir, {
-      captureProvider: { capturePage },
+    const requestContextRefresh = vi.fn()
+    const service = new VisibleContextService(userDataDir, {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
       requestContextRefresh,
-      refreshTimeoutMs: 100,
       now: () => new Date('2026-07-11T03:00:10.000Z')
     })
-    await service.publish(snapshot())
+    const published = await service.publish(snapshot())
 
     const result = await service.capture({
       requestId: 'capture-refreshed-target',
+      ...captureIdentity(published),
       scope: 'target',
       componentId: 'preview',
       targetId: 'page-10'
     })
 
     expect(requestContextRefresh).toHaveBeenCalledTimes(1)
-    expect(capturePage).toHaveBeenCalledTimes(1)
-    expect(result).toMatchObject({ ok: true, resource: { revision: 2 } })
+    expect(requestContextRefresh).toHaveBeenCalledWith('window-1')
+    expect(capturePage).not.toHaveBeenCalled()
+    expect(result).toMatchObject({ ok: false, error: { code: 'stale_visible_context' } })
   })
 
   it('blackens every intersecting redaction target before writing the single capture asset', async () => {
     const userDataDir = await temporaryUserData()
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: {
-        capturePage: async () => ({
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
+        async () => ({
           png: whitePng(),
           width: 100,
           height: 80,
           scaleFactor: 1
         })
-      },
+      ),
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    await service.publish(snapshot({
+    const published = await service.publish(snapshot({
       components: [{
         id: 'app.window',
         region: 'window',
@@ -235,7 +341,7 @@ describe('VisibleContextService', () => {
       }]
     }))
 
-    const result = await service.capture({ requestId: 'capture-redacted', scope: 'window' })
+    const result = await service.capture({ requestId: 'capture-redacted', ...captureIdentity(published), scope: 'window' })
     if (!result.ok) throw new Error('Expected redacted capture to succeed.')
     expect(await pixel(result.resource.path, 15, 15)).toEqual([0, 0, 0, 255])
     expect(await pixel(result.resource.path, 5, 5)).toEqual([255, 255, 255, 255])
@@ -244,18 +350,18 @@ describe('VisibleContextService', () => {
   it('reads only PNG previews directly inside the managed capture directory', async () => {
     const userDataDir = await temporaryUserData()
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: {
-        capturePage: async () => ({
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
+        async () => ({
           png: whitePng(),
           width: 100,
           height: 80,
           scaleFactor: 1
         })
-      },
+      ),
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    await service.publish(snapshot())
-    const capture = await service.capture({ requestId: 'capture-preview', scope: 'window' })
+    const published = await service.publish(snapshot())
+    const capture = await service.capture({ requestId: 'capture-preview', ...captureIdentity(published), scope: 'window' })
     if (!capture.ok) throw new Error('Expected capture to succeed.')
 
     await expect(service.readCapturePreview(capture.resource.path)).resolves.toMatchObject({
@@ -273,15 +379,15 @@ describe('VisibleContextService', () => {
   it('retains only the bounded set of most recent stable capture assets', async () => {
     const userDataDir = await temporaryUserData()
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: {
-        capturePage: async () => ({ png: whitePng(), width: 100, height: 80, scaleFactor: 1 })
-      },
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
+        async () => ({ png: whitePng(), width: 100, height: 80, scaleFactor: 1 })
+      ),
       captureRetentionLimit: 2,
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    await service.publish(snapshot())
+    const published = await service.publish(snapshot())
     for (const requestId of ['capture-1', 'capture-2', 'capture-3']) {
-      const result = await service.capture({ requestId, scope: 'window' })
+      const result = await service.capture({ requestId, ...captureIdentity(published), scope: 'window' })
       if (!result.ok) throw new Error('Expected capture to succeed.')
     }
 
@@ -295,23 +401,24 @@ describe('VisibleContextService', () => {
     const userDataDir = await temporaryUserData()
     const requestDirectory = visibleContextCaptureRequestsPath(userDataDir)
     const service = new VisibleContextService(userDataDir, {
-      captureProvider: {
-        capturePage: async () => ({
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
+        async () => ({
           png: Uint8Array.from([9, 8, 7]),
           width: 100,
           height: 80,
           scaleFactor: 1
         })
-      },
+      ),
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    await service.publish(snapshot())
+    const published = await service.publish(snapshot())
     await mkdir(requestDirectory, { recursive: true })
     await writeFile(join(requestDirectory, 'broker-1.request.json'), JSON.stringify({
       schemaVersion: VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
       requestId: 'broker-1',
       requestedAt: '2026-07-11T03:00:00.000Z',
       expiresAt: '2026-07-11T03:00:10.000Z',
+      ...captureIdentity(published),
       scope: 'window'
     }))
 

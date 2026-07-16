@@ -25,7 +25,10 @@ type ToolStormState = {
   steered: Set<string>
   interrupted: Set<string>
   recoveryAttempts: Map<string, number>
+  hygieneReplayAttempts: Map<string, number>
   observedRunningToolIds: Set<string>
+  fingerprintsByToolId: Map<string, ToolFingerprint>
+  receiptsByExactCall: Map<string, ToolReceiptState>
 }
 
 type ToolFingerprint = {
@@ -33,7 +36,14 @@ type ToolFingerprint = {
   family: string
 }
 
+type ToolReceiptState = {
+  status: 'success' | 'error'
+  detail: string
+  errorCode: string
+}
+
 const MAX_TOOL_STORM_RECOVERY_ATTEMPTS = 2
+const MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS = 2
 
 export class RuntimeGovernanceSupervisor {
   private readonly toolStormStates = new Map<string, ToolStormState>()
@@ -44,7 +54,7 @@ export class RuntimeGovernanceSupervisor {
     settings: RuntimeGuardSettingsV1,
     controls: RuntimeGovernanceControls
   ): void {
-    if (event.kind !== 'tool_event' || event.status !== 'running') return
+    if (event.kind !== 'tool_event') return
     if (capabilities.guard.toolStorm !== 'observe') return
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
@@ -56,15 +66,29 @@ export class RuntimeGovernanceSupervisor {
       steered: new Set(),
       interrupted: new Set(),
       recoveryAttempts: new Map(),
-      observedRunningToolIds: new Set()
+      hygieneReplayAttempts: new Map(),
+      observedRunningToolIds: new Set(),
+      fingerprintsByToolId: new Map(),
+      receiptsByExactCall: new Map()
     }
-    const runningToolId = runningToolIdentity(event)
-    if (runningToolId && state.observedRunningToolIds.has(runningToolId)) {
+    const toolId = runningToolIdentity(event)
+    if (event.status !== 'running') {
+      rememberTerminalReceipt(state, event, toolId)
       this.toolStormStates.set(key, state)
       return
     }
-    if (runningToolId) state.observedRunningToolIds.add(runningToolId)
+    if (toolId && state.observedRunningToolIds.has(toolId)) {
+      this.toolStormStates.set(key, state)
+      return
+    }
+    if (toolId) state.observedRunningToolIds.add(toolId)
     const fingerprint = toolFingerprint(event)
+    if (toolId) state.fingerprintsByToolId.set(toolId, fingerprint)
+    if (fingerprint.family === 'command_execution:shell/history-placeholder') {
+      this.handleHistoryHygieneReplay(event, capabilities.runtimeId, state, fingerprint, controls)
+      this.toolStormStates.set(key, state)
+      return
+    }
     state.events.push(fingerprint)
     state.events = state.events.slice(-settings.toolStorm.windowSize)
     this.toolStormStates.set(key, state)
@@ -84,7 +108,12 @@ export class RuntimeGovernanceSupervisor {
           runtimeId: capabilities.runtimeId,
           threadId,
           turnId,
-          text: toolStormRecoveryInstruction(event, fingerprint.family, nextRecoveryAttempt)
+          text: toolStormRecoveryInstruction(
+            event,
+            fingerprint.family,
+            nextRecoveryAttempt,
+            receiptEvidence(state, fingerprint.exact)
+          )
         }).catch(() => undefined)
         void publishToolStormEvent(
           controls,
@@ -113,13 +142,45 @@ export class RuntimeGovernanceSupervisor {
         runtimeId: capabilities.runtimeId,
         threadId,
         turnId,
-        text: [
-          `The runtime has not observed a successful terminal receipt for the repeated ${fingerprint.family} tool call.`,
-          'Inspect the latest tool output or error, do not repeat the identical call, and continue the original task using a different valid approach.'
-        ].join(' ')
+        text: toolStormSteeringInstruction(
+          fingerprint.family,
+          receiptEvidence(state, fingerprint.exact)
+        )
       }).catch(() => undefined)
       void publishToolStormEvent(controls, event, capabilities.runtimeId, 'soft', fingerprint.family)
     }
+  }
+
+  private handleHistoryHygieneReplay(
+    event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>,
+    runtimeId: AgentRuntimeId,
+    state: ToolStormState,
+    fingerprint: ToolFingerprint,
+    controls: RuntimeGovernanceControls
+  ): void {
+    const replayKey = fingerprint.family
+    const attempt = (state.hygieneReplayAttempts.get(replayKey) ?? 0) + 1
+    state.hygieneReplayAttempts.set(replayKey, attempt)
+    if (attempt <= MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS) {
+      void controls.steerTurn({
+        runtimeId,
+        threadId: event.threadId,
+        turnId: event.turnId?.trim() || '',
+        text: historyHygieneRecoveryInstruction(attempt)
+      }).catch(() => undefined)
+      void publishHistoryHygieneEvent(controls, event, runtimeId, 'recovery', attempt)
+      return
+    }
+    const interruptKey = `hygiene:${replayKey}`
+    if (state.interrupted.has(interruptKey)) return
+    state.interrupted.add(interruptKey)
+    void controls.interruptTurn({
+      runtimeId,
+      threadId: event.threadId,
+      turnId: event.turnId?.trim() || '',
+      discard: false
+    }).catch(() => undefined)
+    void publishHistoryHygieneEvent(controls, event, runtimeId, 'hard', attempt)
   }
 }
 
@@ -200,6 +261,7 @@ function commandExecutionText(meta: Record<string, unknown>, detail?: string): s
 
 function commandFamily(command: string): string {
   const effectiveCommand = shellScriptFromCommand(command) || command
+  if (isHistoryHygieneCommand(effectiveCommand)) return 'shell/history-placeholder'
   const head = commandName(shellTokens(effectiveCommand)[0] || 'shell')
   if (head === 'date' || head === 'time') return 'shell/date'
   if (['cat', 'sed', 'head', 'tail', 'nl', 'less'].includes(head)) return 'shell/read-file'
@@ -207,6 +269,16 @@ function commandFamily(command: string): string {
   if (['ls', 'pwd', 'stat'].includes(head)) return 'shell/list'
   if (['curl', 'wget'].includes(head)) return 'shell/fetch'
   return `shell/${head}`
+}
+
+function isHistoryHygieneCommand(command: string): boolean {
+  const trimmed = command.trim()
+  if (trimmed.length >= 4096) return false
+  return (
+    trimmed.startsWith('[cache hygiene:') ||
+    trimmed.startsWith('[sciforge request_hygiene') ||
+    /^(?::|false)\s*#\s*sciforge\s+(?:history metadata only|history omitted prior (?:bash|shell) command|request hygiene omitted prior shell command)\b/iu.test(trimmed)
+  )
 }
 
 function shellScriptFromCommandAndArgs(command: string, args: string[]): string {
@@ -336,10 +408,71 @@ async function publishToolStormEvent(
   }
 }
 
+async function publishHistoryHygieneEvent(
+  controls: RuntimeGovernanceControls,
+  source: AgentRuntimeEvent,
+  runtimeId: AgentRuntimeId,
+  level: 'recovery' | 'hard',
+  attempt: number
+): Promise<void> {
+  await controls.publishSyntheticEvent({
+    kind: 'runtime_status',
+    threadId: source.threadId,
+    runtimeId,
+    turnId: source.turnId,
+    phase: 'tool_running',
+    message: level === 'hard'
+      ? 'Runtime guard interrupted repeated execution of history-only tool arguments.'
+      : 'Runtime guard rejected a history-only tool argument and requested a fresh action.',
+    metadata: {
+      synthetic: true,
+      guard: 'toolArgumentHygiene',
+      level,
+      family: 'command_execution:shell/history-placeholder',
+      recoveryAttempt: attempt
+    }
+  })
+  if (level === 'hard') {
+    await controls.publishSyntheticEvent({
+      kind: 'error',
+      threadId: source.threadId,
+      runtimeId,
+      turnId: source.turnId,
+      itemId: `runtime-guard-history-hygiene-${source.turnId || source.threadId}`,
+      recoverable: true,
+      severity: 'error',
+      code: 'runtime_history_hygiene_replay',
+      message: 'Runtime guard stopped this turn after history-only tool arguments were repeatedly replayed.',
+      detail: [
+        `The runtime supplied ${MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS} targeted recovery instructions.`,
+        'The repeated argument was compressed history metadata, not an executable action.',
+        'Resume from verified task state and create a fresh, smaller action.'
+      ].join(' ')
+    })
+  }
+}
+
+function historyHygieneRecoveryInstruction(attempt: number): string {
+  return [
+    `Runtime history-argument recovery ${attempt}/${MAX_HYGIENE_REPLAY_RECOVERY_ATTEMPTS}: the latest tool argument is compressed history metadata, not an executable action.`,
+    'Discard it completely; do not retry it and do not reconstruct the omitted command from its marker.',
+    'Re-read the current task or workspace state, create a fresh smaller action with newly authored arguments, and verify a concrete state change before continuing.'
+  ].join(' ')
+}
+
+function toolStormSteeringInstruction(family: string, receipt: string): string {
+  return [
+    `Runtime detected a repeated ${family} tool call; ${receipt}.`,
+    'A successful process exit alone is not evidence of task progress.',
+    'Inspect the latest result, do not repeat the identical call, and continue with a different verifiable action.'
+  ].join(' ')
+}
+
 function toolStormRecoveryInstruction(
   event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>,
   family: string,
-  recoveryAttempt: number
+  recoveryAttempt: number,
+  receipt: string
 ): string {
   const meta = recordValue(event.meta)
   const callId = stringValue(event.callId) ||
@@ -353,7 +486,7 @@ function toolStormRecoveryInstruction(
     callId ? `latest call: ${callId}` : '',
     errorCode ? `error code: ${errorCode}` : '',
     detail ? `latest detail: ${detail}` : '',
-    'receipt status: no successful terminal executor receipt observed'
+    `receipt status: ${receipt}`
   ].filter(Boolean).join('; ')
   return [
     `Runtime recovery ${recoveryAttempt}/${MAX_TOOL_STORM_RECOVERY_ATTEMPTS}: ${evidence}.`,
@@ -361,6 +494,37 @@ function toolStormRecoveryInstruction(
     'Try a different tool, corrected arguments, or another verifiable method, then continue and complete the original user task.',
     'Only report a blocker after the available recovery paths have genuinely failed.'
   ].join(' ')
+}
+
+function rememberTerminalReceipt(
+  state: ToolStormState,
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' }>,
+  toolId: string
+): void {
+  if (!toolId) return
+  const fingerprint = state.fingerprintsByToolId.get(toolId)
+  if (!fingerprint) return
+  const meta = recordValue(event.meta)
+  state.receiptsByExactCall.set(fingerprint.exact, {
+    status: event.status === 'success' ? 'success' : 'error',
+    detail: boundedRecoveryDetail(event.detail || stringValue(meta.error) || stringValue(meta.message)),
+    errorCode: stringValue(event.errorCode) || stringValue(meta.errorCode)
+  })
+}
+
+function receiptEvidence(state: ToolStormState, exact: string): string {
+  const receipt = state.receiptsByExactCall.get(exact)
+  if (!receipt) return 'no terminal executor receipt observed for a prior identical call'
+  if (receipt.status === 'success') {
+    return 'a prior identical call completed successfully, but repeating it does not demonstrate task progress'
+  }
+  const context = [
+    receipt.errorCode ? `error code ${receipt.errorCode}` : '',
+    receipt.detail
+  ].filter(Boolean).join(': ')
+  return context
+    ? `a prior identical call failed (${context})`
+    : 'a prior identical call failed'
 }
 
 function boundedRecoveryDetail(value: string): string {

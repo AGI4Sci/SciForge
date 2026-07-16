@@ -8,8 +8,6 @@ import {
   PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
   TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
   TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
-  WORKSPACE_PREVIEW_NO_AGENT_ACCESS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
@@ -40,8 +38,7 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['markdown'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['markdown']
     }
   },
   {
@@ -59,8 +56,7 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['html'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['html']
     }
   },
   {
@@ -79,8 +75,7 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       inspect: true,
       structuredSelection: true,
       annotations: true,
-      export: ['pdf', 'sidecar', 'annotated-pdf'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['pdf', 'sidecar', 'annotated-pdf']
     }
   },
   {
@@ -99,8 +94,7 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       inspect: true,
       structuredSelection: true,
       annotations: true,
-      export: ['docx', 'sidecar'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['docx', 'sidecar']
     }
   },
   {
@@ -118,8 +112,7 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       edit: false,
       inspect: true,
       structuredSelection: false,
-      export: [...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: [...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS]
     }
   }
 ] as const
@@ -140,8 +133,7 @@ export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewP
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['txt'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['txt']
     }
   },
   {
@@ -164,8 +156,7 @@ export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewP
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['csv', 'tsv'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['csv', 'tsv']
     },
     workerPackage: '@sciforge/workspace-tabular'
   },
@@ -185,8 +176,7 @@ export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewP
       inspect: true,
       structuredSelection: true,
       annotations: true,
-      export: ['pptx'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['pptx']
     },
     workerPackage: '@sciforge/workspace-deck'
   },
@@ -205,8 +195,7 @@ export const FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS: readonly WorkspacePreviewP
       edit: false,
       inspect: true,
       structuredSelection: false,
-      export: [],
-      agent: WORKSPACE_PREVIEW_NO_AGENT_ACCESS
+      export: []
     },
     notes: 'Passive byte-range transport for validated Biology Room companion indexes.'
   }

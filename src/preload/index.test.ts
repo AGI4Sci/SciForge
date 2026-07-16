@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { capabilityResourceContentAccessFromUrl } from '../shared/workspace-preview-asset-url'
 
 const invoke = vi.fn()
 const on = vi.fn()
@@ -229,20 +230,13 @@ describe('preload agentRuntime bridge', () => {
     expect(api.writeWorkspaceDocxText).toBeUndefined()
   })
 
-  it('exposes workspace preview IPC methods without replacing file channels', async () => {
+  it('exposes broker-backed workspace preview methods without replacing file channels', async () => {
     const api = exposedApi as {
       readWorkspaceFile(options: unknown): Promise<unknown>
       workspacePreview: {
         listPlugins(): Promise<unknown>
         open(input: unknown): Promise<unknown>
         observe(sessionId: string): Promise<unknown>
-        describeAsset(sessionId: string): Promise<unknown>
-        readRange(sessionId: string, range: unknown): Promise<unknown>
-        prepareArtifact(sessionId: string, request: unknown): Promise<unknown>
-        readArtifactRange(sessionId: string, request: unknown): Promise<unknown>
-        applyEdit(sessionId: string, operation: unknown): Promise<unknown>
-        export(sessionId: string, target: unknown): Promise<unknown>
-        releaseSession(sessionId: string): Promise<boolean>
         watch(payload: unknown): Promise<unknown>
         unwatch(watchId: string): Promise<unknown>
         getAssetSourceUrl(sessionId: string): string | null
@@ -255,90 +249,84 @@ describe('preload agentRuntime bridge', () => {
       mimeType: 'chemical/x-pdb',
       mode: 'inspect'
     }
+    const resource = {
+      token: 'cap_abcdefghijklmnopqrstuvwxyz',
+      semanticRevision: 'revision-1',
+      expiresAt: '2026-07-16T14:00:00.000Z'
+    }
+    invoke.mockImplementation(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:invoke') {
+        const request = (payload as { request: { actionId: string } }).request
+        const output = request.actionId === 'workspace-preview.list'
+          ? []
+          : {
+              ok: true,
+              session: { id: 'session-1', workspaceRoot: '/tmp/workspace' },
+              manifest: { id: 'molecular' },
+              route: 'matched',
+              file: { path: 'protein.pdb' },
+              resource
+            }
+        return {
+          actionId: request.actionId,
+          output,
+          changed: false,
+          replayed: false,
+          completedAt: '2026-07-16T13:00:00.000Z'
+        }
+      }
+      if (channel === 'capability:observe') {
+        return {
+          resource,
+          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+          resourceKind: 'workspace-preview',
+          semanticRevision: resource.semanticRevision,
+          observedAt: '2026-07-16T13:00:00.000Z',
+          state: { session: { id: 'session-1' }, observation: { sessionId: 'session-1' } },
+          operations: []
+        }
+      }
+      if (channel === 'file:watch-workspace') return { watchId: 'watch-1' }
+      if (channel === 'file:unwatch-workspace') return true
+      return undefined
+    })
 
     await api.workspacePreview.listPlugins()
     await api.workspacePreview.open(openInput)
     await api.workspacePreview.observe('session-1')
-    await api.workspacePreview.describeAsset('session-1')
-    await api.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
-    await api.workspacePreview.prepareArtifact('session-1', {
-      kind: 'cache-artifact',
-      source: 'observation'
-    })
-    await api.workspacePreview.readArtifactRange('session-1', {
-      artifactId: 'artifact-1',
-      range: { offset: 0, length: 4 }
-    })
-    await api.workspacePreview.applyEdit('session-1', {
-      kind: 'molecular.setSelection',
-      path: 'protein.pdb',
-      selection: { kind: 'molecular', chains: ['A'] }
-    })
-    await api.workspacePreview.export('session-1', {
-      kind: 'workspace-file',
-      format: 'pdb',
-      path: 'exports/protein-copy.pdb'
-    })
-    await api.workspacePreview.releaseSession('session-1')
     await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.workspacePreview.unwatch('watch-1')
-    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session 1')
+    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session-1')
     const changed = vi.fn()
     const unsubscribe = api.workspacePreview.onChanged(changed)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'workspacePreview:changed')?.[1]
+    const wrapped = on.mock.calls.find(([channel]) => channel === 'file:workspace-changed')?.[1]
     wrapped?.({}, { ok: true, watchId: 'watch-1' })
     unsubscribe()
     await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
 
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:listPlugins')
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:open', openInput)
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:observe', { sessionId: 'session-1' })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:describeAsset', { sessionId: 'session-1' })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:readRange', {
-      sessionId: 'session-1',
-      range: { offset: 0, length: 4 }
+    expect(invoke).toHaveBeenCalledWith('capability:invoke', expect.objectContaining({
+      request: expect.objectContaining({ actionId: 'workspace-preview.list' })
+    }))
+    expect(invoke).toHaveBeenCalledWith('capability:invoke', expect.objectContaining({
+      workspaceId: '/tmp/workspace',
+      request: expect.objectContaining({ actionId: 'workspace-preview.open', input: openInput })
+    }))
+    expect(invoke).toHaveBeenCalledWith('capability:observe', {
+      workspaceId: '/tmp/workspace',
+      request: { resource }
     })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:prepareArtifact', {
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:readArtifactRange', {
-      sessionId: 'session-1',
-      request: {
-        artifactId: 'artifact-1',
-        range: { offset: 0, length: 4 }
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:applyEdit', {
-      sessionId: 'session-1',
-      operation: {
-        kind: 'molecular.setSelection',
-        path: 'protein.pdb',
-        selection: { kind: 'molecular', chains: ['A'] }
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:export', {
-      sessionId: 'session-1',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: 'exports/protein-copy.pdb'
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:releaseSession', {
-      sessionId: 'session-1'
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:watch', {
+    expect(invoke).toHaveBeenCalledWith('file:watch-workspace', {
       path: 'protein.pdb',
       workspaceRoot: '/tmp/workspace'
     })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
-    expect(assetSourceUrl).toBe('sciforge-preview://asset/session%201')
+    expect(invoke).toHaveBeenCalledWith('file:unwatch-workspace', 'watch-1')
+    expect(assetSourceUrl).not.toBeNull()
+    expect(capabilityResourceContentAccessFromUrl(assetSourceUrl!)).toEqual({
+      workspaceId: '/tmp/workspace',
+      resource
+    })
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
-    expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
+    expect(removeListener).toHaveBeenCalledWith('file:workspace-changed', wrapped)
     expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
       path: 'paper.pdf',
       workspaceRoot: '/tmp/workspace'
@@ -495,8 +483,7 @@ describe('preload agentRuntime bridge', () => {
       }
     }
     const snapshot = {
-      schemaVersion: 2,
-      windowId: 'window-1',
+      schemaVersion: 3,
       revision: 1,
       publishedAt: '2026-07-04T00:00:00.000Z',
       freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },

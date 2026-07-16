@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest'
-import { WORKSPACE_PREVIEW_MAX_RANGE_BYTES } from '../../shared/workspace-preview'
 import {
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
@@ -53,14 +52,7 @@ import {
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
   workspaceNativeFileDragPayloadSchema,
-  workspacePreviewApplyEditPayloadSchema,
-  workspacePreviewDescribeAssetPayloadSchema,
-  workspacePreviewExportPayloadSchema,
-  workspacePreviewObservePayloadSchema,
   workspacePreviewOpenPayloadSchema,
-  workspacePreviewPrepareArtifactPayloadSchema,
-  workspacePreviewReadArtifactRangePayloadSchema,
-  workspacePreviewReadRangePayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
@@ -623,7 +615,7 @@ describe('app-ipc-schemas', () => {
     expect(skillListPayloadSchema.parse({})).toEqual({})
   })
 
-  it('accepts workspace preview open and observe IPC payloads', () => {
+  it('accepts capability-backed workspace preview open payloads', () => {
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' protein.PDB ',
       workspaceRoot: ' /tmp/workspace ',
@@ -635,9 +627,6 @@ describe('app-ipc-schemas', () => {
       mimeType: 'chemical/x-pdb',
       mode: 'inspect'
     })
-    expect(workspacePreviewObservePayloadSchema.parse({
-      sessionId: ' session-1 '
-    })).toEqual({ sessionId: 'session-1' })
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' evidence.pdf ',
       workspaceRoot: ' /tmp/workspace ',
@@ -659,128 +648,11 @@ describe('app-ipc-schemas', () => {
         expectedDigest: `sha256:${'a'.repeat(64)}`
       }
     })
-    expect(workspacePreviewDescribeAssetPayloadSchema.parse({
-      sessionId: ' session-1 '
-    })).toEqual({ sessionId: 'session-1' })
-    expect(workspacePreviewReadRangePayloadSchema.parse({
-      sessionId: ' session-1 ',
-      range: { offset: 4, length: 16 }
-    })).toEqual({
-      sessionId: 'session-1',
-      range: { offset: 4, length: 16 }
-    })
-    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })
-    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        kind: 'cache-artifact',
-        source: 'plugin-metadata',
-        metadataKind: 'bioimaging'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'plugin-metadata',
-        metadataKind: 'bioimaging'
-      }
-    })
-    expect(workspacePreviewReadArtifactRangePayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        artifactId: ' artifact-1 ',
-        range: { offset: 0, length: 32 }
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        artifactId: 'artifact-1',
-        range: { offset: 0, length: 32 }
-      }
-    })
-    expect(workspacePreviewApplyEditPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      operation: {
-        kind: 'text.replaceRange',
-        path: 'notes.md',
-        range: {
-          start: { line: 1, column: 1 },
-          end: { line: 1, column: 5 }
-        },
-        text: 'done'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      operation: {
-        kind: 'text.replaceRange',
-        path: 'notes.md',
-        range: {
-          start: { line: 1, column: 1 },
-          end: { line: 1, column: 5 }
-        },
-        text: 'done'
-      }
-    })
-
-    expect(workspacePreviewExportPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: ' exports/protein-copy.pdb '
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: 'exports/protein-copy.pdb'
-      }
-    })
-
     expect(() =>
       workspacePreviewOpenPayloadSchema.parse({
         path: 'protein.PDB',
         workspaceRoot: '/tmp/workspace',
         mode: 'review'
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewReadRangePayloadSchema.parse({
-        sessionId: 'session-1',
-        range: { offset: 0, length: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1 }
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewApplyEditPayloadSchema.parse({
-        sessionId: 'session-1',
-        operation: {
-          kind: 'text.replaceRange',
-          path: 'notes.md',
-          range: {
-            start: { line: 1, column: 1 },
-            end: { line: 1, column: 5 }
-          },
-          text: 'x'.repeat(2_000_001)
-        }
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewExportPayloadSchema.parse({
-        sessionId: 'session-1',
-        target: { kind: 'workspace-file', format: 'pdb' }
       })
     ).toThrow()
   })
@@ -812,6 +684,7 @@ describe('app-ipc-schemas', () => {
     const payload = settingsPatchSchema.parse({
       theme: 'dark',
       activeAgentRuntime: 'claude',
+      evidenceDag: { enabled: true },
       agentCapabilities: {
         subagents: {
           enabled: true,
@@ -918,6 +791,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.sciforge?.tokenEconomy?.enabled).toBe(true)
     expect(payload.agents?.sciforge?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.activeAgentRuntime).toBe('claude')
+    expect(payload.evidenceDag).toEqual({ enabled: true })
     expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(3)
     expect(payload.agentCapabilities?.subagents?.maxChildRuns).toBe(4)
     expect(payload.agents?.codex?.codexHome).toBe('/tmp/codex-home')

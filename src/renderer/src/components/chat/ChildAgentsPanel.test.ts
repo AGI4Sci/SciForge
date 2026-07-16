@@ -8,6 +8,9 @@ import { ChildAgentsPanelView } from './ChildAgentsPanel'
 const labels: Record<string, string> = {
   sidebarChildren: 'Children',
   sidebarChildrenActive: 'Active',
+  sidebarChildrenFilterAll: 'Show all child agents',
+  sidebarChildrenFilterActive: 'Show active child agents',
+  sidebarChildrenActiveEmpty: 'No child agents are active right now.',
   sidebarChildrenLoading: 'Loading children',
   sidebarChildrenLoadError: 'Unable to load children',
   sidebarChildrenNoThread: 'No active thread.',
@@ -469,6 +472,72 @@ describe('ChildAgentsPanelView', () => {
 
     expect(html.match(/role="tab"/g)).toHaveLength(1)
     expect(html.match(/>clone-repo</g)).toHaveLength(1)
+  })
+
+  it('merges a prompt-only event shadow into the matching reasoning thread record', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'child-event-shadow',
+          name: 'writing-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Child-agent runtime guardrails:\nDo not spawn children.\n\nDelegated task:\nReview the writing.',
+          summary: 'Prompt-only event record'
+        }),
+        child({
+          id: 'thread-writing-review',
+          kind: 'thread',
+          name: 'writing-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the writing.',
+          summary: undefined,
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-writing-review' },
+          transcriptRef: { runtimeId: 'codex', childId: 'thread-writing-review', transcriptId: 'thread-writing-review' }
+        })
+      ],
+      selectedSide: side({ threadId: 'thread-writing-review', title: 'writing-review' })
+    })
+
+    expect(html.match(/role="tab"/g)).toHaveLength(1)
+    expect(html.match(/>writing-review</g)).toHaveLength(1)
+    expect(html).toContain('child-ok')
+    expect(html).not.toContain('Prompt-only event record')
+  })
+
+  it('keeps a same-name event when its delegated task differs from the reasoning thread', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'child-event-methods',
+          name: 'paper-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the methods.'
+        }),
+        child({
+          id: 'thread-writing-review',
+          kind: 'thread',
+          name: 'paper-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the writing.',
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-writing-review' }
+        })
+      ]
+    })
+
+    expect(html.match(/role="tab"/g)).toHaveLength(2)
+  })
+
+  it('renders the child and active counts as list filter buttons', () => {
+    const html = renderView({
+      children: [
+        child({ id: 'running-child', name: 'running-child', status: 'running' }),
+        child({ id: 'completed-child', name: 'completed-child', status: 'completed', prompt: 'A different task' })
+      ]
+    })
+
+    expect(html).toContain('aria-label="Show all child agents"')
+    expect(html).toContain('aria-label="Show active child agents"')
+    expect(html).toContain('aria-pressed="true"')
   })
 
   it('collapses distinct retries under the latest active attempt by default', () => {

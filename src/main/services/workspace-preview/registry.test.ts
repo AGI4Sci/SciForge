@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  WORKSPACE_PREVIEW_NO_AGENT_ACCESS,
   WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
   WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
   WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
@@ -102,8 +101,7 @@ describe('WorkspacePreviewRegistry', () => {
           modality: 'unknown',
           capabilities: {
             edit: false,
-            structuredSelection: false,
-            agent: WORKSPACE_PREVIEW_NO_AGENT_ACCESS
+            structuredSelection: false
           }
         }
       })

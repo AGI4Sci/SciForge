@@ -1,5 +1,8 @@
 import { useEffect, useState } from 'react'
 
+const THREAD_USAGE_REFRESH_DEBOUNCE_MS = 400
+const threadUsageLoads = new Map<string, Promise<ThreadUsageSummary | null>>()
+
 export type ThreadUsageSummary = {
   inputTokens: number
   outputTokens: number
@@ -159,6 +162,16 @@ export async function loadThreadUsage(threadId: string): Promise<ThreadUsageSumm
   }
 }
 
+function loadThreadUsageSingleflight(threadId: string): Promise<ThreadUsageSummary | null> {
+  const existing = threadUsageLoads.get(threadId)
+  if (existing) return existing
+  const pending = loadThreadUsage(threadId).finally(() => {
+    if (threadUsageLoads.get(threadId) === pending) threadUsageLoads.delete(threadId)
+  })
+  threadUsageLoads.set(threadId, pending)
+  return pending
+}
+
 export function useThreadUsageState(
   threadId: string | null | undefined,
   enabled: boolean,
@@ -177,15 +190,18 @@ export function useThreadUsageState(
       return
     }
     setState((current) => ({ ...current, loading: true }))
-    void loadThreadUsage(threadId)
-      .then((usage) => {
-        if (!cancelled) setState({ usage, loading: false, loaded: true })
-      })
-      .catch(() => {
-        if (!cancelled) setState({ usage: null, loading: false, loaded: true })
-      })
+    const timer = window.setTimeout(() => {
+      void loadThreadUsageSingleflight(threadId)
+        .then((usage) => {
+          if (!cancelled) setState({ usage, loading: false, loaded: true })
+        })
+        .catch(() => {
+          if (!cancelled) setState({ usage: null, loading: false, loaded: true })
+        })
+    }, THREAD_USAGE_REFRESH_DEBOUNCE_MS)
     return () => {
       cancelled = true
+      window.clearTimeout(timer)
     }
   }, [enabled, refreshKey, threadId])
 

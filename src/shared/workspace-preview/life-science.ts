@@ -1,6 +1,5 @@
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
   type WorkspacePreviewModality,
   type WorkspacePreviewPluginManifest,
   extensionFromPreviewPath,
@@ -111,8 +110,7 @@ export const LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS: readonly WorkspacePreviewPlu
       edit: false,
       inspect: true,
       structuredSelection: true,
-      export: ['pdb', 'cif', 'mmcif', 'sdf', 'mol', 'mol2', 'xyz', 'xtc', 'dcd', 'trr', 'mrc', 'ccp4'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['pdb', 'cif', 'mmcif', 'sdf', 'mol', 'mol2', 'xyz', 'xtc', 'dcd', 'trr', 'mrc', 'ccp4']
     },
     workerPackage: '@sciforge/workspace-molecular'
   },
@@ -131,8 +129,7 @@ export const LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS: readonly WorkspacePreviewPlu
       edit: false,
       inspect: true,
       structuredSelection: true,
-      export: ['fasta', 'fa', 'fastq', 'gb', 'gbk', 'gff', 'gtf', 'bed', 'vcf'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['fasta', 'fa', 'fastq', 'gb', 'gbk', 'gff', 'gtf', 'bed', 'vcf']
     },
     workerPackage: '@sciforge/workspace-sequence'
   },
@@ -151,8 +148,7 @@ export const LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS: readonly WorkspacePreviewPlu
       edit: false,
       inspect: true,
       structuredSelection: true,
-      export: ['h5ad', 'loom', 'mtx', 'h5', 'hdf5', 'zarr'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['h5ad', 'loom', 'mtx', 'h5', 'hdf5', 'zarr']
     },
     workerPackage: '@sciforge/workspace-omics'
   },
@@ -171,8 +167,7 @@ export const LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS: readonly WorkspacePreviewPlu
       edit: false,
       inspect: true,
       structuredSelection: true,
-      export: ['tif', 'tiff', 'czi', 'svs', 'ndpi'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['tif', 'tiff', 'czi', 'svs', 'ndpi']
     },
     workerPackage: '@sciforge/workspace-bioimaging'
   },
@@ -191,8 +186,7 @@ export const LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS: readonly WorkspacePreviewPlu
       edit: false,
       inspect: true,
       structuredSelection: true,
-      export: ['mzml', 'mzxml', 'mgf', 'fcs'],
-      agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+      export: ['mzml', 'mzxml', 'mgf', 'fcs']
     },
     workerPackage: '@sciforge/workspace-spectra'
   }

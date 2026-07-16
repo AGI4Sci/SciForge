@@ -220,9 +220,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     input.route.pluginId
   const mode = observation?.view.mode ?? input.context.state.session?.mode
   const selectionKind = observation?.selection?.kind ?? input.context.state.session?.selection?.kind
-  const actionCount = observation?.actions.length ?? 0
   const summary = observation
-    ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)} with ${actionCount} actions.`
+    ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)}.`
     : input.context.assetError
       ? `Workspace preview for ${fileNameFromPath(path)} has an asset error: ${input.context.assetError}.`
       : `Workspace preview for ${fileNameFromPath(path)} is ${input.context.assetStatus}.`
@@ -230,7 +229,6 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     kind: 'workspaceFile',
     role: 'preview-target',
     title: fileNameFromPath(path),
-    accessHint: 'Use workspacePreview.observe for structured state and workspacePreview.readRange for bounded asset bytes.',
     workspaceRoot: resolvedWorkspaceRoot,
     path,
     relativePath,
@@ -241,6 +239,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     size: observation?.file.size ?? input.context.state.file?.size,
     mtimeMs: observation?.file.mtimeMs ?? input.context.state.file?.mtimeMs,
     annotationCount: observation?.annotations?.length,
+    capability: input.context.state.capability ?? undefined,
     metadata: {
       pluginId,
       modality,
@@ -253,7 +252,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         status: strategy.status
       })),
       selectionKind,
-      actionCount
+      semanticRevision: input.context.state.capability?.resource.semanticRevision,
+      operationIds: input.context.state.capability?.operations.map((operation) => operation.id) ?? []
     }
   }]
 
@@ -281,7 +281,6 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         status: strategy.status
       })) ?? [],
       selectionKind: selectionKind ?? null,
-      actionCount,
       error: input.context.state.error ?? input.context.assetError,
       workspaceObservation: observation ?? null
     }
@@ -306,6 +305,7 @@ function WorkspacePreviewShellBody({
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const capabilityWorkspaceRoot = target?.workspaceRoot?.trim() || workspaceRoot
   const lastEditSummary = context.state.lastEditSummary
   const canOpenDirectory = Boolean(target && onOpenDirectory)
   const integrityNotice = workspacePreviewIntegrityNotice({
@@ -354,6 +354,39 @@ function WorkspacePreviewShellBody({
       element: () => previewRef.current
     })
   }, [context.state.observation, context.state.session?.modality, route.modality, visibleContextComponent])
+
+  useEffect(() => {
+    const capabilities = window.sciforge?.capabilities
+    if (!capabilities) return undefined
+
+    let active = true
+    let subscriptionId: string | null = null
+    const offEvent = capabilities.onEvent((payload) => {
+      if (!active || payload.subscriptionId !== subscriptionId) return
+      if (payload.event.resourceKind !== 'workspace-preview') return
+      const resourceRef = context.state.capability?.resourceRef
+      if (resourceRef && payload.event.resourceRef !== resourceRef) return
+      const sessionId = context.state.session?.id
+      if (!sessionId) return
+      void context.host.observe(sessionId)
+    })
+
+    void capabilities.subscribe(capabilityWorkspaceRoot)
+      .then((subscription) => {
+        if (!active) {
+          void capabilities.unsubscribe(subscription.subscriptionId)
+          return
+        }
+        subscriptionId = subscription.subscriptionId
+      })
+      .catch(() => undefined)
+
+    return () => {
+      active = false
+      offEvent()
+      if (subscriptionId) void capabilities.unsubscribe(subscriptionId)
+    }
+  }, [capabilityWorkspaceRoot, context.host, context.state.capability?.resourceRef, context.state.session?.id])
 
   return (
     <div

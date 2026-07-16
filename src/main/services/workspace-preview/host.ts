@@ -21,6 +21,7 @@ import {
   type PdfAnnotationKind,
   type PdfAnnotationSidecar,
   type PdfAnnotationThread,
+  type PdfAnnotationThreadTombstone,
   type PdfAnnotationThreadStatus
 } from '../../../shared/pdf-annotations'
 import type { AppSettingsV1 } from '../../../shared/app-settings'
@@ -2678,12 +2679,24 @@ function deletePdfAnnotationThreadSidecar(input: {
       !deletedAnchorCandidateIds.has(anchor.id) || retainedAnchorIds.has(anchor.id)
     )
   }
+  const tombstone: PdfAnnotationThreadTombstone = {
+    threadId: existing.id,
+    annotationIds: sortedUniqueStrings([...deletedAnnotationIds]),
+    anchorIds: sortedUniqueStrings([...deletedAnchorCandidateIds]),
+    deletedAt: input.now,
+    deletedVersion: input.sidecar.version + 1
+  }
+  const deletedThreads = [
+    ...(input.sidecar.deletedThreads ?? []).filter((candidate) => candidate.threadId !== existing.id),
+    tombstone
+  ]
 
   return {
     sidecar: commitPdfAnnotationSidecar(input.sidecar, {
       anchors,
       annotations,
-      threads
+      threads,
+      deletedThreads
     }, input.now),
     annotationCount: input.sidecar.annotations.length - annotations.length,
     anchorCount: input.sidecar.anchors.length - anchors.length
@@ -2976,7 +2989,7 @@ function applyOptionalThreadField<TKey extends keyof Pick<
 
 function commitPdfAnnotationSidecar(
   sidecar: PdfAnnotationSidecar,
-  changes: Partial<Pick<PdfAnnotationSidecar, 'anchors' | 'annotations' | 'threads'>>,
+  changes: Partial<Pick<PdfAnnotationSidecar, 'anchors' | 'annotations' | 'threads' | 'deletedThreads'>>,
   updatedAt: string
 ): PdfAnnotationSidecar {
   return stablePdfAnnotationSidecar({

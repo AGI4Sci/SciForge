@@ -73,7 +73,7 @@ describe('request history hygiene', () => {
     expect(nextPairedCall?.kind === 'tool_call' ? String(nextPairedCall.arguments.content) : '')
       .toContain('cache hygiene')
     expect(nextPairedCall?.kind === 'tool_call' ? String(nextPairedCall.arguments.content) : '')
-      .toContain('do not copy into future tool arguments')
+      .toContain('never execute, persist, or copy into future tool arguments')
     expect(nextPairedCall?.kind === 'tool_call' ? nextPairedCall.arguments.path : '')
       .toBe('src/generated.ts')
     expect(nextUnpairedCall?.kind === 'tool_call' ? String(nextUnpairedCall.arguments.content).length : 0)
@@ -166,7 +166,9 @@ describe('request history hygiene', () => {
     const nextCall = compacted[0]
     const command = nextCall?.kind === 'tool_call' ? String(nextCall.arguments.command) : ''
 
-    expect(command).toBe(': # sciforge history omitted prior bash command; inspect paired tool result')
+    expect(command).toBe(
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command'
+    )
     expect(command).not.toContain('cache hygiene')
     expect(command).not.toContain('see following tool result')
     expect(command).not.toContain('preview=')
@@ -197,11 +199,13 @@ describe('request history hygiene', () => {
     const nextCall = compacted[0]
     const command = nextCall?.kind === 'tool_call' ? String(nextCall.arguments.command) : ''
 
-    expect(command).toBe(': # sciforge history omitted prior bash command; inspect paired tool result')
+    expect(command).toBe(
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command'
+    )
     expect(command).not.toContain('[sciforge request_hygiene')
   })
 
-  it('replaces oversized completed bash commands with a safe shell no-op', () => {
+  it('replaces oversized completed bash commands with an explicit failing history sentinel', () => {
     const pairedCall = makeToolCallItem({
       id: 'long_bash_call',
       threadId: 'thr_1',
@@ -225,7 +229,9 @@ describe('request history hygiene', () => {
     const nextCall = compacted[0]
     const command = nextCall?.kind === 'tool_call' ? String(nextCall.arguments.command) : ''
 
-    expect(command).toBe(': # sciforge history omitted prior bash command; inspect paired tool result')
+    expect(command).toBe(
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command'
+    )
     expect(command).not.toContain('[cache hygiene:')
   })
 
@@ -253,6 +259,7 @@ describe('request history hygiene', () => {
 
     expect(instruction).toContain('[cache hygiene: ...]')
     expect(instruction).toContain('[sciforge request_hygiene ...]')
-    expect(instruction).toContain('never copy them into shell commands')
+    expect(instruction).toContain('false # sciforge history metadata only')
+    expect(instruction).toContain('never execute or copy them into tool arguments')
   })
 })

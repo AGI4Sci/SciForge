@@ -1,9 +1,16 @@
+import { constants } from 'node:fs'
+import { open } from 'node:fs/promises'
+import { createInterface } from 'node:readline'
 import type {
   AgentRuntimeUsage,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse
 } from '../../../shared/agent-runtime-contract'
-import { AppDataJsonlStore } from '../../services/app-data-store'
+import { AppDataJsonlStore, atomicWriteAppDataText } from '../../services/app-data-store'
+
+const NOFOLLOW = constants.O_NOFOLLOW ?? 0
+const COMPACTION_MIN_JOURNAL_ROWS = 256
+const COMPACTION_MIN_REDUNDANCY_RATIO = 2
 
 export type CodexUsageRecord = {
   version: 1
@@ -59,10 +66,16 @@ type UsageCounters = {
 }
 
 export class CodexUsageStore {
+  private readonly rootDir: string
   private readonly jsonlStore: AppDataJsonlStore
   private readonly now: () => Date
+  private readonly recordsByTurn = new Map<string, CodexUsageRecord>()
+  private loadPromise: Promise<void> | null = null
+  private mutationQueue: Promise<void> = Promise.resolve()
+  private sortedRecordsCache: CodexUsageRecord[] | null = null
 
   constructor(options: CodexUsageStoreOptions) {
+    this.rootDir = options.rootDir
     this.jsonlStore = new AppDataJsonlStore({
       rootDir: options.rootDir,
       segments: ['usage', 'codex-usage.jsonl']
@@ -73,8 +86,18 @@ export class CodexUsageStore {
   async record(input: CodexUsageRecordInput): Promise<CodexUsageRecord | null> {
     const record = normalizeRecordInput(input, this.now)
     if (!record) return null
-    await this.jsonlStore.appendJson([record])
-    return record
+    return this.enqueueMutation(async () => {
+      await this.ensureLoaded()
+      const key = usageRecordKey(record)
+      const current = this.recordsByTurn.get(key)
+      const preferred = preferredRecord(current, record)
+      if (preferred === current || (current && equivalentRecord(current, preferred))) return current
+
+      await this.jsonlStore.appendJson([preferred])
+      this.recordsByTurn.set(key, preferred)
+      this.sortedRecordsCache = null
+      return preferred
+    })
   }
 
   async threadUsage(threadId: string): Promise<AgentRuntimeUsage | undefined> {
@@ -107,21 +130,84 @@ export class CodexUsageStore {
   }
 
   private async records(): Promise<CodexUsageRecord[]> {
-    let raw = ''
+    await this.mutationQueue
+    await this.ensureLoaded()
+    await this.mutationQueue
+    if (!this.sortedRecordsCache) {
+      this.sortedRecordsCache = [...this.recordsByTurn.values()]
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    }
+    return this.sortedRecordsCache
+  }
+
+  private async ensureLoaded(): Promise<void> {
+    if (!this.loadPromise) {
+      this.loadPromise = this.loadRecords().catch((error) => {
+        this.loadPromise = null
+        throw error
+      })
+    }
+    await this.loadPromise
+  }
+
+  private async loadRecords(): Promise<void> {
+    let handle
     try {
-      raw = await this.jsonlStore.readText()
+      const path = await this.jsonlStore.path()
+      handle = await open(path, constants.O_RDONLY | NOFOLLOW)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
       throw error
     }
-    const byTurn = new Map<string, CodexUsageRecord>()
-    for (const line of raw.split('\n')) {
-      const record = parseRecord(line)
-      if (!record) continue
-      const key = `${record.threadId}\u0000${record.turnId}`
-      byTurn.set(key, preferredRecord(byTurn.get(key), record))
+
+    const input = handle.createReadStream({ encoding: 'utf8', autoClose: false })
+    const lines = createInterface({ input, crlfDelay: Infinity })
+    let recordRows = 0
+    try {
+      for await (const line of lines) {
+        const record = parseRecord(line)
+        if (!record) continue
+        recordRows += 1
+        const key = usageRecordKey(record)
+        this.recordsByTurn.set(key, preferredRecord(this.recordsByTurn.get(key), record))
+      }
+    } finally {
+      lines.close()
+      input.destroy()
+      await handle.close()
     }
-    return [...byTurn.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+    this.scheduleCompaction(recordRows)
+  }
+
+  private scheduleCompaction(recordRows: number): void {
+    const uniqueRecords = this.recordsByTurn.size
+    if (recordRows < COMPACTION_MIN_JOURNAL_ROWS ||
+        uniqueRecords === 0 ||
+        recordRows <= uniqueRecords * COMPACTION_MIN_REDUNDANCY_RATIO) return
+
+    const timer = setTimeout(() => {
+      void this.enqueueMutation(async () => {
+        const records = this.sortedRecordsCache ?? [...this.recordsByTurn.values()]
+          .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
+        const content = records.length > 0
+          ? `${records.map((record) => JSON.stringify(record)).join('\n')}\n`
+          : ''
+        await atomicWriteAppDataText(
+          this.rootDir,
+          ['usage', 'codex-usage.jsonl'],
+          content
+        )
+      }).catch(() => {
+        // Compaction is opportunistic. The append-only journal remains authoritative on failure.
+      })
+    }, 0)
+    timer.unref()
+  }
+
+  private enqueueMutation<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.mutationQueue.then(task, task)
+    this.mutationQueue = run.then(() => undefined, () => undefined)
+    return run
   }
 
 }
@@ -347,6 +433,23 @@ function preferredRecord(current: CodexUsageRecord | undefined, next: CodexUsage
   const nextHasTokens = recordTokenValue(next) > 0
   if (currentHasTokens && !nextHasTokens) return current
   return next
+}
+
+function usageRecordKey(record: Pick<CodexUsageRecord, 'threadId' | 'turnId'>): string {
+  return `${record.threadId}\u0000${record.turnId}`
+}
+
+function equivalentRecord(current: CodexUsageRecord, next: CodexUsageRecord): boolean {
+  return current.threadId === next.threadId &&
+    current.turnId === next.turnId &&
+    current.model === next.model &&
+    current.inputTokens === next.inputTokens &&
+    current.outputTokens === next.outputTokens &&
+    current.reasoningTokens === next.reasoningTokens &&
+    current.cachedTokens === next.cachedTokens &&
+    current.cacheMissTokens === next.cacheMissTokens &&
+    current.totalTokens === next.totalTokens &&
+    current.modelContextWindow === next.modelContextWindow
 }
 
 function recordTokenValue(record: CodexUsageRecord): number {

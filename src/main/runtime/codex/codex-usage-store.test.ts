@@ -1,7 +1,8 @@
-import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rename, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { AppDataJsonlStore } from '../../services/app-data-store'
 import { CodexUsageStore } from './codex-usage-store'
 
 async function tempRoot(): Promise<string> {
@@ -161,6 +162,127 @@ describe('CodexUsageStore', () => {
     await expect(store.summary({ groupBy: 'thread', timezone: 'UTC' })).resolves.toMatchObject({
       totals: { turns: 30, threadCount: 1 }
     })
+  })
+
+  it('does not append an unchanged turn again, including after the store is recreated', async () => {
+    const rootDir = await tempRoot()
+    const input = {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      createdAt: '2026-06-10T01:00:00.000Z',
+      model: 'gpt-5-codex',
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        totalTokens: 110
+      }
+    }
+
+    const firstStore = new CodexUsageStore({ rootDir })
+    await firstStore.record(input)
+    await firstStore.record(input)
+    await new CodexUsageStore({ rootDir }).record(input)
+
+    const raw = await readFile(join(rootDir, 'usage', 'codex-usage.jsonl'), 'utf8')
+    expect(raw.trim().split('\n')).toHaveLength(1)
+  })
+
+  it('loads its index once and serves repeated queries without reopening the JSONL history', async () => {
+    const rootDir = await tempRoot()
+    const store = new CodexUsageStore({ rootDir })
+    await store.record({
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      createdAt: '2026-06-10T01:00:00.000Z',
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 }
+    })
+    const pathSpy = vi.spyOn(AppDataJsonlStore.prototype, 'path')
+
+    const reopened = new CodexUsageStore({ rootDir })
+    await reopened.summary({ groupBy: 'thread', timezone: 'UTC' })
+    await reopened.summary({ groupBy: 'model', timezone: 'UTC' })
+    await reopened.threadUsage('thread-1')
+
+    expect(pathSpy).toHaveBeenCalledTimes(1)
+    pathSpy.mockRestore()
+  })
+
+  it('compacts a redundant legacy journal to the preferred record per turn', async () => {
+    const rootDir = await tempRoot()
+    const usageDir = join(rootDir, 'usage')
+    const usagePath = join(usageDir, 'codex-usage.jsonl')
+    await mkdir(usageDir)
+    const rows = Array.from({ length: 300 }, (_, index) => JSON.stringify({
+      version: 1,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      createdAt: '2026-06-10T01:00:00.000Z',
+      updatedAt: new Date(index + 1).toISOString(),
+      model: 'gpt-5-codex',
+      inputTokens: index + 1,
+      outputTokens: 1,
+      reasoningTokens: 0,
+      cachedTokens: 0,
+      cacheMissTokens: index + 1,
+      totalTokens: index + 2,
+      modelContextWindow: null
+    }))
+    await writeFile(usagePath, `${rows.join('\n')}\n`, 'utf8')
+
+    const store = new CodexUsageStore({ rootDir })
+    await expect(store.threadUsage('thread-1')).resolves.toMatchObject({
+      inputTokens: 300,
+      totalTokens: 301
+    })
+
+    await vi.waitFor(async () => {
+      const compacted = (await readFile(usagePath, 'utf8')).trim().split('\n')
+      expect(compacted).toHaveLength(1)
+      expect(JSON.parse(compacted[0]!) as { inputTokens: number }).toMatchObject({ inputTokens: 300 })
+    })
+  })
+
+  it('leaves the original journal intact when background compaction cannot replace the target', async () => {
+    vi.useFakeTimers()
+    try {
+      const rootDir = await tempRoot()
+      const usageDir = join(rootDir, 'usage')
+      const usagePath = join(usageDir, 'codex-usage.jsonl')
+      const originalPath = join(usageDir, 'codex-usage.original.jsonl')
+      await mkdir(usageDir)
+      const row = JSON.stringify({
+        version: 1,
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        createdAt: '2026-06-10T01:00:00.000Z',
+        updatedAt: '2026-06-10T01:00:00.000Z',
+        model: 'gpt-5-codex',
+        inputTokens: 1,
+        outputTokens: 1,
+        reasoningTokens: 0,
+        cachedTokens: 0,
+        cacheMissTokens: 1,
+        totalTokens: 2,
+        modelContextWindow: null
+      })
+      const original = `${Array.from({ length: 300 }, () => row).join('\n')}\n`
+      await writeFile(usagePath, original, 'utf8')
+
+      const store = new CodexUsageStore({ rootDir })
+      await store.summary({ groupBy: 'thread', timezone: 'UTC' })
+      await rename(usagePath, originalPath)
+      const outsidePath = join(await tempRoot(), 'outside.jsonl')
+      await writeFile(outsidePath, 'outside\n', 'utf8')
+      await symlink(outsidePath, usagePath)
+
+      await vi.runAllTimersAsync()
+      await store.summary({ groupBy: 'thread', timezone: 'UTC' })
+
+      await expect(readFile(originalPath, 'utf8')).resolves.toBe(original)
+      await expect(readFile(outsidePath, 'utf8')).resolves.toBe('outside\n')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('rejects symlinked usage append parents and targets', async () => {

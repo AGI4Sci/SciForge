@@ -1,4 +1,5 @@
 import { createCanvas, loadImage } from '@napi-rs/canvas'
+import { createHmac, randomBytes } from 'node:crypto'
 import { constants, watch, type FSWatcher } from 'node:fs'
 import { lstat, mkdir, open, readdir, readFile, rm, stat } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -47,24 +48,35 @@ export type CapturedVisualPage = {
   bounds?: VisibleContextBounds
 }
 
-export type VisibleContextCaptureProvider = {
-  capturePage: (bounds?: VisibleContextBounds) => Promise<CapturedVisualPage>
+export type SurfaceCaptureRequest = {
+  windowId: string
+  revision: number
+  snapshotToken: string
+  activeThreadId: string | null
+  bounds?: VisibleContextBounds
+}
+
+export type SurfaceCaptureUnavailableReason = {
+  code: 'surface_capture_unsupported' | 'capture_surface_unavailable'
+  message: string
+  retryable: boolean
+}
+
+export type SurfaceCaptureResult =
+  | { ok: true; page: CapturedVisualPage }
+  | { ok: false; reason: SurfaceCaptureUnavailableReason }
+
+export type SurfaceCaptureProvider = {
+  capture: (request: SurfaceCaptureRequest) => Promise<SurfaceCaptureResult>
 }
 
 export type VisibleContextServiceOptions = {
-  captureProvider: VisibleContextCaptureProvider
-  requestContextRefresh?: () => void
-  refreshTimeoutMs?: number
-  onCaptureState?: (active: boolean) => void
+  surfaceCaptureProvider: SurfaceCaptureProvider
+  requestContextRefresh?: (windowId: string) => void
+  onCaptureState?: (windowId: string, active: boolean) => void
   now?: () => Date
   captureRetentionLimit?: number
   captureMaxAgeMs?: number
-}
-
-type SnapshotWaiter = {
-  windowId: string
-  revision: number
-  resolve: (snapshot: VisibleContextSnapshot) => void
 }
 
 export function visibleContextSnapshotPath(userDataDir: string): string {
@@ -81,10 +93,11 @@ export function visibleContextCaptureRequestsPath(userDataDir: string): string {
 
 export class VisibleContextService {
   private current: VisibleContextSnapshot | null = null
+  private readonly snapshots = new Map<string, VisibleContextSnapshot>()
+  private readonly snapshotSecret = randomBytes(32)
   private captureQueue: Promise<void> = Promise.resolve()
   private brokerWatcher: FSWatcher | null = null
   private readonly brokerRequests = new Set<string>()
-  private readonly snapshotWaiters = new Set<SnapshotWaiter>()
   private readonly now: () => Date
 
   constructor(
@@ -140,16 +153,20 @@ export class VisibleContextService {
 
   async publish(snapshot: VisibleContextSnapshot): Promise<VisibleContextSnapshot> {
     const parsed = visibleContextSnapshotSchema.parse(snapshot)
+    const currentForWindow = this.snapshots.get(parsed.windowId)
     if (
-      this.current &&
-      parsed.windowId === this.current.windowId &&
-      parsed.revision <= this.current.revision
+      currentForWindow &&
+      parsed.revision <= currentForWindow.revision
     ) {
-      return this.withFreshness(this.current)
+      return this.withFreshness(currentForWindow)
     }
-    const sanitized = this.withFreshness(sanitizeVisibleContextSnapshot(parsed))
+    const normalized = sanitizeVisibleContextSnapshot({ ...parsed, snapshotToken: undefined })
+    const sanitized = this.withFreshness({
+      ...normalized,
+      snapshotToken: this.createSnapshotToken(normalized)
+    })
+    this.snapshots.set(sanitized.windowId, sanitized)
     this.current = sanitized
-    this.resolveSnapshotWaiters(sanitized)
     await atomicWriteAppDataJson(
       this.userDataDir,
       VISIBLE_CONTEXT_STORE_SEGMENTS,
@@ -160,7 +177,18 @@ export class VisibleContextService {
   }
 
   async get(): Promise<VisibleContextSnapshot> {
-    if (!this.current) this.current = await this.readPersisted()
+    if (!this.current) {
+      this.current = await this.readPersisted()
+      this.snapshots.set(this.current.windowId, this.current)
+      if (this.current.snapshotToken) {
+        await atomicWriteAppDataJson(
+          this.userDataDir,
+          VISIBLE_CONTEXT_STORE_SEGMENTS,
+          this.current,
+          { trailingNewline: true }
+        )
+      }
+    }
     this.current = this.withFreshness(this.current)
     return this.current
   }
@@ -196,12 +224,20 @@ export class VisibleContextService {
   }
 
   private async captureValidated(request: VisibleContextCaptureRequest): Promise<VisibleContextCaptureResult> {
-    let snapshot = await this.get()
+    const snapshot = await this.snapshotForCapture(request)
+    if (!snapshot) {
+      return captureFailure(
+        request.requestId,
+        'stale_snapshot_token',
+        'The visible-context snapshot token no longer identifies the requested window revision. Call gui_visible_context again before capturing.',
+        true
+      )
+    }
     let target: VisualContextTarget | undefined
     let bounds: VisibleContextBounds | undefined
 
-    if (snapshot.freshness.stale) snapshot = await this.refreshSnapshot(snapshot)
     if (snapshot.freshness.stale) {
+      this.requestSnapshotRefresh(snapshot.windowId)
       return captureFailure(
         request.requestId,
         'stale_visible_context',
@@ -214,10 +250,16 @@ export class VisibleContextService {
       const component = snapshot.components.find((candidate) => candidate.id === request.componentId)
       target = component?.visualTargets?.find((candidate) => candidate.id === request.targetId)
       if (!component || !target) {
+        const available = snapshot.components.flatMap((entry) => (
+          entry.visualTargets?.map((candidate) => `${entry.id}/${candidate.id}`) ?? []
+        ))
+        const availableSummary = available.length > 12
+          ? `${available.slice(0, 12).join(', ')} (+${available.length - 12} more)`
+          : available.join(', ')
         return captureFailure(
           request.requestId,
           'visual_target_not_found',
-          `Visual target ${request.componentId}/${request.targetId} is not present in the latest snapshot.`,
+          `Visual target ${request.componentId}/${request.targetId} is not present in snapshot ${snapshot.revision}. Available targets: ${availableSummary || 'none'}.`,
           true
         )
       }
@@ -232,9 +274,24 @@ export class VisibleContextService {
       }
     }
 
-    this.setCaptureState(true)
+    this.setCaptureState(snapshot.windowId, true)
     try {
-      const captured = await this.options.captureProvider.capturePage(bounds)
+      const capture = await this.options.surfaceCaptureProvider.capture({
+        windowId: snapshot.windowId,
+        revision: snapshot.revision,
+        snapshotToken: request.snapshotToken,
+        activeThreadId: snapshot.activeThreadId ?? null,
+        ...(bounds ? { bounds } : {})
+      })
+      if (!capture.ok) {
+        return captureFailure(
+          request.requestId,
+          capture.reason.code,
+          capture.reason.message,
+          capture.reason.retryable
+        )
+      }
+      const captured = capture.page
       assertCapturedPage(captured)
       const png = await redactCapturedVisualPage(captured, snapshot)
       const captureName = `${request.requestId}.png`
@@ -261,6 +318,10 @@ export class VisibleContextService {
         scaleFactor: captured.scaleFactor,
         windowId: snapshot.windowId,
         revision: snapshot.revision,
+        metadata: {
+          activeThreadId: snapshot.activeThreadId ?? null,
+          route: snapshot.route ?? null
+        },
         ...(request.scope === 'target'
           ? {
               componentId: request.componentId,
@@ -278,8 +339,31 @@ export class VisibleContextService {
         true
       )
     } finally {
-      this.setCaptureState(false)
+      this.setCaptureState(snapshot.windowId, false)
     }
+  }
+
+  private async snapshotForCapture(
+    request: VisibleContextCaptureRequest
+  ): Promise<VisibleContextSnapshot | null> {
+    if (!this.current) await this.get()
+    const snapshot = this.snapshots.get(request.windowId)
+    if (!snapshot) return null
+    if (snapshot.revision !== request.revision || snapshot.snapshotToken !== request.snapshotToken) return null
+    if ((snapshot.activeThreadId ?? null) !== (request.activeThreadId ?? null)) return null
+    return this.withFreshness(snapshot)
+  }
+
+  private createSnapshotToken(snapshot: VisibleContextSnapshot): string {
+    const identity = JSON.stringify({
+      windowId: snapshot.windowId,
+      revision: snapshot.revision,
+      activeThreadId: snapshot.activeThreadId ?? null,
+      workspaceRoot: snapshot.workspaceRoot ?? null,
+      route: snapshot.route ?? null,
+      publishedAt: snapshot.publishedAt
+    })
+    return `vc_${createHmac('sha256', this.snapshotSecret).update(identity).digest('hex')}`
   }
 
   private enqueueCapture(
@@ -303,47 +387,17 @@ export class VisibleContextService {
     }
   }
 
-  private async refreshSnapshot(snapshot: VisibleContextSnapshot): Promise<VisibleContextSnapshot> {
-    if (!this.options.requestContextRefresh) return snapshot
-    const waiter = this.waitForNewerSnapshot(snapshot)
+  private requestSnapshotRefresh(windowId: string): void {
     try {
-      this.options.requestContextRefresh()
-      return this.withFreshness(await waiter)
+      this.options.requestContextRefresh?.(windowId)
     } catch {
-      return this.withFreshness(snapshot)
+      // A failed refresh request never authorizes capture from a different surface.
     }
   }
 
-  private waitForNewerSnapshot(snapshot: VisibleContextSnapshot): Promise<VisibleContextSnapshot> {
-    return new Promise((resolve, reject) => {
-      const waiter: SnapshotWaiter = {
-        windowId: snapshot.windowId,
-        revision: snapshot.revision,
-        resolve: (next) => {
-          clearTimeout(timeout)
-          this.snapshotWaiters.delete(waiter)
-          resolve(next)
-        }
-      }
-      const timeout = setTimeout(() => {
-        this.snapshotWaiters.delete(waiter)
-        reject(new Error('Timed out waiting for a fresh visible-context snapshot.'))
-      }, this.options.refreshTimeoutMs ?? 1_500)
-      this.snapshotWaiters.add(waiter)
-    })
-  }
-
-  private resolveSnapshotWaiters(snapshot: VisibleContextSnapshot): void {
-    for (const waiter of this.snapshotWaiters) {
-      if (snapshot.windowId !== waiter.windowId || snapshot.revision > waiter.revision) {
-        waiter.resolve(snapshot)
-      }
-    }
-  }
-
-  private setCaptureState(active: boolean): void {
+  private setCaptureState(windowId: string, active: boolean): void {
     try {
-      this.options.onCaptureState?.(active)
+      this.options.onCaptureState?.(windowId, active)
     } catch {
       // Capture-state UI is advisory and must never break visual capture.
     }
@@ -382,7 +436,13 @@ export class VisibleContextService {
     try {
       const raw = await readAppDataStoreText(this.userDataDir, VISIBLE_CONTEXT_STORE_SEGMENTS)
       const parsed = visibleContextSnapshotSchema.safeParse(JSON.parse(raw) as unknown)
-      if (parsed.success) return this.withFreshness(sanitizeVisibleContextSnapshot(parsed.data))
+      if (parsed.success) {
+        const normalized = sanitizeVisibleContextSnapshot({ ...parsed.data, snapshotToken: undefined })
+        return this.withFreshness({
+          ...normalized,
+          snapshotToken: this.createSnapshotToken(normalized)
+        })
+      }
     } catch {
       return emptyVisibleContextSnapshot()
     }
@@ -421,6 +481,10 @@ export class VisibleContextService {
           const result = await this.capture({
             requestId,
             scope: request.scope,
+            snapshotToken: request.snapshotToken,
+            windowId: request.windowId,
+            revision: request.revision,
+            ...(request.activeThreadId !== undefined ? { activeThreadId: request.activeThreadId } : {}),
             ...(request.scope === 'target'
               ? { componentId: request.componentId!, targetId: request.targetId! }
               : {})

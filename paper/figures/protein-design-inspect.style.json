@@ -1,0 +1,389 @@
+{
+  "profile": {
+    "version": 1,
+    "id": "visual-style-c8a25c4fd7e7",
+    "scope": "artifact",
+    "source": {
+      "type": "reference",
+      "path": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/protein-design-inspect.png",
+      "figureId": "protein-design-inspect"
+    },
+    "tokens": {
+      "canvas": {
+        "width": 900,
+        "height": 692,
+        "aspectRatio": 1.301,
+        "background": "#ffffff"
+      },
+      "palette": {
+        "colors": [
+          "#3090c0",
+          "#f07818",
+          "#d8a818",
+          "#9048a8",
+          "#30a860",
+          "#c03030",
+          "#186090",
+          "#60a8d8"
+        ],
+        "background": "#ffffff",
+        "ink": "#9040b0",
+        "accent": [
+          "#3090c0",
+          "#f07818",
+          "#d8a818",
+          "#30a860",
+          "#c03030",
+          "#186090"
+        ],
+        "colorMode": "multi-hue"
+      },
+      "typography": {
+        "fontFamily": "sans-serif",
+        "axisSize": 8,
+        "labelSize": 9,
+        "titleSize": 11,
+        "weight": "medium"
+      },
+      "strokes": {
+        "ink": "#9040b0",
+        "primaryWidth": 1.4,
+        "secondaryWidth": 0.59,
+        "lineCap": "unknown"
+      },
+      "spacing": {
+        "margin": {
+          "left": 0.007,
+          "right": 0.006,
+          "top": 0.009,
+          "bottom": 0.01
+        },
+        "gutter": "compact",
+        "density": "dense"
+      },
+      "shapes": {
+        "fillMode": "unknown",
+        "borderWidth": 1.4,
+        "shadow": "unknown"
+      },
+      "plots": {
+        "panelGrid": "1x1",
+        "panelLabels": "unknown",
+        "axes": {
+          "spine": "left-bottom",
+          "tickDirection": "out",
+          "grid": true,
+          "gridTone": "medium",
+          "gridColor": "#f0f0f0",
+          "gridAlpha": 0.72,
+          "gridLineWidth": 0.59
+        },
+        "marks": {
+          "lineWidth": 1.4,
+          "markerSize": 3.8,
+          "errorBarStyle": "unknown",
+          "density": "dense"
+        },
+        "annotations": {
+          "significance": "unknown",
+          "legend": "frameless"
+        },
+        "export": {
+          "formats": [
+            "pdf",
+            "svg",
+            "png"
+          ],
+          "dpi": 300,
+          "transparent": false
+        }
+      },
+      "generatedAssets": {
+        "visualTreatment": "unknown",
+        "backgroundTreatment": "solid",
+        "edgeTreatment": "unknown",
+        "detailLevel": "rich"
+      }
+    },
+    "semanticDescription": "multi-hue palette on #ffffff canvas; compact spacing with dense visual density; medium sans-serif typography; left-bottom axes, medium grid, dense marks",
+    "confidence": {
+      "overall": 0.88,
+      "palette": 0.9,
+      "spacing": 0.85,
+      "plots": 0.9,
+      "typography": 0.35,
+      "generatedAssets": 0
+    }
+  },
+  "diagnostics": {
+    "analyzedAt": "2026-07-15T11:23:16.257Z",
+    "sampledPixels": 155700,
+    "foregroundRatio": 0.2793,
+    "darkPixelRatio": 0.0805,
+    "chromaRatio": 0.2515,
+    "warnings": []
+  },
+  "referenceProfile": {
+    "kind": "chart",
+    "recommendedTemplate": "bar",
+    "confidence": 0.36,
+    "detectedTraits": {
+      "aspect": "balanced",
+      "background": "light",
+      "axes": "measured",
+      "grid": "medium",
+      "markDensity": "dense",
+      "colorMode": "multi-hue",
+      "panelGrid": "1x1",
+      "textSignals": []
+    },
+    "reasons": [
+      "Dense foreground marks on a light measured axis are closer to categorical or multi-panel chart styling.",
+      "Visible axes and grid indicate a measured chart rather than a freeform schematic."
+    ],
+    "risks": [
+      "Typography was inferred conservatively; exact font matching should be reviewed visually."
+    ]
+  },
+  "styleProfileMatches": [
+    {
+      "profileId": "cell-systems-statistical",
+      "profile": {
+        "id": "cell-systems-statistical",
+        "name": "Cell Systems Statistical",
+        "venue": "Cell-style generic",
+        "sourceLabel": "SciForge first-party statistical profile",
+        "description": "Dense but readable statistical profile for distributions, summary bars, and multi-panel biomedical comparisons.",
+        "recommendedTemplates": [
+          "box-violin",
+          "errorbar-bar",
+          "bar",
+          "multi-panel"
+        ],
+        "tags": [
+          "cell",
+          "systems",
+          "biology",
+          "statistical",
+          "distribution",
+          "multi-panel"
+        ],
+        "referenceProfile": {
+          "kind": "chart",
+          "recommendedTemplate": "box-violin",
+          "confidence": 0.62,
+          "detectedTraits": {
+            "aspect": "wide",
+            "background": "light",
+            "axes": "measured",
+            "grid": "none",
+            "markDensity": "dense",
+            "colorMode": "limited",
+            "panelGrid": "1x1",
+            "textSignals": [
+              "box-violin"
+            ]
+          },
+          "reasons": [
+            "Dense statistical comparisons benefit from individual points, compact typography, and minimal grid."
+          ],
+          "risks": [
+            "Statistical annotations and sample sizes still need explicit user-provided semantics."
+          ]
+        },
+        "cautions": [
+          "Does not infer significance testing or sample-size labels."
+        ]
+      },
+      "score": 0.826,
+      "reasons": [
+        "Profile supports the reference-recommended bar template.",
+        "Both are chart style references.",
+        "Background tone matches: light.",
+        "Axis treatment matches: measured.",
+        "Panel grid matches: 1x1.",
+        "Mark density matches: dense."
+      ],
+      "cautions": [
+        "Does not infer significance testing or sample-size labels.",
+        "Typography was inferred conservatively; exact font matching should be reviewed visually."
+      ]
+    },
+    {
+      "profileId": "nature-2021-alphafold-fig2",
+      "profile": {
+        "id": "nature-2021-alphafold-fig2",
+        "name": "Nature 2021 AlphaFold Fig. 2",
+        "venue": "Nature",
+        "sourceLabel": "AlphaFold style smoke reference",
+        "description": "Tall, light-background comparison chart with pale blue accents, visible grid, compact typography, and outside legend handling.",
+        "recommendedTemplates": [
+          "bar",
+          "errorbar-bar",
+          "line",
+          "box-violin"
+        ],
+        "tags": [
+          "nature",
+          "biology",
+          "benchmark",
+          "light",
+          "grid",
+          "bar",
+          "errorbar"
+        ],
+        "referenceProfile": {
+          "kind": "chart",
+          "recommendedTemplate": "bar",
+          "confidence": 0.36,
+          "detectedTraits": {
+            "aspect": "tall",
+            "background": "light",
+            "axes": "measured",
+            "grid": "light",
+            "markDensity": "balanced",
+            "colorMode": "multi-hue",
+            "panelGrid": "1x1",
+            "textSignals": []
+          },
+          "reasons": [
+            "Tall chart with visible grid is compatible with categorical comparison panels.",
+            "Visible axes and grid indicate a measured chart rather than a freeform schematic."
+          ],
+          "risks": [
+            "Typography was inferred conservatively; exact font matching should be reviewed visually."
+          ]
+        },
+        "cautions": [
+          "Use for measured charts, not freeform illustrations.",
+          "Legend and grid may need visual review for dense categorical panels."
+        ]
+      },
+      "score": 0.802,
+      "reasons": [
+        "Both reference and profile suggest bar.",
+        "Both are chart style references.",
+        "Background tone matches: light.",
+        "Axis treatment matches: measured.",
+        "Color mode matches: multi-hue.",
+        "Panel grid matches: 1x1."
+      ],
+      "cautions": [
+        "Use for measured charts, not freeform illustrations.",
+        "Legend and grid may need visual review for dense categorical panels.",
+        "Typography was inferred conservatively; exact font matching should be reviewed visually."
+      ]
+    },
+    {
+      "profileId": "nature-publication-light",
+      "profile": {
+        "id": "nature-publication-light",
+        "name": "Nature Publication Light",
+        "venue": "Nature-style generic",
+        "sourceLabel": "SciForge first-party publication profile",
+        "description": "General light-background publication chart style with colorblind-safe accents, compact typography, and restrained grid.",
+        "recommendedTemplates": [
+          "line",
+          "scatter",
+          "bar",
+          "errorbar-bar",
+          "box-violin",
+          "histogram-density"
+        ],
+        "tags": [
+          "nature",
+          "publication",
+          "generic",
+          "light",
+          "colorblind-safe"
+        ],
+        "referenceProfile": {
+          "kind": "chart",
+          "recommendedTemplate": "line",
+          "confidence": 0.54,
+          "detectedTraits": {
+            "aspect": "wide",
+            "background": "light",
+            "axes": "measured",
+            "grid": "light",
+            "markDensity": "balanced",
+            "colorMode": "limited",
+            "panelGrid": "1x1",
+            "textSignals": [
+              "line"
+            ]
+          },
+          "reasons": [
+            "Generic publication profile supports measured charts with compact text and restrained colors."
+          ],
+          "risks": [
+            "This is a generic profile; use paper-specific profiles when a reference figure is available."
+          ]
+        },
+        "cautions": [
+          "Prefer extracted StyleSpec for exact journal figure matching."
+        ]
+      },
+      "score": 0.784,
+      "reasons": [
+        "Profile supports the reference-recommended bar template.",
+        "Both are chart style references.",
+        "Background tone matches: light.",
+        "Axis treatment matches: measured.",
+        "Panel grid matches: 1x1.",
+        "Canvas/background color is close."
+      ],
+      "cautions": [
+        "Prefer extracted StyleSpec for exact journal figure matching.",
+        "Typography was inferred conservatively; exact font matching should be reviewed visually."
+      ]
+    }
+  ],
+  "recommendedStyleProfile": {
+    "id": "cell-systems-statistical",
+    "name": "Cell Systems Statistical",
+    "venue": "Cell-style generic",
+    "sourceLabel": "SciForge first-party statistical profile",
+    "description": "Dense but readable statistical profile for distributions, summary bars, and multi-panel biomedical comparisons.",
+    "recommendedTemplates": [
+      "box-violin",
+      "errorbar-bar",
+      "bar",
+      "multi-panel"
+    ],
+    "tags": [
+      "cell",
+      "systems",
+      "biology",
+      "statistical",
+      "distribution",
+      "multi-panel"
+    ],
+    "referenceProfile": {
+      "kind": "chart",
+      "recommendedTemplate": "box-violin",
+      "confidence": 0.62,
+      "detectedTraits": {
+        "aspect": "wide",
+        "background": "light",
+        "axes": "measured",
+        "grid": "none",
+        "markDensity": "dense",
+        "colorMode": "limited",
+        "panelGrid": "1x1",
+        "textSignals": [
+          "box-violin"
+        ]
+      },
+      "reasons": [
+        "Dense statistical comparisons benefit from individual points, compact typography, and minimal grid."
+      ],
+      "risks": [
+        "Statistical annotations and sample sizes still need explicit user-provided semantics."
+      ]
+    },
+    "cautions": [
+      "Does not infer significance testing or sample-size labels."
+    ]
+  }
+}

@@ -18,6 +18,7 @@ import {
   type BiologyRoomSummary
 } from '@shared/biology-room'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import type { CapabilityBoundBiologyRoomManifest } from '@shared/sciforge-api'
 import type { BioGymRunEvent } from '@shared/biogym'
 import {
   BiologyRoomShell,
@@ -95,7 +96,7 @@ export function BiologyRoomPanelBridge({
   onAddSelectionToChat,
   onClose
 }: BiologyRoomPanelBridgeProps): ReactElement {
-  const [room, setRoom] = useState<BiologyRoomManifest | null>(null)
+  const [room, setRoom] = useState<CapabilityBoundBiologyRoomManifest | null>(null)
   const [rooms, setRooms] = useState<BiologyRoomSummary[]>([])
   const [history, setHistory] = useState<BiologyRoomHistoryResult | null>(null)
   const [preview, setPreview] = useState<PreviewTransportState>(EMPTY_PREVIEW_TRANSPORT)
@@ -107,7 +108,7 @@ export function BiologyRoomPanelBridge({
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const initialTargetRef = useRef(initialTarget)
   const initialOpenCoordinatorRef = useRef<BiologyRoomInitialOpenCoordinator | null>(null)
-  const roomRef = useRef<BiologyRoomManifest | null>(null)
+  const roomRef = useRef<CapabilityBoundBiologyRoomManifest | null>(null)
   const mutationQueueRef = useRef<PendingBiologyRoomMutation[]>([])
   const mutationRunningRef = useRef(false)
   const followRunRef = useRef(true)
@@ -131,7 +132,7 @@ export function BiologyRoomPanelBridge({
   }, [workspaceRoot])
 
   const acceptRoom = useCallback((
-    manifest: BiologyRoomManifest,
+    manifest: CapabilityBoundBiologyRoomManifest,
     preferredActiveAssetId?: string
   ): void => {
     writeBrowserStorageItem(lastBiologyRoomStorageKey(workspaceRoot), manifest.roomId)
@@ -307,6 +308,47 @@ export function BiologyRoomPanelBridge({
       conflicted: Boolean(conflict)
     }))
   }, [conflict, room, workspaceRoot])
+
+  useEffect(() => {
+    const capabilities = window.sciforge?.capabilities
+    const biologyRoom = window.sciforge?.biologyRoom
+    if (!capabilities || !biologyRoom) return undefined
+
+    let active = true
+    let subscriptionId: string | null = null
+    const offEvent = capabilities.onEvent((payload) => {
+      if (!active || payload.subscriptionId !== subscriptionId) return
+      if (payload.event.resourceKind !== 'biology-room') return
+      const current = roomRef.current
+      if (!current) return
+      if (current.capability?.resourceRef && payload.event.resourceRef !== current.capability.resourceRef) return
+      void biologyRoom.load({ workspaceRoot, roomId: current.roomId })
+        .then((manifest) => {
+          if (active && roomRef.current?.roomId === manifest.roomId) acceptRoom(manifest)
+        })
+        .catch((cause) => {
+          if (active) setError(formatBiologyRoomError(cause))
+        })
+    })
+
+    void capabilities.subscribe(workspaceRoot)
+      .then((subscription) => {
+        if (!active) {
+          void capabilities.unsubscribe(subscription.subscriptionId)
+          return
+        }
+        subscriptionId = subscription.subscriptionId
+      })
+      .catch((cause) => {
+        if (active) setError(formatBiologyRoomError(cause))
+      })
+
+    return () => {
+      active = false
+      offEvent()
+      if (subscriptionId) void capabilities.unsubscribe(subscriptionId)
+    }
+  }, [acceptRoom, workspaceRoot])
 
   const drainMutationQueue = useCallback(async (): Promise<void> => {
     if (mutationRunningRef.current) return

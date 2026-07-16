@@ -103,6 +103,17 @@ import type {
   BiologyRoomSummary,
   BiologyRoomTarget
 } from './biology-room'
+import type {
+  CapabilityDescriptor,
+  CapabilityDiscoveryQuery,
+  CapabilityEventQuery,
+  CapabilityInvocationRequest,
+  CapabilityInvocationResult,
+  CapabilityObservation,
+  CapabilityObserveRequest,
+  CapabilityResourceBinding as BrokerCapabilityResourceBinding,
+  CapabilityResourceChangeEvent
+} from './capability-broker'
 import type { BioGymDoctorResult, BioGymRunEvent } from './biogym'
 import type {
   WriteInlineCompletionDebugEntry,
@@ -172,6 +183,7 @@ import type {
 import type {
   VisibleContextCapturePreviewRequest,
   VisibleContextCapturePreviewResult,
+  VisibleContextPublishInput,
   VisibleContextSnapshot
 } from './visible-context'
 import type {
@@ -909,6 +921,7 @@ export type WorkspacePreviewOpenInput = {
   anchor?: WorkspacePreviewAnchor
   integrity?: WorkspacePreviewIntegrityExpectation
 }
+export type CapabilityResourceBinding = BrokerCapabilityResourceBinding
 export type WorkspacePreviewOpenResult =
   | {
       ok: true
@@ -917,10 +930,11 @@ export type WorkspacePreviewOpenResult =
       route: 'matched' | 'fallback'
       file: WorkspacePreviewFileState
       integrity?: WorkspacePreviewIntegrityVerification
+      capability?: CapabilityResourceBinding
     }
   | { ok: false; message: string }
 export type WorkspacePreviewObserveResult =
-  | { ok: true; observation: WorkspaceObservation }
+  | { ok: true; observation: WorkspaceObservation; capability?: CapabilityResourceBinding }
   | { ok: false; message: string }
 export type WorkspacePreviewReadRangeResult =
   | {
@@ -970,6 +984,7 @@ export type WorkspacePreviewApplyEditResult =
         effect: 'file-write' | 'session-update' | 'sidecar-write'
       }
       diffSummary?: WorkspacePreviewEditDiffSummary
+      capability?: CapabilityResourceBinding
     }
   | { ok: false; message: string }
 export type WorkspacePreviewExportResult =
@@ -989,8 +1004,18 @@ export type WorkspacePreviewExportResult =
     }
   | { ok: false; message: string }
 export type WorkspacePreviewInvokeActionResult =
-  | WorkspacePreviewPluginActionResult
+  | (WorkspacePreviewPluginActionResult & { capability?: CapabilityResourceBinding })
   | { ok: false; message: string }
+
+export type CapabilityBoundBiologyRoomManifest = BiologyRoomManifest & {
+  capability?: CapabilityResourceBinding
+}
+export type CapabilityBoundBiologyRoomOpenOrCreateResult = Omit<BiologyRoomOpenOrCreateResult, 'manifest'> & {
+  manifest: CapabilityBoundBiologyRoomManifest
+}
+export type CapabilityBoundBiologyRoomApplyResult = Omit<BiologyRoomApplyResult, 'manifest'> & {
+  manifest: CapabilityBoundBiologyRoomManifest
+}
 
 export type SciForgeApi = {
   platform: string
@@ -1162,6 +1187,31 @@ export type SciForgeApi = {
   watchWorkspaceFile: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
   unwatchWorkspaceFile: (watchId: string) => Promise<boolean>
   onWorkspaceFileChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
+  capabilities: {
+    discover: (input?: {
+      workspaceId?: string
+      query?: CapabilityDiscoveryQuery
+    }) => Promise<CapabilityDescriptor[]>
+    observe: (input: {
+      workspaceId?: string
+      request: CapabilityObserveRequest
+    }) => Promise<CapabilityObservation>
+    invoke: (input: {
+      workspaceId?: string
+      request: CapabilityInvocationRequest
+      approval?: { mode: 'confirmation' }
+    }) => Promise<CapabilityInvocationResult>
+    events: (input?: {
+      workspaceId?: string
+      query?: CapabilityEventQuery
+    }) => Promise<CapabilityResourceChangeEvent[]>
+    subscribe: (workspaceId?: string) => Promise<{ subscriptionId: string }>
+    unsubscribe: (subscriptionId: string) => Promise<boolean>
+    onEvent: (handler: (payload: {
+      subscriptionId: string
+      event: CapabilityResourceChangeEvent
+    }) => void) => () => void
+  }
   workspacePreview: {
     listPlugins: () => Promise<WorkspacePreviewPluginManifest[]>
     open: (input: WorkspacePreviewOpenInput) => Promise<WorkspacePreviewOpenResult>
@@ -1200,13 +1250,13 @@ export type SciForgeApi = {
   /** Optional while connecting to an older desktop or browser-only bridge. */
   biologyRoom?: {
     pickFile: (workspaceRoot: string) => Promise<WorkspacePickResult>
-    create: (input: BiologyRoomCreateInput) => Promise<BiologyRoomManifest>
-    openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<BiologyRoomOpenOrCreateResult>
-    load: (input: BiologyRoomTarget) => Promise<BiologyRoomManifest>
+    create: (input: BiologyRoomCreateInput) => Promise<CapabilityBoundBiologyRoomManifest>
+    openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<CapabilityBoundBiologyRoomOpenOrCreateResult>
+    load: (input: BiologyRoomTarget) => Promise<CapabilityBoundBiologyRoomManifest>
     list: (input: BiologyRoomListInput) => Promise<BiologyRoomSummary[]>
     observe: (input: BiologyRoomObserveInput) => Promise<BiologyRoomObserveResult>
-    apply: (input: BiologyRoomApplyInput) => Promise<BiologyRoomApplyResult>
-    refresh: (input: BiologyRoomRefreshInput) => Promise<BiologyRoomApplyResult>
+    apply: (input: BiologyRoomApplyInput) => Promise<CapabilityBoundBiologyRoomApplyResult>
+    refresh: (input: BiologyRoomRefreshInput) => Promise<CapabilityBoundBiologyRoomApplyResult>
     history: (input: BiologyRoomHistoryInput) => Promise<BiologyRoomHistoryResult>
   }
   /** Optional until the BioGym service PR is installed. */
@@ -1247,7 +1297,7 @@ export type SciForgeApi = {
     archive: (input: ResearchCardArchiveInput) => Promise<ResearchCard>
   }
   visibleContext: {
-    publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
+    publish: (snapshot: VisibleContextPublishInput) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
     readCapturePreview: (
       request: VisibleContextCapturePreviewRequest

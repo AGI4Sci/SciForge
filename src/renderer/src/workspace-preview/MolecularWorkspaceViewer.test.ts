@@ -390,19 +390,19 @@ describe('MolecularWorkspaceViewer', () => {
     const identity = molecularWorkbenchSourceIdentity({
       observationPath: '/workspace/lab/protein.pdb',
       asset,
-      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      sourceUrl: 'sciforge-resource://asset/session-molecular',
       rangeReaderAvailable: true
     })
     const sameSource = molecularWorkbenchSourceIdentity({
       observationPath: '/workspace/lab/protein.pdb',
       asset: { ...asset },
-      sourceUrl: 'sciforge-preview://asset/session-molecular',
+      sourceUrl: 'sciforge-resource://asset/session-molecular',
       rangeReaderAvailable: true
     })
     const nextSession = molecularWorkbenchSourceIdentity({
       observationPath: '/workspace/lab/protein.pdb',
       asset: { ...asset, sessionId: 'session-next' },
-      sourceUrl: 'sciforge-preview://asset/session-next',
+      sourceUrl: 'sciforge-resource://asset/session-next',
       rangeReaderAvailable: true
     })
 

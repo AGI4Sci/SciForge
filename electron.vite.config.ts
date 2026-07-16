@@ -29,7 +29,10 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // Capability facades validate broker payloads inside the sandboxed preload.
+    // Sandbox preloads cannot resolve arbitrary external packages at runtime,
+    // so bundle the contract validator instead of emitting require("zod").
+    plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
       rollupOptions: {
         output: {

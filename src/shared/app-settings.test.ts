@@ -535,6 +535,15 @@ describe('app behavior settings', () => {
   })
 })
 
+describe('Evidence DAG settings', () => {
+  it('defaults to disabled and only enables explicitly', () => {
+    const raw = { ...settings(), evidenceDag: undefined } as unknown as AppSettingsV1
+    expect(normalizeAppSettings(raw).evidenceDag).toEqual({ enabled: false })
+    expect(normalizeAppSettings({ ...settings(), evidenceDag: { enabled: true } }).evidenceDag)
+      .toEqual({ enabled: true })
+  })
+})
+
 describe('keyboard shortcut settings', () => {
   it('defaults shortcut overrides to empty', () => {
     const raw = {

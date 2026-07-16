@@ -628,6 +628,7 @@ export type ScientificPlottingRenderRequest = {
   visualPlan: VisualProductionHandoff
   template: ScientificPlottingTemplate
   data: unknown
+  reviewTask?: string
   labels?: ScientificPlottingLabels
   figureId?: string
   styleSpec?: FigureStyleSpec
@@ -666,6 +667,8 @@ export type ScientificPlottingCompositeRequest = {
   workspaceRoot: string
   visualPlan: VisualProductionHandoff
   layers: ScientificPlottingCompositeLayer[]
+  reviewTask: string
+  reviewReferencePath?: string
   canvas?: {
     width: number
     height: number
@@ -948,6 +951,7 @@ export type ScientificPlottingAttempt = {
     multiPanelCount?: number
     schematicNodeCount?: number
     schematicEdgeCount?: number
+    schematicPrimitiveCount?: number
     schematicExplicitPositions?: boolean
     typography?: {
       titleSize: number

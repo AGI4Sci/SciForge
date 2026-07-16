@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { BrowserStorageLike } from '../../lib/browser-storage'
 import {
   COMPOSER_INPUT_MEMORY_STORAGE_KEY,
   composerDraftContextKey,
+  createComposerDraftPersistence,
   mergeComposerInputHistory,
   navigateComposerHistory,
   readComposerDraft,
@@ -21,6 +22,10 @@ function memoryStorage(): BrowserStorageLike {
 }
 
 describe('composer input memory', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('stores independent drafts for threads and restores exact whitespace', () => {
     const storage = memoryStorage()
     const first = composerDraftContextKey({ threadId: 'thread-1', workspaceRoot: '/tmp/a' })
@@ -43,6 +48,64 @@ describe('composer input memory', () => {
     storage.setItem(COMPOSER_INPUT_MEMORY_STORAGE_KEY, '{broken json')
     expect(readComposerDraft('thread:one', storage)).toBe('')
     expect(readComposerInputHistory(storage)).toEqual([])
+  })
+
+  it('does not rewrite storage when a draft value is unchanged', () => {
+    const storage = memoryStorage()
+    const setItem = vi.spyOn(storage, 'setItem')
+
+    writeComposerDraft('thread:one', 'unchanged', storage, 1)
+    writeComposerDraft('thread:one', 'unchanged', storage, 2)
+
+    expect(setItem).toHaveBeenCalledTimes(1)
+  })
+
+  it('reuses parsed memory while the persisted value is unchanged', () => {
+    const storage = memoryStorage()
+    storage.setItem(COMPOSER_INPUT_MEMORY_STORAGE_KEY, JSON.stringify({
+      version: 1,
+      drafts: { 'thread:one': { text: 'cached', updatedAt: 1 } },
+      history: ['previous']
+    }))
+    const parse = vi.spyOn(JSON, 'parse')
+
+    expect(readComposerDraft('thread:one', storage)).toBe('cached')
+    expect(readComposerInputHistory(storage)).toEqual(['previous'])
+
+    expect(parse).toHaveBeenCalledTimes(1)
+    parse.mockRestore()
+  })
+
+  it('debounces rapid draft updates into one storage write', () => {
+    vi.useFakeTimers()
+    const storage = memoryStorage()
+    const setItem = vi.spyOn(storage, 'setItem')
+    const persistence = createComposerDraftPersistence({ storage, delayMs: 400, now: () => 7 })
+
+    persistence.schedule('thread:one', 'a')
+    persistence.schedule('thread:one', 'ab')
+    persistence.schedule('thread:one', 'abc')
+
+    vi.advanceTimersByTime(399)
+    expect(setItem).not.toHaveBeenCalled()
+    vi.advanceTimersByTime(1)
+    expect(setItem).toHaveBeenCalledTimes(1)
+    expect(readComposerDraft('thread:one', storage)).toBe('abc')
+  })
+
+  it('flushes a pending draft immediately for blur, switching, send, or unmount boundaries', () => {
+    vi.useFakeTimers()
+    const storage = memoryStorage()
+    const setItem = vi.spyOn(storage, 'setItem')
+    const persistence = createComposerDraftPersistence({ storage, delayMs: 400 })
+
+    persistence.schedule('thread:one', 'latest text')
+    expect(persistence.flush()).toBe(true)
+
+    expect(setItem).toHaveBeenCalledTimes(1)
+    expect(readComposerDraft('thread:one', storage)).toBe('latest text')
+    vi.runAllTimers()
+    expect(setItem).toHaveBeenCalledTimes(1)
   })
 
   it('keeps recent unique sent inputs in chronological order', () => {

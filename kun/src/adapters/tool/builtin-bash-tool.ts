@@ -17,6 +17,7 @@ import {
   workspaceRoot
 } from './builtin-tool-utils.js'
 import {
+  HYGIENE_PLACEHOLDER_ERROR_CODE,
   OMITTED_BASH_COMMAND,
   OMITTED_BASH_COMMAND_OUTPUT,
   isHygienePlaceholderText
@@ -70,6 +71,7 @@ type BashPayload = {
   partial?: boolean
   stop_sent?: boolean
   error?: string
+  error_code?: string
 }
 
 const bashSessions = new Map<string, BashSession>()
@@ -598,15 +600,21 @@ export function createBashLocalTool(options: BashLocalToolOptions = {}): LocalTo
       if (jsonCommandError) return { output: { error: jsonCommandError }, isError: true }
       const cwd = workspaceRoot(context.workspace)
       if (isHygienePlaceholderText(command)) {
+        const payload = resultPayload({
+          command: OMITTED_BASH_COMMAND,
+          cwd,
+          shell: shellRuntime.name,
+          exitCode: null,
+          output: OMITTED_BASH_COMMAND_OUTPUT,
+          truncated: emptyTextSlice()
+        })
         return {
-          output: resultPayload({
-            command: OMITTED_BASH_COMMAND,
-            cwd,
-            shell: shellRuntime.name,
-            exitCode: 0,
-            output: OMITTED_BASH_COMMAND_OUTPUT,
-            truncated: emptyTextSlice()
-          })
+          output: {
+            ...payload,
+            error: OMITTED_BASH_COMMAND_OUTPUT,
+            error_code: HYGIENE_PLACEHOLDER_ERROR_CODE
+          },
+          isError: true
         }
       }
       const timeout = normalizePositiveInteger(

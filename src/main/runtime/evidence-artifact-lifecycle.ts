@@ -133,6 +133,7 @@ export class EvidenceArtifactLifecycle {
       includeArchived: true,
       includeSide: true
     })
+    if (this.stopped) return
     const grouped = new Map<string, AgentRuntimeThread[]>()
     for (const thread of threads) {
       const workspace = thread.workspace?.trim()

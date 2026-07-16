@@ -38,6 +38,7 @@ describe('pdf annotation sidecar schema', () => {
       mergeKey: 'threadId',
       conflictResolution: 'updatedAt'
     })
+    expect(sidecar.deletedThreads).toEqual([])
   })
 
   it('migrates sparse legacy-shaped JSON into a valid v1 sidecar', () => {
@@ -111,6 +112,52 @@ describe('pdf annotation sidecar schema', () => {
     expect(stable.annotations.map((annotation) => annotation.id)).toEqual(['ann-a', 'ann-b'])
     expect(stable.threads.map((thread) => thread.id)).toEqual(['thread-a', 'thread-b'])
     expect(stable.threads[1].anchorIds).toEqual(['a', 'b'])
+  })
+
+  it('keeps deleted thread content removed when a stale snapshot contains it', () => {
+    const now = '2026-06-22T00:00:03.000Z'
+    const sidecar: PdfAnnotationSidecar = {
+      ...createEmptyPdfAnnotationSidecar(fingerprint),
+      anchors: [
+        createPdfAnchor({
+          id: 'anchor-deleted',
+          rects: [{ page: 1, x: 0, y: 0, width: 0.1, height: 0.1 }],
+          pdfFingerprint: fingerprint
+        })
+      ],
+      annotations: [{
+        id: 'annotation-deleted',
+        threadId: 'thread-deleted',
+        anchorId: 'anchor-deleted',
+        kind: 'comment',
+        body: 'This content must not return.',
+        createdAt: now,
+        updatedAt: now
+      }],
+      threads: [{
+        id: 'thread-deleted',
+        kind: 'comment',
+        anchorIds: ['anchor-deleted'],
+        annotationIds: ['annotation-deleted'],
+        status: 'open',
+        createdAt: now,
+        updatedAt: now
+      }],
+      deletedThreads: [{
+        threadId: 'thread-deleted',
+        annotationIds: ['annotation-deleted'],
+        anchorIds: ['anchor-deleted'],
+        deletedAt: '2026-06-22T00:00:04.000Z',
+        deletedVersion: 2
+      }]
+    }
+
+    const stable = stablePdfAnnotationSidecar(sidecar)
+
+    expect(stable.threads).toEqual([])
+    expect(stable.annotations).toEqual([])
+    expect(stable.anchors).toEqual([])
+    expect(stable.deletedThreads).toHaveLength(1)
   })
 })
 

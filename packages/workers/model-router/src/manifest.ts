@@ -30,6 +30,7 @@ type ToolWorkerManifest = {
 export const MODEL_ROUTER_WORKER_VERSION = '0.1.0';
 export const MODEL_ROUTER_WORKER_TRANSPORT = 'http';
 export const MODEL_ROUTER_WORKER_CAPABILITIES = [
+  'model_router_capabilities',
   'model_router_responses',
   'model_router_messages',
   'model_router_image_generations',
@@ -81,6 +82,16 @@ export const modelRouterManifest: ToolWorkerManifest = {
   description: 'Provider-compatible SciForge /v1/responses, /v1/messages, /v1/images/generations, and /v1/images/edits facade for text reasoning, image generation/editing, and refs-first visual/scientific translation.',
   capabilities: [...MODEL_ROUTER_WORKER_CAPABILITIES],
   providers: [
+    {
+      providerId: 'sciforge.model-router.capabilities',
+      capabilityId: 'model_router_capabilities',
+      transport: 'http',
+      invokePath: '/v1/capabilities',
+      healthPath: '/healthz',
+      manifestPath: '/manifest',
+      permissions: ['network'],
+      status: 'available',
+    },
     {
       providerId: 'sciforge.model-router.responses',
       capabilityId: 'model_router_responses',

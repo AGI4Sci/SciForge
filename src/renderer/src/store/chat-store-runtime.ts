@@ -14,6 +14,7 @@ import type {
 } from '../agent/types'
 import { getProvider } from '../agent/registry'
 import {
+  AGENT_RUNTIME_DELTA_HANDLES_SEQ,
   AGENT_RUNTIME_EVENT_REPLAY_FILTER,
   type AgentRuntimeEventReplayFilter
 } from '../agent/agent-runtime-event-dispatcher'
@@ -895,8 +896,10 @@ export function buildThreadEventSink(
 
   const sink: ThreadEventSink & {
     [AGENT_RUNTIME_EVENT_REPLAY_FILTER]: AgentRuntimeEventReplayFilter
+    [AGENT_RUNTIME_DELTA_HANDLES_SEQ]: true
   } = {
     [AGENT_RUNTIME_EVENT_REPLAY_FILTER]: shouldApplyRuntimeEvent,
+    [AGENT_RUNTIME_DELTA_HANDLES_SEQ]: true,
     onSeq: (seq) => {
       if (!isCurrentStream()) return
       performanceMonitor.count('runtime.seq')

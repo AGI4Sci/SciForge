@@ -180,7 +180,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
       summary: 'gui_visual_capture',
       detail: JSON.stringify({
         ok: true,
-        inspection: { provider: 'model-router-vision', attestation: ATTESTATION }
+        evidence: { provider: 'model-router', attestation: ATTESTATION }
       })
     })
 

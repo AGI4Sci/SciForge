@@ -46,6 +46,7 @@ import {
   normalizeRemoteExecutorSettings,
   normalizeWriteSettings,
   normalizeImageGenerationSettings,
+  normalizeEvidenceDagSettings,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -108,6 +109,10 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     agentCapabilities: mergeAgentCapabilitySettings(safeCurrent.agentCapabilities, agentCapabilitiesPatch),
     computerUse: mergeComputerUseSettings(safeCurrent.computerUse, computerUsePatch),
     runtimeGuards: mergeRuntimeGuardSettings(safeCurrent.runtimeGuards, runtimeGuardsPatch),
+    evidenceDag: normalizeEvidenceDagSettings({
+      ...safeCurrent.evidenceDag,
+      ...(patch.evidenceDag ?? {})
+    }),
     imageGeneration: mergeImageGenerationSettings(safeCurrent.imageGeneration, imageGenerationPatch),
     log: {
       ...safeCurrent.log,
@@ -165,6 +170,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     ),
     computerUse: mergeComputerUseSettings(defaultComputerUseSettings(), normalizeComputerUseSettings(raw.computerUse)),
     runtimeGuards: mergeRuntimeGuardSettings(defaultRuntimeGuardSettings(), raw.runtimeGuards),
+    evidenceDag: normalizeEvidenceDagSettings(raw.evidenceDag),
     imageGeneration: mergeImageGenerationSettings(
       defaultImageGenerationSettings(),
       normalizeImageGenerationSettings(raw.imageGeneration)

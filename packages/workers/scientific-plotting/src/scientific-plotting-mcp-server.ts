@@ -1,6 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
+import { normalizeVisualScene, type VisualScene } from '@sciforge/image-generation/visual-scene'
 import {
   SCIENTIFIC_PLOTTING_TEMPLATES,
   type ScientificPlottingCompositeRequest,
@@ -39,14 +40,26 @@ const CONTROLLED_WRITE_ANNOTATIONS = {
   openWorldHint: false
 } as const
 
+const visualSceneSchema = z.custom<VisualScene>((value) => {
+  try {
+    normalizeVisualScene(value)
+    return true
+  } catch {
+    return false
+  }
+}, 'Invalid normalized VisualScene.')
+
 const controlledPlottingPlanSchema = z.object({
   planId: z.string().trim().min(1).max(160),
   route: z.enum(['code', 'hybrid']),
   routeLocked: z.literal(true),
   rationale: z.string().trim().min(1).max(2000),
   sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64),
-  reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
-  lockedElements: z.array(z.string().trim().min(1).max(1000)).min(1).max(64),
+  reproducibleInputs: z.array(z.string().trim().min(1).max(1000)).max(64),
+  inlineSpecification: z.string().trim().min(1).max(16000).optional(),
+  structuredData: z.unknown().optional(),
+  scene: visualSceneSchema.optional(),
+  lockedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
   modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(64),
   contextStatus: z.enum(['ready', 'budget_exhausted']),
   contextStopReason: z.enum(['sufficient', 'policy_closed', 'round_limit', 'cost_limit', 'token_limit', 'elapsed_time_limit', 'no_information_gain']),
@@ -225,11 +238,14 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
       }
       const mapping = await mapScientificPlottingData(request)
+      const nextCall = mapping.ok
+        ? { tool: 'scientific_plotting_render', arguments: mapping.renderRequest }
+        : undefined
       return textResult(
         mapping.ok
-          ? jsonSummary(`Mapped data to template: ${mapping.selectedTemplate}.`, mapping)
+          ? jsonSummary(`Mapped data to template: ${mapping.selectedTemplate}.`, { mapping, nextCall })
           : jsonSummary(`Scientific plotting data mapping needs input: ${mapping.status}.`, mapping),
-        { mapping }
+        { mapping, ...(nextCall ? { nextCall } : {}) }
       )
     } catch (error) {
       return errorResult(`Failed to map data for scientific plotting: ${error instanceof Error ? error.message : String(error)}`)
@@ -244,6 +260,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       visualPlan: controlledPlottingPlanSchema,
       template: templateSchema,
       data: z.unknown(),
+      reviewTask: z.string().trim().min(1).max(16000).optional(),
       labels: z.object({
         title: z.string().trim().max(300).optional(),
         x: z.string().trim().max(200).optional(),
@@ -275,6 +292,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         visualPlan: input.visualPlan,
         template: input.template,
         data: input.data,
+        ...(input.reviewTask ? { reviewTask: input.reviewTask } : {}),
         ...(input.labels ? { labels: input.labels } : {}),
         ...(input.figureId ? { figureId: input.figureId } : {}),
         ...(input.styleSpec ? { styleSpec: input.styleSpec as never } : {}),
@@ -289,11 +307,34 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         ...(input.autoRepair ? { autoRepair: input.autoRepair } : {})
       }
       const result = await renderScientificPlot(request)
+      const reviewTask = input.reviewTask || input.labels?.title || `Review the ${input.template} artifact against its locked visual plan.`
+      const nextCall = result.ok
+        ? request.visualPlan.route === 'hybrid'
+          ? {
+              tool: 'image_generation_prepare',
+              arguments: {
+                workspaceRoot: request.workspaceRoot,
+                task: reviewTask,
+                referencePath: result.outputPath,
+                visualPlan: request.visualPlan
+              }
+            }
+          : {
+              tool: 'visual_artifact_review',
+              arguments: {
+                workspaceRoot: request.workspaceRoot,
+                outputPath: result.outputPath,
+                manifestPath: result.manifestPath,
+                task: reviewTask,
+                ...(request.reviewReferencePath ? { referencePath: request.reviewReferencePath } : {})
+              }
+            }
+        : undefined
       return textResult(
         result.ok
-          ? jsonSummary(`Rendered scientific plot: ${result.status}.`, result)
+          ? jsonSummary(`Rendered scientific plot: ${result.status}.`, { result, nextCall })
           : jsonSummary(`Scientific plot render failed: ${result.status}.`, result),
-        { result }
+        { result, ...(nextCall ? { nextCall } : {}) }
       )
     } catch (error) {
       return errorResult(`Failed to render scientific plot: ${error instanceof Error ? error.message : String(error)}`)
@@ -308,6 +349,8 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       visualPlan: controlledPlottingPlanSchema.refine((plan) => plan.route === 'hybrid', {
         message: 'scientific_plotting_composite requires route=hybrid.'
       }),
+      reviewTask: z.string().trim().min(1).max(16000),
+      reviewReferencePath: z.string().trim().min(1).max(4096).optional(),
       layers: z.array(z.object({
         path: z.string().trim().min(1).max(4096),
         owner: z.enum(['model', 'code']),
@@ -337,6 +380,8 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       const request: ScientificPlottingCompositeRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         visualPlan: input.visualPlan,
+        reviewTask: input.reviewTask,
+        ...(input.reviewReferencePath ? { reviewReferencePath: input.reviewReferencePath } : {}),
         layers: input.layers,
         ...(input.canvas ? { canvas: input.canvas } : {}),
         ...(input.figureId ? { figureId: input.figureId } : {}),
@@ -345,11 +390,23 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
         ...(input.threadId ? { threadId: input.threadId } : {})
       }
       const result = await compositeScientificPlotLayers(request)
+      const nextCall = result.ok
+        ? {
+            tool: 'visual_artifact_review',
+            arguments: {
+              workspaceRoot: request.workspaceRoot,
+              outputPath: result.outputPath,
+              manifestPath: result.manifestPath,
+              task: request.reviewTask,
+              ...(request.reviewReferencePath ? { referencePath: request.reviewReferencePath } : {})
+            }
+          }
+        : undefined
       return textResult(
         result.ok
-          ? jsonSummary('Composed hybrid visual layers.', result)
+          ? jsonSummary('Composed hybrid visual layers.', { result, nextCall })
           : jsonSummary(`Hybrid visual composition failed: ${result.status}.`, result),
-        { result }
+        { result, ...(nextCall ? { nextCall } : {}) }
       )
     } catch (error) {
       return errorResult(`Failed to composite hybrid visual layers: ${error instanceof Error ? error.message : String(error)}`)

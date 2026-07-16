@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import path from 'node:path'
 import {
   getActiveAgentRuntime,
+  isEvidenceDagEnabled,
   type AppSettingsV1
 } from '../../../shared/app-settings'
 import { resolveRuntimeModelRouterSettings } from '../../../shared/app-settings-model-router'
@@ -126,6 +127,8 @@ const THREAD_TURN_QUEUE_TIMEOUT_MS = 10 * 60_000
 const RUNTIME_HANDOFF_TRANSCRIPT_MAX_BYTES = 32_000
 const RUNTIME_HANDOFF_TRANSCRIPT_ITEM_MAX_BYTES = 4_000
 const RUNTIME_HANDOFF_TRANSCRIPT_TOOL_LIMIT = 8
+const AUXILIARY_READ_CACHE_MS = 1_000
+const AUXILIARY_READ_CACHE_MAX_ENTRIES = 128
 const AGENT_RUNTIME_IDS = ['sciforge', 'codex', 'claude'] as const satisfies readonly AgentRuntimeId[]
 
 type ActiveThreadTurn = {
@@ -143,6 +146,9 @@ type ThreadTurnActivity = {
 export class AgentRuntimeHost {
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
   private readonly turnQueues = new Map<string, Promise<unknown>>()
+  private readonly threadReadsInFlight = new Map<string, Promise<AgentRuntimeThreadDetail>>()
+  private readonly auxiliaryReadsInFlight = new Map<string, Promise<unknown>>()
+  private readonly auxiliaryReadCache = new Map<string, { expiresAt: number; value: unknown }>()
   private readonly activeThreadTurns = new Map<string, ActiveThreadTurn>()
   private readonly terminalWaiters = new Map<string, Set<() => void>>()
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
@@ -197,7 +203,16 @@ export class AgentRuntimeHost {
 
   async readThread(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadDetail> {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-    return this.withSharedGoalOnThread(adapter.id, await adapter.readThread(context, input))
+    const key = `${adapter.id}:${input.threadId}`
+    const existing = this.threadReadsInFlight.get(key)
+    if (existing) return existing
+    const pending = adapter.readThread(context, input)
+      .then((detail) => this.withSharedGoalOnThread(adapter.id, detail))
+      .finally(() => {
+        if (this.threadReadsInFlight.get(key) === pending) this.threadReadsInFlight.delete(key)
+      })
+    this.threadReadsInFlight.set(key, pending)
+    return pending
   }
 
   async readThreadSidebarProbe(input: AgentRuntimeThreadReadInput): Promise<AgentRuntimeThreadSidebarProbe> {
@@ -437,6 +452,13 @@ export class AgentRuntimeHost {
 
   async auxiliary(input: AgentRuntimeAuxiliaryInput): Promise<unknown> {
     assertAuxiliaryRuntimeId(input)
+    if (input.operation === 'listThreadChildren') {
+      return this.coalescedAuxiliaryRead(input)
+    }
+    return this.dispatchAuxiliary(input)
+  }
+
+  private async dispatchAuxiliary(input: AgentRuntimeAuxiliaryInput): Promise<unknown> {
     const { adapter, context } = await this.resolveOptionalActiveRuntime(input.runtimeId)
     if (isThreadGoalAuxiliaryOperation(input.operation)) {
       return this.handleThreadGoalAuxiliary(adapter, context, input)
@@ -445,6 +467,48 @@ export class AgentRuntimeHost {
     if (hostResult.handled) return hostResult.value
     if (!adapter.auxiliary) throw unsupported(adapter.id, input.operation)
     return adapter.auxiliary(context, input)
+  }
+
+  private async coalescedAuxiliaryRead(input: AgentRuntimeAuxiliaryInput): Promise<unknown> {
+    const key = JSON.stringify([input.runtimeId, input.operation, input.payload ?? null])
+    const now = Date.now()
+    const cached = this.auxiliaryReadCache.get(key)
+    if (cached && cached.expiresAt > now) return cached.value
+    if (cached) this.auxiliaryReadCache.delete(key)
+
+    const existing = this.auxiliaryReadsInFlight.get(key)
+    if (existing) return existing
+
+    const pending = this.dispatchAuxiliary(input)
+      .then((value) => {
+        this.rememberAuxiliaryRead(key, value)
+        return value
+      })
+      .finally(() => {
+        if (this.auxiliaryReadsInFlight.get(key) === pending) {
+          this.auxiliaryReadsInFlight.delete(key)
+        }
+      })
+    this.auxiliaryReadsInFlight.set(key, pending)
+    return pending
+  }
+
+  private rememberAuxiliaryRead(key: string, value: unknown): void {
+    const now = Date.now()
+    if (this.auxiliaryReadCache.size >= AUXILIARY_READ_CACHE_MAX_ENTRIES) {
+      for (const [cachedKey, cached] of this.auxiliaryReadCache) {
+        if (cached.expiresAt <= now) this.auxiliaryReadCache.delete(cachedKey)
+      }
+      while (this.auxiliaryReadCache.size >= AUXILIARY_READ_CACHE_MAX_ENTRIES) {
+        const oldestKey = this.auxiliaryReadCache.keys().next().value
+        if (typeof oldestKey !== 'string') break
+        this.auxiliaryReadCache.delete(oldestKey)
+      }
+    }
+    this.auxiliaryReadCache.set(key, {
+      expiresAt: now + AUXILIARY_READ_CACHE_MS,
+      value
+    })
   }
 
   private async handleHostAuxiliary(
@@ -1825,6 +1889,7 @@ export class AgentRuntimeHost {
     event: AgentRuntimeEvent
   ): void {
     if (event.kind !== 'turn_lifecycle' || event.state !== 'completed') return
+    if (!isEvidenceDagEnabled(context.settings)) return
     if (!isEvidenceDagAutoFeedEnabled()) return
     const threadId = event.threadId.trim()
     const turnId = event.turnId?.trim()
@@ -2541,8 +2606,8 @@ function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot): strin
     'Visible GUI context lookup:',
     'The current user request appears to reference content visible in the SciForge GUI. Do not say you cannot see the right sidebar, current preview, or PDF annotations before checking the available visible-context tools.',
     'First call `gui_visible_context` when it is available. It returns a bounded index of visible components and resource pointers, not full document contents.',
-    'If the request requires visual inspection, call `gui_visual_capture` with `scope: window` or with a componentId and targetId published by `gui_visible_context`. Leave semantic inspection enabled and pass an inspectionPrompt matching the task; the successful result contains attested Model Router vision evidence in text as well as the PNG.',
-    'If the result includes a `pdfAnnotations` resource, use its workspaceRoot plus relativePath/path with `gui_workspace_read` to inspect the annotation sidecar JSON only when the task needs those annotations.'
+    'If the request requires visual inspection, pass the fresh snapshotToken and task to `gui_visual_capture`; target identifiers must come from that same snapshot. For local workspace PNG, JPEG, or WebP artifacts, call `gui_workspace_image_inspect` with one task and an artifacts array.',
+    'When a visible resource includes a capability binding, pass its opaque resource handle to `sciforge_resource_observe` and invoke only operations returned by that observation. Do not infer sidecar files or unregistered tool names.'
   ]
   const components = snapshot.components.filter((component) => component.visible).slice(0, 6)
   if (components.length > 0) {
@@ -2576,6 +2641,12 @@ function renderVisibleContextResourceLine(resource: VisibleContextResource): str
     resource.annotationCount !== undefined ? `annotations=${resource.annotationCount}` : '',
     resource.threadCount !== undefined ? `threads=${resource.threadCount}` : '',
     resource.openThreadCount !== undefined ? `openThreads=${resource.openThreadCount}` : '',
+    resource.capability
+      ? `capabilityResource=${JSON.stringify(resource.capability.resource)}`
+      : '',
+    resource.capability
+      ? `operations=${resource.capability.operations.map((operation) => operation.id).join(',')}`
+      : '',
     resource.accessHint ? `accessHint=${truncateUtf8Text(resource.accessHint, 180)}` : ''
   ].filter(Boolean)
   return `  - resource ${parts.join('; ')}`

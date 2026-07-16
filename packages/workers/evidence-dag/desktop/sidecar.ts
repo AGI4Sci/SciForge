@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { join } from 'node:path'
 import {
   getModelRouterSettings,
+  isEvidenceDagEnabled,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1
 } from '../../../../src/shared/app-settings'
@@ -151,6 +152,11 @@ export async function ensureEvidenceDagSidecar(
   }
 ): Promise<void> {
   const baseEnv = options.env ?? process.env
+  if (!isEvidenceDagEnabled(settings)) {
+    options.log?.('Evidence DAG is disabled in Settings.')
+    if (isEvidenceDagChildRunning()) await stopEvidenceDagSidecar()
+    return
+  }
   if (baseEnv.SCIFORGE_EVIDENCE_DAG_AUTO_START === '0') {
     options.log?.('Evidence DAG auto-start is disabled.')
     if (isEvidenceDagChildRunning()) await stopEvidenceDagSidecar()

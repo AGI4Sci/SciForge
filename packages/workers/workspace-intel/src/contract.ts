@@ -1,11 +1,14 @@
 import { z } from 'zod'
-import type { VisualInspectionEvidence } from './visual-inspection.js'
+import type {
+  VisualArtifactMimeType,
+  VisualInspectionEvidence
+} from './visual-inspection.js'
 
 export const WORKSPACE_TREE_RESOURCE_URI = 'workspace://tree'
 export const WORKSPACE_FILE_RESOURCE_URI_TEMPLATE = 'workspace://file/{+path}'
 export const VISIBLE_CONTEXT_RESOURCE_URI = 'sciforge://visible-context'
-export const VISIBLE_CONTEXT_SCHEMA_VERSION = 2
-export const VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION = 1
+export const VISIBLE_CONTEXT_SCHEMA_VERSION = 3
+export const VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION = 2
 
 export const WORKSPACE_INTEL_DEFAULT_READ_BYTES = 64 * 1024
 export const WORKSPACE_INTEL_MAX_READ_BYTES = 1_500_000
@@ -16,10 +19,10 @@ export const WORKSPACE_INTEL_MAX_TREE_DEPTH = 12
 export const WorkspaceIntelToolNames = [
   'gui_visible_context',
   'gui_visual_capture',
+  'gui_workspace_image_inspect',
   'gui_workspace_list',
   'gui_workspace_tree',
   'gui_workspace_read',
-  'gui_workspace_preview',
   'gui_workspace_reference_list',
   'gui_workspace_reference_preview',
   'gui_workspace_skill_list',
@@ -46,12 +49,17 @@ export type WorkspaceIntelErrorCode =
   | 'visual_capture_failed'
   | 'invalid_visual_capture_request'
   | 'stale_visible_context'
+  | 'stale_snapshot_token'
+  | 'surface_capture_unsupported'
+  | 'capture_surface_unavailable'
   | 'visual_target_not_found'
   | 'visual_target_bounds_unavailable'
   | 'visual_capture_request_expired'
   | 'visual_capture_broker_failed'
   | 'visual_inspection_unavailable'
   | 'visual_inspection_invalid'
+  | 'unsupported_image_format'
+  | 'image_too_large'
   | 'read_failed'
 
 export type WorkspaceIntelError = {
@@ -195,6 +203,16 @@ export type WorkspaceSkillReadResult = WorkspaceIntelFailure | {
   nextOffset?: number
 }
 
+export type VisibleContextCapabilityBinding = {
+  resource: {
+    token: string
+    semanticRevision: string
+    expiresAt: string
+  }
+  resourceRef?: string
+  operations: Array<{ id: string; [key: string]: unknown }>
+}
+
 export type VisibleContextResource = {
   kind: string
   role?: string
@@ -214,6 +232,7 @@ export type VisibleContextResource = {
   openThreadCount?: number
   selectedThreadId?: string | null
   updatedAt?: string
+  capability?: VisibleContextCapabilityBinding
   metadata?: Record<string, unknown>
 }
 
@@ -262,6 +281,7 @@ export type VisibleContextResult = WorkspaceIntelFailure | {
   snapshotPath?: string
   windowId?: string
   revision?: number
+  snapshotToken?: string
   publishedAt?: string
   freshness?: {
     stale: boolean
@@ -281,7 +301,24 @@ export type VisualCaptureResult = WorkspaceIntelFailure | {
   ok: true
   requestId: string
   resource: VisibleContextVisualSnapshotResource
-  inspection?: VisualInspectionEvidence
+  evidence: VisualInspectionEvidence
+}
+
+export type WorkspaceImageArtifact = {
+  id: string
+  relativePath: string
+  path: string
+  mimeType: VisualArtifactMimeType
+  size: number
+  mtimeMs: number
+  sha256: string
+}
+
+export type WorkspaceImageInspectResult = WorkspaceIntelFailure | {
+  ok: true
+  workspaceRoot: string
+  artifacts: WorkspaceImageArtifact[]
+  evidence: VisualInspectionEvidence
 }
 
 export const WorkspaceRootInputSchema = z.object({
@@ -336,28 +373,82 @@ export const VisibleContextInputSchema = z.object({
   componentId: z.string().trim().min(1).max(256).optional()
 }).strict()
 
-export const VisualCaptureInputSchema = z.object({
-  scope: z.enum(['window', 'target']),
-  componentId: z.string().trim().min(1).max(256).optional(),
-  targetId: z.string().trim().min(1).max(256).optional(),
-  requireSemanticInspection: z.boolean().optional(),
-  inspectionPrompt: z.string().trim().min(1).max(16_000).optional(),
-  truthLockedElements: z.array(z.string().trim().min(1).max(1_000)).max(64).optional()
-}).strict().superRefine((request, context) => {
-  if (request.scope === 'target' && (!request.componentId || !request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['targetId'],
-      message: 'Target captures require both componentId and targetId.'
-    })
+const visualInputRegionSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  label: z.string().trim().min(1).max(512).optional(),
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+  width: z.number().finite().positive().max(1),
+  height: z.number().finite().positive().max(1)
+}).strict().superRefine((region, context) => {
+  if (region.x + region.width > 1) {
+    context.addIssue({ code: 'custom', path: ['width'], message: 'Normalized regions must remain inside the image.' })
   }
-  if (request.scope === 'window' && (request.componentId || request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['scope'],
-      message: 'Window captures cannot include target identifiers.'
-    })
+  if (region.y + region.height > 1) {
+    context.addIssue({ code: 'custom', path: ['height'], message: 'Normalized regions must remain inside the image.' })
   }
+})
+
+const visualOutputIntentSchema = z.object({
+  kind: z.enum(['description', 'ocr', 'comparison', 'quality-review', 'structured-extraction', 'custom']),
+  instructions: z.string().trim().min(1).max(4_000).optional()
+}).strict()
+
+const visualTaskSchema = z.object({
+  task: z.string().trim().min(1).max(16_000).optional(),
+  regions: z.array(visualInputRegionSchema).max(64).optional(),
+  truthLocks: z.array(z.string().trim().min(1).max(1_000)).max(64).optional(),
+  outputIntent: visualOutputIntentSchema.optional()
+}).strict()
+
+const visualCaptureInputSchema = visualTaskSchema.extend({
+  snapshotToken: z.string().trim().regex(/^vc_[a-f0-9]{64}$/u),
+}).strict()
+
+export const VisualCaptureInputSchema = z.discriminatedUnion('scope', [
+  visualCaptureInputSchema.extend({ scope: z.literal('window') }).strict(),
+  visualCaptureInputSchema.extend({
+    scope: z.literal('target'),
+    componentId: z.string().trim().min(1).max(256),
+    targetId: z.string().trim().min(1).max(256)
+  }).strict()
+]).superRefine((input, context) => {
+  const regionIds = new Set<string>()
+  input.regions?.forEach((region, index) => {
+    if (regionIds.has(region.id)) {
+      context.addIssue({ code: 'custom', path: ['regions', index, 'id'], message: 'Region ids must be unique.' })
+    }
+    regionIds.add(region.id)
+  })
+})
+
+const workspaceImageArtifactInputSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  path: z.string().trim().min(1).max(4096),
+  regions: z.array(visualInputRegionSchema).max(64).optional()
+}).strict().superRefine((artifact, context) => {
+  const regionIds = new Set<string>()
+  artifact.regions?.forEach((region, index) => {
+    if (regionIds.has(region.id)) {
+      context.addIssue({ code: 'custom', path: ['regions', index, 'id'], message: 'Region ids must be unique.' })
+    }
+    regionIds.add(region.id)
+  })
+})
+
+export const WorkspaceImageInspectInputSchema = WorkspaceRootInputSchema.extend({
+  task: z.string().trim().min(1).max(16_000),
+  artifacts: z.array(workspaceImageArtifactInputSchema).min(1).max(8),
+  truthLocks: z.array(z.string().trim().min(1).max(1_000)).max(64).optional(),
+  outputIntent: visualOutputIntentSchema.optional()
+}).strict().superRefine((input, context) => {
+  const ids = new Set<string>()
+  input.artifacts.forEach((artifact, index) => {
+    if (ids.has(artifact.id)) {
+      context.addIssue({ code: 'custom', path: ['artifacts', index, 'id'], message: 'Artifact ids must be unique.' })
+    }
+    ids.add(artifact.id)
+  })
 })
 
 const timestampSchema = z.string().datetime({ offset: true })
@@ -450,6 +541,7 @@ export type WorkspaceSkillListInput = z.infer<typeof WorkspaceSkillListInputSche
 export type WorkspaceSkillReadInput = z.infer<typeof WorkspaceSkillReadInputSchema>
 export type VisibleContextInput = z.infer<typeof VisibleContextInputSchema>
 export type VisualCaptureInput = z.infer<typeof VisualCaptureInputSchema>
+export type WorkspaceImageInspectInput = z.infer<typeof WorkspaceImageInspectInputSchema>
 export type VisualCaptureBrokerResponse = z.infer<typeof VisualCaptureBrokerResponseSchema>
 
 export function workspaceFileResourceUri(relativePath: string): string {

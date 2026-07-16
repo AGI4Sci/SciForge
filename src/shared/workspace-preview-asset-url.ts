@@ -1,26 +1,38 @@
-export const WORKSPACE_PREVIEW_ASSET_SCHEME = 'sciforge-preview'
+import {
+  capabilityResourceContentAccessSchema,
+  type CapabilityResourceContentAccess
+} from './capability-broker'
 
-export function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
-  const normalized = sessionId.trim()
-  if (!normalized || normalized.length > 256 || normalized.includes('\0')) return null
-  return `${WORKSPACE_PREVIEW_ASSET_SCHEME}://asset/${encodeURIComponent(normalized)}`
+export const CAPABILITY_RESOURCE_CONTENT_SCHEME = 'sciforge-resource'
+
+export function serializeCapabilityResourceContentAccess(access: CapabilityResourceContentAccess): string {
+  return JSON.stringify(capabilityResourceContentAccessSchema.parse(access))
 }
 
-export function workspacePreviewSessionIdFromAssetUrl(rawUrl: string): string | null {
+export function parseCapabilityResourceContentAccess(serialized: string): CapabilityResourceContentAccess | null {
+  try {
+    const parsed = capabilityResourceContentAccessSchema.safeParse(JSON.parse(serialized))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+export function capabilityResourceContentSourceUrl(access: CapabilityResourceContentAccess): string {
+  const url = new URL(`${CAPABILITY_RESOURCE_CONTENT_SCHEME}://content`)
+  url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
+  return url.toString()
+}
+
+export function capabilityResourceContentAccessFromUrl(rawUrl: string): CapabilityResourceContentAccess | null {
   let url: URL
   try {
     url = new URL(rawUrl)
   } catch {
     return null
   }
-  if (url.protocol !== `${WORKSPACE_PREVIEW_ASSET_SCHEME}:` || url.hostname !== 'asset') return null
-  const segments = url.pathname.split('/').filter(Boolean)
-  if (segments.length !== 1) return null
-  try {
-    const sessionId = decodeURIComponent(segments[0] ?? '').trim()
-    if (!sessionId || sessionId.length > 256 || sessionId.includes('\0')) return null
-    return sessionId
-  } catch {
-    return null
-  }
+  if (url.protocol !== `${CAPABILITY_RESOURCE_CONTENT_SCHEME}:` || url.hostname !== 'content') return null
+  const serialized = url.searchParams.get('access')
+  if (!serialized) return null
+  return parseCapabilityResourceContentAccess(serialized)
 }

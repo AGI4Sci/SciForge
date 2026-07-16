@@ -844,6 +844,29 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     const component = buildWorkspacePreviewVisibleContextComponent({
       context: {
         state: {
+          capability: {
+            resource: {
+              token: 'cap_abcdefghijklmnopqrstuvwxyz',
+              semanticRevision: 'revision-2',
+              expiresAt: '2026-07-16T14:00:00.000Z'
+            },
+            operations: [{
+              contractVersion: 1,
+              id: 'workspace-preview.apply-edit',
+              version: '1.0.0',
+              title: 'Apply edit',
+              description: 'Apply a registered preview edit.',
+              audiences: ['ui', 'agent', 'system'],
+              scope: 'resource',
+              resourceKinds: ['workspace-preview'],
+              effect: 'workspace-write',
+              approval: 'none',
+              concurrency: { revision: 'optimistic', idempotency: 'required' },
+              inputSchema: { type: 'object' },
+              outputSchema: { type: 'object' },
+              tags: ['preview']
+            }]
+          },
           session: {
             id: 'session-1',
             pluginId: 'molecular',
@@ -943,12 +966,11 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       id: 'right-sidebar.file-preview',
       component: 'workspace-preview',
       title: 'protein.pdb',
-      summary: 'Workspace preview observation for Molecular file protein.pdb with 1 actions.',
+      summary: 'Workspace preview observation for Molecular file protein.pdb.',
       state: {
         pluginId: 'molecular',
         modality: 'molecular',
         selectionKind: 'molecular',
-        actionCount: 1,
         assetPrimary: 'byte-range',
         assetStrategies: [
           {
@@ -980,6 +1002,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           role: 'preview-target',
           relativePath: 'protein.pdb',
           resourceUri: 'workspace://file/protein.pdb',
+          capability: {
+            resource: {
+              token: 'cap_abcdefghijklmnopqrstuvwxyz',
+              semanticRevision: 'revision-2'
+            },
+            operations: [{ id: 'workspace-preview.apply-edit' }]
+          },
           metadata: {
             routeReason: 'registered-plugin',
             assetStrategies: [
@@ -992,7 +1021,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
                 status: 'requires-plugin'
               }
             ],
-            actionCount: 1
+            semanticRevision: 'revision-2',
+            operationIds: ['workspace-preview.apply-edit']
           }
         }
       ]

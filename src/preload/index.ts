@@ -1,7 +1,8 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
-import { workspacePreviewAssetSourceUrl } from '../shared/workspace-preview-asset-url'
+import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-asset-url'
+import { createCapabilityFacades } from './capability-facades'
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
@@ -49,6 +50,11 @@ function isDevPreviewNavigatePayload(value: unknown): value is DevPreviewNavigat
   const payload = value as { url?: unknown; webContentsId?: unknown }
   return typeof payload.url === 'string' && Number.isInteger(payload.webContentsId)
 }
+
+const capabilityFacades = createCapabilityFacades({
+  invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
+  createResourceContentUrl: capabilityResourceContentSourceUrl
+})
 
 const api = {
   platform: process.platform,
@@ -241,47 +247,36 @@ const api = {
     ipcRenderer.on('file:workspace-changed', wrapped)
     return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
   },
+  capabilities: {
+    discover: (input = {}) => ipcRenderer.invoke('capability:discover', input),
+    observe: (input) => ipcRenderer.invoke('capability:observe', input),
+    invoke: (input) => ipcRenderer.invoke('capability:invoke', input),
+    events: (input = {}) => ipcRenderer.invoke('capability:events', input),
+    subscribe: (workspaceId) => ipcRenderer.invoke('capability:subscribe', { workspaceId }),
+    unsubscribe: (subscriptionId) => ipcRenderer.invoke('capability:unsubscribe', { subscriptionId }),
+    onEvent: (handler) => {
+      const wrapped = (
+        _: Electron.IpcRendererEvent,
+        payload: Parameters<typeof handler>[0]
+      ) => handler(payload)
+      ipcRenderer.on('capability:event', wrapped)
+      return () => ipcRenderer.removeListener('capability:event', wrapped)
+    }
+  },
   workspacePreview: {
-    listPlugins: () => ipcRenderer.invoke('workspacePreview:listPlugins'),
-    open: (input) => ipcRenderer.invoke('workspacePreview:open', input),
-    observe: (sessionId) => ipcRenderer.invoke('workspacePreview:observe', { sessionId }),
-    describeAsset: (sessionId) => ipcRenderer.invoke('workspacePreview:describeAsset', { sessionId }),
-    readRange: (sessionId, range) =>
-      ipcRenderer.invoke('workspacePreview:readRange', { sessionId, range }),
-    prepareArtifact: (sessionId, request) =>
-      ipcRenderer.invoke('workspacePreview:prepareArtifact', { sessionId, request }),
-    readArtifactRange: (sessionId, request) =>
-      ipcRenderer.invoke('workspacePreview:readArtifactRange', { sessionId, request }),
-    applyEdit: (sessionId, operation) =>
-      ipcRenderer.invoke('workspacePreview:applyEdit', { sessionId, operation }),
-    export: (sessionId, target) =>
-      ipcRenderer.invoke('workspacePreview:export', { sessionId, target }),
-    invokeAction: (sessionId, action) =>
-      ipcRenderer.invoke('workspacePreview:invokeAction', { sessionId, action }),
-    releaseSession: (sessionId) =>
-      ipcRenderer.invoke('workspacePreview:releaseSession', { sessionId }),
-    watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
-    unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
-    getAssetSourceUrl: workspacePreviewAssetSourceUrl,
+    ...capabilityFacades.workspacePreview,
     onChanged: (handler) => {
       const wrapped = (
         _: Electron.IpcRendererEvent,
         payload: Parameters<typeof handler>[0]
       ) => handler(payload)
-      ipcRenderer.on('workspacePreview:changed', wrapped)
-      return () => ipcRenderer.removeListener('workspacePreview:changed', wrapped)
+      ipcRenderer.on('file:workspace-changed', wrapped)
+      return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
     }
   },
   biologyRoom: {
     pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
-    create: (input) => ipcRenderer.invoke('biologyRoom:create', input),
-    openOrCreate: (input) => ipcRenderer.invoke('biologyRoom:openOrCreate', input),
-    load: (input) => ipcRenderer.invoke('biologyRoom:load', input),
-    list: (input) => ipcRenderer.invoke('biologyRoom:list', input),
-    observe: (input) => ipcRenderer.invoke('biologyRoom:observe', input),
-    apply: (input) => ipcRenderer.invoke('biologyRoom:apply', input),
-    refresh: (input) => ipcRenderer.invoke('biologyRoom:refresh', input),
-    history: (input) => ipcRenderer.invoke('biologyRoom:history', input)
+    ...capabilityFacades.biologyRoom
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),

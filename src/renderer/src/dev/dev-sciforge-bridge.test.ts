@@ -422,12 +422,94 @@ describe('dev sciforge browser bridge', () => {
   it('forwards workspace preview calls through the dev bridge', async () => {
     installWindow()
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = init?.body ? JSON.parse(String(init.body)) as { channel?: string } : {}
-      if (body.channel === 'workspacePreview:listPlugins') {
+      const body = init?.body
+        ? JSON.parse(String(init.body)) as { channel?: string; payload?: { request?: { actionId?: string } } }
+        : {}
+      const resource = {
+        token: 'cap_abcdefghijklmnopqrstuvwxyz',
+        semanticRevision: 'revision-1',
+        expiresAt: '2026-07-16T14:00:00.000Z'
+      }
+      if (body.channel === 'capability:observe') {
         return new Response(JSON.stringify({
           ok: true,
-          payload: [{ id: 'molecular', displayName: 'Molecular Structure Viewer' }]
+          payload: {
+            resource,
+            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+            resourceKind: 'workspace-preview',
+            semanticRevision: resource.semanticRevision,
+            observedAt: '2026-07-16T13:00:00.000Z',
+            state: { session: { id: 'session-1' }, observation: { sessionId: 'session-1' } },
+            operations: []
+          }
         }))
+      }
+      if (body.channel === 'capability:invoke') {
+        const actionId = body.payload?.request?.actionId ?? ''
+        const output = actionId === 'workspace-preview.list'
+          ? [{ id: 'molecular', displayName: 'Molecular Structure Viewer' }]
+          : actionId === 'workspace-preview.open'
+            ? {
+                ok: true,
+                session: { id: 'session-1', workspaceRoot: '/tmp/work' },
+                manifest: { id: 'molecular' },
+                route: 'matched',
+                file: { path: 'protein.pdb' },
+                resource
+              }
+            : actionId === 'workspace-preview.describe-asset'
+              ? {
+                  ok: true,
+                  descriptor: {
+                    contractVersion: 1,
+                    sessionId: 'session-1',
+                    assetId: 'asset-1',
+                    primary: 'range',
+                    file: {
+                      name: 'protein.pdb',
+                      relativePath: 'protein.pdb',
+                      mimeType: 'chemical/x-pdb'
+                    },
+                    range: {
+                      available: true,
+                      size: 4,
+                      maxChunkBytes: 52_428_800,
+                      recommendedChunkBytes: 262_144
+                    },
+                    strategies: [{ kind: 'range', status: 'available' }],
+                    artifacts: []
+                  }
+                }
+              : actionId === 'workspace-preview.read-range'
+                ? {
+                    ok: true,
+                    sessionId: 'session-1',
+                    assetId: 'asset-1',
+                    offset: 0,
+                    length: 4,
+                    size: 4,
+                    dataBase64: 'REFUQQ==',
+                    mimeType: 'chemical/x-pdb'
+                  }
+            : actionId === 'workspace-preview.release'
+              ? true
+              : { ok: true }
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: {
+            actionId,
+            output,
+            changed: false,
+            replayed: false,
+            completedAt: '2026-07-16T13:00:00.000Z'
+          }
+        }))
+      }
+      if (body.channel === 'file:watch-workspace') {
+        return new Response(JSON.stringify({ ok: true, payload: { watchId: 'watch-1' } }))
+      }
+      if (body.channel === 'file:unwatch-workspace') {
+        return new Response(JSON.stringify({ ok: true, payload: true }))
       }
       return new Response(JSON.stringify({
         ok: true,
@@ -447,8 +529,8 @@ describe('dev sciforge browser bridge', () => {
     await window.sciforge.workspacePreview.listPlugins()
     await window.sciforge.workspacePreview.open(openInput)
     await window.sciforge.workspacePreview.observe('session-1')
-    await window.sciforge.workspacePreview.describeAsset('session-1')
-    await window.sciforge.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
+    const described = await window.sciforge.workspacePreview.describeAsset('session-1')
+    const range = await window.sciforge.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
     await window.sciforge.workspacePreview.prepareArtifact('session-1', {
       kind: 'cache-artifact',
       source: 'observation'
@@ -467,158 +549,66 @@ describe('dev sciforge browser bridge', () => {
       format: 'pdb',
       path: 'exports/protein-copy.pdb'
     })
+    const assetSourceUrl = window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')
     await window.sciforge.workspacePreview.releaseSession('session-1')
     await window.sciforge.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
     await window.sciforge.workspacePreview.unwatch('watch-1')
-    expect(window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')).toBe(
-      'http://localhost:5173/__sciforge-dev-bridge/workspace-preview/assets/session-1?clientId=client-1'
-    )
+    expect(window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')).toBeNull()
+    expect(assetSourceUrl).toContain('/__sciforge-dev-bridge/capability/resources/content?')
+    expect(new URL(assetSourceUrl!).searchParams.get('clientId')).toBeTruthy()
+    expect(JSON.parse(new URL(assetSourceUrl!).searchParams.get('access') ?? '{}')).toMatchObject({
+      workspaceId: '/tmp/work',
+      resource: { token: expect.stringMatching(/^cap_/) }
+    })
+    expect(described).toMatchObject({
+      ok: true,
+      descriptor: {
+        sessionId: 'session-1',
+        assetId: 'asset-1',
+        range: { available: true, size: 4 }
+      }
+    })
+    expect(range).toMatchObject({
+      ok: true,
+      sessionId: 'session-1',
+      assetId: 'asset-1',
+      length: 4,
+      dataBase64: 'REFUQQ=='
+    })
 
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:listPlugins'
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:prepareArtifact',
-          payload: {
-            sessionId: 'session-1',
-            request: {
-              kind: 'cache-artifact',
-              source: 'observation'
-            }
-          }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:readArtifactRange',
-          payload: {
-            sessionId: 'session-1',
-            request: {
-              artifactId: 'artifact-1',
-              range: { offset: 0, length: 4 }
-            }
-          }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:watch',
-          payload: { path: 'protein.pdb', workspaceRoot: '/tmp/work' }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:unwatch',
-          payload: 'watch-1'
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:open',
-          payload: openInput
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:observe',
-          payload: { sessionId: 'session-1' }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:describeAsset',
-          payload: { sessionId: 'session-1' }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:readRange',
-          payload: { sessionId: 'session-1', range: { offset: 0, length: 4 } }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:applyEdit',
-          payload: {
-            sessionId: 'session-1',
-            operation: {
-              kind: 'molecular.setSelection',
-              path: 'protein.pdb',
-              selection: { kind: 'molecular', chains: ['A'] }
-            }
-          }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:export',
-          payload: {
-            sessionId: 'session-1',
-            target: {
-              kind: 'workspace-file',
-              format: 'pdb',
-              path: 'exports/protein-copy.pdb'
-            }
-          }
-        })
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'workspacePreview:releaseSession',
-          payload: { sessionId: 'session-1' }
-        })
-      })
-    )
+    const bridgeRequests = fetchMock.mock.calls.map(([, init]) => (
+      JSON.parse(String(init?.body)) as {
+        channel: string
+        payload?: { request?: { actionId?: string } }
+      }
+    ))
+    expect(bridgeRequests.map((request) => request.channel)).toEqual(expect.arrayContaining([
+      'capability:invoke',
+      'capability:observe',
+      'file:watch-workspace',
+      'file:unwatch-workspace'
+    ]))
+    expect(bridgeRequests.map((request) => request.channel).some((channel) => channel.startsWith('workspacePreview:')))
+      .toBe(false)
+    expect(bridgeRequests
+      .filter((request) => request.channel === 'capability:invoke')
+      .map((request) => request.payload?.request?.actionId))
+      .toEqual(expect.arrayContaining([
+        'workspace-preview.list',
+        'workspace-preview.open',
+        'workspace-preview.describe-asset',
+        'workspace-preview.read-range',
+        'workspace-preview.prepare-artifact',
+        'workspace-preview.read-artifact-range',
+        'workspace-preview.apply-edit',
+        'workspace-preview.export',
+        'workspace-preview.release'
+      ]))
+    expect(bridgeRequests).toContainEqual({
+      channel: 'file:watch-workspace',
+      payload: { path: 'protein.pdb', workspaceRoot: '/tmp/work' }
+    })
+    expect(bridgeRequests).toContainEqual({ channel: 'file:unwatch-workspace', payload: 'watch-1' })
   })
 
   it('forwards terminal calls and events through the dev bridge', async () => {

@@ -1335,7 +1335,6 @@ export function Workbench(): ReactElement {
             kind: 'workspaceFile',
             role: 'selected-file-preview-target',
             title: filePreviewTarget.path.split(/[/\\]/).filter(Boolean).pop() ?? filePreviewTarget.path,
-            accessHint: 'Use gui_workspace_preview/read with workspaceRoot and relativePath when available.',
             workspaceRoot: targetWorkspaceRoot,
             path: filePreviewTarget.path
           }]
@@ -1409,6 +1408,16 @@ export function Workbench(): ReactElement {
   const showDevPreviewCard =
     route === 'chat' &&
     latestDevPreviewUrl !== null
+  const timelineDevPreviewCard = useMemo(
+    () => showDevPreviewCard ? (
+      <DevPreviewLaunchCard
+        url={latestDevPreviewUrl}
+        opened={rightPanelMode === 'browser'}
+        onOpen={openDevPreview}
+      />
+    ) : null,
+    [latestDevPreviewUrl, openDevPreview, rightPanelMode, showDevPreviewCard]
+  )
 
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.sciforge?.getLogPath !== 'function') return
@@ -2904,7 +2913,7 @@ export function Workbench(): ReactElement {
   return (
     <div
       ref={shellRef}
-      className="ds-workbench-shell ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main"
+      className="ds-workbench-shell flex h-full min-h-0 w-full min-w-0 bg-ds-main"
     >
       {visualCaptureActive ? (
         <div
@@ -2956,7 +2965,7 @@ export function Workbench(): ReactElement {
       ) : null}
 
       <main
-        className={`ds-drag ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
+        className={`ds-stage-surface relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden ${
           route === 'plugins' ? 'px-0' : ''
         }`}
       >
@@ -3006,8 +3015,8 @@ export function Workbench(): ReactElement {
               nextDisabled={busy || runtimeConnection !== 'ready' || sddDraftOperationStatus === 'upgrading'}
             />
           ) : (
-            <section className="ds-chat-stage ds-drag flex min-h-0 min-w-0 flex-1 flex-col">
-            <header className="chat-topbar ds-topbar-surface relative z-10 mt-3 flex min-h-[46px] w-full shrink-0 items-stretch overflow-visible rounded-[24px]">
+            <section className="ds-chat-stage flex min-h-0 min-w-0 flex-1 flex-col">
+            <header className="chat-topbar ds-topbar-surface ds-drag relative z-10 mt-3 flex min-h-[46px] w-full shrink-0 items-stretch overflow-visible rounded-[24px]">
               <div className="chat-topbar-grid grid w-full min-w-0 items-start gap-2.5 px-3 py-2 sm:px-4 md:pl-5 md:pr-2">
                 <div
                   className={`chat-topbar-session flex min-w-0 items-center gap-2.5 ${
@@ -3153,15 +3162,7 @@ export function Workbench(): ReactElement {
                   onBuildPlan={() => void buildGuiPlan()}
                   onOpenPlan={openGuiPlanPanel}
                   onOpenImageArtifactInVisualReview={openImageArtifactInVisualReview}
-                  devPreviewCard={
-                    showDevPreviewCard ? (
-                      <DevPreviewLaunchCard
-                        url={latestDevPreviewUrl}
-                        opened={rightPanelMode === 'browser'}
-                        onOpen={openDevPreview}
-                      />
-                    ) : null
-                  }
+                  devPreviewCard={timelineDevPreviewCard}
                 />
                 <div className="ds-no-drag flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
                   <FloatingComposer

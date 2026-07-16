@@ -42,6 +42,8 @@ test('public manifest exposes only the Model Router worker contract', async () =
     assert.equal(body.workerVersion, '0.1.0');
     assert.match(serialized, /refs_first_trace/);
     assert.match(serialized, /refs-first/);
+    assert.match(serialized, /model_router_capabilities/);
+    assert.match(serialized, /\/v1\/capabilities/);
     assert.match(serialized, /\/v1\/responses/);
     assert.match(serialized, /sciforge\.model-router\.responses/);
     assert.doesNotMatch(serialized, forbiddenPublicSurfacePattern);
@@ -84,6 +86,137 @@ test('public model list exposes only the configured public alias', async () => {
   }
 });
 
+test('authenticated capability discovery exposes only sanitized active-profile readiness and features', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-capabilities-'));
+  const config = testConfig({
+    publicModelAlias: 'public-router-alias',
+    imageGenerator: testImageGeneratorConfig(),
+    scientificTranslator: testScientificTranslatorConfig(),
+  });
+  config.profiles.default.capabilities = {
+    vision: {
+      mimeTypes: ['image/png', 'IMAGE/JPEG', 'https://private-provider.example/model'],
+      maxInputBytes: 4 * 1024 * 1024,
+    },
+    images: {
+      generation: true,
+      editing: true,
+      referenceImages: true,
+      masks: false,
+      sizeSelection: true,
+      sizes: ['512x512', '1024x1024', 'private-model-size'],
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const unauthorized = await fetch(`${server.url}/v1/capabilities`);
+    assert.equal(unauthorized.status, 401);
+
+    const response = await fetch(`${server.url}/v1/capabilities`, { headers: runtimeHeaders() });
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(body, {
+      schemaVersion: 'sciforge.model-router.capabilities.v1',
+      publicModelAlias: 'public-router-alias',
+      profile: 'default',
+      roles: {
+        textReasoner: { configured: true, ready: true, state: 'ready' },
+        imageGenerator: { configured: true, ready: true, state: 'ready' },
+        visionTranslator: { configured: true, ready: true, state: 'ready' },
+        scientificTranslator: { configured: true, ready: false, state: 'missing_credentials' },
+      },
+      vision: {
+        available: true,
+        input: {
+          mimeTypes: ['image/png', 'image/jpeg'],
+          maxInputBytes: 4 * 1024 * 1024,
+          maxRequestBytes: 40 * 1024 * 1024,
+          sources: ['inline', 'url', 'workspace_ref'],
+        },
+      },
+      images: {
+        available: true,
+        maxRequestBytes: 40 * 1024 * 1024,
+        features: {
+          generation: true,
+          editing: true,
+          referenceImages: true,
+          masks: false,
+          sizeSelection: true,
+        },
+        sizes: {
+          mode: 'enumerated',
+          values: ['512x512', '1024x1024'],
+        },
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
+    assert.doesNotMatch(JSON.stringify(body), /private-provider|private-model/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('capability discovery selects registered profiles and fails closed for unknown profiles', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-profile-capabilities-'));
+  const config = testConfig();
+  config.profiles.textOnly = {
+    traceRoot: DEFAULT_MODEL_ROUTER_TRACE_ROOT,
+    textReasoner: config.profiles.default.textReasoner,
+    translators: {},
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const selected = await fetch(`${server.url}/v1/capabilities`, {
+      headers: runtimeHeaders({ 'x-sciforge-model-router-profile': 'textOnly' }),
+    });
+    assert.equal(selected.status, 200);
+    const body = await selected.json() as Record<string, unknown>;
+    assert.equal(body.profile, 'textOnly');
+    assert.deepEqual(body.vision, {
+      available: false,
+      input: {
+        mimeTypes: [],
+        maxInputBytes: 0,
+        maxRequestBytes: 40 * 1024 * 1024,
+        sources: ['inline', 'url', 'workspace_ref'],
+      },
+    });
+    assert.deepEqual((body.images as Record<string, unknown>).features, {
+      generation: false,
+      editing: false,
+      referenceImages: false,
+      masks: false,
+      sizeSelection: false,
+    });
+
+    const unknown = await fetch(`${server.url}/v1/capabilities`, {
+      headers: runtimeHeaders({ 'x-sciforge-model-router-profile': 'missing' }),
+    });
+    assert.equal(unknown.status, 400);
+    assert.match(await unknown.text(), /unknown_profile/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test('runtime model routes require the configured bearer token', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-runtime-auth-'));
   const server = await startModelRouterServer({
@@ -97,6 +230,8 @@ test('runtime model routes require the configured bearer token', async () => {
   try {
     const missing = await fetch(`${server.url}/v1/models`);
     assert.equal(missing.status, 401);
+    const missingCapabilities = await fetch(`${server.url}/v1/capabilities`);
+    assert.equal(missingCapabilities.status, 401);
     const invalid = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' },
@@ -308,6 +443,65 @@ test('image edits require runtime auth, multipart input, and the public router m
     assert.equal(wrongModel.status, 400);
     const body = await wrongModel.json() as Record<string, { code?: string }>;
     assert.equal(body.error?.code, 'unregistered_model');
+    assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('image routes enforce the active profile capability registration before provider calls', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-capability-enforcement-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig({ imageGenerator: testImageGeneratorConfig() });
+  config.profiles.default.capabilities = {
+    images: {
+      generation: false,
+      editing: true,
+      referenceImages: false,
+      masks: false,
+      sizeSelection: true,
+      sizes: ['512x512'],
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, []),
+  });
+
+  try {
+    const generation = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'Draw a cell.' }),
+    });
+    assert.equal(generation.status, 422);
+    assert.equal((await generation.json() as { error: { code: string } }).error.code, 'image_capability_not_supported');
+
+    const maskedEdit = imageEditForm('sciforge-router');
+    maskedEdit.set('mask', new Blob(['mask'], { type: 'image/png' }), 'mask.png');
+    const maskResponse = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: maskedEdit,
+    });
+    assert.equal(maskResponse.status, 422);
+    assert.equal((await maskResponse.json() as { error: { code: string } }).error.code, 'image_masks_not_supported');
+
+    const sizedEdit = imageEditForm('sciforge-router');
+    sizedEdit.set('size', '1024x1024');
+    const sizeResponse = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: sizedEdit,
+    });
+    assert.equal(sizeResponse.status, 422);
+    assert.equal((await sizeResponse.json() as { error: { code: string } }).error.code, 'image_size_not_supported');
     assert.equal(calls.length, 0);
   } finally {
     await server.close();
@@ -1213,7 +1407,7 @@ test('anthropic messages request hygiene folds long string tool arguments as str
   }
 });
 
-test('anthropic messages request hygiene replaces long shell commands with a safe no-op', async () => {
+test('anthropic messages request hygiene replaces long shell commands with an explicit failing history sentinel', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-messages-hygiene-shell-args-'));
   const longCommand = `python3 <<'PY'\n${'print("work")\n'.repeat(700)}PY`;
   const calls: CapturedFetch[] = [];
@@ -1260,7 +1454,10 @@ test('anthropic messages request hygiene replaces long shell commands with a saf
     const messages = calls[0]?.body.messages as Array<Record<string, any>>;
     const toolCall = messages[0]?.tool_calls?.[0] as Record<string, any>;
     const args = JSON.parse(String(toolCall.function.arguments)) as Record<string, any>;
-    assert.equal(args.cmd, ': # sciforge request hygiene omitted prior shell command; inspect paired tool result');
+    assert.equal(
+      args.cmd,
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command',
+    );
     assert.equal(args.workdir, workspaceRoot);
     assert.doesNotMatch(args.cmd, /\[sciforge request_hygiene/u);
     assert.ok(!JSON.stringify(calls[0]?.body).includes(longCommand.slice(0, 80)));
@@ -1294,6 +1491,7 @@ test('healthz reports provider readiness without leaking private bindings', asyn
     });
     assert.equal(body.recentError, null);
     assert.deepEqual(body.capabilities, [
+      'model_router_capabilities',
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
@@ -1342,6 +1540,7 @@ test('healthz blocks missing provider credentials without leaking binding names'
     });
     assert.equal(body.recentError, 'provider-auth');
     assert.deepEqual(body.capabilities, [
+      'model_router_capabilities',
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
@@ -2047,6 +2246,53 @@ test('vision responses translate refs first, then ask the text reasoner for the 
     assert.doesNotMatch(traceText, /text-secret|vision-secret|data:image|base64|tiny-png/i);
     assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
     assert.match(traceText, /"roleAlias":\s*"translators\.vision"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('vision routing enforces the active profile MIME registration before upstream translation', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-vision-capability-enforcement-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.capabilities = {
+    vision: {
+      mimeTypes: ['image/jpeg'],
+      maxInputBytes: 1024,
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final', JSON.stringify({
+        type: 'final_answer',
+        content: 'The referenced image could not be inspected.',
+      })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Describe this image.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.match(String((await response.json() as { output_text: string }).output_text), /could not be inspected/i);
   } finally {
     await server.close();
   }

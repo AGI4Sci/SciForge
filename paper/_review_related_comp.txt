@@ -1,0 +1,46 @@
+\subsection{Comparison and Positioning}
+
+While each of the three system categories addresses a distinct facet of the AI-assisted research life cycle, SciForge is designed to unify them within a single workbench. The comparison spans five key dimensions: execution, model governance, evidence quality, research continuity, and goal-oriented research design.
+
+\textbf{Execution architecture.} GUI workbenches such as Claude Science and ClaudePrism deliver polished interactive experiences but are typically constrained to one model provider and one local session. Terminal workbenches---OmicOS with its hybrid daemon plus browser model, OmicsClaw with multi-surface CLIs, and Operon with persistent terminal sessions---excel at running code where data and schedulers reside, yet they expose tools and pipelines rather than a unified research workbench. SciForge bridges these worlds by providing a GUI for human judgment while keeping a local-first workspace where execution can span desktop, SSH, and HPC environments.
+
+\textbf{Model governance.} The reviewed public materials commonly emphasize a single provider family or manual switching between separate tools. SciForge's Scientific Model Router combines multi-provider routing with a deliberately narrow translate-then-reason file-ingress path covering four modality classes: protein sequences (Esm2Text~\cite{abdine2023prot2text}), protein structures (Prot2Text~\cite{abdine2023prot2text}), molecules (BioT5~\cite{pei2024biot5}), and single-cell transcriptomics (Cell2Sentence~\cite{rizvi2025c2s}); unsupported formats fail closed. Literature is handled through search, PDF anchoring, and source attribution, not as a scientific modality translator. We did not find this same integrated combination documented as a first-class feature in the reviewed categories.
+
+\textbf{Evidence quality and governance.} Research agents such as FutureHouse, AI Co-Scientist, and the AI Scientist produce outputs from variable-quality evidence; in the publicly documented materials we reviewed, we did not observe the same integrated combination of claim--evidence audit trail, PROV-JSON provenance, and quality gates in a single research workbench. SciForge threads claims through an Evidence DAG backed by PROV-JSON provenance, audit runs, risk digests, and explicit quality gates. This governance layer is designed to make agent outputs inspectable and auditable.
+
+\textbf{Research continuity.} Many reviewed systems foreground per-session interaction. SciForge maintains goal-centered research memory as scoped free-text records (scope, tags, confidence, timestamps, context) across sessions; typed goals and decision events belong to the Project DAG, enabling long-running multi-session scientific workflows rather than only single-turn conversations. The combination of research memory, workflow engine, and evidence governance creates a persistent research workspace whose integrated design---tying thread-level Evidence Snapshots to goal-scoped Project Snapshots with audit and release semantics---we did not find documented as a first-class, integrated feature in the public materials of the reviewed GUI, terminal, and API-agent systems.
+
+\textbf{Goal-oriented research design.} SciForge anchors every thread and project to an explicit goal scope with defined review gates, decision records, and release semantics. This design ensures that scientific objectives are persistent, auditable, and governable across multiple turns, tools, and contributors.
+
+Table~\ref{tab:terminal_related_work} summarizes these differences at the category level, while the detailed capability differentiation in Appendix~\ref{tab:capability_differentiation} provides a feature-level comparison against common approaches.
+
+\begin{table}[ht!]
+\caption{High-level comparison of scientific AI system categories. A checkmark indicates first-class or documented support as a primary design goal in the publicly reviewed materials. Absence of a checkmark does not prove absence of a feature; it indicates we did not find documented first-class support in the reviewed materials. $\dagger$~Planned for a future release.}
+\label{tab:terminal_related_work}
+\scriptsize
+\centering
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.15}
+\begin{tabular}{@{}L{5.0cm} C{1.30cm} C{1.30cm} C{1.30cm} C{1.30cm}@{}}
+\toprule
+\textbf{Capability} &
+\textbf{\shortstack{GUI\\WB}} &
+\textbf{\shortstack{Terminal\\WB}} &
+\textbf{\shortstack{API\\agent}} &
+\textbf{SciForge} \\
+\midrule
+Human Interface --- GUI for interactive research & \cmark &  &  & \cmark \\
+Local Execution --- local/HPC compute, local-first data &  & \cmark &  & \cmark \\
+Sci. Tools --- fail-closed native format ingestion &  &  &  & \cmark \\
+Sci. Multimodal Routing --- enhanced scientific multimodal understanding &  &  &  & \cmark \\
+Workflow Automation --- DAG-based scheduled protocols &  &  &  & \cmark \\
+Research Memory --- cross-session knowledge persistence &  &  &  & \cmark \\
+Evidence Governance --- provenance, audit trail, release gates &  &  &  & \cmark \\
+Team Workspace --- multi-user collaboration\textsuperscript{$\dagger$} &  &  &  & \textsuperscript{$\dagger$} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+SciForge combines these categories rather than competing with only one of them. It keeps the usability of GUI workbenches, the locality and composability of terminal systems, and the task power of scientific agents, while adding fail-closed scientific-object handling, content-addressed artifacts with structured selection and provenance, specialist domain translation, run-grounded evidence governance with immutable snapshots and an audit sidecar, and goal-scoped decision governance with explicit release semantics.
+
+% ============================================================

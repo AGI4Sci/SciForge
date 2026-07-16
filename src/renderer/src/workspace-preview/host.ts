@@ -1,5 +1,6 @@
 import type {
   SciForgeApi,
+  CapabilityResourceBinding,
   WorkspacePreviewApplyEditResult,
   WorkspacePreviewDescribeAssetResult,
   WorkspacePreviewExportResult,
@@ -67,6 +68,7 @@ export type WorkspacePreviewAssetTransportClient = {
 
 export type WorkspacePreviewHostState = {
   session: WorkspacePreviewSession | null
+  capability: CapabilityResourceBinding | null
   descriptor: RendererWorkspacePreviewPluginDescriptor | null
   asset: WorkspacePreviewAssetTransportDescriptor | null
   observation: WorkspaceObservation | null
@@ -93,6 +95,7 @@ export function createWorkspacePreviewHostState(
 ): WorkspacePreviewHostState {
   return {
     session: null,
+    capability: null,
     descriptor: null,
     asset: null,
     observation: null,
@@ -199,6 +202,7 @@ export class WorkspacePreviewHost {
 
       this.patchState({
         session: result.session,
+        capability: result.capability ?? null,
         descriptor: this.registry.get(result.manifest.id) ?? this.registry.get(result.session.pluginId) ?? descriptor,
         asset: null,
         observation: null,
@@ -239,6 +243,7 @@ export class WorkspacePreviewHost {
 
       this.patchState({
         observation: result.observation,
+        capability: result.capability ?? this.state.capability,
         error: null
       })
       return result
@@ -396,6 +401,7 @@ export class WorkspacePreviewHost {
 
       this.patchState({
         session: result.session,
+        capability: result.capability ?? this.state.capability,
         descriptor: this.registry.get(result.session.pluginId) ?? this.state.descriptor,
         asset: this.state.asset?.sessionId === result.session.id ? this.state.asset : null,
         observation: observationWithSessionSelection(this.state.observation, result.session),
@@ -448,7 +454,10 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.invokeAction(sessionId, resolvedAction)
-      this.patchState({ error: result.ok ? null : result.message })
+      this.patchState({
+        capability: result.ok ? result.capability ?? this.state.capability : this.state.capability,
+        error: result.ok ? null : result.message
+      })
       return result
     } catch (error) {
       return this.failInvokeAction(messageFromError(error))

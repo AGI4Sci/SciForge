@@ -1,12 +1,13 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   defaultModelRouterSettings,
   type AppSettingsV1
 } from '../../../../src/shared/app-settings'
-import { buildEvidenceDagLaunch } from './sidecar'
+import { buildEvidenceDagLaunch, ensureEvidenceDagSidecar } from './sidecar'
 
 function settings(): AppSettingsV1 {
   return {
+    evidenceDag: { enabled: true },
     modelRouter: {
       ...defaultModelRouterSettings(),
       runtimeApiKey: 'router-runtime-key',
@@ -16,6 +17,15 @@ function settings(): AppSettingsV1 {
 }
 
 describe('Evidence DAG sidecar launch', () => {
+  it('does not spawn while the app feature is disabled', async () => {
+    const spawnImpl = vi.fn()
+    await ensureEvidenceDagSidecar(
+      { ...settings(), evidenceDag: { enabled: false } },
+      { userDataDir: '/tmp/sciforge', spawnImpl: spawnImpl as never }
+    )
+    expect(spawnImpl).not.toHaveBeenCalled()
+  })
+
   it('routes LLM configuration only through Model Router env', () => {
     const result = buildEvidenceDagLaunch(settings(), {
       userDataDir: '/tmp/sciforge',

@@ -6,6 +6,7 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import {
+  isEvidenceDagEnabled,
   type AppSettingsPatch,
   type AppSettingsV1,
   type ScheduleRunResult,
@@ -30,16 +31,6 @@ import type {
 } from '../../shared/sciforge-api'
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
-import {
-  biologyRoomApplyInputSchema,
-  biologyRoomCreateInputSchema,
-  biologyRoomHistoryInputSchema,
-  biologyRoomListInputSchema,
-  biologyRoomObserveInputSchema,
-  biologyRoomOpenOrCreateInputSchema,
-  biologyRoomRefreshInputSchema,
-  biologyRoomTargetSchema
-} from '../../shared/biology-room'
 import {
   agentRuntimeConnectPayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
@@ -141,18 +132,7 @@ import {
   workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
-  workspacePreviewApplyEditPayloadSchema,
-  workspacePreviewDescribeAssetPayloadSchema,
-  workspacePreviewExportPayloadSchema,
-  workspacePreviewInvokeActionPayloadSchema,
   workspaceNativeFileDragPayloadSchema,
-  workspacePreviewPrepareArtifactPayloadSchema,
-  workspacePreviewListPluginsPayloadSchema,
-  workspacePreviewObservePayloadSchema,
-  workspacePreviewOpenPayloadSchema,
-  workspacePreviewReadArtifactRangePayloadSchema,
-  workspacePreviewReadRangePayloadSchema,
-  workspacePreviewReleaseSessionPayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -330,8 +310,6 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
-import { WorkspacePreviewHost } from '../services/workspace-preview'
-import { BiologyRoomService } from '../services/biology-room-service'
 import {
   acknowledgeEvidenceDagSnapshot,
   enqueueEvidenceDagUpdate,
@@ -351,8 +329,6 @@ type WorkspaceFileWatchRecord = {
   sender: AppBridgeSender
   path: string
   workspaceRoot: string
-  kind: 'legacy-file' | 'workspace-preview'
-  changeChannel: 'file:workspace-changed' | 'workspacePreview:changed'
   timer: ReturnType<typeof setTimeout> | null
 }
 
@@ -362,18 +338,17 @@ type AgentRuntimeEventStreamRecord = {
   onSenderDestroyed: () => void
 }
 
-type WorkspacePreviewSenderSessionRecord = {
-  sender: AppBridgeSender
-  sessionIds: Set<string>
-  onSenderDestroyed: () => void
-}
-
 export type AppBridgeSender = {
   id: number
   isDestroyed: () => boolean
   send: (channel: string, ...args: unknown[]) => void
   once: (event: 'destroyed', listener: () => void) => unknown
   removeListener: (event: 'destroyed', listener: () => void) => unknown
+}
+
+function visibleContextWindowId(sender: AppBridgeSender): string {
+  const nativeCapture = (sender as { capturePage?: unknown }).capturePage
+  return `${typeof nativeCapture === 'function' ? 'electron' : 'browser'}:${sender.id}`
 }
 
 type AppBridgeInvokeEvent = {
@@ -454,31 +429,6 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
-  workspacePreviewHost?: Pick<WorkspacePreviewHost,
-    | 'listPlugins'
-    | 'open'
-    | 'observe'
-    | 'describeAsset'
-    | 'readRange'
-    | 'prepareArtifact'
-    | 'readArtifactRange'
-    | 'applyEdit'
-    | 'exportPreview'
-    | 'invokeAction'
-    | 'releaseSession'
-    | 'prepareWatch'
-    | 'createWatchSnapshot'
-  >
-  biologyRoomService?: Pick<BiologyRoomService,
-    | 'create'
-    | 'openOrCreate'
-    | 'load'
-    | 'list'
-    | 'observe'
-    | 'apply'
-    | 'refresh'
-    | 'history'
-  >
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
@@ -1338,8 +1288,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
-    workspacePreviewHost: providedWorkspacePreviewHost,
-    biologyRoomService: providedBiologyRoomService,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -1365,15 +1313,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     ensureProjectDagReady,
     transcribeSpeech = requestSpeechTranscription
   } = options
-  const workspacePreviewHost = providedWorkspacePreviewHost ?? new WorkspacePreviewHost({
-    loadSettings: () => store.load()
-  })
-  const biologyRoomService = providedBiologyRoomService ?? new BiologyRoomService()
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
-  const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()
-  const workspacePreviewSessionOwnerIds = new Map<string, number>()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
+  const evidenceDagDisabledMessage = 'Evidence DAG is disabled in Settings.'
+  const evidenceDagEnabled = async (): Promise<boolean> =>
+    isEvidenceDagEnabled(await store.load())
+  const assertEvidenceDagEnabled = async (): Promise<void> => {
+    if (!await evidenceDagEnabled()) throw new Error(evidenceDagDisabledMessage)
+  }
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
@@ -1467,102 +1415,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   }
 
-  const cleanupWorkspacePreviewSenderSessionRecord = (
-    senderId: number,
-    record: WorkspacePreviewSenderSessionRecord
-  ): void => {
-    if (workspacePreviewSenderSessions.get(senderId) !== record) return
-    record.sender.removeListener('destroyed', record.onSenderDestroyed)
-    workspacePreviewSenderSessions.delete(senderId)
-  }
-
-  const cleanupWorkspacePreviewSessionOwnership = (sessionId: string): void => {
-    const senderId = workspacePreviewSessionOwnerIds.get(sessionId)
-    if (senderId === undefined) return
-    workspacePreviewSessionOwnerIds.delete(sessionId)
-    const record = workspacePreviewSenderSessions.get(senderId)
-    if (!record) return
-    record.sessionIds.delete(sessionId)
-    if (record.sessionIds.size === 0) {
-      cleanupWorkspacePreviewSenderSessionRecord(senderId, record)
-    }
-  }
-
-  const releaseWorkspacePreviewSession = (sessionId: string): boolean => {
-    const released = workspacePreviewHost.releaseSession(sessionId)
-    if (released) cleanupWorkspacePreviewSessionOwnership(sessionId)
-    return released
-  }
-
-  const disposeWorkspacePreviewSessionsForSender = (sender: AppBridgeSender): void => {
-    const record = workspacePreviewSenderSessions.get(sender.id)
-    if (!record) return
-    for (const sessionId of [...record.sessionIds]) {
-      workspacePreviewHost.releaseSession(sessionId)
-      workspacePreviewSessionOwnerIds.delete(sessionId)
-    }
-    record.sessionIds.clear()
-    cleanupWorkspacePreviewSenderSessionRecord(sender.id, record)
-  }
-
-  const trackWorkspacePreviewSessionForSender = (sender: AppBridgeSender, sessionId: string): void => {
-    cleanupWorkspacePreviewSessionOwnership(sessionId)
-    if (sender.isDestroyed()) {
-      workspacePreviewHost.releaseSession(sessionId)
-      return
-    }
-    let record = workspacePreviewSenderSessions.get(sender.id)
-    if (!record) {
-      const onSenderDestroyed = () => disposeWorkspacePreviewSessionsForSender(sender)
-      record = {
-        sender,
-        sessionIds: new Set<string>(),
-        onSenderDestroyed
-      }
-      workspacePreviewSenderSessions.set(sender.id, record)
-      sender.once('destroyed', onSenderDestroyed)
-    }
-    record.sessionIds.add(sessionId)
-    workspacePreviewSessionOwnerIds.set(sessionId, sender.id)
-  }
-
   const emitWorkspaceFileChange = async (watchId: string): Promise<void> => {
     const record = workspaceFileWatchers.get(watchId)
     if (!record) return
     const changedAt = new Date().toISOString()
     try {
-      if (record.kind === 'workspace-preview') {
-        const result = await workspacePreviewHost.createWatchSnapshot({
-          path: record.path,
-          workspaceRoot: record.workspaceRoot
-        })
-        const latest = workspaceFileWatchers.get(watchId)
-        if (!latest || latest.sender.isDestroyed()) return
-        if (result.ok) {
-          latest.sender.send(latest.changeChannel, {
-            ok: true,
-            watchId,
-            workspaceRoot: result.workspaceRoot,
-            path: result.path,
-            content: result.content,
-            size: result.size,
-            truncated: result.truncated,
-            mtimeMs: result.mtimeMs,
-            changedAt
-          })
-          return
-        }
-        latest.sender.send(latest.changeChannel, {
-          ok: false,
-          watchId,
-          workspaceRoot: latest.workspaceRoot,
-          path: latest.path,
-          message: result.message,
-          changedAt
-        })
-        return
-      }
-
       const result = await readWorkspaceFile({
         path: record.path,
         workspaceRoot: record.workspaceRoot
@@ -1570,7 +1427,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
       if (result.ok) {
-        latest.sender.send(latest.changeChannel, {
+        latest.sender.send('file:workspace-changed', {
           ok: true,
           watchId,
           workspaceRoot: latest.workspaceRoot,
@@ -1582,7 +1439,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         })
         return
       }
-      latest.sender.send(latest.changeChannel, {
+      latest.sender.send('file:workspace-changed', {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -1593,7 +1450,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     } catch (error) {
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
-      latest.sender.send(latest.changeChannel, {
+      latest.sender.send('file:workspace-changed', {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -1758,10 +1615,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return paperRadarRequest(() => requirePaperRadarService().digest(input))
   })
 
-  handleInvoke('visibleContext:publish', async (_, payload: unknown) => {
+  handleInvoke('visibleContext:publish', async (event, payload: unknown) => {
     const snapshot = parseIpcPayload('visibleContext:publish', visibleContextPublishPayloadSchema, payload)
-    if (!visibleContext) return snapshot
-    return visibleContext.publish(snapshot)
+    const boundSnapshot = { ...snapshot, windowId: visibleContextWindowId(event.sender) }
+    if (!visibleContext) return boundSnapshot
+    return visibleContext.publish(boundSnapshot)
   })
   handleInvoke('visibleContext:get', async () => {
     if (!visibleContext) return emptyVisibleContextSnapshot()
@@ -1882,11 +1740,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('agentRuntime:usage', agentRuntimeUsagePayloadSchema, payload)
     )
   )
-  handleInvoke('agentRuntime:auxiliary', async (_, payload: unknown) =>
-    requireAgentRuntime().auxiliary(
-      parseIpcPayload('agentRuntime:auxiliary', agentRuntimeAuxiliaryPayloadSchema, payload)
+  handleInvoke('agentRuntime:auxiliary', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'agentRuntime:auxiliary',
+      agentRuntimeAuxiliaryPayloadSchema,
+      payload
     )
-  )
+    mainPerformanceMonitor.count(`main.agentRuntime.auxiliary.${request.operation}`)
+    return requireAgentRuntime().auxiliary(request)
+  })
   handleInvoke('agentRuntime:stopEvents', async (event, payload: unknown) =>
     disposeAgentRuntimeEventStream(streamIdSchema.parse(payload), event.sender)
   )
@@ -2337,33 +2199,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       path: result.canceled ? null : (result.filePaths[0] ?? null)
     }
   })
-  handleInvoke('biologyRoom:create', async (_, payload: unknown) =>
-    biologyRoomService.create(parseIpcPayload('biologyRoom:create', biologyRoomCreateInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:openOrCreate', async (_, payload: unknown) =>
-    biologyRoomService.openOrCreate(
-      parseIpcPayload('biologyRoom:openOrCreate', biologyRoomOpenOrCreateInputSchema, payload)
-    )
-  )
-  handleInvoke('biologyRoom:load', async (_, payload: unknown) =>
-    biologyRoomService.load(parseIpcPayload('biologyRoom:load', biologyRoomTargetSchema, payload))
-  )
-  handleInvoke('biologyRoom:list', async (_, payload: unknown) =>
-    biologyRoomService.list(parseIpcPayload('biologyRoom:list', biologyRoomListInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:observe', async (_, payload: unknown) =>
-    biologyRoomService.observe(parseIpcPayload('biologyRoom:observe', biologyRoomObserveInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:apply', async (_, payload: unknown) =>
-    biologyRoomService.apply(parseIpcPayload('biologyRoom:apply', biologyRoomApplyInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:refresh', async (_, payload: unknown) =>
-    biologyRoomService.refresh(parseIpcPayload('biologyRoom:refresh', biologyRoomRefreshInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:history', async (_, payload: unknown) =>
-    biologyRoomService.history(parseIpcPayload('biologyRoom:history', biologyRoomHistoryInputSchema, payload))
-  )
-
   handleInvoke(
     'skill:save-file',
     async (_, payload: unknown) => {
@@ -2911,89 +2746,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('workspacePreview:listPlugins', async (_, payload: unknown) => {
-    parseIpcPayload('workspacePreview:listPlugins', workspacePreviewListPluginsPayloadSchema, payload ?? {})
-    return workspacePreviewHost.listPlugins()
-  })
-  handleInvoke('workspacePreview:open', async (event, payload: unknown) => {
-    const result = await workspacePreviewHost.open(
-      parseIpcPayload('workspacePreview:open', workspacePreviewOpenPayloadSchema, payload)
-    )
-    if (result.ok) trackWorkspacePreviewSessionForSender(event.sender, result.session.id)
-    return result
-  })
-  handleInvoke('workspacePreview:observe', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:observe',
-      workspacePreviewObservePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.observe(request.sessionId)
-  })
-  handleInvoke('workspacePreview:releaseSession', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:releaseSession',
-      workspacePreviewReleaseSessionPayloadSchema,
-      payload
-    )
-    return releaseWorkspacePreviewSession(request.sessionId)
-  })
-  handleInvoke('workspacePreview:describeAsset', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:describeAsset',
-      workspacePreviewDescribeAssetPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.describeAsset(request.sessionId)
-  })
-  handleInvoke('workspacePreview:readRange', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:readRange',
-      workspacePreviewReadRangePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.readRange(request.sessionId, request.range)
-  })
-  handleInvoke('workspacePreview:prepareArtifact', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:prepareArtifact',
-      workspacePreviewPrepareArtifactPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.prepareArtifact(request.sessionId, request.request)
-  })
-  handleInvoke('workspacePreview:readArtifactRange', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:readArtifactRange',
-      workspacePreviewReadArtifactRangePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.readArtifactRange(request.sessionId, request.request)
-  })
-  handleInvoke('workspacePreview:applyEdit', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:applyEdit',
-      workspacePreviewApplyEditPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.applyEdit(request.sessionId, request.operation)
-  })
-  handleInvoke('workspacePreview:export', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:export',
-      workspacePreviewExportPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.exportPreview(request.sessionId, request.target)
-  })
-  handleInvoke('workspacePreview:invokeAction', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:invokeAction',
-      workspacePreviewInvokeActionPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.invokeAction(request.sessionId, request.action)
-  })
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
     writeWorkspaceFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
@@ -3051,45 +2803,29 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   const startWorkspaceFileWatch = async (
     event: AppBridgeInvokeEvent,
-    payload: unknown,
-    channel: 'file:watch-workspace' | 'workspacePreview:watch',
-    changeChannel: 'file:workspace-changed' | 'workspacePreview:changed',
-    kind: WorkspaceFileWatchRecord['kind']
+    payload: unknown
   ): Promise<WorkspaceFileWatchResult> => {
-    const request = parseIpcPayload(channel, workspaceFileWatchPayloadSchema, payload)
+    const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
     let watchedPath: string
-    let watchWorkspaceRoot = request.workspaceRoot
     let initialContent: string
     let initialSize: number
     let initialTruncated: boolean
     let initialMtimeMs: number | undefined
-    let startedAt = new Date().toISOString()
-    if (kind === 'workspace-preview') {
-      const initial = await workspacePreviewHost.prepareWatch(request, startedAt)
-      if (!initial.ok) return initial
-      watchedPath = initial.path
-      watchWorkspaceRoot = initial.workspaceRoot
+    const startedAt = new Date().toISOString()
+    const initial = await readWorkspaceFile(request)
+    if (initial.ok) {
       initialContent = initial.content
       initialSize = initial.size
       initialTruncated = initial.truncated
-      initialMtimeMs = initial.mtimeMs
-      startedAt = initial.startedAt
+      initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
+      watchedPath = initial.path
     } else {
-      const initial = await readWorkspaceFile(request)
-      if (initial.ok) {
-        watchedPath = initial.path
-        initialContent = initial.content
-        initialSize = initial.size
-        initialTruncated = initial.truncated
-        initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
-      } else {
-        const initialImage = await readWorkspaceImage(request)
-        if (!initialImage.ok) return initial
-        watchedPath = initialImage.path
-        initialContent = ''
-        initialSize = initialImage.size
-        initialTruncated = false
-      }
+      const initialImage = await readWorkspaceImage(request)
+      if (!initialImage.ok) return initial
+      watchedPath = initialImage.path
+      initialContent = ''
+      initialSize = initialImage.size
+      initialTruncated = false
     }
 
     const watchId = randomUUID()
@@ -3101,9 +2837,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         watcher,
         sender: event.sender,
         path: watchedPath,
-        workspaceRoot: watchWorkspaceRoot,
-        kind,
-        changeChannel,
+        workspaceRoot: request.workspaceRoot,
         timer: null
       })
       event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
@@ -3125,16 +2859,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   }
   handleInvoke('file:watch-workspace', async (event, payload: unknown) =>
-    startWorkspaceFileWatch(event, payload, 'file:watch-workspace', 'file:workspace-changed', 'legacy-file')
+    startWorkspaceFileWatch(event, payload)
   )
   handleInvoke('file:unwatch-workspace', async (_, watchId: unknown) =>
     disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
-  )
-  handleInvoke('workspacePreview:watch', async (event, payload: unknown) =>
-    startWorkspaceFileWatch(event, payload, 'workspacePreview:watch', 'workspacePreview:changed', 'workspace-preview')
-  )
-  handleInvoke('workspacePreview:unwatch', async (_, watchId: unknown) =>
-    disposeWorkspaceFileWatch(parseIpcPayload('workspacePreview:unwatch', streamIdSchema, watchId))
   )
   handleInvoke('write:export', async (_, payload: unknown) => {
     const input = parseIpcPayload('write:export', writeExportPayloadSchema, payload)
@@ -3207,6 +2935,17 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('evidenceDag:view', async (_, payload: unknown) => {
     const input = parseIpcPayload('evidenceDag:view', evidenceDagViewPayloadSchema, payload)
+    if (!await evidenceDagEnabled()) {
+      return {
+        url: '',
+        ...(input.threadId?.trim() ? { threadId: input.threadId.trim() } : {}),
+        status: {
+          freshness: 'paused' as const,
+          pendingCount: 0,
+          lastError: evidenceDagDisabledMessage
+        }
+      }
+    }
     await ensureEvidenceDagReady?.()
     const config = evidenceDagViewConfig(process.env)
     const threadId = input.threadId?.trim()
@@ -3241,6 +2980,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('evidenceDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('evidenceDag:update', evidenceDagUpdatePayloadSchema, payload)
+    await assertEvidenceDagEnabled()
     const { detail, items } = await evidenceDagThreadUpdateSource(input, agentRuntime)
     const workspaceRoot = await evidenceDagThreadWorkspaceRoot(input, detail, agentRuntime)
     const includedSessions = [evidenceDagThreadId(input.runtimeId, input.threadId)]
@@ -3276,6 +3016,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('evidenceDag:priority', async (_, payload: unknown) => {
     const input = parseIpcPayload('evidenceDag:priority', evidenceDagPriorityPayloadSchema, payload)
+    if (!await evidenceDagEnabled()) {
+      return {
+        freshness: 'paused' as const,
+        pendingCount: 0,
+        lastError: evidenceDagDisabledMessage
+      }
+    }
     if (!input.visible) return { freshness: 'fresh', pendingCount: 0 } satisfies DagPanelStatus
     return dagPanelStatus({}, await prioritizeEvidenceDagUpdate(input.runtimeId, input.threadId))
   })
@@ -3285,6 +3032,13 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       evidenceDagEvidencePreviewResolvePayloadSchema,
       payload
     )
+    if (!await evidenceDagEnabled()) {
+      return {
+        ok: false as const,
+        code: 'file_unavailable' as const,
+        message: evidenceDagDisabledMessage
+      }
+    }
     if (!agentRuntime) {
       return {
         ok: false as const,
@@ -3330,6 +3084,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('projectDag:view', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:view', projectDagViewPayloadSchema, payload)
+    await assertEvidenceDagEnabled()
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
@@ -3403,6 +3158,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       projectDagEvidencePreviewResolvePayloadSchema,
       payload
     )
+    await assertEvidenceDagEnabled()
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)
@@ -3421,6 +3177,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('projectDag:update', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:update', projectDagUpdatePayloadSchema, payload)
+    await assertEvidenceDagEnabled()
     const projectIdentity = projectDagUpdateIdentity(input)
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
@@ -3598,6 +3355,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   })
   handleInvoke('projectDag:save-goal', async (_, payload: unknown) => {
     const input = parseIpcPayload('projectDag:save-goal', projectDagGoalSavePayloadSchema, payload)
+    await assertEvidenceDagEnabled()
     await ensureProjectDagReady?.()
     const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
     await assertProjectDagServiceReachable(serviceUrl, apiKey)

@@ -540,10 +540,13 @@ describe('Local runtime built-in tools', () => {
     await expect(readFile(join(workspace, 'existing.txt'), 'utf8')).resolves.toBe('alpha\n')
   })
 
-  it('treats hygiene placeholders as successful bash no-ops', async () => {
+  it('rejects current and persisted hygiene placeholders before shell execution', async () => {
     const placeholders = [
       '[cache hygiene: omitted completed bash.command argument, 1.2KB, approx 300 token(s), 20 line(s); see following tool result] preview="touch should-not-run"',
-      '[sciforge request_hygiene source=tool_call.arguments.command reason=large_argument_string digest=sha256:abc original_chars=7000 summary="touch should-not-run"]'
+      '[sciforge request_hygiene source=tool_call.arguments.command reason=large_argument_string digest=sha256:abc original_chars=7000 summary="touch should-not-run"]',
+      ': # sciforge request hygiene omitted prior shell command; inspect paired tool result',
+      ': # sciforge history omitted prior bash command; inspect paired tool result',
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command'
     ]
 
     for (const [index, placeholder] of placeholders.entries()) {
@@ -573,11 +576,12 @@ describe('Local runtime built-in tools', () => {
       expect(result.item).toMatchObject({
         kind: 'tool_result',
         toolName: 'bash',
-        isError: false,
+        isError: true,
         output: {
-          command: ': # sciforge history omitted prior bash command; inspect paired tool result',
-          exit_code: 0,
-          output: expect.stringContaining('Skipped execution')
+          command: 'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command',
+          exit_code: null,
+          error_code: 'stale_history_argument',
+          error: expect.stringContaining('Rejected stale history argument')
         }
       })
       expect(executed).toBe(false)

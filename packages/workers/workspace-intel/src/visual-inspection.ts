@@ -5,33 +5,76 @@ export const MODEL_ROUTER_BASE_URL_ENV = 'SCIFORGE_MODEL_ROUTER_BASE_URL'
 export const MODEL_ROUTER_RUNTIME_API_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY'
 export const MODEL_ROUTER_VISUAL_MODEL_ENV = 'SCIFORGE_MODEL_ROUTER_VISUAL_MODEL'
 
-const DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS = 90_000
-const DEFAULT_VISUAL_INSPECTION_PROMPT = [
-  'Inspect this captured SciForge interface as visual QA evidence.',
-  'Describe the visible content and identify layout problems such as clipping, overlap, illegible text, poor spacing, alignment, hierarchy, or contrast.',
-  'Recommend concrete corrections. Do not infer content that is not visibly supported.'
+export const GUI_QUALITY_REVIEW_TASK = [
+  'Review the visible interface using only evidence in the supplied image.',
+  'Identify content, legibility, clipping, overlap, spacing, alignment, hierarchy, and contrast issues.',
+  'State actionable corrections as recommendation claims and do not infer unsupported content.'
 ].join(' ')
 
-export type VisualInspectionRequest = {
+const DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS = 90_000
+const MAX_VISUAL_ARTIFACTS = 8
+
+export type VisualArtifactMimeType = 'image/png' | 'image/jpeg' | 'image/webp'
+
+export type NormalizedVisualRegion = {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+
+export type VisualInputRegion = NormalizedVisualRegion & {
+  id: string
+  label?: string
+}
+
+export type VisualOutputIntent = {
+  kind: 'description' | 'ocr' | 'comparison' | 'quality-review' | 'structured-extraction' | 'custom'
+  instructions?: string
+}
+
+export type VisualInspectionArtifact = {
+  id: string
   imagePath: string
-  prompt?: string
-  truthLockedElements?: string[]
+  mimeType: VisualArtifactMimeType
+  regions?: VisualInputRegion[]
+}
+
+export type VisualInspectionRequest = {
+  task: string
+  artifacts: VisualInspectionArtifact[]
+  truthLocks?: string[]
+  outputIntent?: VisualOutputIntent
+}
+
+export type VisualArtifactEvidence = {
+  id: string
+  mimeType: VisualArtifactMimeType
+  sha256: string
+}
+
+export type VisualEvidenceClaim = {
+  kind: 'observation' | 'issue' | 'recommendation'
+  text: string
+  artifactId: string
+  region?: NormalizedVisualRegion
+  confidence: number
 }
 
 export type VisualInspectionEvidence = {
   status: 'inspected'
-  provider: 'model-router-vision'
+  provider: 'model-router'
   model: string
   inspectedAt: string
-  captureSha256: string
-  observationSha256: string
+  task: string
+  artifacts: VisualArtifactEvidence[]
+  requestSha256: string
+  evidenceSha256: string
   attestation: string
-  prompt: string
   summary: string
-  visibleFacts: string[]
-  layoutIssues: string[]
-  recommendedActions: string[]
-  confidence: number
+  claims: VisualEvidenceClaim[]
+  uncertainties: string[]
+  structuredResult?: unknown
 }
 
 export type VisualInspectionFailure = {
@@ -55,7 +98,7 @@ export type ModelRouterVisualInspectorOptions = {
 export function createModelRouterVisualInspector(
   options: ModelRouterVisualInspectorOptions
 ): VisualInspector {
-  const baseUrl = options.baseUrl.trim().replace(/\/+$/u, '')
+  const baseUrl = normalizedLocalModelRouterBaseUrl(options.baseUrl)
   const apiKey = options.apiKey.trim()
   const model = options.model.trim()
   const timeoutMs = Math.max(1_000, options.timeoutMs ?? DEFAULT_VISUAL_INSPECTION_TIMEOUT_MS)
@@ -66,13 +109,44 @@ export function createModelRouterVisualInspector(
     if (!baseUrl || !apiKey || !model) {
       return {
         status: 'visual_inspection_unavailable',
-        message: 'Semantic visual inspection requires a configured local SciForge Model Router.'
+        message: baseUrl === null
+          ? 'Visual understanding requires a local SciForge Model Router URL at http(s)://<loopback>/v1.'
+          : 'Visual understanding requires a configured SciForge Model Router.'
+      }
+    }
+    const normalized = normalizeRequest(request)
+    if (!normalized) {
+      return {
+        status: 'visual_inspection_invalid',
+        message: 'Visual inspection requires a task and between 1 and 8 valid image artifacts.'
       }
     }
     try {
-      const image = await readFile(request.imagePath)
-      const captureSha256 = sha256(image)
-      const prompt = normalizedPrompt(request.prompt)
+      const loadedArtifacts = await Promise.all(normalized.artifacts.map(async (artifact) => {
+        const bytes = await readFile(artifact.imagePath)
+        return {
+          ...artifact,
+          bytes,
+          sha256: sha256(bytes)
+        }
+      }))
+      const artifactEvidence = loadedArtifacts.map(({ id, mimeType, sha256: artifactSha256 }) => ({
+        id,
+        mimeType,
+        sha256: artifactSha256
+      }))
+      const requestDescriptor = {
+        task: normalized.task,
+        artifacts: loadedArtifacts.map(({ id, mimeType, regions, sha256: artifactSha256 }) => ({
+          id,
+          mimeType,
+          sha256: artifactSha256,
+          ...(regions?.length ? { regions } : {})
+        })),
+        truthLocks: normalized.truthLocks,
+        outputIntent: normalized.outputIntent
+      }
+      const requestSha256 = sha256(stableJson(requestDescriptor))
       const response = await fetchImpl(`${baseUrl}/responses`, {
         method: 'POST',
         headers: {
@@ -87,13 +161,19 @@ export function createModelRouterVisualInspector(
             content: [
               {
                 type: 'input_text',
-                text: visualInspectionInstruction(prompt, request.truthLockedElements ?? [])
+                text: visualInspectionInstruction(requestDescriptor)
               },
-              {
-                type: 'input_image',
-                image_url: `data:image/png;base64,${image.toString('base64')}`,
-                mime_type: 'image/png'
-              }
+              ...loadedArtifacts.flatMap((artifact) => [
+                {
+                  type: 'input_text',
+                  text: `Artifact ${JSON.stringify(artifact.id)} follows.`
+                },
+                {
+                  type: 'input_image',
+                  image_url: `data:${artifact.mimeType};base64,${artifact.bytes.toString('base64')}`,
+                  mime_type: artifact.mimeType
+                }
+              ])
             ]
           }]
         }),
@@ -108,25 +188,25 @@ export function createModelRouterVisualInspector(
       }
       const payload = parseJsonRecord(raw)
       const observationText = responseOutputText(payload)
-      const observation = parseVisualObservation(observationText)
+      const observation = parseVisualEvidence(observationText, new Set(artifactEvidence.map(({ id }) => id)))
       if (!observation) {
         return {
           status: 'visual_inspection_invalid',
-          message: 'Model Router visual inspection returned an invalid observation payload.'
+          message: 'Model Router visual inspection returned an invalid evidence payload.'
         }
       }
       const inspectedAt = now().toISOString()
-      const observationJson = JSON.stringify(observation)
-      const observationSha256 = sha256(observationJson)
+      const evidenceSha256 = sha256(stableJson(observation))
       return {
         status: 'inspected',
-        provider: 'model-router-vision',
+        provider: 'model-router',
         model,
         inspectedAt,
-        captureSha256,
-        observationSha256,
-        attestation: `sha256:${sha256(`${captureSha256}\0${prompt}\0${observationSha256}`)}`,
-        prompt,
+        task: normalized.task,
+        artifacts: artifactEvidence,
+        requestSha256,
+        evidenceSha256,
+        attestation: `sha256:${sha256(`${requestSha256}\0${evidenceSha256}`)}`,
         ...observation
       }
     } catch (error) {
@@ -136,6 +216,35 @@ export function createModelRouterVisualInspector(
       }
     }
   }
+}
+
+function normalizedLocalModelRouterBaseUrl(value: string): string | null {
+  const raw = value.trim()
+  if (!raw || raw.includes('?') || raw.includes('#')) return null
+  let url: URL
+  try {
+    url = new URL(raw)
+  } catch {
+    return null
+  }
+  if (
+    (url.protocol !== 'http:' && url.protocol !== 'https:') ||
+    url.username ||
+    url.password ||
+    !isLoopbackHostname(url.hostname)
+  ) return null
+  const pathname = url.pathname.replace(/\/+$/u, '')
+  if (pathname !== '/v1') return null
+  return `${url.origin}/v1`
+}
+
+function isLoopbackHostname(value: string): boolean {
+  const hostname = value.toLowerCase().replace(/^\[|\]$/gu, '')
+  if (hostname === 'localhost' || hostname === '::1') return true
+  const octets = hostname.split('.')
+  return octets.length === 4 &&
+    octets[0] === '127' &&
+    octets.every((octet) => /^\d{1,3}$/u.test(octet) && Number(octet) <= 255)
 }
 
 export function modelRouterVisualInspectorFromEnv(
@@ -148,21 +257,64 @@ export function modelRouterVisualInspectorFromEnv(
   return createModelRouterVisualInspector({ baseUrl, apiKey, model })
 }
 
-function visualInspectionInstruction(prompt: string, truthLockedElements: string[]): string {
-  return [
-    'You are the semantic vision stage of a fail-closed GUI visual QA workflow.',
-    `Inspection task: ${prompt}`,
-    `Truth-locked elements: ${JSON.stringify(truthLockedElements.slice(0, 64))}`,
-    'Inspect only what is visibly supported by the supplied screenshot.',
-    'Return JSON only with this schema:',
-    '{"summary":string,"visibleFacts":string[],"layoutIssues":string[],"recommendedActions":string[],"confidence":number}',
-    'confidence must be between 0 and 1. Use empty arrays when no issue is visible.'
-  ].join('\n')
+function normalizeRequest(request: VisualInspectionRequest): VisualInspectionRequest | null {
+  const task = request.task.trim().slice(0, 16_000)
+  if (!task || request.artifacts.length < 1 || request.artifacts.length > MAX_VISUAL_ARTIFACTS) return null
+  const artifactIds = new Set<string>()
+  const artifacts: VisualInspectionArtifact[] = []
+  for (const artifact of request.artifacts) {
+    const id = artifact.id.trim().slice(0, 128)
+    if (!id || artifactIds.has(id) || !artifact.imagePath || !isSupportedMimeType(artifact.mimeType)) return null
+    artifactIds.add(id)
+    if ((artifact.regions?.length ?? 0) > 64) return null
+    const regionIds = new Set<string>()
+    const regions = artifact.regions?.map((region) => {
+      const label = region.label?.trim().slice(0, 512)
+      return {
+        ...region,
+        id: region.id.trim().slice(0, 128),
+        ...(label ? { label } : {})
+      }
+    })
+    for (const region of regions ?? []) {
+      if (!isValidInputRegion(region) || regionIds.has(region.id)) return null
+      regionIds.add(region.id)
+    }
+    artifacts.push({
+      id,
+      imagePath: artifact.imagePath,
+      mimeType: artifact.mimeType,
+      ...(regions?.length ? { regions } : {})
+    })
+  }
+  return {
+    task,
+    artifacts,
+    ...(request.truthLocks?.length
+      ? { truthLocks: request.truthLocks.map((lock) => lock.trim().slice(0, 1_000)).filter(Boolean).slice(0, 64) }
+      : {}),
+    ...(request.outputIntent ? { outputIntent: request.outputIntent } : {})
+  }
 }
 
-function normalizedPrompt(value: string | undefined): string {
-  const trimmed = value?.trim().slice(0, 16_000)
-  return trimmed || DEFAULT_VISUAL_INSPECTION_PROMPT
+function visualInspectionInstruction(request: {
+  task: string
+  artifacts: Array<Omit<VisualInspectionArtifact, 'imagePath'> & { sha256: string }>
+  truthLocks?: string[]
+  outputIntent?: VisualOutputIntent
+}): string {
+  return [
+    'You are the visual understanding stage of SciForge. All model inference is mediated by the SciForge Model Router.',
+    `Task: ${request.task}`,
+    `Artifacts: ${JSON.stringify(request.artifacts)}`,
+    `Truth locks: ${JSON.stringify(request.truthLocks ?? [])}`,
+    `Output intent: ${JSON.stringify(request.outputIntent ?? { kind: 'description' })}`,
+    'Use only evidence visibly supported by the supplied artifacts. Never invent an artifact id.',
+    'Regions use normalized image coordinates from 0 to 1. Omit a region when the claim applies to the whole artifact.',
+    'Return JSON only with this schema:',
+    '{"summary":string,"claims":[{"kind":"observation"|"issue"|"recommendation","text":string,"artifactId":string,"region"?:{"x":number,"y":number,"width":number,"height":number},"confidence":number}],"uncertainties":string[],"structuredResult"?:any}',
+    'Each confidence must be between 0 and 1. Use empty arrays when there are no claims or uncertainties.'
+  ].join('\n')
 }
 
 function responseOutputText(payload: Record<string, unknown>): string {
@@ -183,36 +335,86 @@ function responseOutputText(payload: Record<string, unknown>): string {
   return chunks.join('\n')
 }
 
-function parseVisualObservation(text: string): {
+function parseVisualEvidence(text: string, artifactIds: Set<string>): {
   summary: string
-  visibleFacts: string[]
-  layoutIssues: string[]
-  recommendedActions: string[]
-  confidence: number
+  claims: VisualEvidenceClaim[]
+  uncertainties: string[]
+  structuredResult?: unknown
 } | null {
-  const candidate = text.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')
-  let parsed: Record<string, unknown>
+  const parsed = parseEmbeddedJson(text)
+  if (!parsed) return null
+  const summary = stringValue(parsed.summary)
+  if (!summary || !Array.isArray(parsed.claims) || !Array.isArray(parsed.uncertainties)) return null
+  const claims: VisualEvidenceClaim[] = []
+  for (const item of parsed.claims) {
+    const record = asRecord(item)
+    const kind = stringValue(record.kind)
+    const claimText = stringValue(record.text)
+    const artifactId = stringValue(record.artifactId)
+    const confidence = numberValue(record.confidence)
+    if (
+      !isClaimKind(kind) ||
+      !claimText ||
+      !artifactIds.has(artifactId) ||
+      confidence === null ||
+      confidence < 0 ||
+      confidence > 1
+    ) return null
+    const region = record.region === undefined ? undefined : normalizedRegion(record.region)
+    if (record.region !== undefined && !region) return null
+    claims.push({ kind, text: claimText, artifactId, ...(region ? { region } : {}), confidence })
+  }
+  const uncertainties = stringArray(parsed.uncertainties)
+  if (uncertainties.length !== parsed.uncertainties.length) return null
+  return {
+    summary,
+    claims,
+    uncertainties,
+    ...(Object.prototype.hasOwnProperty.call(parsed, 'structuredResult')
+      ? { structuredResult: parsed.structuredResult }
+      : {})
+  }
+}
+
+function parseEmbeddedJson(value: string): Record<string, unknown> | null {
+  const candidate = value.trim().replace(/^```(?:json)?\s*/iu, '').replace(/\s*```$/u, '')
   try {
-    parsed = parseJsonRecord(candidate)
+    return parseJsonRecord(candidate)
   } catch {
     const match = candidate.match(/\{[\s\S]*\}/u)
     if (!match) return null
     try {
-      parsed = parseJsonRecord(match[0])
+      return parseJsonRecord(match[0])
     } catch {
       return null
     }
   }
-  const summary = stringValue(parsed.summary)
-  const confidence = numberValue(parsed.confidence)
-  if (!summary || confidence === null) return null
-  return {
-    summary,
-    visibleFacts: stringArray(parsed.visibleFacts),
-    layoutIssues: stringArray(parsed.layoutIssues),
-    recommendedActions: stringArray(parsed.recommendedActions),
-    confidence: Math.max(0, Math.min(1, confidence))
-  }
+}
+
+function normalizedRegion(value: unknown): NormalizedVisualRegion | null {
+  const record = asRecord(value)
+  const x = numberValue(record.x)
+  const y = numberValue(record.y)
+  const width = numberValue(record.width)
+  const height = numberValue(record.height)
+  if (
+    x === null || y === null || width === null || height === null ||
+    x < 0 || y < 0 || width <= 0 || height <= 0 ||
+    x + width > 1 || y + height > 1
+  ) return null
+  return { x, y, width, height }
+}
+
+function isValidInputRegion(region: VisualInputRegion): boolean {
+  return Boolean(region.id.trim()) && normalizedRegion(region) !== null
+}
+
+function isSupportedMimeType(value: string): value is VisualArtifactMimeType {
+  return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp'
+}
+
+function isClaimKind(value: string): value is VisualEvidenceClaim['kind'] {
+  return value === 'observation' || value === 'issue' || value === 'recommendation'
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> {
@@ -241,6 +443,18 @@ function stringArray(value: unknown): string[] {
 
 function numberValue(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function stableJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`)
+      .join(',')}}`
+  }
+  return JSON.stringify(value) ?? 'null'
 }
 
 function sha256(value: string | Buffer): string {

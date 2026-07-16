@@ -1729,6 +1729,13 @@ describe('WorkspacePreviewHost', () => {
     expect(loaded.sidecar.threads).toHaveLength(0)
     expect(loaded.sidecar.annotations).toHaveLength(0)
     expect(loaded.sidecar.anchors).toHaveLength(0)
+    expect(loaded.sidecar.deletedThreads).toEqual([{
+      threadId: 'thread-edit',
+      annotationIds: ['ann-thread'],
+      anchorIds: ['anchor-edit'],
+      deletedAt: '2026-07-08T00:03:00.000Z',
+      deletedVersion: 3
+    }])
 
     const observed = await host.observe(opened.session.id)
     expect(observed).toMatchObject({

@@ -28,6 +28,7 @@ import {
 import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import { performanceMonitor } from '../../lib/performance-monitor'
+import { registerVisibleContextComponent } from '../../lib/visible-context'
 import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
 
 export { summarizeToolBlock } from './message-timeline-process'
@@ -61,6 +62,7 @@ type Props = {
 
 const TURN_PAGE_SIZE = 18
 const AUTO_COLLAPSE_THRESHOLD = 24
+const PROCESS_SECTION_PAGE_SIZE = 80
 
 function useStableOptionalCallback<Args extends unknown[]>(
   callback: ((...args: Args) => void) | undefined
@@ -78,6 +80,20 @@ function useStableOptionalCallback<Args extends unknown[]>(
       callbackRef.current?.(...args)
     }
   }, [hasCallback])
+}
+
+function useStableCallback<Args extends unknown[]>(
+  callback: (...args: Args) => void
+): (...args: Args) => void {
+  const callbackRef = useRef(callback)
+
+  useEffect(() => {
+    callbackRef.current = callback
+  }, [callback])
+
+  return useMemo(() => (...args: Args): void => {
+    callbackRef.current(...args)
+  }, [])
 }
 
 function blockScrollStamp(block: ChatBlock | undefined): string {
@@ -101,7 +117,30 @@ function blockScrollStamp(block: ChatBlock | undefined): string {
   }
 }
 
-export function MessageTimeline({
+export function MessageTimeline(props: Props): ReactElement {
+  const onRetryConnection = useStableCallback(props.onRetryConnection)
+  const onOpenSettings = useStableCallback(props.onOpenSettings)
+  const onSelectSuggestion = useStableOptionalCallback(props.onSelectSuggestion)
+  const onBuildPlan = useStableOptionalCallback(props.onBuildPlan)
+  const onOpenPlan = useStableOptionalCallback(props.onOpenPlan)
+  const onOpenImageArtifactInVisualReview = useStableOptionalCallback(
+    props.onOpenImageArtifactInVisualReview
+  )
+
+  return (
+    <MemoMessageTimelineComponent
+      {...props}
+      onRetryConnection={onRetryConnection}
+      onOpenSettings={onOpenSettings}
+      onSelectSuggestion={onSelectSuggestion}
+      onBuildPlan={onBuildPlan}
+      onOpenPlan={onOpenPlan}
+      onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
+    />
+  )
+}
+
+function MessageTimelineComponent({
   blocks,
   liveReasoning,
   live,
@@ -150,15 +189,29 @@ export function MessageTimeline({
   const liveReasoningMeta = useChatStore((s) =>
     activeThreadId && activeThreadId === s.activeThreadId ? s.liveReasoningMeta : null
   )
-  const stableOnBuildPlan = useStableOptionalCallback(onBuildPlan)
-  const stableOnOpenPlan = useStableOptionalCallback(onOpenPlan)
-  const stableOnOpenImageArtifactInVisualReview = useStableOptionalCallback(onOpenImageArtifactInVisualReview)
+  const stableOnBuildPlan = onBuildPlan
+  const stableOnOpenPlan = onOpenPlan
+  const stableOnOpenImageArtifactInVisualReview = onOpenImageArtifactInVisualReview
   const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
   const hasContent = blocks.length > 0 || live || liveReasoning
   const endRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => registerVisibleContextComponent({
+    id: 'chat.timeline',
+    region: 'main',
+    component: 'message-timeline',
+    title: 'Chat timeline',
+    visible: true,
+    priority: 100,
+    updatedAt: new Date().toISOString(),
+    summary: activeThreadId
+      ? `Visible messages and generated artifacts for thread ${activeThreadId}.`
+      : 'Chat timeline without an active thread.',
+    state: { activeThreadId }
+  }), [activeThreadId])
 
   const turns = useMemo(() => groupTurns(blocks), [blocks])
   const latestBlock = blocks[blocks.length - 1]
@@ -340,6 +393,8 @@ export function MessageTimeline({
   )
 }
 
+const MemoMessageTimelineComponent = memo(MessageTimelineComponent)
+
 function MessageTurn({
   turn,
   isProcessing,
@@ -373,6 +428,7 @@ function MessageTurn({
   onContinueScientificObject?: (prompt: string) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
+  const { t } = useTranslation('common')
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   // Inline Review Plan card: surfaced under a turn that produced a
   // successful `create_plan` result so the user can open/build the plan
@@ -428,6 +484,19 @@ function MessageTurn({
     () => (workExpanded ? groupProcessSections(processBlocks) : []),
     [processBlocks, workExpanded]
   )
+  const [visibleProcessSectionCount, setVisibleProcessSectionCount] = useState(
+    PROCESS_SECTION_PAGE_SIZE
+  )
+  const hiddenProcessSectionCount = Math.max(
+    0,
+    processSections.length - visibleProcessSectionCount
+  )
+  const visibleProcessSections = useMemo(
+    () => hiddenProcessSectionCount > 0
+      ? processSections.slice(hiddenProcessSectionCount)
+      : processSections,
+    [hiddenProcessSectionCount, processSections]
+  )
   const reasoningSectionCount = useMemo(
     () => processSections.filter((section) => section.kind === 'reasoning').length,
     [processSections]
@@ -455,7 +524,20 @@ function MessageTurn({
           />
           {workExpanded && processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
-              {processSections.map((section) => (
+              {hiddenProcessSectionCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleProcessSectionCount((count) =>
+                    Math.min(processSections.length, count + PROCESS_SECTION_PAGE_SIZE)
+                  )}
+                  className="mb-1 w-fit rounded-full px-3 py-1.5 text-[12px] font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  {t('timelineShowEarlierWork', {
+                    count: Math.min(hiddenProcessSectionCount, PROCESS_SECTION_PAGE_SIZE)
+                  })}
+                </button>
+              ) : null}
+              {visibleProcessSections.map((section) => (
                 <ProcessSectionRow
                   key={section.id}
                   section={section}

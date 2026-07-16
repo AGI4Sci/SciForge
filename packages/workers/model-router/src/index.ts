@@ -1,9 +1,17 @@
 export {
+  MODEL_ROUTER_MAX_REQUEST_BYTES,
+  MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES,
+  MODEL_ROUTER_VISION_MIME_TYPES,
+  createModelRouterPublicCapabilities,
   createModelRouterServer,
   startModelRouterServer,
   type ModelRouterConfig,
   type ModelRouterProfile,
+  type ModelRouterProfileCapabilityRegistration,
   type ModelRouterProviderConfig,
+  type ModelRouterPublicCapabilityContract,
+  type ModelRouterRoleReadiness,
+  type ModelRouterRoleReadinessState,
   type StartedModelRouterServer,
 } from './router';
 export {

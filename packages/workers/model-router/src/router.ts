@@ -45,6 +45,30 @@ export interface ModelRouterScientificTranslatorConfig {
   timeoutMs?: number;
 }
 
+export const MODEL_ROUTER_VISION_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+] as const;
+export const MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES = 20 * 1024 * 1024;
+export const MODEL_ROUTER_MAX_REQUEST_BYTES = 40 * 1024 * 1024;
+
+export interface ModelRouterProfileCapabilityRegistration {
+  vision?: {
+    mimeTypes?: string[];
+    maxInputBytes?: number;
+  };
+  images?: {
+    generation?: boolean;
+    editing?: boolean;
+    referenceImages?: boolean;
+    masks?: boolean;
+    sizeSelection?: boolean;
+    sizes?: string[];
+  };
+}
+
 export interface ModelRouterProfile {
   traceRoot: string;
   textReasoner: ModelRouterProviderConfig;
@@ -53,6 +77,7 @@ export interface ModelRouterProfile {
     vision?: ModelRouterProviderConfig;
     scientific?: ModelRouterScientificTranslatorConfig;
   };
+  capabilities?: ModelRouterProfileCapabilityRegistration;
 }
 
 export interface ModelRouterConfig {
@@ -77,6 +102,54 @@ export interface StartedModelRouterServer {
   port: number;
   close(): Promise<void>;
 }
+
+export type ModelRouterRoleReadinessState =
+  | 'ready'
+  | 'not_configured'
+  | 'invalid_configuration'
+  | 'missing_credentials';
+
+export type ModelRouterRoleReadiness = {
+  configured: boolean;
+  ready: boolean;
+  state: ModelRouterRoleReadinessState;
+};
+
+export type ModelRouterPublicCapabilityContract = {
+  schemaVersion: 'sciforge.model-router.capabilities.v1';
+  publicModelAlias: string;
+  profile: string;
+  roles: {
+    textReasoner: ModelRouterRoleReadiness;
+    imageGenerator: ModelRouterRoleReadiness;
+    visionTranslator: ModelRouterRoleReadiness;
+    scientificTranslator: ModelRouterRoleReadiness;
+  };
+  vision: {
+    available: boolean;
+    input: {
+      mimeTypes: string[];
+      maxInputBytes: number;
+      maxRequestBytes: number;
+      sources: Array<'inline' | 'url' | 'workspace_ref'>;
+    };
+  };
+  images: {
+    available: boolean;
+    maxRequestBytes: number;
+    features: {
+      generation: boolean;
+      editing: boolean;
+      referenceImages: boolean;
+      masks: boolean;
+      sizeSelection: boolean;
+    };
+    sizes: {
+      mode: 'enumerated' | 'provider-defined' | 'unsupported';
+      values: string[];
+    };
+  };
+};
 
 type ModalityKind = 'vision.image' | 'audio' | 'video' | 'table' | 'document';
 
@@ -203,8 +276,8 @@ type TextControl =
   | { type: 'final_answer'; content: string }
   | { type: 'need_more_visual_info'; target: string; question: string; reason?: string };
 
-const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = 40 * 1024 * 1024;
+const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES;
+const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = MODEL_ROUTER_MAX_REQUEST_BYTES;
 const MAX_TOOL_CALL_CACHE_ENTRIES = 512;
 const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
 export const DEFAULT_MODEL_ROUTER_TRACE_ROOT = 'traces';
@@ -334,6 +407,15 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           data: [publicModel],
           models: [publicModel],
         });
+      }
+      if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const profileId = requestedProfileId({}, request, options.config);
+        return sendJson(
+          response,
+          200,
+          createModelRouterPublicCapabilities(options.config, env, profileId) as unknown as JsonObject,
+        );
       }
       if (request.method === 'POST' && url.pathname === '/v1/responses') {
         assertRuntimeAuthorized(request, options.config, env);
@@ -573,6 +655,123 @@ function assertRuntimeAuthorized(
   }
 }
 
+export function createModelRouterPublicCapabilities(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+  profileId = config.defaultProfile,
+): ModelRouterPublicCapabilityContract {
+  const profile = config.profiles[profileId];
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+
+  const roles = {
+    textReasoner: providerRoleReadiness(profile.textReasoner, env),
+    imageGenerator: providerRoleReadiness(profile.imageGenerator, env),
+    visionTranslator: providerRoleReadiness(profile.translators.vision, env),
+    scientificTranslator: scientificTranslatorRoleReadiness(profile.translators.scientific, env),
+  };
+  const visionRegistration = profile.capabilities?.vision;
+  const registeredVisionMimeTypes = visionRegistration?.mimeTypes;
+  const mimeTypes = profile.translators.vision
+    ? sanitizeVisionMimeTypes(registeredVisionMimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES])
+    : [];
+  const maxInputBytes = profile.translators.vision
+    ? boundedPublicInputBytes(visionRegistration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES)
+    : 0;
+
+  const imageRegistration = profile.capabilities?.images;
+  const imageRoleRegistered = Boolean(profile.imageGenerator);
+  const generation = imageRoleRegistered && registeredFeature(imageRegistration?.generation, true);
+  const editing = imageRoleRegistered && registeredFeature(imageRegistration?.editing, true);
+  const referenceImages = editing && registeredFeature(imageRegistration?.referenceImages, true);
+  const masks = editing && registeredFeature(imageRegistration?.masks, true);
+  const sizeSelection = (generation || editing) && registeredFeature(imageRegistration?.sizeSelection, true);
+  const sizes = sizeSelection ? sanitizeImageSizes(imageRegistration?.sizes ?? []) : [];
+
+  return {
+    schemaVersion: 'sciforge.model-router.capabilities.v1',
+    publicModelAlias: config.publicModelAlias ?? 'sciforge-model-router',
+    profile: profileId,
+    roles,
+    vision: {
+      available: roles.visionTranslator.ready,
+      input: {
+        mimeTypes,
+        maxInputBytes,
+        maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+        sources: ['inline', 'url', 'workspace_ref'],
+      },
+    },
+    images: {
+      available: roles.imageGenerator.ready && (generation || editing),
+      maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+      features: {
+        generation,
+        editing,
+        referenceImages,
+        masks,
+        sizeSelection,
+      },
+      sizes: {
+        mode: !sizeSelection ? 'unsupported' : sizes.length > 0 ? 'enumerated' : 'provider-defined',
+        values: sizes,
+      },
+    },
+  };
+}
+
+function providerRoleReadiness(
+  provider: ModelRouterProviderConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!provider) return { configured: false, ready: false, state: 'not_configured' };
+  if (providerConfigurationIssue(provider)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[provider.apiKeyEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function scientificTranslatorRoleReadiness(
+  translator: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!translator) return { configured: false, ready: false, state: 'not_configured' };
+  if (scientificTranslatorConfigurationIssue(translator)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[translator.tokenEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function registeredFeature(value: boolean | undefined, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeVisionMimeTypes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^image\/[a-z0-9][a-z0-9.+-]{0,63}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function sanitizeImageSizes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value === 'auto' || /^[1-9]\d{1,4}x[1-9]\d{1,4}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function boundedPublicInputBytes(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) return fallback;
+  return Math.min(Math.floor(value), MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
+}
+
 function modelRouterHealthzUpstreamDiagnostic(
   config: ModelRouterConfig,
   env: Record<string, string | undefined>,
@@ -710,6 +909,11 @@ async function routeImageGenerationRequest(body: unknown, context: ImageRouteCon
     throw routerError(400, 'invalid_request', 'Image generation request body must be a JSON object.');
   }
   const route = resolveImageRoute(body, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'generation',
+    { size: stringField(body.size) },
+  );
   return routeImageProviderRequest({
     context,
     route,
@@ -733,11 +937,21 @@ async function routeImageEditRequest(form: FormData, context: ImageRouteContext)
   const prompt = requiredMultipartText(form, 'prompt');
   const images = requiredMultipartFiles(form, 'image');
   const mask = optionalMultipartFile(form, 'mask');
+  const size = optionalMultipartText(form, 'size');
   const route = resolveImageRoute({ model }, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'editing',
+    {
+      imageCount: images.length,
+      hasMask: Boolean(mask),
+      size,
+    },
+  );
   const providerForm = new FormData();
   providerForm.set('model', route.provider.model);
   providerForm.set('prompt', prompt);
-  copyOptionalMultipartText(form, providerForm, 'size');
+  if (size) providerForm.set('size', size);
   copyOptionalMultipartText(form, providerForm, 'n');
   copyOptionalMultipartText(form, providerForm, 'quality');
   copyOptionalMultipartText(form, providerForm, 'input_fidelity');
@@ -753,6 +967,32 @@ async function routeImageEditRequest(form: FormData, context: ImageRouteContext)
       body: providerForm,
     },
   });
+}
+
+function assertImageRequestCapabilities(
+  capabilities: ModelRouterPublicCapabilityContract,
+  operation: 'generation' | 'editing',
+  request: { imageCount?: number; hasMask?: boolean; size?: string },
+): void {
+  if (!capabilities.images.features[operation]) {
+    throw routerError(422, 'image_capability_not_supported', `The active Model Router profile does not support image ${operation}.`, 'imageGenerator');
+  }
+  if ((request.imageCount ?? 0) > 1 && !capabilities.images.features.referenceImages) {
+    throw routerError(422, 'image_references_not_supported', 'The active Model Router profile does not support multiple reference images.', 'imageGenerator');
+  }
+  if (request.hasMask && !capabilities.images.features.masks) {
+    throw routerError(422, 'image_masks_not_supported', 'The active Model Router profile does not support masked image editing.', 'imageGenerator');
+  }
+  if (request.size && !capabilities.images.features.sizeSelection) {
+    throw routerError(422, 'image_size_selection_not_supported', 'The active Model Router profile does not support explicit image sizes.', 'imageGenerator');
+  }
+  if (
+    request.size
+    && capabilities.images.sizes.mode === 'enumerated'
+    && !capabilities.images.sizes.values.includes(request.size.toLowerCase())
+  ) {
+    throw routerError(422, 'image_size_not_supported', 'The requested image size is not supported by the active Model Router profile.', 'imageGenerator');
+  }
 }
 
 function resolveImageRoute(request: Record<string, unknown>, context: ImageRouteContext): ResolvedImageRoute {
@@ -857,12 +1097,18 @@ function requiredMultipartText(form: FormData, name: string): string {
 }
 
 function copyOptionalMultipartText(source: FormData, target: FormData, name: string): void {
-  const value = source.get(name);
-  if (value === null) return;
+  const value = optionalMultipartText(source, name);
+  if (!value) return;
+  target.set(name, value);
+}
+
+function optionalMultipartText(form: FormData, name: string): string | undefined {
+  const value = form.get(name);
+  if (value === null) return undefined;
   if (typeof value !== 'string' || !value.trim()) {
     throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string when provided.`);
   }
-  target.set(name, value);
+  return value.trim();
 }
 
 function requiredMultipartFiles(form: FormData, name: string): Blob[] {
@@ -1467,13 +1713,22 @@ function validateProfile(profile: ModelRouterProfile) {
 }
 
 function validateProviderConfig(config: ModelRouterProviderConfig, role: string) {
-  if (!config.provider || !config.baseUrl || !config.apiKeyEnv || !config.model) {
+  const issue = providerConfigurationIssue(config);
+  if (issue === 'missing') {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" is missing required provider configuration.`);
   }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+  }
+}
+
+function providerConfigurationIssue(config: ModelRouterProviderConfig): 'missing' | 'invalid_url' | undefined {
+  if (!config.provider || !config.baseUrl || !config.apiKeyEnv || !config.model) return 'missing';
   try {
     new URL(config.baseUrl);
+    return undefined;
   } catch {
-    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+    return 'invalid_url';
   }
 }
 
@@ -1489,13 +1744,24 @@ function optionalSecretForProvider(config: ModelRouterProviderConfig, env: Recor
 }
 
 function validateScientificTranslatorConfig(config: ModelRouterScientificTranslatorConfig) {
-  if (!config.baseUrl || !config.tokenEnv || !config.model) {
+  const issue = scientificTranslatorConfigurationIssue(config);
+  if (issue === 'missing') {
     throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" is missing required service configuration.');
   }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" has an invalid service base URL.');
+  }
+}
+
+function scientificTranslatorConfigurationIssue(
+  config: ModelRouterScientificTranslatorConfig,
+): 'missing' | 'invalid_url' | undefined {
+  if (!config.baseUrl || !config.tokenEnv || !config.model) return 'missing';
   try {
     new URL(config.baseUrl);
+    return undefined;
   } catch {
-    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" has an invalid service base URL.');
+    return 'invalid_url';
   }
 }
 
@@ -2409,6 +2675,7 @@ async function callVisionTranslator(options: {
 }) {
   const translator = options.profile.translators.vision;
   if (!translator) throw new Error('Vision translator is not configured.');
+  assertVisionInputCapability(options.profile, options.modality);
   const providerParts = [options.modality.transientProviderPart]
     .filter((part): part is JsonObject => Boolean(part));
   const content: JsonObject[] = [
@@ -2440,6 +2707,19 @@ async function callVisionTranslator(options: {
     signal: options.signal,
   });
   return result;
+}
+
+function assertVisionInputCapability(profile: ModelRouterProfile, modality: ModalityRef): void {
+  const registration = profile.capabilities?.vision;
+  const mimeTypes = sanitizeVisionMimeTypes(registration?.mimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES]);
+  const mime = modality.mime?.trim().toLowerCase();
+  if (mime && !mimeTypes.includes(mime)) {
+    throw routerError(415, 'vision_mime_not_supported', 'The visual input MIME type is not supported by the active Model Router profile.', 'visionTranslator');
+  }
+  const maxInputBytes = boundedPublicInputBytes(registration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
+  if (modality.byteLength !== undefined && modality.byteLength > maxInputBytes) {
+    throw routerError(413, 'vision_input_too_large', 'The visual input exceeds the active Model Router profile input limit.', 'visionTranslator');
+  }
 }
 
 async function callTextReasoner(options: {
