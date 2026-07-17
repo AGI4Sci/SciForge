@@ -39,13 +39,59 @@
 % === Metadata ===
 \title[SciForge: Multimodal Research-Native AI Workbench]{SciForge: A Multimodal Research-Native AI Workbench for Scientific Discovery}
 
-\author*[1]{\fnm{Author} \sur{Names}}\email{author@example.com}
+\author[1,2]{\fnm{Shuizhou} \sur{Chen}}
+\author[1,4]{\fnm{Lang} \sur{Yu}}
+\author[1,3]{\fnm{Kedu} \sur{Jin}}
+\author[1,5]{\fnm{Songming} \sur{Zhang}}
+\author[1]{\fnm{Hao} \sur{Wu}}
+\author[1]{\fnm{Wenxuan} \sur{Huang}}
+\author[1]{\fnm{Sheng} \sur{Xu}}
+\author*[2]{\fnm{Quan} \sur{Qian}}
+\author*[4]{\fnm{Qin} \sur{Chen}}
+\author*[1]{\fnm{Lei} \sur{Bai}}
+\author*[1]{\fnm{Siqi} \sur{Sun}}
+\author*[1]{\fnm{Zhangyang} \sur{Gao}}\email{gaozhangyang@pjlab.org.cn}
 
-\affil*[1]{\orgdiv{Institute}, \orgname{University}, \orgaddress{\city{City}, \country{Country}}}
+\affil[1]{\orgname{Shanghai Artificial Intelligence Laboratory}, \orgaddress{\city{Shanghai}, \country{China}}}
+\affil[2]{\orgdiv{School of Computer Engineering \& Science}, \orgname{Shanghai University}, \orgaddress{\city{Shanghai}, \country{China}}}
+\affil[3]{\orgdiv{School of Life Science and Technology}, \orgname{China Pharmaceutical University}, \orgaddress{\city{Nanjing}, \country{China}}}
+\affil[4]{\orgdiv{School of Computer Science and Technology}, \orgname{East China Normal University}, \orgaddress{\city{Shanghai}, \country{China}}}
+\affil[5]{\orgdiv{Faculty of Computer Engineering and Artificial Intelligence}, \orgname{Shenzhen University of Advanced Technology}, \orgaddress{\city{Shenzhen}, \country{China}}}
+
+% Compact technical-report front matter: institutional masthead at the upper
+% right, a full-width rule, and left-aligned title/author metadata.
+\makeatletter
+\def\Titlefont{\reset@font\fontsize{17bp}{20bp}\selectfont\raggedright}
+\def\Authorfont{\reset@font\fontsize{7.5bp}{9bp}\selectfont\raggedright}
+\def\addressfont{\reset@font\fontsize{6.5bp}{7.8bp}\selectfont\raggedright}
+\def\abstractfont{\reset@font\fontsize{8.5bp}{10.5bp}\selectfont\leftskip=0pt\rightskip=0pt\parfillskip=0pt plus 1fil}
+\def\keywordfont{\reset@font\fontsize{7.5bp}{9bp}\selectfont\leftskip=0pt\rightskip=0pt plus0.5fill}
+\long\def\abstract#1{\def\@abstract{\abstractfont #1\par}}
+\renewcommand{\@maketitle}{%
+  \null\vspace*{-34pt}%
+  \hsize\textwidth\parindent0pt%
+  \noindent\makebox[\textwidth][r]{\includegraphics[width=0.38\textwidth]{figures/shanghai-ai-lab-logo.png}}\par%
+  \vspace{4pt}\hrule\vspace{11pt}%
+  {\Titlefont\@title\par}%
+  \ifnum\aucount>0
+    \global\punctcount\aucount%
+    \vspace{8pt}{\artauthors\par}%
+    \vspace{4pt}{\addressfont\auaddress\par}%
+    \ifnum\emailcnt>0\relax%
+      \ifx\corrauthemail\@empty\else
+        \vspace{6pt}{\addressfont *Corresponding authors. E-mail: \corrauthemail\par}%
+      \fi%
+    \fi%
+  \fi%
+  \vspace{10pt}{\printabstract\par}%
+  {\printkeywords\par}%
+  \vspace{20pt}%
+}
+\makeatother
 
 % === Abstract keywords ===
 \abstract{
-Scientific work increasingly spans heterogeneous artifacts---papers, code, datasets, scientific file formats, model outputs, figures, manuscripts, and team decisions---yet general-purpose AI assistants rarely preserve these objects as a coherent, auditable research state. We present SciForge, a multimodal research-native AI workbench that reserves the graphical interface for human judgment while search, parsing, model routing, workflow execution, plotting, writing, and presentation generation run as modular agent-accessible services. SciForge is built around four integrated pillars: (i)~\emph{translate-then-reason} for \textbf{multimodal} scientific ingress, routing native scientific objects through domain translators before the agent reasons; (ii)~\emph{evidence governance} for \textbf{auditable} traceability, linking claims to provenance chains with structured audit; (iii)~\emph{collaborative team science} with \textbf{early-stage} support for multi-role decision governance and shared review surfaces; and (iv)~\emph{practical scientific impact}, validated through end-to-end workflows spanning BGC discovery, AI-guided protein and molecular design, automated figure generation, and multi-format document parsing. The system combines a thin interaction layer, contextual research capability patterns, an Agent Runtime and Workflow Engine, an Evidence-DAG audit sidecar, a Scientific Model Router, and local scientific memory backed by reusable worker services. SciForge currently runs as a desktop application, with mobile supervision support; future releases will strengthen these collaborative capabilities through shared review surfaces and decision governance. The system is open-source and available at \url{https://github.com/AGI4Sci/SciForge}.
+Scientific work increasingly spans heterogeneous artifacts---papers, code, datasets, scientific file formats, model outputs, figures, manuscripts, and team decisions---yet general-purpose AI assistants rarely preserve these objects as a coherent, auditable research state. We present SciForge, a multimodal research-native AI workbench that reserves the graphical interface for human judgment while search, parsing, model routing, workflow execution, plotting, writing, and presentation generation run as modular agent-accessible services. SciForge is built around four integrated pillars: (i)~\emph{translate-then-reason} for \textbf{multimodal} scientific ingress, routing native scientific objects through domain translators before the agent reasons; (ii)~\emph{evidence governance} for \textbf{auditable} traceability, linking claims to provenance chains with structured audit; (iii)~\emph{collaborative team science} with \textbf{early-stage} support for multi-role decision governance and shared review surfaces; and (iv)~\emph{practical scientific impact}, validated through end-to-end workflows spanning four representative scientific domains---BGC discovery (genome mining), AI-guided protein and molecular design (structural biology and drug discovery), automated figure generation (scientific communication), and multi-format document parsing (literature processing)---each exercising distinct combinations of multimodal translation, agent orchestration, and evidence governance. The system combines a thin interaction layer, contextual research capability patterns, an Agent Runtime and Workflow Engine, an Evidence-DAG audit sidecar, a Scientific Model Router, and local scientific memory backed by reusable worker services. SciForge currently runs as a desktop application, with mobile supervision support; future releases will strengthen these collaborative capabilities through shared review surfaces and decision governance. The system is open-source and available at \url{https://github.com/AGI4Sci/SciForge}.
 }
 
 \keywords{SciForge, AI workbench, scientific discovery, agentic workflow, evidence-aware AI, multimodal science, research automation}
@@ -54,6 +100,13 @@ Scientific work increasingly spans heterogeneous artifacts---papers, code, datas
 \begin{document}
 
 \maketitle
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sciforge-evidence-dag.png}
+\caption{SciForge at a glance: a live scientific-research thread (left) and its inspectable Evidence DAG (right). In this target-discovery example, source assertions, reasoning nodes, and claims remain connected to support and contradiction edges, while node-level provenance and audit metrics stay visible to the researcher.}
+\label{fig:sciforge-workbench-at-a-glance}
+\end{figure}
 
 \vspace{-12pt}
 % ============================================================
@@ -477,7 +530,7 @@ Figure~\ref{fig:molopt-optimization} summarizes the campaign in three coordinate
 \small
 \begin{tabular}{@{}llrrr@{}}
 \toprule
-\textbf{Round} & \textbf{Best Candidate} & \textbf{MW (Da)} $\downarrow$ & \textbf{LogP} & \textbf{QED} $\uparrow$ \\
+\textbf{Round} & \textbf{Best Candidate} & \textbf{MW (Da)} $\downarrow$ & \textbf{LogP} & QED $\uparrow$ \\
 \midrule
 R01 & \texttt{R01\_D005} & 423.4 & 3.2 & 0.72 \\
 R02 & \texttt{R02\_D002} & 459.4 & 3.6 & 0.68 \\
@@ -526,7 +579,7 @@ The governance layer introduces another trade-off. Recording provenance, claim--
 
 \subsection{Limitations and Future Work}
 
-The current implementation has several concrete limitations. \textbf{Ingress scope:} end-to-end file ingress is restricted to four modality classes (protein, protein\_structure, molecule, single-cell); Cell2Sentence (C2S) provides a direct-worker ingress path for single-cell transcriptomics (.h5ad files), distinct from the translate-then-reason pipeline used by the other three translators; VCF, BED, GFF, and MGF are unsupported and fail closed. \textbf{Scientific validation:} translator observations are evidence candidates, not verified scientific facts; no systematic validation against ground-truth annotations has been performed. \textbf{Memory model:} research memory stores scoped free-text records rather than a typed scientific state store; typed goals and decisions belong to the Project DAG. \textbf{Evidence completeness:} the Evidence DAG schema can represent complete provenance but depends on runtime capture; software, parameters, environment, log/output, and seed are not automatically populated. \textbf{IM governance:} IM-based coordination is partially integrated; annotation, task transfer, and DAG-decision approval through chat are not end-to-end validated. \textbf{Evaluation gaps:} no baselines, ablation studies, user studies, or third-party reproductions have been conducted. \textbf{MCFST contract:} the verification contract has unresolved conflicts (pre-selection rule, run-count mismatch) and the 0.05 threshold is post-hoc; formal reproduction requires revision and third-party re-execution. \textbf{Cell-atlas provenance:} the cell-atlas pipeline has been executed as a validated prototype on the Papalexi/Satija dataset; \texttt{case45\_gate.py} has been exercised, and execution artifacts are archived alongside the specification. Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats; implementing baselines and systematic evaluations; strengthening IM governance integration; improving provenance capture automation; and developing pre-registered verification contracts with third-party re-execution protocols.
+The current implementation has several concrete limitations. \textbf{Ingress scope:} end-to-end file ingress is restricted to four modality classes (protein, protein\_structure, molecule, single-cell); Cell2Sentence (C2S) provides a direct-worker ingress path for single-cell transcriptomics (.h5ad files), distinct from the translate-then-reason pipeline used by the other three translators; VCF, BED, GFF, and MGF are unsupported and fail closed. \textbf{Scientific validation:} translator observations are evidence candidates, not verified scientific facts; no systematic validation against ground-truth annotations has been performed. \textbf{Memory model:} research memory stores scoped free-text records rather than a typed scientific state store; typed goals and decisions belong to the Project DAG. \textbf{Evidence completeness:} the Evidence DAG schema can represent complete provenance but depends on runtime capture; software, parameters, environment, log/output, and seed are not automatically populated. \textbf{IM governance:} IM-based coordination is partially integrated; annotation, task transfer, and DAG-decision approval through chat are not end-to-end validated. \textbf{Evaluation gaps:} no baselines, ablation studies, user studies, or third-party reproductions have been conducted. Future work includes expanding scientific modality support to crystal structures, mass spectrometry, cryo-EM, and additional omics formats; implementing baselines and systematic evaluations; strengthening IM governance integration; improving provenance capture automation; and developing pre-registered verification contracts with third-party re-execution protocols.
 
 % ============================================================
 \section{Conclusion}
@@ -537,6 +590,7 @@ SciForge presents a research-native AI workbench that brings together local exec
 \clearpage
 \begin{appendices}
 \renewcommand{\theHtable}{A.\arabic{table}}
+\renewcommand{\theHfigure}{app.\Alph{section}.\arabic{figure}}
 
 \section{Capability Differentiation}
 
@@ -549,42 +603,94 @@ SciForge presents a research-native AI workbench that brings together local exec
 \renewcommand{\arraystretch}{1.04}
 \begin{tabular}{@{}L{2.1cm} L{2.7cm} L{3.2cm} L{3.8cm}@{}}
 \toprule
-\textbf{Capability} & \textbf{Function} & \textbf{Typical approaches} & \textbf{SciForge differentiation} \\
+\textbf{Capability} & \textbf{Function} & \textbf{Typical approaches} & SciForge differentiation \\
 \midrule
 Model Router
 & Select the optimal LLM provider and model per request
 & Single-provider lock-in or manual model switching
-& \textbf{Provider-agnostic routing across OpenAI, Anthropic, DeepSeek, and local models; cost-aware fallback chains; localizable deployment} $\uparrow$ \\
+& Provider-agnostic routing across OpenAI, Anthropic, DeepSeek, and local models; cost-aware fallback chains; localizable deployment $\uparrow$ \\
 Scientific Pipeline
 & Translate scientific file formats into evidence the agent can reason over
 & Raw text input or manual format conversion
-& \textbf{Four domain-expert translators (Esm2Text, Prot2Text, BioT5+, Cell2Sentence~(C2S)) covering protein, structure, molecule, and single-cell modalities; unrecognized formats fail closed with diagnostics} $\uparrow$ \\
+& Four domain-expert translators (Esm2Text, Prot2Text, BioT5+, Cell2Sentence~(C2S)) covering protein, structure, molecule, and single-cell modalities; unrecognized formats fail closed with diagnostics $\uparrow$ \\
 Agent Runtime
 & Execute AI agents with tools, sub-agents, and workspace operations
 & Single-session chat without structured delegation
-& \textbf{Multi-backend support (Codex, Claude Code, custom runtimes); sub-agent delegation; MCP worker invocation; long-task recovery} $\uparrow$ \\
+& Multi-backend support (Codex, Claude Code, custom runtimes); sub-agent delegation; MCP worker invocation; long-task recovery $\uparrow$ \\
 Workflow Engine
 & Chain research steps into repeatable, scheduled protocols
 & Ad-hoc scripts and cron jobs
-& \textbf{DAG-based workflows with code, agent, tool, and approval nodes; schedule and event triggers; integrated with agent runtime} $\uparrow$ \\
+& DAG-based workflows with code, agent, tool, and approval nodes; schedule and event triggers; integrated with agent runtime $\uparrow$ \\
 Research Memory
 & Store and retrieve project knowledge across sessions
 & Ephemeral chat history or external document RAG
-& \textbf{Structured Project DAG with confidence-tagged, scoped free-text records; typed goals and decision events persist across sessions} $\uparrow$ \\
+& Structured Project DAG with confidence-tagged, scoped free-text records; typed goals and decision events persist across sessions $\uparrow$ \\
 Evidence Governance
 & Track provenance, audit claims, and govern release decisions
 & Outputs detached from data, scripts, and review history
-& \textbf{Thread-scoped Evidence DAGs with automatic provenance capture; deterministic audit runs; goal-scoped release gates} $\uparrow$ \\
+& Thread-scoped Evidence DAGs with automatic provenance capture; deterministic audit runs; goal-scoped release gates $\uparrow$ \\
 Research Capability Patterns
 & Define structured human judgment points at research milestones
 & Generic chat and file-list views
-& \textbf{Six recurrent interaction patterns (artifact review, approval, visual inspection, etc.) grounded in Evidence DAGs and audit records} $\uparrow$ \\
+& Six recurrent interaction patterns (artifact review, approval, visual inspection, etc.) grounded in Evidence DAGs and audit records $\uparrow$ \\
 \bottomrule
 \end{tabular}
 \end{table}
 \clearpage
 
+\section{Workbench Interface Examples}
+\label{app:workbench-interfaces}
+
+This appendix shows the running SciForge desktop interface rather than isolated architectural diagrams. The screenshots were captured from real local research sessions and illustrate how agent execution, evidence inspection, project-level continuity, and manuscript review are exposed as human judgment surfaces.
+
+\subsection{Thread-Level Evidence DAG}
+
+Figure~\ref{fig:appendix-evidence-dag} shows the Evidence DAG for a target-discovery session. The captured graph contains 32 nodes and 21 edges, including four explicit claims. It separates source assertions from reasoning and claim nodes, draws support and contradiction links between them, and exposes the selected node's provenance and incoming evidence in the inspector. In this example, the graph makes an overcounted and fabricated PDB reference directly inspectable instead of leaving the problem buried in a long agent transcript. The extraction and fragility summaries at the top provide a compact audit signal, while the underlying scientific judgment remains with the researcher.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sciforge-evidence-dag.png}
+\caption{Thread-level Evidence DAG embedded beside the originating SciForge research session. Source assertions, reasoning, claims, edge semantics, audit controls, and node-level provenance are visible in one review surface.}
+\label{fig:appendix-evidence-dag}
+\end{figure}
+
+\subsection{Project-Level DAG}
+
+Figure~\ref{fig:appendix-project-dag} moves from a single thread to the project scope. The captured committed snapshot aggregates four sessions, 25 evidence records, and 16 claims into 45 nodes and 48 relationships. Session nodes identify the contributing runs, while evidence and claim nodes preserve how findings accumulate across the project. This view makes cross-session continuity reviewable and gives release and review workflows a shared project state rather than relying on chat history alone.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sciforge-project-dag.png}
+\caption{Project DAG for the same research workspace. The committed project snapshot aggregates evidence and claims across sessions, exposing the project-level relationship structure and review diagnostics.}
+\label{fig:appendix-project-dag}
+\end{figure}
+
+\clearpage
+\subsection{Review-to-Revision PDF Workflow}
+
+SciForge also keeps human review close to the artifact being judged. Figure~\ref{fig:appendix-pdf-review} captures a completed manuscript-revision cycle rather than a static annotation list. Three page-anchored review threads question the abstract's example selection, the scope of the limitations discussion, and emphasis in an appendix table. The agent thread records the corresponding edits and compilation checks, while the recompiled manuscript and the still-open review items remain visible. This co-located view makes the path from a precise reviewer concern to an auditable artifact change immediately legible.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sciforge-pdf-review.png}
+\caption{Review-to-revision PDF workflow in SciForge. The agent thread records concrete manuscript changes and validation (left), the recompiled paper remains inspectable (center), and page-anchored reviewer comments retain their source context and improvement actions (right).}
+\label{fig:appendix-pdf-review}
+\end{figure}
+
+\clearpage
+\subsection{Selection-Grounded Protein Structure Dialogue}
+
+Figure~\ref{fig:appendix-biology-selection-chat} shows a Biology Room selection connected directly to the chat composer. A residue picked in the three-dimensional viewer is represented as structured context containing the source-file path and SHA-256 digest, room revision, molecular identity fields, and an explicit model/chain/residue locator. Selecting \emph{Add selection to chat} appends this context to the current conversation, where the researcher can ask a follow-up question while keeping the structure, active selection, and resulting explanation visible together. In the captured session, the misleading filename is not accepted as biological identity: the follow-up explicitly requests identity verification before interpretation, and the agent checks the 9VMR record before discussing the selected ALA~86 environment and proposing additional residues for interactive inspection. This workflow turns a visual pick into an auditable, selection-grounded scientific dialogue rather than an unreferenced natural-language question.
+
+\begin{figure}[H]
+\centering
+\includegraphics[width=\textwidth]{figures/sciforge-biology-selection-chat.png}
+\caption{Selection-grounded protein structure dialogue in SciForge. The Biology Room (right) retains the active ALA~86 selection in the 9VMR structure, while the linked chat (left) receives the file hash, room revision, and residue locator and uses them to drive an identity-checked structural interpretation.}
+\label{fig:appendix-biology-selection-chat}
+\end{figure}
+
 \end{appendices}
+\clearpage
 
 % ============================================================
 % Resource

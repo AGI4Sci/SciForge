@@ -1,4 +1,4 @@
-\begin{thebibliography}{22}
+\begin{thebibliography}{23}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{{#1}}
 \providecommand{\urlprefix}{URL }
@@ -60,6 +60,13 @@ Asai A, et~al (2024) {OpenScholar: Synthesizing Scientific Literature with
   \url{https://research.google/blog/accelerating-scientific-breakthroughs-with-an-ai-co-scientist/}
   (accessed 4 July 2026)
 
+\bibitem[{Lin et~al.(2023)Lin, Akin, Rao, Hie, Zhu, Lu, Smetanin, Verkuil,
+  Kabeli, Shmueli, dos Santos~Costa, Fazel-Zarandi, Sercu, Candido, and
+  Rives}]{lin2023esm2}
+Lin Z, Akin H, Rao R, et~al (2023) Evolutionary-scale prediction of
+  atomic-level protein structure with a language model. Science
+  379(6637):1123--1130. \doi{10.1126/science.ade2574}
+
 \bibitem[{Lu et~al.(2024)Lu, Lu, Lange, Foerster, Clune, and
   Ha}]{sakanaAIScientist2024}
 Lu C, Lu C, Lange RT, et~al (2024) {The AI Scientist: Towards Fully Automated
@@ -108,7 +115,7 @@ Schmidgall S, et~al (2025) {Agent Laboratory: Using LLM Agents as Research
 
 \bibitem[{Yang et~al.(2026)}]{vcbench2026}
 Yang K, et~al (2026) Benchmarking virtual cell models for in-the-wild
-  perturbation response. arXiv preprint arXiv:260427646v1 ArXiv:2604.27646v1
+  perturbation response. arXiv preprint ArXiv:2604.27646v1
 
 \bibitem[{Zhang et~al.(2026)Zhang, Duan, and Gao}]{MCFST2025}
 Zhang Z, Duan H, Gao X (2026) {MCFST}: Spatial domain identification method
