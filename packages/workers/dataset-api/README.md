@@ -26,6 +26,8 @@ Tools:
 - `dataset_api_metadata`: retrieve metadata with bounded retries and optionally persist the complete response as a checksummed downstream-processing artifact.
 - `dataset_api_raw_data`: stream format-validated raw bytes into a checksummed workspace artifact. FASTA, JSON, text, and binary validation are supported.
 - `dataset_prepare_plan`: persist a draft or user-confirmed preparation plan.
+- `dataset_execute_plan`: execute every exact operation in a confirmed plan, resolve logical artifact names to checksummed paths, and checkpoint each step.
+- `dataset_resume_plan`: checksum-verify a failed or interrupted run and resume from the earliest valid checkpoint without accepting changed parameters or a caller-selected step.
 - `dataset_profile`: profile JSON, JSONL, CSV, TSV, or FASTA and save a schema/quality report.
 - `dataset_filter`: apply structured filter conditions under a confirmed plan.
 - `dataset_select_columns`: select, rename, require, and default fields; optionally change output format.
@@ -47,6 +49,17 @@ Raw downloads follow the same invariant: an identical re-fetch is reused and
 a changed response is written to a checksum-suffixed version instead of
 replacing the original. Raw request receipts are propagated through child
 manifests into the final publication provenance.
+
+Automatic execution state is stored under `.sciforge/datasets/runs`. A failed
+execution returns a normal structured receipt with `resumable=true`, so the
+conversation UI can render completed/failed steps, row-count changes,
+intermediate artifacts, and a Retry / Resume action. Calling
+`dataset_execute_plan` again does not skip the failure; continuation goes
+through `dataset_resume_plan`, which accepts only the immutable `planId` and
+deterministic `runId`.
+
+Reviewable request templates are available in [`examples/ensembl-access-plan.json`](examples/ensembl-access-plan.json)
+and [`examples/multi-source-synthesis-plan.json`](examples/multi-source-synthesis-plan.json).
 
 NCBI Gene FASTA requests are provider-aware: SciForge resolves the Gene record's genomic accession, coordinates, and strand through ESummary, then fetches the actual sequence from Nuccore. A Gene text report is never accepted as FASTA. Dataset API failures should be retried through Dataset API itself or reported; agents must not bypass failures with shell or curl.
 

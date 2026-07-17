@@ -1,0 +1,102 @@
+{
+  "objective": "Synthesize TP53 protein metadata, Reactome apoptosis events, and a STRING interaction network into one validated release.",
+  "sources": [
+    { "providerId": "uniprot", "purpose": "TP53 protein metadata" },
+    { "providerId": "reactome", "purpose": "Apoptosis pathway events" },
+    { "providerId": "string", "purpose": "TP53 and BRCA1 interaction network" }
+  ],
+  "operations": [
+    {
+      "tool": "dataset_api_metadata",
+      "description": "Acquire UniProt TP53 metadata.",
+      "parameters": {
+        "sourceId": "uniprot",
+        "pathParameters": { "identifier": "P04637" },
+        "responseMode": "full",
+        "outputFileName": "uniprot-P04637.json"
+      }
+    },
+    {
+      "tool": "dataset_api_raw_data",
+      "description": "Acquire Reactome apoptosis events.",
+      "parameters": {
+        "sourceId": "reactome",
+        "pathParameters": { "identifier": "R-HSA-109581" },
+        "outputFileName": "reactome-apoptosis.json",
+        "expectedFormat": "json",
+        "overwrite": true
+      }
+    },
+    {
+      "tool": "dataset_api_raw_data",
+      "description": "Acquire the STRING TP53 and BRCA1 network.",
+      "parameters": {
+        "sourceId": "string",
+        "query": { "identifiers": "TP53\rBRCA1", "species": 9606 },
+        "outputFileName": "string-TP53-BRCA1.tsv",
+        "expectedFormat": "text",
+        "overwrite": true
+      }
+    },
+    {
+      "tool": "dataset_validate",
+      "description": "Validate UniProt metadata.",
+      "parameters": {
+        "inputArtifact": "uniprot-P04637.json",
+        "format": "json",
+        "minRecords": 1,
+        "rules": [{ "field": "primaryAccession", "required": true }],
+        "failOnInvalid": true,
+        "outputFileName": "uniprot.validation.json"
+      }
+    },
+    {
+      "tool": "dataset_validate",
+      "description": "Validate Reactome events.",
+      "parameters": {
+        "inputArtifact": "reactome-apoptosis.json",
+        "format": "json",
+        "minRecords": 1,
+        "failOnInvalid": true,
+        "outputFileName": "reactome.validation.json"
+      }
+    },
+    {
+      "tool": "dataset_validate",
+      "description": "Validate the STRING network.",
+      "parameters": {
+        "inputArtifact": "string-TP53-BRCA1.tsv",
+        "format": "tsv",
+        "minRecords": 1,
+        "failOnInvalid": true,
+        "outputFileName": "string.validation.json"
+      }
+    },
+    {
+      "tool": "dataset_publish",
+      "description": "Publish the three-source synthesis and quality reports.",
+      "parameters": {
+        "name": "tp53-apoptosis-network",
+        "description": "UniProt TP53 metadata with Reactome apoptosis events and a STRING interaction network.",
+        "artifacts": [
+          "uniprot-P04637.json",
+          "reactome-apoptosis.json",
+          "string-TP53-BRCA1.tsv",
+          "uniprot.validation.json",
+          "reactome.validation.json",
+          "string.validation.json"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    { "name": "uniprot-P04637.json", "format": "json" },
+    { "name": "reactome-apoptosis.json", "format": "json" },
+    { "name": "string-TP53-BRCA1.tsv", "format": "tsv" }
+  ],
+  "confirmationNotes": [
+    "Register the built-in uniprot, reactome, and string providers before execution.",
+    "Review all exact operation parameters, then confirm the generated draftPlanId."
+  ],
+  "confirmedByUser": false
+}

@@ -120,6 +120,51 @@ describe('TimelineDatasetResultsPanel', () => {
     }])
   })
 
+  it('extracts checkpointed plan execution progress for the conversation card', () => {
+    const blocks: ChatBlock[] = [{
+      kind: 'tool',
+      id: 'execute-plan',
+      summary: 'dataset_execute_plan',
+      status: 'success',
+      meta: {
+        toolName: 'dataset_execute_plan',
+        output: {
+          structuredContent: {
+            result: {
+              execution: {
+                runId: 'run-0123456789abcdef',
+                planId: 'plan-0123456789abcdef',
+                status: 'failed',
+                completedSteps: 1,
+                failedSteps: 1,
+                totalSteps: 3,
+                resumable: true,
+                steps: [
+                  { index: 0, tool: 'dataset_api_raw_data', status: 'succeeded', attempts: 1 },
+                  { index: 1, tool: 'dataset_filter', status: 'failed', attempts: 1, error: 'network unavailable' }
+                ]
+              },
+              artifact: { path: '/workspace/.sciforge/datasets/runs/run-0123456789abcdef.json', sha256: 'abc' }
+            }
+          }
+        }
+      }
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([{
+      toolName: 'dataset_execute_plan',
+      kind: 'execution',
+      success: true,
+      result: {
+        execution: {
+          status: 'failed',
+          resumable: true,
+          completedSteps: 1
+        }
+      }
+    }])
+  })
+
   it('surfaces structured Dataset API failures and ignores unrelated tools', () => {
     const blocks: ChatBlock[] = [
       {

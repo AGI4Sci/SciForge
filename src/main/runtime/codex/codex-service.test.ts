@@ -1817,6 +1817,8 @@ describe('CodexRuntimeService compatibility operations', () => {
       'dataset_api_metadata',
       'dataset_api_raw_data',
       'dataset_prepare_plan',
+      'dataset_execute_plan',
+      'dataset_resume_plan',
       'dataset_profile',
       'dataset_filter',
       'dataset_select_columns',

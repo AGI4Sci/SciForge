@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState, type ReactElement } from 'react'
-import { Braces, ChevronDown, ChevronRight, Database, Download, ExternalLink, TriangleAlert } from 'lucide-react'
+import { Braces, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleX, Database, Download, ExternalLink, RotateCcw, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 
-type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'plan' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
+type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'plan' | 'execution' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
 
 export type TimelineDatasetResult = {
   id: string
@@ -121,11 +121,12 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
-  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)/i)
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|execute_plan|resume_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
 function datasetKind(toolName: string, result: Record<string, unknown> | null): DatasetResultKind {
+  if (toolName === 'dataset_execute_plan' || toolName === 'dataset_resume_plan' || result?.execution !== undefined) return 'execution'
   if (toolName === 'dataset_prepare_plan' || result?.plan !== undefined) return 'plan'
   if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
@@ -140,10 +141,12 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
 
 export function TimelineDatasetResultsPanel({
   blocks,
-  workspaceRoot
+  workspaceRoot,
+  onContinuePrompt
 }: {
   blocks: ChatBlock[]
   workspaceRoot?: string
+  onContinuePrompt?: (prompt: string) => void
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const items = useMemo(() => datasetResultsFromTimelineBlocks(blocks), [blocks])
@@ -156,7 +159,7 @@ export function TimelineDatasetResultsPanel({
       data-timeline-dataset-results
     >
       {items.map((item) => (
-        <DatasetResultCard key={item.id} item={item} workspaceRoot={workspaceRoot} />
+        <DatasetResultCard key={item.id} item={item} workspaceRoot={workspaceRoot} onContinuePrompt={onContinuePrompt} />
       ))}
     </section>
   )
@@ -164,10 +167,12 @@ export function TimelineDatasetResultsPanel({
 
 function DatasetResultCard({
   item,
-  workspaceRoot
+  workspaceRoot,
+  onContinuePrompt
 }: {
   item: TimelineDatasetResult
   workspaceRoot?: string
+  onContinuePrompt?: (prompt: string) => void
 }): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(false)
@@ -278,6 +283,14 @@ function DatasetResultCard({
         <DatasetProcessingHighlights item={item} />
       ) : null}
 
+      {item.success && item.kind === 'execution' ? (
+        <DatasetExecutionProgress
+          result={result}
+          workspaceRoot={workspaceRoot}
+          onContinuePrompt={onContinuePrompt}
+        />
+      ) : null}
+
       {item.success && item.kind === 'publication' && publication ? (
         <DatasetPublicationFiles publication={publication} workspaceRoot={workspaceRoot} />
       ) : null}
@@ -303,6 +316,103 @@ function DatasetResultCard({
       ) : null}
     </article>
   )
+}
+
+function DatasetExecutionProgress({
+  result,
+  workspaceRoot,
+  onContinuePrompt
+}: {
+  result?: Record<string, unknown>
+  workspaceRoot?: string
+  onContinuePrompt?: (prompt: string) => void
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  const execution = asRecord(result?.execution)
+  if (!execution) return null
+  const steps = arrayValue(execution.steps).map(asRecord).filter((step): step is Record<string, unknown> => step !== null)
+  const status = stringValue(execution.status)
+  const planId = stringValue(execution.planId)
+  const runId = stringValue(execution.runId)
+  const resumePrompt = `继续执行已确认 Dataset 计划。严格只调用 Dataset MCP 的 dataset_resume_plan，参数 planId="${planId}", runId="${runId}"。等待工具终端回执后报告执行结果。`
+  return (
+    <div data-dataset-execution-progress className="border-t border-ds-border-muted/70 bg-violet-500/[0.025] px-5 py-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-[12px] font-semibold text-ds-ink">
+          {t('datasetResultExecutionProgress', {
+            completed: numberValue(execution.completedSteps) ?? 0,
+            total: numberValue(execution.totalSteps) ?? steps.length
+          })}
+        </p>
+        {status === 'failed' && onContinuePrompt && planId && runId ? (
+          <button
+            type="button"
+            onClick={() => onContinuePrompt(resumePrompt)}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-violet-600 px-3 text-[12px] font-semibold text-white transition hover:bg-violet-500"
+          >
+            <RotateCcw className="h-3.5 w-3.5" />
+            {t('datasetResultResume')}
+          </button>
+        ) : null}
+      </div>
+      <ol className="space-y-2">
+        {steps.map((step, position) => {
+          const stepStatus = stringValue(step.status)
+          const counts = asRecord(step.counts)
+          const artifacts = arrayValue(step.artifacts).map(asRecord).filter((artifact): artifact is Record<string, unknown> => artifact !== null)
+          return (
+            <li key={`${stringValue(step.tool)}-${position}`} className="rounded-xl border border-ds-border-muted bg-ds-card/65 px-3 py-2.5">
+              <div className="flex items-start gap-2.5">
+                <span className={`mt-0.5 ${stepStatus === 'succeeded' ? 'text-emerald-500' : stepStatus === 'failed' ? 'text-red-500' : stepStatus === 'running' ? 'text-violet-500' : 'text-ds-faint'}`}>
+                  {stepStatus === 'succeeded' ? <CheckCircle2 className="h-4 w-4" /> : stepStatus === 'failed' ? <CircleX className="h-4 w-4" /> : <Circle className="h-4 w-4" />}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <span className="text-[12px] font-semibold text-ds-ink">{position + 1}. {stringValue(step.description) || stringValue(step.tool)}</span>
+                    <DatasetBadge>{t(`datasetResultStepStatus.${stepStatus || 'pending'}`)}</DatasetBadge>
+                    {numberValue(step.attempts) && numberValue(step.attempts)! > 1 ? <DatasetBadge>{t('datasetResultAttempts', { count: numberValue(step.attempts) })}</DatasetBadge> : null}
+                  </div>
+                  {stringValue(step.error) ? <p className="mt-1 text-[11px] text-red-600 dark:text-red-300">{stringValue(step.error)}</p> : null}
+                  {counts ? <p className="mt-1 text-[11px] text-ds-muted">{executionCountsSummary(counts, t)}</p> : null}
+                  {artifacts.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {artifacts.slice(0, 4).map((artifact, artifactIndex) => {
+                        const path = stringValue(artifact.path)
+                        return path ? (
+                          <button
+                            key={`${path}-${artifactIndex}`}
+                            type="button"
+                            onClick={() => previewWorkspaceFile({ path, workspaceRoot })}
+                            className="inline-flex max-w-[240px] items-center gap-1 rounded-md border border-ds-border px-2 py-1 text-[10.5px] text-ds-muted hover:bg-ds-hover"
+                            title={path}
+                          >
+                            <ExternalLink className="h-3 w-3 shrink-0" />
+                            <span className="truncate">{path.split('/').pop()}</span>
+                          </button>
+                        ) : null
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+    </div>
+  )
+}
+
+function executionCountsSummary(
+  counts: Record<string, unknown>,
+  t: (key: string, options?: Record<string, unknown>) => string
+): string {
+  const input = numberValue(counts.inputRecords) ?? numberValue(counts.leftRecords)
+  const output = numberValue(counts.outputRecords) ?? numberValue(counts.records) ?? numberValue(counts.edgeRecords)
+  if (input !== undefined && output !== undefined) return t('datasetResultRowChange', { input, output })
+  if (output !== undefined) return t('datasetResultRecordsCount', { count: output })
+  if (counts.valid !== undefined) return counts.valid === true ? t('datasetResultValidationPassed') : t('datasetResultValidationFailed')
+  return Object.entries(counts).slice(0, 3).map(([key, value]) => `${key}: ${String(value)}`).join(' · ')
 }
 
 function DatasetPublicationFiles({
@@ -490,6 +600,7 @@ function datasetKindTitle(kind: DatasetResultKind, t: (key: string) => string): 
   if (kind === 'catalog') return t('datasetResultCatalog')
   if (kind === 'sources') return t('datasetResultSources')
   if (kind === 'plan') return t('datasetResultPlan')
+  if (kind === 'execution') return t('datasetResultExecution')
   if (kind === 'profile') return t('datasetResultProfile')
   if (kind === 'processing') return t('datasetResultProcessing')
   if (kind === 'validation') return t('datasetResultValidation')
@@ -515,6 +626,12 @@ function datasetSuccessSubtitle(
   if (kind === 'catalog') return t('datasetResultProvidersCount', { count: arrayValue(result?.providers).length })
   if (kind === 'sources') return t('datasetResultSourcesCount', { count: arrayValue(result?.sources).length })
   if (kind === 'plan') return t('datasetResultPlanPrepared')
+  if (kind === 'execution') {
+    const execution = asRecord(result?.execution)
+    return stringValue(execution?.status) === 'succeeded'
+      ? t('datasetResultExecutionCompleted')
+      : t('datasetResultExecutionStopped')
+  }
   if (kind === 'profile') return t('datasetResultProfileCompleted')
   if (kind === 'processing') return t('datasetResultProcessingCompleted')
   if (kind === 'validation') return asRecord(result?.validation)?.valid === true

@@ -109,6 +109,17 @@ export function createDatasetProcessingService(options: {
   const providerSleep = options.sleepImpl ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
 
   return {
+    async confirmedPlan(raw: { workspaceRoot?: string; planId: string }) {
+      const workspaceRoot = await resolveWorkspaceRoot(raw.workspaceRoot, defaultWorkspaceRoot)
+      const confirmed = await requireConfirmedPlan(workspaceRoot, raw.planId)
+      return {
+        workspaceRoot,
+        path: confirmed.path,
+        sha256: hash(await readFile(confirmed.path)),
+        plan: confirmed.plan
+      }
+    },
+
     async authorizePlan(raw: {
       workspaceRoot?: string
       planId: string
@@ -185,8 +196,11 @@ export function createDatasetProcessingService(options: {
         createdAt: new Date().toISOString()
       }
       await writeIdempotentJson(path, document)
+      const confirmation = input.confirmedByUser
+        ? await ensurePlanConfirmation(workspaceRoot, planId, path)
+        : undefined
       return {
-        plan: document,
+        plan: { ...document, ...(confirmation ? { confirmation } : {}) },
         artifact: await describeStandaloneArtifact(path, 'plan', 'dataset_prepare_plan', {
           confirmedByUser: input.confirmedByUser
         }, { operations: input.operations.length, outputs: input.outputs.length })
@@ -1991,10 +2005,15 @@ async function requireConfirmedPlan(
     operations?: Array<{ tool?: string; parameters?: Record<string, unknown> }>
   }
   if (plan.planId !== planId) throw new Error(`Preparation plan '${planId}' has an invalid identity.`)
+  const recordedConfirmation = await readPlanConfirmation(workspaceRoot, planId)
+  if (recordedConfirmation && (
+    recordedConfirmation.draftSha256 !== hash(planBytes) || recordedConfirmation.draftPath !== path
+  )) {
+    throw new Error(`Preparation plan '${planId}' is not confirmed by the user or its confirmed draft has changed.`)
+  }
   let confirmedPlan = plan
   if (!plan.confirmedByUser || plan.status !== 'confirmed') {
-    const confirmation = await readPlanConfirmation(workspaceRoot, planId)
-    if (!confirmation || confirmation.draftSha256 !== hash(planBytes) || confirmation.draftPath !== path) {
+    if (!recordedConfirmation) {
       throw new Error(`Preparation plan '${planId}' is not confirmed by the user or its confirmed draft has changed.`)
     }
     confirmedPlan = { ...plan, confirmedByUser: true, status: 'confirmed' }
@@ -2023,6 +2042,24 @@ async function requireConfirmedPlan(
   return { path, plan: confirmedPlan }
 }
 
+async function ensurePlanConfirmation(workspaceRoot: string, planId: string, path: string) {
+  const planBytes = await readFile(path)
+  const existing = await readPlanConfirmation(workspaceRoot, planId)
+  const confirmation = existing?.draftPath === path && existing.draftSha256 === hash(planBytes)
+    ? existing
+    : {
+        version: 1 as const,
+        planId,
+        status: 'confirmed',
+        confirmedByUser: true,
+        draftPath: path,
+        draftSha256: hash(planBytes),
+        confirmedAt: new Date().toISOString()
+      }
+  await writeIdempotentJson(planConfirmationPath(workspaceRoot, planId), confirmation)
+  return confirmation
+}
+
 function planParametersMatch(
   declared: Record<string, unknown>,
   actual: Record<string, unknown>
@@ -2040,7 +2077,9 @@ function normalizePlanBindingValue(key: string, value: unknown): unknown {
       .map(([childKey, childValue]) => [childKey, normalizePlanBindingValue(childKey, childValue)]))
   }
   if (typeof value === 'string' && /(?:^|_)(?:inputArtifact|mappingArtifact|leftArtifact|rightArtifact|artifact|artifacts)$/iu.test(key)) {
-    return basename(value).replace(/^(?:[a-f0-9]{12,16}-)+/iu, '')
+    return basename(value)
+      .replace(/^(?:[a-f0-9]{12,16}-)+/iu, '')
+      .replace(/-[a-f0-9]{12,16}(?=\.[^.]+$|$)/iu, '')
   }
   return value
 }

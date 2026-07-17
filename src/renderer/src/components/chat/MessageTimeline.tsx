@@ -493,6 +493,7 @@ function MessageTurn({
       <TimelineDatasetResultsPanel
         blocks={isProcessing ? [] : turn.blocks}
         workspaceRoot={workspaceRoot}
+        onContinuePrompt={onContinueScientificObject}
       />
 
       <TimelineScientificObjectsPanel

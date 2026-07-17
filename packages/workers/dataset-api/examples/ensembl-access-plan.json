@@ -1,0 +1,64 @@
+{
+  "objective": "Retrieve, validate, and publish the Ensembl TP53 transcript sequence.",
+  "sources": [
+    {
+      "providerId": "ensembl",
+      "purpose": "Gene/transcript metadata and transcript sequence"
+    }
+  ],
+  "operations": [
+    {
+      "tool": "dataset_api_metadata",
+      "description": "Read TP53 transcript metadata.",
+      "parameters": {
+        "sourceId": "ensembl",
+        "pathParameters": { "identifier": "ENST00000269305" },
+        "responseMode": "full",
+        "outputFileName": "ENST00000269305.metadata.json"
+      }
+    },
+    {
+      "tool": "dataset_api_raw_data",
+      "description": "Download the TP53 transcript FASTA sequence.",
+      "parameters": {
+        "sourceId": "ensembl",
+        "pathParameters": { "identifier": "ENST00000269305" },
+        "outputFileName": "ENST00000269305.fasta",
+        "expectedFormat": "fasta",
+        "overwrite": true
+      }
+    },
+    {
+      "tool": "dataset_validate",
+      "description": "Validate the transcript FASTA artifact.",
+      "parameters": {
+        "inputArtifact": "ENST00000269305.fasta",
+        "format": "fasta",
+        "minRecords": 1,
+        "failOnInvalid": true,
+        "outputFileName": "ENST00000269305.validation.json"
+      }
+    },
+    {
+      "tool": "dataset_publish",
+      "description": "Publish metadata, sequence, and validation report.",
+      "parameters": {
+        "name": "ensembl-tp53-transcript",
+        "artifacts": [
+          "ENST00000269305.metadata.json",
+          "ENST00000269305.fasta",
+          "ENST00000269305.validation.json"
+        ]
+      }
+    }
+  ],
+  "outputs": [
+    { "name": "ENST00000269305.metadata.json", "format": "json" },
+    { "name": "ENST00000269305.fasta", "format": "fasta" }
+  ],
+  "confirmationNotes": [
+    "Register the built-in ensembl provider before execution.",
+    "Review all exact operation parameters, then confirm the generated draftPlanId."
+  ],
+  "confirmedByUser": false
+}

@@ -12,6 +12,8 @@ import {
   datasetApiRawDataInputSchema,
   datasetApiRegisterInputSchema,
   datasetPreparePlanInputSchema,
+  datasetExecutePlanInputSchema,
+  datasetResumePlanInputSchema,
   datasetProfileInputSchema,
   datasetFilterInputSchema,
   datasetGraphOrganizeInputSchema,
@@ -27,6 +29,7 @@ import {
   datasetPublishInputSchema
 } from './contract.js'
 import { EXECUTABLE_DATASET_PROVIDER_PRESETS } from './provider-presets.js'
+import { createDatasetPlanExecutor } from './plan-executor.js'
 import { createDatasetProcessingService, type DatasetProcessingService } from './processing.js'
 import { createDatasetApiService, DatasetApiRequestError, type DatasetApiService } from './service.js'
 
@@ -62,6 +65,7 @@ export function createDatasetApiMcpServer(
     { name: DATASET_API_MCP_SERVER_NAME, version: DATASET_API_MCP_SERVER_VERSION },
     { capabilities: { logging: {} } }
   )
+  const executor = createDatasetPlanExecutor(service, processing)
 
   server.registerTool('dataset_api_catalog', {
     title: 'Browse Biology Dataset Providers',
@@ -184,6 +188,38 @@ export function createDatasetApiMcpServer(
     return textResult(
       `Prepared ${result.plan.status} dataset plan '${result.plan.planId}' with ${result.plan.operations?.length ?? 0} operations.`,
       { result: compactDatasetToolResult(result) }
+    )
+  }))
+
+  server.registerTool('dataset_execute_plan', {
+    title: 'Execute Confirmed Dataset Plan',
+    description: 'Execute every operation in an immutable confirmed dataset plan in order. Logical artifact names are resolved to checksummed workspace paths automatically, and every step is checkpointed before and after execution. Failed runs must be continued with dataset_resume_plan; execution parameters cannot be changed here.',
+    inputSchema: datasetExecutePlanInputSchema,
+    annotations: { ...CONTROLLED_WRITE_ANNOTATIONS, openWorldHint: true }
+  }, async (args) => runTool(async () => {
+    const result = await executor.execute(datasetExecutePlanInputSchema.parse(args))
+    const execution = result.execution
+    return textResult(
+      execution.status === 'succeeded'
+        ? `Dataset plan '${execution.planId}' completed all ${execution.totalSteps} steps.`
+        : `Dataset plan '${execution.planId}' stopped at step ${(execution.currentStepIndex ?? 0) + 1}; resume run '${execution.runId}' after addressing the reported failure.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_resume_plan', {
+    title: 'Resume Dataset Plan from Checkpoint',
+    description: 'Resume a failed or interrupted confirmed dataset plan from its verified checkpoint. Completed artifacts are checksum-verified; missing or changed artifacts cause rollback to the earliest invalid step. This tool does not accept a step index or operation parameters, so steps cannot be skipped or modified.',
+    inputSchema: datasetResumePlanInputSchema,
+    annotations: { ...CONTROLLED_WRITE_ANNOTATIONS, openWorldHint: true }
+  }, async (args) => runTool(async () => {
+    const result = await executor.resume(datasetResumePlanInputSchema.parse(args))
+    const execution = result.execution
+    return textResult(
+      execution.status === 'succeeded'
+        ? `Dataset plan '${execution.planId}' resumed and completed all ${execution.totalSteps} steps.`
+        : `Dataset plan '${execution.planId}' remains failed at step ${(execution.currentStepIndex ?? 0) + 1}; checkpoint '${execution.runId}' remains resumable.`,
+      { result }
     )
   }))
 

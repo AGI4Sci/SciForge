@@ -12,6 +12,8 @@ export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_metadata: 'network-read',
   dataset_api_raw_data: 'network-read-controlled-write',
   dataset_prepare_plan: 'controlled-write',
+  dataset_execute_plan: 'network-read-controlled-write',
+  dataset_resume_plan: 'network-read-controlled-write',
   dataset_profile: 'controlled-write',
   dataset_filter: 'controlled-write',
   dataset_select_columns: 'controlled-write',
@@ -115,6 +117,15 @@ export const datasetPreparePlanInputSchema = z.object({
   if (!input.operations) context.addIssue({ code: 'custom', path: ['operations'], message: 'At least one plan operation is required.' })
   if (!input.outputs) context.addIssue({ code: 'custom', path: ['outputs'], message: 'At least one plan output is required.' })
 })
+
+export const datasetExecutePlanInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema
+}).strict()
+
+export const datasetResumePlanInputSchema = datasetExecutePlanInputSchema.extend({
+  runId: z.string().regex(/^run-[a-f0-9]{16}$/).optional()
+}).strict()
 
 const datasetInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
@@ -464,6 +475,8 @@ export type DatasetApiMetadataInput = z.infer<typeof datasetApiMetadataInputSche
 export type DatasetApiRawDataInput = z.infer<typeof datasetApiRawDataInputSchema>
 export type DatasetProcessingFormat = z.infer<typeof datasetConcreteFormatSchema>
 export type DatasetPreparePlanInput = z.infer<typeof datasetPreparePlanInputSchema>
+export type DatasetExecutePlanInput = z.infer<typeof datasetExecutePlanInputSchema>
+export type DatasetResumePlanInput = z.infer<typeof datasetResumePlanInputSchema>
 export type DatasetProfileInput = z.infer<typeof datasetProfileInputSchema>
 export type DatasetFilterInput = z.infer<typeof datasetFilterInputSchema>
 export type DatasetSelectColumnsInput = z.infer<typeof datasetSelectColumnsInputSchema>

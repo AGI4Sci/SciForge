@@ -45,6 +45,8 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
       'dataset_api_metadata',
       'dataset_api_raw_data',
       'dataset_prepare_plan',
+      'dataset_execute_plan',
+      'dataset_resume_plan',
       'dataset_profile',
       'dataset_filter',
       'dataset_select_columns',
