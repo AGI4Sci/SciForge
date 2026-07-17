@@ -14,12 +14,15 @@ import {
   datasetPreparePlanInputSchema,
   datasetProfileInputSchema,
   datasetFilterInputSchema,
+  datasetGraphOrganizeInputSchema,
   datasetSelectColumnsInputSchema,
   datasetTransformInputSchema,
   datasetDeduplicateInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
   datasetProviderIdMapInputSchema,
+  datasetStructureProfileInputSchema,
+  datasetStructureValidateInputSchema,
   datasetValidateInputSchema,
   datasetPublishInputSchema
 } from './contract.js'
@@ -301,6 +304,45 @@ export function createDatasetApiMcpServer(
     const result = await processing.join(datasetJoinInputSchema.parse(args))
     return textResult(
       `Joined ${result.counts.leftRecords} left and ${result.counts.rightRecords} right records into ${result.counts.outputRecords}; unmatched left=${result.counts.unmatchedLeftRecords}, right=${result.counts.unmatchedRightRecords}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_structure_profile', {
+    title: 'Profile SDF or mmCIF Structure Data',
+    description: 'Profile a workspace SDF or mmCIF artifact with a format-aware parser. Reports SDF molecule records, atom/bond counts and property fields, or mmCIF data blocks, categories, loops, atom-site coordinates, chains and models without rewriting the structure file.',
+    inputSchema: datasetStructureProfileInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.structureProfile(datasetStructureProfileInputSchema.parse(args))
+    return textResult(
+      `Profiled ${result.profile.records} ${result.profile.format} structure records with ${result.profile.coordinateRecords} coordinate records; report: ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_structure_validate', {
+    title: 'Validate SDF or mmCIF Structure Data',
+    description: 'Validate SDF mol blocks and coordinate counts or mmCIF data blocks, loop cardinality and atom-site coordinates. Produces a persistent quality report that participates in dataset publication quality gates.',
+    inputSchema: datasetStructureValidateInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.structureValidate(datasetStructureValidateInputSchema.parse(args))
+    return textResult(
+      `Structure validation ${result.validation.valid ? 'passed' : 'failed'} with ${result.validation.errorCount} errors; report: ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_graph_organize', {
+    title: 'Organize Pathway or Network Data',
+    description: 'Convert explicit source/target edge records into deterministic pathway or network node, edge, graph-summary, and invalid-record artifacts. Supports directed or undirected graphs, edge types, weights, selected attributes, deduplication, and bounded output without arbitrary graph code.',
+    inputSchema: datasetGraphOrganizeInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.organizeGraph(datasetGraphOrganizeInputSchema.parse(args))
+    return textResult(
+      `Organized ${result.counts.edgeRecords} edges and ${result.counts.nodeRecords} nodes; invalid=${result.counts.invalidRecords}, duplicates removed=${result.counts.duplicateEdgesRemoved}.`,
       { result }
     )
   }))

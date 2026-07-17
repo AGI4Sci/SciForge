@@ -45,6 +45,9 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
       'dataset_id_map',
       'dataset_id_map_provider',
       'dataset_join',
+      'dataset_structure_profile',
+      'dataset_structure_validate',
+      'dataset_graph_organize',
       'dataset_validate',
       'dataset_publish'
     ])

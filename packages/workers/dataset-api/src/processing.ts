@@ -5,9 +5,12 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import {
   datasetDeduplicateInputSchema,
   datasetFilterInputSchema,
+  datasetGraphOrganizeInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
   datasetProviderIdMapInputSchema,
+  datasetStructureProfileInputSchema,
+  datasetStructureValidateInputSchema,
   datasetPreparePlanInputSchema,
   datasetProfileInputSchema,
   datasetPublishInputSchema,
@@ -16,9 +19,12 @@ import {
   datasetValidateInputSchema,
   type DatasetDeduplicateInput,
   type DatasetFilterInput,
+  type DatasetGraphOrganizeInput,
   type DatasetIdMapInput,
   type DatasetJoinInput,
   type DatasetProviderIdMapInput,
+  type DatasetStructureProfileInput,
+  type DatasetStructureValidateInput,
   type DatasetPreparePlanInput,
   type DatasetProcessingFormat,
   type DatasetProfileInput,
@@ -36,6 +42,33 @@ type LoadedDataset = {
   rows: DatasetRow[]
   bytes: number
   sha256: string
+}
+
+type LoadedStructure = {
+  path: string
+  format: 'sdf' | 'mmcif'
+  text: string
+  bytes: number
+  sha256: string
+}
+
+type StructureProfile = {
+  format: 'sdf' | 'mmcif'
+  bytes: number
+  sha256: string
+  records: number
+  coordinateRecords: number
+  errors: Array<Record<string, unknown>>
+  warnings: Array<Record<string, unknown>>
+  details: Record<string, unknown>
+}
+
+type OrganizedGraphEdge = {
+  source: string | number
+  target: string | number
+  type?: string | number
+  weight?: number
+  attributes?: Record<string, unknown>
 }
 
 type DatasetOrigin = {
@@ -616,6 +649,206 @@ export function createDatasetProcessingService(options: {
       }
     },
 
+    async structureProfile(raw: DatasetStructureProfileInput) {
+      const input = datasetStructureProfileInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      const structure = await loadStructureArtifact(workspaceRoot, input)
+      const profile = profileStructure(structure)
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_structure_profile',
+        format: 'report',
+        outputFileName: input.outputFileName ?? `${basename(structure.path)}.structure-profile.json`,
+        data: jsonBytes(profile),
+        parents: [{ path: structure.path, sha256: structure.sha256 }],
+        parameters: processingParameters(input, ['workspaceRoot', 'outputFileName']),
+        summary: {
+          format: profile.format,
+          records: profile.records,
+          coordinateRecords: profile.coordinateRecords,
+          errorCount: profile.errors.length,
+          warningCount: profile.warnings.length
+        },
+        records: profile.records
+      })
+      return { profile, artifact }
+    },
+
+    async structureValidate(raw: DatasetStructureValidateInput) {
+      const input = datasetStructureValidateInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      const structure = await loadStructureArtifact(workspaceRoot, input)
+      const profile = profileStructure(structure)
+      const errors = [...profile.errors]
+      const minRecords = input.minRecords ?? 1
+      if (profile.records < minRecords) {
+        errors.push({ rule: 'minRecords', expected: minRecords, actual: profile.records })
+      }
+      if ((input.requireCoordinates ?? true) && profile.coordinateRecords === 0) {
+        errors.push({ rule: 'requireCoordinates', expected: true, actual: 0 })
+      }
+      const validation = {
+        valid: errors.length === 0,
+        format: profile.format,
+        records: profile.records,
+        coordinateRecords: profile.coordinateRecords,
+        errorCount: errors.length,
+        warningCount: profile.warnings.length,
+        errors: errors.slice(0, 1000),
+        warnings: profile.warnings.slice(0, 1000),
+        profile
+      }
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_structure_validate',
+        format: 'report',
+        outputFileName: input.outputFileName ?? `${basename(structure.path)}.structure-validation.json`,
+        data: jsonBytes(validation),
+        parents: [{ path: structure.path, sha256: structure.sha256 }],
+        parameters: processingParameters(input, ['workspaceRoot', 'outputFileName']),
+        summary: validation,
+        records: profile.records
+      })
+      if (input.failOnInvalid && !validation.valid) {
+        throw new Error(`Structure validation failed with ${validation.errorCount} errors. Report: ${artifact.path}`)
+      }
+      return { validation, artifact }
+    },
+
+    async organizeGraph(raw: DatasetGraphOrganizeInput) {
+      const input = datasetGraphOrganizeInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_graph_organize')
+      const dataset = await loadDataset(workspaceRoot, input)
+      if (dataset.format === 'fasta') throw new Error('Graph organization requires JSON, JSONL, CSV, or TSV records.')
+      const directed = input.directed ?? input.graphType === 'pathway'
+      const deduplicateEdges = input.deduplicateEdges ?? true
+      const onInvalid = input.onInvalid ?? 'drop'
+      const maxOutputEdges = input.maxOutputEdges ?? 1_000_000
+      const invalid: Array<{ recordIndex: number; reason: string; record: DatasetRow }> = []
+      const edges: OrganizedGraphEdge[] = []
+      const edgeKeys = new Set<string>()
+      let duplicateEdgesRemoved = 0
+      for (const [recordIndex, row] of dataset.rows.entries()) {
+        const source = graphNodeId(valueAtPath(row, input.sourceField))
+        const target = graphNodeId(valueAtPath(row, input.targetField))
+        if (source === undefined || target === undefined) {
+          invalid.push({ recordIndex: recordIndex + 1, reason: 'missing_or_invalid_endpoint', record: row })
+          continue
+        }
+        const edgeTypeValue = input.edgeTypeField ? valueAtPath(row, input.edgeTypeField) : undefined
+        const edgeType = edgeTypeValue === undefined || edgeTypeValue === null || edgeTypeValue === ''
+          ? undefined
+          : graphNodeId(edgeTypeValue)
+        if (input.edgeTypeField && edgeType === undefined) {
+          invalid.push({ recordIndex: recordIndex + 1, reason: 'invalid_edge_type', record: row })
+          continue
+        }
+        const weightValue = input.weightField ? valueAtPath(row, input.weightField) : undefined
+        const weight = weightValue === undefined || weightValue === null || weightValue === ''
+          ? undefined
+          : Number(weightValue)
+        if (input.weightField && (weight === undefined || !Number.isFinite(weight))) {
+          invalid.push({ recordIndex: recordIndex + 1, reason: 'invalid_weight', record: row })
+          continue
+        }
+        const endpointKeys = [canonicalJson(source), canonicalJson(target)]
+        if (!directed) endpointKeys.sort()
+        const edgeKey = canonicalJson([...endpointKeys, edgeType ?? null])
+        if (deduplicateEdges && edgeKeys.has(edgeKey)) {
+          duplicateEdgesRemoved += 1
+          continue
+        }
+        edgeKeys.add(edgeKey)
+        if (edges.length >= maxOutputEdges) {
+          throw new Error(`Graph organization exceeded maxOutputEdges=${maxOutputEdges}; filter or partition the edge dataset before retrying.`)
+        }
+        const attributes = Object.fromEntries((input.includeFields ?? []).map((field) => [field, valueAtPath(row, field) ?? null]))
+        edges.push({
+          source,
+          target,
+          ...(edgeType !== undefined ? { type: edgeType } : {}),
+          ...(weight !== undefined ? { weight } : {}),
+          ...(Object.keys(attributes).length > 0 ? { attributes } : {})
+        })
+      }
+      const parent = { path: dataset.path, sha256: dataset.sha256 }
+      const parameters = processingParameters(input, ['workspaceRoot', 'maxBytes'])
+      const outputStem = basename(input.outputFileName, extname(input.outputFileName))
+      const invalidArtifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_graph_invalid',
+        format: 'json',
+        outputFileName: `${outputStem}.invalid.json`,
+        data: jsonBytes(invalid),
+        parents: [parent],
+        parameters,
+        summary: { records: invalid.length, onInvalid },
+        records: invalid.length
+      })
+      if (onInvalid === 'fail' && invalid.length > 0) {
+        throw new Error(`Graph organization found ${invalid.length} invalid edge records. Report: ${invalidArtifact.path}`)
+      }
+      const nodes = graphNodes(edges, directed)
+      const [nodesArtifact, edgesArtifact] = await Promise.all([
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_graph_nodes',
+          format: 'json',
+          outputFileName: `${outputStem}.nodes.json`,
+          data: jsonBytes(nodes),
+          parents: [parent],
+          parameters,
+          summary: { records: nodes.length, graphType: input.graphType, directed },
+          records: nodes.length
+        }),
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_graph_edges',
+          format: 'json',
+          outputFileName: `${outputStem}.edges.json`,
+          data: jsonBytes(edges),
+          parents: [parent],
+          parameters,
+          summary: { records: edges.length, graphType: input.graphType, directed },
+          records: edges.length
+        })
+      ])
+      const counts = {
+        inputRecords: dataset.rows.length,
+        nodeRecords: nodes.length,
+        edgeRecords: edges.length,
+        invalidRecords: invalid.length,
+        duplicateEdgesRemoved
+      }
+      const graph = {
+        version: 1,
+        graphType: input.graphType,
+        directed,
+        counts,
+        source: { path: dataset.path, sha256: dataset.sha256 },
+        nodes: { path: nodesArtifact.path, sha256: nodesArtifact.sha256 },
+        edges: { path: edgesArtifact.path, sha256: edgesArtifact.sha256 },
+        invalid: { path: invalidArtifact.path, sha256: invalidArtifact.sha256 }
+      }
+      const graphArtifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_graph_organize',
+        format: 'report',
+        outputFileName: input.outputFileName,
+        data: jsonBytes(graph),
+        parents: [
+          { path: nodesArtifact.path, sha256: nodesArtifact.sha256 },
+          { path: edgesArtifact.path, sha256: edgesArtifact.sha256 },
+          { path: invalidArtifact.path, sha256: invalidArtifact.sha256 }
+        ],
+        parameters,
+        summary: { ...counts, graphType: input.graphType, directed },
+        records: edges.length
+      })
+      return { graph, graphArtifact, nodesArtifact, edgesArtifact, invalidArtifact, counts }
+    },
+
     async validate(raw: DatasetValidateInput) {
       const input = datasetValidateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
@@ -693,7 +926,7 @@ export function createDatasetProcessingService(options: {
       const schema = mergedPublishedSchema(artifacts)
       const quality = publishedQualitySummary(artifacts)
       if ((input.requireValidation ?? true) && quality.validationReportCount === 0) {
-        throw new Error('Dataset publication requires at least one dataset_validate report artifact.')
+        throw new Error('Dataset publication requires at least one dataset_validate or dataset_structure_validate report artifact.')
       }
       if (!input.allowInvalid && quality.status === 'failed') {
         throw new Error('Dataset publication is blocked because an included validation report failed.')
@@ -755,6 +988,306 @@ function assertContained(workspaceRoot: string, candidate: string): void {
   const child = relative(workspaceRoot, candidate)
   if (child === '' || (!child.startsWith('..') && !isAbsolute(child))) return
   throw new Error('Dataset processing inputs and outputs must stay inside the selected workspace.')
+}
+
+async function loadStructureArtifact(
+  workspaceRoot: string,
+  input: DatasetStructureProfileInput
+): Promise<LoadedStructure> {
+  const path = await resolveInputArtifact(workspaceRoot, input.inputArtifact)
+  const info = await stat(path)
+  const maxBytes = input.maxBytes ?? DEFAULT_MAX_PROCESSING_BYTES
+  if (info.size > maxBytes) throw new Error(`Structure artifact exceeds the ${maxBytes}-byte processing limit.`)
+  const data = await readFile(path)
+  if (data.includes(0)) throw new Error('Structure artifact must be a text SDF or mmCIF file.')
+  const text = data.toString('utf8')
+  const format = resolveStructureFormat(path, text, input.format)
+  return { path, format, text, bytes: data.byteLength, sha256: hash(data) }
+}
+
+function resolveStructureFormat(
+  path: string,
+  text: string,
+  requested: DatasetStructureProfileInput['format']
+): 'sdf' | 'mmcif' {
+  if (requested && requested !== 'auto') return requested
+  const extension = extname(path).toLowerCase()
+  if (extension === '.sdf' || extension === '.sd') return 'sdf'
+  if (extension === '.cif' || extension === '.mmcif') return 'mmcif'
+  if (/^\s*data_/m.test(text) && /(?:^|\n)_\w+\./.test(text)) return 'mmcif'
+  if (/^\$\$\$\$\s*$/m.test(text) || /(?:^|\n)M  END\s*(?:\n|$)/.test(text)) return 'sdf'
+  throw new Error('Unable to detect structure format; set format to sdf or mmcif explicitly.')
+}
+
+function profileStructure(structure: LoadedStructure): StructureProfile {
+  try {
+    return structure.format === 'sdf' ? profileSdf(structure) : profileMmcif(structure)
+  } catch (error) {
+    return {
+      format: structure.format,
+      bytes: structure.bytes,
+      sha256: structure.sha256,
+      records: 0,
+      coordinateRecords: 0,
+      errors: [{ rule: 'parse', message: errorMessage(error) }],
+      warnings: [],
+      details: {}
+    }
+  }
+}
+
+function profileSdf(structure: LoadedStructure): StructureProfile {
+  const records: string[][] = []
+  let current: string[] = []
+  for (const line of structure.text.split(/\r?\n/)) {
+    if (line.trim() === '$$$$') {
+      if (current.some((value) => value.trim())) records.push(current)
+      current = []
+    } else current.push(line)
+  }
+  if (current.some((value) => value.trim())) records.push(current)
+  const errors: Array<Record<string, unknown>> = []
+  const warnings: Array<Record<string, unknown>> = []
+  const propertyStats = new Map<string, { records: number; sample: string[] }>()
+  let coordinateRecords = 0
+  let totalBonds = 0
+  let validRecords = 0
+  const titles: string[] = []
+  for (const [recordIndex, lines] of records.entries()) {
+    const title = (lines[0] ?? '').trim()
+    if (title && titles.length < 20) titles.push(title)
+    const molEnd = lines.findIndex((line) => /^M  END\s*$/.test(line))
+    if (molEnd < 0) {
+      errors.push({ record: recordIndex + 1, rule: 'molBlockTerminator', message: 'Missing M  END.' })
+      continue
+    }
+    const counts = sdfCounts(lines)
+    if (!counts) {
+      errors.push({ record: recordIndex + 1, rule: 'countsLine', message: 'Missing or invalid atom/bond counts.' })
+    } else {
+      coordinateRecords += counts.atoms
+      totalBonds += counts.bonds
+      validRecords += 1
+    }
+    const seenProperties = new Set<string>()
+    for (let index = molEnd + 1; index < lines.length; index += 1) {
+      const match = lines[index].match(/^>\s*<([^>]+)>/)
+      if (!match) continue
+      const name = match[1].trim()
+      if (!name) continue
+      const values: string[] = []
+      index += 1
+      while (index < lines.length && lines[index].trim() !== '') {
+        values.push(lines[index])
+        index += 1
+      }
+      if (seenProperties.has(name)) warnings.push({ record: recordIndex + 1, property: name, rule: 'duplicateProperty' })
+      seenProperties.add(name)
+      const stats = propertyStats.get(name) ?? { records: 0, sample: [] }
+      stats.records += 1
+      const value = values.join('\n')
+      if (value && stats.sample.length < 3) stats.sample.push(value.slice(0, 500))
+      propertyStats.set(name, stats)
+    }
+  }
+  if (records.length === 0) errors.push({ rule: 'records', message: 'SDF contains no records.' })
+  return {
+    format: 'sdf',
+    bytes: structure.bytes,
+    sha256: structure.sha256,
+    records: records.length,
+    coordinateRecords,
+    errors: errors.slice(0, 1000),
+    warnings: warnings.slice(0, 1000),
+    details: {
+      validRecords,
+      invalidRecords: records.length - validRecords,
+      totalAtoms: coordinateRecords,
+      totalBonds,
+      titles,
+      propertyFields: [...propertyStats.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([name, stats]) => ({
+        name,
+        records: stats.records,
+        missingRecords: records.length - stats.records,
+        sample: stats.sample
+      }))
+    }
+  }
+}
+
+function sdfCounts(lines: string[]): { atoms: number; bonds: number } | null {
+  const v3000 = lines.find((line) => /M  V30 COUNTS\s+\d+\s+\d+/.test(line))
+  if (v3000) {
+    const match = v3000.match(/M  V30 COUNTS\s+(\d+)\s+(\d+)/)
+    return match ? { atoms: Number(match[1]), bonds: Number(match[2]) } : null
+  }
+  const line = lines[3] ?? ''
+  const atoms = Number(line.slice(0, 3).trim())
+  const bonds = Number(line.slice(3, 6).trim())
+  return Number.isInteger(atoms) && atoms >= 0 && Number.isInteger(bonds) && bonds >= 0
+    ? { atoms, bonds }
+    : null
+}
+
+function profileMmcif(structure: LoadedStructure): StructureProfile {
+  const tokens = tokenizeCif(structure.text)
+  const errors: Array<Record<string, unknown>> = []
+  const warnings: Array<Record<string, unknown>> = []
+  const dataBlocks: string[] = []
+  const categories = new Set<string>()
+  const atomFields = new Set<string>()
+  const chains = new Set<string>()
+  const models = new Set<string>()
+  let coordinateRecords = 0
+  for (let index = 0; index < tokens.length;) {
+    const token = tokens[index]
+    const lower = token.toLowerCase()
+    if (lower.startsWith('data_')) {
+      dataBlocks.push(token.slice(5))
+      index += 1
+      continue
+    }
+    if (lower === 'loop_') {
+      index += 1
+      const tags: string[] = []
+      while (index < tokens.length && tokens[index].startsWith('_')) tags.push(tokens[index++])
+      if (tags.length === 0) {
+        errors.push({ rule: 'loopHeaders', message: 'loop_ is not followed by data names.' })
+        continue
+      }
+      for (const tag of tags) categories.add(cifCategory(tag))
+      const valuesStart = index
+      while (index < tokens.length && !isCifControlToken(tokens[index])) index += 1
+      const valueCount = index - valuesStart
+      if (valueCount % tags.length !== 0) {
+        errors.push({ rule: 'loopCardinality', tags: tags.length, values: valueCount, tagNames: tags })
+      }
+      const rows = Math.floor(valueCount / tags.length)
+      if (tags.some((tag) => tag.startsWith('_atom_site.'))) {
+        coordinateRecords += rows
+        tags.forEach((tag) => atomFields.add(tag))
+        const chainIndex = tags.findIndex((tag) => ['_atom_site.auth_asym_id', '_atom_site.label_asym_id'].includes(tag))
+        const modelIndex = tags.indexOf('_atom_site.pdbx_PDB_model_num')
+        for (let row = 0; row < rows; row += 1) {
+          if (chainIndex >= 0) addCifValue(chains, tokens[valuesStart + row * tags.length + chainIndex])
+          if (modelIndex >= 0) addCifValue(models, tokens[valuesStart + row * tags.length + modelIndex])
+        }
+      }
+      continue
+    }
+    if (token.startsWith('_')) {
+      categories.add(cifCategory(token))
+      index += Math.min(2, tokens.length - index)
+      continue
+    }
+    index += 1
+  }
+  if (dataBlocks.length === 0) errors.push({ rule: 'dataBlock', message: 'mmCIF contains no data_ block.' })
+  if (coordinateRecords === 0) warnings.push({ rule: 'atomSite', message: 'mmCIF contains no _atom_site coordinate rows.' })
+  return {
+    format: 'mmcif',
+    bytes: structure.bytes,
+    sha256: structure.sha256,
+    records: dataBlocks.length,
+    coordinateRecords,
+    errors: errors.slice(0, 1000),
+    warnings: warnings.slice(0, 1000),
+    details: {
+      dataBlocks: dataBlocks.slice(0, 100),
+      categories: [...categories].sort(),
+      atomSite: {
+        rows: coordinateRecords,
+        fields: [...atomFields].sort(),
+        chains: [...chains].sort(),
+        models: [...models].sort()
+      }
+    }
+  }
+}
+
+const CIF_LITERAL_PREFIX = '\u0001'
+
+function tokenizeCif(text: string): string[] {
+  const tokens: string[] = []
+  let index = 0
+  while (index < text.length) {
+    while (index < text.length && /\s/.test(text[index])) index += 1
+    if (index >= text.length) break
+    if (text[index] === '#') {
+      while (index < text.length && text[index] !== '\n') index += 1
+      continue
+    }
+    if (text[index] === ';' && (index === 0 || text[index - 1] === '\n')) {
+      const start = index + 1
+      const end = text.indexOf('\n;', start)
+      if (end < 0) throw new Error('mmCIF contains an unterminated semicolon text field.')
+      tokens.push(`${CIF_LITERAL_PREFIX}${text.slice(start, end).replace(/^\r?\n/, '')}`)
+      index = end + 2
+    } else if (text[index] === "'" || text[index] === '"') {
+      const quote = text[index++]
+      const start = index
+      while (index < text.length && text[index] !== quote) index += 1
+      if (index >= text.length) throw new Error('mmCIF contains an unterminated quoted value.')
+      tokens.push(`${CIF_LITERAL_PREFIX}${text.slice(start, index)}`)
+      index += 1
+    } else {
+      const start = index
+      while (index < text.length && !/\s/.test(text[index])) index += 1
+      tokens.push(text.slice(start, index))
+    }
+    if (tokens.length > 5_000_000) throw new Error('mmCIF token count exceeds the processing safety limit.')
+  }
+  return tokens
+}
+
+function isCifControlToken(token: string): boolean {
+  if (token.startsWith(CIF_LITERAL_PREFIX)) return false
+  const lower = token.toLowerCase()
+  return token.startsWith('_') || lower === 'loop_' || lower === 'stop_' || lower === 'global_'
+    || lower.startsWith('data_') || lower.startsWith('save_')
+}
+
+function cifCategory(tag: string): string {
+  return tag.slice(1).split('.')[0] || 'unknown'
+}
+
+function addCifValue(target: Set<string>, value: string | undefined): void {
+  const normalized = value?.startsWith(CIF_LITERAL_PREFIX) ? value.slice(CIF_LITERAL_PREFIX.length) : value
+  if (normalized && normalized !== '.' && normalized !== '?' && target.size < 10_000) target.add(normalized)
+}
+
+function graphNodeId(value: unknown): string | number | undefined {
+  if (typeof value === 'string') {
+    const normalized = value.trim()
+    return normalized || undefined
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return undefined
+}
+
+function graphNodes(edges: OrganizedGraphEdge[], directed: boolean): Array<Record<string, unknown>> {
+  const nodes = new Map<string, { id: string | number; degree: number; inDegree: number; outDegree: number }>()
+  const node = (id: string | number) => {
+    const key = canonicalJson(id)
+    const existing = nodes.get(key)
+    if (existing) return existing
+    const created = { id, degree: 0, inDegree: 0, outDegree: 0 }
+    nodes.set(key, created)
+    return created
+  }
+  for (const edge of edges) {
+    const source = node(edge.source)
+    const target = node(edge.target)
+    source.degree += 1
+    target.degree += 1
+    if (directed) {
+      source.outDegree += 1
+      target.inDegree += 1
+    }
+  }
+  return [...nodes.values()]
+    .sort((left, right) => canonicalJson(left.id).localeCompare(canonicalJson(right.id)))
+    .map((entry) => directed ? entry : { id: entry.id, degree: entry.degree })
 }
 
 async function loadDataset(
@@ -1553,7 +2086,9 @@ function publishedQualitySummary(artifacts: Array<{
   records?: number
   summary?: Record<string, unknown>
 }>) {
-  const validationReports = artifacts.filter((artifact) => artifact.operation === 'dataset_validate')
+  const validationReports = artifacts.filter((artifact) => (
+    artifact.operation === 'dataset_validate' || artifact.operation === 'dataset_structure_validate'
+  ))
   const validations = validationReports.map((artifact) => ({
     valid: artifact.summary?.valid === true,
     errorCount: Number(artifact.summary?.errorCount ?? 0),

@@ -83,7 +83,7 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
-  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|validate|publish)/i)
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
@@ -92,7 +92,7 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
   if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
   if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
-  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join'].includes(toolName)) return 'processing'
+  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join', 'dataset_graph_organize'].includes(toolName)) return 'processing'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'
   if (toolName.endsWith('_raw_data') || result?.artifact !== undefined) return 'raw-data'
   if (toolName.endsWith('_catalog') || Array.isArray(result?.providers)) return 'catalog'
@@ -137,7 +137,7 @@ function DatasetResultCard({
   const source = asRecord(result?.source)
   const request = asRecord(result?.request)
   const response = asRecord(result?.response)
-  const artifact = asRecord(result?.artifact)
+  const artifact = asRecord(result?.artifact) ?? asRecord(result?.graphArtifact)
   const publication = asRecord(result?.publication)
   const title = stringValue(source?.name) || stringValue(source?.id) || datasetKindTitle(item.kind, t)
   const subtitle = item.success
@@ -251,6 +251,7 @@ function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }):
   const plan = asRecord(result?.plan)
   const values: Array<{ label: string; value: string }> = []
   if (numberValue(profile?.records) !== undefined) values.push({ label: t('datasetResultRecords'), value: String(numberValue(profile?.records)) })
+  if (numberValue(profile?.coordinateRecords) !== undefined) values.push({ label: t('datasetResultCoordinates'), value: String(numberValue(profile?.coordinateRecords)) })
   if (numberValue(counts?.inputRecords) !== undefined) values.push({ label: t('datasetResultInputRecords'), value: String(numberValue(counts?.inputRecords)) })
   if (numberValue(counts?.outputRecords) !== undefined) values.push({ label: t('datasetResultOutputRecords'), value: String(numberValue(counts?.outputRecords)) })
   if (numberValue(counts?.excludedRecords) !== undefined) values.push({ label: t('datasetResultExcludedRecords'), value: String(numberValue(counts?.excludedRecords)) })
@@ -262,8 +263,12 @@ function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }):
   if (numberValue(counts?.mappedRecords) !== undefined) values.push({ label: t('datasetResultMappedRecords'), value: String(numberValue(counts?.mappedRecords)) })
   if (numberValue(counts?.unmatchedRecords) !== undefined) values.push({ label: t('datasetResultUnmatchedRecords'), value: String(numberValue(counts?.unmatchedRecords)) })
   if (numberValue(counts?.ambiguousRecords) !== undefined) values.push({ label: t('datasetResultAmbiguousRecords'), value: String(numberValue(counts?.ambiguousRecords)) })
+  if (numberValue(counts?.nodeRecords) !== undefined) values.push({ label: t('datasetResultNodes'), value: String(numberValue(counts?.nodeRecords)) })
+  if (numberValue(counts?.edgeRecords) !== undefined) values.push({ label: t('datasetResultEdges'), value: String(numberValue(counts?.edgeRecords)) })
+  if (numberValue(counts?.invalidRecords) !== undefined) values.push({ label: t('datasetResultInvalidRecords'), value: String(numberValue(counts?.invalidRecords)) })
   if (Array.isArray(result?.operations)) values.push({ label: t('datasetResultOperations'), value: String(result.operations.length) })
   if (validation) values.push({ label: t('datasetResultQuality'), value: validation.valid === true ? t('datasetResultValid') : t('datasetResultInvalid') })
+  if (numberValue(validation?.coordinateRecords) !== undefined) values.push({ label: t('datasetResultCoordinates'), value: String(numberValue(validation?.coordinateRecords)) })
   if (numberValue(validation?.errorCount) !== undefined) values.push({ label: t('datasetResultErrors'), value: String(numberValue(validation?.errorCount)) })
   if (numberValue(publication?.artifactCount) !== undefined) values.push({ label: t('datasetResultArtifacts'), value: String(numberValue(publication?.artifactCount)) })
   if (stringValue(plan?.status)) values.push({ label: t('datasetResultPlanStatus'), value: stringValue(plan?.status) })

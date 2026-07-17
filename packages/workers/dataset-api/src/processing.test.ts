@@ -23,6 +23,9 @@ async function confirmedPlan(service: ReturnType<typeof createDatasetProcessingS
       { tool: 'dataset_deduplicate', description: 'Remove duplicate records.' },
       { tool: 'dataset_id_map', description: 'Map biomedical identifiers.' },
       { tool: 'dataset_join', description: 'Join source artifacts.' },
+      { tool: 'dataset_structure_profile', description: 'Profile structure files.' },
+      { tool: 'dataset_structure_validate', description: 'Validate structure files.' },
+      { tool: 'dataset_graph_organize', description: 'Organize graph data.' },
       { tool: 'dataset_validate', description: 'Validate output.' },
       { tool: 'dataset_publish', description: 'Publish output.' }
     ],
@@ -485,6 +488,135 @@ test('filters, deduplicates, and validates FASTA without modifying the source', 
   }
 })
 
+test('profiles and validates SDF and mmCIF structures with publication quality gating', async () => {
+  const { workspaceRoot, service, cleanup } = await fixture()
+  const sdfPath = join(workspaceRoot, 'molecules.sdf')
+  const mmcifPath = join(workspaceRoot, 'structure.cif')
+  await writeFile(sdfPath, [
+    'Example molecule',
+    '  SciForge',
+    '',
+    '  2  1  0  0  0  0            999 V2000',
+    '    0.0000    0.0000    0.0000 C   0  0  0  0  0  0  0  0  0  0  0  0',
+    '    1.2000    0.0000    0.0000 O   0  0  0  0  0  0  0  0  0  0  0  0',
+    '  1  2  1  0  0  0  0',
+    'M  END',
+    '>  <CHEMBL_ID>',
+    'CHEMBL25',
+    '',
+    '>  <ACTIVITY>',
+    '12.5',
+    '',
+    '$$$$',
+    ''
+  ].join('\n'))
+  await writeFile(mmcifPath, [
+    'data_TEST',
+    '_entry.id TEST',
+    'loop_',
+    '_atom_site.group_PDB',
+    '_atom_site.id',
+    '_atom_site.type_symbol',
+    '_atom_site.label_asym_id',
+    '_atom_site.pdbx_PDB_model_num',
+    '_atom_site.Cartn_x',
+    '_atom_site.Cartn_y',
+    '_atom_site.Cartn_z',
+    'ATOM 1 C A 1 0.0 0.0 0.0',
+    'ATOM 2 N B 1 1.0 0.0 0.0',
+    '#',
+    ''
+  ].join('\n'))
+  try {
+    const planId = await confirmedPlan(service)
+    const sdfProfile = await service.structureProfile({ inputArtifact: sdfPath })
+    assert.equal(sdfProfile.profile.format, 'sdf')
+    assert.equal(sdfProfile.profile.records, 1)
+    assert.equal(sdfProfile.profile.coordinateRecords, 2)
+    assert.deepEqual(
+      (sdfProfile.profile.details.propertyFields as Array<{ name: string }>).map((field) => field.name),
+      ['ACTIVITY', 'CHEMBL_ID']
+    )
+    const sdfValidation = await service.structureValidate({ inputArtifact: sdfPath, minRecords: 1 })
+    assert.equal(sdfValidation.validation.valid, true)
+
+    const cifProfile = await service.structureProfile({ inputArtifact: mmcifPath })
+    assert.equal(cifProfile.profile.format, 'mmcif')
+    assert.equal(cifProfile.profile.records, 1)
+    assert.equal(cifProfile.profile.coordinateRecords, 2)
+    assert.deepEqual((cifProfile.profile.details.atomSite as { chains: string[] }).chains, ['A', 'B'])
+    const cifValidation = await service.structureValidate({ inputArtifact: mmcifPath, requireCoordinates: true })
+    assert.equal(cifValidation.validation.valid, true)
+
+    const published = await service.publish({
+      planId,
+      name: 'structure-release',
+      artifacts: [mmcifPath, cifValidation.artifact.path]
+    })
+    assert.equal(published.quality.status, 'passed')
+    assert.equal(published.quality.validationReportCount, 1)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('organizes pathway and network edges into bounded nodes, edges, and invalid artifacts', async () => {
+  const { workspaceRoot, service, cleanup } = await fixture()
+  const networkPath = join(workspaceRoot, 'interactions.tsv')
+  await writeFile(networkPath, [
+    'source\ttarget\tscore\ttype\tevidence',
+    'TP53\tMDM2\t0.99\tphysical\texperiment-1',
+    'MDM2\tTP53\t0.80\tphysical\texperiment-2',
+    'TP53\tBRCA1\tinvalid\tfunctional\texperiment-3',
+    '\tATM\t0.70\tfunctional\texperiment-4'
+  ].join('\n'))
+  try {
+    const planId = await confirmedPlan(service)
+    const organized = await service.organizeGraph({
+      planId,
+      inputArtifact: networkPath,
+      format: 'tsv',
+      graphType: 'network',
+      sourceField: 'source',
+      targetField: 'target',
+      edgeTypeField: 'type',
+      weightField: 'score',
+      includeFields: ['evidence'],
+      directed: false,
+      deduplicateEdges: true,
+      onInvalid: 'drop',
+      outputFileName: 'tp53-network.graph.json'
+    })
+    assert.deepEqual(organized.counts, {
+      inputRecords: 4,
+      nodeRecords: 2,
+      edgeRecords: 1,
+      invalidRecords: 2,
+      duplicateEdgesRemoved: 1
+    })
+    assert.deepEqual(JSON.parse(await readFile(organized.nodesArtifact.path, 'utf8')), [
+      { id: 'MDM2', degree: 1 },
+      { id: 'TP53', degree: 1 }
+    ])
+    assert.deepEqual(JSON.parse(await readFile(organized.edgesArtifact.path, 'utf8')), [{
+      source: 'TP53',
+      target: 'MDM2',
+      type: 'physical',
+      weight: 0.99,
+      attributes: { evidence: 'experiment-1' }
+    }])
+    const invalid = JSON.parse(await readFile(organized.invalidArtifact.path, 'utf8'))
+    assert.deepEqual(invalid.map((entry: { reason: string }) => entry.reason), [
+      'invalid_weight', 'missing_or_invalid_endpoint'
+    ])
+    const graph = JSON.parse(await readFile(organized.graphArtifact.path, 'utf8'))
+    assert.equal(graph.graphType, 'network')
+    assert.equal(graph.edges.sha256, organized.edgesArtifact.sha256)
+  } finally {
+    await cleanup()
+  }
+})
+
 test('requires confirmed plans and rejects inputs outside the workspace', async () => {
   const { workspaceRoot, service, cleanup } = await fixture()
   const sourcePath = join(workspaceRoot, 'records.json')
@@ -520,7 +652,7 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
       planId,
       name: 'unvalidated',
       artifacts: [sourcePath]
-    }), /requires at least one dataset_validate report/)
+    }), /requires at least one dataset_validate or dataset_structure_validate report/)
     await assert.rejects(service.filter({
       planId,
       inputArtifact: sourcePath,

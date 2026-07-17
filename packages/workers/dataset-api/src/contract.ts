@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const DATASET_API_MCP_FLAG = '--dataset-api-mcp-server'
 export const DATASET_API_MCP_SERVER_NAME = 'sciforge-dataset-api'
-export const DATASET_API_MCP_SERVER_VERSION = '0.4.0'
+export const DATASET_API_MCP_SERVER_VERSION = '0.6.0'
 
 export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_catalog: 'read',
@@ -20,6 +20,9 @@ export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_id_map: 'controlled-write',
   dataset_id_map_provider: 'network-read-controlled-write',
   dataset_join: 'controlled-write',
+  dataset_structure_profile: 'controlled-write',
+  dataset_structure_validate: 'controlled-write',
+  dataset_graph_organize: 'controlled-write',
   dataset_validate: 'controlled-write',
   dataset_publish: 'controlled-write'
 } as const
@@ -68,6 +71,9 @@ const datasetPlanOperationSchema = z.object({
     'dataset_id_map',
     'dataset_id_map_provider',
     'dataset_join',
+    'dataset_structure_profile',
+    'dataset_structure_validate',
+    'dataset_graph_organize',
     'dataset_validate',
     'dataset_publish'
   ]),
@@ -270,6 +276,37 @@ export const datasetJoinInputSchema = z.object({
   maxBytes: processingMaxBytesSchema
 }).strict()
 
+const datasetStructureFormatSchema = z.enum(['auto', 'sdf', 'mmcif'])
+
+export const datasetStructureProfileInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  inputArtifact: artifactPathSchema,
+  format: datasetStructureFormatSchema.optional(),
+  outputFileName: outputFileNameSchema.optional(),
+  maxBytes: processingMaxBytesSchema
+}).strict()
+
+export const datasetStructureValidateInputSchema = datasetStructureProfileInputSchema.extend({
+  minRecords: z.number().int().nonnegative().optional(),
+  requireCoordinates: z.boolean().optional(),
+  failOnInvalid: z.boolean().optional()
+}).strict()
+
+export const datasetGraphOrganizeInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema,
+  graphType: z.enum(['pathway', 'network']),
+  sourceField: transformFieldSchema,
+  targetField: transformFieldSchema,
+  edgeTypeField: transformFieldSchema.optional(),
+  weightField: transformFieldSchema.optional(),
+  includeFields: z.array(transformFieldSchema).max(100).optional(),
+  directed: z.boolean().optional(),
+  deduplicateEdges: z.boolean().optional(),
+  onInvalid: z.enum(['drop', 'fail']).optional(),
+  outputFileName: outputFileNameSchema,
+  maxOutputEdges: z.number().int().min(1).max(5_000_000).optional()
+}).strict()
+
 const datasetFieldRuleSchema = z.object({
   field: z.string().trim().min(1).max(512),
   required: z.boolean().optional(),
@@ -411,6 +448,9 @@ export type DatasetDeduplicateInput = z.infer<typeof datasetDeduplicateInputSche
 export type DatasetIdMapInput = z.infer<typeof datasetIdMapInputSchema>
 export type DatasetProviderIdMapInput = z.infer<typeof datasetProviderIdMapInputSchema>
 export type DatasetJoinInput = z.infer<typeof datasetJoinInputSchema>
+export type DatasetStructureProfileInput = z.infer<typeof datasetStructureProfileInputSchema>
+export type DatasetStructureValidateInput = z.infer<typeof datasetStructureValidateInputSchema>
+export type DatasetGraphOrganizeInput = z.infer<typeof datasetGraphOrganizeInputSchema>
 export type DatasetValidateInput = z.infer<typeof datasetValidateInputSchema>
 export type DatasetPublishInput = z.infer<typeof datasetPublishInputSchema>
 

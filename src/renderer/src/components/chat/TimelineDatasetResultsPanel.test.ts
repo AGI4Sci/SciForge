@@ -189,6 +189,30 @@ describe('TimelineDatasetResultsPanel', () => {
         } }
       },
       {
+        kind: 'tool', id: 'graph-1', summary: 'dataset_graph_organize', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_graph_organize', success: true,
+          result: {
+            counts: { inputRecords: 10, nodeRecords: 7, edgeRecords: 8, invalidRecords: 1, duplicateEdgesRemoved: 1 },
+            graphArtifact: { path: '/workspace/network.graph.json', format: 'report', bytes: 240, sha256: 'graph' }
+          }
+        } }
+      },
+      {
+        kind: 'tool', id: 'structure-profile-1', summary: 'dataset_structure_profile', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_structure_profile', success: true,
+          result: { profile: { format: 'mmcif', records: 1, coordinateRecords: 2500 } }
+        } }
+      },
+      {
+        kind: 'tool', id: 'structure-validate-1', summary: 'dataset_structure_validate', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_structure_validate', success: true,
+          result: { validation: { valid: true, records: 1, coordinateRecords: 2500, errorCount: 0 } }
+        } }
+      },
+      {
         kind: 'tool', id: 'validate-1', summary: 'dataset_validate', status: 'success',
         meta: { datasetApi: {
           toolName: 'dataset_validate', success: true,
@@ -209,6 +233,9 @@ describe('TimelineDatasetResultsPanel', () => {
       { kind: 'processing', toolName: 'dataset_id_map', result: { counts: { mappedRecords: 4, ambiguousRecords: 1 } } },
       { kind: 'processing', toolName: 'dataset_id_map_provider', result: { counts: { mappedRecords: 2 } } },
       { kind: 'processing', toolName: 'dataset_join', result: { counts: { unmatchedLeftRecords: 1 } } },
+      { kind: 'processing', toolName: 'dataset_graph_organize', result: { counts: { nodeRecords: 7, edgeRecords: 8 } } },
+      { kind: 'profile', toolName: 'dataset_structure_profile', result: { profile: { coordinateRecords: 2500 } } },
+      { kind: 'validation', toolName: 'dataset_structure_validate', result: { validation: { valid: true } } },
       { kind: 'validation', result: { validation: { valid: true } } },
       { kind: 'publication', result: { publication: { artifactCount: 2 } } }
     ])

@@ -34,6 +34,9 @@ Tools:
 - `dataset_id_map`: map biomedical identifiers through an explicit mapping artifact with one-to-many, unmatched, and ambiguous-record handling.
 - `dataset_id_map_provider`: use the fixed UniProt batch ID Mapping API, persist its mapping response and request provenance, then apply it through the deterministic mapping engine.
 - `dataset_join`: perform deterministic inner/left/right/full joins and persist both sides' unmatched records as separate artifacts.
+- `dataset_structure_profile`: inspect SDF molecule records/properties or mmCIF blocks/categories/atom-site coordinates without rewriting the source.
+- `dataset_structure_validate`: produce publication-compatible SDF/mmCIF quality reports.
+- `dataset_graph_organize`: normalize pathway or network edge tables into nodes, edges, graph summary, and invalid-record artifacts.
 - `dataset_validate`: validate record counts, fields, types, ranges, uniqueness, missingness, and FASTA integrity.
 - `dataset_publish`: create a release directory with data, manifest, schema, quality report, checksums, and full parent/plan provenance.
 
