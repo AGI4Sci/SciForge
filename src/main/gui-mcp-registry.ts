@@ -174,6 +174,11 @@ import {
   type ManagedGuiMcpDescriptor
 } from './managed-gui-mcp-config'
 import { internalSecretEnv } from './internal-http-secret'
+import {
+  CAPABILITY_RUNTIME_BRIDGE_SERVER_ID,
+  buildCapabilityRuntimeBridgeLocalRuntimeMcpServerConfig
+} from './capabilities/runtime-bridge-config'
+import type { CapabilityRuntimeBridgeLaunchConfig } from './capabilities/runtime-bridge'
 
 export type GuiMcpRuntimeServerConfig = {
   id: string
@@ -185,6 +190,7 @@ export type GuiMcpRuntimeServerConfig = {
 }
 
 export type GuiMcpRegistryInput = {
+  capabilityRuntimeBridge?: CapabilityRuntimeBridgeLaunchConfig
   settings?: AppSettingsV1
   scheduleMcp?: {
     settings?: AppSettingsV1
@@ -269,6 +275,7 @@ export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
 
 export function managedGuiMcpServerNames(): string[] {
   return [
+    CAPABILITY_RUNTIME_BRIDGE_SERVER_ID,
     ...GUI_MCP_DESCRIPTORS.flatMap((descriptor) => managedGuiMcpNames(descriptor)),
     ...RETIRED_GUI_RESEARCH_MCP_SERVER_NAMES,
     ...RETIRED_GUI_VISUAL_DOCUMENT_MCP_SERVER_NAMES,
@@ -340,6 +347,12 @@ export function buildClaudeCodeManagedGuiMcpServers(input: GuiMcpRegistryInput =
 
 function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, LocalRuntimeServerBuilder]> {
   const builders: Array<[string, LocalRuntimeServerBuilder]> = []
+  if (input.capabilityRuntimeBridge) {
+    builders.push([
+      CAPABILITY_RUNTIME_BRIDGE_SERVER_ID,
+      () => buildCapabilityRuntimeBridgeLocalRuntimeMcpServerConfig(input.capabilityRuntimeBridge!)
+    ])
+  }
   const settings = input.settings
   const scheduleSettings = input.scheduleMcp?.settings ?? settings
   if (input.scheduleMcp && scheduleSettings) {

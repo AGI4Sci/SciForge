@@ -37,7 +37,14 @@ function createObservation(): WorkspaceObservation {
       mode: 'preview',
       title: 'paper.pdf'
     },
-    actions: ['annotation.sidecar.read', 'annotation.upsert']
+    documentAnnotations: {
+      threadCount: 0,
+      annotationCount: 0,
+      openThreadCount: 0,
+      truncated: false,
+      threads: []
+    },
+    actions: []
   }
 }
 
@@ -101,21 +108,30 @@ function createContext(observation: WorkspaceObservation): WorkspacePreviewPanel
       ok: true as const,
       observation
     })),
-    invokeAction: vi.fn(async () => ({
+    updateAnnotation: vi.fn(async () => ({
       ok: true as const,
-      sessionId: 'session-pdf',
-      pluginId: 'pdf',
-      actionId: 'annotation.sidecar.read',
-      invokedAt: '2026-07-08T00:01:00.000Z',
-      result: {
-        sidecar: createSidecar()
+      session: {
+        id: 'session-pdf',
+        pluginId: 'pdf',
+        workspaceRoot: '/workspace/lab',
+        path: '/workspace/lab/paper.pdf',
+        modality: 'document' as const,
+        mode: 'preview' as const,
+        openedAt: '2026-07-08T00:00:00.000Z',
+        updatedAt: '2026-07-08T00:01:00.000Z'
       },
+      operationKind: 'annotation.upsert' as const,
+      appliedAt: '2026-07-08T00:01:00.000Z',
       audit: {
         pluginId: 'pdf',
         path: '/workspace/lab/paper.pdf',
-        actionId: 'annotation.sidecar.read',
-        effect: 'host-action' as const
+        operationKind: 'annotation.upsert' as const,
+        effect: 'sidecar-write' as const
       }
+    })),
+    listAnnotations: vi.fn(async () => ({
+      ok: true as const,
+      sidecar: createSidecar()
     })),
     readRange: vi.fn()
   } as unknown as WorkspacePreviewHost
@@ -132,7 +148,16 @@ function createContext(observation: WorkspaceObservation): WorkspacePreviewPanel
         mode: 'preview',
         openedAt: '2026-07-08T00:00:00.000Z',
         updatedAt: '2026-07-08T00:00:00.000Z'
-      }
+      },
+      capability: {
+        resource: {
+          token: `cap_${'a'.repeat(26)}`,
+          semanticRevision: 'revision-1',
+          expiresAt: '2026-07-08T01:00:00.000Z'
+        },
+        resourceRef: `res_${'b'.repeat(26)}`,
+        operations: [{ id: 'workspace-preview.annotations.list' }]
+      } as never
     }),
     asset: null,
     assetStatus: 'idle',
@@ -192,11 +217,13 @@ describe('DocumentAnnotationPanelController', () => {
     if (!capturedInput) throw new Error('Document render input was not captured.')
     await capturedInput.pdf.onApplyEdit(operation)
 
-    expect(context.host.applyEdit).toHaveBeenCalledWith(operation)
-    expect(context.host.observe).toHaveBeenCalledWith('session-pdf')
-    expect(context.host.invokeAction).toHaveBeenCalledWith('session-pdf', {
-      actionId: 'annotation.sidecar.read',
-      input: {}
+    expect(context.host.updateAnnotation).toHaveBeenCalledWith({
+      annotationId: 'pdf-ann-1',
+      annotationKind: 'comment',
+      body: '',
+      target: operation.target
     })
+    expect(context.host.observe).toHaveBeenCalledWith('session-pdf')
+    expect(context.host.listAnnotations).toHaveBeenCalledWith('session-pdf')
   })
 })

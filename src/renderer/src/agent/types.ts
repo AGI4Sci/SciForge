@@ -370,7 +370,7 @@ export type RuntimeStatusEventPayload = {
   kind:
     | 'tool_result_upload_wait'
     | 'tool_catalog_changed'
-    | 'tool_storm_suppressed'
+    | 'execution_suppressed'
     | 'compaction_summary_fallback'
     | 'runtime_handoff'
   itemId: string

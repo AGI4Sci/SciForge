@@ -264,7 +264,7 @@ Feature flags are intentionally explicit:
 - `serve.mcpSearch` can collapse a large MCP catalog into four entry points: `mcp_search`, `mcp_describe`, `mcp_call`, and `mcp_refresh_catalog`. When the catalog is too large, the model searches for relevant tools first, then describes and calls the exact tool instead of carrying every MCP schema on every turn.
 - `serve.tokenEconomy` / `tokenEconomyMode` compresses tool descriptions, tool results, and history context while preserving code, paths, commands, URLs, errors, and other high-value signals.
 - `contextCompaction` controls fallback long-thread compaction thresholds and summary behavior. Per-model thresholds live in `models.profiles`. Compaction preserves goals, constraints, decisions, touched files, tool outcomes, and unresolved next steps.
-- `serve.runtimeTuning.toolStorm` suppresses repeated identical tool calls within a turn so useless tool loops do not keep spending tokens.
+- `serve.runtimeTuning.executionGovernance` suppresses repeated identical tool calls within a turn so useless tool loops do not keep spending tokens.
 - `serve.runtimeTuning.maxTurnModelSteps` raises or lowers the per-turn model-step cap for long-running workflows such as delegated research agents; the default remains 64.
 - `capabilities.web` exposes `web_fetch` and/or `web_search`. The built-in provider can fetch HTTP(S) pages; search requires a provider implementation and may report unavailable.
 - `capabilities.skills` scans configured roots for `skill.json` manifests. A manifest may point its `entry` at `SKILL.md`, but a bare `SKILL.md` file is not a package marker.

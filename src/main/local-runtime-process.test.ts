@@ -485,6 +485,30 @@ describe('resolveLocalRuntimeDataDir', () => {
 })
 
 describe('syncGuiManagedLocalRuntimeConfig', () => {
+  it('writes the authenticated capability bridge as a managed file-bridge server', async () => {
+    if (!tempRoot) throw new Error('temp root not initialized')
+    const configPath = join(tempRoot, 'config.json')
+    const module = await import('./local-runtime-process')
+
+    await module.syncGuiManagedLocalRuntimeConfig(tempRoot, defaultLocalRuntimeSettings(), {
+      capabilityRuntimeBridge: {
+        rootDir: join(tempRoot, 'capability-runtime-bridge'),
+        authSecret: 'runtime-bridge-test-secret-that-is-long-enough',
+        timeoutMs: 30_000
+      }
+    })
+
+    const parsed = LocalRuntimeConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')))
+    expect(parsed.capabilities.mcp.servers.sciforge_capabilities).toMatchObject({
+      enabled: true,
+      transport: 'file-bridge',
+      rootDir: join(tempRoot, 'capability-runtime-bridge'),
+      authSecret: 'runtime-bridge-test-secret-that-is-long-enough',
+      trustScope: 'user',
+      timeoutMs: 30_000
+    })
+  })
+
   it('creates GUI-managed config with attachments enabled for image paste/upload', async () => {
     if (!tempRoot) throw new Error('temp root not initialized')
     const configPath = join(tempRoot, 'config.json')
@@ -532,7 +556,12 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
         hardThreshold: 990_000
       }
     })
-    expect(parsed.runtime.toolStorm).toMatchObject({ enabled: true, windowSize: 8, threshold: 3 })
+    expect(parsed.runtime.executionGovernance).toMatchObject({
+      enabled: true,
+      windowSize: 8,
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
+    })
     expect(parsed.runtime.modelStreamIdleTimeoutMs).toBe(600000)
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 524288 })
     expect(parsed.runtime.toolBudget).toMatchObject({
@@ -1101,8 +1130,8 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
       runtime: {
         customRuntimeFlag: true,
         modelStreamIdleTimeoutMs: 180000,
-        toolStorm: {
-          customStormFlag: 'keep'
+        executionGovernance: {
+          customExecutionFlag: 'drop'
         }
       },
       serve: {
@@ -1186,10 +1215,11 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
     }, {
       runtimeGuards: {
         ...defaultRuntimeGuardSettings(),
-        toolStorm: {
+        execution: {
           enabled: false,
           windowSize: 12,
-          threshold: 4
+          exactRepeatThreshold: 4,
+          semanticFailureThreshold: 3
         }
       }
     })
@@ -1245,12 +1275,13 @@ describe('syncGuiManagedLocalRuntimeConfig', () => {
         hardThreshold: 990_000
       }
     })
-    expect(parsed.runtime.toolStorm).toMatchObject({
+    expect(parsed.runtime.executionGovernance).toMatchObject({
       enabled: false,
       windowSize: 12,
-      threshold: 4
+      exactRepeatThreshold: 4,
+      semanticFailureThreshold: 3
     })
-    expect(parsed.runtime.toolStorm.customStormFlag).toBeUndefined()
+    expect(parsed.runtime.executionGovernance.customExecutionFlag).toBeUndefined()
     expect(parsed.runtime.customRuntimeFlag).toBeUndefined()
     expect(parsed.runtime.modelStreamIdleTimeoutMs).toBe(180000)
     expect(parsed.runtime.toolArgumentRepair).toMatchObject({ maxStringBytes: 262144 })

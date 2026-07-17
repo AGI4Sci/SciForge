@@ -144,7 +144,7 @@ function capabilities(runtimeId: AgentRuntimeId): AgentRuntimeCapabilities {
       resumeSession: false
     },
     guard: {
-      toolStorm: runtimeId === 'sciforge' ? 'native' : 'observe'
+      execution: runtimeId === 'sciforge' ? 'native' : 'observe'
     },
     storage: {
       guiOwnedThreads: false,
@@ -643,10 +643,11 @@ describe('AgentRuntimeHost', () => {
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(visibleContext.get).toHaveBeenCalled()
-    expect(dispatched?.text).toContain('gui_visible_context')
-    expect(dispatched?.text).toContain('sciforge_resource_observe')
-    expect(dispatched?.text).toContain('cap_abcdefghijklmnopqrstuvwxyz')
-    expect(dispatched?.text).toContain('workspace-preview.apply-edit')
+    expect(dispatched?.text).toContain('sciforge_discover')
+    expect(dispatched?.text).toContain('sciforge_observe')
+    expect(dispatched?.text).toContain('sciforge_invoke')
+    expect(dispatched?.text).not.toContain('cap_abcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).not.toContain('workspace-preview.apply-edit')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
   })
@@ -685,7 +686,7 @@ describe('AgentRuntimeHost', () => {
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(visibleContext.get).not.toHaveBeenCalled()
-    expect(dispatched?.text).not.toContain('gui_visible_context')
+    expect(dispatched?.text).not.toContain('sciforge_discover')
     expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
     expect(dispatched?.displayText).toBe('Run the unit tests.')
   })
@@ -3458,10 +3459,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3492,7 +3494,7 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       expect.objectContaining({
         kind: 'runtime_status',
-        metadata: expect.objectContaining({ guard: 'toolStorm' })
+        metadata: expect.objectContaining({ guard: 'execution' })
       })
     )
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
@@ -3535,10 +3537,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3578,10 +3581,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3620,10 +3624,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3685,10 +3690,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3726,10 +3732,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3776,10 +3783,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3828,10 +3836,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3852,7 +3861,7 @@ describe('AgentRuntimeHost', () => {
     expect(codex.publishSyntheticEvent).not.toHaveBeenCalled()
   })
 
-  it('does not run observe tool-storm controls for native-guard runtimes', async () => {
+  it('does not run observe execution-governance controls for native-guard runtimes', async () => {
     const local = fakeAdapter('sciforge', {
       id: 'local-thread',
       runtimeId: 'sciforge',
@@ -3881,10 +3890,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('sciforge'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3903,6 +3913,68 @@ describe('AgentRuntimeHost', () => {
     expect(local.steerTurn).not.toHaveBeenCalled()
     expect(local.interruptTurn).not.toHaveBeenCalled()
     expect(local.publishSyntheticEvent).not.toHaveBeenCalled()
+  })
+
+  it('uses authoritative capability availability to deny Codex OS GUI automation', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      yield {
+        kind: 'tool_event',
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        turnId: 'turn-1',
+        itemId: 'shell-gui-fallback',
+        status: 'running',
+        toolKind: 'command_execution',
+        toolName: 'exec_command',
+        meta: {
+          callId: 'shell-gui-fallback',
+          toolName: 'exec_command',
+          arguments: { command: 'screencapture -x /tmp/sciforge.png' }
+        }
+      } satisfies AgentRuntimeEvent
+    })
+    const capabilityAvailability = vi.fn(() => true)
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2 }
+        }
+      }),
+      adapters: [codex],
+      capabilityAvailability
+    })
+
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(capabilityAvailability).toHaveBeenCalledWith(expect.objectContaining({
+      capabilityId: 'surface.inspect',
+      audience: 'agent',
+      runtimeId: 'codex'
+    }))
+    expect(codex.interruptTurn).toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied',
+        detail: expect.stringContaining('sciforge_discover')
+      })
+    )
   })
 
   it('routes same-thread startTurn into steer when the runtime supports active turn steering', async () => {

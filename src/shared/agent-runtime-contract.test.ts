@@ -194,7 +194,7 @@ describe('agent runtime contract', () => {
         resumeSession: false
       },
       guard: {
-        toolStorm: 'unsupported'
+        execution: 'unsupported'
       }
     })
     expect(capabilities.events.live).toBe(false)
@@ -272,13 +272,13 @@ describe('agent runtime contract', () => {
     })
     const codex = {
       ...base,
-      guard: { toolStorm: 'observe' }
+      guard: { execution: 'observe' }
     } satisfies AgentRuntimeCapabilities
     const localRuntime = {
       ...base,
       runtimeId: 'sciforge',
       transport: 'http_sse',
-      guard: { toolStorm: 'native' },
+      guard: { execution: 'native' },
       controls: {
         ...base.controls,
         interrupt: false,
@@ -286,8 +286,8 @@ describe('agent runtime contract', () => {
       }
     } satisfies AgentRuntimeCapabilities
 
-    expect(codex.guard.toolStorm).toBe('observe')
-    expect(localRuntime.guard.toolStorm).toBe('native')
+    expect(codex.guard.execution).toBe('observe')
+    expect(localRuntime.guard.execution).toBe('native')
     expect(localRuntime.controls.interrupt).toBe(false)
     expect(localRuntime.controls.steer).toBe(false)
   })

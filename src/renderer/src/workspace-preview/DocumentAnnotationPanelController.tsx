@@ -18,11 +18,7 @@ import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
-import {
-  PDF_REVIEW_GENERATE_ACTION_ID,
-  PDF_REVIEW_IMPROVE_ACTION_ID,
-  type PdfReviewSelection
-} from '@shared/pdf-review'
+import type { PdfReviewSelection } from '@shared/pdf-review'
 import {
   WritePdfAnnotationsPanel,
   type WritePdfAnnotationDisplayMode,
@@ -53,6 +49,10 @@ import {
   createPdfAnnotationOverlaysFromSidecar,
   firstPdfAnnotationThreadRect
 } from './document-annotation-operations'
+
+const ANNOTATION_LIST_OPERATION_ID = 'workspace-preview.annotations.list'
+const ANNOTATION_REVIEW_GENERATE_OPERATION_ID = 'workspace-preview.annotations.review.generate'
+const ANNOTATION_REVIEW_IMPROVE_OPERATION_ID = 'workspace-preview.annotations.review.improve'
 
 export type DocumentAnnotationPanelRenderInput = {
   pdf: {
@@ -143,10 +143,23 @@ export function DocumentAnnotationPanelController({
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
-  const canReadSidecar = Boolean(observation?.actions.includes('annotation.sidecar.read') && sessionId)
-  const canImportSidecar = Boolean(documentKind === 'pdf' && observation?.actions.includes('annotation.sidecar.import') && sessionId)
-  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
-  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
+  const operationIds = context.state.capability?.operations.map((operation) => operation.id) ?? []
+  const canReadSidecar = Boolean(
+    sessionId &&
+    observation?.documentAnnotations &&
+    operationIds.includes(ANNOTATION_LIST_OPERATION_ID)
+  )
+  const canImportSidecar = Boolean(documentKind === 'pdf' && sessionId)
+  const canGeneratePdfReview = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_REVIEW_GENERATE_OPERATION_ID)
+  )
+  const canImprovePdfReview = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_REVIEW_IMPROVE_OPERATION_ID)
+  )
   const pdfReviewHasSelection = Boolean(pdfReviewSelection && (pdfReviewSelection.text.trim() || pdfReviewSelection.rects?.length))
   const pdfReviewSelectionLabel = pdfReviewHasSelection
     ? `${pdfReviewSelection?.text.trim().length || pdfReviewSelection?.rects?.length || 0}${pdfReviewSelection?.text.trim() ? ' chars' : ' regions'}`
@@ -156,17 +169,14 @@ export function DocumentAnnotationPanelController({
     if (!sessionId || !canReadSidecar) return false
     setLoadingSidecar(true)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: 'annotation.sidecar.read',
-        input: {}
-      })
+      const result = await context.host.listAnnotations(sessionId)
       if (!result.ok) {
         setAnnotationNotice({ tone: 'error', message: result.message })
         return false
       }
-      const nextSidecar = sidecarFromActionResult(result)
-      if (nextSidecar) {
-        setSidecar(nextSidecar)
+      const parsed = pdfAnnotationSidecarSchema.safeParse(result.sidecar)
+      if (parsed.success) {
+        setSidecar(parsed.data)
         setAnnotationNotice(null)
         return true
       }
@@ -242,7 +252,24 @@ export function DocumentAnnotationPanelController({
   ): Promise<boolean> => {
     if (!operation) return false
     try {
-      const result = await context.host.applyEdit(operation)
+      const result = operation.kind === 'annotation.upsert'
+        ? await context.host.updateAnnotation({
+            annotationId: operation.annotationId,
+            annotationKind: operation.annotationKind,
+            body: operation.body,
+            ...(operation.target ? { target: operation.target } : {})
+          })
+        : operation.kind === 'annotation.thread.update' && operation.patch.status !== undefined
+          ? await context.host.resolveAnnotation({
+              threadId: operation.threadId,
+              resolved: operation.patch.status === 'resolved'
+            })
+          : operation.kind === 'annotation.thread.delete'
+            ? await context.host.deleteAnnotation({
+                threadId: operation.threadId,
+                pruneOrphanAnchors: operation.pruneOrphanAnchors
+              })
+            : { ok: false as const, message: 'Unsupported document annotation mutation.' }
       if (!result.ok) {
         setAnnotationNotice({ tone: 'error', message: result.message })
         return false
@@ -445,20 +472,17 @@ export function DocumentAnnotationPanelController({
     setPdfReviewGenerating(true)
     setPdfReviewNotice(null)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: PDF_REVIEW_GENERATE_ACTION_ID,
-        input: {
-          maxComments: input.maxComments,
-          prompt: input.prompt,
-          replaceExisting: input.scope === 'document',
-          ...(selection ? { selection } : {})
-        }
+      const result = await context.host.generateAnnotationReview({
+        maxComments: input.maxComments,
+        prompt: input.prompt,
+        replaceExisting: input.scope === 'document',
+        ...(selection ? { selection } : {})
       })
       if (!result.ok) {
         setPdfReviewNotice({ tone: 'error', message: result.message })
         return
       }
-      const nextSidecar = sidecarFromActionResult(result)
+      const nextSidecar = pdfAnnotationSidecarSchema.parse(result.sidecar)
       if (nextSidecar) {
         setSidecar(nextSidecar)
         const firstReviewThread = nextSidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
@@ -468,9 +492,7 @@ export function DocumentAnnotationPanelController({
       await context.host.observe(sessionId)
       setDisplayMode('all')
       setPanelOpen(true)
-      const payload = isRecord(result.result) ? result.result : {}
-      const commentCount = typeof payload.commentCount === 'number' ? payload.commentCount : 0
-      setPdfReviewNotice({ tone: 'success', message: `SciForge generated ${commentCount} PDF review comments.` })
+      setPdfReviewNotice({ tone: 'success', message: `SciForge generated ${result.commentCount} PDF review comments.` })
     } catch (error) {
       setPdfReviewNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
     } finally {
@@ -492,18 +514,15 @@ export function DocumentAnnotationPanelController({
     setPdfReviewImprovingThreadId(threadId)
     setPdfReviewNotice(null)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: PDF_REVIEW_IMPROVE_ACTION_ID,
-        input: {
-          threadId,
-          annotationId
-        }
+      const result = await context.host.improveAnnotationReview({
+        threadId,
+        annotationId
       })
       if (!result.ok) {
         setPdfReviewNotice({ tone: 'error', message: result.message })
         return
       }
-      const nextSidecar = sidecarFromActionResult(result)
+      const nextSidecar = pdfAnnotationSidecarSchema.parse(result.sidecar)
       if (nextSidecar) setSidecar(nextSidecar)
       await context.host.observe(sessionId)
       setSelectedThreadId(threadId)
@@ -541,12 +560,9 @@ export function DocumentAnnotationPanelController({
     setImportingPackage(true)
     try {
       const packageBase64 = await readBrowserFileBase64(file)
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: 'annotation.sidecar.import',
-        input: { packageBase64 }
-      })
+      const result = await context.host.importAnnotations({ packageBase64 }, sessionId)
       if (result.ok) {
-        await context.host.observe(result.sessionId)
+        await context.host.observe(sessionId)
         await loadSidecar()
         setPanelOpen(true)
       }
@@ -629,12 +645,6 @@ export function DocumentAnnotationPanelController({
       ) : null}
     </div>
   )
-}
-
-function sidecarFromActionResult(result: Awaited<ReturnType<WorkspacePreviewPanelShellContext['host']['invokeAction']>>): PdfAnnotationSidecar | null {
-  if (!result.ok || !isRecord(result.result) || !isRecord(result.result.sidecar)) return null
-  const parsed = pdfAnnotationSidecarSchema.safeParse(result.result.sidecar)
-  return parsed.success ? parsed.data : null
 }
 
 type AnnotationQuestionTurn = {
@@ -908,8 +918,4 @@ function isAnnotationEditOperation(operation: WorkspacePreviewEditOperation): bo
 function annotationThreadIdFromOperation(operation: WorkspacePreviewEditOperation): string | null {
   if (operation.kind !== 'annotation.upsert') return null
   return operation.target?.threadId?.trim() || null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

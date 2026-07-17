@@ -41,7 +41,7 @@ export type LegacyMainGuardCode =
   | 'runtime_port_conflict'
   | 'runtime_unhealthy'
   | 'runtime_request_user_input_unsupported'
-  | 'runtime_tool_storm_interrupted'
+  | 'runtime_execution_interrupted'
   | 'missing_api_key'
   | 'provider_auth_blocked'
 
@@ -81,7 +81,7 @@ const KNOWN_LEGACY_CODES: ReadonlySet<LegacyMainGuardCode> = new Set<LegacyMainG
   'runtime_port_conflict',
   'runtime_unhealthy',
   'runtime_request_user_input_unsupported',
-  'runtime_tool_storm_interrupted',
+  'runtime_execution_interrupted',
   'missing_api_key',
   'provider_auth_blocked'
 ])

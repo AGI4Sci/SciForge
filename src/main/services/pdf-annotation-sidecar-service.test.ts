@@ -11,6 +11,7 @@ import {
   exportPdfAnnotationSidecarPackage,
   importPdfAnnotationSidecarPackage,
   loadPdfAnnotationSidecar,
+  migrateLegacyPdfAnnotationSidecar,
   savePdfAnnotationSidecar
 } from './pdf-annotation-sidecar-service'
 
@@ -158,7 +159,7 @@ describe('pdf annotation sidecar service', () => {
     expect(reloaded.sidecar.manifest.sourcePdfPath?.endsWith('/paper.pdf')).toBe(true)
   })
 
-  it('promotes an existing matching annotation sidecar into the canonical document path', async () => {
+  it('loads only the canonical path and migrates a matching legacy sidecar explicitly', async () => {
     const workspaceRoot = await createTempWorkspace()
     const pdfPath = join(workspaceRoot, 'paper.pdf')
     await writeFile(pdfPath, '%PDF-1.7\nfirst-build\n', 'utf8')
@@ -210,13 +211,19 @@ describe('pdf annotation sidecar service', () => {
     const reloaded = await loadPdfAnnotationSidecar({ pdfPath, workspaceRoot })
     expect(reloaded.ok).toBe(true)
     if (!reloaded.ok) return
-    expect(reloaded.source).toBe('default')
+    expect(reloaded.source).toBe('empty')
     expect(reloaded.path).not.toBe(existingPath)
-    expect(reloaded.sidecar.annotations[0]?.body).toBe('promote this comment')
-    await expect(readFile(reloaded.path, 'utf8')).resolves.toContain('promote this comment')
+    expect(reloaded.sidecar.annotations).toEqual([])
+
+    const migrated = await migrateLegacyPdfAnnotationSidecar({ pdfPath, workspaceRoot })
+    expect(migrated.ok).toBe(true)
+    if (!migrated.ok) return
+    expect(migrated.path).toBe(reloaded.path)
+    expect(migrated.sidecar.annotations[0]?.body).toBe('promote this comment')
+    await expect(readFile(migrated.path, 'utf8')).resolves.toContain('promote this comment')
   })
 
-  it('promotes a matching populated legacy sidecar when the canonical file is empty', async () => {
+  it('does not scan a populated legacy sidecar when the canonical file is empty', async () => {
     const workspaceRoot = await createTempWorkspace()
     const pdfPath = join(workspaceRoot, 'paper.pdf')
     await writeFile(pdfPath, '%PDF-1.7\nfirst-build\n', 'utf8')
@@ -268,7 +275,13 @@ describe('pdf annotation sidecar service', () => {
     expect(reloaded.ok).toBe(true)
     if (!reloaded.ok) return
     expect(reloaded.path).toBe(emptySaved.path)
-    expect(reloaded.sidecar.threads.map((thread) => thread.id)).toEqual(['thread-promoted'])
+    expect(reloaded.sidecar.threads).toEqual([])
+
+    const migrated = await migrateLegacyPdfAnnotationSidecar({ pdfPath, workspaceRoot })
+    expect(migrated.ok).toBe(true)
+    if (!migrated.ok) return
+    expect(migrated.path).toBe(emptySaved.path)
+    expect(migrated.sidecar.threads.map((thread) => thread.id)).toEqual(['thread-promoted'])
   })
 
   it('serializes concurrent saves and preserves additions from both snapshots', async () => {

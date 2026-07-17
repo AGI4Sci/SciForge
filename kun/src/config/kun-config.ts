@@ -137,11 +137,12 @@ export const RuntimeTuningConfigSchema = z
   .object({
     modelStreamIdleTimeoutMs: PositiveInt.optional(),
     maxTurnModelSteps: PositiveInt.optional(),
-    toolStorm: z
+    executionGovernance: z
       .object({
         enabled: z.boolean().optional(),
         windowSize: PositiveInt.optional(),
-        threshold: z.number().int().min(2).optional()
+        exactRepeatThreshold: z.number().int().min(2).optional(),
+        semanticFailureThreshold: z.number().int().min(2).optional()
       })
       .strict()
       .optional(),

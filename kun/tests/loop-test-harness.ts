@@ -1,4 +1,8 @@
-import { AgentLoop, type AgentLoopOptions } from '../src/loop/agent-loop.js'
+import {
+  AgentLoop,
+  type AgentLoopOptions,
+  type ExecutionGovernanceOptions
+} from '../src/loop/agent-loop.js'
 import { InMemoryEventBus } from '../src/adapters/in-memory-event-bus.js'
 import { InMemoryApprovalGate } from '../src/adapters/in-memory-approval-gate.js'
 import { InMemoryUserInputGate } from '../src/adapters/in-memory-user-input-gate.js'
@@ -21,7 +25,6 @@ import type { AttachmentStore } from '../src/attachments/attachment-store.js'
 import type { ModelCapabilityMetadata } from '../src/contracts/capabilities.js'
 import type { MemoryStore } from '../src/memory/memory-store.js'
 import type { TokenEconomyConfig } from '../src/loop/token-economy.js'
-import type { ToolStormBreakerOptions } from '../src/loop/tool-storm-breaker.js'
 import type { ContextCompactionConfig } from '../src/loop/model-context-profile.js'
 
 export type Harness = {
@@ -79,13 +82,7 @@ export function makeHarness(
     modelCapabilities?: (model: string) => ModelCapabilityMetadata
     tokenEconomy?: TokenEconomyConfig
     contextCompaction?: ContextCompactionConfig
-    toolStorm?: ToolStormBreakerOptions & {
-      enabled?: boolean
-      maxRecoverySteps?: number
-      nonProgressThreshold?: number
-      maxStepsAfterRecovery?: number
-      maxToolCallsPerTurn?: number
-    }
+    executionGovernance?: ExecutionGovernanceOptions
     nowMs?: () => number
     toolHost?: LocalToolHost
     toolArgumentRepair?: {
@@ -147,7 +144,7 @@ export function makeHarness(
     ...(options.modelCapabilities ? { modelCapabilities: options.modelCapabilities } : {}),
     ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
     ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
-    ...(options.toolStorm ? { toolStorm: options.toolStorm } : {}),
+    ...(options.executionGovernance ? { executionGovernance: options.executionGovernance } : {}),
     ...(options.toolBudget ? { toolBudget: options.toolBudget } : {}),
     ...(options.toolBudgetProfile ? { toolBudgetProfile: options.toolBudgetProfile } : {}),
     ...(options.parallelism ? { parallelism: options.parallelism } : {}),

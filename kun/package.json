@@ -52,8 +52,11 @@
     "kun": "./dist/cli/serve-entry.js"
   },
   "scripts": {
+    "prebuild": "npm --prefix ../packages/execution-governance run build",
     "build": "tsc -p tsconfig.build.json",
+    "pretypecheck": "npm --prefix ../packages/execution-governance run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
+    "pretest": "npm --prefix ../packages/execution-governance run build",
     "test": "vitest run",
     "test:watch": "vitest",
     "transcript:diff": "node ./scripts/transcript-diff.mjs",
@@ -61,6 +64,7 @@
     "dev": "tsc -p tsconfig.build.json --watch"
   },
   "dependencies": {
+    "@sciforge/execution-governance": "file:../packages/execution-governance",
     "@sciforge/multi-agent": "file:../packages/workers/multi-agent",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "better-sqlite3": "^12.10.0",

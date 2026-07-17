@@ -1,7 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  COMMENT_LAUNCHER_DRAG_THRESHOLD,
   COMMENT_LAUNCHER_POSITION_STORAGE_KEY,
   clampCommentLauncherPosition,
+  exceedsCommentLauncherDragThreshold,
   readCommentLauncherPosition,
   writeCommentLauncherPosition
 } from './comment-launcher-position'
@@ -17,6 +19,13 @@ beforeEach(() => {
 })
 
 describe('comment launcher position', () => {
+  it('separates clicks from drags using a six-pixel movement threshold', () => {
+    expect(COMMENT_LAUNCHER_DRAG_THRESHOLD).toBe(6)
+    expect(exceedsCommentLauncherDragThreshold({ x: 10, y: 10 }, { x: 15, y: 10 })).toBe(false)
+    expect(exceedsCommentLauncherDragThreshold({ x: 10, y: 10 }, { x: 16, y: 10 })).toBe(true)
+    expect(exceedsCommentLauncherDragThreshold({ x: 10, y: 10 }, { x: 14, y: 15 })).toBe(true)
+  })
+
   it('keeps the launcher inside the viewport margin', () => {
     expect(
       clampCommentLauncherPosition(

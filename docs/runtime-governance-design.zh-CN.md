@@ -28,7 +28,7 @@ UI / Write / 连接手机 / Schedule
 
 - turn 排队、超时、预算、状态收束。
 - runtime capability 编排，例如 steer、interrupt、approval、user input。
-- 事件归一后的稳定性治理，例如工具循环、重复状态、异常收尾。
+- 归一化 execution attempt/receipt 后的稳定性治理，例如语义失败、重复读取、异常收尾。
 - synthetic event 规范：先持久化，再发布给 UI。
 - hidden prompt 与 display text 的展示边界。
 - 公共测试基座和配置迁移。
@@ -54,7 +54,8 @@ Adapter 不负责业务策略；同类策略应上移到公共治理层。
 
 Runtime 原生层保留各自能力：
 
-- SciForge Runtime 保留 AgentLoop、pre-exec tool host、ToolStormBreaker、request history hygiene。
+- SciForge Runtime 保留 AgentLoop、pre-exec tool host 和 request history hygiene；pre-exec
+  host 调用公共 `ExecutionGovernorCore`，不再维护 runtime 私有的重复检测器。
 - Codex app-server 保留原生 sandbox、approval、file change、thread、session、JSON-RPC 生命周期。
 - 新 runtime 只要实现 adapter 合同并声明能力，就能接入公共治理层。
 
@@ -63,7 +64,7 @@ Runtime 原生层保留各自能力：
 公共层根据 capability 决定治理方式，避免双重保护：
 
 ```text
-guard.toolStorm = native | observe | unsupported
+guard.execution = preexec | observe | unsupported
 controls.steer = true | false
 controls.interrupt = true | false
 events.replayable = true | false
@@ -74,19 +75,26 @@ userInput = sync | async | unsupported
 
 示例：
 
-- SciForge Runtime: `guard.toolStorm = native`，因为它能在工具执行前 suppress。
-- Codex: `guard.toolStorm = observe`，因为 GUI 侧主要通过已归一事件观察后纠偏。
+- SciForge Runtime: `guard.execution = preexec`，在工具执行前把 attempt 交给公共 governor。
+- Codex: `guard.execution = observe`，把归一化 lifecycle event 交给同一个 governor 记录 receipt
+  并在事件后纠偏。
 
-## 工具循环治理
+## Execution 治理
 
-工具循环是公共治理能力之一，不是针对某个命令的补丁。
+Execution 治理是公共能力，不是针对某个命令或单个模型的补丁。所有 runtime adapter 都输出：
 
-公共 fingerprint 至少包含：
+- `ExecutionAttempt`：call ID、工具/provider、kind、canonical arguments、resource identity；
+- `ExecutionReceipt`：success/error/cancelled、结构化 error code、failure class、evidence delta、
+  state changed；
+- 同一套 exact fingerprint、semantic fingerprint、read coverage 与 failure streak。
+
+公共语义至少覆盖：
 
 - exact tool name + canonical args。
 - tool kind，例如 command execution、tool call、file change。
-- 行为族，例如 shell/date、shell/read-file、search/read。
-- 同一 turn 的连续次数和总次数。
+- 行为族和资源身份，例如 shell GUI automation、surface inspection、search/read。
+- volatile token、revision、request ID 或坐标变化不能重置同一语义失败 streak。
+- 成功且获得新 evidence 的分块读取、受信 computer-use 和真实 state change 不得被误杀。
 
 默认策略选择方案 A：
 
@@ -100,21 +108,44 @@ userInput = sync | async | unsupported
   -> 如果不支持 interrupt：标记 degraded，交给原生 runtime 收尾
 ```
 
-SciForge Runtime 的 native guard 在执行前生效；公共层只消费它的结果事件。Codex 的 observe guard 在事件后生效，优先 steer，继续重复再 interrupt。
+SciForge Runtime 在执行前消费 governor decision，并在完成后记录 receipt。Codex adapter 从动态
+MCP/command lifecycle 构造相同 attempt/receipt，优先 steer，继续同类语义失败再 interrupt。
+如果 registry 显示 `surface.inspect` 对 agent 可用，shell 截图和窗口自动化必须以结构化
+`owned_surface_policy_denied` 失败；这条政策由实际 capability availability 驱动，不能靠 prompt。
+
+## Capability agent surface
+
+Codex 与 SciForge Runtime 对模型只公开四个稳定元工具：`sciforge_discover`、
+`sciforge_observe`、`sciforge_invoke`、`sciforge_events`。两者都进入 main 进程同一个
+`CapabilityAgentToolSurface` 和同一个 app registry：
+
+```text
+Codex adapter -------------------------> CapabilityAgentToolSurface
+SciForge Runtime -> transparent bridge -> CapabilityAgentToolSurface
+                                              -> CapabilityBroker
+                                              -> App Registry / Providers
+```
+
+桥接层只能传输请求和 caller context，并负责超时、原子消息写入及结构化错误；不得复制
+registry/provider。模型不可见 thread ID、turn ID、workspace path、revision、snapshot token、
+坐标和 invocation ID。应用能力的可用性由实时 registry discovery 决定，不由 provider metadata
+或手写 prompt 伪造。
 
 ## 配置边界
 
 配置按治理能力命名，不按 runtime 命名：
 
 ```text
-runtimeGuards.toolStorm.enabled
-runtimeGuards.toolStorm.windowSize
-runtimeGuards.toolStorm.threshold
+runtimeGuards.execution.enabled
+runtimeGuards.execution.windowSize
+runtimeGuards.execution.exactRepeatThreshold
+runtimeGuards.execution.semanticFailureThreshold
 runtimeGuards.budgets.defaultMaxToolEvents
 runtimeGuards.budgets.remoteGuardMaxToolEvents
 ```
 
-设置只读取 `runtimeGuards.toolStorm`。UI 文案使用 Runtime Guard，不再使用默认运行时专属命名。
+设置只读取 runtime-neutral execution governance 配置。UI 文案使用 Runtime Guard，不再使用
+默认运行时或旧检测器专属命名。
 
 ## 拓展规则
 
@@ -136,7 +167,8 @@ runtimeGuards.budgets.remoteGuardMaxToolEvents
 ## 风险控制
 
 - 过度统一会伤害 Codex 原生能力；公共层只编排，不改写协议。
-- 双重保护会制造误中断；必须由 capability 决定谁负责。
+- 双重 decision engine 会制造误中断；adapter 只能决定执行时机，判定逻辑必须来自同一个
+  `ExecutionGovernorCore`。
 - 只看 exact duplicate 会漏掉参数变体循环；fingerprint 要支持行为族。
 - synthetic event 顺序错误会造成 UI 和存储不一致；必须持久化优先。
 - 值守入口更容易长时间无人干预，应使用更严格预算，但仍复用同一治理层。

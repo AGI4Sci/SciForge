@@ -19,6 +19,13 @@ export const PRELOAD_CAPABILITY_IDS = Object.freeze({
   workspacePreviewPrepareArtifact: 'workspace-preview.prepare-artifact',
   workspacePreviewReadArtifactRange: 'workspace-preview.read-artifact-range',
   workspacePreviewApplyEdit: 'workspace-preview.apply-edit',
+  workspacePreviewAnnotationsList: 'workspace-preview.annotations.list',
+  workspacePreviewAnnotationsUpdate: 'workspace-preview.annotations.update',
+  workspacePreviewAnnotationsResolve: 'workspace-preview.annotations.resolve',
+  workspacePreviewAnnotationsDelete: 'workspace-preview.annotations.delete',
+  workspacePreviewAnnotationsImport: 'workspace-preview.annotations.import',
+  workspacePreviewAnnotationsReviewGenerate: 'workspace-preview.annotations.review.generate',
+  workspacePreviewAnnotationsReviewImprove: 'workspace-preview.annotations.review.improve',
   workspacePreviewExport: 'workspace-preview.export',
   workspacePreviewInvokeAction: 'workspace-preview.invoke-action',
   workspacePreviewRelease: 'workspace-preview.release',
@@ -208,6 +215,66 @@ export function createCapabilityFacades(options: CapabilityFacadeOptions): Capab
         requireBinding(previewResources, sessionId, 'Workspace Preview session')
       ) as Awaited<ReturnType<WorkspacePreviewFacade['applyEdit']>>
     },
+    listAnnotations: (sessionId) => invokePreview(sessionId, {
+      actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsList,
+      input: {}
+    }),
+    updateAnnotation: async (sessionId, input) => {
+      const result = await invokePreview<Record<string, unknown>>(sessionId, {
+        actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsUpdate,
+        invocationId: createInvocationId(),
+        expectedRevision: true,
+        input
+      })
+      return attachCapabilityToSuccess(
+        result,
+        requireBinding(previewResources, sessionId, 'Workspace Preview session')
+      ) as Awaited<ReturnType<WorkspacePreviewFacade['updateAnnotation']>>
+    },
+    resolveAnnotation: async (sessionId, input) => {
+      const result = await invokePreview<Record<string, unknown>>(sessionId, {
+        actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsResolve,
+        invocationId: createInvocationId(),
+        expectedRevision: true,
+        input
+      })
+      return attachCapabilityToSuccess(
+        result,
+        requireBinding(previewResources, sessionId, 'Workspace Preview session')
+      ) as Awaited<ReturnType<WorkspacePreviewFacade['resolveAnnotation']>>
+    },
+    deleteAnnotation: async (sessionId, input) => {
+      const result = await invokePreview<Record<string, unknown>>(sessionId, {
+        actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsDelete,
+        invocationId: createInvocationId(),
+        expectedRevision: true,
+        input
+      })
+      return attachCapabilityToSuccess(
+        result,
+        requireBinding(previewResources, sessionId, 'Workspace Preview session')
+      ) as Awaited<ReturnType<WorkspacePreviewFacade['deleteAnnotation']>>
+    },
+    importAnnotations: (sessionId, input) => invokePreview(sessionId, {
+      actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
+      invocationId: createInvocationId(),
+      expectedRevision: true,
+      input
+    }),
+    generateAnnotationReview: (sessionId, input) => invokePreview(sessionId, {
+      actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate,
+      invocationId: createInvocationId(),
+      expectedRevision: true,
+      approval: { mode: 'confirmation' },
+      input
+    }),
+    improveAnnotationReview: (sessionId, input) => invokePreview(sessionId, {
+      actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsReviewImprove,
+      invocationId: createInvocationId(),
+      expectedRevision: true,
+      approval: { mode: 'confirmation' },
+      input
+    }),
     export: (sessionId, target) => invokePreview(sessionId, {
       actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewExport,
       invocationId: createInvocationId(),

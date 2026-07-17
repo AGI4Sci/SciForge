@@ -355,6 +355,25 @@ export type WorkspacePreviewPluginMetadataItem = {
   actions?: string[]
 }
 
+export type WorkspaceDocumentAnnotationThreadSummary = {
+  id: string
+  kind: string
+  status: 'open' | 'resolved'
+  title?: string
+  pageStart?: number
+  pageEnd?: number
+  annotationCount: number
+  summary?: string
+}
+
+export type WorkspaceDocumentAnnotations = {
+  threadCount: number
+  annotationCount: number
+  openThreadCount: number
+  truncated: boolean
+  threads: WorkspaceDocumentAnnotationThreadSummary[]
+}
+
 export type WorkspaceObservation = {
   schemaVersion: typeof WORKSPACE_PREVIEW_CONTRACT_VERSION
   file: {
@@ -450,6 +469,7 @@ export type WorkspaceObservation = {
     scanMarkers?: Array<{ index: number; id?: string; scanNumber?: string; msLevel?: string; peakCount?: number; mzRange?: { min: number; max: number }; intensityRange?: { min: number; max: number } }>
   }
   annotations?: Array<{ id: string; kind: string; summary?: string }>
+  documentAnnotations?: WorkspaceDocumentAnnotations
   pluginMetadata?: WorkspacePreviewPluginMetadataItem[]
   actions: string[]
 }
@@ -514,6 +534,32 @@ export const workspacePreviewAnnotationUpsertTargetSchema = z.object({
 }).strict()
 
 export type WorkspacePreviewAnnotationUpsertTarget = z.infer<typeof workspacePreviewAnnotationUpsertTargetSchema>
+
+export const workspacePreviewAnnotationUpdateInputSchema = z.object({
+  annotationId: idSchema,
+  annotationKind: workspacePreviewAnnotationKindSchema,
+  body: boundedString(WORKSPACE_PREVIEW_MAX_ANNOTATION_TEXT_CHARS),
+  target: workspacePreviewAnnotationUpsertTargetSchema.optional()
+}).strict()
+
+export type WorkspacePreviewAnnotationUpdateInput =
+  z.infer<typeof workspacePreviewAnnotationUpdateInputSchema>
+
+export const workspacePreviewAnnotationResolveInputSchema = z.object({
+  threadId: idSchema,
+  resolved: z.boolean()
+}).strict()
+
+export type WorkspacePreviewAnnotationResolveInput =
+  z.infer<typeof workspacePreviewAnnotationResolveInputSchema>
+
+export const workspacePreviewAnnotationDeleteInputSchema = z.object({
+  threadId: idSchema,
+  pruneOrphanAnchors: z.boolean().default(true)
+}).strict()
+
+export type WorkspacePreviewAnnotationDeleteInput =
+  z.infer<typeof workspacePreviewAnnotationDeleteInputSchema>
 
 const numericRangeSchema = z.object({
   min: z.number().finite(),
@@ -1036,6 +1082,22 @@ export const workspaceObservationSchema = z.object({
     kind: z.string().trim().min(1).max(128),
     summary: z.string().trim().max(1000).optional()
   }).strict()).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS).optional(),
+  documentAnnotations: z.object({
+    threadCount: z.number().int().nonnegative(),
+    annotationCount: z.number().int().nonnegative(),
+    openThreadCount: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    threads: z.array(z.object({
+      id: idSchema,
+      kind: z.string().trim().min(1).max(128),
+      status: workspacePreviewAnnotationThreadStatusSchema,
+      title: z.string().trim().max(512).optional(),
+      pageStart: z.number().int().positive().max(1_000_000).optional(),
+      pageEnd: z.number().int().positive().max(1_000_000).optional(),
+      annotationCount: z.number().int().nonnegative(),
+      summary: z.string().trim().max(1000).optional()
+    }).strict()).max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
+  }).strict().optional(),
   pluginMetadata: z.array(workspacePreviewPluginMetadataItemSchema)
     .max(WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
     .optional(),
@@ -1205,7 +1267,10 @@ export type WorkspacePreviewExportTarget = z.infer<typeof workspacePreviewExport
 export const workspacePreviewPluginActionInputSchema = z.object({
   actionId: z.string().trim().min(1).max(128),
   input: z.record(z.string().trim().min(1).max(128), z.unknown()).default({})
-}).strict()
+}).strict().refine((action) => !action.actionId.startsWith('annotation.'), {
+  path: ['actionId'],
+  message: 'Document annotations use dedicated registered operations.'
+})
 
 export type WorkspacePreviewPluginActionInput = z.infer<typeof workspacePreviewPluginActionInputSchema>
 

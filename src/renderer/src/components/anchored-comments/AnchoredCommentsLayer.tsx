@@ -1,4 +1,5 @@
 import type {
+  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactElement
@@ -10,6 +11,7 @@ import { CommentEditor } from './CommentEditor'
 import { CommentPanel } from './CommentPanel'
 import { ProductFeedbackDialog } from './ProductFeedbackDialog'
 import {
+  exceedsCommentLauncherDragThreshold,
   clampCommentLauncherPosition,
   readCommentLauncherPosition,
   writeCommentLauncherPosition,
@@ -87,12 +89,14 @@ export function AnchoredCommentsLayer({
   )
   const launcherPositionRef = useRef<CommentLauncherPoint | null>(launcherPosition)
   const [launcherDragging, setLauncherDragging] = useState(false)
+  const suppressLauncherClickRef = useRef(false)
   const launcherDragRef = useRef<{
     pointerId: number
     startX: number
     startY: number
     origin: CommentLauncherPoint
     current: CommentLauncherPoint
+    dragging: boolean
   } | null>(null)
 
   const clampLauncherPosition = useCallback((point: CommentLauncherPoint): CommentLauncherPoint => {
@@ -312,10 +316,9 @@ export function AnchoredCommentsLayer({
       startX: event.clientX,
       startY: event.clientY,
       origin,
-      current: origin
+      current: origin,
+      dragging: false
     }
-    setLauncherDragging(true)
-    event.preventDefault()
     event.currentTarget.setPointerCapture(event.pointerId)
   }
 
@@ -324,6 +327,14 @@ export function AnchoredCommentsLayer({
     if (!drag || drag.pointerId !== event.pointerId) return
     const deltaX = event.clientX - drag.startX
     const deltaY = event.clientY - drag.startY
+    if (!drag.dragging && !exceedsCommentLauncherDragThreshold(
+      { x: drag.startX, y: drag.startY },
+      { x: event.clientX, y: event.clientY }
+    )) return
+    if (!drag.dragging) {
+      drag.dragging = true
+      setLauncherDragging(true)
+    }
     event.preventDefault()
     drag.current = updateLauncherPosition({
       x: drag.origin.x + deltaX,
@@ -339,7 +350,53 @@ export function AnchoredCommentsLayer({
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
       event.currentTarget.releasePointerCapture(event.pointerId)
     }
+    if (!drag.dragging) return
+    event.preventDefault()
+    suppressLauncherClickRef.current = true
+    window.setTimeout(() => {
+      suppressLauncherClickRef.current = false
+    }, 0)
     writeCommentLauncherPosition(drag.current)
+  }
+
+  const cancelLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
+    const drag = launcherDragRef.current
+    if (!drag || drag.pointerId !== event.pointerId) return
+    launcherDragRef.current = null
+    setLauncherDragging(false)
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId)
+    }
+    if (drag.dragging) writeCommentLauncherPosition(drag.current)
+  }
+
+  const suppressClickAfterLauncherDrag = (event: ReactMouseEvent<HTMLDivElement>): void => {
+    if (!suppressLauncherClickRef.current) return
+    suppressLauncherClickRef.current = false
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
+  const moveLauncherWithKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
+    const direction = {
+      ArrowLeft: { x: -1, y: 0 },
+      ArrowRight: { x: 1, y: 0 },
+      ArrowUp: { x: 0, y: -1 },
+      ArrowDown: { x: 0, y: 1 }
+    }[event.key]
+    if (!direction) return
+    const launcher = launcherRef.current
+    if (!launcher) return
+    const bounds = launcher.getBoundingClientRect()
+    const origin = launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
+    const step = event.shiftKey ? 32 : 12
+    const next = updateLauncherPosition({
+      x: origin.x + direction.x * step,
+      y: origin.y + direction.y * step
+    })
+    writeCommentLauncherPosition(next)
+    event.preventDefault()
+    event.stopPropagation()
   }
 
   if (captureClean) return <></>
@@ -419,29 +476,36 @@ export function AnchoredCommentsLayer({
       <div
         ref={launcherRef}
         data-sciforge-comments-ui
-        className={`ds-no-drag fixed z-[1000] flex items-center gap-2 ${
+        data-sciforge-comment-launcher
+        className={`ds-no-drag fixed z-[1000] flex touch-none select-none items-center gap-2 ${
           launcherPosition ? '' : 'bottom-4 right-4'
         }`}
         style={launcherPosition ? { left: launcherPosition.x, top: launcherPosition.y } : undefined}
+        onPointerDown={startLauncherDrag}
+        onPointerMove={moveLauncher}
+        onPointerUp={finishLauncherDrag}
+        onPointerCancel={cancelLauncherDrag}
+        onClickCapture={suppressClickAfterLauncherDrag}
         onClick={preventWorkbenchClick}
       >
-        <div
-          data-sciforge-comment-drag-handle
-          aria-hidden="true"
-          title="Drag to move comment controls"
-          className={`grid h-11 w-5 touch-none select-none place-items-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink ${
-            launcherDragging ? 'cursor-grabbing' : 'cursor-grab'
-          }`}
-          onPointerDown={startLauncherDrag}
-          onPointerMove={moveLauncher}
-          onPointerUp={finishLauncherDrag}
-          onPointerCancel={finishLauncherDrag}
-        >
-          <GripVertical className="h-4 w-4" />
-        </div>
         <button
           type="button"
-          className={`relative grid h-11 w-11 cursor-pointer place-items-center rounded-full border text-white shadow-[0_14px_36px_rgba(30,41,59,0.28)] transition ${
+          data-sciforge-comment-drag-handle
+          aria-label="Move comment controls"
+          title="Drag, or use arrow keys, to move comment controls"
+          className={`grid h-11 w-6 place-items-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink ${
+            launcherDragging ? 'cursor-grabbing' : 'cursor-grab'
+          }`}
+          onKeyDown={moveLauncherWithKeyboard}
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          title="Click to comment; drag to move"
+          className={`relative grid h-11 w-11 place-items-center rounded-full border text-white shadow-[0_14px_36px_rgba(30,41,59,0.28)] transition ${
+            launcherDragging ? 'cursor-grabbing' : 'cursor-pointer'
+          } ${
             commentMode
               ? 'border-indigo-300 bg-indigo-600 hover:bg-indigo-500'
               : 'border-slate-700 bg-slate-900 hover:bg-slate-800 dark:border-slate-300 dark:bg-white dark:text-slate-950'
@@ -455,7 +519,10 @@ export function AnchoredCommentsLayer({
         {threads.length > 0 ? (
           <button
             type="button"
-            className="relative grid h-11 w-11 cursor-pointer place-items-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-[0_14px_36px_rgba(30,41,59,0.22)] transition hover:bg-ds-hover"
+            title="Open comments; drag to move"
+            className={`relative grid h-11 w-11 place-items-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-[0_14px_36px_rgba(30,41,59,0.22)] transition hover:bg-ds-hover ${
+              launcherDragging ? 'cursor-grabbing' : 'cursor-pointer'
+            }`}
             aria-label="Open comments"
             aria-expanded={panelOpen}
             onClick={() => setPanelOpen(!panelOpen)}

@@ -221,8 +221,8 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'SciForge may configure specialized MCP tools for this runtime.',
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   SCIENTIFIC_VISUAL_RUNTIME_POLICY,
-  'For requests about the current GUI, visible panes, right sidebar, previews, PDF annotations, selected text, or component state, first use `gui_visible_context` to discover the visible component/resource index, then follow the returned access hints.',
-  'When visual inspection is needed, call `gui_visible_context` first, then pass its fresh snapshotToken and task to `gui_visual_capture`; any componentId/targetId must come from that same snapshot. For local workspace PNG, JPEG, or WebP files, use `gui_workspace_image_inspect` with one task and an artifacts array. Do not substitute OS-level screenshots.',
+  'For requests about the current GUI, visible panes, previews, PDF annotations, selected text, or component state, use `sciforge_discover` to find the surface operation, invoke the current-surface read, and observe the returned opaque resourceRef.',
+  'For semantic visual inspection, invoke the discovered surface inspection operation with the observed resourceRef and an opaque targetRef when appropriate. For workspace PNG, JPEG, or WebP files, discover and invoke the artifact inspection operation. Do not pass coordinates, component ids, revisions, invocation ids, or resource handles.',
   'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
   ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
@@ -1120,7 +1120,8 @@ export class CodexRuntimeService {
           type: 'inputText',
           text: `MCP dynamic tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
         }],
-        success: false
+        success: false,
+        ...dynamicToolErrorMetadata(error)
       }
     }
     await this.publishDynamicToolExecutionFact(
@@ -1194,7 +1195,15 @@ export class CodexRuntimeService {
     })
     return {
       success: true,
-      contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }]
+      contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }],
+      structuredContent: result.value,
+      evidenceDelta: true,
+      ...(booleanValue(asRecord(result.value)?.changed) !== undefined
+        ? { stateChanged: booleanValue(asRecord(result.value)?.changed) }
+        : {}),
+      ...(stringValue(asRecord(result.value)?.resourceRef).trim()
+        ? { resourceIdentity: stringValue(asRecord(result.value)?.resourceRef).trim() }
+        : {})
     }
   }
 
@@ -1224,7 +1233,17 @@ export class CodexRuntimeService {
           phase,
           factSource: terminal ? 'executor_result' : 'runtime_lifecycle',
           evidenceStrength: terminal ? 'executor_receipt' : 'runtime_lifecycle',
+          arguments: dynamicToolArgumentsRecord(request.arguments) ?? request.arguments,
           ...(terminal ? { success: response?.success === true } : {}),
+          ...(response?.structuredContent !== undefined
+            ? { structuredContent: response.structuredContent }
+            : {}),
+          ...(response?.errorCode ? { errorCode: response.errorCode } : {}),
+          ...(response?.failureClass ? { failureClass: response.failureClass } : {}),
+          ...(response?.retryable !== undefined ? { retryable: response.retryable } : {}),
+          ...(response?.resourceIdentity ? { resourceIdentity: response.resourceIdentity } : {}),
+          ...(response?.evidenceDelta !== undefined ? { evidenceDelta: response.evidenceDelta } : {}),
+          ...(response?.stateChanged !== undefined ? { stateChanged: response.stateChanged } : {}),
           ...(request.namespace ? { namespace: request.namespace } : {})
         }
       }
@@ -3580,6 +3599,21 @@ function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallRespo
   return text.length <= 2_000 ? text : `${text.slice(0, 2_000)}…`
 }
 
+function dynamicToolErrorMetadata(error: unknown): Pick<
+  CodexAppServerDynamicToolCallResponse,
+  'errorCode' | 'failureClass' | 'retryable'
+> {
+  const record = asRecord(error)
+  const code = stringValue(record?.code).trim()
+  const failureClass = stringValue(record?.failureClass).trim()
+  const retryable = booleanValue(record?.retryable)
+  return {
+    ...(code ? { errorCode: code } : {}),
+    ...(failureClass ? { failureClass } : {}),
+    ...(retryable !== undefined ? { retryable } : {})
+  }
+}
+
 function workspaceIntelToolNameForRequest(
   request: CodexAppServerDynamicToolCallRequest
 ): WorkspaceIntelToolName | null {
@@ -3589,9 +3623,7 @@ function workspaceIntelToolNameForRequest(
 }
 
 const WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS = new Set<WorkspaceIntelToolName>(
-  WorkspaceIntelToolNames.filter((name) => (
-    name !== 'gui_visible_context' && name !== 'gui_visual_capture'
-  ))
+  WorkspaceIntelToolNames
 )
 
 function arrayValue(value: unknown): unknown[] {
@@ -3600,6 +3632,10 @@ function arrayValue(value: unknown): unknown[] {
 
 function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
 }
 
 function canonicalModelText(value: string): string {

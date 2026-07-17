@@ -132,10 +132,11 @@ export function defaultLocalRuntimeTuningSettings(): LocalRuntimeTuningSettingsV
 
 export function defaultRuntimeGuardSettings(): RuntimeGuardSettingsV1 {
   return {
-    toolStorm: {
+    execution: {
       enabled: true,
       windowSize: 8,
-      threshold: 3
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
     }
   }
 }
@@ -144,16 +145,29 @@ export function normalizeRuntimeGuardSettings(
   input: Partial<RuntimeGuardSettingsV1> | undefined
 ): RuntimeGuardSettingsV1 {
   const defaults = defaultRuntimeGuardSettings()
-  const toolStormInput = input?.toolStorm
-  const threshold = Math.max(
+  const executionInput = input?.execution
+  const exactRepeatThreshold = Math.max(
     2,
-    boundedPositiveInt(toolStormInput?.threshold, defaults.toolStorm.threshold, 128)
+    boundedPositiveInt(
+      executionInput?.exactRepeatThreshold,
+      defaults.execution.exactRepeatThreshold,
+      128
+    )
+  )
+  const semanticFailureThreshold = Math.max(
+    2,
+    boundedPositiveInt(
+      executionInput?.semanticFailureThreshold,
+      defaults.execution.semanticFailureThreshold,
+      128
+    )
   )
   return {
-    toolStorm: {
-      enabled: toolStormInput?.enabled !== false,
-      windowSize: boundedPositiveInt(toolStormInput?.windowSize, defaults.toolStorm.windowSize, 256),
-      threshold
+    execution: {
+      enabled: executionInput?.enabled !== false,
+      windowSize: boundedPositiveInt(executionInput?.windowSize, defaults.execution.windowSize, 256),
+      exactRepeatThreshold,
+      semanticFailureThreshold
     }
   }
 }
@@ -164,9 +178,9 @@ export function mergeRuntimeGuardSettings(
 ): RuntimeGuardSettingsV1 {
   const normalizedCurrent = normalizeRuntimeGuardSettings(current)
   return normalizeRuntimeGuardSettings({
-    toolStorm: {
-      ...normalizedCurrent.toolStorm,
-      ...(patch?.toolStorm ?? {})
+    execution: {
+      ...normalizedCurrent.execution,
+      ...(patch?.execution ?? {})
     }
   })
 }

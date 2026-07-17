@@ -1,16 +1,14 @@
-import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
-import { createCanvas, loadImage } from '@napi-rs/canvas'
+import { join } from 'node:path'
+import { createCanvas } from '@napi-rs/canvas'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
   VISIBLE_CONTEXT_SCHEMA_VERSION,
   type VisibleContextSnapshot
 } from '../../shared/visible-context'
 import {
   VisibleContextService,
-  visibleContextCaptureRequestsPath,
   type CapturedVisualPage,
   type SurfaceCaptureProvider
 } from './visible-context-service'
@@ -35,33 +33,42 @@ function whitePng(width = 100, height = 80): Buffer {
   return canvas.encodeSync('png')
 }
 
-async function pixel(path: string, x: number, y: number): Promise<number[]> {
-  const image = await loadImage(path)
-  const canvas = createCanvas(image.width, image.height)
-  const context = canvas.getContext('2d')
-  context.drawImage(image, 0, 0)
-  return [...context.getImageData(x, y, 1, 1).data]
-}
-
 function snapshot(overrides: Partial<VisibleContextSnapshot> = {}): VisibleContextSnapshot {
   return {
     schemaVersion: VISIBLE_CONTEXT_SCHEMA_VERSION,
-    windowId: 'window-1',
+    windowId: 'electron:1',
     revision: 1,
     publishedAt: '2026-07-11T03:00:00.000Z',
     freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+    workspaceRoot: '/workspace',
+    route: '/chat',
     components: [{
-      id: 'preview',
-      region: 'workspace-preview',
+      id: 'right-sidebar.file-preview',
+      region: 'right-sidebar',
       component: 'pdf',
+      title: 'Paper.pdf',
       visible: true,
       updatedAt: '2026-07-11T03:00:00.000Z',
       summary: 'PDF page 10',
+      resources: [{
+        kind: 'workspace-preview',
+        role: 'preview-target',
+        title: 'Paper.pdf',
+        capability: {
+          resource: {
+            token: `cap_${'a'.repeat(26)}`,
+            semanticRevision: 'paper-1',
+            expiresAt: '2026-07-11T04:00:00.000Z'
+          },
+          resourceRef: `res_${'b'.repeat(26)}`,
+          operations: []
+        }
+      }],
       visualTargets: [{
-        id: 'page-10',
+        id: 'current-page',
         kind: 'document-page',
         contentType: 'application/pdf',
-        bounds: { x: -5, y: 20, width: 300, height: 400 },
+        bounds: { x: 10, y: 20, width: 300, height: 400 },
         page: 10,
         active: true
       }]
@@ -70,28 +77,32 @@ function snapshot(overrides: Partial<VisibleContextSnapshot> = {}): VisibleConte
   }
 }
 
-function captureIdentity(value: VisibleContextSnapshot) {
-  if (!value.snapshotToken) throw new Error('Expected a bound visible-context snapshot token.')
-  return {
-    snapshotToken: value.snapshotToken,
-    windowId: value.windowId,
-    revision: value.revision,
-    activeThreadId: value.activeThreadId ?? null
-  }
-}
-
 function successfulSurfaceCaptureProvider(
-  capturePage: (windowId: string, bounds?: { x: number; y: number; width: number; height: number }) => Promise<CapturedVisualPage>
+  capturePage: (bounds?: { x: number; y: number; width: number; height: number }) => Promise<CapturedVisualPage>
 ): SurfaceCaptureProvider {
   return {
-    capture: async (request) => ({
-      ok: true,
-      page: await capturePage(request.windowId, request.bounds)
-    })
+    capture: async (request) => ({ ok: true, page: await capturePage(request.bounds) })
   }
 }
 
-describe('VisibleContextService', () => {
+function inspectedEvidence(task: string) {
+  return {
+    status: 'inspected' as const,
+    provider: 'model-router' as const,
+    model: 'vision-model',
+    inspectedAt: '2026-07-11T03:00:02.000Z',
+    task,
+    artifacts: [{ id: 'surface', mimeType: 'image/png' as const, sha256: 'a'.repeat(64) }],
+    requestSha256: 'b'.repeat(64),
+    evidenceSha256: 'c'.repeat(64),
+    attestation: `sha256:${'d'.repeat(64)}`,
+    summary: 'Five PDF annotations are visible.',
+    claims: [],
+    uncertainties: []
+  }
+}
+
+describe('VisibleContextService surface inspection v2', () => {
   it('derives freshness and rejects out-of-order publishes for the same window', async () => {
     const userDataDir = await temporaryUserData()
     let now = new Date('2026-07-11T03:00:01.000Z')
@@ -101,338 +112,102 @@ describe('VisibleContextService', () => {
     })
 
     const published = await service.publish(snapshot())
+    expect(published).not.toHaveProperty('snapshotToken')
     expect(published.freshness).toEqual({ stale: false, ageMs: 1_000, staleAfterMs: 5_000 })
-
     now = new Date('2026-07-11T03:00:07.000Z')
-    expect((await service.get()).freshness).toEqual({
-      stale: true,
-      ageMs: 7_000,
-      staleAfterMs: 5_000
-    })
-
-    const stalePublish = snapshot({ revision: 0, route: '/out-of-order' })
-    expect((await service.publish(stalePublish)).route).toBeUndefined()
+    expect((await service.get()).freshness.stale).toBe(true)
+    expect((await service.publish(snapshot({ revision: 0, route: '/out-of-order' }))).route).toBe('/chat')
   })
 
-  it('resolves target bounds and preserves a stable capture asset for each request', async () => {
-    const userDataDir = await temporaryUserData()
-    const capturePage = vi.fn()
-      .mockResolvedValueOnce({
-        png: Uint8Array.from([1, 2, 3]),
-        width: 600,
-        height: 800,
-        scaleFactor: 2,
-        bounds: { x: 0, y: 20, width: 295, height: 400 }
-      })
-      .mockResolvedValueOnce({
-        png: Uint8Array.from([4, 5]),
-        width: 1200,
-        height: 900,
-        scaleFactor: 2
-      })
-    const captureStates: boolean[] = []
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
-      onCaptureState: (_windowId, active) => captureStates.push(active),
+  it('separates semantic revision from layout revision and emits stable opaque target refs', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: { capture: vi.fn() },
       now: () => new Date('2026-07-11T03:00:01.000Z')
     })
-    const published = await service.publish(snapshot())
+    await service.publish(snapshot())
+    const first = await service.currentSurface()
+    const firstState = first.state as { targets: Array<{ targetRef: string }> }
 
-    const target = await service.capture({
-      requestId: 'capture-target',
-      ...captureIdentity(published),
-      scope: 'target',
-      componentId: 'preview',
-      targetId: 'page-10'
-    })
-    expect(capturePage).toHaveBeenNthCalledWith(1, 'window-1', { x: -5, y: 20, width: 300, height: 400 })
-    expect(target).toMatchObject({
-      ok: true,
-      resource: {
-        kind: 'visualSnapshot',
-        role: 'target',
-        mimeType: 'image/png',
-        windowId: 'window-1',
-        revision: 1,
-        componentId: 'preview',
-        targetId: 'page-10',
-        target: { bounds: { x: 0, y: 20, width: 295, height: 400 }, page: 10 }
-      }
-    })
-    if (!target.ok) throw new Error('Expected target capture to succeed.')
-    expect(target.resource.path.startsWith(userDataDir)).toBe(true)
-    expect([...await readFile(target.resource.path)]).toEqual([1, 2, 3])
-
-    const fullWindow = await service.capture({ requestId: 'capture-window', ...captureIdentity(published), scope: 'window' })
-    expect(capturePage).toHaveBeenNthCalledWith(2, 'window-1', undefined)
-    expect(fullWindow).toMatchObject({ ok: true, resource: { role: 'window' } })
-    if (!fullWindow.ok) throw new Error('Expected window capture to succeed.')
-    expect(fullWindow.resource.path).not.toBe(target.resource.path)
-    expect(fullWindow.resource.path).toBe(service.capturePath('capture-window'))
-    expect([...await readFile(target.resource.path)]).toEqual([1, 2, 3])
-    expect([...await readFile(fullWindow.resource.path)]).toEqual([4, 5])
-    expect(captureStates).toEqual([true, false, true, false])
-  })
-
-  it('does not capture missing or stale targets', async () => {
-    const userDataDir = await temporaryUserData()
-    const capturePage = vi.fn()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
-      now: () => new Date('2026-07-11T03:00:10.000Z')
-    })
-    const published = await service.publish(snapshot())
-
-    await expect(service.capture({
-      requestId: 'capture-target',
-      ...captureIdentity(published),
-      scope: 'target',
-      componentId: 'preview',
-      targetId: 'page-10'
-    })).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'stale_visible_context', retryable: true }
-    })
-    expect(capturePage).not.toHaveBeenCalled()
-  })
-
-  it('captures the surface bound to the requested token even after another window publishes', async () => {
-    const userDataDir = await temporaryUserData()
-    const capture = vi.fn(async () => ({
-      ok: true as const,
-      page: {
-        png: Uint8Array.from([7]),
-        width: 100,
-        height: 80,
-        scaleFactor: 1
-      }
+    await service.publish(snapshot({
+      revision: 2,
+      publishedAt: '2026-07-11T03:00:01.000Z',
+      components: snapshot().components.map((component) => ({
+        ...component,
+        updatedAt: '2026-07-11T03:00:01.000Z',
+        visualTargets: component.visualTargets?.map((target) => ({
+          ...target,
+          bounds: { x: 40, y: 60, width: 300, height: 400 }
+        }))
+      }))
     }))
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: { capture },
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const first = await service.publish(snapshot({ windowId: 'electron:11' }))
-    await service.publish(snapshot({ windowId: 'electron:22' }))
+    const moved = await service.currentSurface()
+    const movedState = moved.state as { targets: Array<{ targetRef: string }> }
+    expect(moved.semanticRevision).toBe(first.semanticRevision)
+    expect(moved.layoutRevision).not.toBe(first.layoutRevision)
+    expect(movedState.targets[0]?.targetRef).toBe(firstState.targets[0]?.targetRef)
 
-    const result = await service.capture({
-      requestId: 'capture-first-surface',
-      ...captureIdentity(first),
-      scope: 'window'
-    })
-
-    expect(result).toMatchObject({ ok: true, resource: { windowId: 'electron:11' } })
-    expect(capture).toHaveBeenCalledWith({
-      windowId: 'electron:11',
-      revision: 1,
-      snapshotToken: first.snapshotToken,
-      activeThreadId: null
-    })
-  })
-
-  it('returns typed provider capability failures without treating them as capture exceptions', async () => {
-    const userDataDir = await temporaryUserData()
-    const capture = vi.fn(async () => ({
-      ok: false as const,
-      reason: {
-        code: 'surface_capture_unsupported' as const,
-        message: 'This surface has no trusted pixel source.',
-        retryable: false
-      }
+    await service.publish(snapshot({
+      revision: 3,
+      publishedAt: '2026-07-11T03:00:02.000Z',
+      components: snapshot().components.map((component) => ({ ...component, summary: 'PDF page 11' }))
     }))
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: { capture },
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const published = await service.publish(snapshot({ windowId: 'browser:4' }))
-
-    await expect(service.capture({
-      requestId: 'capture-browser-surface',
-      ...captureIdentity(published),
-      scope: 'window'
-    })).resolves.toEqual({
-      ok: false,
-      requestId: 'capture-browser-surface',
-      error: {
-        code: 'surface_capture_unsupported',
-        message: 'This surface has no trusted pixel source.',
-        retryable: false
-      }
-    })
-    expect(capture).toHaveBeenCalledOnce()
+    expect((await service.currentSurface()).semanticRevision).not.toBe(first.semanticRevision)
   })
 
-  it('rejects an old token after the same surface publishes a newer revision', async () => {
-    const userDataDir = await temporaryUserData()
-    const capturePage = vi.fn()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const first = await service.publish(snapshot())
-    await service.publish(snapshot({ revision: 2, publishedAt: '2026-07-11T03:00:01.000Z' }))
-
-    await expect(service.capture({
-      requestId: 'capture-old-token',
-      ...captureIdentity(first),
-      scope: 'window'
-    })).resolves.toMatchObject({
-      ok: false,
-      error: { code: 'stale_snapshot_token', retryable: true }
-    })
-    expect(capturePage).not.toHaveBeenCalled()
-  })
-
-  it('requests a targeted refresh but refuses to capture a stale bound revision', async () => {
-    const userDataDir = await temporaryUserData()
-    const capturePage = vi.fn(async () => ({
-      png: Uint8Array.from([1]),
-      width: 300,
-      height: 400,
+  it('resolves an observed target against the latest surface atomically without a stale-read rejection', async () => {
+    const capture = vi.fn(async () => ({
+      png: whitePng(),
+      width: 100,
+      height: 80,
       scaleFactor: 1,
-      bounds: { x: 0, y: 20, width: 295, height: 400 }
+      bounds: { x: 30, y: 40, width: 310, height: 410 }
     }))
-    const requestContextRefresh = vi.fn()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capturePage),
-      requestContextRefresh,
-      now: () => new Date('2026-07-11T03:00:10.000Z')
+    const inspector = vi.fn(async (request: { task: string }) => inspectedEvidence(request.task))
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
+      visualInspector: () => inspector,
+      now: () => new Date('2026-07-11T03:00:03.000Z')
     })
-    const published = await service.publish(snapshot())
+    await service.publish(snapshot())
+    const observed = await service.currentSurface()
+    const targetRef = (observed.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
 
-    const result = await service.capture({
-      requestId: 'capture-refreshed-target',
-      ...captureIdentity(published),
-      scope: 'target',
-      componentId: 'preview',
-      targetId: 'page-10'
-    })
-
-    expect(requestContextRefresh).toHaveBeenCalledTimes(1)
-    expect(requestContextRefresh).toHaveBeenCalledWith('window-1')
-    expect(capturePage).not.toHaveBeenCalled()
-    expect(result).toMatchObject({ ok: false, error: { code: 'stale_visible_context' } })
-  })
-
-  it('blackens every intersecting redaction target before writing the single capture asset', async () => {
-    const userDataDir = await temporaryUserData()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
-        async () => ({
-          png: whitePng(),
-          width: 100,
-          height: 80,
-          scaleFactor: 1
-        })
-      ),
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const published = await service.publish(snapshot({
-      components: [{
-        id: 'app.window',
-        region: 'window',
-        component: 'sciforge-window',
-        visible: true,
-        updatedAt: '2026-07-11T03:00:00.000Z',
-        summary: 'SciForge window',
-        visualTargets: [
-          { id: 'password', kind: 'region', bounds: { x: 10, y: 10, width: 20, height: 15 }, redact: true },
-          { id: 'outside', kind: 'region', bounds: { x: 200, y: 200, width: 10, height: 10 }, redact: true }
-        ]
-      }]
+    await service.publish(snapshot({
+      revision: 2,
+      publishedAt: '2026-07-11T03:00:02.000Z',
+      components: snapshot().components.map((component) => ({
+        ...component,
+        summary: 'Five annotations are now visible',
+        visualTargets: component.visualTargets?.map((target) => ({
+          ...target,
+          bounds: { x: 30, y: 40, width: 310, height: 410 }
+        }))
+      }))
     }))
 
-    const result = await service.capture({ requestId: 'capture-redacted', ...captureIdentity(published), scope: 'window' })
-    if (!result.ok) throw new Error('Expected redacted capture to succeed.')
-    expect(await pixel(result.resource.path, 15, 15)).toEqual([0, 0, 0, 255])
-    expect(await pixel(result.resource.path, 5, 5)).toEqual([255, 255, 255, 255])
+    const result = await service.inspectSurface(observed.resourceId, {
+      targetRef,
+      task: 'Count the visible PDF annotations.'
+    })
+    expect(capture).toHaveBeenCalledWith({ x: 30, y: 40, width: 310, height: 410 })
+    expect(result).toMatchObject({
+      artifact: { artifactRef: expect.stringMatching(/^artifact_/u), targetRef },
+      evidence: { provider: 'model-router', summary: 'Five PDF annotations are visible.' }
+    })
+    expect(JSON.stringify(result)).not.toMatch(/path|snapshotToken|componentId|targetId|bounds|revision/iu)
   })
 
-  it('reads only PNG previews directly inside the managed capture directory', async () => {
-    const userDataDir = await temporaryUserData()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
-        async () => ({
-          png: whitePng(),
-          width: 100,
-          height: 80,
-          scaleFactor: 1
-        })
-      ),
-      now: () => new Date('2026-07-11T03:00:01.000Z')
+  it('fails closed when the requested opaque target is no longer visible', async () => {
+    const capture = vi.fn()
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
+      now: () => new Date('2026-07-11T03:00:03.000Z')
     })
-    const published = await service.publish(snapshot())
-    const capture = await service.capture({ requestId: 'capture-preview', ...captureIdentity(published), scope: 'window' })
-    if (!capture.ok) throw new Error('Expected capture to succeed.')
-
-    await expect(service.readCapturePreview(capture.resource.path)).resolves.toMatchObject({
-      ok: true,
-      path: capture.resource.path,
-      mimeType: 'image/png',
-      dataUrl: expect.stringMatching(/^data:image\/png;base64,/)
-    })
-    await expect(service.readCapturePreview(join(userDataDir, 'outside.png'))).resolves.toEqual({
-      ok: false,
-      message: 'Capture preview path is outside the managed capture directory.'
-    })
-  })
-
-  it('retains only the bounded set of most recent stable capture assets', async () => {
-    const userDataDir = await temporaryUserData()
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
-        async () => ({ png: whitePng(), width: 100, height: 80, scaleFactor: 1 })
-      ),
-      captureRetentionLimit: 2,
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const published = await service.publish(snapshot())
-    for (const requestId of ['capture-1', 'capture-2', 'capture-3']) {
-      const result = await service.capture({ requestId, ...captureIdentity(published), scope: 'window' })
-      if (!result.ok) throw new Error('Expected capture to succeed.')
-    }
-
-    const names = await readdir(dirname(service.capturePath('capture-3')))
-    const captures = names.filter((name) => name.endsWith('.png'))
-    expect(captures).toHaveLength(2)
-    expect(captures).toContain('capture-3.png')
-  })
-
-  it('handles pre-existing broker requests through the same capture path', async () => {
-    const userDataDir = await temporaryUserData()
-    const requestDirectory = visibleContextCaptureRequestsPath(userDataDir)
-    const service = new VisibleContextService(userDataDir, {
-      surfaceCaptureProvider: successfulSurfaceCaptureProvider(
-        async () => ({
-          png: Uint8Array.from([9, 8, 7]),
-          width: 100,
-          height: 80,
-          scaleFactor: 1
-        })
-      ),
-      now: () => new Date('2026-07-11T03:00:01.000Z')
-    })
-    const published = await service.publish(snapshot())
-    await mkdir(requestDirectory, { recursive: true })
-    await writeFile(join(requestDirectory, 'broker-1.request.json'), JSON.stringify({
-      schemaVersion: VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
-      requestId: 'broker-1',
-      requestedAt: '2026-07-11T03:00:00.000Z',
-      expiresAt: '2026-07-11T03:00:10.000Z',
-      ...captureIdentity(published),
-      scope: 'window'
-    }))
-
-    const stop = await service.startCaptureRequestBroker()
-    const responsePath = join(requestDirectory, 'broker-1.response.json')
-    await vi.waitFor(async () => {
-      const response = JSON.parse(await readFile(responsePath, 'utf8')) as Record<string, unknown>
-      expect(response).toMatchObject({
-        schemaVersion: VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION,
-        requestId: 'broker-1',
-        ok: true,
-        capture: { kind: 'visualSnapshot', path: service.capturePath('broker-1') }
-      })
-    })
-    stop()
+    await service.publish(snapshot())
+    await expect(service.inspectSurface('electron:1', {
+      targetRef: `target_${'x'.repeat(26)}`,
+      task: 'Inspect the target.'
+    })).rejects.toThrow('no longer visible')
+    expect(capture).not.toHaveBeenCalled()
   })
 })

@@ -52,6 +52,9 @@ describe('capability facades', () => {
         })
       }
       if (actionId === PRELOAD_CAPABILITY_IDS.workspacePreviewApplyEdit) {
+        return invocation(actionId, { ok: true, operationKind: 'text.replaceRange' }, edited)
+      }
+      if (actionId === PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsResolve) {
         return invocation(actionId, { ok: true, operationKind: 'annotation.thread.update' }, edited)
       }
       if (actionId === PRELOAD_CAPABILITY_IDS.workspacePreviewExport) {
@@ -83,10 +86,20 @@ describe('capability facades', () => {
       capability: { resource: observed, operations: [operation] }
     })
     await expect(facades.workspacePreview.applyEdit('session-1', {
-      kind: 'annotation.thread.update',
+      kind: 'text.replaceRange',
       path: 'paper.pdf',
+      range: {
+        start: { line: 1, column: 1 },
+        end: { line: 1, column: 1 }
+      },
+      text: 'Revised'
+    })).resolves.toMatchObject({
+      ok: true,
+      capability: { resource: edited, operations: [operation] }
+    })
+    await expect(facades.workspacePreview.resolveAnnotation('session-1', {
       threadId: 'thread-1',
-      patch: { status: 'resolved' }
+      resolved: true
     })).resolves.toMatchObject({
       ok: true,
       capability: { resource: edited, operations: [operation] }
@@ -114,16 +127,26 @@ describe('capability facades', () => {
         resource: observed
       }
     })
+    expect(invokeRequest(invoke, PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsResolve)).toMatchObject({
+      workspaceId: '/workspace',
+      request: {
+        actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewAnnotationsResolve,
+        invocationId: 'invocation-2',
+        expectedRevision: edited.semanticRevision,
+        resource: edited,
+        input: { threadId: 'thread-1', resolved: true }
+      }
+    })
     expect(invokeRequest(invoke, PRELOAD_CAPABILITY_IDS.workspacePreviewExport)).toMatchObject({
       approval: { mode: 'confirmation' },
       request: {
-        invocationId: 'invocation-3',
+        invocationId: 'invocation-4',
         resource: edited
       }
     })
     expect(invokeRequest(invoke, PRELOAD_CAPABILITY_IDS.workspacePreviewInvokeAction)).toMatchObject({
       request: {
-        invocationId: 'invocation-2',
+        invocationId: 'invocation-3',
         expectedRevision: edited.semanticRevision,
         resource: edited
       }

@@ -278,12 +278,13 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('defaults runtime guard settings to runtime-neutral tool storm limits', () => {
+  it('defaults runtime guard settings to runtime-neutral execution governance limits', () => {
     expect(defaultRuntimeGuardSettings()).toMatchObject({
-      toolStorm: {
+      execution: {
         enabled: true,
         windowSize: 8,
-        threshold: 3
+        exactRepeatThreshold: 3,
+        semanticFailureThreshold: 2
       }
     })
   })
@@ -350,30 +351,42 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('normalizes runtime guard tool storm settings', () => {
+  it('normalizes runtime guard execution governance settings', () => {
     expect(normalizeRuntimeGuardSettings({
-      toolStorm: {
+      execution: {
         enabled: false,
         windowSize: 10,
-        threshold: 5
+        exactRepeatThreshold: 5,
+        semanticFailureThreshold: 4
       }
-    }).toolStorm).toMatchObject({
+    }).execution).toMatchObject({
       enabled: false,
       windowSize: 10,
-      threshold: 5
+      exactRepeatThreshold: 5,
+      semanticFailureThreshold: 4
     })
   })
 
   it('drops legacy runtime guard soft and hard thresholds', () => {
     expect(normalizeRuntimeGuardSettings({
-      toolStorm: {
+      execution: {
         softThreshold: 5,
         hardThreshold: 7
       }
-    } as never).toolStorm).toMatchObject({
+    } as never).execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      threshold: 3
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
+    })
+  })
+
+  it('does not interpret the obsolete ambiguous execution threshold', () => {
+    expect(normalizeRuntimeGuardSettings({
+      execution: { threshold: 7 }
+    } as never).execution).toMatchObject({
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
     })
   })
 })
@@ -1155,15 +1168,17 @@ describe('mergeLocalRuntimeSettings', () => {
 
   it('deep-merges runtime guard settings through the new config model', () => {
     const next = mergeRuntimeGuardSettings(defaultRuntimeGuardSettings(), {
-      toolStorm: {
-        threshold: 5
+      execution: {
+        exactRepeatThreshold: 5,
+        semanticFailureThreshold: 4
       }
     })
 
-    expect(next.toolStorm).toMatchObject({
+    expect(next.execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      threshold: 5
+      exactRepeatThreshold: 5,
+      semanticFailureThreshold: 4
     })
   })
 })

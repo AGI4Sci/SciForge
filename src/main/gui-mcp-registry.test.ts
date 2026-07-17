@@ -93,6 +93,7 @@ describe('GUI MCP runtime registry', () => {
 
   it('exposes every managed server name that must be stripped from external local runtime mcp.json', () => {
     expect(managedGuiMcpServerNames()).toEqual(expect.arrayContaining([
+      'sciforge_capabilities',
       'gui_schedule',
       'gui_research',
       'gui_workflow',
@@ -110,6 +111,26 @@ describe('GUI MCP runtime registry', () => {
       'gui_owl_computer_use',
       'gui_computer_use'
     ]))
+  })
+
+  it('adds the private capability bridge only to the local runtime registry', () => {
+    const capabilityRuntimeBridge = {
+      rootDir: '/Users/example/Library/Application Support/SciForge/capability-runtime-bridge',
+      authSecret: 'runtime-bridge-test-secret-that-is-long-enough',
+      timeoutMs: 30_000
+    }
+    const localRuntime = buildLocalRuntimeManagedGuiMcpServers({ capabilityRuntimeBridge })
+
+    expect(localRuntime.sciforge_capabilities).toEqual({
+      enabled: true,
+      transport: 'file-bridge',
+      rootDir: capabilityRuntimeBridge.rootDir,
+      authSecret: capabilityRuntimeBridge.authSecret,
+      trustScope: 'user',
+      timeoutMs: 30_000
+    })
+    expect(buildCodexManagedGuiMcpServers({ capabilityRuntimeBridge })).toEqual([])
+    expect(buildClaudeCodeManagedGuiMcpServers({ capabilityRuntimeBridge })).toEqual({})
   })
 
   it('builds local runtime managed server configs from shared descriptors and preserves existing env safely', () => {

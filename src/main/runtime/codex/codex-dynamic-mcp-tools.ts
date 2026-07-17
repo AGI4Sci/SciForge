@@ -40,6 +40,13 @@ export type CodexAppServerDynamicToolCallOutputContentItem =
 export type CodexAppServerDynamicToolCallResponse = {
   contentItems: CodexAppServerDynamicToolCallOutputContentItem[]
   success: boolean
+  structuredContent?: unknown
+  errorCode?: string
+  failureClass?: string
+  retryable?: boolean
+  resourceIdentity?: string
+  evidenceDelta?: boolean
+  stateChanged?: boolean
 }
 
 export type McpToolDescriptor = {
@@ -606,15 +613,35 @@ export function dynamicToolResponseFromMcpResult(
   result: unknown
 ): CodexAppServerDynamicToolCallResponse {
   const record = asRecord(result)
-  const success = record?.isError !== true
+  const structuredContent = record?.structuredContent
+  const structuredRecord = asRecord(structuredContent)
+  const structuredError = asRecord(structuredRecord?.error)
+  const errorCode = stringValue(structuredError?.code) ||
+    stringValue(structuredRecord?.errorCode) ||
+    stringValue(record?.errorCode)
+  const failureClass = stringValue(structuredError?.failureClass) ||
+    stringValue(structuredRecord?.failureClass) ||
+    stringValue(record?.failureClass)
+  const retryable = booleanValue(structuredError?.retryable) ??
+    booleanValue(structuredRecord?.retryable) ??
+    booleanValue(record?.retryable)
+  const resourceIdentity = stringValue(structuredRecord?.resourceRef) ||
+    stringValue(structuredRecord?.resourceIdentity) ||
+    stringValue(record?.resourceRef)
+  const evidenceDelta = booleanValue(structuredRecord?.evidenceDelta) ??
+    booleanValue(record?.evidenceDelta)
+  const stateChanged = booleanValue(structuredRecord?.changed) ??
+    booleanValue(structuredRecord?.stateChanged) ??
+    booleanValue(record?.changed)
+  const success = record?.isError !== true && !structuredError && !errorCode
   const contentItems: CodexAppServerDynamicToolCallOutputContentItem[] = []
   for (const item of arrayValue(record?.content)) {
     contentItems.push(...dynamicContentItemsFromMcpContent(item))
   }
-  if (record && record.structuredContent !== undefined) {
+  if (record && structuredContent !== undefined) {
     contentItems.push({
       type: 'inputText',
-      text: `structuredContent:\n${jsonText(record.structuredContent)}`
+      text: `structuredContent:\n${jsonText(structuredContent)}`
     })
   }
   if (contentItems.length === 0) {
@@ -623,7 +650,17 @@ export function dynamicToolResponseFromMcpResult(
       text: result === undefined ? '' : jsonText(result)
     })
   }
-  return { contentItems, success }
+  return {
+    contentItems,
+    success,
+    ...(structuredContent !== undefined && !success ? { structuredContent } : {}),
+    ...(errorCode ? { errorCode } : {}),
+    ...(failureClass ? { failureClass } : {}),
+    ...(retryable !== undefined ? { retryable } : {}),
+    ...(resourceIdentity ? { resourceIdentity } : {}),
+    ...(evidenceDelta !== undefined ? { evidenceDelta } : {}),
+    ...(stateChanged !== undefined ? { stateChanged } : {})
+  }
 }
 
 function dynamicContentItemsFromMcpContent(
@@ -653,6 +690,10 @@ function failedDynamicToolResponse(message: string): CodexAppServerDynamicToolCa
     contentItems: [{ type: 'inputText', text: message }],
     success: false
   }
+}
+
+function booleanValue(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
 }
 
 function recordArguments(value: unknown): Record<string, unknown> {

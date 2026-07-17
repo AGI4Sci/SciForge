@@ -54,6 +54,34 @@ function createMockBridge(overrides: Partial<WorkspacePreviewBridgeAdapter> = {}
       ok: false,
       message: 'applyEdit not mocked'
     })),
+    listAnnotations: vi.fn<WorkspacePreviewBridgeAdapter['listAnnotations']>(async () => ({
+      ok: false,
+      message: 'listAnnotations not mocked'
+    })),
+    updateAnnotation: vi.fn<WorkspacePreviewBridgeAdapter['updateAnnotation']>(async () => ({
+      ok: false,
+      message: 'updateAnnotation not mocked'
+    })),
+    resolveAnnotation: vi.fn<WorkspacePreviewBridgeAdapter['resolveAnnotation']>(async () => ({
+      ok: false,
+      message: 'resolveAnnotation not mocked'
+    })),
+    deleteAnnotation: vi.fn<WorkspacePreviewBridgeAdapter['deleteAnnotation']>(async () => ({
+      ok: false,
+      message: 'deleteAnnotation not mocked'
+    })),
+    importAnnotations: vi.fn<WorkspacePreviewBridgeAdapter['importAnnotations']>(async () => ({
+      ok: false,
+      message: 'importAnnotations not mocked'
+    })),
+    generateAnnotationReview: vi.fn<WorkspacePreviewBridgeAdapter['generateAnnotationReview']>(async () => ({
+      ok: false,
+      message: 'generateAnnotationReview not mocked'
+    })),
+    improveAnnotationReview: vi.fn<WorkspacePreviewBridgeAdapter['improveAnnotationReview']>(async () => ({
+      ok: false,
+      message: 'improveAnnotationReview not mocked'
+    })),
     export: vi.fn<WorkspacePreviewBridgeAdapter['export']>(async () => ({
       ok: false,
       message: 'export not mocked'

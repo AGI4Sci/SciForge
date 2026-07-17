@@ -527,12 +527,12 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
       }
     })
   }
-  const updateToolStorm = (patch: Record<string, unknown>): void => {
+  const updateExecution = (patch: Record<string, unknown>): void => {
     update({
       runtimeGuards: {
         ...runtimeGuards,
-        toolStorm: {
-          ...runtimeGuards.toolStorm,
+        execution: {
+          ...runtimeGuards.execution,
           ...patch
         }
       }
@@ -1169,7 +1169,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     description={t('localRuntimeCompactionThresholdsDesc')}
                     wideControl
                     control={
-                      <div className="grid gap-3 sm:grid-cols-2">
+                      <div className="grid gap-3 sm:grid-cols-3">
                         <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
                           {t('localRuntimeCompactionSoftThreshold')}
                           <input
@@ -1252,42 +1252,54 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     }
                   />
                   <SettingRow
-                    title={t('runtimeGuardToolStorm')}
-                    description={t('runtimeGuardToolStormDesc')}
+                    title={t('runtimeGuardExecution')}
+                    description={t('runtimeGuardExecutionDesc')}
                     control={
                       <Toggle
-                        checked={runtimeGuards.toolStorm.enabled}
-                        onChange={(enabled) => updateToolStorm({ enabled })}
+                        checked={runtimeGuards.execution.enabled}
+                        onChange={(enabled) => updateExecution({ enabled })}
                       />
                     }
                   />
                   <SettingRow
-                    title={t('runtimeGuardToolStormLimits')}
+                    title={t('runtimeGuardExecutionLimits')}
                     wideControl
                     control={
                       <div className="grid gap-3 sm:grid-cols-2">
                         <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('runtimeGuardToolStormWindowSize')}
+                          {t('runtimeGuardExecutionWindowSize')}
                           <input
                             type="number"
                             min={1}
                             max={256}
                             className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeGuards.toolStorm.windowSize}
-                            disabled={!runtimeGuards.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ windowSize: Number(e.target.value) })}
+                            value={runtimeGuards.execution.windowSize}
+                            disabled={!runtimeGuards.execution.enabled}
+                            onChange={(e) => updateExecution({ windowSize: Number(e.target.value) })}
                           />
                         </label>
                         <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
-                          {t('runtimeGuardToolStormLimits')}
+                          {t('runtimeGuardExecutionExactRepeatThreshold')}
                           <input
                             type="number"
                             min={2}
                             max={128}
                             className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                            value={runtimeGuards.toolStorm.threshold}
-                            disabled={!runtimeGuards.toolStorm.enabled}
-                            onChange={(e) => updateToolStorm({ threshold: Number(e.target.value) })}
+                            value={runtimeGuards.execution.exactRepeatThreshold}
+                            disabled={!runtimeGuards.execution.enabled}
+                            onChange={(e) => updateExecution({ exactRepeatThreshold: Number(e.target.value) })}
+                          />
+                        </label>
+                        <label className="flex min-w-0 flex-col gap-1.5 text-[12px] font-medium text-ds-muted">
+                          {t('runtimeGuardExecutionSemanticFailureThreshold')}
+                          <input
+                            type="number"
+                            min={2}
+                            max={128}
+                            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[14px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30"
+                            value={runtimeGuards.execution.semanticFailureThreshold}
+                            disabled={!runtimeGuards.execution.enabled}
+                            onChange={(e) => updateExecution({ semanticFailureThreshold: Number(e.target.value) })}
                           />
                         </label>
                       </div>

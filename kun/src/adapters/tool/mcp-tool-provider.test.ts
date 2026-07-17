@@ -1,4 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
+import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { McpCapabilityConfig } from '../../contracts/capabilities.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
 import {
@@ -7,6 +10,17 @@ import {
   normalizeMcpToolName,
   type McpClientLike
 } from './mcp-tool-provider.js'
+import {
+  CAPABILITY_RUNTIME_BRIDGE_SERVER_ID,
+  CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES,
+  CAPABILITY_RUNTIME_BRIDGE_VERSION,
+  atomicWriteCapabilityRuntimeBridgeJson,
+  capabilityRuntimeBridgePaths,
+  capabilityRuntimeBridgeResponsePath,
+  parseCapabilityRuntimeBridgeRequest,
+  signCapabilityRuntimeBridgeCatalog,
+  signCapabilityRuntimeBridgeResponse
+} from '../../contracts/capability-runtime-bridge.js'
 
 function fakeContext(): ToolHostContext {
   return {
@@ -182,3 +196,128 @@ describe('buildMcpToolProviders workspace-intel arguments', () => {
     expect(secondCallTool).toHaveBeenCalled()
   })
 })
+
+describe('buildMcpToolProviders capability runtime bridge', () => {
+  it('exposes only the four flat tools and injects ToolHostContext outside their schemas', async () => {
+    const callToolWithContext = vi.fn(async () => ({ structuredContent: { ok: true } }))
+    const client: McpClientLike = {
+      listTools: async () => ({
+        tools: CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES.map((name) => ({
+          name,
+          description: name,
+          inputSchema: {
+            type: 'object',
+            properties: name === 'sciforge_discover' ? { text: { type: 'string' } } : {}
+          },
+          _meta: { capabilityIds: ['surface.inspect'] }
+        }))
+      }),
+      callTool: async () => ({ isError: true }),
+      callToolWithContext,
+      close: async () => undefined
+    }
+    const built = await buildMcpToolProviders(McpCapabilityConfig.parse({
+      enabled: true,
+      servers: {
+        [CAPABILITY_RUNTIME_BRIDGE_SERVER_ID]: {
+          enabled: true,
+          transport: 'file-bridge',
+          rootDir: '/tmp/sciforge-capability-bridge',
+          authSecret: 'runtime-bridge-test-secret-that-is-long-enough',
+          trustScope: 'user',
+          timeoutMs: 1000
+        }
+      },
+      search: { enabled: true, mode: 'search' }
+    }), { clientFactory: async () => client })
+    const bridgeProvider = built.providers.find((provider) =>
+      provider.id === `mcp:${CAPABILITY_RUNTIME_BRIDGE_SERVER_ID}:always`
+    )
+    const names = bridgeProvider?.tools.map((tool) => tool.name)
+
+    expect(names).toEqual(CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES)
+    expect(names).not.toContain('mcp_sciforge_capabilities_sciforge_discover')
+    for (const tool of bridgeProvider?.tools ?? []) {
+      expect(tool.inputSchema).not.toHaveProperty('properties.threadId')
+      expect(tool.inputSchema).not.toHaveProperty('properties.turnId')
+      expect(tool.inputSchema).not.toHaveProperty('properties.workspaceId')
+      expect(tool.metadata).toMatchObject({ capabilityIds: ['surface.inspect'] })
+    }
+
+    const context = fakeContext()
+    await bridgeProvider?.tools.find((tool) => tool.name === 'sciforge_discover')
+      ?.execute({ text: 'surface' }, context)
+    expect(callToolWithContext).toHaveBeenCalledWith(
+      { name: 'sciforge_discover', arguments: { text: 'surface' } },
+      context,
+      expect.objectContaining({ timeout: 1000 })
+    )
+  })
+
+  it('round-trips through the authenticated file client with bounded private context', async () => {
+    const rootDir = await mkdtemp(join(tmpdir(), 'kun-capability-bridge-'))
+    const authSecret = 'runtime-bridge-test-secret-that-is-long-enough'
+    try {
+      const paths = capabilityRuntimeBridgePaths(rootDir)
+      await atomicWriteCapabilityRuntimeBridgeJson(paths.catalog, signCapabilityRuntimeBridgeCatalog(authSecret, {
+        version: CAPABILITY_RUNTIME_BRIDGE_VERSION,
+        generatedAt: new Date().toISOString(),
+        capabilityIds: ['surface.inspect'],
+        tools: CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES.map((name) => ({
+          type: 'function' as const,
+          name,
+          description: name,
+          inputSchema: { type: 'object', properties: {} }
+        }))
+      }))
+      const built = await buildMcpToolProviders(McpCapabilityConfig.parse({
+        enabled: true,
+        servers: {
+          [CAPABILITY_RUNTIME_BRIDGE_SERVER_ID]: {
+            transport: 'file-bridge',
+            rootDir,
+            authSecret,
+            trustScope: 'user',
+            timeoutMs: 1000
+          }
+        }
+      }))
+      const tool = built.providers[0]?.tools.find((candidate) => candidate.name === 'sciforge_discover')
+      const execution = tool?.execute({}, fakeContext())
+      const requestFile = await waitForRequestFile(paths.requests)
+      const request = parseCapabilityRuntimeBridgeRequest(
+        JSON.parse(await readFile(join(paths.requests, requestFile), 'utf8')),
+        authSecret
+      )
+      await atomicWriteCapabilityRuntimeBridgeJson(
+        capabilityRuntimeBridgeResponsePath(rootDir, request.requestId),
+        signCapabilityRuntimeBridgeResponse(authSecret, {
+          version: CAPABILITY_RUNTIME_BRIDGE_VERSION,
+          requestId: request.requestId,
+          completedAt: new Date().toISOString(),
+          result: { ok: true, value: [{ operationRef: 'op_test' }] }
+        })
+      )
+
+      expect(request.context).toMatchObject({
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        workspaceId: '/tmp/research-workspace'
+      })
+      expect(await execution).toMatchObject({ isError: false })
+      await built.close()
+    } finally {
+      await rm(rootDir, { recursive: true, force: true })
+    }
+  })
+})
+
+async function waitForRequestFile(directory: string): Promise<string> {
+  const deadline = Date.now() + 1000
+  while (Date.now() < deadline) {
+    const file = (await readdir(directory).catch(() => [])).find((name) => name.endsWith('.json'))
+    if (file) return file
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+  throw new Error('Timed out waiting for a capability bridge request.')
+}

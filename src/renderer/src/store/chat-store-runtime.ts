@@ -532,8 +532,8 @@ function runtimeStatusText(event: RuntimeStatusEventPayload): string {
   if (event.kind === 'tool_catalog_changed') {
     return event.message?.trim() || i18n.t('common:toolCatalogChangedStatus')
   }
-  if (event.kind === 'tool_storm_suppressed') {
-    return event.message?.trim() || i18n.t('common:toolStormSuppressedStatus', {
+  if (event.kind === 'execution_suppressed') {
+    return event.message?.trim() || i18n.t('common:executionSuppressedStatus', {
       tool: event.toolName ?? 'tool'
     })
   }

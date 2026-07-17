@@ -71,6 +71,10 @@ import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAnchor,
+  WorkspacePreviewAnnotationDeleteInput,
+  WorkspacePreviewAnnotationResolveInput,
+  WorkspacePreviewAnnotationSidecarImportActionInput,
+  WorkspacePreviewAnnotationUpdateInput,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewByteRange,
   WorkspacePreviewEditDiffSummary,
@@ -87,6 +91,11 @@ import type {
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from './workspace-preview'
+import type { PdfAnnotationSidecar } from './pdf-annotations'
+import type {
+  PdfReviewGenerateActionInput,
+  PdfReviewImproveAnnotationActionInput
+} from './pdf-review'
 import type {
   BiologyRoomApplyInput,
   BiologyRoomApplyResult,
@@ -1007,6 +1016,40 @@ export type WorkspacePreviewInvokeActionResult =
   | (WorkspacePreviewPluginActionResult & { capability?: CapabilityResourceBinding })
   | { ok: false; message: string }
 
+export type WorkspacePreviewAnnotationListResult =
+  | { ok: true; sidecar: PdfAnnotationSidecar }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationImportResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      importedAt: string
+      fingerprintMatched: boolean
+      warnings: string[]
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationReviewGenerateResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      mode: 'auto' | 'import'
+      commentCount: number
+      skippedCount: number
+      generatedAt: string
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationReviewImproveResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      threadId: string
+      annotationId: string
+      modificationAdvice: string
+      revisedContent: string
+      generatedAt: string
+    }
+  | { ok: false; message: string }
+
 export type CapabilityBoundBiologyRoomManifest = BiologyRoomManifest & {
   capability?: CapabilityResourceBinding
 }
@@ -1233,6 +1276,31 @@ export type SciForgeApi = {
       sessionId: string,
       operation: WorkspacePreviewEditOperation
     ) => Promise<WorkspacePreviewApplyEditResult>
+    listAnnotations: (sessionId: string) => Promise<WorkspacePreviewAnnotationListResult>
+    updateAnnotation: (
+      sessionId: string,
+      input: WorkspacePreviewAnnotationUpdateInput
+    ) => Promise<WorkspacePreviewApplyEditResult>
+    resolveAnnotation: (
+      sessionId: string,
+      input: WorkspacePreviewAnnotationResolveInput
+    ) => Promise<WorkspacePreviewApplyEditResult>
+    deleteAnnotation: (
+      sessionId: string,
+      input: WorkspacePreviewAnnotationDeleteInput
+    ) => Promise<WorkspacePreviewApplyEditResult>
+    importAnnotations: (
+      sessionId: string,
+      input: WorkspacePreviewAnnotationSidecarImportActionInput
+    ) => Promise<WorkspacePreviewAnnotationImportResult>
+    generateAnnotationReview: (
+      sessionId: string,
+      input: PdfReviewGenerateActionInput
+    ) => Promise<WorkspacePreviewAnnotationReviewGenerateResult>
+    improveAnnotationReview: (
+      sessionId: string,
+      input: PdfReviewImproveAnnotationActionInput
+    ) => Promise<WorkspacePreviewAnnotationReviewImproveResult>
     export: (
       sessionId: string,
       target: WorkspacePreviewExportTarget

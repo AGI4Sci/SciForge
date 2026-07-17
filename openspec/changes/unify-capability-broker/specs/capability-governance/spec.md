@@ -14,6 +14,10 @@ SciForge MUST NOT represent agent accessibility with free-standing booleans or h
 - **WHEN** a manifest declares the agent audience without an executable provider
 - **THEN** registry validation fails
 
+#### Scenario: Legacy owned tool remains public
+- **WHEN** a migrated domain still exposes a per-feature agent tool or direct dispatcher alongside the broker meta-tools
+- **THEN** the architecture check fails
+
 ### Requirement: Capability reference is generated
 Human-readable capability documentation and visible-context access metadata SHALL be generated from the authoritative registry.
 
@@ -26,6 +30,10 @@ Each migrated domain SHALL remove its prior execution route in the same change t
 
 #### Scenario: Duplicate domain providers
 - **WHEN** tests detect more than one executable provider or a direct bypass for a migrated action
+- **THEN** the architecture check fails
+
+#### Scenario: Runtime scans legacy annotation storage
+- **WHEN** normal observation code reads backup or legacy sidecar candidates instead of the canonical provider path
 - **THEN** the architecture check fails
 
 ### Requirement: Registration contract tests are reusable

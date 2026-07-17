@@ -8,12 +8,25 @@ import { tsImport } from 'tsx/esm/api'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const APP_REGISTRY_PATH = path.join(ROOT, 'src/main/capabilities/app-registry.ts')
+const AGENT_TOOLS_PATH = path.join(ROOT, 'src/main/capabilities/agent-tools.ts')
 const GENERATED_REFERENCE_PATH = path.join(ROOT, 'docs/generated/capabilities.md')
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.mjs', '.cjs', '.ts', '.tsx', '.mts', '.cts'])
 const EXCLUDED_SOURCE_SEGMENTS = new Set(['node_modules', 'dist', 'out', 'coverage', 'generated'])
 
 const DIRECT_TRANSPORT_ROOTS = ['src', 'packages']
+const REQUIRED_AGENT_TOOL_NAMES = [
+  'sciforge_discover',
+  'sciforge_events',
+  'sciforge_invoke',
+  'sciforge_observe'
+]
+const REMOVED_AGENT_PATHS = [
+  'annotation.sidecar.read',
+  'gui_visible_context',
+  'gui_visual_capture',
+  'gui_workspace_image_inspect'
+]
 
 class GovernanceError extends Error {
   constructor(message, details = []) {
@@ -250,8 +263,31 @@ async function loadApplicationCapabilityModel() {
     throw new GovernanceError('createAppCapabilityRegistry(deps) must return a registry with list().')
   }
   const descriptors = validateDescriptors(await registry.list())
+  const ambiguousPreviewAction = descriptors.find((descriptor) =>
+    descriptor.id === 'workspace-preview.invoke-action' && descriptor.audiences.includes('agent')
+  )
+  if (ambiguousPreviewAction) {
+    throw new GovernanceError(
+      'workspace-preview.invoke-action must be UI-only. Agent callers use registered domain operations, never a two-level action dispatcher.'
+    )
+  }
   const migratedDomains = validateMigratedDomainPolicies(module.MIGRATED_CAPABILITY_DOMAINS)
   validateDomainPolicyCoverage(descriptors, migratedDomains)
+  let agentToolsModule
+  try {
+    agentToolsModule = await tsImport(pathToFileURL(AGENT_TOOLS_PATH).href, { parentURL: import.meta.url })
+  } catch (error) {
+    throw new GovernanceError(
+      `Unable to import ${relativePath(AGENT_TOOLS_PATH)}: ${error instanceof Error ? error.message : String(error)}`
+    )
+  }
+  const agentToolNames = Object.values(agentToolsModule.CAPABILITY_AGENT_TOOL_NAMES ?? {}).sort()
+  if (stableStringify(agentToolNames) !== stableStringify(REQUIRED_AGENT_TOOL_NAMES)) {
+    throw new GovernanceError(
+      `The owned agent tool surface must contain only ${REQUIRED_AGENT_TOOL_NAMES.join(', ')}; ` +
+        `received ${agentToolNames.join(', ') || '(none)'}. Register product capabilities behind the broker instead of adding tools.`
+    )
+  }
   return { descriptors, migratedDomains }
 }
 
@@ -382,6 +418,16 @@ async function scanArchitecture(registeredIds = new Set(), migratedDomains = [])
 
   for (const filePath of sourceFiles) {
     const source = await readFile(filePath, 'utf8')
+    for (const removedPath of REMOVED_AGENT_PATHS) {
+      addRegexViolations(
+        violations,
+        filePath,
+        source,
+        'removed-agent-path',
+        new RegExp(`(?<![A-Za-z0-9_.-])${escapeRegExp(removedPath)}(?![A-Za-z0-9_.-])`, 'g'),
+        `Removed agent path "${removedPath}" must not remain in production source. Use the registered broker operation.`
+      )
+    }
     addRegexViolations(
       violations,
       filePath,

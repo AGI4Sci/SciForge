@@ -16,9 +16,7 @@ export async function runWorkspaceIntelMcpServerFromArgv(argv: string[]): Promis
 function workspaceIntelOptionsFromArgv(argv: string[]): WorkspaceIntelServiceOptions {
   const options = workspaceIntelConfigFromEnv()
   const workspaceRoot = argValue(argv, '--workspace-root')
-  const visibleContextPath = argValue(argv, '--visible-context-path')
   if (workspaceRoot) options.workspaceRoot = workspaceRoot
-  if (visibleContextPath) options.visibleContextPath = visibleContextPath
   for (const skillRoot of argValues(argv, '--skill-root')) {
     options.skillRoots = [...(options.skillRoots ?? []), skillRoot]
   }

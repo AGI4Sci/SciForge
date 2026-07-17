@@ -98,7 +98,7 @@ export class RuntimeVisualExecutionGuard {
         code: 'runtime_visual_execution_missing',
         message: 'Visual completion rejected because no verified visual inspection executed.',
         detail: [
-          'This turn required visual inspection, but no successful Model Router-attested gui_visual_capture, gui_workspace_image_inspect, or visual_artifact_review event was observed.',
+          'This turn required visual inspection, but no successful Model Router-attested broker inspection or visual_artifact_review event was observed.',
           'Rendering, compiling, checking file size, or claiming that an image tool returned empty does not satisfy the visual execution gate.'
         ].join(' ')
       }
@@ -136,7 +136,7 @@ export function withVisualExecutionRequirement(
   const instruction = [
     'Runtime-enforced visual completion gate:',
     '- This turn requires real visual inspection after the final render or UI state is available.',
-    '- For a visible GUI surface, call `gui_visible_context`, then pass its fresh snapshotToken and visual task to `gui_visual_capture`. For local workspace images, call `gui_workspace_image_inspect` with one task and an artifacts array.',
+    '- For a visible GUI surface or workspace image, discover and invoke the matching broker inspection operation through `sciforge_invoke`; use only opaque resourceRef, operationRef, and targetRef values returned by the broker surface.',
     '- If this turn creates or revises a visual, completion requires a successful `visual_artifact_review`; screenshots and file inspection do not replace artifact review.',
     '- Unattested capture output, successful compilation, file existence, dimensions, or self-reported inspection does not satisfy the gate.',
     '- Do not claim visual verification unless the tool returned a successful semantic inspection. If it is unavailable, report the blocker instead of claiming completion.'
@@ -166,8 +166,7 @@ export function isVerifiedVisualExecutionEvent(event: AgentRuntimeEvent): boolea
   if (!tool || tool.status !== 'success') return false
   const name = normalizedToolName(tool.name)
   if (isVisualArtifactReviewTool(name)) return hasSuccessfulVisualArtifactReview(tool)
-  const isSemanticInspection = name === 'gui_visual_capture' || name.endsWith('_gui_visual_capture') ||
-    name === 'gui_workspace_image_inspect' || name.endsWith('_gui_workspace_image_inspect')
+  const isSemanticInspection = name === 'sciforge_invoke' || name.endsWith('_sciforge_invoke')
   if (!isSemanticInspection) return false
   return hasVisualInspectionAttestation(tool)
 }

@@ -35,6 +35,7 @@ import {
   SERVE_USAGE,
   ServeExitCode
 } from '../src/cli/serve.js'
+import { RuntimeTuningConfigSchema } from '../src/config/kun-config.js'
 
 describe('contracts', () => {
   it('round-trips a thread creation payload through zod', () => {
@@ -373,6 +374,12 @@ describe('contracts', () => {
 })
 
 describe('cli', () => {
+  it('rejects the obsolete ambiguous execution threshold field', () => {
+    expect(() => RuntimeTuningConfigSchema.parse({
+      executionGovernance: { threshold: 4 }
+    })).toThrow(/Unrecognized key/)
+  })
+
   it('defaults serve provider to the local model router and ignores legacy direct-provider env defaults', () => {
     const parsed = parseServeOptions(['--data-dir', '/tmp/ca'], {
       DEEPSEEK_API_KEY: 'deepseek-env-key',
@@ -489,10 +496,11 @@ describe('cli', () => {
         runtime: {
           modelStreamIdleTimeoutMs: 120_000,
           maxTurnModelSteps: 128,
-          toolStorm: {
+          executionGovernance: {
             enabled: true,
             windowSize: 5,
-            threshold: 4
+            exactRepeatThreshold: 4,
+            semanticFailureThreshold: 3
           },
           toolArgumentRepair: {
             maxStringBytes: 4096
@@ -565,8 +573,9 @@ describe('cli', () => {
       expect(parsed.contextCompaction?.summaryInputMaxBytes).toBe(98_304)
       expect(parsed.models?.profiles?.['custom-1m']?.contextCompaction?.softRatio).toBe(0.7)
       expect(parsed.models?.profiles?.['custom-1m']?.inputModalities).toEqual(['text', 'image'])
-      expect(parsed.runtime?.toolStorm?.windowSize).toBe(5)
-      expect(parsed.runtime?.toolStorm?.threshold).toBe(4)
+      expect(parsed.runtime?.executionGovernance?.windowSize).toBe(5)
+      expect(parsed.runtime?.executionGovernance?.exactRepeatThreshold).toBe(4)
+      expect(parsed.runtime?.executionGovernance?.semanticFailureThreshold).toBe(3)
       expect(parsed.runtime?.toolArgumentRepair?.maxStringBytes).toBe(4096)
       expect(parsed.runtime?.toolBudget?.profiles?.review).toEqual({
         softLimit: 8,

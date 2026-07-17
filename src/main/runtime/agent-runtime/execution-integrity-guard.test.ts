@@ -160,8 +160,8 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', {
       ...tool('codex', 'succeeded'),
-      toolName: 'gui_visual_capture',
-      summary: 'gui_visual_capture',
+      toolName: 'sciforge_invoke',
+      summary: 'sciforge_invoke',
       detail: JSON.stringify({ ok: true })
     })
 
@@ -176,8 +176,8 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     guard.rememberTurn('sciforge', input, 'sciforge-thread', 'sciforge-turn')
     guard.observe('sciforge', {
       ...tool('sciforge', 'succeeded'),
-      toolName: 'gui_visual_capture',
-      summary: 'gui_visual_capture',
+      toolName: 'sciforge_invoke',
+      summary: 'sciforge_invoke',
       detail: JSON.stringify({
         ok: true,
         evidence: { provider: 'model-router', attestation: ATTESTATION }

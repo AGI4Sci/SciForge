@@ -6,6 +6,7 @@ Workspace Preview and Biology Room SHALL expose observations containing current 
 #### Scenario: Agent observes an open workspace surface
 - **WHEN** an authorized agent observes a Workspace Preview or Biology Room resource
 - **THEN** it receives a scoped handle, structured state, and operation IDs with input schemas and availability instead of only an action count or textual hint
+- **AND** operation schemas are represented by references so current state is not hidden by a large inline catalog
 
 ### Requirement: Workspace Preview uses its canonical host
 Workspace Preview UI and agent operations SHALL invoke the existing main-process Workspace Preview host through the capability broker.
@@ -17,6 +18,25 @@ Workspace Preview UI and agent operations SHALL invoke the existing main-process
 #### Scenario: Unsupported operation
 - **WHEN** a file observation does not offer a requested operation
 - **THEN** the broker rejects it without adding a format-specific fallback or shell path
+
+#### Scenario: Observe current PDF annotations
+- **WHEN** a caller observes a PDF with annotation threads
+- **THEN** the compact state includes current canonical thread summaries and distinct thread and annotation record counts
+
+#### Scenario: Legacy or backup sidecars exist
+- **WHEN** normal observation resolves the document annotation store
+- **THEN** it reads only the canonical workspace-root sidecar and does not scan, promote, or merge legacy or backup files
+
+### Requirement: Surface inspection uses the broker
+Workspace surfaces SHALL expose visual inspection as a registered read operation whose provider resolves the current layout at execution time.
+
+#### Scenario: Layout changes after observation
+- **WHEN** a surface scrolls, resizes, rerenders, or moves after an agent observes it
+- **THEN** `surface.inspect` uses the latest target layout and the semantic handle remains valid
+
+#### Scenario: Semantic content changes after observation
+- **WHEN** the inspected resource content changes
+- **THEN** its semantic revision advances and a subsequent operation observes or resolves the new resource state
 
 ### Requirement: Biology Room uses its canonical service
 Biology Room UI and agent operations SHALL invoke the existing Biology Room service through the capability broker.
@@ -33,7 +53,7 @@ Successful surface mutations SHALL cause subscribed renderer and agent clients t
 - **THEN** the renderer receives a resource change event and re-observes the updated state
 
 ### Requirement: No conflicting migrated path
-After a workspace surface is migrated, SciForge MUST NOT retain agent-visible sidecar instructions, nonexistent tool hints, ambiguous preview tools, or a second direct mutation route.
+After a workspace surface is migrated, SciForge MUST NOT retain agent-visible sidecar instructions, nonexistent tool hints, agent access to ambiguous preview dispatch, or a second direct mutation route. A generic UI-only dispatcher MAY remain for plugin domains not yet migrated, but it MUST exclude migrated annotation actions.
 
 #### Scenario: Architecture boundary scan
 - **WHEN** the migrated source tree is checked in CI

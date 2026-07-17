@@ -145,7 +145,7 @@ export function applyRuntimeEvent(
       break
 	    case 'tool_call_ready':
 	    case 'tool_result_upload_wait':
-	    case 'tool_storm_suppressed':
+	    case 'execution_suppressed':
     case 'pipeline_stage':
     case 'heartbeat':
     case 'goal_updated':

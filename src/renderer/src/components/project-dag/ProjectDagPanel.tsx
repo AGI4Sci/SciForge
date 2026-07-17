@@ -19,6 +19,12 @@ import {
 import { handleProjectDagPreviewMessage } from './project-dag-preview-bridge'
 import { normalizeProjectDagGraphNodeId } from '../../lib/workspace-file-preview'
 import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
+import {
+  DagRuntimeDisabledState,
+  DagRuntimeToggle,
+  type DagRuntimeControl,
+  useDagRuntimeControl
+} from '../dag-runtime-toggle'
 
 type Props = {
   workspaceRoot?: string
@@ -28,6 +34,7 @@ type Props = {
   onCollapse: () => void
   onInitialClaimConsumed?: () => void
   onInitialNodeConsumed?: () => void
+  dagRuntimeControl?: DagRuntimeControl
 }
 
 export const PROJECT_DAG_REVIEW_VIEW: ProjectDagViewName = 'home'
@@ -162,7 +169,8 @@ export function ProjectDagPanel({
   className = '',
   onCollapse,
   onInitialClaimConsumed,
-  onInitialNodeConsumed
+  onInitialNodeConsumed,
+  dagRuntimeControl
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const pendingInitialClaimRef = useRef(initialClaimId?.trim() || undefined)
@@ -186,6 +194,8 @@ export function ProjectDagPanel({
   const [autonomyMode, setAutonomyMode] = useState<DagAutonomyMode>('autonomous')
   const [excludedSessionsText, setExcludedSessionsText] = useState('')
   const [isolatedSessionsText, setIsolatedSessionsText] = useState('')
+  const settingsDagRuntime = useDagRuntimeControl()
+  const dagRuntime = dagRuntimeControl ?? settingsDagRuntime
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
 
   const requestContext = useMemo(() => projectDagRequestContext(workspaceRoot), [workspaceRoot])
@@ -211,6 +221,15 @@ export function ProjectDagPanel({
   }, [workspaceRoot])
 
   useEffect(() => {
+    if (dagRuntime.enabled !== true) {
+      if (dagRuntime.enabled === false) {
+        setView(null)
+        setFrameUrl(undefined)
+        setLoading(false)
+        setLoadError(null)
+      }
+      return
+    }
     let cancelled = false
     const loader = window.sciforge?.getProjectDagView
     if (typeof loader !== 'function') {
@@ -266,7 +285,7 @@ export function ProjectDagPanel({
         if (!cancelled) setLoading(false)
       })
     return () => { cancelled = true }
-  }, [editingGoal, optimisticProgress, requestContext, requestNonce, submitting, t])
+  }, [dagRuntime.enabled, editingGoal, optimisticProgress, requestContext, requestNonce, submitting, t])
 
   useEffect(() => {
     const freshness = view?.status.freshness
@@ -325,6 +344,7 @@ export function ProjectDagPanel({
   }
 
   const saveGoal = (): void => {
+    if (dagRuntime.enabled !== true) return
     const handler = window.sciforge?.saveProjectDagGoal
     if (typeof handler !== 'function' || !goalTitle) {
       setCommandError(t('projectDagUnavailable'))
@@ -350,6 +370,7 @@ export function ProjectDagPanel({
   }
 
   const updateProject = (): void => {
+    if (dagRuntime.enabled !== true) return
     const handler = window.sciforge?.updateProjectDag
     if (typeof handler !== 'function') {
       setCommandError(t('projectDagUnavailable'))
@@ -397,14 +418,16 @@ export function ProjectDagPanel({
           <span className="truncate text-[11.5px] text-ds-faint">· {projectSubtitle}</span>
         </div>
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          <button type="button" onClick={updateProject} disabled={loading || updateBusy || savingGoal} className="inline-flex h-7 min-w-[88px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50" aria-label={t('projectDagUpdateHelp')} title={t('projectDagUpdateHelp')}>
+          <DagRuntimeToggle control={dagRuntime} />
+          <button type="button" onClick={updateProject} disabled={dagRuntime.enabled !== true || loading || updateBusy || savingGoal} className="inline-flex h-7 min-w-[88px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink hover:bg-ds-hover disabled:opacity-50" aria-label={t('projectDagUpdateHelp')} title={t('projectDagUpdateHelp')}>
             {updateBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}<span>{updateBusy ? t('projectDagUpdating') : t('projectDagUpdate')}</span>
           </button>
-          <button type="button" onClick={() => setRequestNonce((current) => current + 1)} disabled={loading || submitting} className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50" aria-label={t('projectDagRefresh')} title={t('projectDagRefresh')}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
+          <button type="button" onClick={() => setRequestNonce((current) => current + 1)} disabled={dagRuntime.enabled !== true || loading || submitting} className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink disabled:opacity-50" aria-label={t('projectDagRefresh')} title={t('projectDagRefresh')}><RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} /></button>
           <button type="button" onClick={onCollapse} className="rounded-lg p-1.5 text-ds-muted hover:bg-ds-hover hover:text-ds-ink" aria-label={t('rightPanelCollapse')} title={t('rightPanelCollapse')}><PanelRightClose className="h-4 w-4" /></button>
         </div>
       </header>
 
+      {dagRuntime.enabled !== true ? <DagRuntimeDisabledState control={dagRuntime} /> : <>
       <details className="group shrink-0 border-b border-ds-border bg-ds-sidebar">
         <summary className="flex min-h-8 cursor-pointer list-none items-center gap-2 px-3 py-1.5 text-[11px] marker:hidden sm:px-4 [&::-webkit-details-marker]:hidden">
           <GitMerge className="h-3.5 w-3.5 shrink-0 text-ds-muted" />
@@ -485,6 +508,7 @@ export function ProjectDagPanel({
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('projectDagLoading')}</span></div> : null}
         {loadError && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main px-6"><div className="max-w-sm text-center"><AlertTriangle className="mx-auto h-5 w-5 text-amber-500" /><div className="mt-3 text-[13px] font-semibold text-ds-ink">{t('projectDagLoadFailed')}</div><div className="mt-2 text-[12px] text-ds-muted">{loadError}</div><button type="button" onClick={() => setRequestNonce((current) => current + 1)} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-ds-border bg-ds-surface px-3 py-1.5 text-[12px]"><RefreshCw className="h-3.5 w-3.5" />{t('projectDagRetry')}</button></div></div> : null}
       </div></div>
+      </>}
     </aside>
   )
 }

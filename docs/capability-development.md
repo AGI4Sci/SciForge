@@ -83,8 +83,14 @@ accessHint: 'Use some_tool ...'
 - UI 使用通用 discover/observe/invoke/events client，不新增领域业务 IPC。
 - Agent 只使用稳定的 discover/observe/invoke/events 元工具，action 在调用时从 registry
   发现，不扁平注入新工具名。
-- Visible context 发布 opaque resource handle 和 registry-derived operation descriptor，
-  不发布内部 session ID、sidecar path、action count 或文字提示。
+- Codex adapter 与 SciForge Runtime 都必须把这四个元工具转发到 main 进程中的同一个
+  `CapabilityAgentToolSurface`。Runtime transport 只负责转发 caller context 和请求，不得
+  创建第二份 registry、provider 或 schema 清单。
+- Agent transport 只暴露 opaque `operationRef`、`schemaRef`、`resourceRef` 和稳定的
+  `targetRef`。snapshot token、semantic revision、layout revision、target coordinates、
+  expected revision 和 invocation ID 全部由 adapter/provider 管理。
+- Visible context 发布 compact resource state 和 registry-derived operation/schema reference，
+  不发布内部 session ID、sidecar path、完整 schema、action count 或文字工具提示。
 - System/automation 也通过同一个 broker，并携带明确 caller context。
 
 Resource handle 默认只允许签发它的 audience 使用。只有确需在 UI、agent 或 system 间共享的
@@ -128,12 +134,28 @@ npm test
 
 不要先标记迁移完成再保留过渡旁路；也不要为旧任务或单个文件格式保留兼容分支。
 
+## Surface Inspection 与文档批注约束
+
+- 当前界面由 `surface.current` 签发稳定 surface resource；视觉读取统一调用
+  `surface.inspect`。Provider 在执行时原子解析最新 layout，滚动、缩放、渲染和截图发布
+  不能让语义 resource 失效。
+- 工作区图片统一由 `artifact.inspect` 读取。禁止公开 token 协调式 GUI 工具，也禁止在
+  已注册 surface inspector 可用时用 shell 截图或窗口脚本建立旁路。
+- 文档批注的 list/update/resolve/delete 是 Workspace Preview provider 的独立 operations。
+  UI 和 agent 进入同一 provider；generic preview edit/action schema 必须排除批注变体。
+- 运行时只读取 workspace root 下唯一 canonical annotation store。旧文件扫描只能存在于
+  显式、一次性 migration 命令中，不能出现在 observe、mutation 或 agent 探测链路。
+- Review generate/improve 在没有统一 approval transport 前只能对 UI 发布；UI 必须先让
+  用户确认或修改 prompt，再携带 confirmation grant 调用 operation。
+
 ## Review 清单
 
 - [ ] 是否先提交了 input/output/policy/revision/idempotency 契约？
 - [ ] action 是否只在 app registry 注册一次且绑定唯一 handler？
 - [ ] UI、agent、system 是否全部走 broker？
 - [ ] agent audience 和 visible operation 是否完全由 registry 派生？
+- [ ] Codex 与 SciForge Runtime 是否复用同一个四元工具 surface 和同一个 main registry？
+- [ ] agent schema 是否没有泄漏 token、revision、coordinates 或 invocation ID？
 - [ ] provider contract suite 是否覆盖 discovery、policy、revision、idempotency、audit、event？
 - [ ] mutation 是否没有 direct IPC、sidecar/file write 或手动 refresh 旁路？
 - [ ] 是否运行 `capability:generate` 并提交生成参考？

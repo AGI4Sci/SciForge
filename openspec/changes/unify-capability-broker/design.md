@@ -62,6 +62,38 @@ New product features must add a provider manifest and contract tests before UI o
 
 Each migrated domain switches UI and agent adapters to the broker in one change, then deletes its old direct mutation IPC, prompt hints, aliases, and refresh chains. There is no compatibility alias or permanent dual path. Un-migrated domains are not falsely advertised as broker-backed.
 
+### 8. Agent transport v2 hides infrastructure coordination
+
+The agent-facing contract contains only the four stable broker meta-tools. `observe` returns a compact resource state, opaque resource reference, operation references, schema references, artifacts, and optional surface target references. Full schemas are fetched only when explicitly requested. `invoke` accepts an operation reference and domain input; its adapter creates invocation IDs and supplies the revision from the observed handle.
+
+Codex may call the in-process agent adapter directly. SciForge Runtime reaches the same adapter through a narrow request bridge owned by the main process. The bridge serializes only meta-tool name, arguments, caller scope, and structured result/error; it does not host a second registry, cache domain state, or execute provider logic. Runtime-specific flattened catalogs are not an alternative provider path for migrated capabilities.
+
+Snapshot tokens, component IDs, target coordinates, invocation IDs, and expected revisions are transport implementation details. They MUST NOT be required model inputs or emitted as instructions. This is a breaking replacement of the public `gui_visible_context` and `gui_visual_capture` tools.
+
+### 9. Surface inspection is an ordinary broker read
+
+Visual inspection is registered as `surface.inspect` and resolved by the canonical surface provider. The provider converts a stable surface target reference to the latest layout atomically when the operation executes. Semantic content changes advance the resource revision; scroll, resize, rendering, target movement, and capture publication advance only a layout epoch. A layout change cannot make a semantic handle stale.
+
+Alternative considered: refresh a snapshot token before each capture. Rejected because result rendering can itself change layout and invalidate the refreshed token, leaving correctness dependent on timing.
+
+### 10. Observations are compact and operational
+
+Observations include the current domain state needed to choose an operation, but do not inline every capability schema ahead of that state. Operation descriptors carry stable references to schemas. Large content is returned as artifacts or paged operation output. Important state, including current PDF annotation thread summaries, is not placed behind a large schema block where transport truncation can hide it.
+
+### 11. Document annotations have one canonical provider and store
+
+Workspace Preview registers annotation list, create/update, resolve, delete, and review operations against its canonical host. UI and agent calls enter through those operations. Runtime observation reads only the workspace-root canonical sidecar resolved by document identity; it never scans backup or legacy paths. Any legacy import is an explicit one-time migration command and is not part of normal reads.
+
+The public `annotation.sidecar.read` action and sidecar path guidance are deleted. Annotation actions are removed from the generic `workspace-preview.invoke-action` schema and observation path; that dispatcher becomes UI-only for not-yet-migrated plugin domains and MUST NOT be discoverable by agents. Annotation UI and agent callers both use the dedicated registered operations.
+
+### 12. One semantic execution governor serves every runtime
+
+KUN pre-execution and the Codex adapter call one `ExecutionGovernorCore`. It consumes normalized attempts and receipts containing operation family, resource identity, failure class, stable error code, and evidence/state-change signals. Exact duplicate detection remains useful, but recovery escalates consecutive semantic failures across argument, token, or shell-command variants when they target the same blocked objective.
+
+Family alone is not a failure signal. Successful evidence-producing reads, paginated operations, and trusted `computer_use` screenshots remain valid. When an owned surface-inspection capability exists, shell-based OS screenshot/window automation is denied before execution with a structured recovery directing the runtime back to broker discovery.
+
+Dynamic MCP errors are normalized before governance. Runtime adapters MUST NOT maintain separate fingerprint or recovery decision engines.
+
 ## Risks / Trade-offs
 
 - [Large cross-cutting cutover can collide with active changes] → Add the broker in new modules, use narrow integration edits, and migrate domains separately with focused tests.
@@ -80,6 +112,8 @@ Each migrated domain switches UI and agent adapters to the broker in one change,
 5. Delete migrated direct action paths, false agent metadata, literal hints, ambiguous preview tooling, and sidecar guidance.
 6. Add generated capability reference and architecture-boundary CI tests.
 7. Migrate remaining domains one at a time, deleting each old path during its cutover.
+8. Cut the agent transport to v2, migrate Surface Inspection and PDF annotations, and delete their public legacy tools and dispatchers.
+9. Replace runtime-specific failure guards with the shared semantic execution governor.
 
 Rollback is code rollback of the atomic domain change; no runtime compatibility mode is retained.
 

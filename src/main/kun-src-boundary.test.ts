@@ -22,7 +22,11 @@ const allowedKunBoundaryImports = new Map<string, string[]>([
   ['src/main/atomic-write-file.ts', ['kun/src/adapters/file/atomic-write.js']],
   [
     'src/main/local-runtime-package-contract.ts',
-    ['kun/src/config/kun-config.js', 'kun/src/contracts/capabilities.js']
+    [
+      'kun/src/config/kun-config.js',
+      'kun/src/contracts/capabilities.js',
+      'kun/src/contracts/capability-runtime-bridge.js'
+    ]
   ],
   [
     'src/shared/gui-plan.test.ts',

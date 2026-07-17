@@ -142,7 +142,6 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
   const openAtLoginSupported = platform === 'win32' || platform === 'darwin'
   const startMinimizedSupported = platform === 'win32'
   const desktopBehavior = form.appBehavior
-  const evidenceDagEnabled = form.evidenceDag?.enabled === true
   const modelRouterSettings = getModelRouterSettings(form)
   const defaultModelRouterProfile = modelRouterSettings.profiles.default
   const imageGenerationSettings = getImageGenerationSettings(form)
@@ -479,19 +478,6 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                     <Toggle
                       checked={desktopBehavior.closeToTray}
                       onChange={(v) => update({ appBehavior: { closeToTray: v } })}
-                    />
-                  }
-                />
-              </SettingsCard>
-
-              <SettingsCard title={t('evidenceDagSettings')} className="mt-6">
-                <SettingRow
-                  title={t('evidenceDagEnabled')}
-                  description={t('evidenceDagEnabledDesc')}
-                  control={
-                    <Toggle
-                      checked={evidenceDagEnabled}
-                      onChange={(enabled) => update({ evidenceDag: { enabled } })}
                     />
                   }
                 />

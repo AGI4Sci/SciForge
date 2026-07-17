@@ -2,7 +2,6 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
-  VisualCaptureInputSchema,
   WorkspaceImageInspectInputSchema,
   WorkspaceListInputSchema,
   WorkspaceReadInputSchema,
@@ -13,31 +12,11 @@ import {
 } from './contract.js'
 
 test('workspace intel schemas reject unbounded inputs', () => {
-  const snapshotToken = `vc_${'a'.repeat(64)}`
   assert.equal(WorkspaceListInputSchema.safeParse({ limit: 0 }).success, false)
   assert.equal(WorkspaceListInputSchema.safeParse({ depth: 999 }).success, false)
   assert.equal(WorkspaceTreeInputSchema.safeParse({ depth: 999 }).success, false)
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: 'a.txt', maxBytes: 0 }).success, false)
   assert.equal(WorkspaceReadInputSchema.safeParse({ path: '' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({
-    scope: 'window',
-    snapshotToken,
-    task: 'Inspect the final layout.',
-    truthLocks: ['Capability is the first column.'],
-    outputIntent: { kind: 'quality-review' }
-  }).success, true)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', snapshotToken, task: '' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', snapshotToken, requireSemanticInspection: false }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', snapshotToken, inspectionPrompt: 'old input' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'window', snapshotToken, targetId: 'page' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({ scope: 'target' }).success, false)
-  assert.equal(VisualCaptureInputSchema.safeParse({
-    scope: 'target',
-    snapshotToken,
-    componentId: 'preview',
-    targetId: 'current-page'
-  }).success, true)
   assert.equal(WorkspaceImageInspectInputSchema.safeParse({
     task: 'Compare both artifacts.',
     artifacts: [{

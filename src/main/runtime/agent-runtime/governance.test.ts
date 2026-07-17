@@ -8,14 +8,15 @@ import { RuntimeGovernanceSupervisor } from './governance'
 
 const baseCapabilities = {
   runtimeId: 'codex',
-  guard: { toolStorm: 'observe' }
+  guard: { execution: 'observe' }
 } as AgentRuntimeCapabilities
 
 const strictBudgetSettings: RuntimeGuardSettingsV1 = {
-  toolStorm: {
+  execution: {
     enabled: true,
     windowSize: 8,
-    threshold: 2
+    exactRepeatThreshold: 2,
+    semanticFailureThreshold: 2
   }
 }
 
@@ -38,7 +39,7 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'runtime_status',
       metadata: expect.objectContaining({
-        guard: 'toolStorm',
+        guard: 'execution',
         level: 'soft',
         family: 'tool_call:lookup'
       })
@@ -59,11 +60,11 @@ describe('RuntimeGovernanceSupervisor', () => {
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      text: expect.stringMatching(/tool_timeout.*workspace read timed out.*no terminal executor receipt observed/u)
+      text: expect.stringMatching(/repeated identical arguments 3 times.*distinct, verifiable action/u)
     }))
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'runtime_status',
-      message: expect.stringContaining('asked the model to recover'),
+      message: expect.stringContaining('requested recovery'),
       metadata: expect.objectContaining({
         level: 'recovery',
         recoveryAttempt: 1,
@@ -90,8 +91,8 @@ describe('RuntimeGovernanceSupervisor', () => {
     }))
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'error',
-      code: 'runtime_tool_storm_interrupted',
-      message: expect.stringContaining('could not be recovered')
+      code: 'runtime_execution_interrupted',
+      message: expect.stringContaining('repeated identical arguments')
     }))
   })
 
@@ -105,12 +106,10 @@ describe('RuntimeGovernanceSupervisor', () => {
     await Promise.resolve()
 
     expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringContaining(
-        'a prior identical call completed successfully, but repeating it does not demonstrate task progress'
-      )
+      text: expect.stringMatching(/failure class: none.*lookup completed/u)
     }))
     expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.not.stringContaining('no successful terminal executor receipt')
+      text: expect.not.stringContaining('no terminal executor receipt')
     }))
   })
 
@@ -156,6 +155,43 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'error',
       code: 'runtime_history_hygiene_replay'
+    }))
+  })
+
+  it('escalates structured broker failures across opaque argument variants', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 2; index += 1) {
+      supervisor.observe(capabilityInvokeEvent(index), baseCapabilities, strictBudgetSettings, controls)
+      supervisor.observe(capabilityInvokeReceipt(index), baseCapabilities, strictBudgetSettings, controls)
+    }
+    await Promise.resolve()
+
+    expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
+      text: expect.stringMatching(/unknown_resource_ref.*sciforge_discover.*surface\.inspect/u)
+    }))
+
+    supervisor.observe(capabilityInvokeEvent(3), baseCapabilities, strictBudgetSettings, controls)
+    await Promise.resolve()
+    expect(controls.interruptTurn).toHaveBeenCalled()
+  })
+
+  it('denies OS GUI automation when the capability registry advertises surface.inspect', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = {
+      ...controlsSpy(),
+      ownedSurfaceInspectionAvailable: true
+    }
+
+    supervisor.observe(shellGuiFallbackEvent(), baseCapabilities, strictBudgetSettings, controls)
+    await Promise.resolve()
+
+    expect(controls.interruptTurn).toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      code: 'runtime_execution_policy_denied',
+      detail: expect.stringContaining('sciforge_discover')
     }))
   })
 })
@@ -229,6 +265,67 @@ function historyPlaceholderEvent(index: number): AgentRuntimeEvent {
         args: ['-lc', command],
         max_output_tokens: index * 100
       }
+    }
+  }
+}
+
+function capabilityInvokeEvent(
+  index: number
+): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
+  return {
+    kind: 'tool_event',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: `invoke-${index}`,
+    status: 'running',
+    toolKind: 'tool_call',
+    toolName: 'sciforge_invoke',
+    meta: {
+      callId: `invoke-${index}`,
+      toolName: 'sciforge_invoke',
+      arguments: {
+        operationRef: 'op_surface_12345678901234567890',
+        resourceRef: 'res_surface_12345678901234567890'
+      }
+    }
+  }
+}
+
+function capabilityInvokeReceipt(
+  index: number
+): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
+  return {
+    ...capabilityInvokeEvent(index),
+    status: 'error',
+    errorCode: 'unknown_resource_ref',
+    detail: 'The opaque resource reference is no longer known.',
+    meta: {
+      ...capabilityInvokeEvent(index).meta,
+      errorCode: 'unknown_resource_ref',
+      failureClass: 'stale_resource',
+      resourceIdentity: 'res_surface_12345678901234567890',
+      structuredContent: {
+        error: { code: 'unknown_resource_ref' }
+      }
+    }
+  }
+}
+
+function shellGuiFallbackEvent(): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
+  return {
+    kind: 'tool_event',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: 'shell-gui-fallback',
+    status: 'running',
+    toolKind: 'command_execution',
+    toolName: 'exec_command',
+    meta: {
+      callId: 'shell-gui-fallback',
+      toolName: 'exec_command',
+      arguments: { command: 'screencapture -x /tmp/sciforge.png' }
     }
   }
 }

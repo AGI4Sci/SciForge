@@ -4,9 +4,9 @@ Read-only workspace and visible-GUI intelligence worker for SciForge runtimes.
 
 It exposes guarded workspace listing, tree, file read, bounded reference listing and preview, skill discovery, visible-context lookup, surface-bound visual understanding, and direct workspace-image understanding through a pure Node service and an MCP stdio server.
 
-`gui_visible_context` returns an opaque snapshot token bound to one window, thread, and revision. `gui_visual_capture` requires that token and accepts either the bound SciForge window or a component target from the same snapshot. The GUI broker never falls back to another window; unsupported surfaces fail explicitly. Its visual task is general, while GUI quality review is only the default when no task is supplied.
+Surface and artifact inspection are registered app capabilities. Agents discover and invoke `surface.inspect` or `artifact.inspect` through SciForge's stable discover/observe/invoke/events meta-tools; this worker does not expose a second GUI tool surface or snapshot-token protocol.
 
-`gui_workspace_image_inspect` is the single direct-image understanding path. It accepts a task and one to eight workspace-confined artifacts, each with a stable id and optional normalized regions. Truth locks and output intent can guide description, OCR, comparison, quality review, or structured extraction. Input MIME is detected from PNG, JPEG, or WebP content instead of trusted from a filename.
+`surface.inspect` accepts an opaque stable target reference and resolves the latest layout atomically in the canonical provider. `artifact.inspect` accepts one to eight workspace-confined PNG, JPEG, or WebP artifacts with optional normalized regions. Both use Model Router visual inspection and return structured, attested evidence.
 
 Successful visual tasks return attested generic evidence:
 

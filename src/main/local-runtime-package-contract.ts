@@ -14,3 +14,4 @@ export {
   SubagentsCapabilityConfig,
   WebCapabilityConfig
 } from '../../kun/src/contracts/capabilities.js'
+export * from '../../kun/src/contracts/capability-runtime-bridge.js'

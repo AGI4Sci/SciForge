@@ -582,6 +582,10 @@ describe('workspace preview contract', () => {
     })
 
     expect(action.input.query).toBe('BRCA1')
+    expect(workspacePreviewPluginActionInputSchema.safeParse({
+      actionId: 'annotation.sidecar.read',
+      input: {}
+    }).success).toBe(false)
     expect(result.audit.effect).toBe('worker-action')
     expect(workspacePreviewPluginActionResultSchema.parse({
       ...result,

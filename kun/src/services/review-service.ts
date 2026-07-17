@@ -178,7 +178,7 @@ export class ReviewService {
       ...(this.deps.contextCompaction ? { contextCompaction: this.deps.contextCompaction } : {}),
       ...(this.deps.tokenEconomy ? { tokenEconomy: this.deps.tokenEconomy } : {}),
       ...(this.deps.runtime?.maxTurnModelSteps ? { maxTurnModelSteps: this.deps.runtime.maxTurnModelSteps } : {}),
-      ...(this.deps.runtime?.toolStorm ? { toolStorm: this.deps.runtime.toolStorm } : {}),
+      ...(this.deps.runtime?.executionGovernance ? { executionGovernance: this.deps.runtime.executionGovernance } : {}),
       ...(this.deps.runtime?.toolBudget ? { toolBudget: this.deps.runtime.toolBudget } : {}),
       toolBudgetProfile: 'review',
       ...(this.deps.runtime?.parallelism ? { parallelism: this.deps.runtime.parallelism } : {}),

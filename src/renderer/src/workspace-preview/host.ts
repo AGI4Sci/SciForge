@@ -1,6 +1,10 @@
 import type {
   SciForgeApi,
   CapabilityResourceBinding,
+  WorkspacePreviewAnnotationImportResult,
+  WorkspacePreviewAnnotationListResult,
+  WorkspacePreviewAnnotationReviewGenerateResult,
+  WorkspacePreviewAnnotationReviewImproveResult,
   WorkspacePreviewApplyEditResult,
   WorkspacePreviewDescribeAssetResult,
   WorkspacePreviewExportResult,
@@ -19,6 +23,10 @@ import type {
 } from '@shared/workspace-file'
 import type {
   WorkspacePreviewArtifactDescriptor,
+  WorkspacePreviewAnnotationDeleteInput,
+  WorkspacePreviewAnnotationResolveInput,
+  WorkspacePreviewAnnotationSidecarImportActionInput,
+  WorkspacePreviewAnnotationUpdateInput,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewAssetTransportKind,
   WorkspaceObservation,
@@ -34,6 +42,10 @@ import type {
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from '@shared/workspace-preview'
+import type {
+  PdfReviewGenerateActionInput,
+  PdfReviewImproveAnnotationActionInput
+} from '@shared/pdf-review'
 import {
   rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor,
@@ -394,23 +406,116 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.applyEdit(sessionId, resolvedOperation)
-      if (!result.ok) {
-        this.patchState({ error: result.message })
-        return result
-      }
-
-      this.patchState({
-        session: result.session,
-        capability: result.capability ?? this.state.capability,
-        descriptor: this.registry.get(result.session.pluginId) ?? this.state.descriptor,
-        asset: this.state.asset?.sessionId === result.session.id ? this.state.asset : null,
-        observation: observationWithSessionSelection(this.state.observation, result.session),
-        lastEditSummary: diffSummaryFromApplyEditResult(result),
-        error: null
-      })
-      return result
+      return this.acceptApplyEditResult(result)
     } catch (error) {
       return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async listAnnotations(
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationListResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.listAnnotations(sessionId)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async updateAnnotation(input: WorkspacePreviewAnnotationUpdateInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.updateAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async resolveAnnotation(input: WorkspacePreviewAnnotationResolveInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.resolveAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async deleteAnnotation(input: WorkspacePreviewAnnotationDeleteInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.deleteAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async importAnnotations(
+    input: WorkspacePreviewAnnotationSidecarImportActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationImportResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.importAnnotations(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async generateAnnotationReview(
+    input: PdfReviewGenerateActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationReviewGenerateResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.generateAnnotationReview(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async improveAnnotationReview(
+    input: PdfReviewImproveAnnotationActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationReviewImproveResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.improveAnnotationReview(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
     }
   }
 
@@ -501,6 +606,23 @@ export class WorkspacePreviewHost {
     const resolvedSessionId = this.resolveSessionId(sessionId)
     if (!resolvedSessionId) return null
     return this.getBridge()?.getAssetSourceUrl?.(resolvedSessionId) ?? null
+  }
+
+  private acceptApplyEditResult(result: WorkspacePreviewApplyEditResult): WorkspacePreviewApplyEditResult {
+    if (!result.ok) {
+      this.patchState({ error: result.message })
+      return result
+    }
+    this.patchState({
+      session: result.session,
+      capability: result.capability ?? this.state.capability,
+      descriptor: this.registry.get(result.session.pluginId) ?? this.state.descriptor,
+      asset: this.state.asset?.sessionId === result.session.id ? this.state.asset : null,
+      observation: observationWithSessionSelection(this.state.observation, result.session),
+      lastEditSummary: diffSummaryFromApplyEditResult(result),
+      error: null
+    })
+    return result
   }
 
   private bridgeOrError(): WorkspacePreviewBridgeAdapter | null {

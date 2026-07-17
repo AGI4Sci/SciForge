@@ -749,7 +749,7 @@ function visualSnapshotFromRecord(record: Record<string, unknown>): TimelineImag
     path,
     name,
     mimeType: 'image/png',
-    sourceTool: 'gui_visual_capture',
+    sourceTool: 'sciforge_invoke',
     ...(readNumber(record, 'size') ? { byteSize: readNumber(record, 'size') } : {}),
     ...(readNumber(record, 'width') ? { width: readNumber(record, 'width') } : {}),
     ...(readNumber(record, 'height') ? { height: readNumber(record, 'height') } : {})

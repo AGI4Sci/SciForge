@@ -13,6 +13,12 @@ import {
   handleEvidenceDagPreviewMessage
 } from './evidence-dag-preview-bridge'
 import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
+import {
+  DagRuntimeDisabledState,
+  DagRuntimeToggle,
+  type DagRuntimeControl,
+  useDagRuntimeControl
+} from '../dag-runtime-toggle'
 
 type Props = {
   activeThreadId: string | null
@@ -21,6 +27,7 @@ type Props = {
   className?: string
   onCollapse: () => void
   onInitialNodeConsumed?: () => void
+  dagRuntimeControl?: DagRuntimeControl
 }
 
 type EvidenceDagUpdateApi = Partial<Pick<SciForgeApi, 'updateEvidenceDag'>>
@@ -87,7 +94,8 @@ export function EvidenceDagPanel({
   initialNodeId,
   className = '',
   onCollapse,
-  onInitialNodeConsumed
+  onInitialNodeConsumed,
+  dagRuntimeControl
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [view, setView] = useState<EvidenceDagViewResult | null>(null)
@@ -99,6 +107,8 @@ export function EvidenceDagPanel({
   const [requestNonce, setRequestNonce] = useState(0)
   const [frameNonce, setFrameNonce] = useState(0)
   const [requestedNodeId, setRequestedNodeId] = useState<string | null>(() => initialNodeId?.trim() || null)
+  const settingsDagRuntime = useDagRuntimeControl()
+  const dagRuntime = dagRuntimeControl ?? settingsDagRuntime
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
   const requestedNodeThreadRef = useRef<string | null>(activeThreadId)
   const threadId = useMemo(() => activeThreadId?.trim() || null, [activeThreadId])
@@ -135,6 +145,14 @@ export function EvidenceDagPanel({
   }, [initialNodeId, threadId])
 
   useEffect(() => {
+    if (dagRuntime.enabled !== true) {
+      if (dagRuntime.enabled === false) {
+        setView(null)
+        setLoading(false)
+        setError(null)
+      }
+      return
+    }
     let cancelled = false
     const getEvidenceDagView = window.sciforge?.getEvidenceDagView
     if (typeof getEvidenceDagView !== 'function') {
@@ -172,7 +190,7 @@ export function EvidenceDagPanel({
     return () => {
       cancelled = true
     }
-  }, [requestNonce, runtimeId, t, threadId, viewCacheKey])
+  }, [dagRuntime.enabled, requestNonce, runtimeId, t, threadId, viewCacheKey])
 
   // Background status poll while a compile is running. It refreshes the status
   // band only; the embedded view keeps its own lightweight change watcher.
@@ -220,6 +238,7 @@ export function EvidenceDagPanel({
       : t('evidenceDagUpdateHelp')
 
   const submitUpdate = (operation: 'update' | 'rebuild'): void => {
+    if (dagRuntime.enabled !== true) return
     const api = window.sciforge
     if (typeof api?.updateEvidenceDag !== 'function') {
       setError(t('evidenceDagUnavailable'))
@@ -259,10 +278,11 @@ export function EvidenceDagPanel({
           <div className="mt-1 truncate text-[11.5px] text-ds-faint">{updateSummary || subtitle}</div>
         </div>
         <div className="flex shrink-0 items-center gap-1">
+          <DagRuntimeToggle control={dagRuntime} />
           <button
             type="button"
             onClick={() => submitUpdate('update')}
-            disabled={loading || submitting || !canUpdateDag}
+            disabled={dagRuntime.enabled !== true || loading || submitting || !canUpdateDag}
             className="inline-flex h-7 min-w-[86px] items-center justify-center gap-1.5 rounded-lg border border-ds-border bg-ds-surface px-2.5 text-[11.5px] font-medium text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={updateDagTitle}
             title={updateDagTitle}
@@ -277,7 +297,7 @@ export function EvidenceDagPanel({
               setRequestNonce((current) => current + 1)
               setFrameNonce((current) => current + 1)
             }}
-            disabled={loading || submitting}
+            disabled={dagRuntime.enabled !== true || loading || submitting}
             className="rounded-lg p-1.5 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
             aria-label={t('evidenceDagRefresh')}
             title={t('evidenceDagRefresh')}
@@ -290,7 +310,7 @@ export function EvidenceDagPanel({
         </div>
       </header>
 
-      {status ? (
+      {dagRuntime.enabled === true && status ? (
         <div className="shrink-0 border-b border-ds-border px-4 py-2.5">
           <div className="flex flex-wrap items-center gap-2 text-[11.5px]">
             <span className={`rounded-full border px-2 py-0.5 font-medium ${statusTone(status)}`}>
@@ -341,9 +361,9 @@ export function EvidenceDagPanel({
         </div>
       ) : null}
 
-      {status ? <DagProgressiveLegend status={status} t={t} /> : null}
+      {dagRuntime.enabled === true && status ? <DagProgressiveLegend status={status} t={t} /> : null}
 
-      <div className="relative min-h-0 flex-1 bg-ds-main" data-dag-layer="committed">
+      {dagRuntime.enabled !== true ? <DagRuntimeDisabledState control={dagRuntime} /> : <div className="relative min-h-0 flex-1 bg-ds-main" data-dag-layer="committed">
         {view && frameUrl ? <iframe ref={iframeRef} key={`${frameUrl}:${frameNonce}`} src={frameUrl} title={t('rightPanelEvidenceDag')} className="ds-no-drag block h-full w-full border-0 bg-ds-main" data-dag-layer="committed" sandbox="allow-forms allow-same-origin allow-scripts" referrerPolicy="no-referrer" onLoad={() => { signalFramePriority(); if (requestedNodeId && initialNodeId?.trim() === requestedNodeId) onInitialNodeConsumed?.() }} /> : null}
         {previewError ? <div role="status" className="absolute left-3 right-3 top-3 z-10 rounded-lg border border-red-200 bg-red-50/95 px-3 py-2 text-[11.5px] text-red-800 shadow-sm">{previewError}</div> : null}
         {loading && !view ? <div className="absolute inset-0 flex items-center justify-center bg-ds-main text-ds-faint"><Loader2 className="h-4 w-4 animate-spin" /><span className="ml-2 text-[12px]">{t('evidenceDagLoading')}</span></div> : null}
@@ -357,7 +377,7 @@ export function EvidenceDagPanel({
             </div>
           </div>
         ) : null}
-      </div>
+      </div>}
     </aside>
   )
 }

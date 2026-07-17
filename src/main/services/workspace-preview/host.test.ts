@@ -11,10 +11,6 @@ import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES
 } from '../../../shared/workspace-preview'
-import {
-  PDF_REVIEW_GENERATE_ACTION_ID,
-  PDF_REVIEW_IMPROVE_ACTION_ID
-} from '../../../shared/pdf-review'
 import { WorkspacePreviewHost } from './host'
 import type { WorkspacePreviewWorkerClient } from './worker-client'
 
@@ -1327,7 +1323,6 @@ describe('WorkspacePreviewHost', () => {
         },
         actions: expect.arrayContaining([
           'document.updateParagraph',
-          'annotation.upsert',
           'applyEdit',
           'save'
         ])
@@ -1381,7 +1376,7 @@ describe('WorkspacePreviewHost', () => {
     expect(documentXml).toContain('with line break')
   })
 
-  it('upserts PDF annotations through the generic host sidecar path', async () => {
+  it('uses the canonical document annotation provider for list, update, delete, and import', async () => {
     const sourcePdf = '%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n'
     await writeFile(join(workspaceRoot, 'paper.pdf'), sourcePdf, 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-pdf-annotation' })
@@ -1393,9 +1388,7 @@ describe('WorkspacePreviewHost', () => {
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
 
-    const created = await host.applyEdit(opened.session.id, {
-      kind: 'annotation.upsert',
-      path: 'paper.pdf',
+    const created = await host.updateAnnotation(opened.session.id, {
       annotationId: 'ann-1',
       annotationKind: 'comment',
       body: 'Check the stated assay result.',
@@ -1418,9 +1411,7 @@ describe('WorkspacePreviewHost', () => {
         }
       }
     }, '2026-07-08T00:03:00.000Z')
-    const updated = await host.applyEdit(opened.session.id, {
-      kind: 'annotation.upsert',
-      path: 'paper.pdf',
+    const updated = await host.updateAnnotation(opened.session.id, {
       annotationId: 'ann-1',
       annotationKind: 'note',
       body: 'Updated assay note.'
@@ -1516,62 +1507,46 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        annotations: [{
-          id: 'thread-1',
-          kind: 'comment',
-          summary: 'open | page 1 | Assay result | Updated assay note.'
-        }],
-        actions: expect.arrayContaining([
-          'annotation.sidecar.read',
-          'annotation.sidecar.import',
-          PDF_REVIEW_GENERATE_ACTION_ID,
-          PDF_REVIEW_IMPROVE_ACTION_ID,
-          'annotation.upsert',
-          'annotation.thread.update',
-          'annotation.thread.delete'
-        ])
+        documentAnnotations: {
+          threadCount: 1,
+          annotationCount: 1,
+          openThreadCount: 1,
+          truncated: false,
+          threads: [{
+            id: 'thread-1',
+            kind: 'comment',
+            status: 'open',
+            pageStart: 1,
+            pageEnd: 1,
+            annotationCount: 1,
+            summary: 'open | page 1 | Assay result | Updated assay note.'
+          }]
+        }
       }
     })
     if (observed.ok) {
-      const annotationPayload = JSON.stringify(observed.observation.annotations)
+      const annotationPayload = JSON.stringify(observed.observation.documentAnnotations)
       expect(annotationPayload).not.toContain('rects')
       expect(annotationPayload).not.toContain('sha256')
       expect(annotationPayload).not.toContain('sourceMessageId')
+      expect(observed.observation.actions.every((action) => !action.startsWith('annotation.'))).toBe(true)
     }
 
-    const sidecarAction = await host.invokeAction(opened.session.id, {
-      actionId: 'annotation.sidecar.read',
-      input: {}
-    }, '2026-07-08T00:04:45.000Z')
-    expect(sidecarAction).toMatchObject({
+    const listed = await host.listAnnotations(opened.session.id)
+    expect(listed).toMatchObject({
       ok: true,
-      sessionId: 'session-pdf-annotation',
-      pluginId: 'pdf',
-      actionId: 'annotation.sidecar.read',
-      audit: {
-        effect: 'host-action'
+      sidecar: {
+        threads: [expect.objectContaining({ id: 'thread-1' })],
+        annotations: [expect.objectContaining({ id: 'ann-1' })]
       }
     })
-    if (sidecarAction.ok) {
-      expect(sidecarAction.result).toMatchObject({
-        sidecar: {
-          threads: [expect.objectContaining({ id: 'thread-1' })],
-          annotations: [expect.objectContaining({ id: 'ann-1' })],
-          anchors: [expect.objectContaining({
-            id: 'anchor-1',
-            rects: [{ page: 1, x: 0.1, y: 0.2, width: 0.3, height: 0.05 }]
-          })]
-        },
-        source: 'default'
-      })
-      expect(JSON.stringify(sidecarAction.result)).not.toContain(workspaceRoot)
-      expect(JSON.stringify(sidecarAction.result)).not.toContain('sourcePdfPath')
+    if (listed.ok) {
+      expect(JSON.stringify(listed)).not.toContain(workspaceRoot)
+      expect(JSON.stringify(listed)).not.toContain('sourcePdfPath')
     }
 
     if (!exported.ok) return
-    const deleted = await host.applyEdit(opened.session.id, {
-      kind: 'annotation.thread.delete',
-      path: 'paper.pdf',
+    const deleted = await host.deleteAnnotation(opened.session.id, {
       threadId: 'thread-1',
       pruneOrphanAnchors: true
     }, '2026-07-08T00:05:00.000Z')
@@ -1583,50 +1558,31 @@ describe('WorkspacePreviewHost', () => {
       }
     })
 
-    const imported = await host.invokeAction(opened.session.id, {
-      actionId: 'annotation.sidecar.import',
-      input: {
-        packagePath: exported.path
-      }
+    const imported = await host.importAnnotations(opened.session.id, {
+      packagePath: exported.path
     }, '2026-07-08T00:06:00.000Z')
     expect(imported).toMatchObject({
       ok: true,
-      sessionId: 'session-pdf-annotation',
-      pluginId: 'pdf',
-      actionId: 'annotation.sidecar.import',
-      result: {
-        fingerprintMatched: true,
-        counts: {
-          threads: 1,
-          annotations: 1,
-          anchors: 1
-        },
-        effect: 'sidecar-write'
-      },
-      audit: {
-        effect: 'host-action'
+      fingerprintMatched: true,
+      sidecar: {
+        threads: [expect.objectContaining({ id: 'thread-1' })],
+        annotations: [expect.objectContaining({ id: 'ann-1', body: 'Updated assay note.' })]
       }
     })
     if (imported.ok) {
-      expect(imported.result).toMatchObject({
-        sidecar: {
-          threads: [expect.objectContaining({ id: 'thread-1' })],
-          annotations: [expect.objectContaining({ id: 'ann-1', body: 'Updated assay note.' })]
-        }
-      })
-      expect(JSON.stringify(imported.result)).not.toContain(workspaceRoot)
-      expect(JSON.stringify(imported.result)).not.toContain('sourcePdfPath')
+      expect(JSON.stringify(imported)).not.toContain(workspaceRoot)
+      expect(JSON.stringify(imported)).not.toContain('sourcePdfPath')
     }
 
     const observedAfterImport = await host.observe(opened.session.id)
     expect(observedAfterImport).toMatchObject({
       ok: true,
       observation: {
-        annotations: [{
-          id: 'thread-1',
-          kind: 'comment',
-          summary: 'open | page 1 | Assay result | Updated assay note.'
-        }]
+        documentAnnotations: {
+          threadCount: 1,
+          annotationCount: 1,
+          openThreadCount: 1
+        }
       }
     })
   })
@@ -1741,14 +1697,17 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        actions: expect.arrayContaining([
-          'annotation.sidecar.read',
-          'annotation.thread.update',
-          'annotation.thread.delete'
-        ])
+        documentAnnotations: {
+          threadCount: 0,
+          annotationCount: 0,
+          openThreadCount: 0,
+          threads: []
+        }
       }
     })
-    if (observed.ok) expect(observed.observation.annotations).toBeUndefined()
+    if (observed.ok) {
+      expect(observed.observation.actions.every((action) => !action.startsWith('annotation.'))).toBe(true)
+    }
   })
 
   it('updates annotation thread kind and side conversation linkage through annotation upsert', async () => {
@@ -1971,12 +1930,20 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        annotations: [{
-          id: 'docx-thread-1',
-          kind: 'question',
-          summary: 'open | page 1 | Paragraph question | Clarify this paragraph.'
-        }],
-        actions: expect.arrayContaining(['annotation.upsert'])
+        documentAnnotations: {
+          threadCount: 1,
+          annotationCount: 1,
+          openThreadCount: 1,
+          threads: [{
+            id: 'docx-thread-1',
+            kind: 'question',
+            status: 'open',
+            pageStart: 1,
+            pageEnd: 1,
+            annotationCount: 1,
+            summary: 'open | page 1 | Paragraph question | Clarify this paragraph.'
+          }]
+        }
       }
     })
   })

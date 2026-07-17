@@ -1,15 +1,10 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { readFile } from 'node:fs/promises'
 
 import {
-  VISIBLE_CONTEXT_RESOURCE_URI,
-  VisualCaptureInputSchema,
-  WorkspaceImageInspectInputSchema,
   WORKSPACE_FILE_RESOURCE_URI_TEMPLATE,
   WORKSPACE_TREE_RESOURCE_URI,
-  VisibleContextInputSchema,
   WorkspaceListInputSchema,
   WorkspaceReadInputSchema,
   WorkspaceReferenceListInputSchema,
@@ -23,7 +18,6 @@ import {
   createWorkspaceIntelService,
   type WorkspaceIntelService
 } from './service.js'
-import type { VisualInspectionEvidence } from './visual-inspection.js'
 
 type McpToolResult = {
   content: Array<
@@ -51,61 +45,6 @@ export function createWorkspaceIntelMcpServer(
     { name: 'sciforge-workspace-intel', version: '0.1.0' },
     { capabilities: { logging: {} } }
   )
-
-  server.registerTool('gui_visible_context', {
-    description: 'Inspect the current GUI surface registry. The returned snapshotToken is required by gui_visual_capture and binds capture to this exact window, thread, and revision.',
-    inputSchema: VisibleContextInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.visibleContext(args)
-    return toolResult(result, result.ok
-      ? `Visible context has ${result.componentCount} component${result.componentCount === 1 ? '' : 's'}.`
-      : result.error.message)
-  })
-
-  server.registerTool('gui_visual_capture', {
-    description: 'Capture and visually understand the exact SciForge surface identified by a fresh gui_visible_context snapshotToken. Accepts a general task, normalized regions, truth locks, and output intent. Target identifiers must come from the same snapshot; arbitrary coordinates and cross-surface fallback are forbidden.',
-    inputSchema: VisualCaptureInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.visualCapture(args)
-    if (!result.ok) return toolResult(result, result.error.message)
-    const bytes = await readFile(result.resource.path)
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Captured ${result.resource.role} visual context to ${result.resource.path}.\n${visualEvidenceText(result.evidence)}`
-        },
-        { type: 'image', data: bytes.toString('base64'), mimeType: result.resource.mimeType }
-      ],
-      structuredContent: result
-    }
-  })
-
-  server.registerTool('gui_workspace_image_inspect', {
-    description: 'Run a general visual-understanding task over one or more workspace-confined PNG, JPEG, or WebP artifacts. Supports normalized regions, truth locks, comparison and structured output intent; all model inference goes through the SciForge Model Router.',
-    inputSchema: WorkspaceImageInspectInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.inspectWorkspaceImages(args)
-    if (!result.ok) return toolResult(result, result.error.message)
-    const images = await Promise.all(result.artifacts.map(async (artifact) => ({
-      artifact,
-      bytes: await readFile(artifact.path)
-    })))
-    return {
-      content: [
-        { type: 'text', text: visualEvidenceText(result.evidence) },
-        ...images.map(({ artifact, bytes }) => ({
-          type: 'image' as const,
-          data: bytes.toString('base64'),
-          mimeType: artifact.mimeType
-        }))
-      ],
-      structuredContent: result
-    }
-  })
 
   server.registerTool('gui_workspace_list', {
     description: 'List read-only workspace directory entries with workspace root guard, pagination, and optional bounded recursion.',
@@ -191,15 +130,6 @@ export function createWorkspaceIntelMcpServer(
     return jsonResource(WORKSPACE_TREE_RESOURCE_URI, result)
   })
 
-  server.registerResource('visible-context', VISIBLE_CONTEXT_RESOURCE_URI, {
-    title: 'Visible Context',
-    description: 'Current bounded GUI visible-context snapshot for agent on-demand inspection.',
-    mimeType: 'application/json'
-  }, async () => {
-    const result = await service.visibleContext({ includeHidden: true })
-    return jsonResource(VISIBLE_CONTEXT_RESOURCE_URI, result)
-  })
-
   server.registerResource('workspace-file', new ResourceTemplate(WORKSPACE_FILE_RESOURCE_URI_TEMPLATE, {
     list: undefined
   }), {
@@ -214,18 +144,6 @@ export function createWorkspaceIntelMcpServer(
   })
 
   return server
-}
-
-function visualEvidenceText(evidence: VisualInspectionEvidence): string {
-  const lines = [
-    `Visual understanding completed through Model Router. Attestation: ${evidence.attestation}`,
-    `Summary: ${evidence.summary}`
-  ]
-  if (evidence.claims.length) {
-    lines.push(`Claims: ${evidence.claims.map((claim) => `[${claim.kind}; ${claim.artifactId}; ${claim.confidence}] ${claim.text}`).join(' | ')}`)
-  }
-  if (evidence.uncertainties.length) lines.push(`Uncertainties: ${evidence.uncertainties.join(' | ')}`)
-  return lines.join('\n')
 }
 
 export async function startWorkspaceIntelMcpServer(

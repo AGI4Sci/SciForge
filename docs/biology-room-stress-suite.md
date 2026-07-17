@@ -89,7 +89,7 @@ path/symlink escapes, manifest limits, and source immutability.
   Codex keeps them deferred.
 - With an active Room, ask to annotate the current selection.
 - Pass when the bounded active-room summary is injected directly, the model does
-  not call `gui_visible_context` to rediscover the Room, and it uses at most one
+  does not rediscover the Room through a removed direct GUI path, and it uses at most one
   `biology_room_observe` before a requested `biology_room_apply`.
 
 ## Quality ledger

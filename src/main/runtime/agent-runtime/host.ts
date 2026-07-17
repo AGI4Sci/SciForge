@@ -91,8 +91,6 @@ import type {
   RuntimeContextLedgerService
 } from '../../services/runtime-context-ledger-service'
 import type {
-  VisibleContextComponentSnapshot,
-  VisibleContextResource,
   VisibleContextSnapshot
 } from '../../../shared/visible-context'
 
@@ -116,6 +114,13 @@ export type AgentRuntimeHostOptions = {
     | AgentRuntimeAdapter[]
     | Partial<Record<AgentRuntimeId, AgentRuntimeAdapter>>
   services?: AgentRuntimeHostServices
+  capabilityAvailability?: (input: {
+    capabilityId: string
+    audience: 'agent'
+    runtimeId: AgentRuntimeId
+    threadId: string
+    turnId: string
+  }) => boolean
 }
 
 export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentRuntimeHost {
@@ -338,6 +343,15 @@ export class AgentRuntimeHost {
       this.createPostTurnCheckpoint(adapter.id, event)
       this.governance.observe(event, capabilities, guardSettings, {
         governanceProfile: this.governanceProfileForEvent(capabilities.runtimeId, event),
+        ownedSurfaceInspectionAvailable: Boolean(
+          event.turnId && this.options.capabilityAvailability?.({
+            capabilityId: 'surface.inspect',
+            audience: 'agent',
+            runtimeId: capabilities.runtimeId,
+            threadId: event.threadId,
+            turnId: event.turnId
+          })
+        ),
         steerTurn: (payload) => this.steerTurn(payload),
         interruptTurn: (payload) => this.interruptTurn(payload),
         publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
@@ -2601,55 +2615,13 @@ function shouldAttachVisibleContextLookupHint(text: string): boolean {
     /(右侧|右栏|右边|侧栏|预览|可见|看到|屏幕|界面|当前打开|批注|注释|标注)/u.test(text)
 }
 
-function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot): string {
-  const lines = [
+function renderVisibleContextLookupHint(_snapshot: VisibleContextSnapshot): string {
+  return [
     'Visible GUI context lookup:',
-    'The current user request appears to reference content visible in the SciForge GUI. Do not say you cannot see the right sidebar, current preview, or PDF annotations before checking the available visible-context tools.',
-    'First call `gui_visible_context` when it is available. It returns a bounded index of visible components and resource pointers, not full document contents.',
-    'If the request requires visual inspection, pass the fresh snapshotToken and task to `gui_visual_capture`; target identifiers must come from that same snapshot. For local workspace PNG, JPEG, or WebP artifacts, call `gui_workspace_image_inspect` with one task and an artifacts array.',
-    'When a visible resource includes a capability binding, pass its opaque resource handle to `sciforge_resource_observe` and invoke only operations returned by that observation. Do not infer sidecar files or unregistered tool names.'
-  ]
-  const components = snapshot.components.filter((component) => component.visible).slice(0, 6)
-  if (components.length > 0) {
-    lines.push('Currently published visible-context index:')
-    for (const component of components) {
-      lines.push(renderVisibleContextComponentLine(component))
-      const resourceLines = (component.resources ?? []).slice(0, 6).map(renderVisibleContextResourceLine)
-      lines.push(...resourceLines)
-    }
-  } else {
-    lines.push('No visible GUI components are currently published; call `gui_visible_context` anyway if the tool is available, because the snapshot may have refreshed after this turn started.')
-  }
-  return lines.join('\n')
-}
-
-function renderVisibleContextComponentLine(component: VisibleContextComponentSnapshot): string {
-  const title = component.title ? ` title=${component.title}` : ''
-  const summary = component.summary ? ` summary=${truncateUtf8Text(component.summary, 180)}` : ''
-  return `- component id=${component.id} region=${component.region} type=${component.component}${title}${summary}`
-}
-
-function renderVisibleContextResourceLine(resource: VisibleContextResource): string {
-  const parts = [
-    `kind=${resource.kind}`,
-    resource.role ? `role=${resource.role}` : '',
-    resource.name ? `name=${resource.name}` : '',
-    resource.workspaceRoot ? `workspaceRoot=${resource.workspaceRoot}` : '',
-    resource.relativePath ? `relativePath=${resource.relativePath}` : '',
-    resource.path && !resource.relativePath ? `path=${resource.path}` : '',
-    resource.resourceUri ? `resourceUri=${resource.resourceUri}` : '',
-    resource.annotationCount !== undefined ? `annotations=${resource.annotationCount}` : '',
-    resource.threadCount !== undefined ? `threads=${resource.threadCount}` : '',
-    resource.openThreadCount !== undefined ? `openThreads=${resource.openThreadCount}` : '',
-    resource.capability
-      ? `capabilityResource=${JSON.stringify(resource.capability.resource)}`
-      : '',
-    resource.capability
-      ? `operations=${resource.capability.operations.map((operation) => operation.id).join(',')}`
-      : '',
-    resource.accessHint ? `accessHint=${truncateUtf8Text(resource.accessHint, 180)}` : ''
-  ].filter(Boolean)
-  return `  - resource ${parts.join('; ')}`
+    'The current request appears to reference content visible in SciForge. Use the broker meta-tools before saying the visible surface is unavailable.',
+    'Call `sciforge_discover` to find and invoke the current-surface read, call `sciforge_observe` with its opaque resourceRef, then call `sciforge_invoke` using only operationRef, resourceRef, targetRef, and domain input returned by the broker.',
+    'Do not infer or pass component ids, coordinates, handles, revisions, or invocation ids.'
+  ].join('\n')
 }
 
 type RuntimeHandoffTranscriptEntry = {

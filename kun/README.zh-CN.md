@@ -242,7 +242,7 @@ SciForge Runtime 默认使用混合存储：`threads/{threadId}/messages.jsonl` 
 - `serve.mcpSearch` 可把大量 MCP 工具收敛为 `mcp_search`、`mcp_describe`、`mcp_call` 和 `mcp_refresh_catalog` 四个入口；当工具目录过大时，模型先检索意图相关工具，再描述和调用具体工具，避免每轮都携带完整 MCP schema。
 - `serve.tokenEconomy` / `tokenEconomyMode` 会压缩工具描述、工具结果和历史上下文；保留代码、路径、命令、URL、错误信号等高价值信息，同时省掉重复、超长或二进制 payload。
 - `contextCompaction` 控制长会话压缩的兜底阈值和摘要方式；模型级阈值写在 `models.profiles`。压缩时保留目标、约束、决策、已触碰文件、工具结果和未解决事项。
-- `serve.runtimeTuning.toolStorm` 会抑制同一回合内重复的相同工具调用，阻止无意义 tool loop 继续烧 token。
+- `serve.runtimeTuning.executionGovernance` 会抑制同一回合内重复的相同工具调用，阻止无意义 tool loop 继续烧 token。
 - `capabilities.web` 暴露 `web_fetch` 与/或 `web_search`。内置 provider 负责 HTTP(S) 抓取；搜索功能依赖 provider 实现，未配置时会变为不可用。
 - `capabilities.skills` 扫描 `roots` 下的 `skill.json`。manifest 可以把 `entry` 指向 `SKILL.md`，但单独存在的 `SKILL.md` 不再作为 package 标记。
 - `capabilities.attachments` 将图片二进制从线程日志剥离，允许回合记录引用 `attachmentIds`。视觉模型直接接收图片部分，纯文本模型走受限文本 fallback。

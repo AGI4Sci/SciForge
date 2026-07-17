@@ -26,16 +26,18 @@ import {
 } from '../../../shared/pdf-annotations'
 import type { AppSettingsV1 } from '../../../shared/app-settings'
 import type {
+  WorkspacePreviewAnnotationImportResult,
+  WorkspacePreviewAnnotationListResult,
+  WorkspacePreviewAnnotationReviewGenerateResult,
+  WorkspacePreviewAnnotationReviewImproveResult,
   WorkspacePreviewOpenInput as WorkspacePreviewApiOpenInput,
   WorkspacePreviewOpenResult as WorkspacePreviewApiOpenResult
 } from '../../../shared/sciforge-api'
 import {
-  PDF_REVIEW_GENERATE_ACTION_ID,
-  PDF_REVIEW_IMPROVE_ACTION_ID,
   pdfReviewGenerateActionInputSchema,
-  pdfReviewGenerateActionResultSchema,
   pdfReviewImproveAnnotationActionInputSchema,
-  pdfReviewImproveAnnotationActionResultSchema
+  type PdfReviewGenerateActionInput,
+  type PdfReviewImproveAnnotationActionInput
 } from '../../../shared/pdf-review'
 import {
   exportPdfAnnotationAdobePdf,
@@ -68,7 +70,9 @@ import {
   resolveWorkspacePreviewInitialSelection,
   workspacePreviewAssetTransportDescriptorSchema,
   workspacePreviewAnnotationSidecarImportActionInputSchema,
-  workspacePreviewAnnotationSidecarImportActionResultSchema,
+  workspacePreviewAnnotationDeleteInputSchema,
+  workspacePreviewAnnotationResolveInputSchema,
+  workspacePreviewAnnotationUpdateInputSchema,
   workspacePreviewByteRangeSchema,
   workspacePreviewEditDiffSummarySchema,
   workspacePreviewEditOperationSchema,
@@ -82,6 +86,10 @@ import {
   workspacePreviewPrepareArtifactRequestSchema,
   workspacePreviewReadArtifactRangeRequestSchema,
   type WorkspacePreviewArtifactDescriptor,
+  type WorkspacePreviewAnnotationDeleteInput,
+  type WorkspacePreviewAnnotationResolveInput,
+  type WorkspacePreviewAnnotationSidecarImportActionInput,
+  type WorkspacePreviewAnnotationUpdateInput,
   type WorkspacePreviewAssetTransportDescriptor,
   type WorkspacePreviewByteRange,
   type WorkspacePreviewEditDiffSummary,
@@ -742,27 +750,10 @@ export class WorkspacePreviewHost {
       pdfPath: record.file.path,
       workspaceRoot: record.file.workspaceRoot
     })
-    const sidecarAnnotations = loaded.ok
-      ? pdfSidecarObservationAnnotations(loaded.sidecar, loaded.warnings)
-      : [{
-          id: 'annotation-sidecar-warning',
-          kind: 'warning',
-          summary: clipObservationText(`Annotation sidecar unavailable: ${loaded.message}`)
-        }]
-    const annotations = mergeObservationAnnotations(observation.annotations, sidecarAnnotations)
-    const documentKind = annotationDocumentKindForPath(record.file.path)
     return workspaceObservationSchema.parse({
       ...observation,
-      ...(annotations.length ? { annotations } : {}),
-      actions: uniqueObservationActions([
-        ...observation.actions,
-        'annotation.sidecar.read',
-        ...(documentKind === 'pdf' ? ['annotation.sidecar.import'] : []),
-        ...(documentKind === 'pdf' ? [PDF_REVIEW_GENERATE_ACTION_ID, PDF_REVIEW_IMPROVE_ACTION_ID] : []),
-        'annotation.upsert',
-        'annotation.thread.update',
-        'annotation.thread.delete'
-      ])
+      ...(loaded.ok ? { documentAnnotations: pdfSidecarDocumentAnnotations(loaded.sidecar) } : {}),
+      actions: uniqueObservationActions(observation.actions)
     })
   }
 
@@ -1065,6 +1056,179 @@ export class WorkspacePreviewHost {
         ok: false,
         message: error instanceof Error ? error.message : String(error)
       }
+    }
+  }
+
+  async listAnnotations(sessionId: string): Promise<WorkspacePreviewAnnotationListResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || !annotationDocumentKindForPath(record.file.path)) {
+      return { ok: false, message: 'The open preview does not support document annotations.' }
+    }
+
+    const loaded = await loadPdfAnnotationSidecar({
+      pdfPath: record.file.path,
+      workspaceRoot: record.file.workspaceRoot
+    })
+    if (!loaded.ok) return loaded
+    return { ok: true, sidecar: workspacePreviewAnnotationSidecarForAction(loaded.sidecar) }
+  }
+
+  async updateAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationUpdateInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationUpdateInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.upsert',
+        path: record.file.path,
+        ...parsed
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async resolveAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationResolveInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationResolveInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.thread.update',
+        path: record.file.path,
+        threadId: parsed.threadId,
+        patch: { status: parsed.resolved ? 'resolved' : 'open' }
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async deleteAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationDeleteInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationDeleteInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.thread.delete',
+        path: record.file.path,
+        ...parsed
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async importAnnotations(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationSidecarImportActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationImportResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'Annotation package import requires an open PDF annotation preview.' }
+    }
+
+    try {
+      const parsed = workspacePreviewAnnotationSidecarImportActionInputSchema.parse(input)
+      const imported = await importPdfAnnotationSidecarPackage({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      })
+      if (!imported.ok) return imported
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(imported.sidecar),
+        importedAt: imported.importedAt || now,
+        fingerprintMatched: imported.fingerprintMatched,
+        warnings: imported.warnings
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async generateAnnotationReview(
+    sessionId: string,
+    input: PdfReviewGenerateActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationReviewGenerateResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF review generation requires an open PDF annotation preview.' }
+    }
+    if (!this.loadSettings) return { ok: false, message: 'PDF review generation requires app settings.' }
+
+    try {
+      const parsed = pdfReviewGenerateActionInputSchema.parse(input)
+      const generated = await generatePdfReviewAnnotations({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      }, await this.loadSettings())
+      if (!generated.ok) return generated
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(generated.sidecar),
+        mode: generated.mode,
+        commentCount: generated.commentCount,
+        skippedCount: generated.skippedCount,
+        generatedAt: generated.generatedAt || now
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async improveAnnotationReview(
+    sessionId: string,
+    input: PdfReviewImproveAnnotationActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationReviewImproveResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF annotation improvement requires an open PDF annotation preview.' }
+    }
+
+    try {
+      const parsed = pdfReviewImproveAnnotationActionInputSchema.parse(input)
+      const improved = await improvePdfReviewAnnotation({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      }, this.loadSettings ? await this.loadSettings() : undefined)
+      if (!improved.ok) return improved
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(improved.sidecar),
+        threadId: improved.threadId,
+        annotationId: improved.annotationId,
+        modificationAdvice: improved.modificationAdvice,
+        revisedContent: improved.revisedContent,
+        generatedAt: improved.generatedAt || now
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
     }
   }
 
@@ -1735,18 +1899,6 @@ export class WorkspacePreviewHost {
     action: WorkspacePreviewPluginActionInput,
     now: string
   ): Promise<WorkspacePreviewInvokeActionResult | null> {
-    if (action.actionId === 'annotation.sidecar.read' && record.manifest.capabilities.annotations) {
-      return this.invokeAnnotationSidecarReadAction(record, action, now)
-    }
-    if (action.actionId === 'annotation.sidecar.import' && record.manifest.capabilities.annotations) {
-      return this.invokeAnnotationSidecarImportAction(record, action, now)
-    }
-    if (action.actionId === PDF_REVIEW_GENERATE_ACTION_ID && record.manifest.capabilities.annotations) {
-      return this.invokePdfReviewGenerateAction(record, action, now)
-    }
-    if (action.actionId === PDF_REVIEW_IMPROVE_ACTION_ID && record.manifest.capabilities.annotations) {
-      return this.invokePdfReviewImproveAction(record, action, now)
-    }
     if (record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'html.previewUrl') {
       return this.invokeHtmlPreviewUrlAction(record, action, now)
     }
@@ -1778,202 +1930,6 @@ export class WorkspacePreviewHost {
         size: preview.size,
         mtimeMs: preview.mtimeMs
       },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokeAnnotationSidecarReadAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (!annotationDocumentKindForPath(record.file.path)) {
-      return { ok: false, message: 'Annotation sidecar reads are currently implemented for PDF and DOCX files only.' }
-    }
-
-    const loaded = await loadPdfAnnotationSidecar({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot
-    })
-    if (!loaded.ok) return loaded
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result: {
-        sidecar: workspacePreviewAnnotationSidecarForAction(loaded.sidecar),
-        source: loaded.source,
-        warnings: loaded.warnings,
-        pdfFingerprint: loaded.pdfFingerprint
-      },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokeAnnotationSidecarImportAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'Annotation sidecar package import is currently implemented for PDF previews only.' }
-    }
-
-    const input = workspacePreviewAnnotationSidecarImportActionInputSchema.parse(action.input)
-    const imported = await importPdfAnnotationSidecarPackage({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...(input.packagePath ? { packagePath: input.packagePath } : {}),
-      ...(input.packageBase64 ? { packageBase64: input.packageBase64 } : {}),
-      ...(input.attemptRelocation !== undefined ? { attemptRelocation: input.attemptRelocation } : {})
-    })
-    if (!imported.ok) return imported
-
-    const fileInfo = await stat(record.file.path)
-    const file: WorkspacePreviewFileState = {
-      ...record.file,
-      size: fileInfo.size,
-      mtimeMs: fileInfo.mtimeMs
-    }
-    const session = workspacePreviewSessionSchema.parse({
-      ...record.session,
-      updatedAt: now,
-      mtimeMs: fileInfo.mtimeMs,
-      file
-    })
-    this.sessions.set(session.id, {
-      ...record,
-      session,
-      file
-    })
-
-    const result = workspacePreviewAnnotationSidecarImportActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(imported.sidecar),
-      importedAt: imported.importedAt || now,
-      pdfFingerprint: imported.pdfFingerprint,
-      fingerprintMatched: imported.fingerprintMatched,
-      warnings: imported.warnings,
-      counts: {
-        threads: imported.sidecar.threads.length,
-        annotations: imported.sidecar.annotations.length,
-        anchors: imported.sidecar.anchors.length
-      },
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokePdfReviewGenerateAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'PDF review generation is currently implemented for PDF previews only.' }
-    }
-    if (!this.loadSettings) {
-      return { ok: false, message: 'PDF review generation requires app settings.' }
-    }
-
-    const input = pdfReviewGenerateActionInputSchema.parse(action.input)
-    const generated = await generatePdfReviewAnnotations({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...input
-    }, await this.loadSettings())
-    if (!generated.ok) return generated
-
-    const session = await this.refreshSidecarSession(record, now)
-    const result = pdfReviewGenerateActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(generated.sidecar),
-      mode: generated.mode,
-      path: generated.path,
-      ...(generated.reviewDataPath ? { reviewDataPath: generated.reviewDataPath } : {}),
-      commentCount: generated.commentCount,
-      skippedCount: generated.skippedCount,
-      generatedAt: generated.generatedAt || now,
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokePdfReviewImproveAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'PDF annotation improvement is currently implemented for PDF previews only.' }
-    }
-
-    const input = pdfReviewImproveAnnotationActionInputSchema.parse(action.input)
-    const improved = await improvePdfReviewAnnotation({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...input
-    }, this.loadSettings ? await this.loadSettings() : undefined)
-    if (!improved.ok) return improved
-
-    const session = await this.refreshSidecarSession(record, now)
-    const result = pdfReviewImproveAnnotationActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(improved.sidecar),
-      path: improved.path,
-      threadId: improved.threadId,
-      annotationId: improved.annotationId,
-      modificationAdvice: improved.modificationAdvice,
-      revisedContent: improved.revisedContent,
-      generatedAt: improved.generatedAt || now,
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
       audit: {
         pluginId: record.manifest.id,
         path: record.file.path,
@@ -2393,26 +2349,35 @@ function createDocumentParagraphEditDiffSummary(input: {
   })
 }
 
-function pdfSidecarObservationAnnotations(
-  sidecar: PdfAnnotationSidecar,
-  warnings: readonly string[] = []
-): NonNullable<WorkspaceObservation['annotations']> {
-  const annotations: NonNullable<WorkspaceObservation['annotations']> = sidecar.threads
+function pdfSidecarDocumentAnnotations(
+  sidecar: PdfAnnotationSidecar
+): NonNullable<WorkspaceObservation['documentAnnotations']> {
+  const threads = sidecar.threads
     .slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
-    .map((thread) => ({
-      id: thread.id,
-      kind: thread.kind,
-      ...annotationSummaryProperty(pdfAnnotationThreadObservationSummary(sidecar, thread))
-    }))
-  for (const warning of warnings) {
-    annotations.push({
-      id: `annotation-sidecar-warning-${annotations.length + 1}`,
-      kind: 'warning',
-      summary: clipObservationText(warning)
+    .map((thread) => {
+      const anchors = sidecar.anchors.filter((anchor) => thread.anchorIds.includes(anchor.id))
+      const pages = pdfAnchorPageRange(anchors)
+      const annotationCount = sidecar.annotations.filter((annotation) => (
+        annotation.threadId === thread.id || thread.annotationIds.includes(annotation.id)
+      )).length
+      const summary = clipObservationText(pdfAnnotationThreadObservationSummary(sidecar, thread))
+      return {
+        id: thread.id,
+        kind: thread.kind,
+        status: thread.status,
+        ...(thread.title?.trim() ? { title: clipObservationText(thread.title, 512) } : {}),
+        ...pages,
+        annotationCount,
+        ...(summary ? { summary } : {})
+      }
     })
-    if (annotations.length >= WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) break
+  return {
+    threadCount: sidecar.threads.length,
+    annotationCount: sidecar.annotations.length,
+    openThreadCount: sidecar.threads.filter((thread) => thread.status === 'open').length,
+    truncated: sidecar.threads.length > threads.length,
+    threads
   }
-  return annotations
 }
 
 function workspacePreviewAnnotationSidecarForAction(sidecar: PdfAnnotationSidecar): PdfAnnotationSidecar {
@@ -2455,34 +2420,23 @@ function pdfAnnotationThreadObservationSummary(
 }
 
 function pdfAnchorPageRangeSummary(anchors: readonly PdfAnchor[]): string {
+  const range = pdfAnchorPageRange(anchors)
+  if (!range.pageStart || !range.pageEnd) return ''
+  return range.pageStart === range.pageEnd
+    ? `page ${range.pageStart}`
+    : `pages ${range.pageStart}-${range.pageEnd}`
+}
+
+function pdfAnchorPageRange(
+  anchors: readonly PdfAnchor[]
+): { pageStart?: number; pageEnd?: number } {
   const pages = anchors
     .flatMap((anchor) => [anchor.pageStart, anchor.pageEnd])
     .filter((page) => Number.isFinite(page) && page > 0)
-  if (!pages.length) return ''
+  if (!pages.length) return {}
   const start = Math.min(...pages)
   const end = Math.max(...pages)
-  return start === end ? `page ${start}` : `pages ${start}-${end}`
-}
-
-function annotationSummaryProperty(summary: string): Pick<NonNullable<WorkspaceObservation['annotations']>[number], 'summary'> | Record<string, never> {
-  const clipped = clipObservationText(summary)
-  return clipped ? { summary: clipped } : {}
-}
-
-function mergeObservationAnnotations(
-  existing: WorkspaceObservation['annotations'],
-  next: WorkspaceObservation['annotations']
-): NonNullable<WorkspaceObservation['annotations']> {
-  const merged: NonNullable<WorkspaceObservation['annotations']> = []
-  const seen = new Set<string>()
-  for (const annotation of [...(existing ?? []), ...(next ?? [])]) {
-    const key = `${annotation.id}\n${annotation.kind}\n${annotation.summary ?? ''}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    merged.push(annotation)
-    if (merged.length >= WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) break
-  }
-  return merged
+  return { pageStart: start, pageEnd: end }
 }
 
 function uniqueObservationActions(actions: readonly string[]): string[] {

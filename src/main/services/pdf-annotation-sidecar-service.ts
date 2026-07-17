@@ -352,52 +352,65 @@ export async function loadPdfAnnotationSidecar(
 ): Promise<PdfAnnotationSidecarLoadResult> {
   try {
     const resolved = await resolvePdfAnnotationTarget(target)
-    const warnings: string[] = []
-    let emptyDefaultSidecar: PdfAnnotationSidecar | undefined
     if (await pathExists(resolved.defaultSidecarPath)) {
-      try {
-        const sidecar = withResolvedFingerprint(await readPdfAnnotationSidecar(resolved.defaultSidecarPath), resolved)
-        if (hasPdfAnnotationContent(sidecar) || (sidecar.deletedThreads?.length ?? 0) > 0) {
-          return {
-            ok: true,
-            sidecar,
-            path: resolved.defaultSidecarPath,
-            source: 'default',
-            pdfFingerprint: resolved.fingerprint,
-            warnings
-          }
-        }
-        emptyDefaultSidecar = sidecar
-      } catch (error) {
-        warnings.push(`annotation sidecar skipped: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-
-    const promotedCandidate = (await matchingPdfAnnotationSidecarCandidates(resolved, warnings))[0]
-    if (promotedCandidate) {
-      const writableResolved = await resolvePdfAnnotationTarget(target, { createDefaultSidecarParents: true })
-      const sidecar = withResolvedFingerprint(promotedCandidate.sidecar, writableResolved)
-      const parsed = pdfAnnotationSidecarSchema.parse(sidecar)
-      await writeJsonFile(writableResolved.defaultSidecarTarget, parsed)
       return {
         ok: true,
-        sidecar: parsed,
-        path: writableResolved.defaultSidecarPath,
+        sidecar: withResolvedFingerprint(await readPdfAnnotationSidecar(resolved.defaultSidecarPath), resolved),
+        path: resolved.defaultSidecarPath,
         source: 'default',
-        pdfFingerprint: writableResolved.fingerprint,
-        warnings
+        pdfFingerprint: resolved.fingerprint,
+        warnings: []
       }
     }
 
     return {
       ok: true,
-      sidecar: emptyDefaultSidecar ?? createEmptyPdfAnnotationSidecar(resolved.fingerprint, {
-          sourcePdfName: basename(resolved.pdfPath),
-          sourcePdfPath: resolved.pdfPath
-        }),
+      sidecar: createEmptyPdfAnnotationSidecar(resolved.fingerprint, {
+        sourcePdfName: basename(resolved.pdfPath),
+        sourcePdfPath: resolved.pdfPath
+      }),
       path: resolved.defaultSidecarPath,
-      source: emptyDefaultSidecar ? 'default' : 'empty',
+      source: 'empty',
       pdfFingerprint: resolved.fingerprint,
+      warnings: []
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Explicit one-shot migration for legacy annotation files. Runtime observation and
+ * mutation paths intentionally never call this function.
+ */
+export async function migrateLegacyPdfAnnotationSidecar(
+  target: PdfAnnotationSidecarTarget
+): Promise<PdfAnnotationSidecarLoadResult> {
+  try {
+    const resolved = await resolvePdfAnnotationTarget(target)
+    if (await pathExists(resolved.defaultSidecarPath)) {
+      const canonical = await loadPdfAnnotationSidecar(target)
+      if (!canonical.ok) return canonical
+      if (hasPdfAnnotationContent(canonical.sidecar) || (canonical.sidecar.deletedThreads?.length ?? 0) > 0) {
+        return canonical
+      }
+    }
+
+    const warnings: string[] = []
+    const candidate = (await matchingPdfAnnotationSidecarCandidates(resolved, warnings))[0]
+    if (!candidate) return await loadPdfAnnotationSidecar(target)
+
+    const writableResolved = await resolvePdfAnnotationTarget(target, { createDefaultSidecarParents: true })
+    const parsed = pdfAnnotationSidecarSchema.parse(
+      withResolvedFingerprint(candidate.sidecar, writableResolved)
+    )
+    await writeJsonFile(writableResolved.defaultSidecarTarget, parsed)
+    return {
+      ok: true,
+      sidecar: parsed,
+      path: writableResolved.defaultSidecarPath,
+      source: 'default',
+      pdfFingerprint: writableResolved.fingerprint,
       warnings
     }
   } catch (error) {

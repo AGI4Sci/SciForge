@@ -24,7 +24,7 @@ export const RuntimeEventKind = z.enum([
   'assistant_reasoning_delta',
   'tool_call_ready',
   'tool_result_upload_wait',
-  'tool_storm_suppressed',
+  'execution_suppressed',
   'tool_catalog_changed',
   'tool_call_started',
   'tool_call_finished',
@@ -161,13 +161,13 @@ export const ToolUploadStatusEvent = RuntimeEventBase.extend({
 })
 export type ToolUploadStatusEvent = z.infer<typeof ToolUploadStatusEvent>
 
-export const ToolStormSuppressedEvent = RuntimeEventBase.extend({
-  kind: z.literal('tool_storm_suppressed'),
+export const ExecutionSuppressedEvent = RuntimeEventBase.extend({
+  kind: z.literal('execution_suppressed'),
   toolName: z.string().min(1),
   callId: z.string().min(1),
   message: z.string()
 })
-export type ToolStormSuppressedEvent = z.infer<typeof ToolStormSuppressedEvent>
+export type ExecutionSuppressedEvent = z.infer<typeof ExecutionSuppressedEvent>
 
 export const ToolCatalogEvent = RuntimeEventBase.extend({
   kind: z.literal('tool_catalog_changed'),
@@ -241,7 +241,7 @@ export const RuntimeEvent = z.discriminatedUnion('kind', [
   UserInputEvent,
   ToolCallReadyEvent,
   ToolUploadStatusEvent,
-  ToolStormSuppressedEvent,
+  ExecutionSuppressedEvent,
   ToolCatalogEvent,
   CompactionEvent,
   GoalEvent,

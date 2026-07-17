@@ -88,7 +88,7 @@ function mcpContentImages(output: Record<string, unknown>): ToolResultImage[] {
     // MCP `content.type=image` is already an explicit model-visible image
     // contract. Do not require a second, tool-specific `kind` marker: doing so
     // silently drops otherwise valid images from tools such as
-    // gui_visual_capture, whose metadata lives under `resource`.
+    // Broker inspection receipts whose metadata lives under `resource`.
     addUniqueImage(images, toMcpContentImage(entry, metadata[imageIndex] ?? visualResource))
     imageIndex += 1
   }

@@ -30,7 +30,7 @@ describe('RuntimeVisualExecutionGuard', () => {
     expect(observation.violation).toMatchObject({ code: 'runtime_visual_execution_missing' })
   })
 
-  it.each(RUNTIME_IDS)('accepts an attested semantic gui_visual_capture for %s', (runtimeId) => {
+  it.each(RUNTIME_IDS)('accepts an attested semantic sciforge_invoke for %s', (runtimeId) => {
     const guard = new RuntimeVisualExecutionGuard()
     guard.rememberTurn(runtimeId, requiredInput(runtimeId), `${runtimeId}-thread`, `${runtimeId}-turn`)
     guard.observe(runtimeId, attestedCaptureEvent(runtimeId))
@@ -53,12 +53,12 @@ describe('RuntimeVisualExecutionGuard', () => {
         id: 'capture-result',
         kind: 'tool',
         status: 'success',
-        summary: 'gui_visual_capture',
+        summary: 'sciforge_invoke',
         detail: JSON.stringify({
           ok: true,
           evidence: { provider: 'model-router', attestation: ATTESTATION }
         }),
-        meta: { toolName: 'gui_visual_capture' }
+        meta: { toolName: 'sciforge_invoke' }
       }
     })
 
@@ -144,7 +144,7 @@ describe('RuntimeVisualExecutionGuard', () => {
       threadId: 'claude-thread',
       turnId: 'claude-turn',
       itemId: 'user-message',
-      text: 'Runtime-enforced visual completion gate:\nCall gui_visual_capture.'
+      text: 'Runtime-enforced visual completion gate:\nCall sciforge_invoke.'
     })
     guard.observe('claude', attestedCaptureEvent('claude'))
 
@@ -162,7 +162,7 @@ describe('RuntimeVisualExecutionGuard', () => {
       threadId: 'codex-thread',
       turnId: 'codex-turn',
       itemId: 'user-message',
-      text: 'Runtime-enforced visual completion gate:\nCall gui_visual_capture.'
+      text: 'Runtime-enforced visual completion gate:\nCall sciforge_invoke.'
     }
     guard.observe('codex', userMessage)
     expect(guard.observe('codex', completedEvent('codex')).violation).toBeDefined()
@@ -196,7 +196,7 @@ describe('visual inspection request classification', () => {
     const guarded = withVisualExecutionRequirement(input, true)
 
     expect(guarded.text).toContain('Runtime-enforced visual completion gate')
-    expect(guarded.text).toContain('gui_visual_capture')
+    expect(guarded.text).toContain('sciforge_invoke')
     expect(guarded.displayText).toBe(input.displayText)
     expect(guarded.metadata?.[VISUAL_EXECUTION_REQUIRED_METADATA_KEY]).toBe(true)
   })
@@ -229,12 +229,12 @@ function attestedCaptureEvent(runtimeId: AgentRuntimeId): AgentRuntimeEvent {
     turnId: `${runtimeId}-turn`,
     itemId: `${runtimeId}-capture`,
     status: 'success',
-    summary: 'gui_visual_capture',
+    summary: 'sciforge_invoke',
     detail: JSON.stringify({
       ok: true,
       evidence: { provider: 'model-router', attestation: ATTESTATION }
     }),
-    meta: { toolName: 'gui_visual_capture' }
+    meta: { toolName: 'sciforge_invoke' }
   }
 }
 
@@ -246,9 +246,9 @@ function captureOnlyEvent(): AgentRuntimeEvent {
     turnId: 'codex-turn',
     itemId: 'capture-only',
     status: 'success',
-    summary: 'gui_visual_capture',
+    summary: 'sciforge_invoke',
     detail: JSON.stringify({ ok: true }),
-    meta: { toolName: 'gui_visual_capture' }
+    meta: { toolName: 'sciforge_invoke' }
   }
 }
 

@@ -220,6 +220,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     input.route.pluginId
   const mode = observation?.view.mode ?? input.context.state.session?.mode
   const selectionKind = observation?.selection?.kind ?? input.context.state.session?.selection?.kind
+  const compactCapability = compactVisibleContextCapability(input.context.state.capability)
+  const documentAnnotations = observation?.documentAnnotations
   const summary = observation
     ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)}.`
     : input.context.assetError
@@ -238,8 +240,10 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     mimeType: observation?.file.mimeType ?? input.context.state.file?.mimeType,
     size: observation?.file.size ?? input.context.state.file?.size,
     mtimeMs: observation?.file.mtimeMs ?? input.context.state.file?.mtimeMs,
-    annotationCount: observation?.annotations?.length,
-    capability: input.context.state.capability ?? undefined,
+    annotationCount: documentAnnotations?.annotationCount,
+    threadCount: documentAnnotations?.threadCount,
+    openThreadCount: documentAnnotations?.openThreadCount,
+    capability: compactCapability,
     metadata: {
       pluginId,
       modality,
@@ -251,9 +255,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         kind: strategy.kind,
         status: strategy.status
       })),
-      selectionKind,
-      semanticRevision: input.context.state.capability?.resource.semanticRevision,
-      operationIds: input.context.state.capability?.operations.map((operation) => operation.id) ?? []
+      selectionKind
     }
   }]
 
@@ -268,6 +270,13 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     summary,
     resources,
     state: {
+      currentPreview: compactCapability
+        ? {
+            resourceRef: compactCapability.resourceRef,
+            operationRefs: compactCapability.operations.map((operation) => operation.operationRef)
+          }
+        : null,
+      documentAnnotations: documentAnnotations ?? null,
       path,
       workspaceRoot: resolvedWorkspaceRoot,
       pluginId,
@@ -284,6 +293,22 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
       error: input.context.state.error ?? input.context.assetError,
       workspaceObservation: observation ?? null
     }
+  }
+}
+
+function compactVisibleContextCapability(
+  binding: WorkspacePreviewPanelShellContext['state']['capability']
+): {
+  resourceRef: string
+  operations: Array<{ operationRef: string; schemaRef: string }>
+} | undefined {
+  if (!binding?.resourceRef) return undefined
+  return {
+    resourceRef: binding.resourceRef,
+    operations: binding.operations.map((operation) => ({
+      operationRef: operation.id,
+      schemaRef: `sciforge://capability-schema/${encodeURIComponent(operation.id)}?version=${encodeURIComponent(operation.version)}`
+    }))
   }
 }
 

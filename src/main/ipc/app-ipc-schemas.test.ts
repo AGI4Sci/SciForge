@@ -1146,14 +1146,14 @@ describe('app-ipc-schemas', () => {
     ).toThrow(/Unrecognized key/)
   })
 
-  it('rejects legacy local runtime tool storm patches in favor of runtime guards', () => {
+  it('rejects legacy local runtime execution governance patches in favor of runtime guards', () => {
     expect(() =>
       settingsPatchSchema.parse({
         agents: {
           sciforge: {
             runtimeTuning: {
-              toolStorm: {
-                threshold: 4
+              execution: {
+                exactRepeatThreshold: 4
               }
             }
           }
@@ -1163,20 +1163,28 @@ describe('app-ipc-schemas', () => {
 
     expect(settingsPatchSchema.parse({
       runtimeGuards: {
-        toolStorm: {
-          threshold: 4
+        execution: {
+          exactRepeatThreshold: 4,
+          semanticFailureThreshold: 3
         }
       }
     }).runtimeGuards).toMatchObject({
-      toolStorm: {
-        threshold: 4
+      execution: {
+        exactRepeatThreshold: 4,
+        semanticFailureThreshold: 3
       }
     })
+
+    expect(() => settingsPatchSchema.parse({
+      runtimeGuards: {
+        execution: { threshold: 4 }
+      }
+    })).toThrow(/Unrecognized key/)
 
     expect(() =>
       settingsPatchSchema.parse({
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             softThreshold: 4,
             hardThreshold: 8
           },

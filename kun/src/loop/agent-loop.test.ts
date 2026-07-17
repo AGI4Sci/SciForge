@@ -155,7 +155,7 @@ function createToolLoopHarness() {
     prefix: { systemPrompt: '', fewShots: [] },
     ids: { next: vi.fn(() => 'item_error_1') },
     nowIso: () => '2026-07-03T00:00:00.000Z',
-    toolStorm: {
+    executionGovernance: {
       enabled: true,
       maxRecoverySteps: 1,
       nonProgressThreshold: 3,

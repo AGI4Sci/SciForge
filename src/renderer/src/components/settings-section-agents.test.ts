@@ -123,13 +123,13 @@ const labels: Record<string, string> = {
   localRuntimeCompactionSummaryTimeout: 'Summary timeout',
   localRuntimeCompactionSummaryMaxTokens: 'Summary max tokens',
   localRuntimeCompactionSummaryInputBytes: 'Summary input bytes',
-  runtimeGuardToolStorm: 'Runtime guard',
-  runtimeGuardToolStormDesc: 'Runtime guard description',
-  runtimeGuardToolStormLimits: 'Tool storm limits',
-  runtimeGuardToolStormLimitsDesc: 'Tool storm limits description',
-  runtimeGuardToolStormWindowSize: 'Tool storm window',
-  runtimeGuardToolStormSoftThreshold: 'Soft threshold',
-  runtimeGuardToolStormHardThreshold: 'Hard threshold',
+  runtimeGuardExecution: 'Runtime guard',
+  runtimeGuardExecutionDesc: 'Runtime guard description',
+  runtimeGuardExecutionLimits: 'Execution governance limits',
+  runtimeGuardExecutionLimitsDesc: 'Execution governance limits description',
+  runtimeGuardExecutionWindowSize: 'Execution governance window',
+  runtimeGuardExecutionExactRepeatThreshold: 'Exact-repeat threshold',
+  runtimeGuardExecutionSemanticFailureThreshold: 'Semantic-failure threshold',
   localRuntimeToolBudget: 'Adaptive tool budget',
   localRuntimeToolBudgetDesc: 'Adaptive tool budget description',
   localRuntimeToolBudgetProfiles: 'Task budget profiles',
@@ -649,12 +649,13 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).not.toContain('<details open')
   })
 
-  it('renders the supported tool storm threshold without a hard-threshold control', () => {
+  it('renders explicit exact-repeat and semantic-failure governance thresholds', () => {
     const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
 
-    expect(html).toContain('Tool storm window')
-    expect(html).toContain('Tool storm limits')
-    expect(html).not.toContain('Hard threshold')
+    expect(html).toContain('Execution governance window')
+    expect(html).toContain('Execution governance limits')
+    expect(html).toContain('Exact-repeat threshold')
+    expect(html).toContain('Semantic-failure threshold')
   })
 
   it('renders task budgets and the default 8/4 parallelism controls', () => {

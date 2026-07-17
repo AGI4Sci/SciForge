@@ -2051,7 +2051,9 @@ describe('CodexRuntimeService compatibility operations', () => {
       arguments: {}
     })).resolves.toEqual({
       success: true,
-      contentItems: [{ type: 'inputText', text: '[]' }]
+      contentItems: [{ type: 'inputText', text: '[]' }],
+      structuredContent: [],
+      evidenceDelta: true
     })
     expect(resolveCaller).toHaveBeenCalledWith({
       requestId: 'capability-request-1',
@@ -2067,6 +2069,75 @@ describe('CodexRuntimeService compatibility operations', () => {
       approvals: []
     }, {})
     expect(duplicateMcpCall).not.toHaveBeenCalled()
+  })
+
+  it('publishes structured dynamic MCP failures as governance receipts', async () => {
+    const client = controllableClient()
+    const sink = { send: vi.fn() }
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const mcpClient: CodexDynamicMcpClient = {
+      listTools: vi.fn(async () => ({
+        tools: [{
+          name: 'surface.inspect',
+          description: 'Inspect a surface resource.',
+          inputSchema: { type: 'object', properties: { resourceRef: { type: 'string' } } }
+        }]
+      })),
+      callTool: vi.fn(async () => ({
+        isError: true,
+        structuredContent: {
+          error: {
+            code: 'unknown_resource_ref',
+            failureClass: 'stale_resource',
+            retryable: true
+          },
+          resourceRef: 'res_surface_12345678901234567890'
+        }
+      })),
+      close: vi.fn(async () => undefined)
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink,
+      managedMcpServers: [{ id: 'surface', command: '/bin/surface-mcp' }],
+      mcpClientFactory: async () => mcpClient,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+    await service.startThread({ title: 'Governed surface' })
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'surface-request-1',
+      callId: 'surface-call-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'surface_inspect',
+      arguments: { resourceRef: 'res_surface_12345678901234567890' }
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'unknown_resource_ref',
+      failureClass: 'stale_resource',
+      retryable: true
+    })
+
+    const terminal = sink.send.mock.calls
+      .map((call) => call[1]?.event?.tool)
+      .find((tool) => tool?.meta?.callId === 'surface-call-1' && tool.status === 'error')
+    expect(terminal).toEqual(expect.objectContaining({
+      detail: expect.stringContaining('unknown_resource_ref'),
+      meta: expect.objectContaining({
+        arguments: { resourceRef: 'res_surface_12345678901234567890' },
+        errorCode: 'unknown_resource_ref',
+        failureClass: 'stale_resource',
+        retryable: true,
+        resourceIdentity: 'res_surface_12345678901234567890',
+        structuredContent: expect.objectContaining({
+          error: expect.objectContaining({ code: 'unknown_resource_ref' })
+        })
+      })
+    }))
   })
 
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
@@ -2509,115 +2580,6 @@ describe('CodexRuntimeService compatibility operations', () => {
     })).resolves.toMatchObject({ success: true })
     expect(service.pendingServerRequests()).toEqual([])
     await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta full access\ngamma\n')
-  })
-
-  it('does not inject a workspace root into visible-context or visual-capture dynamic MCP calls', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: '{"ok":true,"components":[]}' }]
-    }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [
-          {
-            name: 'gui_visible_context',
-            description: 'Inspect current visible GUI context.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                region: { type: 'string' },
-                componentId: { type: 'string' },
-                includeHidden: { type: 'boolean' }
-              },
-              additionalProperties: false
-            }
-          },
-          {
-            name: 'gui_visual_capture',
-            description: 'Capture one published visual target.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                scope: { type: 'string' },
-                componentId: { type: 'string' },
-                targetId: { type: 'string' }
-              },
-              additionalProperties: false
-            }
-          }
-        ]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/settings-workspace'
-      }),
-      sink: { send: vi.fn() },
-      storageRoot,
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({
-      title: 'Visible context thread',
-      workspace: '/tmp/awesome-ai-scientist'
-    })).resolves.toMatchObject({
-      ok: true
-    })
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'visible-context-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_visible_context',
-      arguments: { region: 'right-sidebar' }
-    })).resolves.toMatchObject({
-      contentItems: [{ type: 'inputText', text: '{"ok":true,"components":[]}' }],
-      success: true
-    })
-    expect(callTool).toHaveBeenCalledWith(
-      {
-        name: 'gui_visible_context',
-        arguments: {
-          region: 'right-sidebar'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'visual-capture-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_visual_capture',
-      arguments: {
-        scope: 'target',
-        componentId: 'right-sidebar.file-preview',
-        targetId: 'current-page'
-      }
-    })).resolves.toMatchObject({ success: true })
-    expect(callTool).toHaveBeenLastCalledWith(
-      {
-        name: 'gui_visual_capture',
-        arguments: {
-          scope: 'target',
-          componentId: 'right-sidebar.file-preview',
-          targetId: 'current-page'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
   })
 
   it('aborts active dynamic MCP worker requests when a Codex turn is interrupted', async () => {
@@ -3981,16 +3943,16 @@ describe('CodexRuntimeService compatibility operations', () => {
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      itemId: 'runtime-guard-tool-storm-turn-1',
+      itemId: 'runtime-guard-execution-governance-turn-1',
       recoverable: true,
       severity: 'error',
-      code: 'runtime_tool_storm_interrupted',
+      code: 'runtime_execution_interrupted',
       message: 'Runtime guard stopped this turn after repeated command_execution:shell/fetch tool activity.',
       detail: 'The runtime interrupted the turn to prevent a repeated tool-call loop.'
     })).resolves.toMatchObject({
       runtimeError: {
-        itemId: 'runtime-guard-tool-storm-turn-1',
-        code: 'runtime_tool_storm_interrupted',
+        itemId: 'runtime-guard-execution-governance-turn-1',
+        code: 'runtime_execution_interrupted',
         severity: 'error'
       }
     })

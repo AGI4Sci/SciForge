@@ -4,10 +4,11 @@
 
 Authoritative source: `src/main/capabilities/app-registry.ts`
 
-Registered actions: **18**
+Registered actions: **28**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
+| `artifact.inspect` | 2.0.0 | ui, agent, system | read | none | workspace |
 | `biology-room.apply` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
 | `biology-room.create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `biology-room.history` | 1.0.0 | ui, agent, system | read | none | resource |
@@ -16,16 +17,267 @@ Registered actions: **18**
 | `biology-room.open` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `biology-room.open-or-create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `biology-room.refresh` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
+| `surface.current` | 2.0.0 | ui, agent, system | read | none | global |
+| `surface.inspect` | 2.0.0 | ui, agent, system | read | none | resource |
+| `workspace-preview.annotations.delete` | 2.0.0 | ui, agent, system | workspace-write | none | resource |
+| `workspace-preview.annotations.import` | 2.0.0 | ui | workspace-write | none | resource |
+| `workspace-preview.annotations.list` | 2.0.0 | ui, agent, system | read | none | resource |
+| `workspace-preview.annotations.resolve` | 2.0.0 | ui, agent, system | workspace-write | none | resource |
+| `workspace-preview.annotations.review.generate` | 2.0.0 | ui | workspace-write | confirmation | resource |
+| `workspace-preview.annotations.review.improve` | 2.0.0 | ui | workspace-write | confirmation | resource |
+| `workspace-preview.annotations.update` | 2.0.0 | ui, agent, system | workspace-write | none | resource |
 | `workspace-preview.apply-edit` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
 | `workspace-preview.describe-asset` | 1.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.export` | 1.0.0 | ui, agent | external-write | confirmation | resource |
-| `workspace-preview.invoke-action` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
+| `workspace-preview.invoke-action` | 1.0.0 | ui | workspace-write | none | resource |
 | `workspace-preview.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `workspace-preview.open` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `workspace-preview.prepare-artifact` | 1.0.0 | ui, agent, system | compute | none | resource |
 | `workspace-preview.read-artifact-range` | 1.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.read-range` | 1.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.release` | 1.0.0 | ui, agent, system | compute | none | resource |
+
+## `artifact.inspect`
+
+Visually inspects workspace-confined PNG, JPEG, or WebP artifacts through the Model Router.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "artifacts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "path": {
+              "maxLength": 4096,
+              "minLength": 1,
+              "type": "string"
+            },
+            "regions": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "height": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "type": "number"
+                  },
+                  "id": {
+                    "maxLength": 128,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "label": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "width": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 1,
+                    "type": "number"
+                  },
+                  "x": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "y": {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "id",
+                  "x",
+                  "y",
+                  "width",
+                  "height"
+                ],
+                "type": "object"
+              },
+              "maxItems": 64,
+              "type": "array"
+            }
+          },
+          "required": [
+            "id",
+            "path"
+          ],
+          "type": "object"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "outputIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "instructions": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "description",
+              "ocr",
+              "comparison",
+              "quality-review",
+              "structured-extraction",
+              "custom"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "task": {
+        "maxLength": 16000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "truthLocks": {
+        "items": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 64,
+        "type": "array"
+      }
+    },
+    "required": [
+      "task",
+      "artifacts"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "artifacts": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "artifactRef": {
+              "pattern": "^artifact_[A-Za-z0-9_-]{20,}$",
+              "type": "string"
+            },
+            "id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "mimeType": {
+              "enum": [
+                "image/png",
+                "image/jpeg",
+                "image/webp"
+              ],
+              "type": "string"
+            },
+            "sha256": {
+              "pattern": "^[a-f0-9]{64}$",
+              "type": "string"
+            },
+            "size": {
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "id",
+            "artifactRef",
+            "mimeType",
+            "size",
+            "sha256"
+          ],
+          "type": "object"
+        },
+        "maxItems": 8,
+        "minItems": 1,
+        "type": "array"
+      },
+      "evidence": {
+        "$ref": "#/definitions/__schema0"
+      }
+    },
+    "required": [
+      "artifacts",
+      "evidence"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "artifact",
+    "visual",
+    "inspection"
+  ],
+  "title": "Inspect workspace image artifacts"
+}
+```
 
 ## `biology-room.apply`
 
@@ -713,6 +965,1070 @@ Refreshes source-backed assets in the current Biology Room through the canonical
     "refresh"
   ],
   "title": "Refresh Biology Room assets"
+}
+```
+
+## `surface.current`
+
+Returns an opaque resource for the currently visible SciForge surface.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "surface",
+    "visual",
+    "discovery"
+  ],
+  "title": "Open current SciForge surface"
+}
+```
+
+## `surface.inspect`
+
+Captures and visually inspects the latest visible surface or an opaque target reference.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "outputIntent": {
+        "additionalProperties": false,
+        "properties": {
+          "instructions": {
+            "maxLength": 8000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "description",
+              "ocr",
+              "comparison",
+              "quality-review",
+              "structured-extraction",
+              "custom"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "targetRef": {
+        "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+        "type": "string"
+      },
+      "task": {
+        "maxLength": 16000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "truthLocks": {
+        "items": {
+          "maxLength": 4000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 64,
+        "type": "array"
+      }
+    },
+    "required": [
+      "task"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "artifact": {
+        "additionalProperties": false,
+        "properties": {
+          "artifactRef": {
+            "pattern": "^artifact_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          },
+          "capturedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "height": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "mimeType": {
+            "const": "image/png",
+            "type": "string"
+          },
+          "targetRef": {
+            "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          },
+          "width": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "artifactRef",
+          "mimeType",
+          "capturedAt",
+          "width",
+          "height"
+        ],
+        "type": "object"
+      },
+      "evidence": {
+        "$ref": "#/definitions/__schema0"
+      }
+    },
+    "required": [
+      "artifact",
+      "evidence"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "surface"
+  ],
+  "tags": [
+    "surface",
+    "visual",
+    "inspection"
+  ],
+  "title": "Inspect visible SciForge surface"
+}
+```
+
+## `workspace-preview.annotations.delete`
+
+Deletes one annotation thread through the canonical document annotation provider.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "pruneOrphanAnchors": {
+        "default": true,
+        "type": "boolean"
+      },
+      "threadId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "pruneOrphanAnchors"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "edit"
+  ],
+  "title": "Delete an annotation thread"
+}
+```
+
+## `workspace-preview.annotations.import`
+
+Explicitly imports an annotation package into the canonical provider.
+
+- Version: `2.0.0`
+- Audiences: ui
+- Effect: `workspace-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "attemptRelocation": {
+        "type": "boolean"
+      },
+      "packageBase64": {
+        "maxLength": 160000000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "packagePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "migration"
+  ],
+  "title": "Import document annotations"
+}
+```
+
+## `workspace-preview.annotations.list`
+
+Returns annotations from the canonical provider for the open document.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation"
+  ],
+  "title": "List document annotations"
+}
+```
+
+## `workspace-preview.annotations.resolve`
+
+Changes thread resolution state through the canonical document annotation provider.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "resolved": {
+        "type": "boolean"
+      },
+      "threadId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId",
+      "resolved"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "edit"
+  ],
+  "title": "Resolve or reopen an annotation thread"
+}
+```
+
+## `workspace-preview.annotations.review.generate`
+
+Generates review annotations after the caller confirms the editable review prompt.
+
+- Version: `2.0.0`
+- Audiences: ui
+- Effect: `workspace-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "maxComments": {
+        "exclusiveMinimum": 0,
+        "maximum": 50,
+        "type": "integer"
+      },
+      "prompt": {
+        "maxLength": 20000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "replaceExisting": {
+        "type": "boolean"
+      },
+      "selection": {
+        "additionalProperties": false,
+        "properties": {
+          "pageEnd": {
+            "exclusiveMinimum": 0,
+            "maximum": 1000000,
+            "type": "integer"
+          },
+          "pageStart": {
+            "exclusiveMinimum": 0,
+            "maximum": 1000000,
+            "type": "integer"
+          },
+          "rects": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "height": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 1,
+                  "type": "number"
+                },
+                "page": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000,
+                  "type": "integer"
+                },
+                "width": {
+                  "exclusiveMinimum": 0,
+                  "maximum": 1,
+                  "type": "number"
+                },
+                "x": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "y": {
+                  "maximum": 1,
+                  "minimum": 0,
+                  "type": "number"
+                }
+              },
+              "required": [
+                "page",
+                "x",
+                "y",
+                "width",
+                "height"
+              ],
+              "type": "object"
+            },
+            "maxItems": 800,
+            "minItems": 1,
+            "type": "array"
+          },
+          "text": {
+            "maxLength": 80000,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "review"
+  ],
+  "title": "Generate document review annotations"
+}
+```
+
+## `workspace-preview.annotations.review.improve`
+
+Adds improvement guidance to an existing review annotation after confirmation.
+
+- Version: `2.0.0`
+- Audiences: ui
+- Effect: `workspace-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "annotationId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "userComment": {
+        "maxLength": 80000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "threadId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "review"
+  ],
+  "title": "Improve a review annotation"
+}
+```
+
+## `workspace-preview.annotations.update`
+
+Creates or updates an annotation through the canonical document annotation provider.
+
+- Version: `2.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "annotationId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "annotationKind": {
+        "enum": [
+          "highlight",
+          "comment",
+          "note",
+          "translation",
+          "question",
+          "answer"
+        ],
+        "type": "string"
+      },
+      "body": {
+        "maxLength": 80000,
+        "type": "string"
+      },
+      "target": {
+        "additionalProperties": false,
+        "properties": {
+          "anchor": {
+            "additionalProperties": false,
+            "properties": {
+              "contextAfter": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "contextBefore": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "id": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "text",
+                  "image",
+                  "visual"
+                ],
+                "type": "string"
+              },
+              "pageEnd": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
+              "pageStart": {
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "integer"
+              },
+              "quote": {
+                "maxLength": 80000,
+                "type": "string"
+              },
+              "rects": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "height": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": "number"
+                    },
+                    "page": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000,
+                      "type": "integer"
+                    },
+                    "width": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 1,
+                      "type": "number"
+                    },
+                    "x": {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "y": {
+                      "maximum": 1,
+                      "minimum": 0,
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "page",
+                    "x",
+                    "y",
+                    "width",
+                    "height"
+                  ],
+                  "type": "object"
+                },
+                "maxItems": 800,
+                "type": "array"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "type": "object"
+          },
+          "annotation": {
+            "additionalProperties": false,
+            "properties": {
+              "authorId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "color": {
+                "maxLength": 64,
+                "type": "string"
+              },
+              "sourceMessageId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sourceText": {
+                "maxLength": 80000,
+                "type": "string"
+              },
+              "targetLanguage": {
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "documentKind": {
+            "enum": [
+              "pdf",
+              "docx"
+            ],
+            "type": "string"
+          },
+          "thread": {
+            "additionalProperties": false,
+            "properties": {
+              "authorId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "kind": {
+                "enum": [
+                  "highlight",
+                  "comment",
+                  "note",
+                  "translation",
+                  "question",
+                  "answer"
+                ],
+                "type": "string"
+              },
+              "sourceMessageId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sourceQuoteId": {
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": [
+                  "open",
+                  "resolved"
+                ],
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 512,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "threadId": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "required": [
+      "annotationId",
+      "annotationKind",
+      "body"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "type": "null"
+      },
+      {
+        "type": "boolean"
+      },
+      {
+        "type": "number"
+      },
+      {
+        "type": "string"
+      },
+      {
+        "items": {
+          "$ref": "#"
+        },
+        "type": "array"
+      },
+      {
+        "additionalProperties": {
+          "$ref": "#"
+        },
+        "propertyNames": {
+          "type": "string"
+        },
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "workspace-preview"
+  ],
+  "tags": [
+    "workspace",
+    "preview",
+    "annotation",
+    "edit"
+  ],
+  "title": "Update a document annotation"
 }
 ```
 
@@ -1754,296 +3070,6 @@ Applies one schema-validated edit using the canonical Workspace Preview host.
           {
             "additionalProperties": false,
             "properties": {
-              "annotationId": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
-              },
-              "annotationKind": {
-                "enum": [
-                  "highlight",
-                  "comment",
-                  "note",
-                  "translation",
-                  "question",
-                  "answer"
-                ],
-                "type": "string"
-              },
-              "body": {
-                "maxLength": 80000,
-                "type": "string"
-              },
-              "kind": {
-                "const": "annotation.upsert",
-                "type": "string"
-              },
-              "path": {
-                "maxLength": 4096,
-                "minLength": 1,
-                "type": "string"
-              },
-              "target": {
-                "additionalProperties": false,
-                "properties": {
-                  "anchor": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "contextAfter": {
-                        "maxLength": 2000,
-                        "type": "string"
-                      },
-                      "contextBefore": {
-                        "maxLength": 2000,
-                        "type": "string"
-                      },
-                      "id": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "kind": {
-                        "enum": [
-                          "text",
-                          "image",
-                          "visual"
-                        ],
-                        "type": "string"
-                      },
-                      "pageEnd": {
-                        "exclusiveMinimum": 0,
-                        "maximum": 1000000,
-                        "type": "integer"
-                      },
-                      "pageStart": {
-                        "exclusiveMinimum": 0,
-                        "maximum": 1000000,
-                        "type": "integer"
-                      },
-                      "quote": {
-                        "maxLength": 80000,
-                        "type": "string"
-                      },
-                      "rects": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "height": {
-                              "exclusiveMinimum": 0,
-                              "maximum": 1,
-                              "type": "number"
-                            },
-                            "page": {
-                              "exclusiveMinimum": 0,
-                              "maximum": 1000000,
-                              "type": "integer"
-                            },
-                            "width": {
-                              "exclusiveMinimum": 0,
-                              "maximum": 1,
-                              "type": "number"
-                            },
-                            "x": {
-                              "maximum": 1,
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "y": {
-                              "maximum": 1,
-                              "minimum": 0,
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "page",
-                            "x",
-                            "y",
-                            "width",
-                            "height"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 800,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "id"
-                    ],
-                    "type": "object"
-                  },
-                  "annotation": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "authorId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "color": {
-                        "maxLength": 64,
-                        "type": "string"
-                      },
-                      "sourceMessageId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "sourceText": {
-                        "maxLength": 80000,
-                        "type": "string"
-                      },
-                      "targetLanguage": {
-                        "maxLength": 128,
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "documentKind": {
-                    "enum": [
-                      "pdf",
-                      "docx"
-                    ],
-                    "type": "string"
-                  },
-                  "thread": {
-                    "additionalProperties": false,
-                    "properties": {
-                      "authorId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "kind": {
-                        "enum": [
-                          "highlight",
-                          "comment",
-                          "note",
-                          "translation",
-                          "question",
-                          "answer"
-                        ],
-                        "type": "string"
-                      },
-                      "sourceMessageId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "sourceQuoteId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      },
-                      "status": {
-                        "enum": [
-                          "open",
-                          "resolved"
-                        ],
-                        "type": "string"
-                      },
-                      "title": {
-                        "maxLength": 512,
-                        "type": "string"
-                      }
-                    },
-                    "type": "object"
-                  },
-                  "threadId": {
-                    "maxLength": 256,
-                    "minLength": 1,
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              }
-            },
-            "required": [
-              "kind",
-              "path",
-              "annotationId",
-              "annotationKind",
-              "body"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "kind": {
-                "const": "annotation.thread.update",
-                "type": "string"
-              },
-              "patch": {
-                "additionalProperties": false,
-                "properties": {
-                  "status": {
-                    "enum": [
-                      "open",
-                      "resolved"
-                    ],
-                    "type": "string"
-                  },
-                  "title": {
-                    "maxLength": 512,
-                    "type": "string"
-                  }
-                },
-                "type": "object"
-              },
-              "path": {
-                "maxLength": 4096,
-                "minLength": 1,
-                "type": "string"
-              },
-              "threadId": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "path",
-              "threadId",
-              "patch"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
-              "kind": {
-                "const": "annotation.thread.delete",
-                "type": "string"
-              },
-              "path": {
-                "maxLength": 4096,
-                "minLength": 1,
-                "type": "string"
-              },
-              "pruneOrphanAnchors": {
-                "default": true,
-                "type": "boolean"
-              },
-              "threadId": {
-                "maxLength": 256,
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "path",
-              "threadId",
-              "pruneOrphanAnchors"
-            ],
-            "type": "object"
-          },
-          {
-            "additionalProperties": false,
-            "properties": {
               "kind": {
                 "const": "molecular.setSelection",
                 "type": "string"
@@ -2956,7 +3982,7 @@ Exports the current preview through the canonical provider.
 Invokes an action advertised by the current Workspace Preview observation.
 
 - Version: `1.0.0`
-- Audiences: ui, agent, system
+- Audiences: ui
 - Effect: `workspace-write`
 - Approval: none
 - Scope: resource
@@ -3699,5 +4725,7 @@ Releases an open Workspace Preview session.
 
 | Domain | Forbidden direct transport prefixes | Explicit UI-only transports |
 | --- | --- | --- |
+| Artifact Inspection |  |  |
 | Biology Room | biologyRoom: | biologyRoom:pick-file |
+| Surface Inspection |  |  |
 | Workspace Preview | workspacePreview: |  |

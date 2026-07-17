@@ -15,6 +15,15 @@ import {
 
 const labels: Record<string, string> = {
   projectDagPanelTitle: 'Project evidence',
+  dagRuntimeToggle: 'Toggle DAG background processing',
+  dagRuntimeToggleHelp: 'Shared DAG switch',
+  dagRuntimeEnabled: 'DAG on',
+  dagRuntimeDisabled: 'DAG off',
+  dagRuntimeSaving: 'Applying',
+  dagRuntimeLoading: 'Checking DAG status',
+  dagRuntimeLoadFailed: 'Could not read DAG settings',
+  dagRuntimePausedTitle: 'DAG background processing is paused',
+  dagRuntimePausedDescription: 'Turn it on to resume.',
   projectDagCurrentProject: 'Current project: molclaw',
   projectDagGlobalView: 'Current project',
   projectDagReviewSurface: 'Project evidence review',
@@ -38,6 +47,13 @@ const labels: Record<string, string> = {
   projectDagSessionListPlaceholder: 'codex:thread-id',
   rightPanelCollapse: 'Collapse right sidebar'
 }
+
+const enabledDagRuntime = {
+  enabled: true,
+  saving: false,
+  error: null,
+  setEnabled: vi.fn()
+} as const
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -99,7 +115,8 @@ describe('ProjectDagPanel', () => {
 
     const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
       workspaceRoot: '/tmp/molclaw',
-      onCollapse: vi.fn()
+      onCollapse: vi.fn(),
+      dagRuntimeControl: enabledDagRuntime
     }))
 
     expect(html).not.toContain('aria-pressed=')
@@ -114,10 +131,13 @@ describe('ProjectDagPanel', () => {
   it('renders a visible current-project update action', () => {
     const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
       workspaceRoot: '/tmp/molclaw',
-      onCollapse: vi.fn()
+      onCollapse: vi.fn(),
+      dagRuntimeControl: enabledDagRuntime
     }))
 
     expect(html).toContain('Project evidence')
+    expect(html).toContain('role="switch"')
+    expect(html).toContain('aria-label="Toggle DAG background processing"')
     expect(html).toContain('Update now')
     expect(html).toContain('aria-label="Queue an end-to-end update to the captured project scope"')
     expect(html).toContain('Autonomous')
@@ -125,6 +145,23 @@ describe('ProjectDagPanel', () => {
     expect(html).toContain('Session scope')
     expect(html).toContain('Excluded sessions')
     expect(html).toContain('Isolated sessions')
+  })
+
+  it('shows the shared runtime switch instead of a service error when DAG processing is paused', () => {
+    const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
+      workspaceRoot: '/tmp/molclaw',
+      onCollapse: vi.fn(),
+      dagRuntimeControl: {
+        enabled: false,
+        saving: false,
+        error: null,
+        setEnabled: vi.fn()
+      }
+    }))
+
+    expect(html).toContain('aria-checked="false"')
+    expect(html).toContain('DAG background processing is paused')
+    expect(html).not.toContain('Could not load project evidence')
   })
 
   it('normalizes editable session dispositions without project-specific rules', () => {

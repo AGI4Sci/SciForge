@@ -66,7 +66,11 @@ import {
   resolveAutoModelRoute,
   type AutoModelRouteSelection
 } from './auto-model-router.js'
-import { ToolStormBreaker, type ToolStormBreakerOptions } from './tool-storm-breaker.js'
+import {
+  ExecutionGovernorCore,
+  type ExecutionGovernorContext,
+  type ExecutionGovernorOptions
+} from '@sciforge/execution-governance'
 import { healLoadedHistoryItems } from './history-healing.js'
 import { repairDispatchToolArguments } from './tool-call-repair.js'
 import { CREATE_PLAN_TOOL_NAME } from '../adapters/tool/create-plan-tool.js'
@@ -97,6 +101,40 @@ const DEFAULT_COMPACTION_SUMMARY_INPUT_MAX_BYTES = 96 * 1024
 
 function truncateForEvent(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+function governanceMessage(reason: string | undefined, guidance: string | undefined): string {
+  return [reason, guidance].filter((value): value is string => Boolean(value?.trim())).join(' ')
+}
+
+function metadataAdvertisesCapability(
+  metadata: Record<string, unknown> | undefined,
+  capabilityId: string
+): boolean {
+  if (!metadata) return false
+  return Object.values(metadata).some((value) => {
+    if (value === capabilityId) return true
+    if (Array.isArray(value)) return value.some((entry) => entry === capabilityId)
+    return false
+  })
+}
+
+function executionGovernor(options: ExecutionGovernanceOptions): ExecutionGovernorCore {
+  const {
+    enabled: _enabled,
+    exactRepeatThreshold,
+    semanticFailureThreshold,
+    maxRecoverySteps: _maxRecoverySteps,
+    nonProgressThreshold: _nonProgressThreshold,
+    maxStepsAfterRecovery: _maxStepsAfterRecovery,
+    maxToolCallsPerTurn: _maxToolCallsPerTurn,
+    ...coreOptions
+  } = options
+  return new ExecutionGovernorCore({
+    ...coreOptions,
+    ...(exactRepeatThreshold === undefined ? {} : { threshold: exactRepeatThreshold }),
+    ...(semanticFailureThreshold === undefined ? {} : { semanticFailureThreshold })
+  })
 }
 
 function isRecoverableModelStreamError(error: ModelStreamErrorInfo | undefined): boolean {
@@ -568,6 +606,19 @@ function mergeAllowedToolNames(
   return skillAllowedToolNames.filter((toolName) => turnAllowed.has(toolName))
 }
 
+export type ExecutionGovernanceOptions = Omit<
+  ExecutionGovernorOptions,
+  'threshold' | 'semanticFailureThreshold'
+> & {
+  enabled?: boolean
+  exactRepeatThreshold?: number
+  semanticFailureThreshold?: number
+  maxRecoverySteps?: number
+  nonProgressThreshold?: number
+  maxStepsAfterRecovery?: number
+  maxToolCallsPerTurn?: number
+}
+
 export type AgentLoopOptions = {
   threadStore: ThreadStore
   sessionStore: SessionStore
@@ -592,13 +643,7 @@ export type AgentLoopOptions = {
   tokenEconomy?: TokenEconomyConfig
   contextCompaction?: ContextCompactionConfig
   maxTurnModelSteps?: number
-  toolStorm?: ToolStormBreakerOptions & {
-    enabled?: boolean
-    maxRecoverySteps?: number
-    nonProgressThreshold?: number
-    maxStepsAfterRecovery?: number
-    maxToolCallsPerTurn?: number
-  }
+  executionGovernance?: ExecutionGovernanceOptions
   toolBudget?: ToolBudgetConfig
   toolBudgetProfile?: ToolBudgetProfileName
   parallelism?: {
@@ -646,7 +691,7 @@ export class AgentLoop {
   private readonly opts: AgentLoopOptions
   private readonly autoModelRoutes = new Map<string, AutoModelRouteSelection>()
   private readonly promptTokenPressure = new Map<string, { model: string; promptTokens: number }>()
-  private readonly toolStormBreakers = new Map<string, ToolStormBreaker>()
+  private readonly executionGovernors = new Map<string, ExecutionGovernorCore>()
   private readonly toolLoopHealthByTurn = new Map<string, ToolLoopHealth>()
   private readonly toolCatalogSnapshots = new Map<string, ToolCatalogSnapshot>()
   private readonly lastNoToolTextByTurn = new Map<string, string>()
@@ -677,8 +722,8 @@ export class AgentLoop {
     try {
       goalTimer = await this.startGoalElapsedTimer(threadId)
       await this.recordPipelineStage(threadId, turnId, 'setup')
-      if (this.opts.toolStorm?.enabled !== false) {
-        this.toolStormBreakers.set(turnId, new ToolStormBreaker(this.opts.toolStorm))
+      if (this.opts.executionGovernance?.enabled !== false) {
+        this.executionGovernors.set(turnId, executionGovernor(this.opts.executionGovernance ?? {}))
       }
       await this.recordPipelineStage(threadId, turnId, 'pre_start')
       await this.drainSteering(threadId, turnId, signal)
@@ -712,7 +757,7 @@ export class AgentLoop {
     } finally {
       await this.finishGoalElapsedTimer(threadId, goalTimer)
       this.autoModelRoutes.delete(autoModelRouteKey(threadId, turnId))
-      this.toolStormBreakers.delete(turnId)
+      this.executionGovernors.delete(turnId)
       this.toolLoopHealthByTurn.delete(turnId)
       this.lastNoToolTextByTurn.delete(turnId)
       this.goalNoToolRecoveryStepsByTurn.delete(turnId)
@@ -1697,16 +1742,18 @@ export class AgentLoop {
         continue
       }
 
-      const storm = this.toolStormBreakers.get(input.turnId)?.inspect(call, {
-        workspace: input.workspace
-      })
-      if (storm?.suppress) {
+      const governorContext = this.executionGovernorContext(input)
+      const governance = this.executionGovernors.get(input.turnId)?.inspectAttempt(
+        this.executionAttempt(call, input.toolProviderMetadata),
+        governorContext
+      )
+      if (governance && governance.action !== 'allow') {
         suppressedCount += 1
         await this.persistSuppressedToolCall({
           threadId: input.threadId,
           turnId: input.turnId,
           call,
-          reason: storm.reason
+          reason: governanceMessage(governance.reason, governance.guidance)
         })
         index += 1
         continue
@@ -1725,14 +1772,7 @@ export class AgentLoop {
           context
         })
         executedCount += 1
-        const evidence = this.toolStormBreakers.get(input.turnId)?.recordResult(
-          call,
-          result.item.kind === 'tool_result' ? result.item.output : { error: 'non-tool-result' },
-          {
-            workspace: input.workspace,
-            isError: result.item.kind !== 'tool_result' || result.item.isError === true
-          }
-        )
+        const evidence = this.recordExecutionReceipt(input.turnId, call, result, governorContext)
         if (isSuccessfulToolResult(result)) {
           if (evidence?.evidenceGained !== false) successCount += 1
         } else {
@@ -1766,12 +1806,16 @@ export class AgentLoop {
           break
         }
 
-        const nextStorm = this.toolStormBreakers.get(input.turnId)?.inspect(next, {
-          workspace: input.workspace
-        })
-        if (nextStorm?.suppress) {
+        const nextGovernance = this.executionGovernors.get(input.turnId)?.inspectAttempt(
+          this.executionAttempt(next, input.toolProviderMetadata),
+          governorContext
+        )
+        if (nextGovernance && nextGovernance.action !== 'allow') {
           suppressedCount += 1
-          suppressedAfterBatch = { call: next, reason: nextStorm.reason }
+          suppressedAfterBatch = {
+            call: next,
+            reason: governanceMessage(nextGovernance.reason, nextGovernance.guidance)
+          }
           index += 1
           break
         }
@@ -1796,16 +1840,11 @@ export class AgentLoop {
         if (!result || !batchCall) continue
         if (result.status === 'rejected') throw result.reason
         executedCount += 1
-        const evidence = this.toolStormBreakers.get(input.turnId)?.recordResult(
+        const evidence = this.recordExecutionReceipt(
+          input.turnId,
           batchCall,
-          result.value.item.kind === 'tool_result'
-            ? result.value.item.output
-            : { error: 'non-tool-result' },
-          {
-            workspace: input.workspace,
-            isError:
-              result.value.item.kind !== 'tool_result' || result.value.item.isError === true
-          }
+          result.value,
+          governorContext
         )
         if (isSuccessfulToolResult(result.value)) {
           if (evidence?.evidenceGained !== false) successCount += 1
@@ -1828,6 +1867,54 @@ export class AgentLoop {
     return executedCount > 0
       ? { kind: 'continue', executedCount, successCount, errorCount, suppressedCount }
       : { kind: 'all_suppressed', suppressedCount }
+  }
+
+  private executionGovernorContext(input: {
+    workspace: string
+    toolProviderMetadata: ReadonlyMap<string, {
+      metadata?: Record<string, unknown>
+    }>
+  }): ExecutionGovernorContext {
+    return {
+      workspace: input.workspace,
+      ownedSurfaceInspectionAvailable: [...input.toolProviderMetadata.values()].some(
+        (provider) => metadataAdvertisesCapability(provider.metadata, 'surface.inspect')
+      )
+    }
+  }
+
+  private executionAttempt(
+    call: ToolCallLike,
+    toolProviderMetadata: ReadonlyMap<string, {
+      providerKind?: ToolProviderKind
+      metadata?: Record<string, unknown>
+    }>
+  ) {
+    const provider = toolProviderMetadata.get(call.toolName)
+    return {
+      ...call,
+      metadata: {
+        ...(provider?.metadata ?? {}),
+        ...(provider?.providerKind ? { providerKind: provider.providerKind } : {})
+      }
+    }
+  }
+
+  private recordExecutionReceipt(
+    turnId: string,
+    call: ToolCallLike,
+    result: ToolHostResult,
+    context: ExecutionGovernorContext
+  ) {
+    const isError = result.item.kind !== 'tool_result' || result.item.isError === true
+    const output = result.item.kind === 'tool_result'
+      ? result.item.output
+      : { error: 'non-tool-result' }
+    return this.executionGovernors.get(turnId)?.recordReceipt(call.callId, {
+      status: isError ? 'error' : 'success',
+      output,
+      detail: typeof output === 'string' ? output : JSON.stringify(output)
+    }, context)
   }
 
   private remainingToolCallBudget(turnId: string): number | undefined {
@@ -1859,7 +1946,7 @@ export class AgentLoop {
     signal: AbortSignal
   }): Promise<'continue' | 'failed' | 'aborted'> {
     if (input.signal.aborted || input.outcome.kind === 'aborted') return 'aborted'
-    const stormRecoveryEnabled = this.opts.toolStorm?.enabled !== false
+    const executionRecoveryEnabled = this.opts.executionGovernance?.enabled !== false
     const health = this.toolLoopHealth(input.turnId)
     const limits = this.toolLoopLimits()
     const callsThisStep = input.outcome.kind === 'continue'
@@ -1923,7 +2010,7 @@ export class AgentLoop {
       }
     }
 
-    if (!stormRecoveryEnabled) return 'continue'
+    if (!executionRecoveryEnabled) return 'continue'
 
     if (health.recoveryIssuedAtStep === undefined) {
       if (
@@ -2005,18 +2092,18 @@ export class AgentLoop {
     maxStepsAfterRecovery: number
     maxToolCallsPerTurn?: number
   } {
-    const maxToolCallsPerTurn = positiveIntegerOrUndefined(this.opts.toolStorm?.maxToolCallsPerTurn)
+    const maxToolCallsPerTurn = positiveIntegerOrUndefined(this.opts.executionGovernance?.maxToolCallsPerTurn)
     return {
       maxRecoverySteps: positiveIntegerOrDefault(
-        this.opts.toolStorm?.maxRecoverySteps,
+        this.opts.executionGovernance?.maxRecoverySteps,
         DEFAULT_TOOL_LOOP_MAX_RECOVERY_STEPS
       ),
       nonProgressThreshold: positiveIntegerOrDefault(
-        this.opts.toolStorm?.nonProgressThreshold,
+        this.opts.executionGovernance?.nonProgressThreshold,
         DEFAULT_TOOL_LOOP_NON_PROGRESS_THRESHOLD
       ),
       maxStepsAfterRecovery: positiveIntegerOrDefault(
-        this.opts.toolStorm?.maxStepsAfterRecovery,
+        this.opts.executionGovernance?.maxStepsAfterRecovery,
         DEFAULT_TOOL_LOOP_MAX_STEPS_AFTER_RECOVERY
       ),
       ...(maxToolCallsPerTurn !== undefined ? { maxToolCallsPerTurn } : {})
@@ -2533,7 +2620,7 @@ export class AgentLoop {
     } as Partial<TurnItem>)
     await this.opts.turns.applyItem(input.threadId, item)
     await this.opts.events.record({
-      kind: 'tool_storm_suppressed',
+      kind: 'execution_suppressed',
       threadId: input.threadId,
       turnId: input.turnId,
       itemId: item.id,

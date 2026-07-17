@@ -1,5 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
+import { readFile, rm, stat } from 'node:fs/promises'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
@@ -10,6 +11,20 @@ import type {
 } from '../../contracts/capabilities.js'
 import { redactSecretText } from '../../config/secret-redaction.js'
 import type { ToolHostContext } from '../../ports/tool-host.js'
+import {
+  CAPABILITY_RUNTIME_BRIDGE_MAX_FILE_BYTES,
+  CAPABILITY_RUNTIME_BRIDGE_SERVER_ID,
+  CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES,
+  CAPABILITY_RUNTIME_BRIDGE_VERSION,
+  CapabilityRuntimeBridgeProtocolError,
+  atomicWriteCapabilityRuntimeBridgeJson,
+  capabilityRuntimeBridgePaths,
+  capabilityRuntimeBridgeRequestPath,
+  capabilityRuntimeBridgeResponsePath,
+  parseCapabilityRuntimeBridgeCatalog,
+  parseCapabilityRuntimeBridgeResponse,
+  signCapabilityRuntimeBridgeRequest
+} from '../../contracts/capability-runtime-bridge.js'
 import type { CapabilityToolProvider } from './capability-registry.js'
 import { LocalToolHost, type LocalTool } from './local-tool-host.js'
 import {
@@ -121,6 +136,12 @@ export type McpClientLike = {
     input: { name: string; arguments: Record<string, unknown> },
     options?: { signal?: AbortSignal; timeout?: number }
   ): Promise<unknown>
+  /** Private adapter channel. Context is not part of the advertised tool schema. */
+  callToolWithContext?(
+    input: { name: string; arguments: Record<string, unknown> },
+    context: ToolHostContext,
+    options?: { signal?: AbortSignal; timeout?: number }
+  ): Promise<unknown>
   close(): Promise<void>
 }
 
@@ -221,7 +242,9 @@ export async function buildMcpToolProviders(
       }
       connected.push(state)
       const listed = await refreshMcpConnectionCatalog(state)
-      catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
+      if (serverId !== CAPABILITY_RUNTIME_BRIDGE_SERVER_ID) {
+        catalogState.records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
+      }
       const tools = listed.flatMap((tool) => createMcpLocalTools(state, tool, directToolNames))
       const alwaysAdvertisedTools = tools.filter(isAlwaysAdvertisedMcpTool)
       directProviders.push({
@@ -262,7 +285,9 @@ export async function buildMcpToolProviders(
           const previousFingerprint = catalogState.catalogFingerprint
           for (const state of connected) {
             const listed = await refreshMcpConnectionCatalog(state)
-            records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
+            if (state.serverId !== CAPABILITY_RUNTIME_BRIDGE_SERVER_ID) {
+              records.push(...listed.map((tool) => createMcpSearchCatalogRecord(state, tool)))
+            }
           }
           catalogState.records = records
           catalogState.lastError = undefined
@@ -313,6 +338,7 @@ export function isMcpServerTrusted(server: McpServerConfig, workspace: string): 
 }
 
 async function createSdkMcpClient(serverId: string, server: McpServerConfig): Promise<McpClientLike> {
+  if (server.transport === 'file-bridge') return createCapabilityRuntimeBridgeClient(server)
   const client = new Client({ name: `sciforge-runtime-${serverId}`, version: '0.1.0' })
   const transport = createTransport(server)
   await client.connect(transport, { timeout: server.timeoutMs })
@@ -347,6 +373,8 @@ function createTransport(server: McpServerConfig): Transport {
         requestInit: { headers: server.headers },
         eventSourceInit: { fetch: fetchWithHeaders(server.headers) }
       })
+    case 'file-bridge':
+      throw new Error('file-bridge uses the in-process capability bridge client')
   }
 }
 
@@ -416,6 +444,12 @@ function createMcpLocalTools(
   descriptor: McpToolDescriptor,
   usedNames: Set<string>
 ): LocalTool[] {
+  if (state.serverId === CAPABILITY_RUNTIME_BRIDGE_SERVER_ID) {
+    if (!(CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES as readonly string[]).includes(descriptor.name)) return []
+    if (usedNames.has(descriptor.name)) return []
+    usedNames.add(descriptor.name)
+    return [createMcpLocalTool(state, descriptor, descriptor.name)]
+  }
   const canonicalName = normalizeMcpToolName(state.serverId, descriptor.name)
   const tools = [createMcpLocalTool(state, descriptor, canonicalName)]
   usedNames.add(canonicalName)
@@ -439,8 +473,13 @@ function createMcpLocalTool(
     name: toolName,
     description: descriptor.description ?? `MCP tool ${descriptor.name} from ${state.serverId}`,
     inputSchema: descriptor.inputSchema ?? { type: 'object' },
-    policy: policyFromAnnotations(descriptor.annotations),
+    policy: state.serverId === CAPABILITY_RUNTIME_BRIDGE_SERVER_ID
+      ? 'auto'
+      : policyFromAnnotations(descriptor.annotations),
     metadata: {
+      ...(capabilityIdsFromDescriptor(descriptor).length > 0
+        ? { capabilityIds: capabilityIdsFromDescriptor(descriptor) }
+        : {}),
       mcp: {
         serverId: state.serverId,
         toolName: descriptor.name,
@@ -471,7 +510,9 @@ function createMcpLocalTool(
         result = await callMcpToolWithReconnect(
           state,
           { name: descriptor.name, arguments: callArguments },
-          context.abortSignal
+          context.abortSignal,
+          undefined,
+          context
         )
       } catch (error) {
         const validation = mcpInputValidationFailure(error)
@@ -510,7 +551,8 @@ function computerUseFlatToolAliasName(
 }
 
 function isAlwaysAdvertisedMcpTool(tool: LocalTool): boolean {
-  return tool.name === GUI_COMPUTER_USE_TOOL_NAME
+  return tool.name === GUI_COMPUTER_USE_TOOL_NAME ||
+    (CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES as readonly string[]).includes(tool.name)
 }
 
 async function listAllMcpTools(client: McpClientLike, timeout: number): Promise<McpToolDescriptor[]> {
@@ -601,17 +643,155 @@ async function callMcpToolWithReconnect(
   state: McpConnectionState,
   input: { name: string; arguments: Record<string, unknown> },
   signal: AbortSignal | undefined,
-  timeout = state.server.timeoutMs
+  timeout = state.server.timeoutMs,
+  context?: ToolHostContext
 ): Promise<unknown> {
   try {
-    return await state.client.callTool(input, { signal, timeout })
+    return await callMcpClient(state.client, input, { signal, timeout }, context)
   } catch (error) {
     state.lastError = redactSecretText(errorMessage(error))
     if (signal?.aborted) throw error
     if (!isTransientMcpConnectionError(error)) throw error
     const client = await reconnectMcpConnection(state)
-    return client.callTool(input, { signal, timeout })
+    return callMcpClient(client, input, { signal, timeout }, context)
   }
+}
+
+function callMcpClient(
+  client: McpClientLike,
+  input: { name: string; arguments: Record<string, unknown> },
+  options: { signal?: AbortSignal; timeout?: number },
+  context?: ToolHostContext
+): Promise<unknown> {
+  if (context && client.callToolWithContext) return client.callToolWithContext(input, context, options)
+  return client.callTool(input, options)
+}
+
+function capabilityIdsFromDescriptor(descriptor: McpToolDescriptor): string[] {
+  const value = descriptor._meta?.capabilityIds
+  return Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : []
+}
+
+function createCapabilityRuntimeBridgeClient(server: McpServerConfig): McpClientLike {
+  const rootDir = server.rootDir ?? ''
+  const authSecret = server.authSecret ?? ''
+  return {
+    listTools: async () => {
+      const path = capabilityRuntimeBridgePaths(rootDir).catalog
+      const raw = await readBoundedBridgeJson(path)
+      const catalog = parseCapabilityRuntimeBridgeCatalog(raw, authSecret)
+      return {
+        tools: catalog.tools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+          annotations: tool.name === 'sciforge_invoke'
+            ? { readOnlyHint: false }
+            : { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+          _meta: { capabilityIds: [...catalog.capabilityIds] }
+        }))
+      }
+    },
+    callTool: async () => ({
+      isError: true,
+      structuredContent: {
+        error: {
+          code: 'missing_bridge_context',
+          message: 'Capability bridge calls require ToolHostContext.',
+          retryable: false
+        }
+      }
+    }),
+    callToolWithContext: async (input, context, options) => {
+      const requestId = randomBytes(18).toString('base64url')
+      const requestPath = capabilityRuntimeBridgeRequestPath(rootDir, requestId)
+      const responsePath = capabilityRuntimeBridgeResponsePath(rootDir, requestId)
+      const request = signCapabilityRuntimeBridgeRequest(authSecret, {
+        version: CAPABILITY_RUNTIME_BRIDGE_VERSION,
+        requestId,
+        createdAt: new Date().toISOString(),
+        nonce: randomBytes(18).toString('base64url'),
+        tool: input.name as typeof CAPABILITY_RUNTIME_BRIDGE_TOOL_NAMES[number],
+        arguments: input.arguments,
+        context: {
+          requestId,
+          threadId: context.threadId,
+          turnId: context.turnId,
+          workspaceId: context.workspace
+        }
+      })
+      await rm(responsePath, { force: true }).catch(() => undefined)
+      await atomicWriteCapabilityRuntimeBridgeJson(requestPath, request)
+      try {
+        const response = await waitForCapabilityRuntimeBridgeResponse({
+          path: responsePath,
+          requestId,
+          authSecret,
+          timeoutMs: options?.timeout ?? server.timeoutMs,
+          signal: options?.signal
+        })
+        if (response.result.ok) {
+          return {
+            content: [{ type: 'text', text: JSON.stringify(response.result.value) }],
+            structuredContent: response.result.value
+          }
+        }
+        return {
+          isError: true,
+          content: [{ type: 'text', text: response.result.error.message }],
+          structuredContent: { error: response.result.error }
+        }
+      } finally {
+        await Promise.all([
+          rm(requestPath, { force: true }).catch(() => undefined),
+          rm(responsePath, { force: true }).catch(() => undefined)
+        ])
+      }
+    },
+    close: async () => undefined
+  }
+}
+
+async function waitForCapabilityRuntimeBridgeResponse(input: {
+  path: string
+  requestId: string
+  authSecret: string
+  timeoutMs: number
+  signal?: AbortSignal
+}) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < input.timeoutMs) {
+    if (input.signal?.aborted) throw input.signal.reason ?? new Error('Capability bridge call aborted.')
+    try {
+      const raw = await readBoundedBridgeJson(input.path)
+      return parseCapabilityRuntimeBridgeResponse(raw, input.authSecret, input.requestId)
+    } catch (error) {
+      if (!(error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === 'ENOENT')) throw error
+    }
+    await delay(20, input.signal)
+  }
+  throw new CapabilityRuntimeBridgeProtocolError('bridge_timeout', 'Capability bridge call timed out.')
+}
+
+async function readBoundedBridgeJson(path: string): Promise<unknown> {
+  const details = await stat(path)
+  if (details.size > CAPABILITY_RUNTIME_BRIDGE_MAX_FILE_BYTES) {
+    throw new CapabilityRuntimeBridgeProtocolError('bridge_file_too_large', 'Capability bridge file exceeds the size limit.')
+  }
+  return JSON.parse(await readFile(path, 'utf8')) as unknown
+}
+
+async function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, milliseconds)
+    timer.unref?.()
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timer)
+      reject(signal.reason ?? new Error('Capability bridge call aborted.'))
+    }, { once: true })
+  })
 }
 
 function isTransientMcpConnectionError(error: unknown): boolean {

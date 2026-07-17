@@ -533,7 +533,7 @@ function affirmativeExecutionClaim(text: string): ExecutionEffectClass | 'any' |
     /(?:我|我们|已|已经)(?:成功)?(?:执行|运行|调用|修改|编辑|删除|发送|提交|安装|渲染|部署|发布|修复|实现)(?!不了|失败|尚未|未)/u,
     /(?:我|我们|已|已经)(?:成功)?使用.{0,16}(?:工具|命令|接口|API)/iu,
     /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?(?:ran|executed|called|invoked|edited|modified|deleted|removed|sent|submitted|installed|opened|clicked|downloaded|uploaded|rendered|deployed|published|implemented|fixed)\b/iu,
-    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?used\s+(?:the\s+)?(?:tool|command|api|view_image|gui_visual_capture)\b/iu
+    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?used\s+(?:the\s+)?(?:tool|command|api|view_image|sciforge_invoke)\b/iu
   ].some((pattern) => pattern.test(text))
   if (!affirmative) return null
   if (

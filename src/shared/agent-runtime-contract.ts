@@ -131,7 +131,7 @@ export type AgentRuntimeControlSupport =
 
 export type AgentRuntimeCompactSupport = 'unsupported' | 'native' | 'noop'
 
-export type AgentRuntimeToolStormGuardSupport = 'native' | 'observe' | 'unsupported'
+export type AgentRuntimeExecutionGuardSupport = 'native' | 'observe' | 'unsupported'
 
 export type AgentRuntimeModality = 'text' | 'image'
 
@@ -1289,7 +1289,7 @@ export type AgentRuntimeCapabilities = {
     resumeSession: boolean
   }
   guard: {
-    toolStorm: AgentRuntimeToolStormGuardSupport
+    execution: AgentRuntimeExecutionGuardSupport
   }
   storage: {
     guiOwnedThreads: boolean
@@ -1414,7 +1414,7 @@ export function createDefaultAgentRuntimeCapabilities(input: {
       resumeSession: false
     },
     guard: {
-      toolStorm: 'unsupported'
+      execution: 'unsupported'
     },
     storage: {
       guiOwnedThreads: false,

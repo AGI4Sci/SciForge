@@ -11,6 +11,7 @@ export type CommentLauncherSize = {
 }
 
 export const COMMENT_LAUNCHER_POSITION_STORAGE_KEY = 'sciforge:comment-launcher-position:v1'
+export const COMMENT_LAUNCHER_DRAG_THRESHOLD = 6
 
 const DEFAULT_VIEWPORT_MARGIN = 12
 
@@ -22,6 +23,14 @@ function isFinitePoint(value: unknown): value is CommentLauncherPoint {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(Math.max(value, minimum), maximum)
+}
+
+export function exceedsCommentLauncherDragThreshold(
+  start: CommentLauncherPoint,
+  current: CommentLauncherPoint,
+  threshold = COMMENT_LAUNCHER_DRAG_THRESHOLD
+): boolean {
+  return Math.hypot(current.x - start.x, current.y - start.y) >= threshold
 }
 
 export function clampCommentLauncherPosition(

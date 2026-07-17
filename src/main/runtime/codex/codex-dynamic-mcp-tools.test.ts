@@ -691,6 +691,25 @@ describe('Codex dynamic MCP tool bridge', () => {
       success: false
     })
   })
+
+  it('preserves structured MCP failure receipts for execution governance', () => {
+    expect(dynamicToolResponseFromMcpResult({
+      structuredContent: {
+        error: {
+          code: 'unknown_resource_ref',
+          failureClass: 'stale_resource',
+          retryable: true
+        },
+        resourceRef: 'res_surface_12345678901234567890'
+      }
+    })).toMatchObject({
+      success: false,
+      errorCode: 'unknown_resource_ref',
+      failureClass: 'stale_resource',
+      retryable: true,
+      resourceIdentity: 'res_surface_12345678901234567890'
+    })
+  })
 })
 
 function fakeMcpClient(options: {

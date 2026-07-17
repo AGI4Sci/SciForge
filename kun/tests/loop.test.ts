@@ -545,7 +545,7 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: buildDefaultLocalTools(), toolStorm: { enabled: false } }
+      { tools: buildDefaultLocalTools(), executionGovernance: { enabled: false } }
     )
     await bootstrapThread(h)
 
@@ -555,6 +555,61 @@ describe('AgentLoop', () => {
     expect(status).toBe('completed')
     expect(calls).toBe(10)
     expect(items.some((item) => item.kind === 'assistant_text' && item.text === 'done')).toBe(true)
+  })
+
+  it('denies shell GUI fallback when tool metadata advertises surface.inspect', async () => {
+    let executions = 0
+    const shellTool = LocalToolHost.defineTool({
+      name: 'exec_command',
+      description: 'Execute a shell command.',
+      inputSchema: {
+        type: 'object',
+        properties: { command: { type: 'string' } },
+        required: ['command']
+      },
+      toolKind: 'command_execution',
+      metadata: { capabilities: ['surface.inspect'] },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        return { output: { ok: true } }
+      }
+    })
+    let requests = 0
+    const h = makeHarness({
+      provider: 'governed-shell',
+      model: 'governed-shell',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        requests += 1
+        if (requests === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_shell_gui_fallback',
+            toolName: 'exec_command',
+            arguments: { command: 'screencapture -x /tmp/sciforge.png' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Using the owned capability broker instead.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { tools: [shellTool] })
+    await bootstrapThread(h)
+
+    const status = await h.loop.runTurn(h.threadId, h.turnId)
+    const items = await h.sessionStore.loadItems(h.threadId)
+
+    expect(status).toBe('completed')
+    expect(executions).toBe(0)
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'tool_result',
+      callId: 'call_shell_gui_fallback',
+      isError: true,
+      output: expect.objectContaining({
+        error: expect.stringMatching(/Shell-based OS screenshots.*sciforge_discover/u)
+      })
+    }))
   })
 
   it('replaces live partial tool results with final tool results in the thread snapshot', async () => {
@@ -1023,9 +1078,9 @@ describe('AgentLoop', () => {
     expect(thirdCall).toMatchObject({ kind: 'tool_call', status: 'failed' })
     expect(stormResult?.kind === 'tool_result' ? stormResult.isError : false).toBe(true)
     expect(stormResult?.kind === 'tool_result' ? JSON.stringify(stormResult.output) : '')
-      .toContain('repeat-loop guard suppressed')
-    expect(events.find((event) => event.kind === 'tool_storm_suppressed')).toMatchObject({
-      kind: 'tool_storm_suppressed',
+      .toContain('repeated identical arguments 3 times')
+    expect(events.find((event) => event.kind === 'execution_suppressed')).toMatchObject({
+      kind: 'execution_suppressed',
       callId: 'call_echo_3',
       toolName: 'echo'
     })
@@ -1067,7 +1122,7 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: [echoTool], toolStorm: { enabled: false } }
+      { tools: [echoTool], executionGovernance: { enabled: false } }
     )
     await bootstrapThread(h)
 
@@ -1076,7 +1131,7 @@ describe('AgentLoop', () => {
 
     expect(status).toBe('completed')
     expect(executions).toBe(3)
-    expect(events.some((event) => event.kind === 'tool_storm_suppressed')).toBe(false)
+    expect(events.some((event) => event.kind === 'execution_suppressed')).toBe(false)
   })
 
   it('stops advertising tools after the configured tool budget is exhausted', async () => {
@@ -1118,7 +1173,7 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: [echoTool], toolStorm: { maxToolCallsPerTurn: 1 } }
+      { tools: [echoTool], executionGovernance: { maxToolCallsPerTurn: 1 } }
     )
     await bootstrapThread(h)
 
@@ -1321,7 +1376,7 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: [echoTool], toolStorm: { maxToolCallsPerTurn: 1 } }
+      { tools: [echoTool], executionGovernance: { maxToolCallsPerTurn: 1 } }
     )
     await bootstrapThread(h)
 
@@ -1331,7 +1386,7 @@ describe('AgentLoop', () => {
     expect(status).toBe('completed')
     expect(executions).toBe(1)
     expect(events.some((event) =>
-      event.kind === 'tool_storm_suppressed' &&
+      event.kind === 'execution_suppressed' &&
       event.callId === 'call_echo_2' &&
       event.message.includes('tool budget exhausted')
     )).toBe(true)
@@ -1403,7 +1458,7 @@ describe('AgentLoop', () => {
     expect(status).toBe('completed')
     expect(executions).toBe(2)
     expect(events.some((event) =>
-      event.kind === 'tool_storm_suppressed' && event.message.includes('tool budget exhausted')
+      event.kind === 'execution_suppressed' && event.message.includes('tool budget exhausted')
     )).toBe(false)
   })
 
@@ -1458,7 +1513,7 @@ describe('AgentLoop', () => {
           yield { kind: 'completed', stopReason: 'stop' }
         }
       },
-      { tools: [echoTool], toolStorm: { maxToolCallsPerTurn: 1 } }
+      { tools: [echoTool], executionGovernance: { maxToolCallsPerTurn: 1 } }
     )
     await bootstrapThread(h)
 

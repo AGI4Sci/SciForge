@@ -134,8 +134,74 @@ describe('app capability registry', () => {
     const { dependencies } = createDependencies()
     const ids = createAppCapabilityRegistry(dependencies).list().map((descriptor) => descriptor.id)
 
-    expect(ids).toEqual(expect.arrayContaining(Object.values(APP_CAPABILITY_IDS)))
+    const optionalWithoutProviders = new Set<string>([
+      APP_CAPABILITY_IDS.surfaceCurrent,
+      APP_CAPABILITY_IDS.surfaceInspect,
+      APP_CAPABILITY_IDS.artifactInspect
+    ])
+    expect(ids).toEqual(expect.arrayContaining(
+      Object.values(APP_CAPABILITY_IDS).filter((id) => !optionalWithoutProviders.has(id))
+    ))
     expect(new Set(ids).size).toBe(ids.length)
+  })
+
+  it('registers surface and artifact inspection as broker-native reads', async () => {
+    const { dependencies } = createDependencies()
+    const inspectSurface = vi.fn(async () => ({
+      artifact: {
+        artifactRef: `artifact_${'a'.repeat(26)}`,
+        mimeType: 'image/png' as const,
+        capturedAt: '2026-07-16T00:00:00.000Z',
+        width: 800,
+        height: 600
+      },
+      evidence: { provider: 'model-router', attestation: `sha256:${'b'.repeat(64)}` }
+    }))
+    const inspectArtifacts = vi.fn(async () => ({
+      artifacts: [{
+        id: 'render',
+        artifactRef: `artifact_${'c'.repeat(26)}`,
+        mimeType: 'image/png' as const,
+        size: 128,
+        sha256: 'd'.repeat(64)
+      }],
+      evidence: { provider: 'model-router', attestation: `sha256:${'e'.repeat(64)}` }
+    }))
+    const broker = new CapabilityBroker(createAppCapabilityRegistry({
+      ...dependencies,
+      visibleContextService: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'electron:1',
+          workspaceId: '/workspace',
+          semanticRevision: 'surface-semantic-1',
+          layoutRevision: '12',
+          state: { targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }], resources: [] }
+        })),
+        inspectSurface
+      },
+      inspectArtifacts
+    }))
+    const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+
+    const opened = await broker.invoke(caller, { actionId: APP_CAPABILITY_IDS.surfaceCurrent, input: {} })
+    const surface = capabilityResourceHandleSchema.parse(record(opened.output).surface)
+    const observed = await broker.observe(caller, { resource: surface })
+    expect(observed.operations.map((operation) => operation.id)).toContain(APP_CAPABILITY_IDS.surfaceInspect)
+    await broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.surfaceInspect,
+      resource: surface,
+      input: { task: 'Inspect the current PDF.' }
+    })
+    await broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.artifactInspect,
+      input: { task: 'Inspect the render.', artifacts: [{ id: 'render', path: 'render.png' }] }
+    })
+
+    expect(inspectSurface).toHaveBeenCalledWith('electron:1', { task: 'Inspect the current PDF.' })
+    expect(inspectArtifacts).toHaveBeenCalledWith('/workspace', {
+      task: 'Inspect the render.',
+      artifacts: [{ id: 'render', path: 'render.png' }]
+    })
   })
 
   it('uses the same Workspace Preview provider for UI and agent callers', async () => {
@@ -252,9 +318,10 @@ describe('app capability registry', () => {
     const observed = await broker.observe(caller, { resource: handle })
 
     expect(observed.operations.map((operation) => operation.id)).toEqual(expect.arrayContaining([
-      APP_CAPABILITY_IDS.workspacePreviewApplyEdit,
-      APP_CAPABILITY_IDS.workspacePreviewInvokeAction
+      APP_CAPABILITY_IDS.workspacePreviewApplyEdit
     ]))
+    expect(observed.operations.map((operation) => operation.id))
+      .not.toContain(APP_CAPABILITY_IDS.workspacePreviewInvokeAction)
     const result = await broker.invoke(caller, {
       actionId: APP_CAPABILITY_IDS.workspacePreviewApplyEdit,
       invocationId: 'edit-1',
@@ -276,6 +343,104 @@ describe('app capability registry', () => {
     expect(applyEdit).toHaveBeenCalledTimes(1)
     expect(result).toMatchObject({ changed: true, beforeRevision: observed.semanticRevision })
     expect(broker.listEvents(caller)).toHaveLength(1)
+  })
+
+  it('filters UI-only preview operations and exposes canonical annotation operations to agents', async () => {
+    const { dependencies, observe } = createDependencies()
+    const manifest = dependencies.workspacePreviewHost.listPlugins()[0]!
+    manifest.capabilities.annotations = true
+    observe.mockResolvedValue({
+      ok: true as const,
+      observation: {
+        schemaVersion: 1 as const,
+        file: { path: '/workspace/paper.pdf', workspaceRoot: '/workspace' },
+        view: {
+          pluginId: 'markdown',
+          modality: 'document' as const,
+          mode: 'preview' as const,
+          title: 'paper.pdf'
+        },
+        documentAnnotations: {
+          threadCount: 1,
+          annotationCount: 2,
+          openThreadCount: 1,
+          truncated: false,
+          threads: [{
+            id: 'thread-1',
+            kind: 'comment',
+            status: 'open' as const,
+            annotationCount: 2,
+            summary: 'open | page 3 | Current canonical comment'
+          }]
+        },
+        actions: ['html.previewUrl']
+      }
+    } as never)
+    const registry = createAppCapabilityRegistry(dependencies)
+    const broker = new CapabilityBroker(registry)
+    const ui = { audience: 'ui' as const, callerId: 'window-1', workspaceId: '/workspace' }
+    const agent = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const opened = await broker.invoke(ui, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    })
+    const handle = capabilityResourceHandleSchema.parse(record(opened.output).resource)
+
+    const agentOperations = (await broker.observe(agent, { resource: handle })).operations.map(({ id }) => id)
+    expect(agentOperations).toEqual(expect.arrayContaining([
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsList,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsUpdate,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsResolve,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsDelete
+    ]))
+    expect(agentOperations).not.toEqual(expect.arrayContaining([
+      APP_CAPABILITY_IDS.workspacePreviewInvokeAction,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewImprove
+    ]))
+
+    const uiOperations = (await broker.observe(ui, { resource: handle })).operations.map(({ id }) => id)
+    expect(uiOperations).toEqual(expect.arrayContaining([
+      APP_CAPABILITY_IDS.workspacePreviewInvokeAction,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewImprove
+    ]))
+    expect(registry.get(APP_CAPABILITY_IDS.workspacePreviewInvokeAction)?.descriptor.audiences).toEqual(['ui'])
+    expect(registry.get(APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate)?.descriptor).toMatchObject({
+      audiences: ['ui'],
+      effect: 'workspace-write',
+      approval: 'confirmation'
+    })
+  })
+
+  it('rejects annotation variants through the generic apply-edit broker operation', async () => {
+    const { dependencies, applyEdit } = createDependencies()
+    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const opened = await broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    })
+    const handle = capabilityResourceHandleSchema.parse(record(opened.output).resource)
+    const observed = await broker.observe(caller, { resource: handle })
+
+    await expect(broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewApplyEdit,
+      invocationId: 'annotation-bypass-1',
+      resource: observed.resource,
+      expectedRevision: observed.semanticRevision,
+      input: {
+        operation: {
+          kind: 'annotation.thread.delete',
+          path: '/workspace/paper.md',
+          threadId: 'thread-1',
+          pruneOrphanAnchors: true
+        }
+      }
+    })).rejects.toMatchObject({ code: 'invalid_input' })
+    expect(applyEdit).not.toHaveBeenCalled()
   })
 
   it('creates Biology Rooms through the registered provider and returns an opaque handle', async () => {

@@ -385,7 +385,7 @@ function codexCapabilities(state: CodexMcpState = emptyCodexMcpState): AgentRunt
       resumeSession: false
     },
     guard: {
-      toolStorm: 'observe'
+      execution: 'observe'
     },
     storage: {
       guiOwnedThreads: true,

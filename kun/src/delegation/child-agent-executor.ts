@@ -54,13 +54,13 @@ export function resolveChildMaxTurnModelSteps(runtime: RuntimeTuningConfig | und
   )
 }
 
-function childToolStormOptions(
+function childExecutionGovernanceOptions(
   runtime: RuntimeTuningConfig | undefined,
   maxToolCalls: number | undefined
-): (NonNullable<RuntimeTuningConfig['toolStorm']> & { maxToolCallsPerTurn?: number }) | undefined {
-  if (!runtime?.toolStorm && maxToolCalls === undefined) return undefined
+): (NonNullable<RuntimeTuningConfig['executionGovernance']> & { maxToolCallsPerTurn?: number }) | undefined {
+  if (!runtime?.executionGovernance && maxToolCalls === undefined) return undefined
   return {
-    ...(runtime?.toolStorm ?? {}),
+    ...(runtime?.executionGovernance ?? {}),
     ...(maxToolCalls !== undefined ? { maxToolCallsPerTurn: maxToolCalls } : {})
   }
 }
@@ -79,7 +79,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       contextCompaction: options.contextCompaction,
       models: options.models
     })
-    const toolStorm = childToolStormOptions(options.runtime, input.maxToolCalls)
+    const executionGovernance = childExecutionGovernanceOptions(options.runtime, input.maxToolCalls)
     const events = new RuntimeEventRecorder({
       eventBus,
       sessionStore,
@@ -125,7 +125,7 @@ export function createChildAgentExecutor(options: ChildAgentExecutorOptions): Ch
       ...(options.contextCompaction ? { contextCompaction: options.contextCompaction } : {}),
       ...(options.tokenEconomy ? { tokenEconomy: options.tokenEconomy } : {}),
       maxTurnModelSteps: resolveChildMaxTurnModelSteps(options.runtime),
-      ...(toolStorm ? { toolStorm } : {}),
+      ...(executionGovernance ? { executionGovernance } : {}),
       ...(options.runtime?.toolBudget ? { toolBudget: options.runtime.toolBudget } : {}),
       ...(options.runtime?.parallelism ? { parallelism: options.runtime.parallelism } : {}),
       ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {})

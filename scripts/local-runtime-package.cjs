@@ -6,6 +6,8 @@ const PROJECT_ROOT = resolve(__dirname, '..')
 
 const LOCAL_RUNTIME_INSTALL_REQUIRED_PATHS = [
   'kun/package-lock.json',
+  'kun/node_modules/@sciforge/execution-governance/package.json',
+  'kun/node_modules/@sciforge/execution-governance/dist/index.js',
   'packages/workers/multi-agent/dist/index.js',
   'kun/node_modules/@sciforge/multi-agent/package.json',
   'kun/node_modules/diff/package.json',
@@ -17,6 +19,8 @@ const LOCAL_RUNTIME_REQUIRED_PATHS = [
   'kun/dist/cli/serve-entry.js',
   'kun/package.json',
   'kun/package-lock.json',
+  'kun/node_modules/@sciforge/execution-governance/package.json',
+  'kun/node_modules/@sciforge/execution-governance/dist/index.js',
   'packages/workers/multi-agent/dist/index.js',
   'kun/node_modules/@sciforge/multi-agent/package.json',
   'kun/node_modules/zod/package.json',
@@ -236,6 +240,11 @@ function removeProjectLocalRuntimeSqlite(projectRoot = PROJECT_ROOT) {
 }
 
 function ensureProjectLocalRuntimeInstall(projectRoot = PROJECT_ROOT) {
+  runNpm(['--workspace', '@sciforge/execution-governance', 'run', 'build'], {
+    cwd: projectRoot,
+    label: 'npm --workspace @sciforge/execution-governance run build'
+  })
+
   runNpm(['--workspace', '@sciforge/multi-agent', 'run', 'build'], {
     cwd: projectRoot,
     label: 'npm --workspace @sciforge/multi-agent run build'

@@ -86,6 +86,7 @@ import {
   isPrefixedEnv,
   isUpstreamProviderConfigEnv
 } from './upstream-provider-env'
+import type { CapabilityRuntimeBridgeLaunchConfig } from './capabilities/runtime-bridge'
 
 let child: ChildProcess | null = null
 let childLogCapture: LocalRuntimeChildLogCapture | null = null
@@ -108,6 +109,13 @@ export type LocalRuntimeUnexpectedExitInfo = {
 }
 
 let onUnexpectedLocalRuntimeExit: ((info: LocalRuntimeUnexpectedExitInfo) => void) | null = null
+let capabilityRuntimeBridgeLaunch: CapabilityRuntimeBridgeLaunchConfig | null = null
+
+export function setLocalRuntimeCapabilityBridge(
+  launch: CapabilityRuntimeBridgeLaunchConfig | null
+): void {
+  capabilityRuntimeBridgeLaunch = launch
+}
 
 export function setLocalRuntimeUnexpectedExitHandler(
   handler: ((info: LocalRuntimeUnexpectedExitInfo) => void) | null
@@ -322,6 +330,7 @@ async function startLocalRuntimeChildOnce(
   }
   const dataDir = resolveLocalRuntimeDataDir(runtime)
   await syncGuiManagedLocalRuntimeConfig(dataDir, runtime, {
+    capabilityRuntimeBridge: capabilityRuntimeBridgeLaunch ?? undefined,
     agentCapabilities: settings.agentCapabilities,
     runtimeGuards: normalizeRuntimeGuardSettings(settings.runtimeGuards),
     scheduleMcp: {
@@ -539,6 +548,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
     'mcpSearch' | 'tokenEconomy' | 'storage' | 'contextCompaction' | 'runtimeTuning'
   >,
   options?: {
+    capabilityRuntimeBridge?: CapabilityRuntimeBridgeLaunchConfig
     agentCapabilities?: AgentCapabilitySettingsV1
     runtimeGuards?: RuntimeGuardSettingsV1
     scheduleMcp?: {
@@ -631,6 +641,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
   const mcpSearch = runtime.mcpSearch
   const skillCapability = await skillCapabilityConfigForRuntime(skills, options?.scheduleMcp?.settings)
   const managedMcpServers = buildLocalRuntimeManagedGuiMcpServers({
+    capabilityRuntimeBridge: options?.capabilityRuntimeBridge,
     scheduleMcp: options?.scheduleMcp,
     researchMcp: options?.researchMcp,
     workflowMcp: options?.workflowMcp,
@@ -679,6 +690,7 @@ export async function syncGuiManagedLocalRuntimeConfig(
         ...mcp,
         ...(
           options?.scheduleMcp ||
+          options?.capabilityRuntimeBridge ||
           options?.researchMcp ||
           options?.workflowMcp ||
           options?.workspaceIntelMcp ||
@@ -959,22 +971,23 @@ function runtimeTuningConfigForRuntime(
   existing: Record<string, unknown>,
   runtimeGuards?: RuntimeGuardSettingsV1
 ): Record<string, unknown> {
-  const existingToolStorm = objectValue(existing.toolStorm)
+  const existingExecutionGovernance = objectValue(existing.executionGovernance)
   const existingToolArgumentRepair = objectValue(existing.toolArgumentRepair)
   const existingToolBudget = objectValue(existing.toolBudget)
   const existingToolBudgetProfiles = objectValue(existingToolBudget.profiles)
   const existingParallelism = objectValue(existing.parallelism)
   const existingModelStreamIdleTimeoutMs = positiveIntegerValue(existing.modelStreamIdleTimeoutMs)
-  const toolStorm = normalizeRuntimeGuardSettings(runtimeGuards).toolStorm
+  const execution = normalizeRuntimeGuardSettings(runtimeGuards).execution
   const toolBudget = runtimeTuning.toolBudget
   return {
     ...existing,
     modelStreamIdleTimeoutMs: existingModelStreamIdleTimeoutMs ?? DEFAULT_LOCAL_RUNTIME_MODEL_STREAM_IDLE_TIMEOUT_MS,
-    toolStorm: {
-      ...existingToolStorm,
-      enabled: toolStorm.enabled,
-      windowSize: toolStorm.windowSize,
-      threshold: toolStorm.threshold
+    executionGovernance: {
+      ...existingExecutionGovernance,
+      enabled: execution.enabled,
+      windowSize: execution.windowSize,
+      exactRepeatThreshold: execution.exactRepeatThreshold,
+      semanticFailureThreshold: execution.semanticFailureThreshold
     },
     toolArgumentRepair: {
       ...existingToolArgumentRepair,
@@ -1074,14 +1087,18 @@ function sanitizeLocalRuntimeRuntimeConfig(value: unknown): Record<string, unkno
   if (modelStreamIdleTimeoutMs !== undefined) next.modelStreamIdleTimeoutMs = modelStreamIdleTimeoutMs
   if (maxTurnModelSteps !== undefined) next.maxTurnModelSteps = maxTurnModelSteps
 
-  const rawToolStorm = objectValue(raw.toolStorm)
-  const toolStorm: Record<string, unknown> = {}
-  if (typeof rawToolStorm.enabled === 'boolean') toolStorm.enabled = rawToolStorm.enabled
-  const windowSize = positiveIntegerValue(rawToolStorm.windowSize)
-  const threshold = positiveIntegerValue(rawToolStorm.threshold)
-  if (windowSize !== undefined) toolStorm.windowSize = windowSize
-  if (threshold !== undefined) toolStorm.threshold = threshold
-  if (Object.keys(toolStorm).length > 0) next.toolStorm = toolStorm
+  const rawExecutionGovernance = objectValue(raw.executionGovernance)
+  const executionGovernance: Record<string, unknown> = {}
+  if (typeof rawExecutionGovernance.enabled === 'boolean') executionGovernance.enabled = rawExecutionGovernance.enabled
+  const windowSize = positiveIntegerValue(rawExecutionGovernance.windowSize)
+  const exactRepeatThreshold = positiveIntegerValue(rawExecutionGovernance.exactRepeatThreshold)
+  const semanticFailureThreshold = positiveIntegerValue(rawExecutionGovernance.semanticFailureThreshold)
+  if (windowSize !== undefined) executionGovernance.windowSize = windowSize
+  if (exactRepeatThreshold !== undefined) executionGovernance.exactRepeatThreshold = exactRepeatThreshold
+  if (semanticFailureThreshold !== undefined) {
+    executionGovernance.semanticFailureThreshold = semanticFailureThreshold
+  }
+  if (Object.keys(executionGovernance).length > 0) next.executionGovernance = executionGovernance
 
   const rawToolArgumentRepair = objectValue(raw.toolArgumentRepair)
   const maxStringBytes = positiveIntegerValue(rawToolArgumentRepair.maxStringBytes)

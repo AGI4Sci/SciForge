@@ -1481,7 +1481,7 @@ function conservativeLocalRuntimeCapabilities(): AgentRuntimeCapabilities {
       resumeSession: true
     },
     guard: {
-      toolStorm: 'native'
+      execution: 'native'
     },
     storage: {
       ...caps.storage,

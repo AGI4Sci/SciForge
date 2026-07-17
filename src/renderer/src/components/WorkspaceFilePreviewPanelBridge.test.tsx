@@ -850,6 +850,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
               semanticRevision: 'revision-2',
               expiresAt: '2026-07-16T14:00:00.000Z'
             },
+            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
             operations: [{
               contractVersion: 1,
               id: 'workspace-preview.apply-edit',
@@ -907,6 +908,19 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             },
             molecular: {
               chains: ['A']
+            },
+            documentAnnotations: {
+              threadCount: 2,
+              annotationCount: 5,
+              openThreadCount: 1,
+              truncated: false,
+              threads: [{
+                id: 'thread-1',
+                kind: 'comment',
+                status: 'open',
+                annotationCount: 3,
+                summary: 'open | page 2 | Current comment'
+              }]
             },
             actions: ['molecular.workbench']
           },
@@ -968,6 +982,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       title: 'protein.pdb',
       summary: 'Workspace preview observation for Molecular file protein.pdb.',
       state: {
+        currentPreview: {
+          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+          operationRefs: ['workspace-preview.apply-edit']
+        },
+        documentAnnotations: {
+          threadCount: 2,
+          annotationCount: 5,
+          openThreadCount: 1
+        },
         pluginId: 'molecular',
         modality: 'molecular',
         selectionKind: 'molecular',
@@ -1002,12 +1025,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           role: 'preview-target',
           relativePath: 'protein.pdb',
           resourceUri: 'workspace://file/protein.pdb',
+          annotationCount: 5,
+          threadCount: 2,
+          openThreadCount: 1,
           capability: {
-            resource: {
-              token: 'cap_abcdefghijklmnopqrstuvwxyz',
-              semanticRevision: 'revision-2'
-            },
-            operations: [{ id: 'workspace-preview.apply-edit' }]
+            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
+            operations: [{
+              operationRef: 'workspace-preview.apply-edit',
+              schemaRef: 'sciforge://capability-schema/workspace-preview.apply-edit?version=1.0.0'
+            }]
           },
           metadata: {
             routeReason: 'registered-plugin',
@@ -1020,12 +1046,13 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
                 kind: 'tile',
                 status: 'requires-plugin'
               }
-            ],
-            semanticRevision: 'revision-2',
-            operationIds: ['workspace-preview.apply-edit']
+            ]
           }
         }
       ]
     })
+    expect(JSON.stringify(component)).not.toContain('cap_abcdefghijklmnopqrstuvwxyz')
+    expect(JSON.stringify(component)).not.toContain('semanticRevision')
+    expect(JSON.stringify(component)).not.toContain('inputSchema')
   })
 })

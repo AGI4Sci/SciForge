@@ -1,5 +1,6 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray, webContents, type WebContents } from 'electron'
 import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -104,6 +105,9 @@ import {
   type SurfaceCaptureResult
 } from './services/visible-context-service'
 import type { VisibleContextBounds } from '../shared/visible-context'
+import { artifactInspectOutputSchema } from '../shared/surface-inspection'
+import { createModelRouterVisualInspector } from '../../packages/workers/workspace-intel/src/visual-inspection'
+import { createWorkspaceIntelService } from '../../packages/workers/workspace-intel/src/service'
 import { AnchoredCommentService } from './services/anchored-comment-service'
 import { AnchoredCommentScreenshotService } from './services/anchored-comment-screenshot-service'
 import { AnchoredCommentFeedbackService } from './services/anchored-comment-feedback-service'
@@ -159,6 +163,7 @@ import {
   createCapabilityAgentToolSurface,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
+import { CapabilityRuntimeBridge } from './capabilities/runtime-bridge'
 import {
   installCapabilityResourceContentProtocol,
   registerCapabilityResourceContentScheme
@@ -189,6 +194,7 @@ import { webhookUrl } from './remote-channel-runtime-helpers'
 import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
 import {
   resolveAvailableLocalRuntimePort,
+  setLocalRuntimeCapabilityBridge,
   setLocalRuntimeUnexpectedExitHandler,
   type LocalRuntimeUnexpectedExitInfo
 } from './local-runtime-process'
@@ -399,6 +405,7 @@ let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let capabilityRuntimeBridge: CapabilityRuntimeBridge | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
@@ -793,6 +800,9 @@ async function stopManagedRuntimes(): Promise<void> {
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
       await localRuntimeAdapter.stopAndWait()
+      await capabilityRuntimeBridge?.close()
+      capabilityRuntimeBridge = null
+      setLocalRuntimeCapabilityBridge(null)
       publishRuntimeStatus({ state: 'stopped', source: 'app-shutdown' })
     })().finally(() => {
       managedRuntimesStopPromise = null
@@ -1863,36 +1873,74 @@ app.whenReady().then(async () => {
     loadSettings: () => store.load()
   })
   const biologyRoomService = new BiologyRoomService()
+  const resolveVisualInspector = async () => {
+    const router = resolveRuntimeModelRouterSettings(await store.load())
+    if (!router.baseUrl || !router.apiKey || !router.model) return undefined
+    return createModelRouterVisualInspector({
+      baseUrl: router.baseUrl,
+      apiKey: router.apiKey,
+      model: router.model
+    })
+  }
+  const visibleContextService = new VisibleContextService(app.getPath('userData'), {
+    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
+    visualInspector: resolveVisualInspector,
+    onCaptureState: (windowId, active) => {
+      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
+    }
+  })
   const capabilityBroker = new CapabilityBroker(createAppCapabilityRegistry({
     workspacePreviewHost,
-    biologyRoomService
+    biologyRoomService,
+    visibleContextService,
+    inspectArtifacts: async (workspaceRoot, input) => {
+      if (!workspaceRoot.trim()) throw new Error('Artifact inspection requires a workspace.')
+      const service = createWorkspaceIntelService({
+        workspaceRoot,
+        visualInspector: await resolveVisualInspector()
+      })
+      const result = await service.inspectWorkspaceImages({ ...input, workspaceRoot })
+      if (!result.ok) throw new Error(result.error.message)
+      return artifactInspectOutputSchema.parse({
+        artifacts: result.artifacts.map((artifact) => ({
+          id: artifact.id,
+          artifactRef: `artifact_${randomBytes(18).toString('base64url')}`,
+          mimeType: artifact.mimeType,
+          size: artifact.size,
+          sha256: artifact.sha256
+        })),
+        evidence: result.evidence
+      })
+    }
   }))
   capabilityAgentTools = createCapabilityAgentToolSurface({
     broker: capabilityBroker,
     resolveCaller: (context) => ({
       audience: 'agent',
-      callerId: context.threadId ? `codex:${context.threadId}` : `codex-request:${context.requestId}`,
+      callerId: context.threadId
+        ? `${context.runtimeId ?? 'codex'}:${context.threadId}`
+        : `${context.runtimeId ?? 'codex'}-request:${context.requestId}`,
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
     })
   })
+  capabilityRuntimeBridge = new CapabilityRuntimeBridge({
+    rootDir: join(app.getPath('userData'), 'capability-runtime-bridge'),
+    surface: capabilityAgentTools,
+    capabilityIds: () => capabilityBroker.registry.discover({
+      audience: 'agent',
+      callerId: 'sciforge-runtime:catalog'
+    }).map((descriptor) => descriptor.id)
+  })
+  await capabilityRuntimeBridge.start()
+  setLocalRuntimeCapabilityBridge(capabilityRuntimeBridge.launchConfig())
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
-  const visibleContextService = new VisibleContextService(app.getPath('userData'), {
-    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
-    requestContextRefresh: (windowId) => {
-      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
-    },
-    onCaptureState: (windowId, active) => {
-      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
-    }
-  })
-  void visibleContextService.startCaptureRequestBroker().catch((error) => {
-    logWarn('visible-context', 'Failed to start the visual capture request broker.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
+    capabilityAvailability: ({ capabilityId, audience }) => {
+      const definition = capabilityBroker.registry.get(capabilityId)
+      return Boolean(definition?.descriptor.audiences.includes(audience))
+    },
     adapters: [
       createLocalRuntimeAgentRuntimeAdapter({
         request: async (settings, pathAndQuery, init) =>

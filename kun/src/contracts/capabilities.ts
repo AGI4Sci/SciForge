@@ -44,7 +44,7 @@ const CapabilityToggleConfig = z
 
 const StringRecord = z.record(z.string(), z.string())
 
-export const McpTransportKind = z.enum(['stdio', 'streamable-http', 'sse'])
+export const McpTransportKind = z.enum(['stdio', 'streamable-http', 'sse', 'file-bridge'])
 export type McpTransportKind = z.infer<typeof McpTransportKind>
 
 export const McpTrustScope = z.enum(['user', 'workspace'])
@@ -88,6 +88,8 @@ export const McpServerConfig = z
     command: z.string().min(1).optional(),
     args: z.array(z.string()).default([]),
     url: z.string().min(1).optional(),
+    rootDir: z.string().min(1).optional(),
+    authSecret: z.string().min(32).optional(),
     headers: StringRecord.default({}),
     env: StringRecord.default({}),
     trustScope: McpTrustScope.default('workspace'),
@@ -108,6 +110,13 @@ export const McpServerConfig = z
         code: 'custom',
         path: ['url'],
         message: `${server.transport} MCP servers require url`
+      })
+    }
+    if (server.transport === 'file-bridge' && (!server.rootDir || !server.authSecret)) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rootDir'],
+        message: 'file-bridge MCP servers require rootDir and authSecret'
       })
     }
     if (server.url) {

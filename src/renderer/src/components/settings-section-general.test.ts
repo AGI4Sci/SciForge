@@ -70,9 +70,6 @@ const labels: Record<string, string> = {
   desktopStartMinimizedDisabledDesc: 'Disabled.',
   desktopCloseToTray: 'Close to tray',
   desktopCloseToTrayDesc: 'Keep running.',
-  evidenceDagSettings: 'Evidence DAG',
-  evidenceDagEnabled: 'Enable Evidence DAG',
-  evidenceDagEnabledDesc: 'Build evidence graphs in the background.',
   guiUpdate: 'GUI update',
   guiUpdateChannel: 'Update channel',
   guiUpdateChannelDesc: 'Choose channel.',
@@ -174,8 +171,7 @@ describe('GeneralSettingsSection', () => {
     expect(html).toContain('Scientific modality translation')
     expect(html).toContain('Model Router config file')
     expect(html).toContain('Open Model Router config file')
-    expect(html).toContain('Enable Evidence DAG')
-    expect(html).toContain('Build evidence graphs in the background.')
+    expect(html).not.toContain('Enable Evidence DAG')
   })
 
   it('keeps Model Router API keys hidden by default', () => {

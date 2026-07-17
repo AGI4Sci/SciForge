@@ -317,7 +317,7 @@ export async function createLocalRuntimeServeRuntime(
     tokenEconomy,
     contextCompaction: options.contextCompaction,
     ...(options.runtime?.maxTurnModelSteps ? { maxTurnModelSteps: options.runtime.maxTurnModelSteps } : {}),
-    ...(options.runtime?.toolStorm ? { toolStorm: options.runtime.toolStorm } : {}),
+    ...(options.runtime?.executionGovernance ? { executionGovernance: options.runtime.executionGovernance } : {}),
     ...(options.runtime?.toolBudget ? { toolBudget: options.runtime.toolBudget } : {}),
     ...(options.runtime?.parallelism ? { parallelism: options.runtime.parallelism } : {}),
     ...(options.runtime?.toolArgumentRepair ? { toolArgumentRepair: options.runtime.toolArgumentRepair } : {}),

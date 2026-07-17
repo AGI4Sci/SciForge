@@ -10,6 +10,15 @@ import {
 
 const labels: Record<string, string> = {
   rightPanelEvidenceDag: 'Evidence DAG',
+  dagRuntimeToggle: 'Toggle DAG background processing',
+  dagRuntimeToggleHelp: 'Shared DAG switch',
+  dagRuntimeEnabled: 'DAG on',
+  dagRuntimeDisabled: 'DAG off',
+  dagRuntimeSaving: 'Applying',
+  dagRuntimeLoading: 'Checking DAG status',
+  dagRuntimeLoadFailed: 'Could not read DAG settings',
+  dagRuntimePausedTitle: 'DAG background processing is paused',
+  dagRuntimePausedDescription: 'Turn it on to resume.',
   rightPanelCollapse: 'Collapse right sidebar',
   evidenceDagGlobalView: 'All threads',
   evidenceDagRefresh: 'Refresh Evidence DAG',
@@ -34,8 +43,27 @@ describe('EvidenceDagPanel', () => {
     }))
 
     expect(html).toContain('Evidence DAG')
+    expect(html).toContain('role="switch"')
+    expect(html).toContain('aria-label="Toggle DAG background processing"')
     expect(html).toContain('Update now')
     expect(html).toContain('aria-label="Queue an immediate incremental update for this thread"')
+  })
+
+  it('keeps the runtime switch available while DAG processing is paused', () => {
+    const html = renderToStaticMarkup(createElement(EvidenceDagPanel, {
+      activeThreadId: 'thread-1',
+      runtimeId: 'codex',
+      onCollapse: vi.fn(),
+      dagRuntimeControl: {
+        enabled: false,
+        saving: false,
+        error: null,
+        setEnabled: vi.fn()
+      }
+    }))
+
+    expect(html).toContain('aria-checked="false"')
+    expect(html).toContain('DAG background processing is paused')
   })
 
   it('uses the dedicated update bridge when it is available', async () => {

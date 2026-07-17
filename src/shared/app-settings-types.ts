@@ -261,18 +261,22 @@ export type LocalRuntimeTuningSettingsV1 = {
   parallelism: LocalRuntimeParallelismSettingsV1
 }
 
-export type RuntimeToolStormGuardSettingsV1 = {
+export type RuntimeExecutionGuardSettingsV1 = {
   enabled: boolean
   windowSize: number
-  threshold: number
+  exactRepeatThreshold: number
+  semanticFailureThreshold: number
 }
 
 export type RuntimeGuardSettingsV1 = {
-  toolStorm: RuntimeToolStormGuardSettingsV1
+  execution: RuntimeExecutionGuardSettingsV1
 }
 
 export type RuntimeGuardSettingsPatchV1 = {
-  toolStorm?: Partial<Pick<RuntimeToolStormGuardSettingsV1, 'enabled' | 'windowSize' | 'threshold'>>
+  execution?: Partial<Pick<
+    RuntimeExecutionGuardSettingsV1,
+    'enabled' | 'windowSize' | 'exactRepeatThreshold' | 'semanticFailureThreshold'
+  >>
 }
 
 export type EvidenceDagSettingsV1 = {
