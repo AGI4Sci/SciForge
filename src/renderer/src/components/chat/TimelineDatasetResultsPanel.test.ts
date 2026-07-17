@@ -167,6 +167,17 @@ describe('TimelineDatasetResultsPanel', () => {
         } }
       },
       {
+        kind: 'tool', id: 'provider-map-1', summary: 'dataset_id_map_provider', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_id_map_provider', success: true,
+          result: {
+            counts: { inputRecords: 2, outputRecords: 2, mappedRecords: 2, unmatchedRecords: 0, ambiguousRecords: 0 },
+            artifact: { path: '/workspace/provider-mapped.tsv', format: 'tsv', bytes: 180, sha256: 'provider-map' },
+            providerJob: { jobId: 'job123', failedIdCount: 0 }
+          }
+        } }
+      },
+      {
         kind: 'tool', id: 'join-1', summary: 'dataset_join', status: 'success',
         meta: { datasetApi: {
           toolName: 'dataset_join', success: true,
@@ -196,6 +207,7 @@ describe('TimelineDatasetResultsPanel', () => {
     expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([
       { kind: 'processing', result: { counts: { outputRecords: 4 } } },
       { kind: 'processing', toolName: 'dataset_id_map', result: { counts: { mappedRecords: 4, ambiguousRecords: 1 } } },
+      { kind: 'processing', toolName: 'dataset_id_map_provider', result: { counts: { mappedRecords: 2 } } },
       { kind: 'processing', toolName: 'dataset_join', result: { counts: { unmatchedLeftRecords: 1 } } },
       { kind: 'validation', result: { validation: { valid: true } } },
       { kind: 'publication', result: { publication: { artifactCount: 2 } } }

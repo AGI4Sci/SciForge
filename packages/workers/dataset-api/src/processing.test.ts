@@ -311,6 +311,145 @@ test('maps biomedical identifiers with explicit one-to-many and unmatched semant
   }
 })
 
+test('runs bounded provider-backed UniProt ID mapping with polling, retries, and provenance', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-provider-map-'))
+  const inputPath = join(workspaceRoot, 'protein-accessions.json')
+  await writeFile(inputPath, JSON.stringify([
+    { accession: 'P04637' },
+    { accession: 'P38398' },
+    { accession: 'BAD' }
+  ]))
+  let statusCalls = 0
+  const sleeps: number[] = []
+  const service = createDatasetProcessingService({
+    workspaceRoot,
+    sleepImpl: async (milliseconds) => { sleeps.push(milliseconds) },
+    fetchImpl: async (url, init) => {
+      const value = String(url)
+      if (value.endsWith('/idmapping/run')) {
+        assert.equal(init?.method, 'POST')
+        assert.match(String(init?.body), /from=UniProtKB_AC-ID/)
+        assert.match(String(init?.body), /to=Ensembl/)
+        return new Response('{"jobId":"job123"}', { headers: { 'content-type': 'application/json' } })
+      }
+      if (value.endsWith('/idmapping/status/job123')) {
+        statusCalls += 1
+        if (statusCalls === 1) return new Response('temporary', { status: 503 })
+        return new Response(JSON.stringify({ jobStatus: statusCalls === 2 ? 'RUNNING' : 'FINISHED' }), {
+          headers: { 'content-type': 'application/json' }
+        })
+      }
+      if (value.endsWith('/idmapping/details/job123')) {
+        return new Response(JSON.stringify({
+          redirectURL: 'https://rest.uniprot.org/idmapping/results/job123'
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      if (value === 'https://rest.uniprot.org/idmapping/stream/job123?format=json') {
+        return new Response(JSON.stringify({
+          results: [
+            { from: 'P04637', to: 'ENSG00000141510' },
+            { from: 'P38398', to: { id: 'ENSG00000012048' } }
+          ],
+          failedIds: ['BAD']
+        }), { headers: { 'content-type': 'application/json' } })
+      }
+      throw new Error(`Unexpected provider URL: ${value}`)
+    }
+  })
+  try {
+    const prepared = await service.preparePlan({
+      objective: 'Map UniProt accessions to Ensembl.',
+      operations: [{ tool: 'dataset_id_map_provider', description: 'Use UniProt ID Mapping.' }],
+      outputs: [{ name: 'mapped.json', format: 'json' }],
+      confirmedByUser: true
+    })
+    const provider = await service.providerIdMapping({
+      planId: prepared.plan.planId,
+      inputArtifact: inputPath,
+      inputField: 'accession',
+      provider: 'uniprot',
+      fromDatabase: 'UniProtKB_AC-ID',
+      toDatabase: 'Ensembl',
+      outputField: 'ensembl_id',
+      outputFileName: 'mapped.json',
+      pollIntervalMs: 100,
+      maxPollAttempts: 5,
+      maxRetries: 1
+    })
+    assert.equal(statusCalls, 3)
+    assert.deepEqual(sleeps, [250, 100])
+    assert.deepEqual(JSON.parse(await readFile(provider.mappingArtifact.path, 'utf8')), [
+      { from: 'P04637', to: 'ENSG00000141510' },
+      { from: 'P38398', to: 'ENSG00000012048' }
+    ])
+    const mappingManifest = JSON.parse(await readFile(provider.mappingArtifact.manifestPath, 'utf8'))
+    assert.equal(mappingManifest.origins[0].source.id, 'uniprot-id-mapping')
+    assert.equal(mappingManifest.origins[0].request.idCount, 3)
+    assert.match(mappingManifest.origins[0].request.bodySha256, /^[a-f0-9]{64}$/)
+
+    const mapped = await service.mapIds({
+      planId: prepared.plan.planId,
+      inputArtifact: inputPath,
+      mappingArtifact: provider.mappingArtifact.path,
+      inputField: 'accession',
+      mappingFromField: 'from',
+      mappingToField: 'to',
+      outputField: 'ensembl_id',
+      onUnmapped: 'null',
+      outputFileName: 'mapped.json'
+    })
+    assert.equal(mapped.counts.mappedRecords, 2)
+    assert.equal(mapped.counts.unmatchedRecords, 1)
+    assert.deepEqual(JSON.parse(await readFile(mapped.artifact.path, 'utf8')), [
+      { accession: 'P04637', ensembl_id: 'ENSG00000141510' },
+      { accession: 'P38398', ensembl_id: 'ENSG00000012048' },
+      { accession: 'BAD', ensembl_id: null }
+    ])
+    const mappedManifest = JSON.parse(await readFile(mapped.artifact.manifestPath, 'utf8'))
+    assert.equal(mappedManifest.origins[0].source.id, 'uniprot-id-mapping')
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('bounds provider mapping batches and rejects redirects outside the fixed UniProt origin', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-provider-map-security-'))
+  const inputPath = join(workspaceRoot, 'ids.json')
+  await writeFile(inputPath, '[{"id":"P04637"},{"id":"P38398"}]')
+  const fetchImpl: typeof fetch = async (url) => {
+    const value = String(url)
+    if (value.endsWith('/idmapping/run')) return new Response('{"jobId":"secure123"}')
+    if (value.endsWith('/idmapping/status/secure123')) return new Response('{"jobStatus":"FINISHED"}')
+    if (value.endsWith('/idmapping/details/secure123')) {
+      return new Response('{"redirectURL":"https://attacker.example/idmapping/results/secure123"}')
+    }
+    throw new Error(`Unexpected URL: ${value}`)
+  }
+  const service = createDatasetProcessingService({ workspaceRoot, fetchImpl, sleepImpl: async () => undefined })
+  try {
+    const plan = await service.preparePlan({
+      objective: 'Security test provider mapping.',
+      operations: [{ tool: 'dataset_id_map_provider', description: 'Map IDs.' }],
+      outputs: [{ name: 'mapped.json', format: 'json' }],
+      confirmedByUser: true
+    })
+    const request = {
+      planId: plan.plan.planId,
+      inputArtifact: inputPath,
+      inputField: 'id',
+      provider: 'uniprot' as const,
+      fromDatabase: 'UniProtKB_AC-ID',
+      toDatabase: 'Ensembl',
+      outputField: 'ensembl_id',
+      outputFileName: 'mapped.json'
+    }
+    await assert.rejects(service.providerIdMapping({ ...request, maxIds: 1 }), /exceeding maxIds=1/)
+    await assert.rejects(service.providerIdMapping(request), /redirect left the fixed rest\.uniprot\.org/)
+  } finally {
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
 test('filters, deduplicates, and validates FASTA without modifying the source', async () => {
   const { workspaceRoot, service, cleanup } = await fixture()
   const fastaPath = join(workspaceRoot, 'proteins.fasta')

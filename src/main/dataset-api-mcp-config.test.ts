@@ -31,6 +31,7 @@ describe('dataset API MCP config', () => {
       'dataset_transform',
       'dataset_deduplicate',
       'dataset_id_map',
+      'dataset_id_map_provider',
       'dataset_join',
       'dataset_validate',
       'dataset_publish'

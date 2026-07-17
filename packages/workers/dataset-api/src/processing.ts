@@ -7,6 +7,7 @@ import {
   datasetFilterInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
+  datasetProviderIdMapInputSchema,
   datasetPreparePlanInputSchema,
   datasetProfileInputSchema,
   datasetPublishInputSchema,
@@ -17,6 +18,7 @@ import {
   type DatasetFilterInput,
   type DatasetIdMapInput,
   type DatasetJoinInput,
+  type DatasetProviderIdMapInput,
   type DatasetPreparePlanInput,
   type DatasetProcessingFormat,
   type DatasetProfileInput,
@@ -64,8 +66,14 @@ const DEFAULT_MAX_PROCESSING_BYTES = 64 * 1024 * 1024
 
 export type DatasetProcessingService = ReturnType<typeof createDatasetProcessingService>
 
-export function createDatasetProcessingService(options: { workspaceRoot?: string } = {}) {
+export function createDatasetProcessingService(options: {
+  workspaceRoot?: string
+  fetchImpl?: typeof fetch
+  sleepImpl?: (milliseconds: number) => Promise<void>
+} = {}) {
   const defaultWorkspaceRoot = options.workspaceRoot?.trim()
+  const providerFetch = options.fetchImpl ?? globalThis.fetch
+  const providerSleep = options.sleepImpl ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
 
   return {
     async preparePlan(raw: DatasetPreparePlanInput) {
@@ -246,6 +254,105 @@ export function createDatasetProcessingService(options: { workspaceRoot?: string
         records: rows.length
       })
       return { artifact, counts: artifact.summary }
+    },
+
+    async providerIdMapping(raw: DatasetProviderIdMapInput) {
+      const input = datasetProviderIdMapInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map_provider')
+      const dataset = await loadDataset(workspaceRoot, {
+        inputArtifact: input.inputArtifact,
+        format: input.inputFormat,
+        recordPath: input.inputRecordPath,
+        maxBytes: input.maxBytes
+      })
+      const ids = [...new Set(dataset.rows.map((row, index) => {
+        const value = valueAtPath(row, input.inputField)
+        if (value === undefined || value === null || value === '') return null
+        if (!['string', 'number'].includes(typeof value)) {
+          throw new Error(`Provider ID mapping field '${input.inputField}' must be a string or number at record ${index + 1}.`)
+        }
+        const id = String(value).trim()
+        if (!id || /[,\r\n]/.test(id)) throw new Error(`Provider ID mapping found an invalid identifier at record ${index + 1}.`)
+        return id
+      }).filter((value): value is string => value !== null))]
+      const maxIds = input.maxIds ?? 10_000
+      if (ids.length === 0) throw new Error(`Provider ID mapping found no identifiers in field '${input.inputField}'.`)
+      if (ids.length > maxIds) {
+        throw new Error(`Provider ID mapping found ${ids.length} unique identifiers, exceeding maxIds=${maxIds}. Split or filter the dataset before retrying.`)
+      }
+      const mapped = await runUniProtIdMapping({
+        fetchImpl: providerFetch,
+        sleepImpl: providerSleep,
+        ids,
+        fromDatabase: input.fromDatabase,
+        toDatabase: input.toDatabase,
+        taxId: input.taxId,
+        timeoutMs: input.timeoutMs ?? 30_000,
+        pollIntervalMs: input.pollIntervalMs ?? 3_000,
+        maxPollAttempts: input.maxPollAttempts ?? 100,
+        maxRetries: input.maxRetries ?? 2,
+        maxBytes: input.maxBytes ?? DEFAULT_MAX_PROCESSING_BYTES
+      })
+      const mappingRows = mapped.results.flatMap((entry) => {
+        const target = providerMappingTarget(entry.to)
+        return target === undefined ? [] : [{ from: entry.from, to: target }]
+      })
+      const mappingData = jsonBytes(mappingRows)
+      const bodyFingerprint = hash(Buffer.from(canonicalJson({
+        ids,
+        from: input.fromDatabase,
+        to: input.toDatabase,
+        taxId: input.taxId
+      })))
+      const origin: DatasetOrigin = {
+        source: { id: 'uniprot-id-mapping', name: 'UniProt ID Mapping API' },
+        request: {
+          method: 'POST',
+          url: 'https://rest.uniprot.org/idmapping/run',
+          fromDatabase: input.fromDatabase,
+          toDatabase: input.toDatabase,
+          idCount: ids.length,
+          bodySha256: bodyFingerprint,
+          resultsUrl: mapped.resultsUrl
+        },
+        response: {
+          jobId: mapped.jobId,
+          mappingRecords: mappingRows.length,
+          failedIdCount: mapped.failedIds.length,
+          status: 200
+        }
+      }
+      const mappingArtifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_id_map_provider_mapping',
+        format: 'json',
+        outputFileName: `${safeId(input.provider)}-${providerDatabaseSlug(input.fromDatabase)}-to-${providerDatabaseSlug(input.toDatabase)}.mapping.json`,
+        data: mappingData,
+        parents: [{ path: dataset.path, sha256: dataset.sha256 }],
+        parameters: {
+          provider: input.provider,
+          fromDatabase: input.fromDatabase,
+          toDatabase: input.toDatabase,
+          taxId: input.taxId,
+          inputField: input.inputField,
+          idCount: ids.length,
+          bodySha256: bodyFingerprint,
+          providerResponseSha256: hash(mappingData)
+        },
+        summary: {
+          requestedIds: ids.length,
+          mappingRecords: mappingRows.length,
+          failedIds: mapped.failedIds.length,
+          invalidProviderResults: mapped.results.length - mappingRows.length,
+          provider: input.provider,
+          fromDatabase: input.fromDatabase,
+          toDatabase: input.toDatabase
+        },
+        records: mappingRows.length,
+        origins: [origin]
+      })
+      return { mappingArtifact, mapping: mapped, ids }
     },
 
     async mapIds(raw: DatasetIdMapInput) {
@@ -1049,6 +1156,179 @@ function valueAtPath(value: unknown, path: string): unknown {
   }, value)
 }
 
+type UniProtMappingEntry = { from: string; to: unknown }
+
+async function runUniProtIdMapping(input: {
+  fetchImpl: typeof fetch
+  sleepImpl: (milliseconds: number) => Promise<void>
+  ids: string[]
+  fromDatabase: string
+  toDatabase: string
+  taxId?: number
+  timeoutMs: number
+  pollIntervalMs: number
+  maxPollAttempts: number
+  maxRetries: number
+  maxBytes: number
+}): Promise<{
+  jobId: string
+  resultsUrl: string
+  results: UniProtMappingEntry[]
+  failedIds: string[]
+}> {
+  const form = new URLSearchParams({
+    ids: input.ids.join(','),
+    from: input.fromDatabase,
+    to: input.toDatabase,
+    ...(input.taxId ? { taxId: String(input.taxId) } : {})
+  })
+  const submitted = await providerRequest(input, 'https://rest.uniprot.org/idmapping/run', {
+    method: 'POST',
+    headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+    body: form
+  })
+  const submission = await providerJson(submitted, input.maxBytes) as Record<string, unknown>
+  const jobId = typeof submission.jobId === 'string' ? submission.jobId : ''
+  if (!/^[A-Za-z0-9]+$/.test(jobId)) throw new Error('UniProt ID Mapping API did not return a valid jobId.')
+
+  let statusReady = false
+  let statusRedirect: string | undefined
+  for (let attempt = 0; attempt < input.maxPollAttempts; attempt += 1) {
+    const status = await providerRequest(input, `https://rest.uniprot.org/idmapping/status/${jobId}`, {
+      headers: { accept: 'application/json' },
+      redirect: 'manual'
+    })
+    const location = status.headers.get('location')
+    if (status.status === 303 && location) {
+      statusRedirect = validatedUniProtUrl(location).toString()
+      statusReady = true
+      break
+    }
+    const payload = await providerJson(status, Math.min(input.maxBytes, 4 * 1024 * 1024)) as Record<string, unknown>
+    const jobStatus = typeof payload.jobStatus === 'string' ? payload.jobStatus.toUpperCase() : ''
+    if (jobStatus === 'FINISHED' || Array.isArray(payload.results) || Array.isArray(payload.failedIds)) {
+      statusReady = true
+      break
+    }
+    if (jobStatus && !['NEW', 'RUNNING', 'PENDING'].includes(jobStatus)) {
+      throw new Error(`UniProt ID Mapping job ${jobId} failed with status '${jobStatus}'.`)
+    }
+    if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+      throw new Error(`UniProt ID Mapping job ${jobId} failed: ${payload.messages.map(String).join('; ')}`)
+    }
+    await input.sleepImpl(input.pollIntervalMs)
+  }
+  if (!statusReady) {
+    throw new Error(`UniProt ID Mapping job ${jobId} did not finish after ${input.maxPollAttempts} polls.`)
+  }
+
+  const detailsResponse = await providerRequest(input, `https://rest.uniprot.org/idmapping/details/${jobId}`, {
+    headers: { accept: 'application/json' },
+    redirect: 'manual'
+  })
+  const details = await providerJson(detailsResponse, Math.min(input.maxBytes, 4 * 1024 * 1024)) as Record<string, unknown>
+  const redirectUrl = typeof details.redirectURL === 'string' ? details.redirectURL : statusRedirect
+  const resultsUrl = uniprotStreamResultsUrl(redirectUrl, jobId)
+  const resultResponse = await providerRequest(input, resultsUrl, {
+    headers: { accept: 'application/json' },
+    redirect: 'manual'
+  })
+  const payload = await providerJson(resultResponse, input.maxBytes) as Record<string, unknown>
+  const results = Array.isArray(payload.results)
+    ? payload.results.flatMap((entry): UniProtMappingEntry[] => {
+        if (!entry || typeof entry !== 'object') return []
+        const record = entry as Record<string, unknown>
+        return typeof record.from === 'string' && record.to !== undefined
+          ? [{ from: record.from, to: record.to }]
+          : []
+      })
+    : []
+  const failedIds = Array.isArray(payload.failedIds) ? payload.failedIds.map(String) : []
+  return { jobId, resultsUrl, results, failedIds }
+}
+
+async function providerRequest(
+  input: {
+    fetchImpl: typeof fetch
+    sleepImpl: (milliseconds: number) => Promise<void>
+    timeoutMs: number
+    maxRetries: number
+  },
+  value: string,
+  init: RequestInit
+): Promise<Response> {
+  const url = validatedUniProtUrl(value)
+  for (let attempt = 0; attempt <= input.maxRetries; attempt += 1) {
+    let response: Response
+    try {
+      response = await input.fetchImpl(url, { ...init, signal: AbortSignal.timeout(input.timeoutMs) })
+    } catch (error) {
+      if (attempt >= input.maxRetries) throw new Error(`UniProt ID Mapping request failed: ${errorMessage(error)}`)
+      await input.sleepImpl(Math.min(2_000, 250 * 2 ** attempt))
+      continue
+    }
+    if (response.ok || response.status === 303) return response
+    const retryable = response.status === 429 || response.status >= 500
+    if (!retryable || attempt >= input.maxRetries) {
+      const detail = await response.text().catch(() => '')
+      throw new Error(`UniProt ID Mapping request failed with HTTP ${response.status}${detail ? `: ${detail.slice(0, 500)}` : ''}.`)
+    }
+    const retryAfterHeader = response.headers.get('retry-after')
+    const retryAfterSeconds = retryAfterHeader === null ? Number.NaN : Number(retryAfterHeader)
+    await input.sleepImpl(Number.isFinite(retryAfterSeconds)
+      ? Math.min(10_000, retryAfterSeconds * 1_000)
+      : Math.min(2_000, 250 * 2 ** attempt))
+  }
+  throw new Error('UniProt ID Mapping request exhausted retries.')
+}
+
+async function providerJson(response: Response, maxBytes: number): Promise<unknown> {
+  const declared = Number(response.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new Error(`UniProt ID Mapping response exceeds the ${maxBytes}-byte limit.`)
+  }
+  const bytes = Buffer.from(await response.arrayBuffer())
+  if (bytes.byteLength > maxBytes) throw new Error(`UniProt ID Mapping response exceeds the ${maxBytes}-byte limit.`)
+  try {
+    return JSON.parse(bytes.toString('utf8')) as unknown
+  } catch (error) {
+    throw new Error(`UniProt ID Mapping response is not valid JSON: ${errorMessage(error)}`)
+  }
+}
+
+function validatedUniProtUrl(value: string | URL): URL {
+  const url = new URL(value, 'https://rest.uniprot.org/')
+  if (url.protocol !== 'https:' || url.hostname !== 'rest.uniprot.org' || !url.pathname.startsWith('/idmapping/')) {
+    throw new Error('UniProt ID Mapping redirect left the fixed rest.uniprot.org/idmapping origin.')
+  }
+  return url
+}
+
+function uniprotStreamResultsUrl(redirectUrl: string | undefined, jobId: string): string {
+  const url = validatedUniProtUrl(redirectUrl ?? `https://rest.uniprot.org/idmapping/results/${jobId}`)
+  if (url.pathname.includes('/idmapping/results/')) {
+    url.pathname = url.pathname.replace('/idmapping/results/', '/idmapping/stream/')
+  } else if (url.pathname.includes('/results/')) {
+    url.pathname = url.pathname.replace('/results/', '/results/stream/')
+  } else if (!url.pathname.includes('/stream/')) {
+    throw new Error('UniProt ID Mapping details returned an unsupported results URL.')
+  }
+  url.search = ''
+  url.searchParams.set('format', 'json')
+  return url.toString()
+}
+
+function providerMappingTarget(value: unknown): unknown | undefined {
+  if (typeof value === 'string' || typeof value === 'number') return value
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  for (const key of ['id', 'primaryAccession', 'uniProtkbId']) {
+    const candidate = record[key]
+    if (typeof candidate === 'string' || typeof candidate === 'number') return candidate
+  }
+  return undefined
+}
+
 async function requireConfirmedPlan(workspaceRoot: string, planId: string, operation?: string) {
   const path = join(workspaceRoot, '.sciforge', 'datasets', 'plans', `${safeId(planId)}.json`)
   const plan = JSON.parse(await readFile(path, 'utf8')) as {
@@ -1059,7 +1339,10 @@ async function requireConfirmedPlan(workspaceRoot: string, planId: string, opera
   if (!plan.confirmedByUser || plan.status !== 'confirmed') {
     throw new Error(`Preparation plan '${planId}' is not confirmed by the user.`)
   }
-  if (operation && !plan.operations?.some((candidate) => candidate.tool === operation)) {
+  const authorized = operation === 'dataset_id_map'
+    ? plan.operations?.some((candidate) => ['dataset_id_map', 'dataset_id_map_provider'].includes(candidate.tool ?? ''))
+    : plan.operations?.some((candidate) => candidate.tool === operation)
+  if (operation && !authorized) {
     throw new Error(`Preparation plan '${planId}' does not authorize operation '${operation}'.`)
   }
   return { path, plan }
@@ -1119,6 +1402,7 @@ async function writeDerivedArtifact(input: {
   parameters: Record<string, unknown>
   summary: Record<string, unknown>
   records?: number
+  origins?: DatasetOrigin[]
 }): Promise<ArtifactManifest & { reused: boolean }> {
   const outputName = safeFileName(input.outputFileName)
   const operationHash = fingerprint({
@@ -1157,7 +1441,10 @@ async function writeDerivedArtifact(input: {
     parameters: input.parameters,
     summary: input.summary,
     schema: inferArtifactSchema(input.data, input.format),
-    origins: await collectParentOrigins(input.parents),
+    origins: deduplicateOrigins([
+      ...await collectParentOrigins(input.parents),
+      ...(input.origins ?? [])
+    ]),
     createdAt: new Date().toISOString()
   }
   await writeIdempotentJson(manifestPath, manifest)
@@ -1299,6 +1586,11 @@ function safeFileName(value: string): string {
 function safeId(value: string): string {
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(value)) throw new Error(`Invalid dataset identifier: ${value}`)
   return value
+}
+
+function providerDatabaseSlug(value: string): string {
+  const slug = value.toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '')
+  return safeId(slug)
 }
 
 function jsonBytes(value: unknown): Buffer {

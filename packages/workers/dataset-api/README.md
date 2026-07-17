@@ -32,6 +32,7 @@ Tools:
 - `dataset_transform`: apply allow-listed field normalization and scalar conversion operations without arbitrary code.
 - `dataset_deduplicate`: remove duplicate records using explicit keys.
 - `dataset_id_map`: map biomedical identifiers through an explicit mapping artifact with one-to-many, unmatched, and ambiguous-record handling.
+- `dataset_id_map_provider`: use the fixed UniProt batch ID Mapping API, persist its mapping response and request provenance, then apply it through the deterministic mapping engine.
 - `dataset_join`: perform deterministic inner/left/right/full joins and persist both sides' unmatched records as separate artifacts.
 - `dataset_validate`: validate record counts, fields, types, ranges, uniqueness, missingness, and FASTA integrity.
 - `dataset_publish`: create a release directory with data, manifest, schema, quality report, checksums, and full parent/plan provenance.
@@ -48,7 +49,9 @@ NCBI Gene FASTA requests are provider-aware: SciForge resolves the Gene record's
 
 Authentication secrets are never written to the registry. A source may refer
 to an environment variable containing a bearer token or custom header value.
-Requests are GET-only, bounded by timeout and response-size limits, reject
-cross-origin redirects, and require HTTPS except for loopback development APIs.
+Generic registered-source requests are GET-only, bounded by timeout and
+response-size limits, reject cross-origin redirects, and require HTTPS except
+for loopback development APIs. The UniProt ID-mapping adapter is the only
+allow-listed POST workflow and cannot target an arbitrary URL.
 Raw downloads support byte ranges and produce SHA-256 checksums without parsing
 or transforming the source bytes.

@@ -19,6 +19,7 @@ import {
   datasetDeduplicateInputSchema,
   datasetIdMapInputSchema,
   datasetJoinInputSchema,
+  datasetProviderIdMapInputSchema,
   datasetValidateInputSchema,
   datasetPublishInputSchema
 } from './contract.js'
@@ -245,6 +246,49 @@ export function createDatasetApiMcpServer(
     return textResult(
       `Mapped ${result.counts.mappedRecords}/${result.counts.inputRecords} records; unmatched=${result.counts.unmatchedRecords}, ambiguous=${result.counts.ambiguousRecords}.`,
       { result }
+    )
+  }))
+
+  server.registerTool('dataset_id_map_provider', {
+    title: 'Map Biomedical IDs with a Provider',
+    description: 'Submit a bounded batch ID-mapping job to the fixed UniProt ID Mapping API, poll it with retries and time limits, persist the returned mapping table with network provenance, then deterministically apply it with explicit one-to-many and unmatched-record policies. Arbitrary URLs and arbitrary POST requests are not accepted.',
+    inputSchema: datasetProviderIdMapInputSchema,
+    annotations: { ...CONTROLLED_WRITE_ANNOTATIONS, openWorldHint: true }
+  }, async (args) => runTool(async () => {
+    const input = datasetProviderIdMapInputSchema.parse(args)
+    const provider = await processing.providerIdMapping(input)
+    const result = await processing.mapIds({
+      workspaceRoot: input.workspaceRoot,
+      planId: input.planId,
+      inputArtifact: input.inputArtifact,
+      mappingArtifact: provider.mappingArtifact.path,
+      inputFormat: input.inputFormat,
+      mappingFormat: 'json',
+      inputRecordPath: input.inputRecordPath,
+      inputField: input.inputField,
+      mappingFromField: 'from',
+      mappingToField: 'to',
+      outputField: input.outputField,
+      cardinality: input.cardinality,
+      onUnmapped: input.onUnmapped,
+      caseSensitive: input.caseSensitive,
+      deduplicateTargets: input.deduplicateTargets,
+      outputFormat: input.outputFormat,
+      outputFileName: input.outputFileName,
+      maxOutputRecords: input.maxOutputRecords,
+      maxBytes: input.maxBytes
+    })
+    return textResult(
+      `UniProt mapped ${result.counts.mappedRecords}/${result.counts.inputRecords} records from ${input.fromDatabase} to ${input.toDatabase}; unmatched=${result.counts.unmatchedRecords}, ambiguous=${result.counts.ambiguousRecords}.`,
+      { result: {
+        ...result,
+        providerMappingArtifact: provider.mappingArtifact,
+        providerJob: {
+          jobId: provider.mapping.jobId,
+          resultsUrl: provider.mapping.resultsUrl,
+          failedIdCount: provider.mapping.failedIds.length
+        }
+      } }
     )
   }))
 

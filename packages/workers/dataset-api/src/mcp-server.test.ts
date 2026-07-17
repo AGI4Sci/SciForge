@@ -43,6 +43,7 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
       'dataset_transform',
       'dataset_deduplicate',
       'dataset_id_map',
+      'dataset_id_map_provider',
       'dataset_join',
       'dataset_validate',
       'dataset_publish'

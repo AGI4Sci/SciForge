@@ -83,7 +83,7 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
-  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map|join|validate|publish)/i)
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
@@ -92,7 +92,7 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
   if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
   if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
-  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_join'].includes(toolName)) return 'processing'
+  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_id_map_provider', 'dataset_join'].includes(toolName)) return 'processing'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'
   if (toolName.endsWith('_raw_data') || result?.artifact !== undefined) return 'raw-data'
   if (toolName.endsWith('_catalog') || Array.isArray(result?.providers)) return 'catalog'
