@@ -113,6 +113,8 @@ import type {
   BiologyRoomTarget
 } from './biology-room'
 import type {
+  CapabilityReadiness,
+  CapabilityReadinessRequest,
   CapabilityDescriptor,
   CapabilityDiscoveryQuery,
   CapabilityEventQuery,
@@ -1231,6 +1233,7 @@ export type SciForgeApi = {
   unwatchWorkspaceFile: (watchId: string) => Promise<boolean>
   onWorkspaceFileChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
   capabilities: {
+    readiness: (input: CapabilityReadinessRequest) => Promise<CapabilityReadiness>
     discover: (input?: {
       workspaceId?: string
       query?: CapabilityDiscoveryQuery
@@ -1256,6 +1259,7 @@ export type SciForgeApi = {
     }) => void) => () => void
   }
   workspacePreview: {
+    readiness: () => Promise<CapabilityReadiness>
     listPlugins: () => Promise<WorkspacePreviewPluginManifest[]>
     open: (input: WorkspacePreviewOpenInput) => Promise<WorkspacePreviewOpenResult>
     observe: (sessionId: string) => Promise<WorkspacePreviewObserveResult>
@@ -1317,6 +1321,7 @@ export type SciForgeApi = {
   }
   /** Optional while connecting to an older desktop or browser-only bridge. */
   biologyRoom?: {
+    readiness: () => Promise<CapabilityReadiness>
     pickFile: (workspaceRoot: string) => Promise<WorkspacePickResult>
     create: (input: BiologyRoomCreateInput) => Promise<CapabilityBoundBiologyRoomManifest>
     openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<CapabilityBoundBiologyRoomOpenOrCreateResult>

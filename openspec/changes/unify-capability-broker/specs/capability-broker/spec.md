@@ -18,6 +18,28 @@ SciForge SHALL expose stable discovery, observation, invocation, and event opera
 - **WHEN** an enabled capability is registered after an agent task was created
 - **THEN** the next discovery call returns it without rematerializing the task tool catalog
 
+### Requirement: Capability readiness is fail-visible
+SciForge SHALL perform an explicit broker contract and required-operation readiness handshake before migrated callers treat discovery or facade results as authoritative.
+
+#### Scenario: Required operations are ready
+- **WHEN** the transport contract matches and every caller-required operation is registered for its audience and workspace
+- **THEN** readiness returns the current contract version, registry fingerprint, and a `ready` status, including when no optional operations exist
+
+#### Scenario: Transport or registration is incomplete
+- **WHEN** the main/preload/renderer contract versions differ, the readiness channel is absent, or a required operation is not registered
+- **THEN** the caller reports an incompatible or incomplete capability error and does not substitute an empty list, legacy API, direct domain IPC, or shell fallback
+
+### Requirement: Current visible resources are canonical
+SciForge SHALL publish the current visible surface as a generic canonical capability resource summary with identity, freshness, and operation references.
+
+#### Scenario: Agent acts on the current surface
+- **WHEN** an agent request refers to the current visible resource and a current registered resource summary exists
+- **THEN** the agent resolves and observes that resource before acting, without guessing a workspace path or reading a historical sidecar
+
+#### Scenario: Current resource is stale or unavailable
+- **WHEN** the current resource summary is stale, superseded, expired, or lacks a required operation
+- **THEN** the agent receives a fail-visible resource readiness error and does not route through a legacy GUI tool, direct sidecar access, or shell path fallback
+
 ### Requirement: Agent transport hides infrastructure fields
 SciForge SHALL expose owned capabilities to agents only through stable broker meta-tools whose domain inputs exclude transport coordination fields.
 

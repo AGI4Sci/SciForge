@@ -4,6 +4,9 @@ import { createCapabilityFacades } from '../../../preload/capability-facades'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
 const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
+const DEV_INSTANCE_ID = typeof __SCIFORGE_DEV_INSTANCE_ID__ === 'string'
+  ? __SCIFORGE_DEV_INSTANCE_ID__.trim()
+  : ''
 
 type BridgeEnvelope<T> =
   | { ok: true; payload: T }
@@ -63,6 +66,7 @@ function ensureEventSource(): void {
   if (eventSource || typeof EventSource === 'undefined') return
   const eventsUrl = new URL(`${bridgeUrl.replace(/\/$/, '')}/events`)
   eventsUrl.searchParams.set('clientId', clientId)
+  if (DEV_INSTANCE_ID) eventsUrl.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
   eventSource = new EventSource(eventsUrl.toString())
   eventSource.addEventListener('bridge-message', (event) => {
     let message: BridgeMessage
@@ -95,7 +99,8 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-SciForge-Client': clientId
+      'X-SciForge-Client': clientId,
+      ...(DEV_INSTANCE_ID ? { 'X-SciForge-Dev-Instance': DEV_INSTANCE_ID } : {})
     },
     body: JSON.stringify({ channel, payload })
   }).catch((error) => {
@@ -121,6 +126,7 @@ function createApi(): SciForgeApi {
     createResourceContentUrl: (access) => {
       const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/capability/resources/content`)
       url.searchParams.set('clientId', clientId)
+      if (DEV_INSTANCE_ID) url.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
       url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
       return url.toString()
     }
@@ -281,6 +287,7 @@ function createApi(): SciForgeApi {
     unwatchWorkspaceFile: (watchId) => invoke('file:unwatch-workspace', watchId),
     onWorkspaceFileChanged: (handler) => onChannel('file:workspace-changed', handler),
     capabilities: {
+      readiness: (input) => invoke('capability:readiness', input),
       discover: (input = {}) => invoke('capability:discover', input),
       observe: (input) => invoke('capability:observe', input),
       invoke: (input) => invoke('capability:invoke', input),

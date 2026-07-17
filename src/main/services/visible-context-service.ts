@@ -193,6 +193,11 @@ export class VisibleContextService {
     if (snapshot.windowId === 'unavailable') {
       throw new Error('No visible SciForge surface is currently available.')
     }
+    if (snapshot.freshness.stale) {
+      throw new Error(
+        `The visible SciForge surface is stale (${snapshot.freshness.ageMs}ms old); wait for a fresh renderer publication before using current-resource operations.`
+      )
+    }
     return {
       resourceId: snapshot.windowId,
       ...(snapshot.workspaceRoot ? { workspaceId: snapshot.workspaceRoot } : {}),
@@ -386,6 +391,7 @@ export class VisibleContextService {
   private surfaceObservationState(snapshot: VisibleContextSnapshot): CapabilityJsonValue {
     return {
       ...(snapshot.route ? { route: snapshot.route } : {}),
+      freshness: snapshot.freshness,
       targets: snapshot.components.flatMap((component) => (
         (component.visualTargets ?? []).map((target) => ({
           targetRef: this.surfaceTargetRef(snapshot.windowId, component.id, target.id),
@@ -404,6 +410,10 @@ export class VisibleContextService {
               ...(resource.title || resource.name
                 ? { title: resource.title ?? resource.name }
                 : {}),
+              component: component.component,
+              priority: component.priority ?? 0,
+              active: true,
+              updatedAt: resource.updatedAt ?? component.updatedAt,
               ...(('resourceRef' in resource.capability && resource.capability.resourceRef)
                 ? { resourceRef: resource.capability.resourceRef }
                 : 'resource' in resource.capability

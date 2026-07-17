@@ -1784,7 +1784,13 @@ async function waitForManagedRuntimeReadyBeforeStop(
 
 app.whenReady().then(async () => {
   traceStartup('app.whenReady:start')
-  if (!gotSingleInstanceLock) return
+  if (!gotSingleInstanceLock) {
+    // electron-vite has already launched Electron by this point. Exiting here
+    // ensures its supervisor tears down the renderer instead of leaving a
+    // headless, port-owning development instance behind.
+    app.quit()
+    return
+  }
 
   traceStartup('install webview guards:start')
   installDevPreviewWebviewGuards()
@@ -2477,7 +2483,8 @@ app.whenReady().then(async () => {
         )
       },
       resourceContent: capabilityIpcRegistration.resourceContent,
-      allowAllChannels: true
+      allowAllChannels: true,
+      instanceId: process.env.SCIFORGE_DEV_INSTANCE_ID
     }).then((server) => {
       devBrowserBridgeServer = server
       console.info(`[sciforge dev] browser bridge listening at ${server.url}`)

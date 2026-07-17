@@ -30,6 +30,7 @@ import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
+import { AnchoredCommentsTopBarActions } from '../anchored-comments'
 
 export type RightPanelMode =
   | 'todo'
@@ -538,21 +539,26 @@ export function WorkbenchTopBar({
             >
               <Icon className="h-4 w-4" strokeWidth={1.75} />
             </button>
-            {isChanges && onToggleTerminal ? (
-              <button
-                type="button"
-                onClick={onToggleTerminal}
-                className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
-                  terminalOpen
-                    ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-                    : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
-                }`}
-                aria-label={t('rightPanelTerminal')}
-                aria-pressed={terminalOpen}
-                title={t('rightPanelTerminal')}
-              >
-                <Terminal className="h-4 w-4" strokeWidth={1.75} />
-              </button>
+            {isChanges ? (
+              <>
+                {onToggleTerminal ? (
+                  <button
+                    type="button"
+                    onClick={onToggleTerminal}
+                    className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+                      terminalOpen
+                        ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                        : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+                    }`}
+                    aria-label={t('rightPanelTerminal')}
+                    aria-pressed={terminalOpen}
+                    title={t('rightPanelTerminal')}
+                  >
+                    <Terminal className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                ) : null}
+                <AnchoredCommentsTopBarActions />
+              </>
             ) : null}
           </Fragment>
         )

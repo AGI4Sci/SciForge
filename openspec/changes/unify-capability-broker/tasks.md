@@ -54,3 +54,10 @@
 - [x] 9.3 Normalize dynamic MCP structured errors and deny shell OS capture/window automation when a registered surface-inspection capability is available.
 - [x] 9.4 Delete duplicated runtime-specific recovery decision engines and add cross-runtime contract tests.
 - [x] 9.5 Replace the obsolete `toolStorm` configuration/capability vocabulary with runtime-neutral execution governance names; do not retain compatibility fields.
+
+## 10. Fail-visible Readiness and Current-resource Routing
+
+- [x] 10.1 Add a versioned capability readiness handshake that distinguishes a valid empty registry from transport mismatch, incompatible contract, and missing required operations.
+- [ ] 10.2 Gate migrated preload facades and renderer hosts on readiness, surface failures to users, and remove empty-data error fallbacks.
+- [x] 10.3 Publish the current visible surface as a canonical capability resource summary and require agent routing to prefer that resource over path guessing or legacy direct-tool/shell access.
+- [ ] 10.4 Add readiness, version skew, missing-operation, resource freshness, and no-fallback regression tests.

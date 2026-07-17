@@ -2617,10 +2617,10 @@ function shouldAttachVisibleContextLookupHint(text: string): boolean {
 
 function renderVisibleContextLookupHint(_snapshot: VisibleContextSnapshot): string {
   return [
-    'Visible GUI context lookup:',
-    'The current request appears to reference content visible in SciForge. Use the broker meta-tools before saying the visible surface is unavailable.',
-    'Call `sciforge_discover` to find and invoke the current-surface read, call `sciforge_observe` with its opaque resourceRef, then call `sciforge_invoke` using only operationRef, resourceRef, targetRef, and domain input returned by the broker.',
-    'Do not infer or pass component ids, coordinates, handles, revisions, or invocation ids.'
+    'Canonical current-resource routing:',
+    'The request refers to a current, open, selected, visible, or deictic SciForge resource. Call `sciforge_discover` to find and invoke `surface.current`, then call `sciforge_observe` on the returned canonical resourceRef before acting.',
+    'Use only operationRef, resourceRef, targetRef, and domain input returned by the broker. Do not infer component ids, coordinates, paths, handles, revisions, or invocation ids.',
+    'When a canonical current resource exists it is authoritative: do not substitute generic workspace tools, legacy GUI APIs, direct application-state/sidecar reads, or shell path guessing. Report readiness, freshness, or missing-operation errors without fallback.'
   ].join('\n')
 }
 

@@ -2,11 +2,20 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
+import {
+  AnchoredCommentsTopBarActionsView,
+  useAnchoredCommentStore
+} from '../anchored-comments'
 import { WorkbenchTopBar } from './WorkbenchTopBar'
 
 describe('WorkbenchTopBar Paper Radar entry', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    useAnchoredCommentStore.setState({
+      commentMode: false,
+      threads: [],
+      panelOpen: false
+    })
   })
 
   it('hides Paper Radar when the extension is not enabled', () => {
@@ -48,6 +57,28 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
 
     expect(html).toContain('Project DAG')
     expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('keeps the global comment actions in the top row', () => {
+    const initial = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn()
+    }))
+    expect(initial).toContain('aria-label="Comment on anything"')
+    expect(initial).not.toContain('data-sciforge-comment-launcher')
+    expect(initial).not.toContain('aria-label="Open comments"')
+
+    const active = renderToStaticMarkup(createElement(AnchoredCommentsTopBarActionsView, {
+      commentMode: true,
+      panelOpen: true,
+      threadCount: 1,
+      onToggleCommentMode: vi.fn(),
+      onTogglePanel: vi.fn()
+    }))
+    expect(active).toContain('aria-label="Exit comment mode"')
+    expect(active).toContain('aria-label="Open comments"')
+    expect(active).toContain('aria-expanded="true"')
+    expect(active).toContain('>1</span>')
   })
 
   it('keeps right-panel controls reachable in narrow workbench widths', () => {

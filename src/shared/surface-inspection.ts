@@ -30,11 +30,20 @@ export const surfaceVisibleResourceSchema = z.object({
   kind: z.string().trim().min(1).max(128),
   role: z.string().trim().min(1).max(128).optional(),
   title: z.string().trim().min(1).max(512).optional(),
+  component: z.string().trim().min(1).max(128).optional(),
+  priority: z.number().finite().optional(),
+  active: z.boolean().optional(),
+  updatedAt: z.string().datetime({ offset: true }).optional(),
   resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
 }).strict()
 
 export const surfaceObservationStateSchema = z.object({
   route: z.string().trim().max(128).optional(),
+  freshness: z.object({
+    stale: z.boolean(),
+    ageMs: z.number().finite().nonnegative(),
+    staleAfterMs: z.number().finite().positive()
+  }).strict(),
   targets: z.array(surfaceTargetObservationSchema).max(64),
   resources: z.array(surfaceVisibleResourceSchema).max(64)
 }).strict()

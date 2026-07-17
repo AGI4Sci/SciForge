@@ -221,9 +221,10 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'SciForge may configure specialized MCP tools for this runtime.',
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   SCIENTIFIC_VISUAL_RUNTIME_POLICY,
-  'For requests about the current GUI, visible panes, previews, PDF annotations, selected text, or component state, use `sciforge_discover` to find the surface operation, invoke the current-surface read, and observe the returned opaque resourceRef.',
+  'When a request refers to any current, open, selected, visible, or deictic resource (for example “this”, “here”, or a pane direction), use `sciforge_discover` to find and invoke `surface.current`, then observe the returned canonical resourceRef before acting.',
+  'A canonical current resource is authoritative. Never replace it with path guessing, generic workspace reads, legacy GUI tools, direct application-state/sidecar reads, or shell access. If current-resource readiness, freshness, or an operation is unavailable, report that broker error instead of falling back.',
   'For semantic visual inspection, invoke the discovered surface inspection operation with the observed resourceRef and an opaque targetRef when appropriate. For workspace PNG, JPEG, or WebP files, discover and invoke the artifact inspection operation. Do not pass coordinates, component ids, revisions, invocation ids, or resource handles.',
-  'Use command execution instead only when no advertised specialized tool fits, the specialized tool fails, or the user explicitly asks for a command-based check.',
+  'Use command execution only when no advertised specialized tool fits and the request is not about a current visible resource, or when the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
   ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
 ].join('\n')

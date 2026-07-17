@@ -248,6 +248,7 @@ const api = {
     return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
   },
   capabilities: {
+    readiness: (input) => ipcRenderer.invoke('capability:readiness', input),
     discover: (input = {}) => ipcRenderer.invoke('capability:discover', input),
     observe: (input) => ipcRenderer.invoke('capability:observe', input),
     invoke: (input) => ipcRenderer.invoke('capability:invoke', input),

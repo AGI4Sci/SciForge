@@ -26,12 +26,47 @@ const operation: CapabilityDescriptor = {
   tags: []
 }
 
+function readyCapabilityBroker() {
+  return {
+    contractVersion: 1,
+    status: 'ready' as const,
+    registryFingerprint: 'a'.repeat(64),
+    availableCapabilityIds: Object.values(PRELOAD_CAPABILITY_IDS),
+    missingCapabilityIds: [],
+    message: 'Capability broker is ready.'
+  }
+}
+
 describe('capability facades', () => {
+  it('fails visibly on an incomplete broker and retries readiness instead of caching failure', async () => {
+    let readinessChecks = 0
+    const invoke = vi.fn(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:readiness') {
+        readinessChecks += 1
+        return readinessChecks === 1
+          ? {
+              ...readyCapabilityBroker(),
+              status: 'incomplete' as const,
+              missingCapabilityIds: [PRELOAD_CAPABILITY_IDS.workspacePreviewList],
+              message: 'Workspace Preview capability is not registered.'
+            }
+          : readyCapabilityBroker()
+      }
+      return invocation(invocationAction(payload), [])
+    })
+    const facades = createCapabilityFacades({ invoke })
+
+    await expect(facades.workspacePreview.listPlugins()).rejects.toThrow(/not registered/)
+    await expect(facades.workspacePreview.listPlugins()).resolves.toEqual([])
+    expect(readinessChecks).toBe(2)
+  })
+
   it('keeps Workspace Preview on capability IPC, refreshes handles, and preserves UI result shapes', async () => {
     const first = handle('preview-1')
     const observed = handle('preview-2')
     const edited = handle('preview-3')
     const invoke = vi.fn(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:readiness') return readyCapabilityBroker()
       if (channel === 'file:watch-workspace') return { watchId: 'watch-1' }
       if (channel === 'file:unwatch-workspace') return true
       if (channel === 'capability:observe') {
@@ -169,6 +204,7 @@ describe('capability facades', () => {
     const manifest = { schemaVersion: 1, roomId: 'room-1', title: 'Room 1', revision: 1 }
     let observationCount = 0
     const invoke = vi.fn(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:readiness') return readyCapabilityBroker()
       if (channel === 'capability:observe') {
         observationCount += 1
         return observation(observationCount === 1 ? observed : refreshed, {
@@ -262,6 +298,7 @@ describe('capability facades', () => {
     const room = handle('room-open')
     const renewed = handle('room-renewed')
     const invoke = vi.fn(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:readiness') return readyCapabilityBroker()
       const actionId = channel === 'capability:invoke' ? invocationAction(payload) : ''
       if (actionId === PRELOAD_CAPABILITY_IDS.biologyRoomOpen) {
         return invocation(actionId, { observation: { roomId: 'room-2' }, resource: room })

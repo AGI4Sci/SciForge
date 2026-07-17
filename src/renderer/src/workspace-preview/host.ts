@@ -177,8 +177,9 @@ export class WorkspacePreviewHost {
       this.patchState({ error: null })
       return plugins
     } catch (error) {
-      this.patchState({ error: messageFromError(error) })
-      return []
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      throw new Error(message)
     }
   }
 

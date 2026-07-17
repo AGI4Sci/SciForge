@@ -1,11 +1,14 @@
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import { ipcMain } from 'electron'
 import { z } from 'zod'
 import {
+  CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityDiscoveryQuerySchema,
   capabilityEventQuerySchema,
   capabilityInvocationRequestSchema,
   capabilityObserveRequestSchema,
+  capabilityReadinessRequestSchema,
+  capabilityReadinessSchema,
   capabilityResourceHandleSchema,
   type CapabilityApprovalGrant,
   type CapabilityCallerContextInput,
@@ -14,6 +17,7 @@ import {
 import type { CapabilityBroker } from './broker'
 
 export const CAPABILITY_IPC_CHANNELS = Object.freeze({
+  readiness: 'capability:readiness',
   discover: 'capability:discover',
   observe: 'capability:observe',
   invoke: 'capability:invoke',
@@ -112,6 +116,41 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
   handle(CAPABILITY_IPC_CHANNELS.discover, (event, payload) => {
     const input = parse(capabilityDiscoverIpcSchema, payload)
     return options.broker.discover(uiCaller(event.sender, input.workspaceId), input.query)
+  })
+  handle(CAPABILITY_IPC_CHANNELS.readiness, (event, payload) => {
+    const input = parse(capabilityReadinessRequestSchema, payload)
+    const descriptors = options.broker.discover(uiCaller(event.sender, input.workspaceId))
+    const availableCapabilityIds = descriptors.map((descriptor) => descriptor.id).sort()
+    const available = new Set(availableCapabilityIds)
+    const missingCapabilityIds = input.requiredCapabilityIds
+      .filter((id) => !available.has(id))
+      .sort()
+    const status = input.expectedContractVersion !== CAPABILITY_BROKER_CONTRACT_VERSION
+      ? 'incompatible'
+      : missingCapabilityIds.length > 0
+        ? 'incomplete'
+        : 'ready'
+    const registryFingerprint = createHash('sha256')
+      .update(JSON.stringify(descriptors.map((descriptor) => ({
+        contractVersion: descriptor.contractVersion,
+        id: descriptor.id,
+        version: descriptor.version
+      }))))
+      .digest('hex')
+    const message = status === 'incompatible'
+      ? `Capability broker contract mismatch: renderer expects ${input.expectedContractVersion}, main provides ${CAPABILITY_BROKER_CONTRACT_VERSION}.`
+      : status === 'incomplete'
+        ? `Capability registry is missing required operations: ${missingCapabilityIds.join(', ')}.`
+        : `Capability broker is ready with ${availableCapabilityIds.length} UI operation${availableCapabilityIds.length === 1 ? '' : 's'}.`
+
+    return capabilityReadinessSchema.parse({
+      contractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
+      status,
+      registryFingerprint,
+      availableCapabilityIds,
+      missingCapabilityIds,
+      message
+    })
   })
   handle(CAPABILITY_IPC_CHANNELS.observe, (event, payload) => {
     const input = parse(capabilityObserveIpcSchema, payload)

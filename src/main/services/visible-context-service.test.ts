@@ -103,6 +103,16 @@ function inspectedEvidence(task: string) {
 }
 
 describe('VisibleContextService surface inspection v2', () => {
+  it('fails visibly instead of routing a stale current resource', async () => {
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(vi.fn()),
+      now: () => new Date('2026-07-11T03:00:06.000Z')
+    })
+    await service.publish(snapshot())
+
+    await expect(service.currentSurface()).rejects.toThrow(/surface is stale/u)
+  })
+
   it('derives freshness and rejects out-of-order publishes for the same window', async () => {
     const userDataDir = await temporaryUserData()
     let now = new Date('2026-07-11T03:00:01.000Z')

@@ -1,5 +1,9 @@
 export { AnchoredCommentsLayer } from './AnchoredCommentsLayer'
 export {
+  AnchoredCommentsTopBarActions,
+  AnchoredCommentsTopBarActionsView
+} from './AnchoredCommentsTopBarActions'
+export {
   ANCHORED_COMMENTS_ADD_TO_CONVERSATION_EVENT,
   ANCHORED_COMMENTS_DELETE_EVENT,
   ANCHORED_COMMENTS_STATUS_CHANGE_EVENT,

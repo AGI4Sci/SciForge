@@ -220,7 +220,8 @@ function workspacePreviewOperations(
   canExport: boolean,
   audience: 'ui' | 'agent' | 'system'
 ): string[] {
-  const annotationOperations = canAnnotate && observation.documentAnnotations
+  const annotationDocument = /\.(?:pdf|docx)$/iu.test(observation.file.path)
+  const annotationOperations = canAnnotate && annotationDocument
     ? [
         APP_CAPABILITY_IDS.workspacePreviewAnnotationsList,
         APP_CAPABILITY_IDS.workspacePreviewAnnotationsUpdate,
@@ -229,7 +230,7 @@ function workspacePreviewOperations(
       ]
     : []
   const genericActions = observation.actions.filter((action) => !action.startsWith('annotation.'))
-  const uiAnnotationOperations = audience === 'ui' && canAnnotate && observation.documentAnnotations &&
+  const uiAnnotationOperations = audience === 'ui' && canAnnotate &&
     observation.file.path.toLowerCase().endsWith('.pdf')
     ? [
         APP_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
@@ -389,7 +390,12 @@ function surfaceCapabilities(
       handler: async (_, context) => {
         const current = await service.currentSurface()
         const surface = context.issueResource(surfaceResource(service, current))
-        return { output: capabilityJsonValueSchema.parse({ surface }) }
+        return {
+          output: capabilityJsonValueSchema.parse({
+            surface,
+            current: current.state
+          })
+        }
       }
     }),
     defineCapability({

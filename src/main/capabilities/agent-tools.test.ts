@@ -90,7 +90,11 @@ describe('CapabilityAgentToolSurface', () => {
       surfaceHandle,
       'res_surface_abcdefghijklmnopqrstuvwxyz',
       'surface',
-      { targets: [], resources: [{ kind: 'workspace-preview', resource: documentHandle }] },
+      {
+        freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        targets: [],
+        resources: [{ kind: 'workspace-preview', resource: documentHandle }]
+      },
       [inspect, mutate]
     )
     const documentObservation = observation(

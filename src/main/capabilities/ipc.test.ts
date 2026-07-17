@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events'
 import { z } from 'zod'
 import { describe, expect, it, vi } from 'vitest'
 import { CapabilityBroker } from './broker'
+import { CAPABILITY_BROKER_CONTRACT_VERSION } from '../../shared/capability-broker'
 import { CAPABILITY_IPC_CHANNELS, registerCapabilityIpc } from './ipc'
 import { CapabilityRegistry, defineCapability } from './registry'
 
@@ -62,6 +63,39 @@ describe('capability IPC adapter', () => {
       workspaceId: '/workspace'
     }) as Array<{ id: string }>
     expect(discovered.map((descriptor) => descriptor.id)).toEqual(['test-resource.update'])
+
+    const ready = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.readiness)?.(event, {
+      workspaceId: '/workspace',
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
+      requiredCapabilityIds: ['test-resource.update']
+    }) as {
+      status: string
+      registryFingerprint: string
+      availableCapabilityIds: string[]
+      missingCapabilityIds: string[]
+    }
+    expect(ready).toMatchObject({
+      status: 'ready',
+      availableCapabilityIds: ['test-resource.update'],
+      missingCapabilityIds: []
+    })
+    expect(ready.registryFingerprint).toMatch(/^[a-f0-9]{64}$/)
+
+    await expect(registration.invoke(CAPABILITY_IPC_CHANNELS.readiness, {
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION + 1,
+      requiredCapabilityIds: ['test-resource.missing']
+    }, sender)).resolves.toMatchObject({
+      status: 'incompatible',
+      missingCapabilityIds: ['test-resource.missing']
+    })
+
+    await expect(registration.invoke(CAPABILITY_IPC_CHANNELS.readiness, {
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
+      requiredCapabilityIds: ['test-resource.missing']
+    }, sender)).resolves.toMatchObject({
+      status: 'incomplete',
+      missingCapabilityIds: ['test-resource.missing']
+    })
 
     const subscription = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.subscribe)?.(event, {
       workspaceId: '/workspace'

@@ -38,7 +38,7 @@
   ],
   "scripts": {
     "prebuild": "npm run capability:check",
-    "dev": "npm run build:local-runtime && electron-vite dev",
+    "dev": "node ./scripts/dev-bootstrap.mjs",
     "build": "npm run build:local-runtime && electron-vite build",
     "build:local-runtime": "node ./scripts/local-runtime-package.cjs build",
     "rebuild:electron-native": "node ./scripts/local-runtime-package.cjs rebuild-electron-native",

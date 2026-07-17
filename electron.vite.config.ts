@@ -43,10 +43,18 @@ export default defineConfig({
     }
   },
   renderer: {
+    define: {
+      __SCIFORGE_DEV_INSTANCE_ID__: JSON.stringify(process.env.SCIFORGE_DEV_INSTANCE_ID ?? '')
+    },
     server: {
       // Bind the web dev surface on both loopback families so browser debugging
       // works whether localhost resolves to ::1 or 127.0.0.1.
       host: '::',
+      // Never drift to 5174+ when a stale dev renderer is already alive. The
+      // bridge endpoint intentionally owns 5174, so an incremented renderer
+      // would otherwise present a page backed by a different Electron main.
+      port: 5173,
+      strictPort: true,
       // The renderer HTML keeps a strict script-src CSP. React Fast Refresh adds
       // an inline module preamble in dev, which loopback browser previews reject
       // and then lazy routes hang at the startup fallback.

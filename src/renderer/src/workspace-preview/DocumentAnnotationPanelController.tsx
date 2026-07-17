@@ -51,6 +51,7 @@ import {
 } from './document-annotation-operations'
 
 const ANNOTATION_LIST_OPERATION_ID = 'workspace-preview.annotations.list'
+const ANNOTATION_IMPORT_OPERATION_ID = 'workspace-preview.annotations.import'
 const ANNOTATION_REVIEW_GENERATE_OPERATION_ID = 'workspace-preview.annotations.review.generate'
 const ANNOTATION_REVIEW_IMPROVE_OPERATION_ID = 'workspace-preview.annotations.review.improve'
 
@@ -146,10 +147,13 @@ export function DocumentAnnotationPanelController({
   const operationIds = context.state.capability?.operations.map((operation) => operation.id) ?? []
   const canReadSidecar = Boolean(
     sessionId &&
-    observation?.documentAnnotations &&
     operationIds.includes(ANNOTATION_LIST_OPERATION_ID)
   )
-  const canImportSidecar = Boolean(documentKind === 'pdf' && sessionId)
+  const canImportSidecar = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_IMPORT_OPERATION_ID)
+  )
   const canGeneratePdfReview = Boolean(
     documentKind === 'pdf' &&
     sessionId &&

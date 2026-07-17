@@ -1,22 +1,14 @@
 import type {
-  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
   ReactElement
 } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { GripVertical, MessageSquarePlus, MessagesSquare, X } from 'lucide-react'
+import { MessageSquarePlus, X } from 'lucide-react'
 import { CommentEditor } from './CommentEditor'
 import { CommentPanel } from './CommentPanel'
 import { ProductFeedbackDialog } from './ProductFeedbackDialog'
-import {
-  exceedsCommentLauncherDragThreshold,
-  clampCommentLauncherPosition,
-  readCommentLauncherPosition,
-  writeCommentLauncherPosition,
-  type CommentLauncherPoint
-} from './comment-launcher-position'
 import {
   ANCHORED_COMMENTS_DELETE_EVENT,
   ANCHORED_COMMENTS_STATUS_CHANGE_EVENT,
@@ -67,7 +59,6 @@ export function AnchoredCommentsLayer({
 }): ReactElement {
   const commentMode = useAnchoredCommentStore((state) => state.commentMode)
   const setCommentMode = useAnchoredCommentStore((state) => state.setCommentMode)
-  const toggleCommentMode = useAnchoredCommentStore((state) => state.toggleCommentMode)
   const panelOpen = useAnchoredCommentStore((state) => state.panelOpen)
   const setPanelOpen = useAnchoredCommentStore((state) => state.setPanelOpen)
   const threads = useAnchoredCommentStore((state) => state.threads)
@@ -83,61 +74,6 @@ export function AnchoredCommentsLayer({
   const [deniedMessage, setDeniedMessage] = useState<string | null>(null)
   const [captureClean, setCaptureClean] = useState(false)
   const captureLayerRef = useRef<HTMLDivElement | null>(null)
-  const launcherRef = useRef<HTMLDivElement | null>(null)
-  const [launcherPosition, setLauncherPosition] = useState<CommentLauncherPoint | null>(
-    readCommentLauncherPosition
-  )
-  const launcherPositionRef = useRef<CommentLauncherPoint | null>(launcherPosition)
-  const [launcherDragging, setLauncherDragging] = useState(false)
-  const suppressLauncherClickRef = useRef(false)
-  const launcherDragRef = useRef<{
-    pointerId: number
-    startX: number
-    startY: number
-    origin: CommentLauncherPoint
-    current: CommentLauncherPoint
-    dragging: boolean
-  } | null>(null)
-
-  const clampLauncherPosition = useCallback((point: CommentLauncherPoint): CommentLauncherPoint => {
-    const launcher = launcherRef.current
-    if (!launcher) return point
-    const bounds = launcher.getBoundingClientRect()
-    return clampCommentLauncherPosition(
-      point,
-      { width: bounds.width, height: bounds.height },
-      { width: window.innerWidth, height: window.innerHeight }
-    )
-  }, [])
-
-  const updateLauncherPosition = useCallback((point: CommentLauncherPoint): CommentLauncherPoint => {
-    const next = clampLauncherPosition(point)
-    launcherPositionRef.current = next
-    setLauncherPosition(next)
-    return next
-  }, [clampLauncherPosition])
-
-  useLayoutEffect(() => {
-    const launcher = launcherRef.current
-    if (!launcher) return
-    const bounds = launcher.getBoundingClientRect()
-    updateLauncherPosition(
-      launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
-    )
-  }, [threads.length, updateLauncherPosition])
-
-  useEffect(() => {
-    const keepLauncherVisible = (): void => {
-      const launcher = launcherRef.current
-      if (!launcher) return
-      const bounds = launcher.getBoundingClientRect()
-      updateLauncherPosition(
-        launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
-      )
-    }
-    window.addEventListener('resize', keepLauncherVisible)
-    return () => window.removeEventListener('resize', keepLauncherVisible)
-  }, [updateLauncherPosition])
 
   useLayoutEffect(() => {
     if (!commentMode) return
@@ -305,100 +241,6 @@ export function AnchoredCommentsLayer({
     event.stopPropagation()
   }
 
-  const startLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (!event.isPrimary || event.button !== 0) return
-    const launcher = launcherRef.current
-    if (!launcher) return
-    const bounds = launcher.getBoundingClientRect()
-    const origin = { x: bounds.left, y: bounds.top }
-    launcherDragRef.current = {
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      origin,
-      current: origin,
-      dragging: false
-    }
-    event.currentTarget.setPointerCapture(event.pointerId)
-  }
-
-  const moveLauncher = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const drag = launcherDragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    const deltaX = event.clientX - drag.startX
-    const deltaY = event.clientY - drag.startY
-    if (!drag.dragging && !exceedsCommentLauncherDragThreshold(
-      { x: drag.startX, y: drag.startY },
-      { x: event.clientX, y: event.clientY }
-    )) return
-    if (!drag.dragging) {
-      drag.dragging = true
-      setLauncherDragging(true)
-    }
-    event.preventDefault()
-    drag.current = updateLauncherPosition({
-      x: drag.origin.x + deltaX,
-      y: drag.origin.y + deltaY
-    })
-  }
-
-  const finishLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const drag = launcherDragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    launcherDragRef.current = null
-    setLauncherDragging(false)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    if (!drag.dragging) return
-    event.preventDefault()
-    suppressLauncherClickRef.current = true
-    window.setTimeout(() => {
-      suppressLauncherClickRef.current = false
-    }, 0)
-    writeCommentLauncherPosition(drag.current)
-  }
-
-  const cancelLauncherDrag = (event: ReactPointerEvent<HTMLDivElement>): void => {
-    const drag = launcherDragRef.current
-    if (!drag || drag.pointerId !== event.pointerId) return
-    launcherDragRef.current = null
-    setLauncherDragging(false)
-    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
-      event.currentTarget.releasePointerCapture(event.pointerId)
-    }
-    if (drag.dragging) writeCommentLauncherPosition(drag.current)
-  }
-
-  const suppressClickAfterLauncherDrag = (event: ReactMouseEvent<HTMLDivElement>): void => {
-    if (!suppressLauncherClickRef.current) return
-    suppressLauncherClickRef.current = false
-    event.preventDefault()
-    event.stopPropagation()
-  }
-
-  const moveLauncherWithKeyboard = (event: ReactKeyboardEvent<HTMLButtonElement>): void => {
-    const direction = {
-      ArrowLeft: { x: -1, y: 0 },
-      ArrowRight: { x: 1, y: 0 },
-      ArrowUp: { x: 0, y: -1 },
-      ArrowDown: { x: 0, y: 1 }
-    }[event.key]
-    if (!direction) return
-    const launcher = launcherRef.current
-    if (!launcher) return
-    const bounds = launcher.getBoundingClientRect()
-    const origin = launcherPositionRef.current ?? { x: bounds.left, y: bounds.top }
-    const step = event.shiftKey ? 32 : 12
-    const next = updateLauncherPosition({
-      x: origin.x + direction.x * step,
-      y: origin.y + direction.y * step
-    })
-    writeCommentLauncherPosition(next)
-    event.preventDefault()
-    event.stopPropagation()
-  }
-
   if (captureClean) return <></>
 
   return createPortal(
@@ -472,68 +314,6 @@ export function AnchoredCommentsLayer({
       ) : null}
 
       {panelOpen ? <CommentPanel /> : null}
-
-      <div
-        ref={launcherRef}
-        data-sciforge-comments-ui
-        data-sciforge-comment-launcher
-        className={`ds-no-drag fixed z-[1000] flex touch-none select-none items-center gap-2 ${
-          launcherPosition ? '' : 'bottom-4 right-4'
-        }`}
-        style={launcherPosition ? { left: launcherPosition.x, top: launcherPosition.y } : undefined}
-        onPointerDown={startLauncherDrag}
-        onPointerMove={moveLauncher}
-        onPointerUp={finishLauncherDrag}
-        onPointerCancel={cancelLauncherDrag}
-        onClickCapture={suppressClickAfterLauncherDrag}
-        onClick={preventWorkbenchClick}
-      >
-        <button
-          type="button"
-          data-sciforge-comment-drag-handle
-          aria-label="Move comment controls"
-          title="Drag, or use arrow keys, to move comment controls"
-          className={`grid h-11 w-6 place-items-center rounded-full text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink ${
-            launcherDragging ? 'cursor-grabbing' : 'cursor-grab'
-          }`}
-          onKeyDown={moveLauncherWithKeyboard}
-        >
-          <GripVertical className="h-4 w-4" />
-        </button>
-        <button
-          type="button"
-          title="Click to comment; drag to move"
-          className={`relative grid h-11 w-11 place-items-center rounded-full border text-white shadow-[0_14px_36px_rgba(30,41,59,0.28)] transition ${
-            launcherDragging ? 'cursor-grabbing' : 'cursor-pointer'
-          } ${
-            commentMode
-              ? 'border-indigo-300 bg-indigo-600 hover:bg-indigo-500'
-              : 'border-slate-700 bg-slate-900 hover:bg-slate-800 dark:border-slate-300 dark:bg-white dark:text-slate-950'
-          }`}
-          aria-label={commentMode ? 'Exit comment mode' : 'Comment on anything'}
-          aria-pressed={commentMode}
-          onClick={toggleCommentMode}
-        >
-          {commentMode ? <X className="h-5 w-5" /> : <MessageSquarePlus className="h-5 w-5" />}
-        </button>
-        {threads.length > 0 ? (
-          <button
-            type="button"
-            title="Open comments; drag to move"
-            className={`relative grid h-11 w-11 place-items-center rounded-full border border-ds-border bg-ds-card text-ds-ink shadow-[0_14px_36px_rgba(30,41,59,0.22)] transition hover:bg-ds-hover ${
-              launcherDragging ? 'cursor-grabbing' : 'cursor-pointer'
-            }`}
-            aria-label="Open comments"
-            aria-expanded={panelOpen}
-            onClick={() => setPanelOpen(!panelOpen)}
-          >
-            <MessagesSquare className="h-5 w-5" />
-            <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-indigo-600 px-1 text-center text-[9px] font-bold leading-5 text-white">
-              {Math.min(threads.length, 99)}
-            </span>
-          </button>
-        ) : null}
-      </div>
 
       {feedbackThread ? (
         <ProductFeedbackDialog

@@ -43,7 +43,7 @@ export const capabilityConcurrencySchema = z.object({
 }).strict()
 export type CapabilityConcurrency = z.infer<typeof capabilityConcurrencySchema>
 
-const capabilityIdSchema = z.string()
+export const capabilityIdSchema = z.string()
   .trim()
   .min(3)
   .max(192)
@@ -109,6 +109,39 @@ export const capabilityDescriptorSchema = z.object({
   }
 })
 export type CapabilityDescriptor = z.infer<typeof capabilityDescriptorSchema>
+
+/**
+ * Explicit transport/registry handshake used before a caller treats discovery
+ * results as authoritative. An empty capability list is valid only when this
+ * contract reports `ready` for the caller's required operations.
+ */
+export const capabilityReadinessRequestSchema = z.object({
+  workspaceId: z.string().trim().min(1).max(4_096).optional(),
+  expectedContractVersion: z.number().int().positive(),
+  requiredCapabilityIds: z.array(capabilityIdSchema).max(512).default([])
+}).strict().superRefine((request, context) => {
+  if (new Set(request.requiredCapabilityIds).size !== request.requiredCapabilityIds.length) {
+    context.addIssue({
+      code: 'custom',
+      path: ['requiredCapabilityIds'],
+      message: 'Required capability IDs must be unique.'
+    })
+  }
+})
+export type CapabilityReadinessRequest = z.infer<typeof capabilityReadinessRequestSchema>
+
+export const capabilityReadinessStatusSchema = z.enum(['ready', 'incompatible', 'incomplete'])
+export type CapabilityReadinessStatus = z.infer<typeof capabilityReadinessStatusSchema>
+
+export const capabilityReadinessSchema = z.object({
+  contractVersion: z.number().int().positive(),
+  status: capabilityReadinessStatusSchema,
+  registryFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+  availableCapabilityIds: z.array(capabilityIdSchema).max(2_048),
+  missingCapabilityIds: z.array(capabilityIdSchema).max(512),
+  message: z.string().trim().min(1).max(2_000)
+}).strict()
+export type CapabilityReadiness = z.infer<typeof capabilityReadinessSchema>
 
 export const capabilityApprovalGrantSchema = z.object({
   actionId: capabilityIdSchema,

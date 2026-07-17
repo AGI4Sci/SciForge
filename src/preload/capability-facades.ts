@@ -1,6 +1,8 @@
 import {
+  CAPABILITY_BROKER_CONTRACT_VERSION,
   capabilityInvocationResultSchema,
   capabilityObservationSchema,
+  capabilityReadinessSchema,
   capabilityResourceHandleSchema,
   type CapabilityDescriptor,
   type CapabilityInvocationRequest,
@@ -81,8 +83,32 @@ export function createCapabilityFacades(options: CapabilityFacadeOptions): Capab
   const createInvocationId = options.createInvocationId ?? defaultInvocationId
   const previewResources = new Map<string, ResourceBinding>()
   const roomResources = new Map<string, ResourceBinding>()
+  const readinessCache = new Map<string, Awaited<ReturnType<SciForgeApi['capabilities']['readiness']>>>()
+
+  const readReadiness = async (
+    requiredCapabilityIds: readonly string[],
+    workspaceId?: string
+  ): Promise<Awaited<ReturnType<SciForgeApi['capabilities']['readiness']>>> => {
+    const normalizedIds = [...new Set(requiredCapabilityIds)].sort()
+    const cacheKey = `${workspaceId ?? ''}\u0000${normalizedIds.join('\u0000')}`
+    const cached = readinessCache.get(cacheKey)
+    if (cached) return cached
+    const readiness = capabilityReadinessSchema.parse(await options.invoke('capability:readiness', {
+      ...(workspaceId ? { workspaceId } : {}),
+      expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION,
+      requiredCapabilityIds: normalizedIds
+    }))
+    if (readiness.status === 'ready') readinessCache.set(cacheKey, readiness)
+    return readiness
+  }
+
+  const requireReadiness = async (requiredCapabilityIds: readonly string[], workspaceId?: string): Promise<void> => {
+    const readiness = await readReadiness(requiredCapabilityIds, workspaceId)
+    if (readiness.status !== 'ready') throw new Error(readiness.message)
+  }
 
   const invokeCapability = async (input: InvocationOptions): Promise<CapabilityInvocationResult> => {
+    await requireReadiness([input.actionId], input.workspaceId ?? input.binding?.workspaceId)
     const request: CapabilityInvocationRequest = {
       actionId: input.actionId,
       input: jsonInput(input.input),
@@ -100,6 +126,7 @@ export function createCapabilityFacades(options: CapabilityFacadeOptions): Capab
   }
 
   const observeResource = async (binding: ResourceBinding) => {
+    await requireReadiness([], binding.workspaceId)
     const observation = capabilityObservationSchema.parse(await options.invoke('capability:observe', {
       workspaceId: binding.workspaceId,
       request: { resource: binding.resource }
@@ -157,6 +184,7 @@ export function createCapabilityFacades(options: CapabilityFacadeOptions): Capab
   }
 
   const workspacePreview: WorkspacePreviewFacade = {
+    readiness: () => readReadiness(Object.values(PRELOAD_CAPABILITY_IDS).filter((id) => id.startsWith('workspace-preview.'))),
     listPlugins: async () => (
       await invokeCapability({ actionId: PRELOAD_CAPABILITY_IDS.workspacePreviewList, input: {} })
     ).output as Awaited<ReturnType<WorkspacePreviewFacade['listPlugins']>>,
@@ -315,6 +343,7 @@ export function createCapabilityFacades(options: CapabilityFacadeOptions): Capab
   }
 
   const biologyRoom: BiologyRoomFacade = {
+    readiness: () => readReadiness(Object.values(PRELOAD_CAPABILITY_IDS).filter((id) => id.startsWith('biology-room.'))),
     create: async (input) => {
       const { workspaceRoot, ...actionInput } = input
       const result = await invokeCapability({

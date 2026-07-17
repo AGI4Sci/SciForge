@@ -15,7 +15,8 @@ const DEFAULT_MAX_INVOKE_BODY_BYTES = 24 * 1024 * 1024
 const CLIENT_DESTROY_DELAY_MS = 1_000
 const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
   'Content-Type',
-  'X-SciForge-Client'
+  'X-SciForge-Client',
+  'X-SciForge-Dev-Instance'
 ].join(',')
 
 // The bridge is gated to localhost renderer origins and is only started for
@@ -57,6 +58,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'anchoredComments:upsert',
   'app:version',
   'biologyRoom:pick-file',
+  'capability:readiness',
   'capability:discover',
   'capability:events',
   'capability:invoke',
@@ -228,6 +230,7 @@ type StartDevBrowserBridgeServerOptions = {
   maxInvokeBodyBytes?: number
   allowedChannels?: readonly string[]
   allowAllChannels?: boolean
+  instanceId?: string
 }
 
 type ParsedHttpByteRange =
@@ -399,6 +402,7 @@ export async function startDevBrowserBridgeServer(
   const port = options.port ?? DEFAULT_DEV_BROWSER_BRIDGE_PORT
   const maxInvokeBodyBytes = options.maxInvokeBodyBytes ?? DEFAULT_MAX_INVOKE_BODY_BYTES
   const allowedChannels = createAllowedChannelSet(options.allowedChannels)
+  const instanceId = options.instanceId?.trim() || ''
   const clients = new Map<string, DevBrowserBridgeClient>()
   const clientsByNumericId = new Map<number, DevBrowserBridgeClient>()
   let nextClientNumericId = 1
@@ -426,8 +430,20 @@ export async function startDevBrowserBridgeServer(
 
     const requestUrl = new URL(request.url ?? '/', `http://${host}:${port}`)
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
-      writeJson(response, 200, { ok: true })
+      writeJson(response, 200, instanceId ? { ok: true, instanceId } : { ok: true })
       return
+    }
+
+    if (instanceId) {
+      const suppliedInstanceId = request.headers['x-sciforge-dev-instance']
+        ?? requestUrl.searchParams.get('devInstanceId')
+      if (suppliedInstanceId !== instanceId) {
+        writeJson(response, 409, {
+          ok: false,
+          message: 'The renderer and Electron main belong to different development instances. Reload the current dev endpoint.'
+        })
+        return
+      }
     }
 
     if (request.method === 'GET' && requestUrl.pathname === '/events') {

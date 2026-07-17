@@ -175,7 +175,11 @@ describe('app capability registry', () => {
           workspaceId: '/workspace',
           semanticRevision: 'surface-semantic-1',
           layoutRevision: '12',
-          state: { targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }], resources: [] }
+          state: {
+            freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+            targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }],
+            resources: []
+          }
         })),
         inspectSurface
       },
@@ -184,6 +188,10 @@ describe('app capability registry', () => {
     const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
 
     const opened = await broker.invoke(caller, { actionId: APP_CAPABILITY_IDS.surfaceCurrent, input: {} })
+    expect(record(opened.output).current).toMatchObject({
+      freshness: { stale: false },
+      resources: []
+    })
     const surface = capabilityResourceHandleSchema.parse(record(opened.output).surface)
     const observed = await broker.observe(caller, { resource: surface })
     expect(observed.operations.map((operation) => operation.id)).toContain(APP_CAPABILITY_IDS.surfaceInspect)
@@ -345,7 +353,7 @@ describe('app capability registry', () => {
     expect(broker.listEvents(caller)).toHaveLength(1)
   })
 
-  it('filters UI-only preview operations and exposes canonical annotation operations to agents', async () => {
+  it('keeps canonical annotation operations discoverable when annotation observation is temporarily unavailable', async () => {
     const { dependencies, observe } = createDependencies()
     const manifest = dependencies.workspacePreviewHost.listPlugins()[0]!
     manifest.capabilities.annotations = true
@@ -359,19 +367,6 @@ describe('app capability registry', () => {
           modality: 'document' as const,
           mode: 'preview' as const,
           title: 'paper.pdf'
-        },
-        documentAnnotations: {
-          threadCount: 1,
-          annotationCount: 2,
-          openThreadCount: 1,
-          truncated: false,
-          threads: [{
-            id: 'thread-1',
-            kind: 'comment',
-            status: 'open' as const,
-            annotationCount: 2,
-            summary: 'open | page 3 | Current canonical comment'
-          }]
         },
         actions: ['html.previewUrl']
       }

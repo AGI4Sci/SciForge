@@ -59,6 +59,7 @@ function readFromResponse(
 
 type PostJsonOptions = {
   clientId?: string
+  devInstanceId?: string
 }
 
 function postJson(path: string, body: unknown, options: PostJsonOptions | string = {}): Promise<{ status: number; body: string; headers: Record<string, string | string[] | undefined> }> {
@@ -71,6 +72,9 @@ function postJson(path: string, body: unknown, options: PostJsonOptions | string
       'Content-Length': Buffer.byteLength(payload),
       'X-SciForge-Client': clientId,
       Origin: 'http://localhost:5173'
+    }
+    if (typeof options !== 'string' && options.devInstanceId) {
+      headers['X-SciForge-Dev-Instance'] = options.devInstanceId
     }
     const req = request(url, {
       method: 'POST',
@@ -164,6 +168,31 @@ describe('dev browser bridge server', () => {
       { scope: 'all' },
       expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
     )
+  })
+
+  it('rejects browser requests from a different dev instance', async () => {
+    const invoke = vi.fn(async () => ({ ok: true }))
+    server = await startDevBrowserBridgeServer({
+      dispatcher: { invoke },
+      port: 0,
+      instanceId: 'main-instance'
+    })
+
+    const health = await readFromResponse('/health')
+    expect(JSON.parse(health.body)).toEqual({ ok: true, instanceId: 'main-instance' })
+
+    const stale = await postJson('/invoke', { channel: 'settings:get' }, {
+      devInstanceId: 'stale-renderer'
+    })
+    expect(stale.status).toBe(409)
+    expect(JSON.parse(stale.body)).toEqual(expect.objectContaining({ ok: false }))
+    expect(invoke).not.toHaveBeenCalled()
+
+    const current = await postJson('/invoke', { channel: 'settings:get' }, {
+      devInstanceId: 'main-instance'
+    })
+    expect(current.status).toBe(200)
+    expect(invoke).toHaveBeenCalledOnce()
   })
 
   it('routes browser capability calls through the same generic broker handlers as Electron', async () => {

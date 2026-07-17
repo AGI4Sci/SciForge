@@ -25,6 +25,14 @@ import {
 
 function createMockBridge(overrides: Partial<WorkspacePreviewBridgeAdapter> = {}): WorkspacePreviewBridgeAdapter {
   return {
+    readiness: vi.fn<WorkspacePreviewBridgeAdapter['readiness']>(async () => ({
+      contractVersion: 1,
+      status: 'ready',
+      registryFingerprint: 'a'.repeat(64),
+      availableCapabilityIds: [],
+      missingCapabilityIds: [],
+      message: 'Capability broker is ready.'
+    })),
     listPlugins: vi.fn<WorkspacePreviewBridgeAdapter['listPlugins']>(async () => []),
     open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async () => ({
       ok: false,
