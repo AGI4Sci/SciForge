@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const DATASET_API_MCP_FLAG = '--dataset-api-mcp-server'
 export const DATASET_API_MCP_SERVER_NAME = 'sciforge-dataset-api'
-export const DATASET_API_MCP_SERVER_VERSION = '0.1.0'
+export const DATASET_API_MCP_SERVER_VERSION = '0.2.0'
 
 export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_catalog: 'read',
@@ -10,7 +10,14 @@ export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_list: 'read',
   dataset_api_register: 'controlled-write',
   dataset_api_metadata: 'network-read',
-  dataset_api_raw_data: 'network-read-controlled-write'
+  dataset_api_raw_data: 'network-read-controlled-write',
+  dataset_prepare_plan: 'controlled-write',
+  dataset_profile: 'controlled-write',
+  dataset_filter: 'controlled-write',
+  dataset_select_columns: 'controlled-write',
+  dataset_deduplicate: 'controlled-write',
+  dataset_validate: 'controlled-write',
+  dataset_publish: 'controlled-write'
 } as const
 
 export type DatasetApiToolName = keyof typeof DATASET_API_TOOL_SIDE_EFFECTS
@@ -33,6 +40,128 @@ const pathParametersSchema = z.record(
   z.string().trim().min(1).max(128).regex(/^[A-Za-z][A-Za-z0-9_]*$/),
   pathValueSchema
 ).optional()
+const artifactPathSchema = z.string().trim().min(1).max(4096)
+const outputFileNameSchema = z.string().trim().min(1).max(255)
+const processingMaxBytesSchema = z.number().int().min(1024).max(256 * 1024 * 1024).optional()
+
+export const datasetProcessingFormatSchema = z.enum(['auto', 'json', 'jsonl', 'csv', 'tsv', 'fasta'])
+export const datasetConcreteFormatSchema = z.enum(['json', 'jsonl', 'csv', 'tsv', 'fasta'])
+
+const datasetPlanSourceSchema = z.object({
+  providerId: z.string().trim().min(1).max(80),
+  purpose: z.string().trim().min(1).max(1000),
+  metadataRequest: z.record(z.string(), z.unknown()).optional(),
+  rawDataRequest: z.record(z.string(), z.unknown()).optional()
+}).strict()
+
+const datasetPlanOperationSchema = z.object({
+  tool: z.enum([
+    'dataset_profile',
+    'dataset_filter',
+    'dataset_select_columns',
+    'dataset_deduplicate',
+    'dataset_validate',
+    'dataset_publish'
+  ]),
+  description: z.string().trim().min(1).max(1000),
+  parameters: z.record(z.string(), z.unknown()).optional()
+}).strict()
+
+const datasetPlanOutputSchema = z.object({
+  name: outputFileNameSchema,
+  format: datasetConcreteFormatSchema,
+  description: z.string().trim().min(1).max(1000).optional()
+}).strict()
+
+export const datasetPreparePlanInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  objective: z.string().trim().min(1).max(8000),
+  sources: z.array(datasetPlanSourceSchema).max(50).default([]),
+  operations: z.array(datasetPlanOperationSchema).min(1).max(100),
+  outputs: z.array(datasetPlanOutputSchema).min(1).max(20),
+  exclusions: z.array(z.string().trim().min(1).max(1000)).max(100).optional(),
+  confirmationNotes: z.array(z.string().trim().min(1).max(1000)).max(100).optional(),
+  confirmedByUser: z.boolean()
+}).strict()
+
+const datasetInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  inputArtifact: artifactPathSchema,
+  format: datasetProcessingFormatSchema.optional(),
+  recordPath: z.string().trim().min(1).max(1024).optional(),
+  maxBytes: processingMaxBytesSchema
+}).strict()
+
+export const datasetProfileInputSchema = datasetInputSchema.extend({
+  outputFileName: outputFileNameSchema.optional()
+}).strict()
+
+export const datasetFilterConditionSchema = z.object({
+  field: z.string().trim().min(1).max(512),
+  operator: z.enum([
+    'equals', 'not_equals', 'contains', 'starts_with', 'ends_with',
+    'in', 'not_in', 'gt', 'gte', 'lt', 'lte', 'between', 'exists'
+  ]),
+  value: z.unknown().optional(),
+  caseSensitive: z.boolean().optional()
+}).strict()
+
+export const datasetFilterInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema,
+  conditions: z.array(datasetFilterConditionSchema).min(1).max(100),
+  combine: z.enum(['all', 'any']).optional(),
+  outputFileName: outputFileNameSchema
+}).strict()
+
+const datasetColumnSelectionSchema = z.object({
+  source: z.string().trim().min(1).max(512),
+  target: z.string().trim().min(1).max(512).optional(),
+  required: z.boolean().optional(),
+  defaultValue: z.unknown().optional()
+}).strict()
+
+export const datasetSelectColumnsInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema,
+  columns: z.array(datasetColumnSelectionSchema).min(1).max(500),
+  outputFormat: datasetConcreteFormatSchema.optional(),
+  outputFileName: outputFileNameSchema
+}).strict()
+
+export const datasetDeduplicateInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema,
+  keys: z.array(z.string().trim().min(1).max(512)).min(1).max(50),
+  keep: z.enum(['first', 'last']).optional(),
+  outputFileName: outputFileNameSchema
+}).strict()
+
+const datasetFieldRuleSchema = z.object({
+  field: z.string().trim().min(1).max(512),
+  required: z.boolean().optional(),
+  type: z.enum(['string', 'number', 'boolean', 'object', 'array']).optional(),
+  unique: z.boolean().optional(),
+  min: z.number().finite().optional(),
+  max: z.number().finite().optional(),
+  allowedValues: z.array(z.union([z.string(), z.number(), z.boolean(), z.null()])).max(1000).optional()
+}).strict()
+
+export const datasetValidateInputSchema = datasetInputSchema.extend({
+  rules: z.array(datasetFieldRuleSchema).max(500).default([]),
+  minRecords: z.number().int().nonnegative().optional(),
+  maxMissingFraction: z.number().min(0).max(1).optional(),
+  failOnInvalid: z.boolean().optional(),
+  outputFileName: outputFileNameSchema.optional()
+}).strict()
+
+export const datasetPublishInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema,
+  name: datasetIdSchema,
+  artifacts: z.array(artifactPathSchema).min(1).max(100),
+  description: z.string().trim().max(4000).optional(),
+  outputDirectoryName: datasetIdSchema.optional(),
+  requireValidation: z.boolean().optional(),
+  allowInvalid: z.boolean().optional()
+}).strict()
 
 export const datasetProviderCategorySchema = z.enum([
   'core',
@@ -136,6 +265,14 @@ export type DatasetApiRegisterProviderInput = z.infer<typeof datasetApiRegisterP
 export type DatasetApiRegisterInput = z.infer<typeof datasetApiRegisterInputSchema>
 export type DatasetApiMetadataInput = z.infer<typeof datasetApiMetadataInputSchema>
 export type DatasetApiRawDataInput = z.infer<typeof datasetApiRawDataInputSchema>
+export type DatasetProcessingFormat = z.infer<typeof datasetConcreteFormatSchema>
+export type DatasetPreparePlanInput = z.infer<typeof datasetPreparePlanInputSchema>
+export type DatasetProfileInput = z.infer<typeof datasetProfileInputSchema>
+export type DatasetFilterInput = z.infer<typeof datasetFilterInputSchema>
+export type DatasetSelectColumnsInput = z.infer<typeof datasetSelectColumnsInputSchema>
+export type DatasetDeduplicateInput = z.infer<typeof datasetDeduplicateInputSchema>
+export type DatasetValidateInput = z.infer<typeof datasetValidateInputSchema>
+export type DatasetPublishInput = z.infer<typeof datasetPublishInputSchema>
 
 export type DatasetApiSource = {
   id: string

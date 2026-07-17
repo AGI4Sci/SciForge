@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import type { ChatBlock, ToolBlock } from '../../agent/types'
 import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 
-type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'other'
+type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'plan' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
 
 export type TimelineDatasetResult = {
   id: string
@@ -83,11 +83,16 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
-  const match = value.match(/dataset_api_(catalog|register_provider|list|register|metadata|raw_data)/i)
-  return match ? `dataset_api_${match[1].toLowerCase()}` : null
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|deduplicate|validate|publish)/i)
+  return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
 function datasetKind(toolName: string, result: Record<string, unknown> | null): DatasetResultKind {
+  if (toolName === 'dataset_prepare_plan' || result?.plan !== undefined) return 'plan'
+  if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
+  if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
+  if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
+  if (['dataset_filter', 'dataset_select_columns', 'dataset_deduplicate'].includes(toolName)) return 'processing'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'
   if (toolName.endsWith('_raw_data') || result?.artifact !== undefined) return 'raw-data'
   if (toolName.endsWith('_catalog') || Array.isArray(result?.providers)) return 'catalog'
@@ -133,16 +138,17 @@ function DatasetResultCard({
   const request = asRecord(result?.request)
   const response = asRecord(result?.response)
   const artifact = asRecord(result?.artifact)
+  const publication = asRecord(result?.publication)
   const title = stringValue(source?.name) || stringValue(source?.id) || datasetKindTitle(item.kind, t)
   const subtitle = item.success
     ? datasetSuccessSubtitle(item.kind, result, response, t)
     : stringValue(item.error?.message) || t('datasetResultFailed')
-  const rawPath = stringValue(artifact?.path)
+  const rawPath = stringValue(artifact?.path) || stringValue(publication?.manifestPath)
   const details = datasetDetails(item)
   const contentType = stringValue(response?.contentType)
   const format = stringValue(artifact?.format)
   const sha256 = stringValue(artifact?.sha256)
-  const facts = datasetFacts(item.kind, response, artifact, t)
+  const facts = datasetFacts(item.kind, result, response, artifact, t)
 
   return (
     <article className="overflow-hidden rounded-[20px] border border-ds-border bg-ds-card/85 shadow-[0_16px_40px_rgba(86,103,136,0.08)] backdrop-blur-xl">
@@ -208,6 +214,10 @@ function DatasetResultCard({
         />
       ) : null}
 
+      {item.success && ['plan', 'profile', 'processing', 'validation', 'publication'].includes(item.kind) ? (
+        <DatasetProcessingHighlights item={item} />
+      ) : null}
+
       {details !== undefined ? (
         <div className="border-t border-ds-border-muted/70">
           <button
@@ -228,6 +238,39 @@ function DatasetResultCard({
         </div>
       ) : null}
     </article>
+  )
+}
+
+function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }): ReactElement | null {
+  const { t } = useTranslation('common')
+  const result = item.result
+  const profile = asRecord(result?.profile)
+  const counts = asRecord(result?.counts)
+  const validation = asRecord(result?.validation)
+  const publication = asRecord(result?.publication)
+  const plan = asRecord(result?.plan)
+  const values: Array<{ label: string; value: string }> = []
+  if (numberValue(profile?.records) !== undefined) values.push({ label: t('datasetResultRecords'), value: String(numberValue(profile?.records)) })
+  if (numberValue(counts?.inputRecords) !== undefined) values.push({ label: t('datasetResultInputRecords'), value: String(numberValue(counts?.inputRecords)) })
+  if (numberValue(counts?.outputRecords) !== undefined) values.push({ label: t('datasetResultOutputRecords'), value: String(numberValue(counts?.outputRecords)) })
+  if (numberValue(counts?.excludedRecords) !== undefined) values.push({ label: t('datasetResultExcludedRecords'), value: String(numberValue(counts?.excludedRecords)) })
+  if (numberValue(counts?.duplicateRecordsRemoved) !== undefined) values.push({ label: t('datasetResultDuplicatesRemoved'), value: String(numberValue(counts?.duplicateRecordsRemoved)) })
+  if (validation) values.push({ label: t('datasetResultQuality'), value: validation.valid === true ? t('datasetResultValid') : t('datasetResultInvalid') })
+  if (numberValue(validation?.errorCount) !== undefined) values.push({ label: t('datasetResultErrors'), value: String(numberValue(validation?.errorCount)) })
+  if (numberValue(publication?.artifactCount) !== undefined) values.push({ label: t('datasetResultArtifacts'), value: String(numberValue(publication?.artifactCount)) })
+  if (stringValue(plan?.status)) values.push({ label: t('datasetResultPlanStatus'), value: stringValue(plan?.status) })
+  if (values.length === 0) return null
+  return (
+    <div className="border-t border-ds-border-muted/70 bg-violet-500/[0.025] px-5 py-3">
+      <dl className="grid grid-cols-2 gap-x-5 gap-y-2 sm:grid-cols-4">
+        {values.slice(0, 8).map((entry) => (
+          <div key={entry.label} className="min-w-0">
+            <dt className="text-[10px] font-semibold uppercase tracking-[0.08em] text-ds-faint">{entry.label}</dt>
+            <dd className="mt-0.5 truncate text-[12px] font-medium text-ds-ink">{entry.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
   )
 }
 
@@ -330,6 +373,11 @@ function datasetKindTitle(kind: DatasetResultKind, t: (key: string) => string): 
   if (kind === 'raw-data') return t('datasetResultRawData')
   if (kind === 'catalog') return t('datasetResultCatalog')
   if (kind === 'sources') return t('datasetResultSources')
+  if (kind === 'plan') return t('datasetResultPlan')
+  if (kind === 'profile') return t('datasetResultProfile')
+  if (kind === 'processing') return t('datasetResultProcessing')
+  if (kind === 'validation') return t('datasetResultValidation')
+  if (kind === 'publication') return t('datasetResultPublication')
   return t('datasetResultDatabase')
 }
 
@@ -350,11 +398,19 @@ function datasetSuccessSubtitle(
   }
   if (kind === 'catalog') return t('datasetResultProvidersCount', { count: arrayValue(result?.providers).length })
   if (kind === 'sources') return t('datasetResultSourcesCount', { count: arrayValue(result?.sources).length })
+  if (kind === 'plan') return t('datasetResultPlanPrepared')
+  if (kind === 'profile') return t('datasetResultProfileCompleted')
+  if (kind === 'processing') return t('datasetResultProcessingCompleted')
+  if (kind === 'validation') return asRecord(result?.validation)?.valid === true
+    ? t('datasetResultValidationPassed')
+    : t('datasetResultValidationFailed')
+  if (kind === 'publication') return t('datasetResultPublished')
   return t('datasetResultCompleted')
 }
 
 function datasetFacts(
   kind: DatasetResultKind,
+  result: Record<string, unknown> | undefined,
   response: Record<string, unknown> | null,
   artifact: Record<string, unknown> | null,
   t: (key: string) => string
@@ -364,13 +420,16 @@ function datasetFacts(
   const bytes = numberValue(response?.bytes)
   const contentType = stringValue(response?.contentType)
   const format = stringValue(artifact?.format)
+  const artifactBytes = numberValue(artifact?.bytes)
   if (status !== undefined) facts.push({ label: t('datasetResultHttpStatus'), value: String(status) })
-  if (bytes !== undefined) facts.push({ label: t('datasetResultSize'), value: formatBytes(bytes) })
+  if (bytes !== undefined || artifactBytes !== undefined) facts.push({ label: t('datasetResultSize'), value: formatBytes(bytes ?? artifactBytes) })
   if (format) facts.push({ label: t('datasetResultFormat'), value: format.toUpperCase() })
   if (contentType) facts.push({ label: t('datasetResultContentType'), value: contentType })
   if (kind === 'raw-data' && stringValue(artifact?.fileName)) {
     facts.push({ label: t('datasetResultFile'), value: stringValue(artifact?.fileName) })
   }
+  const plan = asRecord(result?.plan)
+  if (stringValue(plan?.planId)) facts.push({ label: t('datasetResultPlan'), value: stringValue(plan?.planId) })
   return facts.slice(0, 4)
 }
 

@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import { createDatasetApiMcpServer } from './mcp-server.js'
+import { createDatasetProcessingService } from './processing.js'
 import { createDatasetApiService } from './service.js'
 
 test('exposes metadata and raw-data tools as the Dataset API contract', async () => {
@@ -34,7 +35,14 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
       'dataset_api_list',
       'dataset_api_register',
       'dataset_api_metadata',
-      'dataset_api_raw_data'
+      'dataset_api_raw_data',
+      'dataset_prepare_plan',
+      'dataset_profile',
+      'dataset_filter',
+      'dataset_select_columns',
+      'dataset_deduplicate',
+      'dataset_validate',
+      'dataset_publish'
     ])
     const registerProviderTool = listedTools.tools.find((tool) => tool.name === 'dataset_api_register_provider')
     assert.match(registerProviderTool?.description ?? '', /11 executable built-in provider presets/)
@@ -150,6 +158,63 @@ test('returns structured network diagnostics and tells agents not to bypass with
       causeCode: 'EAI_AGAIN',
       causeMessage: 'temporary name resolution failure'
     })
+  } finally {
+    await client.close()
+    await server.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('executes a confirmed conversation-driven processing plan through MCP tools', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-mcp-processing-'))
+  const sourcePath = join(workspaceRoot, 'records.json')
+  await writeFile(sourcePath, JSON.stringify([
+    { id: 'a', organism: 'human', score: 3 },
+    { id: 'b', organism: 'mouse', score: 5 }
+  ]))
+  const server = createDatasetApiMcpServer(
+    createDatasetApiService({ workspaceRoot }),
+    createDatasetProcessingService({ workspaceRoot })
+  )
+  const client = new Client({ name: 'dataset-processing-test', version: '0.1.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+  try {
+    const planCall = await client.callTool({
+      name: 'dataset_prepare_plan',
+      arguments: {
+        objective: 'Keep human records.',
+        operations: [
+          { tool: 'dataset_filter', description: 'Keep human rows.' },
+          { tool: 'dataset_publish', description: 'Publish the result.' }
+        ],
+        outputs: [{ name: 'human.json', format: 'json' }],
+        confirmedByUser: true
+      }
+    })
+    assert.equal(planCall.isError, undefined)
+    const planId = ((planCall.structuredContent?.result as {
+      plan: { planId: string }
+    }).plan.planId)
+    const filterCall = await client.callTool({
+      name: 'dataset_filter',
+      arguments: {
+        planId,
+        inputArtifact: sourcePath,
+        conditions: [{ field: 'organism', operator: 'equals', value: 'human' }],
+        outputFileName: 'human.json'
+      }
+    })
+    assert.equal(filterCall.isError, undefined)
+    const filterResult = filterCall.structuredContent?.result as {
+      artifact: { path: string; manifestPath: string }
+      counts: { outputRecords: number }
+    }
+    assert.equal(filterResult.counts.outputRecords, 1)
+    assert.deepEqual(JSON.parse(await readFile(filterResult.artifact.path, 'utf8')), [
+      { id: 'a', organism: 'human', score: 3 }
+    ])
+    assert.equal(JSON.parse(await readFile(filterResult.artifact.manifestPath, 'utf8')).operation, 'dataset_filter')
   } finally {
     await client.close()
     await server.close()

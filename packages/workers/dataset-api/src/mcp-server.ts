@@ -10,9 +10,17 @@ import {
   datasetApiListInputSchema,
   datasetApiMetadataInputSchema,
   datasetApiRawDataInputSchema,
-  datasetApiRegisterInputSchema
+  datasetApiRegisterInputSchema,
+  datasetPreparePlanInputSchema,
+  datasetProfileInputSchema,
+  datasetFilterInputSchema,
+  datasetSelectColumnsInputSchema,
+  datasetDeduplicateInputSchema,
+  datasetValidateInputSchema,
+  datasetPublishInputSchema
 } from './contract.js'
 import { EXECUTABLE_DATASET_PROVIDER_PRESETS } from './provider-presets.js'
+import { createDatasetProcessingService, type DatasetProcessingService } from './processing.js'
 import { createDatasetApiService, DatasetApiRequestError, type DatasetApiService } from './service.js'
 
 type McpTextResult = {
@@ -28,11 +36,21 @@ const READ_ONLY_ANNOTATIONS = {
   openWorldHint: false
 } as const
 
+const CONTROLLED_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false
+} as const
+
 const EXECUTABLE_PROVIDER_NAMES = Object.values(EXECUTABLE_DATASET_PROVIDER_PRESETS)
   .map((preset) => preset.source.name)
   .join(', ')
 
-export function createDatasetApiMcpServer(service: DatasetApiService = createDatasetApiService()): McpServer {
+export function createDatasetApiMcpServer(
+  service: DatasetApiService = createDatasetApiService(),
+  processing: DatasetProcessingService = createDatasetProcessingService()
+): McpServer {
   const server = new McpServer(
     { name: DATASET_API_MCP_SERVER_NAME, version: DATASET_API_MCP_SERVER_VERSION },
     { capabilities: { logging: {} } }
@@ -136,20 +154,113 @@ export function createDatasetApiMcpServer(service: DatasetApiService = createDat
     )
   }))
 
+  server.registerTool('dataset_prepare_plan', {
+    title: 'Prepare Dataset Processing Plan',
+    description: 'Persist a deterministic, reviewable dataset-preparation plan that records providers, operations, exclusions, outputs, and whether the user confirmed it. Mutating processing tools only accept confirmed plans.',
+    inputSchema: datasetPreparePlanInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.preparePlan(datasetPreparePlanInputSchema.parse(args))
+    return textResult(
+      `Prepared ${result.plan.status} dataset plan '${result.plan.planId}' with ${result.plan.operations.length} operations.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_profile', {
+    title: 'Profile Dataset Artifact',
+    description: 'Inspect a workspace JSON, JSONL, CSV, TSV, or FASTA artifact and persist a profile report with record counts, fields, inferred types, missing values, uniqueness, samples, size, and checksum.',
+    inputSchema: datasetProfileInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.profile(datasetProfileInputSchema.parse(args))
+    return textResult(
+      `Profiled ${result.profile.records} records from a ${result.profile.format} dataset. Report: ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_filter', {
+    title: 'Filter Dataset Artifact',
+    description: 'Apply structured, code-free filter conditions to a confirmed-plan dataset artifact. The source is never overwritten; a deterministic child artifact, checksum, manifest, and exclusion counts are produced.',
+    inputSchema: datasetFilterInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.filter(datasetFilterInputSchema.parse(args))
+    return textResult(
+      `Filtered ${result.counts.inputRecords} records to ${result.counts.outputRecords}; wrote ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_select_columns', {
+    title: 'Select and Rename Dataset Fields',
+    description: 'Select, rename, default, and require structured fields without arbitrary SQL or code. Supports deterministic conversion among JSON, JSONL, CSV, TSV, and FASTA-compatible records.',
+    inputSchema: datasetSelectColumnsInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.selectColumns(datasetSelectColumnsInputSchema.parse(args))
+    return textResult(
+      `Selected fields for ${result.counts.outputRecords} records; wrote ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_deduplicate', {
+    title: 'Deduplicate Dataset Artifact',
+    description: 'Deduplicate records by one or more structured keys, keep the first or last occurrence deterministically, preserve the source, and report removed duplicates.',
+    inputSchema: datasetDeduplicateInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.deduplicate(datasetDeduplicateInputSchema.parse(args))
+    return textResult(
+      `Removed ${result.counts.duplicateRecordsRemoved} duplicate records; wrote ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_validate', {
+    title: 'Validate Dataset Artifact',
+    description: 'Validate record counts, required fields, types, uniqueness, ranges, allowed values, missingness, and FASTA integrity. A persistent quality report is produced without modifying the source.',
+    inputSchema: datasetValidateInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.validate(datasetValidateInputSchema.parse(args))
+    return textResult(
+      `Dataset validation ${result.validation.valid ? 'passed' : 'failed'} with ${result.validation.errorCount} errors. Report: ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_publish', {
+    title: 'Publish Prepared Dataset',
+    description: 'Publish confirmed-plan artifacts into a non-overwriting workspace release containing copied data, manifest, schema, quality report, checksums, parent provenance, and the preparation plan.',
+    inputSchema: datasetPublishInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.publish(datasetPublishInputSchema.parse(args))
+    return textResult(
+      `Published ${result.publication.artifactCount} artifacts to ${result.publication.path}. Manifest: ${result.publication.manifestPath}.`,
+      { result }
+    )
+  }))
+
   return server
 }
 
 export async function startDatasetApiMcpServer(
   service: DatasetApiService = createDatasetApiService(),
-  options: { transport?: Transport } = {}
+  options: { transport?: Transport; processing?: DatasetProcessingService } = {}
 ): Promise<void> {
-  await createDatasetApiMcpServer(service).connect(options.transport ?? new StdioServerTransport())
+  await createDatasetApiMcpServer(service, options.processing).connect(options.transport ?? new StdioServerTransport())
 }
 
 export async function runDatasetApiMcpServerFromArgv(argv: string[]): Promise<boolean> {
   if (!argv.includes(DATASET_API_MCP_FLAG)) return false
   const workspaceRoot = argValue(argv, '--workspace-root')?.trim()
-  await startDatasetApiMcpServer(createDatasetApiService({ workspaceRoot }))
+  await startDatasetApiMcpServer(createDatasetApiService({ workspaceRoot }), {
+    processing: createDatasetProcessingService({ workspaceRoot })
+  })
   return true
 }
 
@@ -166,7 +277,7 @@ async function runTool(operation: () => Promise<McpTextResult>): Promise<McpText
     return {
       content: [{
         type: 'text',
-        text: `${errorMessage}\nDo not bypass Dataset API failures with shell or curl; retry through the Dataset API tool or report the structured diagnostic.`
+        text: `${errorMessage}\nDo not bypass Dataset tool failures with shell or curl, SQL, or ad hoc scripts; retry through the Dataset MCP tool or report the structured diagnostic.`
       }],
       structuredContent: {
         error: error instanceof DatasetApiRequestError

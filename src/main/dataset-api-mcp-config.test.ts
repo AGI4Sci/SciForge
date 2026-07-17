@@ -23,7 +23,14 @@ describe('dataset API MCP config', () => {
       'dataset_api_list',
       'dataset_api_register',
       'dataset_api_metadata',
-      'dataset_api_raw_data'
+      'dataset_api_raw_data',
+      'dataset_prepare_plan',
+      'dataset_profile',
+      'dataset_filter',
+      'dataset_select_columns',
+      'dataset_deduplicate',
+      'dataset_validate',
+      'dataset_publish'
     ])
   })
 })

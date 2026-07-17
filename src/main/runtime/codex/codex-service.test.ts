@@ -1815,7 +1815,14 @@ describe('CodexRuntimeService compatibility operations', () => {
       'dataset_api_list',
       'dataset_api_register',
       'dataset_api_metadata',
-      'dataset_api_raw_data'
+      'dataset_api_raw_data',
+      'dataset_prepare_plan',
+      'dataset_profile',
+      'dataset_filter',
+      'dataset_select_columns',
+      'dataset_deduplicate',
+      'dataset_validate',
+      'dataset_publish'
     ]
     const mcpClient: CodexDynamicMcpClient = {
       listTools: vi.fn(async () => ({
@@ -1849,7 +1856,9 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       dynamicTools: expect.arrayContaining([
         expect.objectContaining({ name: 'dataset_api_metadata' }),
-        expect.objectContaining({ name: 'dataset_api_raw_data' })
+        expect.objectContaining({ name: 'dataset_api_raw_data' }),
+        expect.objectContaining({ name: 'dataset_prepare_plan' }),
+        expect.objectContaining({ name: 'dataset_publish' })
       ])
     }))
   })

@@ -5,6 +5,12 @@ workspace-scoped registry at `.sciforge/datasets/api-sources.json` and exposes
 controlled tools to register databases, read metadata, and stream raw data into
 the workspace dataset cache.
 
+It also provides a deterministic, conversation-driven preparation layer. The
+model discusses requirements and supplies strict JSON arguments; Dataset MCP
+performs the actual processing without arbitrary shell, SQL, or Python. Every
+write produces a new checksummed artifact and provenance manifest, never
+overwriting the source.
+
 The worker also exposes a curated biology-provider catalog. Catalog entries
 describe metadata access, raw-data access, authentication, and whether the
 provider needs generic HTTP, a provider-specific adapter, or an SDK/object
@@ -19,6 +25,17 @@ Tools:
 - `dataset_api_register`: register separate metadata and raw-data endpoints.
 - `dataset_api_metadata`: retrieve metadata from a registered database with bounded transient-network retries and structured diagnostics.
 - `dataset_api_raw_data`: stream format-validated raw bytes into a checksummed workspace artifact. FASTA, JSON, text, and binary validation are supported.
+- `dataset_prepare_plan`: persist a draft or user-confirmed preparation plan.
+- `dataset_profile`: profile JSON, JSONL, CSV, TSV, or FASTA and save a schema/quality report.
+- `dataset_filter`: apply structured filter conditions under a confirmed plan.
+- `dataset_select_columns`: select, rename, require, and default fields; optionally change output format.
+- `dataset_deduplicate`: remove duplicate records using explicit keys.
+- `dataset_validate`: validate record counts, fields, types, ranges, uniqueness, missingness, and FASTA integrity.
+- `dataset_publish`: create a release directory with data, manifest, schema, quality report, checksums, and full parent/plan provenance.
+
+Processing artifacts use a stable fingerprint of the operation, parent
+checksums, and parameters. Re-running the same confirmed plan reuses the same
+verified artifact, while different content is never silently overwritten.
 
 NCBI Gene FASTA requests are provider-aware: SciForge resolves the Gene record's genomic accession, coordinates, and strand through ESummary, then fetches the actual sequence from Nuccore. A Gene text report is never accepted as FASTA. Dataset API failures should be retried through Dataset API itself or reported; agents must not bypass failures with shell or curl.
 

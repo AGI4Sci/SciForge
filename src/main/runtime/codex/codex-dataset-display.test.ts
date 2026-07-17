@@ -37,4 +37,27 @@ describe('datasetApiDisplayMetadata', () => {
       contentItems: [{ type: 'inputText', text: 'structuredContent:\n{"result":{"ok":true}}' }]
     })).toBeUndefined()
   })
+
+  it('bounds processing reports before persisting them in timeline metadata', () => {
+    const response = {
+      success: true,
+      contentItems: [{
+        type: 'inputText' as const,
+        text: `structuredContent:\n${JSON.stringify({
+          result: {
+            validation: {
+              valid: false,
+              errorCount: 100,
+              errors: Array.from({ length: 100 }, (_, index) => ({ index, message: 'x'.repeat(2_000) }))
+            }
+          }
+        })}`
+      }]
+    }
+
+    const display = datasetApiDisplayMetadata('dataset_validate', response)
+    const validation = (display?.result as Record<string, unknown>).validation as Record<string, unknown>
+    expect((validation.errors as unknown[]).length).toBeLessThanOrEqual(20)
+    expect(JSON.stringify(display).length).toBeLessThan(30_000)
+  })
 })

@@ -3574,7 +3574,7 @@ export function datasetApiDisplayMetadata(
   response: CodexAppServerDynamicToolCallResponse
 ): Record<string, unknown> | undefined {
   const normalizedToolName = toolName.split('__').at(-1) ?? toolName
-  if (!normalizedToolName.startsWith('dataset_api_')) return undefined
+  if (!normalizedToolName.startsWith('dataset_')) return undefined
   for (const item of response.contentItems) {
     if (item.type !== 'inputText') continue
     const marker = 'structuredContent:\n'
@@ -3599,20 +3599,7 @@ function boundedDatasetApiStructuredContent(value: Record<string, unknown>): Rec
   if (value.error !== undefined) return { error: boundedDatasetApiValue(value.error) }
   const result = asRecord(value.result)
   if (!result) return { result: boundedDatasetApiValue(value) }
-  return {
-    result: {
-      ...result,
-      ...(result.metadata !== undefined
-        ? { metadata: boundedDatasetApiValue(result.metadata) }
-        : {}),
-      ...(Array.isArray(result.providers)
-        ? { providers: result.providers.slice(0, 50).map(boundedDatasetApiValue) }
-        : {}),
-      ...(Array.isArray(result.sources)
-        ? { sources: result.sources.slice(0, 50).map(boundedDatasetApiValue) }
-        : {})
-    }
-  }
+  return { result: boundedDatasetApiValue(result) }
 }
 
 function boundedDatasetApiValue(value: unknown, depth = 0): unknown {

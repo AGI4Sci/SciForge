@@ -143,4 +143,39 @@ describe('TimelineDatasetResultsPanel', () => {
       '\n  "length": 393\n'
     )
   })
+
+  it('extracts processing, validation, and publication results with row-count evidence', () => {
+    const blocks: ChatBlock[] = [
+      {
+        kind: 'tool', id: 'filter-1', summary: 'dataset_filter', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_filter', success: true,
+          result: {
+            counts: { inputRecords: 10, outputRecords: 4, excludedRecords: 6 },
+            artifact: { path: '/workspace/filtered.tsv', format: 'tsv', bytes: 120, sha256: 'abc' }
+          }
+        } }
+      },
+      {
+        kind: 'tool', id: 'validate-1', summary: 'dataset_validate', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_validate', success: true,
+          result: { validation: { valid: true, records: 4, errorCount: 0 } }
+        } }
+      },
+      {
+        kind: 'tool', id: 'publish-1', summary: 'dataset_publish', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_publish', success: true,
+          result: { publication: { artifactCount: 2, manifestPath: '/workspace/published/manifest.json' } }
+        } }
+      }
+    ]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([
+      { kind: 'processing', result: { counts: { outputRecords: 4 } } },
+      { kind: 'validation', result: { validation: { valid: true } } },
+      { kind: 'publication', result: { publication: { artifactCount: 2 } } }
+    ])
+  })
 })
