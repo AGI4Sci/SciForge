@@ -466,7 +466,7 @@
         <mxCell id="1w0Sm5yt0-OX6XZcn0dS-25" parent="1" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#E36C0A;strokeWidth=1.6;fillColor=#FFF9E8;arcSize=8;fontFamily=Helvetica;fontSize=15;fontColor=#111111;spacing=8;shadow=0;" value="🔒&amp;nbsp;&amp;nbsp;&lt;b&gt;Workspace-Anchored, Local-First Design:&lt;/b&gt;&amp;nbsp; Selected data flow only through configured providers and connectors." vertex="1">
           <mxGeometry height="37" width="941" x="-2239.75" y="1323" as="geometry" />
         </mxCell>
-        <mxCell id="1w0Sm5yt0-OX6XZcn0dS-26" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=27;fontStyle=1;fontColor=#003B85;fontFamily=Helvetica;" value="SciForge: A Multimodal Research-Native AI Workbench for Scientific Discovery" vertex="1">
+        <mxCell id="1w0Sm5yt0-OX6XZcn0dS-26" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=27;fontStyle=1;fontColor=#003B85;fontFamily=Helvetica;" value="SciForge: An AI-Native, Multimodal Workbench for Scientific Discovery" vertex="1">
           <mxGeometry height="40" width="1120" x="-2327" y="20" as="geometry" />
         </mxCell>
         <mxCell id="1w0Sm5yt0-OX6XZcn0dS-27" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=15;fontStyle=1;fontColor=#003B85;fontFamily=Helvetica;" value="Support" vertex="1">
