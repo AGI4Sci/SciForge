@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const DATASET_API_MCP_FLAG = '--dataset-api-mcp-server'
 export const DATASET_API_MCP_SERVER_NAME = 'sciforge-dataset-api'
-export const DATASET_API_MCP_SERVER_VERSION = '0.2.0'
+export const DATASET_API_MCP_SERVER_VERSION = '0.3.0'
 
 export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_catalog: 'read',
@@ -15,7 +15,10 @@ export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_profile: 'controlled-write',
   dataset_filter: 'controlled-write',
   dataset_select_columns: 'controlled-write',
+  dataset_transform: 'controlled-write',
   dataset_deduplicate: 'controlled-write',
+  dataset_id_map: 'controlled-write',
+  dataset_join: 'controlled-write',
   dataset_validate: 'controlled-write',
   dataset_publish: 'controlled-write'
 } as const
@@ -59,7 +62,10 @@ const datasetPlanOperationSchema = z.object({
     'dataset_profile',
     'dataset_filter',
     'dataset_select_columns',
+    'dataset_transform',
     'dataset_deduplicate',
+    'dataset_id_map',
+    'dataset_join',
     'dataset_validate',
     'dataset_publish'
   ]),
@@ -127,11 +133,112 @@ export const datasetSelectColumnsInputSchema = datasetInputSchema.extend({
   outputFileName: outputFileNameSchema
 }).strict()
 
+const transformFieldSchema = z.string().trim().min(1).max(512)
+const transformScalarSchema = z.union([z.string().max(4096), z.number().finite(), z.boolean(), z.null()])
+const transformOnErrorSchema = z.enum(['fail', 'null', 'keep'])
+
+export const datasetTransformOperationSchema = z.discriminatedUnion('operation', [
+  z.object({ operation: z.literal('trim'), field: transformFieldSchema, target: transformFieldSchema.optional() }).strict(),
+  z.object({ operation: z.literal('lowercase'), field: transformFieldSchema, target: transformFieldSchema.optional() }).strict(),
+  z.object({ operation: z.literal('uppercase'), field: transformFieldSchema, target: transformFieldSchema.optional() }).strict(),
+  z.object({ operation: z.literal('normalize_whitespace'), field: transformFieldSchema, target: transformFieldSchema.optional() }).strict(),
+  z.object({
+    operation: z.literal('to_number'),
+    field: transformFieldSchema,
+    target: transformFieldSchema.optional(),
+    onError: transformOnErrorSchema.optional()
+  }).strict(),
+  z.object({
+    operation: z.literal('to_boolean'),
+    field: transformFieldSchema,
+    target: transformFieldSchema.optional(),
+    trueValues: z.array(transformScalarSchema).min(1).max(50).optional(),
+    falseValues: z.array(transformScalarSchema).min(1).max(50).optional(),
+    onError: transformOnErrorSchema.optional()
+  }).strict(),
+  z.object({
+    operation: z.literal('replace_literal'),
+    field: transformFieldSchema,
+    target: transformFieldSchema.optional(),
+    search: z.string().min(1).max(1024),
+    replacement: z.string().max(4096),
+    replaceAll: z.boolean().optional()
+  }).strict(),
+  z.object({
+    operation: z.literal('map_values'),
+    field: transformFieldSchema,
+    target: transformFieldSchema.optional(),
+    mappings: z.array(z.object({ from: transformScalarSchema, to: transformScalarSchema }).strict()).min(1).max(1000),
+    caseSensitive: z.boolean().optional(),
+    onUnmapped: z.enum(['keep', 'null', 'fail']).optional()
+  }).strict(),
+  z.object({
+    operation: z.literal('set_default'),
+    field: transformFieldSchema,
+    target: transformFieldSchema.optional(),
+    value: transformScalarSchema
+  }).strict()
+])
+
+export const datasetTransformInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema,
+  operations: z.array(datasetTransformOperationSchema).min(1).max(500),
+  outputFormat: datasetConcreteFormatSchema.optional(),
+  outputFileName: outputFileNameSchema
+}).strict()
+
 export const datasetDeduplicateInputSchema = datasetInputSchema.extend({
   planId: datasetIdSchema,
   keys: z.array(z.string().trim().min(1).max(512)).min(1).max(50),
   keep: z.enum(['first', 'last']).optional(),
   outputFileName: outputFileNameSchema
+}).strict()
+
+const datasetJoinFormatSchema = z.enum(['auto', 'json', 'jsonl', 'csv', 'tsv'])
+const datasetJoinOutputFormatSchema = z.enum(['json', 'jsonl', 'csv', 'tsv'])
+
+export const datasetIdMapInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema,
+  inputArtifact: artifactPathSchema,
+  mappingArtifact: artifactPathSchema,
+  inputFormat: datasetProcessingFormatSchema.optional(),
+  mappingFormat: datasetJoinFormatSchema.optional(),
+  inputRecordPath: z.string().trim().min(1).max(1024).optional(),
+  mappingRecordPath: z.string().trim().min(1).max(1024).optional(),
+  inputField: transformFieldSchema,
+  mappingFromField: transformFieldSchema,
+  mappingToField: transformFieldSchema,
+  outputField: transformFieldSchema,
+  cardinality: z.enum(['first', 'all', 'explode']).optional(),
+  onUnmapped: z.enum(['keep', 'null', 'drop', 'fail']).optional(),
+  caseSensitive: z.boolean().optional(),
+  deduplicateTargets: z.boolean().optional(),
+  outputFormat: datasetJoinOutputFormatSchema.optional(),
+  outputFileName: outputFileNameSchema,
+  maxOutputRecords: z.number().int().min(1).max(5_000_000).optional(),
+  maxBytes: processingMaxBytesSchema
+}).strict()
+
+export const datasetJoinInputSchema = z.object({
+  workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema,
+  leftArtifact: artifactPathSchema,
+  rightArtifact: artifactPathSchema,
+  leftFormat: datasetJoinFormatSchema.optional(),
+  rightFormat: datasetJoinFormatSchema.optional(),
+  leftRecordPath: z.string().trim().min(1).max(1024).optional(),
+  rightRecordPath: z.string().trim().min(1).max(1024).optional(),
+  keys: z.array(z.object({
+    left: transformFieldSchema,
+    right: transformFieldSchema
+  }).strict()).min(1).max(50),
+  joinType: z.enum(['inner', 'left', 'right', 'full']).optional(),
+  rightPrefix: z.string().trim().min(1).max(64).regex(/^[A-Za-z_][A-Za-z0-9_.-]*$/).optional(),
+  outputFormat: datasetJoinOutputFormatSchema.optional(),
+  outputFileName: outputFileNameSchema,
+  maxOutputRecords: z.number().int().min(1).max(5_000_000).optional(),
+  maxBytes: processingMaxBytesSchema
 }).strict()
 
 const datasetFieldRuleSchema = z.object({
@@ -270,7 +377,10 @@ export type DatasetPreparePlanInput = z.infer<typeof datasetPreparePlanInputSche
 export type DatasetProfileInput = z.infer<typeof datasetProfileInputSchema>
 export type DatasetFilterInput = z.infer<typeof datasetFilterInputSchema>
 export type DatasetSelectColumnsInput = z.infer<typeof datasetSelectColumnsInputSchema>
+export type DatasetTransformInput = z.infer<typeof datasetTransformInputSchema>
 export type DatasetDeduplicateInput = z.infer<typeof datasetDeduplicateInputSchema>
+export type DatasetIdMapInput = z.infer<typeof datasetIdMapInputSchema>
+export type DatasetJoinInput = z.infer<typeof datasetJoinInputSchema>
 export type DatasetValidateInput = z.infer<typeof datasetValidateInputSchema>
 export type DatasetPublishInput = z.infer<typeof datasetPublishInputSchema>
 

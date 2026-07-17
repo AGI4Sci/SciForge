@@ -40,7 +40,10 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
       'dataset_profile',
       'dataset_filter',
       'dataset_select_columns',
+      'dataset_transform',
       'dataset_deduplicate',
+      'dataset_id_map',
+      'dataset_join',
       'dataset_validate',
       'dataset_publish'
     ])
@@ -172,6 +175,11 @@ test('executes a confirmed conversation-driven processing plan through MCP tools
     { id: 'a', organism: 'human', score: 3 },
     { id: 'b', organism: 'mouse', score: 5 }
   ]))
+  const annotationsPath = join(workspaceRoot, 'annotations.json')
+  await writeFile(annotationsPath, JSON.stringify([
+    { record_id: 'a', pathway: 'R-HSA-TEST' },
+    { record_id: 'z', pathway: 'R-HSA-UNMATCHED' }
+  ]))
   const server = createDatasetApiMcpServer(
     createDatasetApiService({ workspaceRoot }),
     createDatasetProcessingService({ workspaceRoot })
@@ -186,6 +194,9 @@ test('executes a confirmed conversation-driven processing plan through MCP tools
         objective: 'Keep human records.',
         operations: [
           { tool: 'dataset_filter', description: 'Keep human rows.' },
+          { tool: 'dataset_transform', description: 'Normalize the organism field.' },
+          { tool: 'dataset_id_map', description: 'Map record identifiers to pathways.' },
+          { tool: 'dataset_join', description: 'Join pathway annotations.' },
           { tool: 'dataset_publish', description: 'Publish the result.' }
         ],
         outputs: [{ name: 'human.json', format: 'json' }],
@@ -215,6 +226,138 @@ test('executes a confirmed conversation-driven processing plan through MCP tools
       { id: 'a', organism: 'human', score: 3 }
     ])
     assert.equal(JSON.parse(await readFile(filterResult.artifact.manifestPath, 'utf8')).operation, 'dataset_filter')
+    const transformCall = await client.callTool({
+      name: 'dataset_transform',
+      arguments: {
+        planId,
+        inputArtifact: filterResult.artifact.path,
+        operations: [{ operation: 'uppercase', field: 'organism', target: 'organism_standardized' }],
+        outputFileName: 'human-standardized.json'
+      }
+    })
+    assert.equal(transformCall.isError, undefined)
+    const transformResult = transformCall.structuredContent?.result as { artifact: { path: string } }
+    const idMapCall = await client.callTool({
+      name: 'dataset_id_map',
+      arguments: {
+        planId,
+        inputArtifact: transformResult.artifact.path,
+        mappingArtifact: annotationsPath,
+        inputField: 'id',
+        mappingFromField: 'record_id',
+        mappingToField: 'pathway',
+        outputField: 'pathway_id',
+        outputFileName: 'human-mapped.json'
+      }
+    })
+    assert.equal(idMapCall.isError, undefined)
+    const idMapResult = idMapCall.structuredContent?.result as {
+      counts: { mappedRecords: number; unmatchedRecords: number }
+    }
+    assert.equal(idMapResult.counts.mappedRecords, 1)
+    assert.equal(idMapResult.counts.unmatchedRecords, 0)
+    const joinCall = await client.callTool({
+      name: 'dataset_join',
+      arguments: {
+        planId,
+        leftArtifact: transformResult.artifact.path,
+        rightArtifact: annotationsPath,
+        keys: [{ left: 'id', right: 'record_id' }],
+        joinType: 'left',
+        rightPrefix: 'annotation_',
+        outputFileName: 'human-annotated.json'
+      }
+    })
+    assert.equal(joinCall.isError, undefined)
+    const joinResult = joinCall.structuredContent?.result as {
+      artifact: { path: string }
+      unmatchedArtifacts: { right: { path: string } }
+      counts: { outputRecords: number; unmatchedRightRecords: number }
+    }
+    assert.equal(joinResult.counts.outputRecords, 1)
+    assert.equal(joinResult.counts.unmatchedRightRecords, 1)
+    assert.deepEqual(JSON.parse(await readFile(joinResult.artifact.path, 'utf8')), [{
+      id: 'a',
+      organism: 'human',
+      score: 3,
+      organism_standardized: 'HUMAN',
+      annotation_record_id: 'a',
+      annotation_pathway: 'R-HSA-TEST'
+    }])
+    assert.equal(JSON.parse(await readFile(joinResult.unmatchedArtifacts.right.path, 'utf8'))[0].record_id, 'z')
+  } finally {
+    await client.close()
+    await server.close()
+    await rm(workspaceRoot, { recursive: true, force: true })
+  }
+})
+
+test('propagates API request provenance through processing and publication manifests', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-mcp-provenance-'))
+  const server = createDatasetApiMcpServer(
+    createDatasetApiService({
+      workspaceRoot,
+      fetchImpl: async () => new Response(JSON.stringify([
+        { accession: 'P04637', reviewed: true },
+        { accession: 'Q9TEST', reviewed: false }
+      ]), { headers: { 'content-type': 'application/json' } })
+    }),
+    createDatasetProcessingService({ workspaceRoot })
+  )
+  const client = new Client({ name: 'dataset-provenance-test', version: '0.3.0' })
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
+  await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
+  const call = async (name: string, args: Record<string, unknown>) => {
+    const response = await client.callTool({ name, arguments: args })
+    assert.equal(response.isError, undefined, `${name} failed`)
+    return response.structuredContent?.result as Record<string, any>
+  }
+  try {
+    await call('dataset_api_register', {
+      id: 'provenance-db',
+      baseUrl: 'https://data.example.org/',
+      metadataEndpoint: 'metadata',
+      rawDataEndpoint: 'proteins'
+    })
+    const raw = await call('dataset_api_raw_data', {
+      sourceId: 'provenance-db',
+      outputFileName: 'proteins.json',
+      expectedFormat: 'json'
+    })
+    const prepared = await call('dataset_prepare_plan', {
+      objective: 'Publish reviewed proteins with source provenance.',
+      sources: [{ providerId: 'provenance-db', purpose: 'Download protein records.' }],
+      operations: [
+        { tool: 'dataset_filter', description: 'Keep reviewed records.' },
+        { tool: 'dataset_validate', description: 'Validate accessions.' },
+        { tool: 'dataset_publish', description: 'Publish the prepared dataset.' }
+      ],
+      outputs: [{ name: 'reviewed.json', format: 'json' }],
+      confirmedByUser: true
+    })
+    const planId = prepared.plan.planId as string
+    const filtered = await call('dataset_filter', {
+      planId,
+      inputArtifact: raw.artifact.path,
+      conditions: [{ field: 'reviewed', operator: 'equals', value: true }],
+      outputFileName: 'reviewed.json'
+    })
+    const validation = await call('dataset_validate', {
+      inputArtifact: filtered.artifact.path,
+      rules: [{ field: 'accession', required: true }],
+      minRecords: 1
+    })
+    const published = await call('dataset_publish', {
+      planId,
+      name: 'reviewed-proteins',
+      artifacts: [filtered.artifact.path, validation.artifact.path]
+    })
+    const filterManifest = JSON.parse(await readFile(filtered.artifact.manifestPath, 'utf8'))
+    assert.equal(filterManifest.origins[0].source.id, 'provenance-db')
+    assert.equal(filterManifest.origins[0].request.url, 'https://data.example.org/proteins')
+    const publicationManifest = JSON.parse(await readFile(published.publication.manifestPath, 'utf8'))
+    assert.equal(publicationManifest.provenance.origins.length, 1)
+    assert.equal(publicationManifest.provenance.origins[0].source.id, 'provenance-db')
   } finally {
     await client.close()
     await server.close()

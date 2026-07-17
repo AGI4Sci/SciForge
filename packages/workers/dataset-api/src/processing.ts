@@ -5,18 +5,24 @@ import { basename, extname, isAbsolute, join, relative, resolve } from 'node:pat
 import {
   datasetDeduplicateInputSchema,
   datasetFilterInputSchema,
+  datasetIdMapInputSchema,
+  datasetJoinInputSchema,
   datasetPreparePlanInputSchema,
   datasetProfileInputSchema,
   datasetPublishInputSchema,
   datasetSelectColumnsInputSchema,
+  datasetTransformInputSchema,
   datasetValidateInputSchema,
   type DatasetDeduplicateInput,
   type DatasetFilterInput,
+  type DatasetIdMapInput,
+  type DatasetJoinInput,
   type DatasetPreparePlanInput,
   type DatasetProcessingFormat,
   type DatasetProfileInput,
   type DatasetPublishInput,
   type DatasetSelectColumnsInput,
+  type DatasetTransformInput,
   type DatasetValidateInput
 } from './contract.js'
 
@@ -30,8 +36,14 @@ type LoadedDataset = {
   sha256: string
 }
 
+type DatasetOrigin = {
+  source: Record<string, unknown>
+  request: Record<string, unknown>
+  response?: Record<string, unknown>
+}
+
 type ArtifactManifest = {
-  version: 1
+  version: 1 | 2
   artifactId: string
   operation: string
   format: DatasetProcessingFormat | 'report' | 'plan' | 'publication'
@@ -43,6 +55,8 @@ type ArtifactManifest = {
   parents: Array<{ path: string; sha256: string }>
   parameters: Record<string, unknown>
   summary: Record<string, unknown>
+  schema?: Record<string, unknown>
+  origins?: DatasetOrigin[]
   createdAt: string
 }
 
@@ -167,6 +181,41 @@ export function createDatasetProcessingService(options: { workspaceRoot?: string
       return { artifact, counts: { inputRecords: dataset.rows.length, outputRecords: rows.length } }
     },
 
+    async transform(raw: DatasetTransformInput) {
+      const input = datasetTransformInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_transform')
+      const dataset = await loadDataset(workspaceRoot, input)
+      const rows = dataset.rows.map((sourceRow, index) => {
+        const row = structuredClone(sourceRow)
+        for (const operation of input.operations) applyTransformOperation(row, operation, index)
+        if ((input.outputFormat ?? dataset.format) === 'fasta' && typeof row.sequence === 'string') {
+          row.length = row.sequence.replace(/\s+/g, '').length
+        }
+        return row
+      })
+      const outputFormat = input.outputFormat ?? dataset.format
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_transform',
+        format: outputFormat,
+        outputFileName: input.outputFileName,
+        data: serializeDataset(rows, outputFormat),
+        parents: [{ path: dataset.path, sha256: dataset.sha256 }],
+        parameters: processingParameters(input, ['workspaceRoot', 'maxBytes']),
+        summary: {
+          inputRecords: dataset.rows.length,
+          outputRecords: rows.length,
+          operationCount: input.operations.length,
+          operations: input.operations,
+          inputFormat: dataset.format,
+          outputFormat
+        },
+        records: rows.length
+      })
+      return { artifact, counts: { inputRecords: dataset.rows.length, outputRecords: rows.length }, operations: input.operations }
+    },
+
     async deduplicate(raw: DatasetDeduplicateInput) {
       const input = datasetDeduplicateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
@@ -197,6 +246,267 @@ export function createDatasetProcessingService(options: { workspaceRoot?: string
         records: rows.length
       })
       return { artifact, counts: artifact.summary }
+    },
+
+    async mapIds(raw: DatasetIdMapInput) {
+      const input = datasetIdMapInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map')
+      const [dataset, mappingDataset] = await Promise.all([
+        loadDataset(workspaceRoot, {
+          inputArtifact: input.inputArtifact,
+          format: input.inputFormat,
+          recordPath: input.inputRecordPath,
+          maxBytes: input.maxBytes
+        }),
+        loadDataset(workspaceRoot, {
+          inputArtifact: input.mappingArtifact,
+          format: input.mappingFormat,
+          recordPath: input.mappingRecordPath,
+          maxBytes: input.maxBytes
+        })
+      ])
+      const caseSensitive = input.caseSensitive ?? true
+      const deduplicateTargets = input.deduplicateTargets ?? true
+      const mapping = new Map<string, unknown[]>()
+      let invalidMappingRecords = 0
+      for (const row of mappingDataset.rows) {
+        const from = valueAtPath(row, input.mappingFromField)
+        const to = valueAtPath(row, input.mappingToField)
+        if (from === undefined || from === null || from === '' || to === undefined || to === null || to === '') {
+          invalidMappingRecords += 1
+          continue
+        }
+        const key = comparableScalar(from, caseSensitive)
+        const targets = mapping.get(key) ?? []
+        if (!deduplicateTargets || !targets.some((target) => canonicalJson(target) === canonicalJson(to))) targets.push(to)
+        mapping.set(key, targets)
+      }
+      const cardinality = input.cardinality ?? 'first'
+      const onUnmapped = input.onUnmapped ?? 'null'
+      const maxOutputRecords = input.maxOutputRecords ?? 1_000_000
+      const rows: DatasetRow[] = []
+      const unmatched: Array<{ recordIndex: number; inputId: unknown; record: DatasetRow }> = []
+      const ambiguous: Array<{ recordIndex: number; inputId: unknown; targets: unknown[] }> = []
+      let mappedRecords = 0
+      const append = (row: DatasetRow) => {
+        if (rows.length >= maxOutputRecords) {
+          throw new Error(`Dataset ID mapping exceeded maxOutputRecords=${maxOutputRecords}; use cardinality=first/all or refine the input before retrying.`)
+        }
+        rows.push(row)
+      }
+      for (const [recordIndex, sourceRow] of dataset.rows.entries()) {
+        const inputId = valueAtPath(sourceRow, input.inputField)
+        const targets = inputId === undefined || inputId === null || inputId === ''
+          ? []
+          : mapping.get(comparableScalar(inputId, caseSensitive)) ?? []
+        if (targets.length === 0) {
+          unmatched.push({ recordIndex: recordIndex + 1, inputId: inputId ?? null, record: sourceRow })
+          if (onUnmapped === 'drop' || onUnmapped === 'fail') continue
+          const row = structuredClone(sourceRow)
+          setValueAtPath(row, input.outputField, onUnmapped === 'keep' ? inputId : null)
+          append(row)
+          continue
+        }
+        mappedRecords += 1
+        if (targets.length > 1) ambiguous.push({ recordIndex: recordIndex + 1, inputId, targets })
+        if (cardinality === 'explode') {
+          for (const target of targets) {
+            const row = structuredClone(sourceRow)
+            setValueAtPath(row, input.outputField, target)
+            append(row)
+          }
+        } else {
+          const row = structuredClone(sourceRow)
+          setValueAtPath(row, input.outputField, cardinality === 'all' ? targets : targets[0])
+          append(row)
+        }
+      }
+      const outputFormat = input.outputFormat ?? (dataset.format === 'fasta' ? 'json' : dataset.format)
+      const parents = [
+        { path: dataset.path, sha256: dataset.sha256 },
+        { path: mappingDataset.path, sha256: mappingDataset.sha256 }
+      ]
+      const parameters = processingParameters(input, ['workspaceRoot', 'maxBytes'])
+      const outputStem = basename(input.outputFileName, extname(input.outputFileName))
+      const [unmatchedArtifact, ambiguousArtifact] = await Promise.all([
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_id_map_unmatched',
+          format: 'json',
+          outputFileName: `${outputStem}.unmatched.json`,
+          data: jsonBytes(unmatched),
+          parents,
+          parameters,
+          summary: { records: unmatched.length, inputField: input.inputField },
+          records: unmatched.length
+        }),
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_id_map_ambiguous',
+          format: 'json',
+          outputFileName: `${outputStem}.ambiguous.json`,
+          data: jsonBytes(ambiguous),
+          parents,
+          parameters,
+          summary: { records: ambiguous.length, cardinality },
+          records: ambiguous.length
+        })
+      ])
+      if (onUnmapped === 'fail' && unmatched.length > 0) {
+        throw new Error(`Dataset ID mapping found ${unmatched.length} unmatched records. Report: ${unmatchedArtifact.path}`)
+      }
+      const counts = {
+        inputRecords: dataset.rows.length,
+        mappingRecords: mappingDataset.rows.length,
+        outputRecords: rows.length,
+        mappedRecords,
+        unmatchedRecords: unmatched.length,
+        ambiguousRecords: ambiguous.length,
+        invalidMappingRecords
+      }
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_id_map',
+        format: outputFormat,
+        outputFileName: input.outputFileName,
+        data: serializeDataset(rows, outputFormat, [...uniqueFields(dataset.rows), input.outputField]),
+        parents,
+        parameters,
+        summary: {
+          ...counts,
+          inputField: input.inputField,
+          mappingFromField: input.mappingFromField,
+          mappingToField: input.mappingToField,
+          outputField: input.outputField,
+          cardinality,
+          onUnmapped
+        },
+        records: rows.length
+      })
+      return { artifact, unmatchedArtifact, ambiguousArtifact, counts }
+    },
+
+    async join(raw: DatasetJoinInput) {
+      const input = datasetJoinInputSchema.parse(raw)
+      const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_join')
+      const [left, right] = await Promise.all([
+        loadDataset(workspaceRoot, {
+          inputArtifact: input.leftArtifact,
+          format: input.leftFormat,
+          recordPath: input.leftRecordPath,
+          maxBytes: input.maxBytes
+        }),
+        loadDataset(workspaceRoot, {
+          inputArtifact: input.rightArtifact,
+          format: input.rightFormat,
+          recordPath: input.rightRecordPath,
+          maxBytes: input.maxBytes
+        })
+      ])
+      const joinType = input.joinType ?? 'inner'
+      const rightPrefix = input.rightPrefix ?? 'right_'
+      const rightIndex = new Map<string, Array<{ row: DatasetRow; index: number }>>()
+      for (const [index, row] of right.rows.entries()) {
+        const key = joinKey(row, input.keys.map((mapping) => mapping.right))
+        if (key === null) continue
+        const matches = rightIndex.get(key) ?? []
+        matches.push({ row, index })
+        rightIndex.set(key, matches)
+      }
+      const leftFields = uniqueFields(left.rows)
+      const rightFields = uniqueFields(right.rows)
+      const matchedRight = new Set<number>()
+      const outputRows: DatasetRow[] = []
+      const unmatchedLeft: DatasetRow[] = []
+      const maxOutputRecords = input.maxOutputRecords ?? 1_000_000
+      const appendOutput = (row: DatasetRow) => {
+        if (outputRows.length >= maxOutputRecords) {
+          throw new Error(`Dataset join exceeded maxOutputRecords=${maxOutputRecords}; refine or deduplicate join keys before retrying.`)
+        }
+        outputRows.push(row)
+      }
+      for (const leftRow of left.rows) {
+        const key = joinKey(leftRow, input.keys.map((mapping) => mapping.left))
+        const matches = key === null ? [] : rightIndex.get(key) ?? []
+        if (matches.length === 0) {
+          unmatchedLeft.push(leftRow)
+          if (joinType === 'left' || joinType === 'full') {
+            appendOutput(mergeJoinedRows(leftRow, undefined, leftFields, rightFields, rightPrefix))
+          }
+          continue
+        }
+        for (const match of matches) {
+          matchedRight.add(match.index)
+          appendOutput(mergeJoinedRows(leftRow, match.row, leftFields, rightFields, rightPrefix))
+        }
+      }
+      const unmatchedRight = right.rows.filter((_, index) => !matchedRight.has(index))
+      if (joinType === 'right' || joinType === 'full') {
+        for (const row of unmatchedRight) {
+          appendOutput(mergeJoinedRows(undefined, row, leftFields, rightFields, rightPrefix))
+        }
+      }
+      const outputFormat = input.outputFormat ?? (left.format === 'fasta' ? 'json' : left.format)
+      const parents = [
+        { path: left.path, sha256: left.sha256 },
+        { path: right.path, sha256: right.sha256 }
+      ]
+      const parameters = processingParameters(input, ['workspaceRoot', 'maxBytes'])
+      const counts = {
+        leftRecords: left.rows.length,
+        rightRecords: right.rows.length,
+        outputRecords: outputRows.length,
+        matchedLeftRecords: left.rows.length - unmatchedLeft.length,
+        matchedRightRecords: right.rows.length - unmatchedRight.length,
+        unmatchedLeftRecords: unmatchedLeft.length,
+        unmatchedRightRecords: unmatchedRight.length
+      }
+      const artifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_join',
+        format: outputFormat,
+        outputFileName: input.outputFileName,
+        data: serializeDataset(outputRows, outputFormat, [
+          ...leftFields,
+          ...rightFields.map((field) => `${rightPrefix}${field}`)
+        ]),
+        parents,
+        parameters,
+        summary: { ...counts, joinType, keys: input.keys, rightPrefix, outputFormat },
+        records: outputRows.length
+      })
+      const outputStem = basename(input.outputFileName, extname(input.outputFileName))
+      const [unmatchedLeftArtifact, unmatchedRightArtifact] = await Promise.all([
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_join_unmatched_left',
+          format: 'json',
+          outputFileName: `${outputStem}.unmatched-left.json`,
+          data: jsonBytes(unmatchedLeft),
+          parents: [parents[0]],
+          parameters,
+          summary: { records: unmatchedLeft.length, side: 'left', keys: input.keys.map((mapping) => mapping.left) },
+          records: unmatchedLeft.length
+        }),
+        writeDerivedArtifact({
+          workspaceRoot,
+          operation: 'dataset_join_unmatched_right',
+          format: 'json',
+          outputFileName: `${outputStem}.unmatched-right.json`,
+          data: jsonBytes(unmatchedRight),
+          parents: [parents[1]],
+          parameters,
+          summary: { records: unmatchedRight.length, side: 'right', keys: input.keys.map((mapping) => mapping.right) },
+          records: unmatchedRight.length
+        })
+      ])
+      return {
+        artifact,
+        unmatchedArtifacts: { left: unmatchedLeftArtifact, right: unmatchedRightArtifact },
+        counts
+      }
     },
 
     async validate(raw: DatasetValidateInput) {
@@ -258,11 +568,13 @@ export function createDatasetProcessingService(options: { workspaceRoot?: string
           fileName: targetName,
           sha256,
           bytes: sourceBytes.byteLength,
+          origins: sidecar?.origins ?? [],
           ...(sidecar ? {
             operation: sidecar.operation,
             format: sidecar.format,
             records: sidecar.records,
             summary: sidecar.summary,
+            schema: sidecar.schema,
             parentArtifacts: sidecar.parents
           } : {}),
           ...(publishedProfile ? {
@@ -290,6 +602,7 @@ export function createDatasetProcessingService(options: { workspaceRoot?: string
         quality,
         provenance: {
           parents: artifacts.map((artifact) => ({ path: artifact.sourcePath, sha256: artifact.sha256 })),
+          origins: deduplicateOrigins(artifacts.flatMap((artifact) => artifact.origins ?? [])),
           preparationPlan: plan.plan
         },
         createdAt: new Date().toISOString()
@@ -459,15 +772,15 @@ function parseFasta(text: string): DatasetRow[] {
   return records
 }
 
-function serializeDataset(rows: DatasetRow[], format: DatasetProcessingFormat): Buffer {
+function serializeDataset(rows: DatasetRow[], format: DatasetProcessingFormat, knownFields?: string[]): Buffer {
   if (format === 'json') return jsonBytes(rows)
   if (format === 'jsonl') return Buffer.from(`${rows.map((row) => JSON.stringify(row)).join('\n')}${rows.length ? '\n' : ''}`)
-  if (format === 'csv' || format === 'tsv') return Buffer.from(serializeDelimited(rows, format === 'csv' ? ',' : '\t'))
+  if (format === 'csv' || format === 'tsv') return Buffer.from(serializeDelimited(rows, format === 'csv' ? ',' : '\t', knownFields))
   return Buffer.from(serializeFasta(rows))
 }
 
-function serializeDelimited(rows: DatasetRow[], delimiter: string): string {
-  const headers = [...new Set(rows.flatMap((row) => Object.keys(row)))]
+function serializeDelimited(rows: DatasetRow[], delimiter: string, knownFields: string[] = []): string {
+  const headers = [...new Set([...knownFields, ...rows.flatMap((row) => Object.keys(row))])]
   const lines = [headers.map((header) => escapeDelimited(header, delimiter)).join(delimiter)]
   for (const row of rows) {
     lines.push(headers.map((header) => escapeDelimited(row[header], delimiter)).join(delimiter))
@@ -587,6 +900,121 @@ function validateRows(dataset: LoadedDataset, input: DatasetValidateInput) {
   }
 }
 
+function applyTransformOperation(
+  row: DatasetRow,
+  operation: DatasetTransformInput['operations'][number],
+  recordIndex: number
+): void {
+  const current = valueAtPath(row, operation.field)
+  const target = operation.target ?? operation.field
+  if (operation.operation === 'set_default') {
+    if (current === undefined || current === null || current === '') setValueAtPath(row, target, operation.value)
+    else if (target !== operation.field) setValueAtPath(row, target, current)
+    return
+  }
+  if (current === undefined || current === null) return
+  try {
+    let transformed: unknown
+    switch (operation.operation) {
+      case 'trim': transformed = requireString(current, operation.operation).trim(); break
+      case 'lowercase': transformed = requireString(current, operation.operation).toLowerCase(); break
+      case 'uppercase': transformed = requireString(current, operation.operation).toUpperCase(); break
+      case 'normalize_whitespace': transformed = requireString(current, operation.operation).trim().replace(/\s+/g, ' '); break
+      case 'replace_literal': {
+        const text = requireString(current, operation.operation)
+        transformed = operation.replaceAll
+          ? text.split(operation.search).join(operation.replacement)
+          : text.replace(operation.search, operation.replacement)
+        break
+      }
+      case 'to_number': {
+        const number = typeof current === 'number' ? current : Number(String(current).trim())
+        if (!Number.isFinite(number)) throw new Error(`cannot convert '${String(current)}' to a finite number`)
+        transformed = number
+        break
+      }
+      case 'to_boolean': {
+        const trueValues = operation.trueValues ?? ['true', '1', 'yes', 'y']
+        const falseValues = operation.falseValues ?? ['false', '0', 'no', 'n']
+        if (trueValues.some((value) => comparableScalar(value) === comparableScalar(current))) transformed = true
+        else if (falseValues.some((value) => comparableScalar(value) === comparableScalar(current))) transformed = false
+        else throw new Error(`cannot convert '${String(current)}' to boolean`)
+        break
+      }
+      case 'map_values': {
+        const comparable = comparableScalar(current, operation.caseSensitive ?? false)
+        const mapping = operation.mappings.find((candidate) => (
+          comparableScalar(candidate.from, operation.caseSensitive ?? false) === comparable
+        ))
+        if (mapping) transformed = mapping.to
+        else if ((operation.onUnmapped ?? 'keep') === 'null') transformed = null
+        else if (operation.onUnmapped === 'fail') throw new Error(`has no configured value mapping for '${String(current)}'`)
+        else transformed = current
+        break
+      }
+    }
+    setValueAtPath(row, target, transformed)
+  } catch (error) {
+    const onError = 'onError' in operation ? operation.onError ?? 'fail' : 'fail'
+    if (onError === 'null') setValueAtPath(row, target, null)
+    else if (onError === 'keep') setValueAtPath(row, target, current)
+    else throw new Error(`Transform '${operation.operation}' failed for field '${operation.field}' at record ${recordIndex + 1}: ${errorMessage(error)}`)
+  }
+}
+
+function requireString(value: unknown, operation: string): string {
+  if (typeof value !== 'string') throw new Error(`${operation} requires a string value`)
+  return value
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
+function comparableScalar(value: unknown, caseSensitive = false): string {
+  if (typeof value === 'string') return `string:${caseSensitive ? value : value.toLocaleLowerCase('en-US')}`
+  return canonicalJson(value)
+}
+
+function setValueAtPath(row: DatasetRow, path: string, value: unknown): void {
+  const segments = path.split('.').filter(Boolean)
+  if (segments.length === 0 || segments.some((segment) => ['__proto__', 'prototype', 'constructor'].includes(segment))) {
+    throw new Error(`Unsafe transform target field '${path}'.`)
+  }
+  let current: DatasetRow = row
+  for (const segment of segments.slice(0, -1)) {
+    const child = current[segment]
+    if (child === undefined || child === null) current[segment] = {}
+    else if (typeof child !== 'object' || Array.isArray(child)) {
+      throw new Error(`Transform target '${path}' crosses non-object field '${segment}'.`)
+    }
+    current = current[segment] as DatasetRow
+  }
+  current[segments.at(-1)!] = value
+}
+
+function joinKey(row: DatasetRow, fields: string[]): string | null {
+  const values = fields.map((field) => valueAtPath(row, field))
+  return values.some((value) => value === undefined || value === null || value === '') ? null : canonicalJson(values)
+}
+
+function uniqueFields(rows: DatasetRow[]): string[] {
+  return [...new Set(rows.flatMap((row) => Object.keys(row)))]
+}
+
+function mergeJoinedRows(
+  left: DatasetRow | undefined,
+  right: DatasetRow | undefined,
+  leftFields: string[],
+  rightFields: string[],
+  rightPrefix: string
+): DatasetRow {
+  return Object.fromEntries([
+    ...leftFields.map((field) => [field, left?.[field] ?? null] as const),
+    ...rightFields.map((field) => [`${rightPrefix}${field}`, right?.[field] ?? null] as const)
+  ])
+}
+
 function conditionMatches(row: DatasetRow, condition: DatasetFilterInput['conditions'][number]): boolean {
   const actual = valueAtPath(row, condition.field)
   const expected = condition.value
@@ -637,6 +1065,50 @@ async function requireConfirmedPlan(workspaceRoot: string, planId: string, opera
   return { path, plan }
 }
 
+async function collectParentOrigins(parents: Array<{ path: string; sha256: string }>): Promise<DatasetOrigin[]> {
+  const origins: DatasetOrigin[] = []
+  for (const parent of parents) {
+    const manifest = await readArtifactManifest(parent.path)
+    if (manifest?.origins) origins.push(...manifest.origins)
+  }
+  return deduplicateOrigins(origins)
+}
+
+function deduplicateOrigins(origins: DatasetOrigin[]): DatasetOrigin[] {
+  const seen = new Set<string>()
+  return origins.filter((origin) => {
+    const key = canonicalJson(origin)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
+function inferArtifactSchema(
+  data: Buffer,
+  format: DatasetProcessingFormat | 'report'
+): Record<string, unknown> {
+  let rows: DatasetRow[]
+  if (format === 'report') {
+    const parsed = JSON.parse(data.toString('utf8')) as unknown
+    rows = Array.isArray(parsed)
+      ? parsed.filter((value): value is DatasetRow => typeof value === 'object' && value !== null && !Array.isArray(value))
+      : typeof parsed === 'object' && parsed !== null ? [parsed as DatasetRow] : []
+  } else {
+    rows = parseDataset(data, format)
+  }
+  const fields = uniqueFields(rows).map((name) => {
+    const values = rows.map((row) => valueAtPath(row, name))
+    const present = values.filter((value) => value !== undefined && value !== null && value !== '')
+    return {
+      name,
+      types: countBy(present.map(valueType)),
+      nullable: present.length !== values.length
+    }
+  })
+  return { version: 1, format, fields }
+}
+
 async function writeDerivedArtifact(input: {
   workspaceRoot: string
   operation: string
@@ -650,6 +1122,7 @@ async function writeDerivedArtifact(input: {
 }): Promise<ArtifactManifest & { reused: boolean }> {
   const outputName = safeFileName(input.outputFileName)
   const operationHash = fingerprint({
+    artifactContractVersion: 2,
     operation: input.operation,
     format: input.format,
     outputName,
@@ -671,7 +1144,7 @@ async function writeDerivedArtifact(input: {
     await atomicWrite(path, input.data)
   }
   const manifest: ArtifactManifest = {
-    version: 1,
+    version: 2,
     artifactId: `sha256:${sha256}`,
     operation: input.operation,
     format: input.format,
@@ -683,6 +1156,8 @@ async function writeDerivedArtifact(input: {
     parents: input.parents,
     parameters: input.parameters,
     summary: input.summary,
+    schema: inferArtifactSchema(input.data, input.format),
+    origins: await collectParentOrigins(input.parents),
     createdAt: new Date().toISOString()
   }
   await writeIdempotentJson(manifestPath, manifest)
@@ -766,6 +1241,7 @@ function mergedPublishedSchema(artifacts: Array<{
   format?: string
   records?: number
   summary?: Record<string, unknown>
+  schema?: Record<string, unknown>
   schemaFields?: unknown[]
 }>) {
   return {
@@ -774,7 +1250,9 @@ function mergedPublishedSchema(artifacts: Array<{
       operation: artifact.operation ?? 'external',
       format: artifact.format ?? 'unknown',
       records: artifact.records,
-      fields: artifact.schemaFields ?? (Array.isArray(artifact.summary?.fields) ? artifact.summary.fields : undefined)
+      fields: artifact.schemaFields
+        ?? (Array.isArray(artifact.schema?.fields) ? artifact.schema.fields : undefined)
+        ?? (Array.isArray(artifact.summary?.fields) ? artifact.summary.fields : undefined)
     }))
   }
 }

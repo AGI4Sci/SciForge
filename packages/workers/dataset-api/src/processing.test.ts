@@ -19,7 +19,10 @@ async function confirmedPlan(service: ReturnType<typeof createDatasetProcessingS
       { tool: 'dataset_profile', description: 'Inspect the source.' },
       { tool: 'dataset_filter', description: 'Filter records.' },
       { tool: 'dataset_select_columns', description: 'Select output fields.' },
+      { tool: 'dataset_transform', description: 'Standardize fields.' },
       { tool: 'dataset_deduplicate', description: 'Remove duplicate records.' },
+      { tool: 'dataset_id_map', description: 'Map biomedical identifiers.' },
+      { tool: 'dataset_join', description: 'Join source artifacts.' },
       { tool: 'dataset_validate', description: 'Validate output.' },
       { tool: 'dataset_publish', description: 'Publish output.' }
     ],
@@ -56,6 +59,11 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
       outputFileName: 'human-reviewed.json'
     })
     assert.equal(filtered.counts.outputRecords, 2)
+    const filteredManifest = JSON.parse(await readFile(filtered.artifact.manifestPath, 'utf8'))
+    assert.equal(filteredManifest.version, 2)
+    assert.deepEqual(filteredManifest.schema.fields.map((field: { name: string }) => field.name), [
+      'accession', 'gene', 'reviewed', 'length', 'organism'
+    ])
 
     const selected = await service.selectColumns({
       planId,
@@ -145,6 +153,159 @@ test('profiles and filters JSONL plus quoted CSV and TSV records', async () => {
     })
     assert.match(await readFile(tsv.artifact.path, 'utf8'), /alpha, beta/)
     assert.equal((await service.profile({ inputArtifact: tsv.artifact.path })).profile.format, 'tsv')
+  } finally {
+    await cleanup()
+  }
+})
+
+test('transforms fields and performs a full multi-source join with unmatched artifacts', async () => {
+  const { workspaceRoot, service, cleanup } = await fixture()
+  const proteinsPath = join(workspaceRoot, 'proteins.json')
+  const pathwaysPath = join(workspaceRoot, 'pathways.tsv')
+  const proteins = [
+    { accession: ' P04637 ', reviewed: 'YES', length: '393' },
+    { accession: ' Q9TEST ', reviewed: 'no', length: '90' }
+  ]
+  const pathways = 'protein_id\tpathway\nP04637\tR-HSA-69563\nP99999\tR-HSA-00000\n'
+  await writeFile(proteinsPath, JSON.stringify(proteins))
+  await writeFile(pathwaysPath, pathways)
+  try {
+    const planId = await confirmedPlan(service)
+    const transformed = await service.transform({
+      planId,
+      inputArtifact: proteinsPath,
+      operations: [
+        { operation: 'trim', field: 'accession' },
+        { operation: 'to_boolean', field: 'reviewed', trueValues: ['yes'], falseValues: ['no'] },
+        { operation: 'to_number', field: 'length' }
+      ],
+      outputFileName: 'proteins-standardized.json'
+    })
+    assert.deepEqual(JSON.parse(await readFile(transformed.artifact.path, 'utf8')), [
+      { accession: 'P04637', reviewed: true, length: 393 },
+      { accession: 'Q9TEST', reviewed: false, length: 90 }
+    ])
+    assert.deepEqual(JSON.parse(await readFile(proteinsPath, 'utf8')), proteins)
+
+    const joined = await service.join({
+      planId,
+      leftArtifact: transformed.artifact.path,
+      rightArtifact: pathwaysPath,
+      rightFormat: 'tsv',
+      keys: [{ left: 'accession', right: 'protein_id' }],
+      joinType: 'full',
+      rightPrefix: 'pathway_',
+      outputFormat: 'tsv',
+      outputFileName: 'protein-pathways.tsv'
+    })
+    assert.deepEqual(joined.counts, {
+      leftRecords: 2,
+      rightRecords: 2,
+      outputRecords: 3,
+      matchedLeftRecords: 1,
+      matchedRightRecords: 1,
+      unmatchedLeftRecords: 1,
+      unmatchedRightRecords: 1
+    })
+    assert.match(await readFile(joined.artifact.path, 'utf8'), /P04637\ttrue\t393\tP04637\tR-HSA-69563/)
+    assert.deepEqual(JSON.parse(await readFile(joined.unmatchedArtifacts.left.path, 'utf8')), [
+      { accession: 'Q9TEST', reviewed: false, length: 90 }
+    ])
+    assert.deepEqual(JSON.parse(await readFile(joined.unmatchedArtifacts.right.path, 'utf8')), [
+      { protein_id: 'P99999', pathway: 'R-HSA-00000' }
+    ])
+    const rerun = await service.join({
+      planId,
+      leftArtifact: transformed.artifact.path,
+      rightArtifact: pathwaysPath,
+      rightFormat: 'tsv',
+      keys: [{ left: 'accession', right: 'protein_id' }],
+      joinType: 'full',
+      rightPrefix: 'pathway_',
+      outputFormat: 'tsv',
+      outputFileName: 'protein-pathways.tsv'
+    })
+    assert.equal(rerun.artifact.reused, true)
+    assert.equal(rerun.artifact.sha256, joined.artifact.sha256)
+    await assert.rejects(service.join({
+      planId,
+      leftArtifact: transformed.artifact.path,
+      rightArtifact: pathwaysPath,
+      rightFormat: 'tsv',
+      keys: [{ left: 'accession', right: 'protein_id' }],
+      joinType: 'full',
+      outputFileName: 'bounded-join.json',
+      maxOutputRecords: 1
+    }), /exceeded maxOutputRecords=1/)
+  } finally {
+    await cleanup()
+  }
+})
+
+test('maps biomedical identifiers with explicit one-to-many and unmatched semantics', async () => {
+  const { workspaceRoot, service, cleanup } = await fixture()
+  const proteinsPath = join(workspaceRoot, 'protein-ids.json')
+  const mappingPath = join(workspaceRoot, 'uniprot-ensembl.tsv')
+  await writeFile(proteinsPath, JSON.stringify([
+    { accession: 'P04637', gene: 'TP53' },
+    { accession: 'Q9UNMAPPED', gene: 'UNKNOWN' }
+  ]))
+  await writeFile(mappingPath, [
+    'uniprot\tensembl',
+    'P04637\tENSG00000141510',
+    'P04637\tENST00000269305',
+    'P04637\tENSG00000141510',
+    '\tINVALID'
+  ].join('\n'))
+  try {
+    const planId = await confirmedPlan(service)
+    const mapped = await service.mapIds({
+      planId,
+      inputArtifact: proteinsPath,
+      mappingArtifact: mappingPath,
+      mappingFormat: 'tsv',
+      inputField: 'accession',
+      mappingFromField: 'uniprot',
+      mappingToField: 'ensembl',
+      outputField: 'ensembl_id',
+      cardinality: 'explode',
+      onUnmapped: 'drop',
+      outputFormat: 'tsv',
+      outputFileName: 'protein-ensembl.tsv'
+    })
+    assert.deepEqual(mapped.counts, {
+      inputRecords: 2,
+      mappingRecords: 4,
+      outputRecords: 2,
+      mappedRecords: 1,
+      unmatchedRecords: 1,
+      ambiguousRecords: 1,
+      invalidMappingRecords: 1
+    })
+    assert.match(await readFile(mapped.artifact.path, 'utf8'), /P04637\tTP53\tENSG00000141510/)
+    assert.match(await readFile(mapped.artifact.path, 'utf8'), /P04637\tTP53\tENST00000269305/)
+    const unmatched = JSON.parse(await readFile(mapped.unmatchedArtifact.path, 'utf8'))
+    assert.equal(unmatched[0].inputId, 'Q9UNMAPPED')
+    const ambiguous = JSON.parse(await readFile(mapped.ambiguousArtifact.path, 'utf8'))
+    assert.deepEqual(ambiguous[0].targets, ['ENSG00000141510', 'ENST00000269305'])
+
+    const allMappings = await service.mapIds({
+      planId,
+      inputArtifact: proteinsPath,
+      mappingArtifact: mappingPath,
+      mappingFormat: 'tsv',
+      inputField: 'accession',
+      mappingFromField: 'uniprot',
+      mappingToField: 'ensembl',
+      outputField: 'ensembl_ids',
+      cardinality: 'all',
+      onUnmapped: 'keep',
+      outputFileName: 'protein-ensembl-all.json'
+    })
+    assert.deepEqual(JSON.parse(await readFile(allMappings.artifact.path, 'utf8')), [
+      { accession: 'P04637', gene: 'TP53', ensembl_ids: ['ENSG00000141510', 'ENST00000269305'] },
+      { accession: 'Q9UNMAPPED', gene: 'UNKNOWN', ensembl_ids: 'Q9UNMAPPED' }
+    ])
   } finally {
     await cleanup()
   }

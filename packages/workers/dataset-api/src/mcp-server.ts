@@ -15,7 +15,10 @@ import {
   datasetProfileInputSchema,
   datasetFilterInputSchema,
   datasetSelectColumnsInputSchema,
+  datasetTransformInputSchema,
   datasetDeduplicateInputSchema,
+  datasetIdMapInputSchema,
+  datasetJoinInputSchema,
   datasetValidateInputSchema,
   datasetPublishInputSchema
 } from './contract.js'
@@ -206,6 +209,19 @@ export function createDatasetApiMcpServer(
     )
   }))
 
+  server.registerTool('dataset_transform', {
+    title: 'Transform and Standardize Dataset Fields',
+    description: 'Apply only allow-listed structured transformations such as trimming, case and whitespace normalization, scalar conversion, literal replacement, categorical mapping, and defaults. Arbitrary code, SQL, and expressions are not accepted; the source is preserved and the output is reproducible.',
+    inputSchema: datasetTransformInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.transform(datasetTransformInputSchema.parse(args))
+    return textResult(
+      `Applied ${result.operations.length} structured transformations to ${result.counts.outputRecords} records; wrote ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
   server.registerTool('dataset_deduplicate', {
     title: 'Deduplicate Dataset Artifact',
     description: 'Deduplicate records by one or more structured keys, keep the first or last occurrence deterministically, preserve the source, and report removed duplicates.',
@@ -215,6 +231,32 @@ export function createDatasetApiMcpServer(
     const result = await processing.deduplicate(datasetDeduplicateInputSchema.parse(args))
     return textResult(
       `Removed ${result.counts.duplicateRecordsRemoved} duplicate records; wrote ${result.artifact.path}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_id_map', {
+    title: 'Map Biomedical Dataset Identifiers',
+    description: 'Map identifiers through a workspace mapping artifact using explicit source and target fields. Handles one-to-many mappings with first, all, or explode semantics and persists separate unmatched and ambiguous reports; no arbitrary scripts or implicit fuzzy matching are used.',
+    inputSchema: datasetIdMapInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.mapIds(datasetIdMapInputSchema.parse(args))
+    return textResult(
+      `Mapped ${result.counts.mappedRecords}/${result.counts.inputRecords} records; unmatched=${result.counts.unmatchedRecords}, ambiguous=${result.counts.ambiguousRecords}.`,
+      { result }
+    )
+  }))
+
+  server.registerTool('dataset_join', {
+    title: 'Join Dataset Artifacts',
+    description: 'Deterministically join two confirmed-plan JSON, JSONL, CSV, or TSV artifacts using explicit key mappings and inner, left, right, or full semantics. Produces a new joined artifact plus separate unmatched-left and unmatched-right artifacts with checksums and provenance.',
+    inputSchema: datasetJoinInputSchema,
+    annotations: CONTROLLED_WRITE_ANNOTATIONS
+  }, async (args) => runTool(async () => {
+    const result = await processing.join(datasetJoinInputSchema.parse(args))
+    return textResult(
+      `Joined ${result.counts.leftRecords} left and ${result.counts.rightRecords} right records into ${result.counts.outputRecords}; unmatched left=${result.counts.unmatchedLeftRecords}, right=${result.counts.unmatchedRightRecords}.`,
       { result }
     )
   }))

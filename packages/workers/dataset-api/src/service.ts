@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import type { LookupAddress } from 'node:dns'
 import { lookup as systemLookup } from 'node:dns/promises'
-import { access, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { createReadStream } from 'node:fs'
+import { access, link, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import type { LookupFunction } from 'node:net'
 import { basename, dirname, extname, join, resolve } from 'node:path'
 import { Agent, fetch as undiciFetch } from 'undici'
@@ -186,32 +187,74 @@ export function createDatasetApiService(options: {
       }
       const temporaryPath = `${artifactPath}.${process.pid}.tmp`
       const streamed = await streamResponseToFile(response, temporaryPath, maxBytes, expectedFormat)
+      let finalArtifactPath = artifactPath
+      let reused = false
       try {
-        if (input.overwrite) await rm(artifactPath, { force: true })
-        await rename(temporaryPath, artifactPath)
+        if (await pathExists(artifactPath)) {
+          const existingHash = await hashFile(artifactPath)
+          if (existingHash === streamed.sha256) {
+            reused = true
+          } else {
+            finalArtifactPath = versionedRawArtifactPath(artifactPath, streamed.sha256)
+            reused = await installRawArtifact(temporaryPath, finalArtifactPath, streamed.sha256)
+          }
+        } else {
+          reused = await installRawArtifact(temporaryPath, artifactPath, streamed.sha256)
+        }
       } catch (error) {
-        await rm(temporaryPath, { force: true }).catch(() => undefined)
         throw error
+      } finally {
+        await rm(temporaryPath, { force: true }).catch(() => undefined)
       }
+      const sourceRecord = { id: source.id, name: source.name }
+      const requestRecord = {
+        url: redactUrl(url),
+        ...(input.range ? { range: input.range } : {}),
+        ...(resolvedFrom ? { resolvedFrom } : {})
+      }
+      const responseRecord = {
+        status: response.status,
+        contentType: response.headers.get('content-type') ?? '',
+        contentRange: response.headers.get('content-range') ?? undefined,
+        rangeSatisfied: input.range ? response.status === 206 : undefined,
+        bytes: streamed.bytes
+      }
+      const manifestPath = `${finalArtifactPath}.manifest.json`
+      await writeRawArtifactManifest(manifestPath, {
+        version: 1,
+        artifactId: `sha256:${streamed.sha256}`,
+        operation: 'dataset_api_raw_data',
+        format: expectedFormat,
+        path: finalArtifactPath,
+        manifestPath,
+        sha256: streamed.sha256,
+        bytes: streamed.bytes,
+        parents: [],
+        parameters: {
+          sourceId: source.id,
+          expectedFormat,
+          ...(input.range ? { range: input.range } : {})
+        },
+        summary: { responseBytes: streamed.bytes, reused },
+        schema: rawArtifactSchema(expectedFormat),
+        source: sourceRecord,
+        request: requestRecord,
+        response: responseRecord,
+        origins: [{ source: sourceRecord, request: requestRecord, response: responseRecord }],
+        createdAt: new Date().toISOString()
+      })
       return {
-        source: { id: source.id, name: source.name },
-        request: {
-          url: redactUrl(url),
-          ...(input.range ? { range: input.range } : {}),
-          ...(resolvedFrom ? { resolvedFrom } : {})
-        },
-        response: {
-          status: response.status,
-          contentType: response.headers.get('content-type') ?? '',
-          contentRange: response.headers.get('content-range') ?? undefined,
-          rangeSatisfied: input.range ? response.status === 206 : undefined,
-          bytes: streamed.bytes
-        },
+        source: sourceRecord,
+        request: requestRecord,
+        response: responseRecord,
         artifact: {
-          path: artifactPath,
+          path: finalArtifactPath,
+          manifestPath,
           sha256: streamed.sha256,
-          fileName,
-          format: expectedFormat
+          bytes: streamed.bytes,
+          fileName: basename(finalArtifactPath),
+          format: expectedFormat,
+          reused
         }
       }
     }
@@ -738,6 +781,65 @@ function extensionForContentType(contentType: string | null): string {
   if (/zip/i.test(contentType ?? '')) return '.zip'
   if (/gzip/i.test(contentType ?? '')) return '.gz'
   return '.bin'
+}
+
+function rawArtifactSchema(format: 'fasta' | 'json' | 'text' | 'binary'): Record<string, unknown> {
+  if (format === 'fasta') {
+    return {
+      version: 1,
+      format,
+      fields: [
+        { name: 'header', types: { string: 1 }, nullable: false },
+        { name: 'id', types: { string: 1 }, nullable: false },
+        { name: 'description', types: { string: 1 }, nullable: true },
+        { name: 'sequence', types: { string: 1 }, nullable: false },
+        { name: 'length', types: { number: 1 }, nullable: false }
+      ]
+    }
+  }
+  return {
+    version: 1,
+    format,
+    fields: [],
+    inference: format === 'json' ? 'deferred-to-dataset_profile' : 'not-applicable'
+  }
+}
+
+async function hashFile(path: string): Promise<string> {
+  const digest = createHash('sha256')
+  for await (const chunk of createReadStream(path)) digest.update(chunk)
+  return digest.digest('hex')
+}
+
+function versionedRawArtifactPath(path: string, sha256: string): string {
+  const extension = extname(path)
+  const stem = basename(path, extension)
+  return join(dirname(path), `${stem}-${sha256.slice(0, 12)}${extension}`)
+}
+
+async function installRawArtifact(temporaryPath: string, targetPath: string, sha256: string): Promise<boolean> {
+  try {
+    await link(temporaryPath, targetPath)
+    return false
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    if (await hashFile(targetPath) !== sha256) {
+      throw new Error(`Raw dataset artifact collision at content-addressed path: ${targetPath}`)
+    }
+    return true
+  }
+}
+
+async function writeRawArtifactManifest(path: string, manifest: Record<string, unknown>): Promise<void> {
+  try {
+    await writeFile(path, `${JSON.stringify(manifest, null, 2)}\n`, { encoding: 'utf8', flag: 'wx' })
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error
+    const existing = JSON.parse(await readFile(path, 'utf8')) as { sha256?: string; path?: string }
+    if (existing.sha256 !== manifest.sha256 || existing.path !== manifest.path) {
+      throw new Error(`Raw dataset manifest collision: ${path}`)
+    }
+  }
 }
 
 async function pathExists(path: string): Promise<boolean> {

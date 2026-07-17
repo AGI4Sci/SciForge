@@ -29,13 +29,20 @@ Tools:
 - `dataset_profile`: profile JSON, JSONL, CSV, TSV, or FASTA and save a schema/quality report.
 - `dataset_filter`: apply structured filter conditions under a confirmed plan.
 - `dataset_select_columns`: select, rename, require, and default fields; optionally change output format.
+- `dataset_transform`: apply allow-listed field normalization and scalar conversion operations without arbitrary code.
 - `dataset_deduplicate`: remove duplicate records using explicit keys.
+- `dataset_id_map`: map biomedical identifiers through an explicit mapping artifact with one-to-many, unmatched, and ambiguous-record handling.
+- `dataset_join`: perform deterministic inner/left/right/full joins and persist both sides' unmatched records as separate artifacts.
 - `dataset_validate`: validate record counts, fields, types, ranges, uniqueness, missingness, and FASTA integrity.
 - `dataset_publish`: create a release directory with data, manifest, schema, quality report, checksums, and full parent/plan provenance.
 
 Processing artifacts use a stable fingerprint of the operation, parent
 checksums, and parameters. Re-running the same confirmed plan reuses the same
 verified artifact, while different content is never silently overwritten.
+Raw downloads follow the same invariant: an identical re-fetch is reused and
+a changed response is written to a checksum-suffixed version instead of
+replacing the original. Raw request receipts are propagated through child
+manifests into the final publication provenance.
 
 NCBI Gene FASTA requests are provider-aware: SciForge resolves the Gene record's genomic accession, coordinates, and strand through ESummary, then fetches the actual sequence from Nuccore. A Gene text report is never accepted as FASTA. Dataset API failures should be retried through Dataset API itself or reported; agents must not bypass failures with shell or curl.
 

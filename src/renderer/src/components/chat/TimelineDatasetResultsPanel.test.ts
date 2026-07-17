@@ -157,6 +157,27 @@ describe('TimelineDatasetResultsPanel', () => {
         } }
       },
       {
+        kind: 'tool', id: 'id-map-1', summary: 'dataset_id_map', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_id_map', success: true,
+          result: {
+            counts: { inputRecords: 5, outputRecords: 6, mappedRecords: 4, unmatchedRecords: 1, ambiguousRecords: 1 },
+            artifact: { path: '/workspace/mapped.tsv', format: 'tsv', bytes: 280, sha256: 'map' }
+          }
+        } }
+      },
+      {
+        kind: 'tool', id: 'join-1', summary: 'dataset_join', status: 'success',
+        meta: { datasetApi: {
+          toolName: 'dataset_join', success: true,
+          result: {
+            counts: { leftRecords: 4, rightRecords: 3, outputRecords: 5, unmatchedLeftRecords: 1, unmatchedRightRecords: 0 },
+            artifact: { path: '/workspace/joined.tsv', format: 'tsv', bytes: 320, sha256: 'def' },
+            unmatchedArtifacts: { left: { path: '/workspace/unmatched-left.json' }, right: { path: '/workspace/unmatched-right.json' } }
+          }
+        } }
+      },
+      {
         kind: 'tool', id: 'validate-1', summary: 'dataset_validate', status: 'success',
         meta: { datasetApi: {
           toolName: 'dataset_validate', success: true,
@@ -174,6 +195,8 @@ describe('TimelineDatasetResultsPanel', () => {
 
     expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([
       { kind: 'processing', result: { counts: { outputRecords: 4 } } },
+      { kind: 'processing', toolName: 'dataset_id_map', result: { counts: { mappedRecords: 4, ambiguousRecords: 1 } } },
+      { kind: 'processing', toolName: 'dataset_join', result: { counts: { unmatchedLeftRecords: 1 } } },
       { kind: 'validation', result: { validation: { valid: true } } },
       { kind: 'publication', result: { publication: { artifactCount: 2 } } }
     ])

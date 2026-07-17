@@ -54,7 +54,7 @@ test('registers a database and reads its metadata endpoint', async () => {
 
 test('streams raw data to the workspace cache with a checksum and byte range', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-dataset-raw-'))
-  const payload = Buffer.from('raw-dataset-payload')
+  let payload = Buffer.from('raw-dataset-payload')
   const service = createDatasetApiService({
     workspaceRoot,
     fetchImpl: async (_url, init) => {
@@ -85,6 +85,29 @@ test('streams raw data to the workspace cache with a checksum and byte range', a
     assert.equal(result.response.bytes, payload.byteLength)
     assert.equal(await readFile(result.artifact.path, 'utf8'), payload.toString())
     assert.match(result.artifact.sha256, /^[a-f0-9]{64}$/)
+    const manifest = JSON.parse(await readFile(result.artifact.manifestPath, 'utf8'))
+    assert.equal(manifest.operation, 'dataset_api_raw_data')
+    assert.equal(manifest.request.url, 'https://example.com/api/datasets/ds-1/raw/file-1')
+    const reused = await service.rawData({
+      sourceId: 'raw-db',
+      pathParameters: { datasetId: 'ds-1', assetId: 'file-1' },
+      range: { start: 0, end: 18 },
+      overwrite: true
+    })
+    assert.equal(reused.artifact.path, result.artifact.path)
+    assert.equal(reused.artifact.reused, true)
+    const originalPayload = payload.toString()
+    payload = Buffer.from('changed-raw-dataset-payload')
+    const versioned = await service.rawData({
+      sourceId: 'raw-db',
+      pathParameters: { datasetId: 'ds-1', assetId: 'file-1' },
+      range: { start: 0, end: 18 },
+      overwrite: true
+    })
+    assert.notEqual(versioned.artifact.path, result.artifact.path)
+    assert.match(versioned.artifact.path, /sample-[a-f0-9]{12}\.dat$/)
+    assert.equal(await readFile(result.artifact.path, 'utf8'), originalPayload)
+    assert.equal(await readFile(versioned.artifact.path, 'utf8'), payload.toString())
   } finally {
     await rm(workspaceRoot, { recursive: true, force: true })
   }

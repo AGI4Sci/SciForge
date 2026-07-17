@@ -83,7 +83,7 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
-  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|deduplicate|validate|publish)/i)
+  const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map|join|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
 
@@ -92,7 +92,7 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
   if (toolName === 'dataset_profile' || result?.profile !== undefined) return 'profile'
   if (toolName === 'dataset_validate' || result?.validation !== undefined) return 'validation'
   if (toolName === 'dataset_publish' || result?.publication !== undefined) return 'publication'
-  if (['dataset_filter', 'dataset_select_columns', 'dataset_deduplicate'].includes(toolName)) return 'processing'
+  if (['dataset_filter', 'dataset_select_columns', 'dataset_transform', 'dataset_deduplicate', 'dataset_id_map', 'dataset_join'].includes(toolName)) return 'processing'
   if (toolName.endsWith('_metadata') || result?.metadata !== undefined) return 'metadata'
   if (toolName.endsWith('_raw_data') || result?.artifact !== undefined) return 'raw-data'
   if (toolName.endsWith('_catalog') || Array.isArray(result?.providers)) return 'catalog'
@@ -255,6 +255,14 @@ function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }):
   if (numberValue(counts?.outputRecords) !== undefined) values.push({ label: t('datasetResultOutputRecords'), value: String(numberValue(counts?.outputRecords)) })
   if (numberValue(counts?.excludedRecords) !== undefined) values.push({ label: t('datasetResultExcludedRecords'), value: String(numberValue(counts?.excludedRecords)) })
   if (numberValue(counts?.duplicateRecordsRemoved) !== undefined) values.push({ label: t('datasetResultDuplicatesRemoved'), value: String(numberValue(counts?.duplicateRecordsRemoved)) })
+  if (numberValue(counts?.leftRecords) !== undefined) values.push({ label: t('datasetResultLeftRecords'), value: String(numberValue(counts?.leftRecords)) })
+  if (numberValue(counts?.rightRecords) !== undefined) values.push({ label: t('datasetResultRightRecords'), value: String(numberValue(counts?.rightRecords)) })
+  if (numberValue(counts?.unmatchedLeftRecords) !== undefined) values.push({ label: t('datasetResultUnmatchedLeft'), value: String(numberValue(counts?.unmatchedLeftRecords)) })
+  if (numberValue(counts?.unmatchedRightRecords) !== undefined) values.push({ label: t('datasetResultUnmatchedRight'), value: String(numberValue(counts?.unmatchedRightRecords)) })
+  if (numberValue(counts?.mappedRecords) !== undefined) values.push({ label: t('datasetResultMappedRecords'), value: String(numberValue(counts?.mappedRecords)) })
+  if (numberValue(counts?.unmatchedRecords) !== undefined) values.push({ label: t('datasetResultUnmatchedRecords'), value: String(numberValue(counts?.unmatchedRecords)) })
+  if (numberValue(counts?.ambiguousRecords) !== undefined) values.push({ label: t('datasetResultAmbiguousRecords'), value: String(numberValue(counts?.ambiguousRecords)) })
+  if (Array.isArray(result?.operations)) values.push({ label: t('datasetResultOperations'), value: String(result.operations.length) })
   if (validation) values.push({ label: t('datasetResultQuality'), value: validation.valid === true ? t('datasetResultValid') : t('datasetResultInvalid') })
   if (numberValue(validation?.errorCount) !== undefined) values.push({ label: t('datasetResultErrors'), value: String(numberValue(validation?.errorCount)) })
   if (numberValue(publication?.artifactCount) !== undefined) values.push({ label: t('datasetResultArtifacts'), value: String(numberValue(publication?.artifactCount)) })
