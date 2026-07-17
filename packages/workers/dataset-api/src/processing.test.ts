@@ -707,7 +707,8 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
     const draftBytes = await readFile(draftPath)
     await assert.rejects(service.authorizePlan({
       planId: draft.plan.planId,
-      operation: 'dataset_api_raw_data'
+      operation: 'dataset_api_raw_data',
+      parameters: {}
     }), /not confirmed/)
     const confirmedDraft = await service.preparePlan({
       draftPlanId: draft.plan.planId,
@@ -728,7 +729,8 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
     assert.equal(repeatedConfirmation.artifact.sha256, confirmedDraft.artifact.sha256)
     await assert.rejects(service.authorizePlan({
       planId: draft.plan.planId,
-      operation: 'dataset_api_raw_data'
+      operation: 'dataset_api_raw_data',
+      parameters: {}
     }), /does not authorize operation/)
     await service.filter({
       planId: draft.plan.planId,
@@ -764,6 +766,48 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
       keys: ['id'],
       outputFileName: 'deduplicated.json'
     }), /does not authorize operation 'dataset_deduplicate'/)
+    await assert.rejects(service.profile({
+      planId: filterOnlyPlan.plan.planId,
+      inputArtifact: sourcePath
+    }), /does not authorize operation 'dataset_profile'/)
+    await assert.rejects(service.structureProfile({
+      planId: filterOnlyPlan.plan.planId,
+      inputArtifact: sourcePath
+    }), /does not authorize operation 'dataset_structure_profile'/)
+    await assert.rejects(service.structureValidate({
+      planId: filterOnlyPlan.plan.planId,
+      inputArtifact: sourcePath
+    }), /does not authorize operation 'dataset_structure_validate'/)
+    const parameterBoundPlan = await service.preparePlan({
+      objective: 'Execute exactly the reviewed filter approved by the user.',
+      operations: [
+        { tool: 'dataset_filter', description: 'Legacy unparameterized duplicate must not weaken binding.' },
+        {
+          tool: 'dataset_filter',
+          description: 'Keep record id 1.',
+          parameters: {
+            inputArtifact: 'records.json',
+            conditions: [{ field: 'id', operator: 'equals', value: 1 }],
+            outputFileName: 'bound.json'
+          }
+        }
+      ],
+      outputs: [{ name: 'bound.json', format: 'json' }],
+      confirmedByUser: true
+    })
+    const bound = await service.filter({
+      planId: parameterBoundPlan.plan.planId,
+      inputArtifact: sourcePath,
+      conditions: [{ field: 'id', operator: 'equals', value: 1 }],
+      outputFileName: 'bound.json'
+    })
+    assert.equal(bound.counts.outputRecords, 1)
+    await assert.rejects(service.filter({
+      planId: parameterBoundPlan.plan.planId,
+      inputArtifact: sourcePath,
+      conditions: [{ field: 'id', operator: 'equals', value: 2 }],
+      outputFileName: 'bound.json'
+    }), /parameters do not authorize/)
     await assert.rejects(service.profile({ inputArtifact: '/etc/hosts', format: 'csv' }), /selected workspace/)
     const planId = await confirmedPlan(service)
     await assert.rejects(service.publish({

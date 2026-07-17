@@ -125,6 +125,7 @@ const datasetInputSchema = z.object({
 }).strict()
 
 export const datasetProfileInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema.optional(),
   outputFileName: outputFileNameSchema.optional()
 }).strict()
 
@@ -298,6 +299,7 @@ const datasetStructureFormatSchema = z.enum(['auto', 'sdf', 'mmcif'])
 
 export const datasetStructureProfileInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema.optional(),
   inputArtifact: artifactPathSchema,
   format: datasetStructureFormatSchema.optional(),
   outputFileName: outputFileNameSchema.optional(),
@@ -336,6 +338,7 @@ const datasetFieldRuleSchema = z.object({
 }).strict()
 
 export const datasetValidateInputSchema = datasetInputSchema.extend({
+  planId: datasetIdSchema.optional(),
   rules: z.array(datasetFieldRuleSchema).max(500).default([]),
   minRecords: z.number().int().nonnegative().optional(),
   maxMissingFraction: z.number().min(0).max(1).optional(),

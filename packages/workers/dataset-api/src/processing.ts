@@ -113,9 +113,10 @@ export function createDatasetProcessingService(options: {
       workspaceRoot?: string
       planId: string
       operation: 'dataset_api_metadata' | 'dataset_api_raw_data'
+      parameters: Record<string, unknown>
     }) {
       const workspaceRoot = await resolveWorkspaceRoot(raw.workspaceRoot, defaultWorkspaceRoot)
-      const confirmed = await requireConfirmedPlan(workspaceRoot, raw.planId, raw.operation)
+      const confirmed = await requireConfirmedPlan(workspaceRoot, raw.planId, raw.operation, raw.parameters)
       return { planId: raw.planId, status: confirmed.plan.status }
     },
 
@@ -195,6 +196,7 @@ export function createDatasetProcessingService(options: {
     async profile(raw: DatasetProfileInput) {
       const input = datasetProfileInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      if (input.planId) await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_profile', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const profile = profileRows(dataset)
       const artifact = await writeDerivedArtifact({
@@ -213,7 +215,7 @@ export function createDatasetProcessingService(options: {
     async filter(raw: DatasetFilterInput) {
       const input = datasetFilterInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_filter')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_filter', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const combine = input.combine ?? 'all'
       const rows: DatasetRow[] = []
@@ -263,7 +265,7 @@ export function createDatasetProcessingService(options: {
     async selectColumns(raw: DatasetSelectColumnsInput) {
       const input = datasetSelectColumnsInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_select_columns')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_select_columns', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const rows = dataset.rows.map((row, index) => Object.fromEntries(input.columns.map((column) => {
         const value = valueAtPath(row, column.source)
@@ -297,7 +299,7 @@ export function createDatasetProcessingService(options: {
     async transform(raw: DatasetTransformInput) {
       const input = datasetTransformInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_transform')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_transform', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const rows = dataset.rows.map((sourceRow, index) => {
         const row = structuredClone(sourceRow)
@@ -332,7 +334,7 @@ export function createDatasetProcessingService(options: {
     async deduplicate(raw: DatasetDeduplicateInput) {
       const input = datasetDeduplicateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_deduplicate')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_deduplicate', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const keep = input.keep ?? 'first'
       const seen = new Map<string, DatasetRow>()
@@ -381,7 +383,7 @@ export function createDatasetProcessingService(options: {
     async providerIdMapping(raw: DatasetProviderIdMapInput) {
       const input = datasetProviderIdMapInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map_provider')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map_provider', input)
       const dataset = await loadDataset(workspaceRoot, {
         inputArtifact: input.inputArtifact,
         format: input.inputFormat,
@@ -480,7 +482,7 @@ export function createDatasetProcessingService(options: {
     async mapIds(raw: DatasetIdMapInput) {
       const input = datasetIdMapInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_id_map', input)
       const [dataset, mappingDataset] = await Promise.all([
         loadDataset(workspaceRoot, {
           inputArtifact: input.inputArtifact,
@@ -619,7 +621,7 @@ export function createDatasetProcessingService(options: {
     async join(raw: DatasetJoinInput) {
       const input = datasetJoinInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_join')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_join', input)
       const [left, right] = await Promise.all([
         loadDataset(workspaceRoot, {
           inputArtifact: input.leftArtifact,
@@ -741,6 +743,7 @@ export function createDatasetProcessingService(options: {
     async structureProfile(raw: DatasetStructureProfileInput) {
       const input = datasetStructureProfileInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      if (input.planId) await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_structure_profile', input)
       const structure = await loadStructureArtifact(workspaceRoot, input)
       const profile = profileStructure(structure)
       const artifact = await writeDerivedArtifact({
@@ -766,6 +769,7 @@ export function createDatasetProcessingService(options: {
     async structureValidate(raw: DatasetStructureValidateInput) {
       const input = datasetStructureValidateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      if (input.planId) await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_structure_validate', input)
       const structure = await loadStructureArtifact(workspaceRoot, input)
       const profile = profileStructure(structure)
       const errors = [...profile.errors]
@@ -807,7 +811,7 @@ export function createDatasetProcessingService(options: {
     async organizeGraph(raw: DatasetGraphOrganizeInput) {
       const input = datasetGraphOrganizeInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_graph_organize')
+      await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_graph_organize', input)
       const dataset = await loadDataset(workspaceRoot, input)
       if (dataset.format === 'fasta') throw new Error('Graph organization requires JSON, JSONL, CSV, or TSV records.')
       const directed = input.directed ?? input.graphType === 'pathway'
@@ -941,6 +945,7 @@ export function createDatasetProcessingService(options: {
     async validate(raw: DatasetValidateInput) {
       const input = datasetValidateInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      if (input.planId) await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_validate', input)
       const dataset = await loadDataset(workspaceRoot, input)
       const report = validateRows(dataset, input)
       const artifact = await writeDerivedArtifact({
@@ -962,7 +967,7 @@ export function createDatasetProcessingService(options: {
     async publish(raw: DatasetPublishInput) {
       const input = datasetPublishInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
-      const plan = await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_publish')
+      const plan = await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_publish', input)
       const outputDirectory = join(
         workspaceRoot,
         '.sciforge',
@@ -1971,14 +1976,19 @@ function providerMappingTarget(value: unknown): unknown | undefined {
   return undefined
 }
 
-async function requireConfirmedPlan(workspaceRoot: string, planId: string, operation?: string) {
+async function requireConfirmedPlan(
+  workspaceRoot: string,
+  planId: string,
+  operation?: string,
+  actualParameters?: Record<string, unknown>
+) {
   const path = join(workspaceRoot, '.sciforge', 'datasets', 'plans', `${safeId(planId)}.json`)
   const planBytes = await readFile(path)
   const plan = JSON.parse(planBytes.toString('utf8')) as {
     planId?: string
     confirmedByUser?: boolean
     status?: string
-    operations?: Array<{ tool?: string }>
+    operations?: Array<{ tool?: string; parameters?: Record<string, unknown> }>
   }
   if (plan.planId !== planId) throw new Error(`Preparation plan '${planId}' has an invalid identity.`)
   let confirmedPlan = plan
@@ -1989,13 +1999,50 @@ async function requireConfirmedPlan(workspaceRoot: string, planId: string, opera
     }
     confirmedPlan = { ...plan, confirmedByUser: true, status: 'confirmed' }
   }
-  const authorized = operation === 'dataset_id_map'
-    ? confirmedPlan.operations?.some((candidate) => ['dataset_id_map', 'dataset_id_map_provider'].includes(candidate.tool ?? ''))
-    : confirmedPlan.operations?.some((candidate) => candidate.tool === operation)
+  const candidates = operation === 'dataset_id_map'
+    ? confirmedPlan.operations?.filter((candidate) => ['dataset_id_map', 'dataset_id_map_provider'].includes(candidate.tool ?? ''))
+    : confirmedPlan.operations?.filter((candidate) => candidate.tool === operation)
+  const authorized = Boolean(candidates?.length)
   if (operation && !authorized) {
     throw new Error(`Preparation plan '${planId}' does not authorize operation '${operation}'.`)
   }
+  const parameterizedCandidates = candidates?.filter((candidate) => (
+    candidate.parameters && Object.keys(candidate.parameters).length > 0
+  ))
+  if (operation && actualParameters && parameterizedCandidates?.length) {
+    const matched = parameterizedCandidates.some((candidate) => (
+      planParametersMatch(candidate.parameters ?? {}, actualParameters)
+    ))
+    if (!matched) {
+      throw new Error(
+        `Preparation plan '${planId}' parameters do not authorize this '${operation}' call. ` +
+        'Create and confirm a revised plan before executing changed parameters.'
+      )
+    }
+  }
   return { path, plan: confirmedPlan }
+}
+
+function planParametersMatch(
+  declared: Record<string, unknown>,
+  actual: Record<string, unknown>
+): boolean {
+  return Object.entries(declared).every(([key, value]) => (
+    canonicalJson(normalizePlanBindingValue(key, value)) ===
+    canonicalJson(normalizePlanBindingValue(key, actual[key]))
+  ))
+}
+
+function normalizePlanBindingValue(key: string, value: unknown): unknown {
+  if (Array.isArray(value)) return value.map((item) => normalizePlanBindingValue(key, item))
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value as Record<string, unknown>)
+      .map(([childKey, childValue]) => [childKey, normalizePlanBindingValue(childKey, childValue)]))
+  }
+  if (typeof value === 'string' && /(?:^|_)(?:inputArtifact|mappingArtifact|leftArtifact|rightArtifact|artifact|artifacts)$/iu.test(key)) {
+    return basename(value).replace(/^(?:[a-f0-9]{12,16}-)+/iu, '')
+  }
+  return value
 }
 
 function planConfirmationPath(workspaceRoot: string, planId: string): string {

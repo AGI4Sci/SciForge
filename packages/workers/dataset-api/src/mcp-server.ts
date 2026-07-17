@@ -136,7 +136,12 @@ export function createDatasetApiMcpServer(
     annotations: { ...READ_ONLY_ANNOTATIONS, openWorldHint: true }
   }, async (args) => runTool(async () => {
     const input = datasetApiMetadataInputSchema.parse(args)
-    if (input.planId) await processing.authorizePlan({ workspaceRoot: input.workspaceRoot, planId: input.planId, operation: 'dataset_api_metadata' })
+    if (input.planId) await processing.authorizePlan({
+      workspaceRoot: input.workspaceRoot,
+      planId: input.planId,
+      operation: 'dataset_api_metadata',
+      parameters: input
+    })
     const result = await service.metadata(input)
     return textResult(
       `Read ${result.response.bytes} metadata bytes from '${result.source.id}'${shouldSummarizeMetadata(result.response.bytes, input.responseMode) ? ' (returned as a bounded structural summary)' : ''}.`,
@@ -156,7 +161,12 @@ export function createDatasetApiMcpServer(
     }
   }, async (args) => runTool(async () => {
     const input = datasetApiRawDataInputSchema.parse(args)
-    if (input.planId) await processing.authorizePlan({ workspaceRoot: input.workspaceRoot, planId: input.planId, operation: 'dataset_api_raw_data' })
+    if (input.planId) await processing.authorizePlan({
+      workspaceRoot: input.workspaceRoot,
+      planId: input.planId,
+      operation: 'dataset_api_raw_data',
+      parameters: input
+    })
     const result = await service.rawData(input)
     return textResult(
       `Downloaded ${result.response.bytes} raw-data bytes to ${result.artifact.path} (sha256 ${result.artifact.sha256}).`,
@@ -166,7 +176,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_prepare_plan', {
     title: 'Prepare Dataset Processing Plan',
-    description: 'Create a deterministic, reviewable dataset-preparation plan, or atomically confirm an immutable draft using only draftPlanId and confirmedByUser=true. Mutating processing tools only accept confirmed plans.',
+    description: 'Create a deterministic, reviewable dataset-preparation plan, or atomically confirm an immutable draft using only draftPlanId and confirmedByUser=true. Declare the exact structured tool parameters reviewed with the user in each operation.parameters object; after confirmation, those declared parameters become the authorization boundary for execution and any changed value requires a revised plan. Mutating processing tools only accept confirmed plans.',
     inputSchema: datasetPreparePlanInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -179,7 +189,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_profile', {
     title: 'Profile Dataset Artifact',
-    description: 'Inspect a workspace JSON, JSONL, CSV, TSV, or FASTA artifact and persist a profile report with record counts, fields, inferred types, missing values, uniqueness, samples, size, and checksum.',
+    description: 'Inspect a workspace JSON, JSONL, CSV, TSV, or FASTA artifact and persist a profile report with record counts, fields, inferred types, missing values, uniqueness, samples, size, and checksum. Pass a confirmed planId during an approved preparation workflow so declared profile parameters are enforced.',
     inputSchema: datasetProfileInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -313,7 +323,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_structure_profile', {
     title: 'Profile SDF or mmCIF Structure Data',
-    description: 'Profile a workspace SDF or mmCIF artifact with a format-aware parser. Reports SDF molecule records, atom/bond counts and property fields, or mmCIF data blocks, categories, loops, atom-site coordinates, chains and models without rewriting the structure file.',
+    description: 'Profile a workspace SDF or mmCIF artifact with a format-aware parser. Reports SDF molecule records, atom/bond counts and property fields, or mmCIF data blocks, categories, loops, atom-site coordinates, chains and models without rewriting the structure file. Pass a confirmed planId during an approved preparation workflow so declared profile parameters are enforced.',
     inputSchema: datasetStructureProfileInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -326,7 +336,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_structure_validate', {
     title: 'Validate SDF or mmCIF Structure Data',
-    description: 'Validate SDF mol blocks and coordinate counts or mmCIF data blocks, loop cardinality and atom-site coordinates. Produces a persistent quality report that participates in dataset publication quality gates.',
+    description: 'Validate SDF mol blocks and coordinate counts or mmCIF data blocks, loop cardinality and atom-site coordinates. Produces a persistent quality report that participates in dataset publication quality gates. Pass a confirmed planId during an approved preparation workflow so declared validation parameters are enforced.',
     inputSchema: datasetStructureValidateInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -352,7 +362,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_validate', {
     title: 'Validate Dataset Artifact',
-    description: 'Validate record counts, required fields, types, uniqueness, ranges, allowed values, missingness, and FASTA integrity. A persistent quality report is produced without modifying the source.',
+    description: 'Validate record counts, required fields, types, uniqueness, ranges, allowed values, missingness, and FASTA integrity. A persistent quality report is produced without modifying the source. Pass a confirmed planId during an approved preparation workflow so declared validation parameters are enforced.',
     inputSchema: datasetValidateInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -371,8 +381,12 @@ export function createDatasetApiMcpServer(
   }, async (args) => runTool(async () => {
     const result = await processing.publish(datasetPublishInputSchema.parse(args))
     return textResult(
-      `Published ${result.publication.artifactCount} artifacts to ${result.publication.path}. Manifest: ${result.publication.manifestPath}.`,
-      { result: compactDatasetToolResult(result) }
+      [
+        `Current manifest SHA-256: ${result.publication.sha256}.`,
+        `Published ${result.publication.artifactCount} artifacts to ${result.publication.path}.`,
+        `Release files: manifest=${result.publication.manifestPath}; schema=${result.publication.schemaPath}; quality=${result.publication.qualityReportPath}; plan=${result.publication.preparationPlanPath}; checksums=${result.publication.checksumsPath}.`
+      ].join(' '),
+      { result: compactPublicationToolResult(result) }
     )
   }))
 
@@ -511,6 +525,20 @@ function compactDatasetToolResult(value: unknown): unknown {
       .filter(([, entry]) => isArtifactDescriptor(entry))
       .slice(0, 12)
       .map(([key, entry]) => [key, compactArtifactDescriptor(entry as Record<string, unknown>)]))
+  }
+}
+
+function compactPublicationToolResult(result: {
+  publication: Record<string, unknown>
+  artifacts: Array<Record<string, unknown>>
+  quality: Record<string, unknown>
+}): Record<string, unknown> {
+  return {
+    publication: result.publication,
+    quality: result.quality,
+    artifacts: result.artifacts.map((artifact) => Object.fromEntries([
+      'path', 'sha256', 'bytes', 'format', 'records'
+    ].flatMap((key) => artifact[key] === undefined ? [] : [[key, artifact[key]]])))
   }
 }
 

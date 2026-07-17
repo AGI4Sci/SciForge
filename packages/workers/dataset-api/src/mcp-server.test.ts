@@ -365,14 +365,25 @@ test('propagates API request provenance through processing and publication manif
       rules: [{ field: 'accession', required: true }],
       minRecords: 1
     })
-    const published = await call('dataset_publish', {
+    const publishCall = await client.callTool({ name: 'dataset_publish', arguments: {
       planId,
       name: 'reviewed-proteins',
       artifacts: [filtered.artifact.path, validation.artifact.path]
-    })
+    } })
+    assert.equal(publishCall.isError, undefined)
+    const published = publishCall.structuredContent?.result as Record<string, any>
     assert.equal(published.publication.artifactCount, 2)
     assert.equal(published.quality.status, 'passed')
-    assert.ok(JSON.stringify(published).length < 24 * 1024)
+    assert.ok(JSON.stringify(publishCall.structuredContent).length < 4_000)
+    const publishText = (publishCall.content[0] as { text: string }).text
+    assert.match(publishText, new RegExp(published.publication.sha256))
+    for (const path of [
+      published.publication.manifestPath,
+      published.publication.schemaPath,
+      published.publication.qualityReportPath,
+      published.publication.preparationPlanPath,
+      published.publication.checksumsPath
+    ]) assert.match(publishText, new RegExp(path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))
     for (const key of ['manifestPath', 'schemaPath', 'qualityReportPath', 'preparationPlanPath', 'checksumsPath']) {
       assert.equal(typeof published.publication[key], 'string', `${key} missing from compact MCP result`)
       assert.ok((await readFile(published.publication[key] as string)).byteLength > 0)
