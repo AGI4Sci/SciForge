@@ -565,6 +565,52 @@ describe('execution integrity input policy', () => {
     expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
+  it('unwraps a successful local-runtime mcp_call receipt for a Dataset plan write', () => {
+    const request = '只创建一个未确认的数据准备草案。'
+    const guarded = withExecutionIntegrityRequirement(baseInput('sciforge', request))
+    expect(guarded.text).toContain('"effectClass":"local_write"')
+
+    const guard = rememberedGuard('sciforge', request)
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'requested'),
+      toolName: 'mcp_call',
+      meta: { arguments: { toolId: 'dataset_api/dataset_prepare_plan' } }
+    })
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      toolName: 'mcp_call',
+      meta: {
+        output: {
+          serverId: 'dataset_api',
+          toolName: 'dataset_prepare_plan',
+          toolId: 'dataset_api/dataset_prepare_plan'
+        }
+      }
+    })
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('treats publishing a prepared dataset locally as a local write', () => {
+    const request = '发布准备好的数据集。'
+    const guarded = withExecutionIntegrityRequirement(baseInput('sciforge', request))
+    expect(guarded.text).toContain('"effectClass":"local_write"')
+
+    const guard = rememberedGuard('sciforge', request)
+    guard.observe('sciforge', {
+      ...tool('sciforge', 'succeeded'),
+      toolName: 'mcp_call',
+      meta: { output: { toolName: 'dataset_publish' } }
+    })
+    expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('keeps publishing a dataset to a remote repository as an external mutation', () => {
+    expect(withExecutionIntegrityRequirement(baseInput(
+      'sciforge',
+      'Publish the dataset to a remote Hugging Face repository.'
+    )).text).toContain('"effectClass":"external_mutation"')
+  })
+
   it.each([
     ['Open an issue.', 'open_issue'],
     ['Create a pull request.', 'create_pull_request'],

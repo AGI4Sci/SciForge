@@ -86,6 +86,40 @@ describe('TimelineDatasetResultsPanel', () => {
     }])
   })
 
+  it('unwraps local-runtime mcp_call receipts into Dataset plan cards', () => {
+    const blocks: ChatBlock[] = [{
+      kind: 'tool',
+      id: 'wrapped-plan',
+      summary: 'mcp_call',
+      status: 'success',
+      meta: {
+        toolName: 'mcp_call',
+        output: {
+          serverId: 'dataset_api',
+          toolName: 'dataset_prepare_plan',
+          toolId: 'dataset_api/dataset_prepare_plan',
+          result: {
+            structuredContent: {
+              result: {
+                plan: { planId: 'plan-bfe4251c23fd1771', status: 'draft', confirmedByUser: false },
+                artifact: { path: '/workspace/.sciforge/datasets/plans/plan-bfe4251c23fd1771.json' }
+              }
+            }
+          }
+        }
+      }
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([{
+      toolName: 'dataset_prepare_plan',
+      kind: 'plan',
+      success: true,
+      result: {
+        plan: { planId: 'plan-bfe4251c23fd1771', status: 'draft' }
+      }
+    }])
+  })
+
   it('surfaces structured Dataset API failures and ignores unrelated tools', () => {
     const blocks: ChatBlock[] = [
       {

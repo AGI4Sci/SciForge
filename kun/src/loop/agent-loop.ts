@@ -948,6 +948,7 @@ export class AgentLoop {
       memoryPolicy: { enabled: Boolean(this.opts.memoryStore) },
       delegationPolicy: { enabled: false },
       ...(allowedToolNames ? { allowedToolNames } : {}),
+      ...(turn?.allowedMcpServerIds ? { allowedMcpServerIds: turn.allowedMcpServerIds } : {}),
       ...(turn?.allowedToolNames ? { explicitAllowedToolNames: turn.allowedToolNames } : {}),
       ...(turn?.strictAllowedToolNames !== undefined ? { explicitStrictAllowedToolNames: turn.strictAllowedToolNames } : {}),
       ...(turn?.bashCommandPolicy ? { bashCommandPolicy: turn.bashCommandPolicy } : {}),

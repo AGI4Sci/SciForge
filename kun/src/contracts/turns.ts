@@ -103,6 +103,7 @@ export const TurnSchema = z.object({
   injectedMemoryIds: z.array(z.string().min(1)).default([]),
   skillInjectionBytes: z.number().int().nonnegative().optional(),
   allowedToolNames: z.array(z.string().min(1)).optional(),
+  allowedMcpServerIds: z.array(z.string().min(1)).optional(),
   bashCommandPolicy: BashCommandPolicySchema.optional(),
   filePathPolicy: FilePathPolicySchema.optional(),
   strictAllowedToolNames: z.boolean().optional(),
@@ -138,6 +139,8 @@ export const StartTurnRequest = z.object({
    * skill-selected tool policy, plus GUI state tools required by goals/todos.
    */
   allowedToolNames: z.array(z.string().min(1)).optional(),
+  /** Optional exact MCP server allow-list used by the searchable MCP gateway. */
+  allowedMcpServerIds: z.array(z.string().min(1)).optional(),
   /**
    * When true, `allowedToolNames` is treated as an exact allow-list and
    * SciForge Runtime does not add GUI state helpers such as todo/goal tools.

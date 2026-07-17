@@ -162,6 +162,7 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
 
     async startTurn(context, input) {
       const runtime = resolveLocalRuntimeSettings(context.settings)
+      const explicitToolScope = strictDatasetMcpToolScope(input.displayText ?? input.text)
       const body: Record<string, unknown> = {
         prompt: input.text,
         model: runtime.model
@@ -176,6 +177,11 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
       if (input.guiPlan) body.guiPlan = input.guiPlan
       if (input.remoteTargetId?.trim()) body.remoteTargetId = input.remoteTargetId.trim()
       if (input.metadata) body.metadata = input.metadata
+      if (explicitToolScope) {
+        body.allowedToolNames = explicitToolScope.allowedToolNames
+        body.allowedMcpServerIds = ['dataset_api']
+        body.strictAllowedToolNames = true
+      }
       if (input.attachmentIds?.length) body.attachmentIds = input.attachmentIds
       const modelObjectReferences = input.fileReferences
         ?.filter((reference) => reference.modelRouterObject === true && reference.relativePath.trim())
@@ -312,6 +318,27 @@ export function createLocalRuntimeAgentRuntimeAdapter(options: LocalRuntimeAgent
     async auxiliary(context, input) {
       return localRuntimeAuxiliary(options, context, input)
     }
+  }
+}
+
+const LOCAL_RUNTIME_MCP_GATEWAY_TOOL_NAMES = ['mcp_search', 'mcp_describe', 'mcp_call'] as const
+
+export function strictDatasetMcpToolScope(text: string): { allowedToolNames: string[] } | null {
+  const value = text.trim()
+  const strictDatasetOnly = /(?:严格|必须|务必)?(?:只|仅)(?:能)?(?:使用|调用).{0,40}Dataset\s*MCP/iu.test(value) ||
+    /(?:strictly\s+)?(?:use|call)\s+only.{0,40}Dataset\s*MCP/iu.test(value)
+  if (!strictDatasetOnly) return null
+
+  const exactOnlyMatch = value.match(
+    /(?:严格)?(?:只|仅)调用(?:\s*Dataset\s*MCP(?:\s*的)?)?\s*[`"']?(dataset_[a-z0-9_]+)/iu
+  ) ?? value.match(
+    /(?:strictly\s+)?(?:only\s+call|call\s+only)(?:\s+the)?(?:\s+Dataset\s+MCP)?\s*[`"']?(dataset_[a-z0-9_]+)/iu
+  )
+  const mentioned = exactOnlyMatch
+    ? [exactOnlyMatch[1].toLowerCase()]
+    : [...new Set([...value.matchAll(/\bdataset_(?:api_)?[a-z0-9_]+\b/giu)].map((match) => match[0].toLowerCase()))]
+  return {
+    allowedToolNames: [...LOCAL_RUNTIME_MCP_GATEWAY_TOOL_NAMES, ...mentioned]
   }
 }
 

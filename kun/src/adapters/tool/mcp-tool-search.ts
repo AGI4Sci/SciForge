@@ -329,7 +329,25 @@ function createMcpSearchTools(options: McpSearchProviderOptions): LocalTool[] {
 }
 
 function trustedRecords(options: McpSearchProviderOptions, context: ToolHostContext): McpSearchCatalogRecord[] {
-  return options.state.records.filter((record) => options.isServerTrusted(record.server, context.workspace))
+  const allowedServers = context.allowedMcpServerIds ? new Set(context.allowedMcpServerIds) : null
+  const delegatedNames = delegatedMcpToolNames(context.explicitAllowedToolNames)
+  return options.state.records.filter((record) => (
+    options.isServerTrusted(record.server, context.workspace) &&
+    (!allowedServers || allowedServers.has(record.serverId)) &&
+    (!delegatedNames || delegatedNames.has(record.descriptor.name) || delegatedNames.has(record.normalizedName))
+  ))
+}
+
+function delegatedMcpToolNames(allowedToolNames: readonly string[] | undefined): Set<string> | null {
+  if (!allowedToolNames) return null
+  const gatewayNames = new Set([
+    MCP_SEARCH_TOOL_NAME,
+    MCP_DESCRIBE_TOOL_NAME,
+    MCP_CALL_TOOL_NAME,
+    MCP_REFRESH_CATALOG_TOOL_NAME
+  ])
+  const names = allowedToolNames.filter((name) => !gatewayNames.has(name))
+  return names.length > 0 ? new Set(names) : null
 }
 
 function resolveTrustedRecord(

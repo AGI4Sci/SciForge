@@ -32,7 +32,7 @@ function datasetResultFromToolBlock(block: ToolBlock): TimelineDatasetResult | n
   const explicit = asRecord(meta?.datasetApi)
   const toolName = normalizeDatasetToolName(
     stringValue(explicit?.toolName) || stringValue(meta?.toolName) || block.summary
-  )
+  ) ?? datasetToolNameFromValue(meta?.output) ?? datasetToolNameFromValue(block.detail)
   if (!toolName) return null
 
   const structured = explicit ?? structuredDatasetContent(meta?.output) ?? structuredDatasetContent(block.detail)
@@ -47,6 +47,39 @@ function datasetResultFromToolBlock(block: ToolBlock): TimelineDatasetResult | n
     ...(result ? { result } : {}),
     ...(error ? { error } : {})
   }
+}
+
+function datasetToolNameFromValue(value: unknown, depth = 0): string | null {
+  if (depth > 5 || value === undefined || value === null) return null
+  if (typeof value === 'string') {
+    const direct = normalizeDatasetToolName(value)
+    if (direct) return direct
+    const candidate = value.trim()
+    if (!candidate.startsWith('{') && !candidate.startsWith('[')) return null
+    try {
+      return datasetToolNameFromValue(JSON.parse(candidate) as unknown, depth + 1)
+    } catch {
+      return null
+    }
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = datasetToolNameFromValue(item, depth + 1)
+      if (found) return found
+    }
+    return null
+  }
+  const record = asRecord(value)
+  if (!record) return null
+  for (const key of ['toolName', 'toolId', 'normalizedName']) {
+    const found = normalizeDatasetToolName(stringValue(record[key]))
+    if (found) return found
+  }
+  for (const key of ['result', 'structuredContent', 'output', 'content', 'datasetApi']) {
+    const found = datasetToolNameFromValue(record[key], depth + 1)
+    if (found) return found
+  }
+  return null
 }
 
 function structuredDatasetContent(value: unknown, depth = 0): Record<string, unknown> | null {
@@ -71,7 +104,12 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
   }
   const record = asRecord(value)
   if (!record) return null
-  if (record.result !== undefined || record.error !== undefined) return record
+  if (record.error !== undefined) return record
+  if (record.result !== undefined) {
+    const nested = structuredDatasetContent(record.result, depth + 1)
+    if (nested) return nested
+    return record
+  }
   for (const key of ['structuredContent', 'output', 'content', 'datasetApi']) {
     const found = structuredDatasetContent(record[key], depth + 1)
     if (found) return found

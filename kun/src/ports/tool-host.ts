@@ -86,6 +86,8 @@ export type ToolHostContext = {
   }
   /** Optional provider allow-list. When set, other providers are not advertised or executed. */
   allowedProviderIds?: readonly string[]
+  /** Optional MCP server allow-list enforced inside the searchable MCP gateway. */
+  allowedMcpServerIds?: readonly string[]
   /** Optional tool-name allow-list. When set, other tools are not advertised or executed. */
   allowedToolNames?: readonly string[]
   /** Raw per-turn tool allow-list from the caller, before skill/runtime policy narrowing. */

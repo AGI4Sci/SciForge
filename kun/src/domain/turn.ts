@@ -27,6 +27,7 @@ export function createTurnRecord(input: {
   approvalPolicy?: ApprovalPolicy
   sandboxMode?: SandboxMode
   allowedToolNames?: string[]
+  allowedMcpServerIds?: string[]
   bashCommandPolicy?: BashCommandPolicyJson
   filePathPolicy?: FilePathPolicyJson
   strictAllowedToolNames?: boolean
@@ -36,6 +37,7 @@ export function createTurnRecord(input: {
   const model = input.model?.trim()
   const reasoningEffort = normalizeReasoningEffort(input.reasoningEffort)
   const allowedToolNames = normalizeAllowedToolNames(input.allowedToolNames)
+  const allowedMcpServerIds = normalizeAllowedToolNames(input.allowedMcpServerIds)
   return {
     id: input.id,
     threadId: input.threadId,
@@ -55,6 +57,7 @@ export function createTurnRecord(input: {
     ...(input.approvalPolicy ? { approvalPolicy: input.approvalPolicy } : {}),
     ...(input.sandboxMode ? { sandboxMode: input.sandboxMode } : {}),
     ...(allowedToolNames !== undefined ? { allowedToolNames } : {}),
+    ...(allowedMcpServerIds !== undefined ? { allowedMcpServerIds } : {}),
     ...(input.bashCommandPolicy ? { bashCommandPolicy: input.bashCommandPolicy } : {}),
     ...(input.filePathPolicy ? { filePathPolicy: input.filePathPolicy } : {}),
     ...(input.strictAllowedToolNames !== undefined ? { strictAllowedToolNames: input.strictAllowedToolNames } : {}),

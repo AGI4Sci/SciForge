@@ -685,6 +685,7 @@ function isStatusDescription(action: string, remainder: string): boolean {
 function effectForRequestedAction(action: string, remainder: string): RequestedExecutionClass {
   if (isExternalObjectMutation(action, remainder)) return 'external_mutation'
   if (/^(?:send|submit|upload|deploy|publish|发送|提交|上传|部署|发布)$/iu.test(action)) {
+    if (/^(?:publish|发布)$/iu.test(action) && requestsLocalDatasetPublication(remainder)) return 'local_write'
     return 'external_mutation'
   }
   if (/^(?:edit|modify|create|delete|remove|update|install|implement|fix|patch|write|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入)$/iu.test(action)) {
@@ -694,6 +695,12 @@ function effectForRequestedAction(action: string, remainder: string): RequestedE
     return requestsCommandSurface(remainder) ? 'command_execution' : 'any_success'
   }
   return 'any_success'
+}
+
+function requestsLocalDatasetPublication(value: string): boolean {
+  if (!/(?:\bdatasets?\b|数据集|数据制品)/iu.test(value)) return false
+  return !/(?:\b(?:github|gitlab|hugging\s*face|registry|remote|server|cloud|repository)\b|远程|云端|仓库|服务器|注册表)/iu
+    .test(value)
 }
 
 /**
@@ -754,21 +761,26 @@ function effectClassesFromEvent(
 ): ExecutionEffectClass[] {
   const toolKind = event.kind === 'tool_event' ? event.toolKind : event.item.toolKind
   const name = normalizedToolName(toolName)
+  const argumentsValue = recordValue(meta.arguments)
+  const outputValue = recordValue(meta.output)
+  const delegatedName = delegatedMcpToolName(name, argumentsValue, outputValue)
+  const names = delegatedName ? [name, delegatedName] : [name]
   const effects = new Set<ExecutionEffectClass>()
   const isCommand = toolKind === 'command_execution' ||
-    /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(name)
+    names.some((value) => /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(value))
   if (isCommand) effects.add('command_execution')
 
-  const argumentsValue = recordValue(meta.arguments)
   const command = [
     stringValue(meta.command),
     stringValue(argumentsValue.command),
     stringValue(argumentsValue.cmd)
   ].filter(Boolean).join(' ')
-  const externalTool = isExternalMutationToolName(name)
+  const externalTool = names.some((value) => (
+    isExternalMutationToolName(value) && !isLocalDatasetWriteToolName(value)
+  ))
   if (
     toolKind === 'file_change' ||
-    (!externalTool && /(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) ||
+    (!externalTool && names.some(isLocalWriteToolName)) ||
     (isCommand && /(?:^|\s)(?:apply_patch|rm|mv|cp|mkdir|touch|install)(?:\s|$)|(?:sed\s+-i|>>?|\btee\b|--(?:fix|write)\b)/iu.test(command))
   ) {
     effects.add('local_write')
@@ -776,10 +788,36 @@ function effectClassesFromEvent(
   if (externalTool || (isCommand && isExternalMutationCommand(command))) {
     effects.add('external_mutation')
   }
-  if (/(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(name)) {
+  if (names.some((value) => /(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(value))) {
     effects.add('read')
   }
   return effects.size > 0 ? [...effects] : ['other']
+}
+
+function delegatedMcpToolName(
+  wrapperName: string,
+  argumentsValue: Record<string, unknown>,
+  outputValue: Record<string, unknown>
+): string {
+  if (wrapperName !== 'mcp_call') return ''
+  const candidate = stringValue(outputValue.toolName) ||
+    stringValue(outputValue.toolId) ||
+    stringValue(argumentsValue.toolName) ||
+    stringValue(argumentsValue.toolId)
+  const leaf = candidate.split('/').filter(Boolean).at(-1) ?? ''
+  return normalizedToolName(leaf)
+}
+
+function isLocalWriteToolName(name: string): boolean {
+  if (/(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) {
+    return true
+  }
+  return isLocalDatasetWriteToolName(name)
+}
+
+function isLocalDatasetWriteToolName(name: string): boolean {
+  return /^dataset_(?:api_(?:register(?:_provider)?|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)$/u
+    .test(name)
 }
 
 function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined {

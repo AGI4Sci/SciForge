@@ -522,6 +522,29 @@ describe('MCP tool provider', () => {
         }
       })
     }
+
+    const scopedContext: ToolHostContext = {
+      ...context,
+      allowedMcpServerIds: ['github'],
+      allowedToolNames: ['mcp_search', 'mcp_describe', 'mcp_call', 'create_issue'],
+      explicitAllowedToolNames: ['mcp_search', 'mcp_describe', 'mcp_call', 'create_issue'],
+      explicitStrictAllowedToolNames: true
+    }
+    const scopedSearch = await host.execute({
+      callId: 'call_scoped_search',
+      toolName: 'mcp_search',
+      arguments: { query: 'github issue' }
+    }, scopedContext)
+    expect(scopedSearch.item.kind === 'tool_result' ? scopedSearch.item.output : {}).toMatchObject({
+      searchedTools: 1,
+      results: [expect.objectContaining({ toolId: 'github/create_issue' })]
+    })
+    const blockedDescribe = await host.execute({
+      callId: 'call_blocked_describe',
+      toolName: 'mcp_describe',
+      arguments: { toolId: 'github/search_issues' }
+    }, scopedContext)
+    expect(blockedDescribe.item).toMatchObject({ kind: 'tool_result', isError: true })
   })
 
   it('passes computer-use arguments through MCP search calls without context injection', async () => {

@@ -69,6 +69,7 @@ export class TurnService {
       approvalPolicy: input.request.approvalPolicy,
       sandboxMode: input.request.sandboxMode,
       allowedToolNames: input.request.allowedToolNames,
+      allowedMcpServerIds: input.request.allowedMcpServerIds,
       bashCommandPolicy: input.request.bashCommandPolicy,
       filePathPolicy: input.request.filePathPolicy,
       strictAllowedToolNames: input.request.strictAllowedToolNames

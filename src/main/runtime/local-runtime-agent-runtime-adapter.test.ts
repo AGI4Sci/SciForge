@@ -386,6 +386,26 @@ describe('createLocalRuntimeAgentRuntimeAdapter', () => {
     })
   })
 
+  it('enforces an exact Dataset MCP tool scope requested by the user', async () => {
+    const captured: CapturedRequest[] = []
+    const adapter = adapterWithCapturedRequests(captured)
+
+    await adapter.startTurn({ settings: buildSettings() }, {
+      runtimeId: 'sciforge',
+      threadId: 'thread-1',
+      text: 'Runtime marker. 严格只调用 Dataset MCP 的 dataset_publish，不得调用其他工具。',
+      displayText: '严格只调用 Dataset MCP 的 dataset_publish，不得调用其他工具。'
+    })
+
+    expect(captured[0]).toMatchObject({
+      body: {
+        allowedToolNames: ['mcp_search', 'mcp_describe', 'mcp_call', 'dataset_publish'],
+        allowedMcpServerIds: ['dataset_api'],
+        strictAllowedToolNames: true
+      }
+    })
+  })
+
   it.each(MODEL_ROUTER_MODEL_CASES)(
     'routes resumeSession %s model through the resolved Model Router alias',
     async (_name, model) => {
