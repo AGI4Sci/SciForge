@@ -89,14 +89,30 @@ const datasetPlanOutputSchema = z.object({
 
 export const datasetPreparePlanInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
-  objective: z.string().trim().min(1).max(8000),
-  sources: z.array(datasetPlanSourceSchema).max(50).default([]),
-  operations: z.array(datasetPlanOperationSchema).min(1).max(100),
-  outputs: z.array(datasetPlanOutputSchema).min(1).max(20),
+  draftPlanId: z.string().regex(/^plan-[a-f0-9]{16}$/).optional(),
+  objective: z.string().trim().min(1).max(8000).optional(),
+  sources: z.array(datasetPlanSourceSchema).max(50).optional(),
+  operations: z.array(datasetPlanOperationSchema).min(1).max(100).optional(),
+  outputs: z.array(datasetPlanOutputSchema).min(1).max(20).optional(),
   exclusions: z.array(z.string().trim().min(1).max(1000)).max(100).optional(),
   confirmationNotes: z.array(z.string().trim().min(1).max(1000)).max(100).optional(),
   confirmedByUser: z.boolean()
-}).strict()
+}).strict().superRefine((input, context) => {
+  if (input.draftPlanId) {
+    if (!input.confirmedByUser) {
+      context.addIssue({ code: 'custom', path: ['confirmedByUser'], message: 'Draft confirmation requires confirmedByUser=true.' })
+    }
+    for (const field of ['objective', 'sources', 'operations', 'outputs', 'exclusions', 'confirmationNotes'] as const) {
+      if (input[field] !== undefined) {
+        context.addIssue({ code: 'custom', path: [field], message: `Do not resubmit ${field} when confirming a draft plan.` })
+      }
+    }
+    return
+  }
+  if (!input.objective) context.addIssue({ code: 'custom', path: ['objective'], message: 'A plan objective is required.' })
+  if (!input.operations) context.addIssue({ code: 'custom', path: ['operations'], message: 'At least one plan operation is required.' })
+  if (!input.outputs) context.addIssue({ code: 'custom', path: ['outputs'], message: 'At least one plan output is required.' })
+})
 
 const datasetInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,

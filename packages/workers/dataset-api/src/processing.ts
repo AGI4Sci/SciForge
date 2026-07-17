@@ -112,10 +112,53 @@ export function createDatasetProcessingService(options: {
     async preparePlan(raw: DatasetPreparePlanInput) {
       const input = datasetPreparePlanInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
+      if (input.draftPlanId) {
+        const planPath = join(workspaceRoot, '.sciforge', 'datasets', 'plans', `${safeId(input.draftPlanId)}.json`)
+        const planBytes = await readFile(planPath)
+        const draft = JSON.parse(planBytes.toString('utf8')) as Record<string, unknown> & {
+          planId?: string
+          status?: string
+          confirmedByUser?: boolean
+          operations?: unknown[]
+          outputs?: unknown[]
+        }
+        if (draft.planId !== input.draftPlanId || draft.status !== 'draft' || draft.confirmedByUser) {
+          throw new Error(`Preparation plan '${input.draftPlanId}' is not an unconfirmed draft.`)
+        }
+        const draftSha256 = hash(planBytes)
+        const confirmationPath = planConfirmationPath(workspaceRoot, input.draftPlanId)
+        const existingConfirmation = await readPlanConfirmation(workspaceRoot, input.draftPlanId)
+        const confirmation = existingConfirmation?.draftPath === planPath && existingConfirmation.draftSha256 === draftSha256
+          ? existingConfirmation
+          : {
+          version: 1,
+          planId: input.draftPlanId,
+          status: 'confirmed',
+          confirmedByUser: true,
+          draftPath: planPath,
+          draftSha256,
+          confirmedAt: new Date().toISOString()
+            }
+        await writeIdempotentJson(confirmationPath, confirmation)
+        return {
+          plan: { ...draft, status: 'confirmed', confirmedByUser: true, confirmation },
+          artifact: await describeStandaloneArtifact(
+            confirmationPath,
+            'plan',
+            'dataset_prepare_plan',
+            { confirmedByUser: true, draftPlanId: input.draftPlanId },
+            { operations: draft.operations?.length ?? 0, outputs: draft.outputs?.length ?? 0 },
+            [{ path: planPath, sha256: draftSha256 }]
+          )
+        }
+      }
+      if (!input.objective || !input.operations || !input.outputs) {
+        throw new Error('A new preparation plan requires objective, operations, and outputs.')
+      }
       const normalized = {
         version: 1,
         objective: input.objective,
-        sources: input.sources,
+        sources: input.sources ?? [],
         operations: input.operations,
         outputs: input.outputs,
         exclusions: input.exclusions ?? [],
@@ -1900,21 +1943,70 @@ function providerMappingTarget(value: unknown): unknown | undefined {
 
 async function requireConfirmedPlan(workspaceRoot: string, planId: string, operation?: string) {
   const path = join(workspaceRoot, '.sciforge', 'datasets', 'plans', `${safeId(planId)}.json`)
-  const plan = JSON.parse(await readFile(path, 'utf8')) as {
+  const planBytes = await readFile(path)
+  const plan = JSON.parse(planBytes.toString('utf8')) as {
+    planId?: string
     confirmedByUser?: boolean
     status?: string
     operations?: Array<{ tool?: string }>
   }
+  if (plan.planId !== planId) throw new Error(`Preparation plan '${planId}' has an invalid identity.`)
+  let confirmedPlan = plan
   if (!plan.confirmedByUser || plan.status !== 'confirmed') {
-    throw new Error(`Preparation plan '${planId}' is not confirmed by the user.`)
+    const confirmation = await readPlanConfirmation(workspaceRoot, planId)
+    if (!confirmation || confirmation.draftSha256 !== hash(planBytes) || confirmation.draftPath !== path) {
+      throw new Error(`Preparation plan '${planId}' is not confirmed by the user or its confirmed draft has changed.`)
+    }
+    confirmedPlan = { ...plan, confirmedByUser: true, status: 'confirmed' }
   }
   const authorized = operation === 'dataset_id_map'
-    ? plan.operations?.some((candidate) => ['dataset_id_map', 'dataset_id_map_provider'].includes(candidate.tool ?? ''))
-    : plan.operations?.some((candidate) => candidate.tool === operation)
+    ? confirmedPlan.operations?.some((candidate) => ['dataset_id_map', 'dataset_id_map_provider'].includes(candidate.tool ?? ''))
+    : confirmedPlan.operations?.some((candidate) => candidate.tool === operation)
   if (operation && !authorized) {
     throw new Error(`Preparation plan '${planId}' does not authorize operation '${operation}'.`)
   }
-  return { path, plan }
+  return { path, plan: confirmedPlan }
+}
+
+function planConfirmationPath(workspaceRoot: string, planId: string): string {
+  return join(workspaceRoot, '.sciforge', 'datasets', 'plans', `${safeId(planId)}.confirmation.json`)
+}
+
+async function readPlanConfirmation(workspaceRoot: string, planId: string): Promise<{
+  version: 1
+  planId: string
+  status: string
+  confirmedByUser: boolean
+  draftPath: string
+  draftSha256: string
+  confirmedAt: string
+} | null> {
+  try {
+    const confirmation = JSON.parse(await readFile(planConfirmationPath(workspaceRoot, planId), 'utf8')) as {
+      version?: number
+      planId?: string
+      status?: string
+      confirmedByUser?: boolean
+      draftPath?: string
+      draftSha256?: string
+      confirmedAt?: string
+    }
+    if (confirmation.planId !== planId || confirmation.status !== 'confirmed' || !confirmation.confirmedByUser ||
+        confirmation.version !== 1 || typeof confirmation.draftPath !== 'string' ||
+        typeof confirmation.draftSha256 !== 'string' || typeof confirmation.confirmedAt !== 'string') return null
+    return confirmation as {
+      version: 1
+      planId: string
+      status: string
+      confirmedByUser: boolean
+      draftPath: string
+      draftSha256: string
+      confirmedAt: string
+    }
+  } catch (error) {
+    if (isMissingFileError(error)) return null
+    throw error
+  }
 }
 
 async function collectParentOrigins(parents: Array<{ path: string; sha256: string }>): Promise<DatasetOrigin[]> {
@@ -2032,7 +2124,8 @@ async function describeStandaloneArtifact(
   format: 'plan' | 'publication',
   operation: string,
   parameters: Record<string, unknown>,
-  summary: Record<string, unknown>
+  summary: Record<string, unknown>,
+  parents: Array<{ path: string; sha256: string }> = []
 ): Promise<ArtifactManifest> {
   const bytes = await readFile(path)
   const manifestPath = `${path}.manifest.json`
@@ -2045,7 +2138,7 @@ async function describeStandaloneArtifact(
     manifestPath,
     sha256: hash(bytes),
     bytes: bytes.byteLength,
-    parents: [],
+    parents,
     parameters,
     summary,
     createdAt: new Date().toISOString()

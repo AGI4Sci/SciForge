@@ -132,12 +132,13 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
   }
 })
 
-test('profiles and filters JSONL plus quoted CSV and TSV records', async () => {
+test('filters JSONL and publishes a validated quoted CSV-to-TSV dataset', async () => {
   const { workspaceRoot, service, cleanup } = await fixture()
   const jsonlPath = join(workspaceRoot, 'records.jsonl')
   const csvPath = join(workspaceRoot, 'records.csv')
   await writeFile(jsonlPath, '{"id":"a","score":1}\n{"id":"b","score":2}\n')
-  await writeFile(csvPath, 'id,name,score\n1,"alpha, beta",3\n2,gamma,5\n')
+  const csv = 'id,name,score\n1,"alpha, beta",3\n2,gamma,5\n'
+  await writeFile(csvPath, csv)
   try {
     const planId = await confirmedPlan(service)
     assert.equal((await service.profile({ inputArtifact: jsonlPath })).profile.format, 'jsonl')
@@ -160,6 +161,31 @@ test('profiles and filters JSONL plus quoted CSV and TSV records', async () => {
     })
     assert.match(await readFile(tsv.artifact.path, 'utf8'), /alpha, beta/)
     assert.equal((await service.profile({ inputArtifact: tsv.artifact.path })).profile.format, 'tsv')
+    const validation = await service.validate({
+      inputArtifact: tsv.artifact.path,
+      rules: [
+        { field: 'id', required: true, unique: true },
+        { field: 'name', required: true },
+        { field: 'score', required: true }
+      ],
+      minRecords: 2,
+      maxMissingFraction: 0
+    })
+    assert.equal(validation.validation.valid, true)
+    const published = await service.publish({
+      planId,
+      name: 'csv-to-tsv-e2e',
+      description: 'Quoted CSV normalized to a validated TSV dataset.',
+      artifacts: [csvProfile.artifact.path, tsv.artifact.path, validation.artifact.path]
+    })
+    assert.equal(published.publication.artifactCount, 3)
+    assert.equal(published.quality.status, 'passed')
+    const publicationManifest = JSON.parse(await readFile(published.publication.manifestPath, 'utf8'))
+    assert.equal(publicationManifest.planId, planId)
+    assert.equal(publicationManifest.quality.validationReportCount, 1)
+    assert.ok(publicationManifest.schema.artifacts.some((artifact: { format: string }) => artifact.format === 'tsv'))
+    assert.match(publicationManifest.artifacts.find((artifact: { format: string }) => artifact.format === 'tsv').sha256, /^[a-f0-9]{64}$/)
+    assert.equal(await readFile(csvPath, 'utf8'), csv)
   } finally {
     await cleanup()
   }
@@ -457,13 +483,15 @@ test('bounds provider mapping batches and rejects redirects outside the fixed Un
   }
 })
 
-test('filters, deduplicates, and validates FASTA without modifying the source', async () => {
+test('profiles, filters, deduplicates, validates, and publishes FASTA without modifying the source', async () => {
   const { workspaceRoot, service, cleanup } = await fixture()
   const fastaPath = join(workspaceRoot, 'proteins.fasta')
   const fasta = '>P04637 TP53 human\nMEEPQSDPSVEPPLSQETFSDLWKLLPEN\n>P04637 duplicate\nMEEPQSDPSVEPPLSQETFSDLWKLLPEN\n>SHORT\nMEE\n'
   await writeFile(fastaPath, fasta)
   try {
     const planId = await confirmedPlan(service)
+    const profile = await service.profile({ inputArtifact: fastaPath })
+    assert.equal(profile.profile.records, 3)
     const filtered = await service.filter({
       planId,
       inputArtifact: fastaPath,
@@ -486,6 +514,26 @@ test('filters, deduplicates, and validates FASTA without modifying the source', 
     })
     assert.equal(validation.validation.valid, true)
     assert.match(await readFile(deduplicated.artifact.path, 'utf8'), /^>P04637/m)
+    const published = await service.publish({
+      planId,
+      name: 'fasta-e2e',
+      description: 'Filtered and deduplicated FASTA dataset.',
+      artifacts: [
+        profile.artifact.path,
+        deduplicated.artifact.path,
+        filtered.excludedArtifact.path,
+        deduplicated.duplicatesArtifact.path,
+        validation.artifact.path
+      ]
+    })
+    assert.equal(published.publication.artifactCount, 5)
+    assert.equal(published.quality.status, 'passed')
+    const publicationManifest = JSON.parse(await readFile(published.publication.manifestPath, 'utf8'))
+    assert.equal(publicationManifest.quality.validationReportCount, 1)
+    assert.ok(publicationManifest.schema.artifacts.some((artifact: { format: string }) => artifact.format === 'fasta'))
+    assert.ok(publicationManifest.artifacts.every((artifact: { sha256: string }) => /^[a-f0-9]{64}$/.test(artifact.sha256)))
+    assert.ok(publicationManifest.artifacts.some((artifact: { operation: string }) => artifact.operation === 'dataset_filter_excluded'))
+    assert.ok(publicationManifest.artifacts.some((artifact: { operation: string }) => artifact.operation === 'dataset_deduplicate_removed'))
     assert.equal(await readFile(fastaPath, 'utf8'), fasta)
   } finally {
     await cleanup()
@@ -638,6 +686,47 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
       conditions: [{ field: 'id', operator: 'equals', value: 1 }],
       outputFileName: 'out.json'
     }), /not confirmed/)
+    const draftPath = draft.artifact.path
+    const draftBytes = await readFile(draftPath)
+    const confirmedDraft = await service.preparePlan({
+      draftPlanId: draft.plan.planId,
+      confirmedByUser: true
+    })
+    assert.equal(confirmedDraft.plan.planId, draft.plan.planId)
+    assert.equal(confirmedDraft.plan.status, 'confirmed')
+    assert.equal(confirmedDraft.plan.confirmedByUser, true)
+    assert.deepEqual(await readFile(draftPath), draftBytes)
+    assert.deepEqual(confirmedDraft.artifact.parents, [{
+      path: draftPath,
+      sha256: draft.artifact.sha256
+    }])
+    const repeatedConfirmation = await service.preparePlan({
+      draftPlanId: draft.plan.planId,
+      confirmedByUser: true
+    })
+    assert.equal(repeatedConfirmation.artifact.sha256, confirmedDraft.artifact.sha256)
+    await service.filter({
+      planId: draft.plan.planId,
+      inputArtifact: sourcePath,
+      conditions: [{ field: 'id', operator: 'equals', value: 1 }],
+      outputFileName: 'confirmed-out.json'
+    })
+    await assert.rejects(service.preparePlan({
+      draftPlanId: draft.plan.planId,
+      objective: 'Attempt to change the confirmed draft.',
+      operations: [{ tool: 'dataset_filter', description: 'Changed operation.' }],
+      outputs: [{ name: 'changed.json', format: 'json' }],
+      confirmedByUser: true
+    }), /Do not resubmit/)
+    const tampered = JSON.parse(draftBytes.toString('utf8')) as Record<string, unknown>
+    tampered.objective = 'Tampered after confirmation.'
+    await writeFile(draftPath, JSON.stringify(tampered))
+    await assert.rejects(service.filter({
+      planId: draft.plan.planId,
+      inputArtifact: sourcePath,
+      conditions: [{ field: 'id', operator: 'equals', value: 1 }],
+      outputFileName: 'tampered-out.json'
+    }), /confirmed draft has changed/)
     const filterOnlyPlan = await service.preparePlan({
       objective: 'Authorize filtering only.',
       operations: [{ tool: 'dataset_filter', description: 'Filter records.' }],

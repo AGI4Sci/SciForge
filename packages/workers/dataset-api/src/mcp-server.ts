@@ -163,13 +163,13 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_prepare_plan', {
     title: 'Prepare Dataset Processing Plan',
-    description: 'Persist a deterministic, reviewable dataset-preparation plan that records providers, operations, exclusions, outputs, and whether the user confirmed it. Mutating processing tools only accept confirmed plans.',
+    description: 'Create a deterministic, reviewable dataset-preparation plan, or atomically confirm an immutable draft using only draftPlanId and confirmedByUser=true. Mutating processing tools only accept confirmed plans.',
     inputSchema: datasetPreparePlanInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
     const result = await processing.preparePlan(datasetPreparePlanInputSchema.parse(args))
     return textResult(
-      `Prepared ${result.plan.status} dataset plan '${result.plan.planId}' with ${result.plan.operations.length} operations.`,
+      `Prepared ${result.plan.status} dataset plan '${result.plan.planId}' with ${result.plan.operations?.length ?? 0} operations.`,
       { result: compactDatasetToolResult(result) }
     )
   }))
