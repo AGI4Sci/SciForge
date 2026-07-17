@@ -144,6 +144,8 @@ function DatasetResultCard({
     ? datasetSuccessSubtitle(item.kind, result, response, t)
     : stringValue(item.error?.message) || t('datasetResultFailed')
   const rawPath = stringValue(artifact?.path) || stringValue(publication?.manifestPath)
+  const excludedPath = stringValue(asRecord(result?.excludedArtifact)?.path)
+  const duplicatesPath = stringValue(asRecord(result?.duplicatesArtifact)?.path)
   const details = datasetDetails(item)
   const contentType = stringValue(response?.contentType)
   const format = stringValue(artifact?.format)
@@ -196,6 +198,26 @@ function DatasetResultCard({
           >
             <ExternalLink className="h-3.5 w-3.5" />
             {t('datasetResultOpenFile')}
+          </button>
+        ) : null}
+        {excludedPath ? (
+          <button
+            type="button"
+            onClick={() => previewWorkspaceFile({ path: excludedPath, workspaceRoot })}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('datasetResultOpenExcluded')}
+          </button>
+        ) : null}
+        {duplicatesPath ? (
+          <button
+            type="button"
+            onClick={() => previewWorkspaceFile({ path: duplicatesPath, workspaceRoot })}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t('datasetResultOpenDuplicates')}
           </button>
         ) : null}
       </div>

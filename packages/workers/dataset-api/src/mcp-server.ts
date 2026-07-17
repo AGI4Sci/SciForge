@@ -131,7 +131,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_api_metadata', {
     title: 'Read Dataset Metadata',
-    description: 'Read metadata from a registered dataset database with built-in transient-network retries and structured diagnostics. responseMode=auto (default) returns complete small payloads and a bounded structural summary for payloads over 64 KiB; use full only when the complete payload is necessary. Endpoint placeholders are supplied through pathParameters and query parameters remain structured. If this tool reports an error, report that Dataset API error; do not bypass it with shell, curl, or workspace search.',
+    description: 'Read metadata from a registered dataset database with built-in transient-network retries and structured diagnostics. responseMode=auto (default) returns complete small payloads and a bounded structural summary for payloads over 64 KiB; use full only when the complete payload is necessary. Set outputFileName to persist the complete response as a non-overwriting, checksummed metadata artifact for downstream processing. Endpoint placeholders are supplied through pathParameters and query parameters remain structured. If this tool reports an error, report that Dataset API error; do not bypass it with shell, curl, or workspace search.',
     inputSchema: datasetApiMetadataInputSchema,
     annotations: { ...READ_ONLY_ANNOTATIONS, openWorldHint: true }
   }, async (args) => runTool(async () => {
@@ -189,7 +189,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_filter', {
     title: 'Filter Dataset Artifact',
-    description: 'Apply structured, code-free filter conditions to a confirmed-plan dataset artifact. The source is never overwritten; a deterministic child artifact, checksum, manifest, and exclusion counts are produced.',
+    description: 'Apply structured, code-free filter conditions to a confirmed-plan dataset artifact. The source is never overwritten; deterministic included and excluded child artifacts, checksums, manifests, and row counts are produced.',
     inputSchema: datasetFilterInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {
@@ -228,7 +228,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_deduplicate', {
     title: 'Deduplicate Dataset Artifact',
-    description: 'Deduplicate records by one or more structured keys, keep the first or last occurrence deterministically, preserve the source, and report removed duplicates.',
+    description: 'Deduplicate records by one or more structured keys, keep the first or last occurrence deterministically, preserve the source, and persist removed duplicate records as a separate artifact.',
     inputSchema: datasetDeduplicateInputSchema,
     annotations: CONTROLLED_WRITE_ANNOTATIONS
   }, async (args) => runTool(async () => {

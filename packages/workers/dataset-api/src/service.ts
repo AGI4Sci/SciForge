@@ -118,7 +118,7 @@ export function createDatasetApiService(options: {
 
     async metadata(raw: DatasetApiMetadataInput) {
       const input = datasetApiMetadataInputSchema.parse(raw)
-      const { source } = await registeredSource(input.sourceId, input.workspaceRoot, defaultWorkspaceRoot)
+      const { source, workspaceRoot } = await registeredSource(input.sourceId, input.workspaceRoot, defaultWorkspaceRoot)
       const url = buildEndpointUrl(source, source.metadataEndpoint, input.pathParameters, input.query, env)
       const response = await requestDataset(
         fetchImpl,
@@ -133,11 +133,72 @@ export function createDatasetApiService(options: {
       if (!response.ok) throw await httpError(response, maxBytes)
       const body = await readResponseBody(response, maxBytes)
       const contentType = response.headers.get('content-type') ?? ''
+      const metadata = parseMetadata(body, contentType)
+      const sourceRecord = { id: source.id, name: source.name }
+      const requestRecord = { url: redactUrl(url) }
+      const responseRecord = { status: response.status, contentType, bytes: Buffer.byteLength(body) }
+      let artifact: Record<string, unknown> | undefined
+      if (input.outputFileName) {
+        const format = typeof metadata === 'string' ? 'text' : 'json'
+        const data = format === 'json'
+          ? Buffer.from(`${JSON.stringify(metadata, null, 2)}\n`)
+          : Buffer.from(String(metadata))
+        const sha256 = sha256Bytes(data)
+        const outputDirectory = join(workspaceRoot, '.sciforge', 'datasets', 'metadata', source.id)
+        await mkdir(outputDirectory, { recursive: true })
+        const fileName = resolveRawFileName(input.outputFileName, response, url, input.sourceId)
+        const requestedPath = join(outputDirectory, fileName)
+        const temporaryPath = `${requestedPath}.${process.pid}.tmp`
+        await writeFile(temporaryPath, data, { flag: 'wx' })
+        let artifactPath = requestedPath
+        let reused = false
+        try {
+          if (await pathExists(requestedPath)) {
+            if (await hashFile(requestedPath) === sha256) reused = true
+            else {
+              artifactPath = versionedRawArtifactPath(requestedPath, sha256)
+              reused = await installRawArtifact(temporaryPath, artifactPath, sha256)
+            }
+          } else reused = await installRawArtifact(temporaryPath, requestedPath, sha256)
+        } finally {
+          await rm(temporaryPath, { force: true }).catch(() => undefined)
+        }
+        const manifestPath = `${artifactPath}.manifest.json`
+        await writeRawArtifactManifest(manifestPath, {
+          version: 1,
+          artifactId: `sha256:${sha256}`,
+          operation: 'dataset_api_metadata',
+          format,
+          path: artifactPath,
+          manifestPath,
+          sha256,
+          bytes: data.byteLength,
+          parents: [],
+          parameters: { sourceId: source.id, responseMode: input.responseMode ?? 'auto' },
+          summary: { responseBytes: responseRecord.bytes, artifactBytes: data.byteLength, reused },
+          schema: rawArtifactSchema(format),
+          source: sourceRecord,
+          request: requestRecord,
+          response: responseRecord,
+          origins: [{ source: sourceRecord, request: requestRecord, response: responseRecord }],
+          createdAt: new Date().toISOString()
+        })
+        artifact = {
+          path: artifactPath,
+          manifestPath,
+          sha256,
+          bytes: data.byteLength,
+          fileName: basename(artifactPath),
+          format,
+          reused
+        }
+      }
       return {
-        source: { id: source.id, name: source.name },
-        request: { url: redactUrl(url) },
-        response: { status: response.status, contentType, bytes: Buffer.byteLength(body) },
-        metadata: parseMetadata(body, contentType)
+        source: sourceRecord,
+        request: requestRecord,
+        response: responseRecord,
+        metadata,
+        ...(artifact ? { artifact } : {})
       }
     },
 
@@ -809,6 +870,10 @@ async function hashFile(path: string): Promise<string> {
   const digest = createHash('sha256')
   for await (const chunk of createReadStream(path)) digest.update(chunk)
   return digest.digest('hex')
+}
+
+function sha256Bytes(value: Uint8Array): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function versionedRawArtifactPath(path: string, sha256: string): string {

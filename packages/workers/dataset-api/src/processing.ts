@@ -163,10 +163,13 @@ export function createDatasetProcessingService(options: {
       await requireConfirmedPlan(workspaceRoot, input.planId, 'dataset_filter')
       const dataset = await loadDataset(workspaceRoot, input)
       const combine = input.combine ?? 'all'
-      const rows = dataset.rows.filter((row) => {
+      const rows: DatasetRow[] = []
+      const excludedRows: DatasetRow[] = []
+      for (const row of dataset.rows) {
         const matches = input.conditions.map((condition) => conditionMatches(row, condition))
-        return combine === 'all' ? matches.every(Boolean) : matches.some(Boolean)
-      })
+        if (combine === 'all' ? matches.every(Boolean) : matches.some(Boolean)) rows.push(row)
+        else excludedRows.push(row)
+      }
       const data = serializeDataset(rows, dataset.format)
       const artifact = await writeDerivedArtifact({
         workspaceRoot,
@@ -185,7 +188,23 @@ export function createDatasetProcessingService(options: {
         },
         records: rows.length
       })
-      return { artifact, counts: artifact.summary }
+      const excludedArtifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_filter_excluded',
+        format: dataset.format,
+        outputFileName: sideArtifactFileName(input.outputFileName, 'excluded', dataset.format),
+        data: serializeDataset(excludedRows, dataset.format),
+        parents: [{ path: dataset.path, sha256: dataset.sha256 }],
+        parameters: processingParameters(input, ['workspaceRoot', 'maxBytes']),
+        summary: {
+          records: excludedRows.length,
+          conditions: input.conditions,
+          combine,
+          reason: 'filter_conditions_not_matched'
+        },
+        records: excludedRows.length
+      })
+      return { artifact, excludedArtifact, counts: artifact.summary }
     },
 
     async selectColumns(raw: DatasetSelectColumnsInput) {
@@ -264,9 +283,15 @@ export function createDatasetProcessingService(options: {
       const dataset = await loadDataset(workspaceRoot, input)
       const keep = input.keep ?? 'first'
       const seen = new Map<string, DatasetRow>()
+      const duplicateRows: DatasetRow[] = []
       for (const row of dataset.rows) {
         const key = canonicalJson(input.keys.map((field) => valueAtPath(row, field)))
-        if (keep === 'last' || !seen.has(key)) seen.set(key, row)
+        const previous = seen.get(key)
+        if (!previous) seen.set(key, row)
+        else if (keep === 'last') {
+          duplicateRows.push(previous)
+          seen.set(key, row)
+        } else duplicateRows.push(row)
       }
       const rows = [...seen.values()]
       const artifact = await writeDerivedArtifact({
@@ -286,7 +311,18 @@ export function createDatasetProcessingService(options: {
         },
         records: rows.length
       })
-      return { artifact, counts: artifact.summary }
+      const duplicatesArtifact = await writeDerivedArtifact({
+        workspaceRoot,
+        operation: 'dataset_deduplicate_removed',
+        format: dataset.format,
+        outputFileName: sideArtifactFileName(input.outputFileName, 'duplicates', dataset.format),
+        data: serializeDataset(duplicateRows, dataset.format),
+        parents: [{ path: dataset.path, sha256: dataset.sha256 }],
+        parameters: processingParameters(input, ['workspaceRoot', 'maxBytes']),
+        summary: { records: duplicateRows.length, keys: input.keys, keep, reason: 'duplicate_key' },
+        records: duplicateRows.length
+      })
+      return { artifact, duplicatesArtifact, counts: artifact.summary }
     },
 
     async providerIdMapping(raw: DatasetProviderIdMapInput) {
@@ -1904,6 +1940,13 @@ function inferArtifactSchema(
   data: Buffer,
   format: DatasetProcessingFormat | 'report'
 ): Record<string, unknown> {
+  if (format === 'fasta' && data.toString('utf8').trim() === '') {
+    return {
+      version: 1,
+      format,
+      fields: ['header', 'id', 'description', 'sequence', 'length'].map((name) => ({ name, types: {}, nullable: true }))
+    }
+  }
   let rows: DatasetRow[]
   if (format === 'report') {
     const parsed = JSON.parse(data.toString('utf8')) as unknown
@@ -2116,6 +2159,17 @@ function safeFileName(value: string): string {
     throw new Error('Dataset outputFileName must be one safe file name without path separators.')
   }
   return normalized
+}
+
+function sideArtifactFileName(
+  outputFileName: string,
+  label: string,
+  format: DatasetProcessingFormat
+): string {
+  const safe = safeFileName(outputFileName)
+  const extension = extname(safe)
+  const stem = basename(safe, extension)
+  return extension ? `${stem}.${label}${extension}` : `${stem}.${label}.${format}`
 }
 
 function safeId(value: string): string {

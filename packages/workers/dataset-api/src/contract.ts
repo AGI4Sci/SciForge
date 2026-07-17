@@ -2,7 +2,7 @@ import { z } from 'zod'
 
 export const DATASET_API_MCP_FLAG = '--dataset-api-mcp-server'
 export const DATASET_API_MCP_SERVER_NAME = 'sciforge-dataset-api'
-export const DATASET_API_MCP_SERVER_VERSION = '0.6.0'
+export const DATASET_API_MCP_SERVER_VERSION = '0.7.0'
 
 export const DATASET_API_TOOL_SIDE_EFFECTS = {
   dataset_api_catalog: 'read',
@@ -408,6 +408,7 @@ export const datasetApiMetadataInputSchema = z.object({
   pathParameters: pathParametersSchema,
   query: querySchema,
   responseMode: z.enum(['auto', 'summary', 'full']).optional(),
+  outputFileName: z.string().trim().min(1).max(255).optional(),
   maxBytes: z.number().int().min(1024).max(10 * 1024 * 1024).optional(),
   timeoutMs: z.number().int().min(100).max(60_000).optional(),
   maxRetries: z.number().int().min(0).max(3).optional()

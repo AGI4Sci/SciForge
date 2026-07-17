@@ -2191,6 +2191,8 @@
   "datasetResultSummary": "摘要",
   "datasetResultDetails": "结构化详情",
   "datasetResultOpenFile": "打开文件",
+  "datasetResultOpenExcluded": "打开排除记录",
+  "datasetResultOpenDuplicates": "打开重复记录",
   "datasetResultFailed": "Dataset API 请求失败",
   "datasetResultMetadataLoaded": "已读取 {{bytes}} 结构化元数据",
   "datasetResultRawSaved": "已保存 {{bytes}} 经校验的 {{format}} 数据",

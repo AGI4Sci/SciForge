@@ -62,6 +62,9 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
       outputFileName: 'human-reviewed.json'
     })
     assert.equal(filtered.counts.outputRecords, 2)
+    assert.deepEqual(JSON.parse(await readFile(filtered.excludedArtifact.path, 'utf8')).map((row: { accession: string }) => row.accession), [
+      'Q9TEST', 'MOUSE1'
+    ])
     const filteredManifest = JSON.parse(await readFile(filtered.artifact.manifestPath, 'utf8'))
     assert.equal(filteredManifest.version, 2)
     assert.deepEqual(filteredManifest.schema.fields.map((field: { name: string }) => field.name), [
@@ -88,6 +91,7 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
       outputFileName: 'human-reviewed-unique.tsv'
     })
     assert.equal(deduplicated.counts.duplicateRecordsRemoved, 1)
+    assert.equal((await readFile(deduplicated.duplicatesArtifact.path, 'utf8')).trim().split('\n').length, 2)
 
     const validation = await service.validate({
       inputArtifact: deduplicated.artifact.path,

@@ -2191,6 +2191,8 @@
   "datasetResultSummary": "Summary",
   "datasetResultDetails": "Structured details",
   "datasetResultOpenFile": "Open file",
+  "datasetResultOpenExcluded": "Open excluded",
+  "datasetResultOpenDuplicates": "Open duplicates",
   "datasetResultFailed": "Dataset API request failed",
   "datasetResultMetadataLoaded": "Loaded {{bytes}} of structured metadata",
   "datasetResultRawSaved": "Saved {{bytes}} of validated {{format}} data",

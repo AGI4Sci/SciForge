@@ -23,7 +23,7 @@ Tools:
   UCSC, PubChem, ClinicalTrials.gov, KEGG, Reactome, QuickGO, STRING, or AlphaFold DB.
 - `dataset_api_list`: list workspace-registered databases.
 - `dataset_api_register`: register separate metadata and raw-data endpoints.
-- `dataset_api_metadata`: retrieve metadata from a registered database with bounded transient-network retries and structured diagnostics.
+- `dataset_api_metadata`: retrieve metadata with bounded retries and optionally persist the complete response as a checksummed downstream-processing artifact.
 - `dataset_api_raw_data`: stream format-validated raw bytes into a checksummed workspace artifact. FASTA, JSON, text, and binary validation are supported.
 - `dataset_prepare_plan`: persist a draft or user-confirmed preparation plan.
 - `dataset_profile`: profile JSON, JSONL, CSV, TSV, or FASTA and save a schema/quality report.

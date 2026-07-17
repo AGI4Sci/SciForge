@@ -40,9 +40,15 @@ test('registers a database and reads its metadata endpoint', async () => {
     })
     const metadata = await service.metadata({
       sourceId: 'example',
-      pathParameters: { datasetId: 'ds-42' }
+      pathParameters: { datasetId: 'ds-42' },
+      outputFileName: 'ds-42-metadata.json'
     })
     assert.deepEqual(metadata.metadata, { id: 'ds-42', title: 'Example dataset', files: 1 })
+    assert.ok(metadata.artifact)
+    assert.deepEqual(JSON.parse(await readFile(metadata.artifact.path, 'utf8')), metadata.metadata)
+    const metadataManifest = JSON.parse(await readFile(metadata.artifact.manifestPath, 'utf8'))
+    assert.equal(metadataManifest.operation, 'dataset_api_metadata')
+    assert.equal(metadataManifest.origins[0].source.id, 'example')
     const listed = await service.list({})
     assert.equal(listed.sources[0]?.metadataEndpoint, 'datasets/{datasetId}/metadata')
     assert.equal(listed.sources[0]?.auth?.configured, true)
