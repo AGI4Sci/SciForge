@@ -2520,8 +2520,36 @@ describe('CodexRuntimeService compatibility operations', () => {
     ]))
     const approvalId = service.pendingServerRequests()[0]!.requestId
     await expect(service.resolveApproval({ requestId: approvalId, decision: 'allowed' })).resolves.toEqual({ ok: true })
-    await expect(patchResult).resolves.toMatchObject({ success: true })
+    await expect(patchResult).resolves.toMatchObject({
+      success: true,
+      stateChanged: true,
+      structuredContent: { ok: true, applied: true }
+    })
     await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
+
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'read-before-external-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_read',
+      arguments: { path: 'notes.txt' }
+    })).resolves.toMatchObject({ success: true })
+    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nchanged elsewhere\ngamma\n', 'utf8')
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'patch-after-external-change',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'gui_workspace_apply_patch',
+      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta stale patch' }
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'patch_target_changed',
+      failureClass: 'stale_resource',
+      retryable: true,
+      stateChanged: false
+    })
+    expect(service.pendingServerRequests()).toEqual([])
+    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nbeta edited\ngamma\n', 'utf8')
 
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'patch-without-reread',
@@ -2531,7 +2559,11 @@ describe('CodexRuntimeService compatibility operations', () => {
       arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta twice' }
     })).resolves.toMatchObject({
       success: false,
-      contentItems: [expect.objectContaining({ text: expect.stringContaining('read-before-edit guard') })]
+      contentItems: [expect.objectContaining({ text: expect.stringContaining('read-before-edit guard') })],
+      errorCode: 'patch_read_required',
+      failureClass: 'precondition_failed',
+      retryable: true,
+      stateChanged: false
     })
 
     await pendingServerRequests?.onToolCallRequest?.({
@@ -2553,7 +2585,13 @@ describe('CodexRuntimeService compatibility operations', () => {
       requestId: service.pendingServerRequests()[0]!.requestId,
       decision: 'denied'
     })
-    await expect(deniedPatch).resolves.toMatchObject({ success: false })
+    await expect(deniedPatch).resolves.toMatchObject({
+      success: false,
+      errorCode: 'patch_user_denied',
+      failureClass: 'permission_denied',
+      retryable: false,
+      stateChanged: false
+    })
     await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
 
     serviceSettings = {
@@ -2577,7 +2615,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         path: 'notes.txt',
         patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta edited\n+beta full access\n gamma\n*** End Patch'
       }
-    })).resolves.toMatchObject({ success: true })
+    })).resolves.toMatchObject({ success: true, stateChanged: true })
     expect(service.pendingServerRequests()).toEqual([])
     await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta full access\ngamma\n')
   })

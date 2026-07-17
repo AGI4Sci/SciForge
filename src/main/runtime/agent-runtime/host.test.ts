@@ -611,6 +611,7 @@ describe('AgentRuntimeHost', () => {
             threadCount: 2,
             openThreadCount: 2,
             capability: {
+              resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
               resource: {
                 token: 'cap_abcdefghijklmnopqrstuvwxyz',
                 semanticRevision: 'revision-2',
@@ -625,7 +626,8 @@ describe('AgentRuntimeHost', () => {
         schemaVersion: 1,
         updatedAt: '1970-01-01T00:00:00.000Z',
         components: []
-      }))
+      })),
+      bindCurrentSurface: vi.fn(async () => visibleContext.get())
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -642,12 +644,13 @@ describe('AgentRuntimeHost', () => {
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.get).toHaveBeenCalled()
+    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
     expect(dispatched?.text).toContain('sciforge_discover')
     expect(dispatched?.text).toContain('sciforge_observe')
     expect(dispatched?.text).toContain('sciforge_invoke')
     expect(dispatched?.text).not.toContain('cap_abcdefghijklmnopqrstuvwxyz')
     expect(dispatched?.text).not.toContain('workspace-preview.apply-edit')
+    expect(dispatched?.text).toContain('res_abcdefghijklmnopqrstuvwxyz')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
   })
@@ -1157,6 +1160,12 @@ describe('AgentRuntimeHost', () => {
     })
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-host-'))
     const contextLedger = new RuntimeContextLedgerService(dataDir)
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-source-task',
+      text: 'Preserve the source task requirements across runtime handoff.'
+    })
     const modelAudit = new ModelRequestAuditRecorder()
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -1229,6 +1238,7 @@ describe('AgentRuntimeHost', () => {
       displayText: 'Please continue from here'
     })
     expect(startTurnInput?.text).toContain('Runtime handoff packet for semantic continuation.')
+    expect(startTurnInput?.text).toContain('Preserve the source task requirements across runtime handoff.')
     expect(startTurnInput?.text).toContain('"schema": "sciforge.runtime_handoff.v1"')
     expect(startTurnInput?.text).toContain('"objective": "handoff across runtimes"')
     expect(startTurnInput?.text).toContain('"schema": "sciforge.runtime_handoff_transcript.v1"')
@@ -2366,6 +2376,14 @@ describe('AgentRuntimeHost', () => {
       ]
     })
     const contextState = new RuntimeContextStateService()
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-host-'))
+    const contextLedger = new RuntimeContextLedgerService(dataDir)
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-before-compaction',
+      text: 'Modify the document using only the resources currently visible.'
+    })
     const base = settings('codex')
     const host = createAgentRuntimeHost({
       settings: async () => ({
@@ -2383,7 +2401,7 @@ describe('AgentRuntimeHost', () => {
         }
       }),
       adapters: [adapter],
-      services: { contextState }
+      services: { contextState, contextLedger }
     })
 
     await host.startTurn({
@@ -2401,6 +2419,7 @@ describe('AgentRuntimeHost', () => {
     })
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(dispatched?.text).toContain('Shared compacted context summary for this thread:')
+    expect(dispatched?.text).toContain('Modify the document using only the resources currently visible.')
     expect(dispatched?.text).toContain('Run the next step.')
     expect(dispatched?.displayText).toBe('Run the next step.')
     expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
@@ -4148,6 +4167,129 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       expect.objectContaining({ text: 'second' })
     )
+  })
+
+  it('uses the context ledger as the single persisted delivery path for start and steer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-old',
+      text: 'Use every annotation from the earlier set.'
+    })
+    await contextLedger.beginDirectiveDelivery({ runtimeId: 'codex', threadId: 'codex-thread', id: 'directive-old' })
+    await contextLedger.finishDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-old',
+      delivery: 'delivered',
+      turnId: 'turn-old'
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const correction = 'The earlier set is stale; use only the annotations currently visible.'
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: correction,
+      displayText: correction,
+      clientDirectiveId: 'directive-current'
+    })
+    await host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-active',
+      text: 'Continue until the requested changes are verified.',
+      clientDirectiveId: 'directive-steer'
+    })
+
+    const started = vi.mocked(codex.startTurn).mock.calls[0]?.[1]
+    expect(started?.text).toContain('later directives override conflicting earlier directives')
+    expect(started?.text).toContain('Use every annotation from the earlier set.')
+    expect(started?.text).toContain(correction)
+    expect(started?.displayText).toBe(correction)
+    const steered = vi.mocked(codex.steerTurn).mock.calls[0]?.[1]
+    expect(steered?.text).toContain('Use every annotation from the earlier set.')
+    expect(steered?.text).toContain(correction)
+    expect(steered?.text).toContain('Continue until the requested changes are verified.')
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({
+        directives: [
+          { id: 'directive-old', delivery: 'delivered' },
+          { id: 'directive-current', delivery: 'delivered' },
+          { id: 'directive-steer', delivery: 'delivered' }
+        ]
+      })
+  })
+
+  it('does not dispatch a delivered directive id twice', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'codex-thread', turnId: 'turn-1' })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'codex-thread',
+      text: 'Modify the document.',
+      clientDirectiveId: 'directive-once'
+    }
+
+    await expect(host.startTurn(input)).resolves.toEqual({ threadId: 'codex-thread', turnId: 'turn-1' })
+    await expect(host.startTurn(input)).resolves.toEqual({ threadId: 'codex-thread', turnId: 'turn-1' })
+    expect(codex.startTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('records ambiguous adapter failures as uncertain and refuses a blind retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockRejectedValue(new Error('connection closed after dispatch'))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'codex-thread',
+      text: 'Modify the document.',
+      clientDirectiveId: 'directive-uncertain'
+    }
+
+    await expect(host.startTurn(input)).rejects.toThrow('connection closed after dispatch')
+    await expect(host.startTurn(input)).rejects.toThrow(/uncertain delivery/)
+    expect(codex.startTurn).toHaveBeenCalledTimes(1)
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({ directives: [{ id: 'directive-uncertain', delivery: 'uncertain' }] })
   })
 
   it('routes running-thread input through steerTurn when the runtime supports steering', async () => {

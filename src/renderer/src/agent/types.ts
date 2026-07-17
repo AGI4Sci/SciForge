@@ -310,6 +310,7 @@ export type ChatBlock =
       modelLabel?: string
       managedBy?: UserMessageManagedBy
       meta?: RuntimeDisclosureMetadata
+      turnStatus?: string
     }
   | { kind: 'assistant'; id: string; createdAt?: string; text: string; meta?: RuntimeDisclosureMetadata }
   | { kind: 'reasoning'; id: string; createdAt?: string; text: string; meta?: RuntimeDisclosureMetadata }
@@ -543,6 +544,11 @@ export type AgentProviderCapabilities = {
   sideConversations?: boolean
 }
 
+export type AgentProviderDirectiveOptions = {
+  /** Stable renderer identity used to make persisted runtime delivery idempotent. */
+  clientDirectiveId?: string
+}
+
 export interface AgentProvider {
   readonly id: AgentRuntimeId
   readonly displayName: string
@@ -587,7 +593,7 @@ export interface AgentProvider {
       }
       attachmentIds?: string[]
       fileReferences?: AgentRuntimeFileReference[]
-    }
+    } & AgentProviderDirectiveOptions
   ): Promise<{
     turnId: string
     threadId: string
@@ -681,7 +687,12 @@ export interface AgentProvider {
     workspaceRoot: string
     path: string
   }): Promise<{ ok: true; preview: AgentRuntimeWorkspaceReferencePreview } | { ok: false; message: string }>
-  steerUserMessage?(threadId: string, turnId: string, text: string): Promise<void>
+  steerUserMessage?(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: AgentProviderDirectiveOptions
+  ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
   renameThread(threadId: string, title: string): Promise<void>
   updateThreadRelation?(threadId: string, relation: 'primary' | 'fork' | 'side'): Promise<void>

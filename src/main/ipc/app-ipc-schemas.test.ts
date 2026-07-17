@@ -89,6 +89,7 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: ' thread-1 ',
       text: ' hello ',
+      clientDirectiveId: ' directive-1 ',
       workspace: ' /tmp/workspace ',
       model: ' deepseek-v4-pro ',
       reasoningEffort: ' medium ',
@@ -108,6 +109,7 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: 'thread-1',
       text: 'hello',
+      clientDirectiveId: 'directive-1',
       workspace: '/tmp/workspace',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'medium',
@@ -121,6 +123,22 @@ describe('app-ipc-schemas', () => {
         mimeType: 'application/pdf',
         modelRouterObject: true
       }]
+    })
+  })
+
+  it('accepts stable directive identity on steer payloads', () => {
+    expect(agentRuntimeTurnSteerPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: ' thread-1 ',
+      turnId: ' turn-1 ',
+      text: ' use the current annotations ',
+      clientDirectiveId: ' correction-1 '
+    })).toEqual({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      text: 'use the current annotations',
+      clientDirectiveId: 'correction-1'
     })
   })
 

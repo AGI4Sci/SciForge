@@ -42,6 +42,8 @@ const MAX_JSON_DEPTH = 6
 const DEFAULT_CAPTURE_RETENTION_LIMIT = 64
 const DEFAULT_CAPTURE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1_000
 const MAX_CAPTURE_PREVIEW_BYTES = 32 * 1024 * 1024
+const MAX_SURFACE_BINDINGS = 512
+const LAYOUT_REFRESH_TIMEOUT_MS = 1_000
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
 
 export type CapturedVisualPage = {
@@ -77,9 +79,24 @@ export type VisibleContextServiceOptions = {
   surfaceCaptureProvider: SurfaceCaptureProvider
   visualInspector?: () => VisualInspector | undefined | Promise<VisualInspector | undefined>
   onCaptureState?: (windowId: string, active: boolean) => void
+  requestSurfaceRefresh?: (windowId: string) => void
   now?: () => Date
   captureRetentionLimit?: number
   captureMaxAgeMs?: number
+}
+
+type BoundSurface = {
+  callerId: string
+  activeThreadId: string
+  resourceId: string
+  snapshot: VisibleContextSnapshot
+}
+
+type LayoutRefreshWaiter = {
+  windowId: string
+  minimumRevision: number
+  resolve: (snapshot: VisibleContextSnapshot) => void
+  timer: ReturnType<typeof setTimeout>
 }
 
 export function visibleContextSnapshotPath(userDataDir: string): string {
@@ -93,6 +110,9 @@ export function visibleContextCapturePath(userDataDir: string, requestId = 'late
 export class VisibleContextService {
   private current: VisibleContextSnapshot | null = null
   private readonly snapshots = new Map<string, VisibleContextSnapshot>()
+  private readonly boundSurfacesByCaller = new Map<string, BoundSurface>()
+  private readonly boundSurfacesByResource = new Map<string, BoundSurface>()
+  private readonly layoutRefreshWaiters = new Set<LayoutRefreshWaiter>()
   private readonly surfaceRefSecret = randomBytes(32)
   private captureQueue: Promise<void> = Promise.resolve()
   private readonly now: () => Date
@@ -160,6 +180,7 @@ export class VisibleContextService {
     const sanitized = this.withFreshness(sanitizeVisibleContextSnapshot(parsed))
     this.snapshots.set(sanitized.windowId, sanitized)
     this.current = sanitized
+    this.resolveLayoutRefreshWaiters(sanitized)
     await atomicWriteAppDataJson(
       this.userDataDir,
       VISIBLE_CONTEXT_STORE_SEGMENTS,
@@ -182,24 +203,55 @@ export class VisibleContextService {
     return this.withFreshness(this.current ?? emptyVisibleContextSnapshot())
   }
 
-  async currentSurface(): Promise<{
+  async bindCurrentSurface(callerId: string, activeThreadId: string): Promise<VisibleContextSnapshot | null> {
+    const normalizedCallerId = callerId.trim()
+    const normalizedThreadId = activeThreadId.trim()
+    if (!normalizedCallerId || !normalizedThreadId) return null
+    let snapshot = await this.get()
+    if (snapshot.windowId === 'unavailable') return null
+    if ((snapshot.activeThreadId ?? null) !== normalizedThreadId) {
+      snapshot = await this.requestRendererSnapshot(snapshot)
+      if ((snapshot.activeThreadId ?? null) !== normalizedThreadId) return null
+    }
+    const previous = this.boundSurfacesByCaller.get(normalizedCallerId)
+    if (previous) this.boundSurfacesByResource.delete(previous.resourceId)
+    const resourceId = `bound_surface_${createHmac('sha256', this.surfaceRefSecret)
+      .update(`${normalizedCallerId}\u0000${snapshot.windowId}\u0000${snapshot.revision}`)
+      .digest('base64url')}`
+    const binding: BoundSurface = {
+      callerId: normalizedCallerId,
+      activeThreadId: normalizedThreadId,
+      resourceId,
+      snapshot
+    }
+    this.boundSurfacesByCaller.set(normalizedCallerId, binding)
+    this.boundSurfacesByResource.set(resourceId, binding)
+    this.pruneSurfaceBindings()
+    return snapshot
+  }
+
+  async currentSurface(callerId?: string): Promise<{
     resourceId: string
     workspaceId?: string
     semanticRevision: string
     layoutRevision: string
     state: CapabilityJsonValue
   }> {
-    const snapshot = await this.get()
+    let binding = callerId ? this.boundSurfacesByCaller.get(callerId) : undefined
+    if (callerId && !binding) {
+      const visible = await this.get()
+      const activeThreadId = visible.activeThreadId?.trim()
+      if (activeThreadId) {
+        await this.bindCurrentSurface(callerId, activeThreadId)
+        binding = this.boundSurfacesByCaller.get(callerId)
+      }
+    }
+    const snapshot = binding?.snapshot ?? await this.get()
     if (snapshot.windowId === 'unavailable') {
       throw new Error('No visible SciForge surface is currently available.')
     }
-    if (snapshot.freshness.stale) {
-      throw new Error(
-        `The visible SciForge surface is stale (${snapshot.freshness.ageMs}ms old); wait for a fresh renderer publication before using current-resource operations.`
-      )
-    }
     return {
-      resourceId: snapshot.windowId,
+      resourceId: binding?.resourceId ?? snapshot.windowId,
       ...(snapshot.workspaceRoot ? { workspaceId: snapshot.workspaceRoot } : {}),
       semanticRevision: this.surfaceSemanticRevision(snapshot),
       layoutRevision: String(snapshot.revision),
@@ -213,9 +265,17 @@ export class VisibleContextService {
   ): Promise<SurfaceInspectOutput> {
     const input = surfaceInspectInputSchema.parse(rawInput)
     const captured = await this.enqueueCapture(async () => {
-      const snapshot = await this.get()
-      if (snapshot.windowId !== resourceId) {
+      const binding = this.boundSurfacesByResource.get(resourceId)
+      let snapshot = await this.get()
+      if (binding && !this.boundSurfaceIsVisible(binding, snapshot)) {
+        throw new Error('The bound surface layout is unavailable while another session or resource is visible.')
+      }
+      if (!binding && snapshot.windowId !== resourceId) {
         throw new Error('The visible surface is no longer available.')
+      }
+      snapshot = await this.refreshLayoutOnDemand(snapshot)
+      if (binding && !this.boundSurfaceIsVisible(binding, snapshot)) {
+        throw new Error('The bound surface layout became unavailable before visual inspection.')
       }
       let componentId: string | undefined
       let target: VisualContextTarget | undefined
@@ -391,7 +451,7 @@ export class VisibleContextService {
   private surfaceObservationState(snapshot: VisibleContextSnapshot): CapabilityJsonValue {
     return {
       ...(snapshot.route ? { route: snapshot.route } : {}),
-      freshness: snapshot.freshness,
+      layoutFreshness: snapshot.freshness,
       targets: snapshot.components.flatMap((component) => (
         (component.visualTargets ?? []).map((target) => ({
           targetRef: this.surfaceTargetRef(snapshot.windowId, component.id, target.id),
@@ -431,6 +491,75 @@ export class VisibleContextService {
     const run = this.captureQueue.then(operation, operation)
     this.captureQueue = run.then(() => undefined, () => undefined)
     return run
+  }
+
+  private async refreshLayoutOnDemand(snapshot: VisibleContextSnapshot): Promise<VisibleContextSnapshot> {
+    if (!snapshot.freshness.stale) return snapshot
+    const refreshed = await this.requestRendererSnapshot(snapshot)
+    if (refreshed.windowId !== snapshot.windowId || refreshed.freshness.stale) {
+      throw new Error('The surface layout did not refresh before visual inspection.')
+    }
+    return refreshed
+  }
+
+  private async requestRendererSnapshot(snapshot: VisibleContextSnapshot): Promise<VisibleContextSnapshot> {
+    if (!this.options.requestSurfaceRefresh) return snapshot
+    return new Promise<VisibleContextSnapshot>((resolve) => {
+      const waiter: LayoutRefreshWaiter = {
+        windowId: snapshot.windowId,
+        minimumRevision: snapshot.revision,
+        resolve,
+        timer: setTimeout(() => {
+          this.layoutRefreshWaiters.delete(waiter)
+          resolve(this.peek())
+        }, LAYOUT_REFRESH_TIMEOUT_MS)
+      }
+      waiter.timer.unref?.()
+      this.layoutRefreshWaiters.add(waiter)
+      try {
+        this.options.requestSurfaceRefresh?.(snapshot.windowId)
+      } catch {
+        clearTimeout(waiter.timer)
+        this.layoutRefreshWaiters.delete(waiter)
+        resolve(this.peek())
+      }
+    })
+  }
+
+  private resolveLayoutRefreshWaiters(snapshot: VisibleContextSnapshot): void {
+    for (const waiter of this.layoutRefreshWaiters) {
+      if (waiter.windowId !== snapshot.windowId || snapshot.revision <= waiter.minimumRevision) continue
+      clearTimeout(waiter.timer)
+      this.layoutRefreshWaiters.delete(waiter)
+      waiter.resolve(snapshot)
+    }
+  }
+
+  private boundSurfaceIsVisible(binding: BoundSurface, snapshot: VisibleContextSnapshot): boolean {
+    if (snapshot.windowId !== binding.snapshot.windowId) return false
+    if ((snapshot.activeThreadId ?? null) !== binding.activeThreadId) return false
+    const boundRefs = this.surfaceResourceRefs(binding.snapshot)
+    if (boundRefs.size > 0) {
+      const currentRefs = this.surfaceResourceRefs(snapshot)
+      return [...boundRefs].some((resourceRef) => currentRefs.has(resourceRef))
+    }
+    return this.surfaceSemanticRevision(snapshot) === this.surfaceSemanticRevision(binding.snapshot)
+  }
+
+  private surfaceResourceRefs(snapshot: VisibleContextSnapshot): Set<string> {
+    return new Set(snapshot.components.flatMap((component) => (
+      (component.resources ?? []).flatMap((resource) => resource.capability?.resourceRef ?? [])
+    )))
+  }
+
+  private pruneSurfaceBindings(): void {
+    while (this.boundSurfacesByCaller.size > MAX_SURFACE_BINDINGS) {
+      const oldestCallerId = this.boundSurfacesByCaller.keys().next().value as string | undefined
+      if (!oldestCallerId) return
+      const binding = this.boundSurfacesByCaller.get(oldestCallerId)
+      this.boundSurfacesByCaller.delete(oldestCallerId)
+      if (binding) this.boundSurfacesByResource.delete(binding.resourceId)
+    }
   }
 
   private withFreshness(snapshot: VisibleContextSnapshot): VisibleContextSnapshot {

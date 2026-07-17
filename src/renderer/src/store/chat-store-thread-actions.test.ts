@@ -209,10 +209,51 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.steerUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'turn-running',
-      'use the current output'
+      'use the current output',
+      { clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/) }
     )
     expect(state.queuedMessages).toEqual([])
     expect(state.error).toBeNull()
+  })
+
+  it('reuses an explicit steer directive id when turn_not_running falls back to the queue', async () => {
+    const { actions, state } = buildHarness()
+    const provider = {
+      getCapabilities: vi.fn(() => ({
+        interrupt: true,
+        stream: true,
+        approvals: true,
+        attachFiles: true,
+        steer: true
+      })),
+      rememberThreadRuntime: vi.fn(),
+      steerUserMessage: vi.fn(async (
+        _threadId: string,
+        _turnId: string,
+        _text: string,
+        _options?: { clientDirectiveId?: string }
+      ) => {
+        throw new Error(JSON.stringify({
+          code: 'turn_not_running',
+          message: 'The target turn already stopped.'
+        }))
+      })
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = true
+    state.currentTurnId = 'turn-running'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'codex' }]
+
+    await expect(actions.sendMessage('/steer preserve this correction')).resolves.toBe(true)
+
+    const steerOptions = provider.steerUserMessage.mock.calls[0]?.[3]
+    expect(steerOptions?.clientDirectiveId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        id: steerOptions?.clientDirectiveId,
+        text: 'preserve this correction'
+      })
+    ])
   })
 
   it('queues running text when the runtime capability says steering is unsupported', async () => {
@@ -272,7 +313,8 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(provider.steerUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'turn-running',
-      'steer this queued follow-up'
+      'steer this queued follow-up',
+      { clientDirectiveId: 'q-1' }
     )
     expect(state.queuedMessages).toEqual([])
     expect(state.error).toBeNull()
@@ -708,6 +750,7 @@ describe('chat-store-thread-actions queued messages', () => {
       'thread-a',
       expect.stringContaining('continue A in the background'),
       expect.objectContaining({
+        clientDirectiveId: 'q-a',
         workspace: '/workspace/a',
         model: 'deepseek-v4-pro',
         displayText: 'continue A in the background',
@@ -1125,6 +1168,7 @@ describe('chat-store-thread-actions queued messages', () => {
     await expect(actions.sendMessage('hello from UI')).resolves.toBe(true)
 
     expect(provider.sendUserMessage).toHaveBeenCalledWith('thr_existing', 'hello from UI', {
+      clientDirectiveId: expect.stringMatching(/^u-/),
       mode: undefined,
       workspace: '/workspace/sciforge',
       title: 'thr_existing',
@@ -1364,7 +1408,11 @@ describe('chat-store-thread-actions queued messages', () => {
     first.state.busy = false
     first.state.error = null
     const firstProvider = {
-      sendUserMessage: vi.fn(() => new Promise<never>(() => undefined)),
+      sendUserMessage: vi.fn((
+        _threadId: string,
+        _text: string,
+        _options?: { clientDirectiveId?: string }
+      ) => new Promise<never>(() => undefined)),
       subscribeThreadEvents: vi.fn(async () => undefined),
       renameThread: vi.fn(async () => undefined)
     }
@@ -1380,6 +1428,10 @@ describe('chat-store-thread-actions queued messages', () => {
         journalOnly: true
       })
     })])
+    const originalDirectiveId = first.state.queuedMessages[0]!.id
+    expect(firstProvider.sendUserMessage.mock.calls[0]?.[2]).toEqual(
+      expect.objectContaining({ clientDirectiveId: originalDirectiveId })
+    )
     const restored = normalizePersistedQueuedMessages(first.state.queuedMessages, true)
     expect(restored[0]?.deliveryAttempt?.restored).toBe(true)
 
@@ -1403,7 +1455,10 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(secondProvider.sendUserMessage).toHaveBeenCalledWith(
       'thr_existing',
       'direct crash-window instruction',
-      expect.objectContaining({ displayText: 'direct crash-window instruction' })
+      expect.objectContaining({
+        clientDirectiveId: originalDirectiveId,
+        displayText: 'direct crash-window instruction'
+      })
     )
     expect(second.state.queuedMessages).toEqual([])
   })

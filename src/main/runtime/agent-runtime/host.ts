@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import path from 'node:path'
 import {
   getActiveAgentRuntime,
@@ -68,6 +68,7 @@ import {
   withVisualExecutionRequirement
 } from './visual-execution-guard'
 import {
+  EXECUTION_CONTINUITY_TEXT_METADATA_KEY,
   RuntimeExecutionIntegrityGuard,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
@@ -85,6 +86,7 @@ import type { GitCheckpointService } from '../../services/git-checkpoint-service
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
 import type { VisibleContextService } from '../../services/visible-context-service'
+import { capabilityAgentCallerId } from '../../capabilities/agent-tools'
 import type { RuntimeGoalPatch, RuntimeGoalService } from '../../services/runtime-goal-service'
 import type {
   RuntimeContextLedgerPatch,
@@ -234,7 +236,13 @@ export class AgentRuntimeHost {
   }
 
   async startTurn(input: AgentRuntimeTurnStartInput): Promise<AgentRuntimeTurnHandle> {
-    return this.startTurnInternal(input, { includeSharedContext: true })
+    return this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
+      const handle = await this.startTurnInternal({
+        ...input,
+        ...(clientDirectiveId ? { clientDirectiveId } : {})
+      }, { includeSharedContext: true })
+      return { value: handle, turnId: handle.turnId }
+    }, (turnId) => ({ threadId: input.threadId, turnId }))
   }
 
   private async startTurnInternal(
@@ -244,21 +252,19 @@ export class AgentRuntimeHost {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     await this.autoCompactThreadIfNeeded(adapter, context, input)
     const safeInput = this.withWorkspaceRelativeFileReferences(context, input)
-    const sharedInput = options.includeSharedContext
+    const contextualInput = options.includeSharedContext
       ? await this.withSharedGoalInstruction(
           adapter.id,
-          await this.withSharedContextLedger(
-            adapter.id,
-            this.withSharedContextState(adapter.id, await this.withSharedMemory(context, safeInput))
-          )
+          this.withSharedContextState(adapter.id, await this.withSharedMemory(context, safeInput))
         )
       : safeInput
+    const sharedInput = await this.withSharedContextLedger(adapter.id, contextualInput)
     const visualRequestText = safeInput.displayText ?? (options.includeSharedContext ? safeInput.text : '')
     const visualRequired = requiresVerifiedVisualInspection(visualRequestText)
     const visuallyGuardedInput = withVisualExecutionRequirement(sharedInput, visualRequired)
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const turnInput = options.includeSharedContext
-      ? await this.withVisibleContextLookupHint(integrityGuardedInput, safeInput.text)
+      ? await this.withVisibleContextLookupHint(adapter.id, integrityGuardedInput, safeInput.text)
       : integrityGuardedInput
     this.createPreTurnCheckpoint(adapter.id, context, turnInput)
     const modelRouter = resolveRuntimeModelRouterSettings(context.settings)
@@ -301,8 +307,75 @@ export class AgentRuntimeHost {
   }
 
   async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
+    await this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
+      const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+      const steerInput = await this.withDirectiveContinuity(adapter.id, {
+        ...input,
+        ...(clientDirectiveId ? { clientDirectiveId } : {})
+      })
+      this.executionIntegrity.rememberSteer(adapter.id, input.threadId, input.turnId, steerInput.text)
+      await adapter.steerTurn(context, steerInput)
+      return { value: undefined, turnId: input.turnId }
+    }, () => undefined)
+  }
+
+  private async steerControlTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     await adapter.steerTurn(context, input)
+  }
+
+  private async withUserDirectiveDelivery<T>(
+    input: AgentRuntimeTurnStartInput | AgentRuntimeTurnSteerInput,
+    deliver: (clientDirectiveId?: string) => Promise<{ value: T; turnId: string }>,
+    duplicate: (turnId: string) => T
+  ): Promise<T> {
+    const service = this.options.services?.contextLedger
+    const clientDirectiveId = input.clientDirectiveId?.trim() || `directive-${randomUUID()}`
+    if (!service) return (await deliver(input.clientDirectiveId?.trim() || undefined)).value
+    await service.acceptDirective({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      id: clientDirectiveId,
+      text: userDirectiveText(input)
+    })
+    const dispatch = await service.beginDirectiveDelivery({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      id: clientDirectiveId
+    })
+    if (!dispatch.deliver) {
+      const turnId = dispatch.directive.turnId?.trim()
+      if (!turnId) throw new Error(`Delivered runtime directive ${clientDirectiveId} has no turn id.`)
+      return duplicate(turnId)
+    }
+    let delivered: { value: T; turnId: string }
+    try {
+      delivered = await deliver(clientDirectiveId)
+    } catch (deliveryError) {
+      try {
+        await service.finishDirectiveDelivery({
+          runtimeId: input.runtimeId,
+          threadId: input.threadId,
+          id: clientDirectiveId,
+          delivery: isDefiniteDirectiveRejection(deliveryError) ? 'rejected' : 'uncertain',
+          error: errorMessage(deliveryError)
+        })
+      } catch (persistenceError) {
+        throw new AggregateError(
+          [deliveryError, persistenceError],
+          'Runtime directive delivery failed and its acknowledgement state could not be persisted.'
+        )
+      }
+      throw deliveryError
+    }
+    await service.finishDirectiveDelivery({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      id: clientDirectiveId,
+      delivery: 'delivered',
+      turnId: delivered.turnId
+    })
+    return delivered.value
   }
 
   async renameThread(input: AgentRuntimeThreadRenameInput): Promise<void> {
@@ -352,7 +425,7 @@ export class AgentRuntimeHost {
             turnId: event.turnId
           })
         ),
-        steerTurn: (payload) => this.steerTurn(payload),
+        steerTurn: (payload) => this.steerControlTurn(payload),
         interruptTurn: (payload) => this.interruptTurn(payload),
         publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
       })
@@ -813,6 +886,7 @@ export class AgentRuntimeHost {
     const model = optionalString(payload.model)
     const title = optionalString(payload.title)
     const reasoningEffort = optionalString(payload.reasoningEffort)
+    const clientDirectiveId = optionalString(payload.clientDirectiveId)
     const attachmentIds = arrayOfStrings(payload.attachmentIds)
     const fileReferences = arrayOfRuntimeFileReferences(payload.fileReferences)
 
@@ -861,20 +935,30 @@ export class AgentRuntimeHost {
       patch: runtimeContextLedgerPatch({ packet })
     })
 
-    const turn = await this.startTurnInternal({
+    const turn = await this.withUserDirectiveDelivery({
       runtimeId: targetRuntimeId,
       threadId: targetThread.id,
-      text: renderRuntimeHandoffPrompt(packet, userText, renderRuntimeHandoffSourceTranscript(sourceDetail)),
-      metadata: handoffAuditMetadata,
+      text: userText,
       displayText,
-      ...(workspace ? { workspace } : {}),
-      ...(mode ? { mode } : {}),
-      ...(model ? { model } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
-      ...(governanceProfile(payload.governanceProfile) ? { governanceProfile: governanceProfile(payload.governanceProfile) } : {}),
-      ...(attachmentIds ? { attachmentIds } : {}),
-      ...(fileReferences ? { fileReferences } : {})
-    }, { includeSharedContext: false })
+      ...(clientDirectiveId ? { clientDirectiveId } : {})
+    }, async (directiveId) => {
+      const handle = await this.startTurnInternal({
+        runtimeId: targetRuntimeId,
+        threadId: targetThread.id,
+        ...(directiveId ? { clientDirectiveId: directiveId } : {}),
+        text: renderRuntimeHandoffPrompt(packet, userText, renderRuntimeHandoffSourceTranscript(sourceDetail)),
+        metadata: handoffAuditMetadata,
+        displayText,
+        ...(workspace ? { workspace } : {}),
+        ...(mode ? { mode } : {}),
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(governanceProfile(payload.governanceProfile) ? { governanceProfile: governanceProfile(payload.governanceProfile) } : {}),
+        ...(attachmentIds ? { attachmentIds } : {}),
+        ...(fileReferences ? { fileReferences } : {})
+      }, { includeSharedContext: false })
+      return { value: handle, turnId: handle.turnId }
+    }, (turnId) => ({ threadId: targetThread.id, turnId }))
     if (targetThreadId && title) {
       await targetAdapter.renameThread(targetContext, {
         runtimeId: targetRuntimeId,
@@ -1227,13 +1311,40 @@ export class AgentRuntimeHost {
     const threadId = input.threadId.trim()
     if (!service || !threadId) return input
     const ledger = await service.peek({ runtimeId, threadId }).catch(() => null)
-    const ledgerText = renderRuntimeContextLedger(ledger)
-    if (!ledgerText) return input
+    const ledgerText = renderRuntimeContextLedger(ledger, input.clientDirectiveId)
+    const continuityText = runtimeDirectiveContinuityText(ledger)
+    if (!ledgerText && !continuityText) return input
     return {
       ...input,
-      text: `${ledgerText}\n\n${input.text}`,
-      displayText: input.displayText ?? input.text
+      text: ledgerText ? `${ledgerText}\n\n${input.text}` : input.text,
+      displayText: input.displayText ?? input.text,
+      metadata: continuityText
+        ? { ...(input.metadata ?? {}), [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: continuityText }
+        : input.metadata
     }
+  }
+
+  private async withDirectiveContinuity(
+    runtimeId: AgentRuntimeId,
+    input: AgentRuntimeTurnSteerInput
+  ): Promise<AgentRuntimeTurnSteerInput> {
+    const service = this.options.services?.contextLedger
+    const ledger = service && input.threadId.trim()
+      ? await service.peek({ runtimeId, threadId: input.threadId }).catch(() => null)
+      : null
+    const ledgerText = renderRuntimeDirectiveContinuity(ledger, input.clientDirectiveId)
+    const continuityText = runtimeDirectiveContinuityText(ledger)
+    const text = ledgerText ? `${ledgerText}\n\n${input.text}` : input.text
+    const guarded = withExecutionIntegrityRequirement({
+      runtimeId,
+      threadId: input.threadId,
+      text,
+      displayText: input.text,
+      ...(continuityText
+        ? { metadata: { [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: continuityText } }
+        : {})
+    })
+    return { ...input, text: guarded.text }
   }
 
   private withSharedContextState(
@@ -1254,12 +1365,19 @@ export class AgentRuntimeHost {
   }
 
   private async withVisibleContextLookupHint(
+    runtimeId: AgentRuntimeId,
     input: AgentRuntimeTurnStartInput,
     triggerText: string
   ): Promise<AgentRuntimeTurnStartInput> {
     const service = this.options.services?.visibleContext
     if (!service || !shouldAttachVisibleContextLookupHint(triggerText)) return input
-    const snapshot = await service.get().catch(() => service.peek())
+    const callerId = capabilityAgentCallerId({
+      runtimeId,
+      threadId: input.threadId,
+      requestId: input.threadId
+    })
+    const snapshot = await service.bindCurrentSurface(callerId, input.threadId)
+      .catch(() => service.get().catch(() => service.peek()))
     const hint = renderVisibleContextLookupHint(snapshot)
     if (!hint) return input
     return {
@@ -1627,8 +1745,15 @@ export class AgentRuntimeHost {
       runtimeId: adapter.id,
       threadId,
       turnId: activity.turnId,
-      text: input.text
+      text: input.text,
+      ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {})
     })
+    this.executionIntegrity.rememberSteer(
+      adapter.id,
+      threadId,
+      activity.turnId,
+      optionalString(recordPayload(input.metadata)[EXECUTION_CONTINUITY_TEXT_METADATA_KEY]) ?? input.text
+    )
     await this.publishSyntheticEvent(adapter, context, {
       kind: 'runtime_status',
       runtimeId: adapter.id,
@@ -2430,8 +2555,34 @@ function runtimeFileReferenceDelivery(value: unknown): AgentRuntimeFileReference
   return value === 'inline_context' || value === 'model_router_object' ? value : undefined
 }
 
+function userDirectiveText(input: AgentRuntimeTurnStartInput | AgentRuntimeTurnSteerInput): string {
+  return ('displayText' in input ? input.displayText?.trim() : undefined) || input.text.trim()
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
+}
+
+function isDefiniteDirectiveRejection(error: unknown): boolean {
+  const message = errorMessage(error).trim()
+  if (!message.startsWith('{')) return false
+  try {
+    const code = optionalString(recordPayload(JSON.parse(message)).code)
+    return code === 'validation_error' ||
+      code === 'unauthorized' ||
+      code === 'forbidden' ||
+      code === 'not_found' ||
+      code === 'conflict' ||
+      code === 'turn_in_progress' ||
+      code === 'turn_not_running' ||
+      code === 'capability_unavailable' ||
+      code === 'policy_blocked' ||
+      code === 'model_modality_unsupported' ||
+      code === 'attachment_validation_failed' ||
+      code === 'not_implemented'
+  } catch {
+    return false
+  }
 }
 
 function normalizeRuntimeFileReference(
@@ -2575,9 +2726,14 @@ function renderSharedContextState(state: AgentRuntimeContextState | null): strin
   return lines.join('\n')
 }
 
-function renderRuntimeContextLedger(ledger: AgentRuntimeContextLedger | null): string {
+function renderRuntimeContextLedger(
+  ledger: AgentRuntimeContextLedger | null,
+  excludeDirectiveId?: string
+): string {
   if (!ledger) return ''
   const lines = ['Runtime context ledger for this thread:']
+  const directives = renderRuntimeDirectiveContinuity(ledger, excludeDirectiveId)
+  if (directives) lines.push(directives)
   if (ledger.objective) lines.push(`Objective: ${truncateUtf8Text(ledger.objective, 600)}`)
   if (ledger.status) lines.push(`Status: ${ledger.status}`)
   if (ledger.summary) lines.push(`Summary: ${truncateUtf8Text(ledger.summary, 1_200)}`)
@@ -2610,17 +2766,45 @@ function renderRuntimeContextLedger(ledger: AgentRuntimeContextLedger | null): s
   return lines.join('\n')
 }
 
+function renderRuntimeDirectiveContinuity(
+  ledger: AgentRuntimeContextLedger | null,
+  excludeDirectiveId?: string
+): string {
+  const excluded = excludeDirectiveId?.trim()
+  const directives = (ledger?.directives ?? [])
+    .filter((directive) => directive.id !== excluded)
+    .map((directive) => ({ id: directive.id, text: directive.text }))
+  if (directives.length === 0) return ''
+  return [
+    'Accepted user directives in chronological order; later directives override conflicting earlier directives:',
+    JSON.stringify(directives, null, 2)
+  ].join('\n')
+}
+
+function runtimeDirectiveContinuityText(ledger: AgentRuntimeContextLedger | null): string {
+  return (ledger?.directives ?? []).map((directive) => directive.text.trim()).filter(Boolean).join('\n\n')
+}
+
 function shouldAttachVisibleContextLookupHint(text: string): boolean {
   return /\b(right\s*(panel|sidebar|side)|visible|preview|annotation|annotations|comment|comments|markup)\b/i.test(text) ||
     /(右侧|右栏|右边|侧栏|预览|可见|看到|屏幕|界面|当前打开|批注|注释|标注)/u.test(text)
 }
 
-function renderVisibleContextLookupHint(_snapshot: VisibleContextSnapshot): string {
+function renderVisibleContextLookupHint(snapshot: VisibleContextSnapshot | null): string {
+  const boundResourceRefs = snapshot
+    ? [...new Set(snapshot.components.flatMap((component) => (
+        (component.resources ?? []).flatMap((resource) => resource.capability?.resourceRef ?? [])
+      )))].slice(0, 4)
+    : []
+  const routing = boundResourceRefs.length > 0
+    ? `This turn is bound to the canonical semantic resourceRef${boundResourceRefs.length === 1 ? '' : 's'} captured at turn start: ${boundResourceRefs.map((ref) => `\`${ref}\``).join(', ')}. Call \`sciforge_observe\` on the relevant bound resource before acting; switching the foreground session must not replace this binding.`
+    : 'No direct semantic resource reference was published. Call `sciforge_discover` to find and invoke `surface.current`; it resolves the surface bound to this turn, then call `sciforge_observe` on the returned resourceRef before acting.'
   return [
     'Canonical current-resource routing:',
-    'The request refers to a current, open, selected, visible, or deictic SciForge resource. Call `sciforge_discover` to find and invoke `surface.current`, then call `sciforge_observe` on the returned canonical resourceRef before acting.',
+    routing,
+    'Use `sciforge_discover` only when you need a current operation schema not already returned by observation, and use `sciforge_invoke` for provider operations.',
     'Use only operationRef, resourceRef, targetRef, and domain input returned by the broker. Do not infer component ids, coordinates, paths, handles, revisions, or invocation ids.',
-    'When a canonical current resource exists it is authoritative: do not substitute generic workspace tools, legacy GUI APIs, direct application-state/sidecar reads, or shell path guessing. Report readiness, freshness, or missing-operation errors without fallback.'
+    'Renderer age is layout freshness only: it may block coordinates or screenshots, but it does not expire the bound semantic resource. When a canonical resource exists it is authoritative; do not substitute generic workspace tools, legacy GUI APIs, direct application-state/sidecar reads, or shell path guessing.'
   ].join('\n')
 }
 

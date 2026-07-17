@@ -101,6 +101,10 @@ type ReadEvidence = {
 
 type SemanticFailureStreak = {
   key: string
+  family: string
+  failureClass: string
+  errorCode: string
+  resourceIdentity: string
   count: number
 }
 
@@ -114,7 +118,15 @@ const DEFAULT_SEMANTIC_FAILURE_THRESHOLD = 2
 const DEFAULT_READ_OFFSET = 1
 const DEFAULT_READ_LIMIT = 2000
 const DEFAULT_MAX_READ_OVERLAP_RATIO = 0.9
-const MUTATING_TOOL_NAMES = new Set(['write', 'edit', 'edit_diff', 'apply_patch', 'delete', 'move'])
+const MUTATING_TOOL_NAMES = new Set([
+  'write',
+  'edit',
+  'edit_diff',
+  'apply_patch',
+  'gui_workspace_apply_patch',
+  'delete',
+  'move'
+])
 const GOVERNOR_EXEMPT_TOOL_NAMES = new Set(['request_user_input', 'user_input'])
 const VOLATILE_ARGUMENT_KEYS = new Set([
   'callid',
@@ -296,14 +308,17 @@ export class ExecutionGovernorCore {
   ): ExecutionGovernorDecision | null {
     const streak = this.semanticFailureStreak
     if (!streak || streak.count < this.semanticFailureThreshold) return null
-    if (!streak.key.startsWith(`${attempt.family}\0`)) return null
-    const [, failureClass, resourceIdentity] = streak.key.split('\0')
-    if (resourceIdentity && attempt.resourceIdentity && resourceIdentity !== attempt.resourceIdentity) return null
+    if (streak.family !== attempt.family) return null
+    if (
+      streak.resourceIdentity &&
+      attempt.resourceIdentity &&
+      streak.resourceIdentity !== attempt.resourceIdentity
+    ) return null
     return {
       action: 'deny',
       code: 'semantic_failure_exhausted',
-      reason: `${attempt.family} already failed ${streak.count} consecutive times with ${failureClass || 'the same semantic failure'}.`,
-      guidance: recoveryGuidance(attempt.family, failureClass),
+      reason: `${attempt.family} already failed ${streak.count} consecutive times with ${failureDescription(streak.failureClass, streak.errorCode)}.`,
+      guidance: recoveryGuidance(attempt.family, streak.failureClass, streak.errorCode),
       attempt
     }
   }
@@ -321,18 +336,30 @@ export class ExecutionGovernorCore {
       this.semanticFailureStreak = null
       return { action: 'allow', attempt }
     }
-    const key = `${attempt.family}\0${receipt.failureClass}\0${receipt.resourceIdentity}`
+    const key = [
+      attempt.family,
+      receipt.failureClass,
+      receipt.errorCode,
+      receipt.resourceIdentity
+    ].join('\0')
     this.semanticFailureStreak = this.semanticFailureStreak?.key === key
-      ? { key, count: this.semanticFailureStreak.count + 1 }
-      : { key, count: 1 }
+      ? { ...this.semanticFailureStreak, count: this.semanticFailureStreak.count + 1 }
+      : {
+          key,
+          family: attempt.family,
+          failureClass: receipt.failureClass,
+          errorCode: receipt.errorCode,
+          resourceIdentity: receipt.resourceIdentity,
+          count: 1
+        }
     if (this.semanticFailureStreak.count < this.semanticFailureThreshold) {
       return { action: 'allow', attempt }
     }
     return {
       action: 'steer',
       code: 'semantic_failure_retry',
-      reason: `${attempt.family} failed ${this.semanticFailureStreak.count} consecutive times with ${receipt.failureClass}.`,
-      guidance: recoveryGuidance(attempt.family, receipt.failureClass),
+      reason: `${attempt.family} failed ${this.semanticFailureStreak.count} consecutive times with ${failureDescription(receipt.failureClass, receipt.errorCode)}.`,
+      guidance: recoveryGuidance(attempt.family, receipt.failureClass, receipt.errorCode),
       attempt
     }
   }
@@ -644,11 +671,30 @@ function isMutatingToolCall(input: ExecutionAttemptInput): boolean {
   return MUTATING_TOOL_NAMES.has(normalizedToolName(input.toolName))
 }
 
-function recoveryGuidance(family: string, failureClass: string): string {
+function recoveryGuidance(family: string, failureClass: string, errorCode = ''): string {
+  if (family === 'tool_call:write') {
+    if (errorCode === 'patch_multiple_files') {
+      return 'Split the change into one gui_workspace_apply_patch call per existing file; keep every call scoped to the path argument.'
+    }
+    if (errorCode === 'patch_context_mismatch' || errorCode === 'patch_target_changed') {
+      return 'Re-read the exact target file, then build a smaller patch from its current verbatim context before retrying.'
+    }
+    if (errorCode === 'patch_context_ambiguous') {
+      return 'Rebuild the hunk with additional unchanged surrounding lines so its old context is unique.'
+    }
+    if (failureClass === 'stale_resource') {
+      return 'Re-read the target path, confirm that the same existing file is still present, and rebuild the patch from its current bytes.'
+    }
+  }
   if (failureClass === 'stale_resource' || family === 'tool_call:surface.inspect') {
     return 'Call sciforge_discover for surface.inspect, then invoke the returned operation through sciforge_invoke using only current opaque references. If discovery or invocation still fails, report the broker receipt instead of using OS GUI automation.'
   }
   return 'Stop varying volatile arguments. Inspect the latest executor receipt, choose a genuinely different evidence-gaining method, or report the blocker.'
+}
+
+function failureDescription(failureClass: string, errorCode: string): string {
+  if (failureClass && errorCode && failureClass !== errorCode) return `${failureClass} (${errorCode})`
+  return errorCode || failureClass || 'the same semantic failure'
 }
 
 function ownedSurfaceGuidance(): string {

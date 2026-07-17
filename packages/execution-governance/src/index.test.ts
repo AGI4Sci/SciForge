@@ -72,6 +72,71 @@ describe('ExecutionGovernorCore', () => {
     })
   })
 
+  it('does not combine distinct structured patch errors into one failure streak', () => {
+    const governor = new ExecutionGovernorCore({
+      semanticFailureThreshold: 2,
+      workspace: '/tmp/workspace'
+    })
+    const multiFile = attempt('gui_workspace_apply_patch', {
+      path: 'paper/report.tex',
+      patch: 'multi-file patch'
+    })
+    const invalidFormat = attempt('gui_workspace_apply_patch', {
+      path: 'paper/report.tex',
+      patch: 'invalid-format patch'
+    })
+    const staleContext = attempt('gui_workspace_apply_patch', {
+      path: 'paper/report.tex',
+      patch: 'stale-context patch'
+    })
+    const staleContextRetry = attempt('gui_workspace_apply_patch', {
+      path: 'paper/report.tex',
+      patch: 'smaller stale-context patch'
+    })
+    const afterRepeatedStaleContext = attempt('gui_workspace_apply_patch', {
+      path: 'paper/report.tex',
+      patch: 'latest-context patch'
+    })
+
+    expect(governor.inspectAttempt(multiFile).action).toBe('allow')
+    expect(governor.recordReceipt(multiFile.callId, {
+      status: 'error',
+      errorCode: 'patch_multiple_files',
+      failureClass: 'invalid_arguments'
+    }).decision.action).toBe('allow')
+
+    expect(governor.inspectAttempt(invalidFormat).action).toBe('allow')
+    expect(governor.recordReceipt(invalidFormat.callId, {
+      status: 'error',
+      errorCode: 'patch_invalid_format',
+      failureClass: 'invalid_arguments'
+    }).decision.action).toBe('allow')
+
+    expect(governor.inspectAttempt(staleContext).action).toBe('allow')
+    expect(governor.recordReceipt(staleContext.callId, {
+      status: 'error',
+      errorCode: 'patch_context_mismatch',
+      failureClass: 'stale_resource'
+    }).decision.action).toBe('allow')
+
+    expect(governor.inspectAttempt(staleContextRetry).action).toBe('allow')
+    expect(governor.recordReceipt(staleContextRetry.callId, {
+      status: 'error',
+      errorCode: 'patch_context_mismatch',
+      failureClass: 'stale_resource'
+    }).decision).toMatchObject({
+      action: 'steer',
+      code: 'semantic_failure_retry',
+      guidance: expect.stringContaining('Re-read the exact target file')
+    })
+
+    expect(governor.inspectAttempt(afterRepeatedStaleContext)).toMatchObject({
+      action: 'deny',
+      code: 'semantic_failure_exhausted',
+      reason: expect.stringContaining('patch_context_mismatch')
+    })
+  })
+
   it.each([
     'screencapture -x /tmp/sciforge.png',
     "osascript -e 'tell application \"System Events\" to get the id of every window'",

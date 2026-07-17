@@ -37,8 +37,16 @@ SciForge SHALL publish the current visible surface as a generic canonical capabi
 - **THEN** the agent resolves and observes that resource before acting, without guessing a workspace path or reading a historical sidecar
 
 #### Scenario: Current resource is stale or unavailable
-- **WHEN** the current resource summary is stale, superseded, expired, or lacks a required operation
+- **WHEN** the semantic current resource is superseded, unavailable, or lacks a required operation
 - **THEN** the agent receives a fail-visible resource readiness error and does not route through a legacy GUI tool, direct sidecar access, or shell path fallback
+
+#### Scenario: Renderer layout publication is old
+- **WHEN** the bound current resource still exists but its renderer layout publication exceeds the layout freshness threshold
+- **THEN** semantic observation and provider operations remain available while visual inspection refreshes layout on demand
+
+#### Scenario: Foreground session changes during a turn
+- **WHEN** a running turn has bound the current semantic resource and the user selects another session
+- **THEN** the running turn continues to resolve its original bound resource and is not retargeted to the newly foregrounded session
 
 ### Requirement: Agent transport hides infrastructure fields
 SciForge SHALL expose owned capabilities to agents only through stable broker meta-tools whose domain inputs exclude transport coordination fields.
@@ -79,6 +87,14 @@ SciForge SHALL use opaque resource handles that bind caller audience, workspace 
 #### Scenario: Layout changes after observation
 - **WHEN** only scroll, resize, or other layout state changes after a resource is observed
 - **THEN** the semantic resource handle remains valid
+
+#### Scenario: Stable reference renews a short-lived handle
+- **WHEN** an authorized caller observes a previously issued opaque resource reference after its cached handle is absent or expired
+- **THEN** the broker revalidates audience and workspace scope and issues a fresh handle for the same current semantic resource
+
+#### Scenario: Cross-scope reference renewal
+- **WHEN** a caller attempts to renew a resource reference from another workspace or a disallowed audience
+- **THEN** the broker rejects the request before the provider executes
 
 ### Requirement: Mutation integrity
 Registered mutations SHALL support declared revision checks, idempotency, audit records, and resource change events.

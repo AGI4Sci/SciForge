@@ -103,14 +103,18 @@ function inspectedEvidence(task: string) {
 }
 
 describe('VisibleContextService surface inspection v2', () => {
-  it('fails visibly instead of routing a stale current resource', async () => {
+  it('keeps semantic current resources available when only renderer layout is stale', async () => {
     const service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: successfulSurfaceCaptureProvider(vi.fn()),
       now: () => new Date('2026-07-11T03:00:06.000Z')
     })
     await service.publish(snapshot())
 
-    await expect(service.currentSurface()).rejects.toThrow(/surface is stale/u)
+    const current = await service.currentSurface()
+    expect(current.resourceId).toBe('electron:1')
+    expect(current.state).toMatchObject({
+      layoutFreshness: { stale: true, ageMs: 6_000, staleAfterMs: 5_000 }
+    })
   })
 
   it('derives freshness and rejects out-of-order publishes for the same window', async () => {
@@ -205,6 +209,92 @@ describe('VisibleContextService surface inspection v2', () => {
       evidence: { provider: 'model-router', summary: 'Five PDF annotations are visible.' }
     })
     expect(JSON.stringify(result)).not.toMatch(/path|snapshotToken|componentId|targetId|bounds|revision/iu)
+  })
+
+  it('keeps a running caller bound to its starting semantic surface after the foreground thread changes', async () => {
+    const capture = vi.fn()
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
+      now: () => new Date('2026-07-11T03:00:02.000Z')
+    })
+    await service.publish(snapshot({ activeThreadId: 'thread-a' }))
+    await service.bindCurrentSurface('codex:thread-a', 'thread-a')
+    const bound = await service.currentSurface('codex:thread-a')
+
+    await service.publish(snapshot({
+      revision: 2,
+      publishedAt: '2026-07-11T03:00:01.000Z',
+      activeThreadId: 'thread-b',
+      components: snapshot().components.map((component) => ({
+        ...component,
+        title: 'Other.pdf',
+        resources: component.resources?.map((resource) => ({
+          ...resource,
+          title: 'Other.pdf',
+          capability: {
+            resourceRef: `res_${'c'.repeat(26)}`,
+            operations: []
+          }
+        }))
+      }))
+    }))
+
+    const stillBound = await service.currentSurface('codex:thread-a')
+    const foreground = await service.currentSurface('codex:thread-b')
+    expect(stillBound.resourceId).toBe(bound.resourceId)
+    expect(stillBound.state).toMatchObject({
+      resources: [expect.objectContaining({ title: 'Paper.pdf', resourceRef: `res_${'b'.repeat(26)}` })]
+    })
+    expect(foreground.state).toMatchObject({
+      resources: [expect.objectContaining({ title: 'Other.pdf', resourceRef: `res_${'c'.repeat(26)}` })]
+    })
+    await expect(service.inspectSurface(bound.resourceId, { task: 'Inspect the bound PDF.' }))
+      .rejects.toThrow(/another session or resource is visible/u)
+    expect(capture).not.toHaveBeenCalled()
+  })
+
+  it('requests a renderer refresh only when a visual operation needs stale layout', async () => {
+    const capture = vi.fn(async () => ({
+      png: whitePng(),
+      width: 100,
+      height: 80,
+      scaleFactor: 1,
+      bounds: { x: 50, y: 70, width: 300, height: 400 }
+    }))
+    const inspector = vi.fn(async (request: { task: string }) => inspectedEvidence(request.task))
+    let service: VisibleContextService
+    const requestSurfaceRefresh = vi.fn(() => {
+      void service.publish(snapshot({
+        revision: 2,
+        publishedAt: '2026-07-11T03:00:06.000Z',
+        activeThreadId: 'thread-a',
+        components: snapshot().components.map((component) => ({
+          ...component,
+          visualTargets: component.visualTargets?.map((target) => ({
+            ...target,
+            bounds: { x: 50, y: 70, width: 300, height: 400 }
+          }))
+        }))
+      }))
+    })
+    service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
+      visualInspector: () => inspector,
+      requestSurfaceRefresh,
+      now: () => new Date('2026-07-11T03:00:06.000Z')
+    })
+    await service.publish(snapshot({ activeThreadId: 'thread-a' }))
+    await service.bindCurrentSurface('codex:thread-a', 'thread-a')
+    const bound = await service.currentSurface('codex:thread-a')
+    const targetRef = (bound.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
+
+    await service.inspectSurface(bound.resourceId, {
+      targetRef,
+      task: 'Inspect the bound PDF.'
+    })
+
+    expect(requestSurfaceRefresh).toHaveBeenCalledWith('electron:1')
+    expect(capture).toHaveBeenCalledWith({ x: 50, y: 70, width: 300, height: 400 })
   })
 
   it('fails closed when the requested opaque target is no longer visible', async () => {

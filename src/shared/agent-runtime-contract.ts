@@ -375,6 +375,22 @@ export type AgentRuntimeContextLedgerMemory = {
   createdAt?: string
 }
 
+export type AgentRuntimeDirectiveDeliveryState =
+  | 'accepted'
+  | 'delivering'
+  | 'delivered'
+  | 'rejected'
+  | 'uncertain'
+
+export type AgentRuntimeContextDirective = {
+  id: string
+  text: string
+  acceptedAt: string
+  delivery: AgentRuntimeDirectiveDeliveryState
+  turnId?: string
+  error?: string
+}
+
 export type AgentRuntimeContextLedger = {
   runtimeId: AgentRuntimeId
   threadId: string
@@ -386,6 +402,7 @@ export type AgentRuntimeContextLedger = {
   evidence: AgentRuntimeContextLedgerEvidence[]
   fileReferences: AgentRuntimeWorkspaceReference[]
   explicitMemories: AgentRuntimeContextLedgerMemory[]
+  directives: AgentRuntimeContextDirective[]
   recentTailDigest?: string
   compactionDigest?: string
   sourceMarker?: string
@@ -406,6 +423,7 @@ export type AgentRuntimeHandoffPacket = {
   evidence: AgentRuntimeContextLedgerEvidence[]
   fileReferences: AgentRuntimeWorkspaceReference[]
   explicitMemories: AgentRuntimeContextLedgerMemory[]
+  directives: AgentRuntimeContextDirective[]
   recentTailDigest?: string
   compactionDigest?: string
   sourceMarker?: string
@@ -601,6 +619,7 @@ export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
+  clientDirectiveId?: string
   metadata?: Record<string, unknown>
   workspace?: string
   mode?: string
@@ -641,6 +660,7 @@ export type AgentRuntimeTurnSteerInput = {
   threadId: string
   turnId: string
   text: string
+  clientDirectiveId?: string
 }
 
 export type AgentRuntimeUsage = {

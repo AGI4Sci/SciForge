@@ -38,6 +38,18 @@ Workspace surfaces SHALL expose visual inspection as a registered read operation
 - **WHEN** the inspected resource content changes
 - **THEN** its semantic revision advances and a subsequent operation observes or resolves the new resource state
 
+#### Scenario: Hidden session continues semantic work
+- **WHEN** a user switches away from a session whose agent turn is operating on a bound Workspace Preview resource
+- **THEN** annotation, document, and other semantic provider operations continue against that bound resource
+
+#### Scenario: Hidden session requests visual inspection
+- **WHEN** a hidden turn requests `surface.inspect` after another session becomes visible
+- **THEN** inspection fails visibly as layout unavailable and never captures the foreground session as evidence for the hidden turn
+
+#### Scenario: Stale layout is refreshed on demand
+- **WHEN** a still-visible bound surface has exceeded its layout freshness threshold and `surface.inspect` is invoked
+- **THEN** the main process requests a renderer publication and resolves the target against the refreshed layout before capture
+
 ### Requirement: Biology Room uses its canonical service
 Biology Room UI and agent operations SHALL invoke the existing Biology Room service through the capability broker.
 

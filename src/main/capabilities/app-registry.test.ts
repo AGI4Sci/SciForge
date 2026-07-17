@@ -176,7 +176,7 @@ describe('app capability registry', () => {
           semanticRevision: 'surface-semantic-1',
           layoutRevision: '12',
           state: {
-            freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+            layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
             targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }],
             resources: []
           }
@@ -189,7 +189,7 @@ describe('app capability registry', () => {
 
     const opened = await broker.invoke(caller, { actionId: APP_CAPABILITY_IDS.surfaceCurrent, input: {} })
     expect(record(opened.output).current).toMatchObject({
-      freshness: { stale: false },
+      layoutFreshness: { stale: false },
       resources: []
     })
     const surface = capabilityResourceHandleSchema.parse(record(opened.output).surface)

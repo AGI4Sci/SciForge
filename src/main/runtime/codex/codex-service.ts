@@ -108,7 +108,8 @@ import {
 import {
   canonicalWorkspaceFileKey,
   CODEX_WORKSPACE_APPLY_PATCH_TOOL_NAME,
-  CodexWorkspacePatchTool
+  CodexWorkspacePatchTool,
+  workspaceFileSnapshot
 } from './codex-workspace-patch-tool'
 import type {
   MultiAgentExecutorInput,
@@ -221,8 +222,8 @@ const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
   'SciForge may configure specialized MCP tools for this runtime.',
   'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
   SCIENTIFIC_VISUAL_RUNTIME_POLICY,
-  'When a request refers to any current, open, selected, visible, or deictic resource (for example “this”, “here”, or a pane direction), use `sciforge_discover` to find and invoke `surface.current`, then observe the returned canonical resourceRef before acting.',
-  'A canonical current resource is authoritative. Never replace it with path guessing, generic workspace reads, legacy GUI tools, direct application-state/sidecar reads, or shell access. If current-resource readiness, freshness, or an operation is unavailable, report that broker error instead of falling back.',
+  'When a request refers to any current, open, selected, visible, or deictic resource, observe the turn-bound canonical resourceRef supplied in the request context. If none was supplied, use `sciforge_discover` to invoke `surface.current`, then observe its resourceRef before acting.',
+  'A canonical current resource is authoritative. Renderer age is layout freshness only and does not expire semantic resources. Never replace a broker resource with path guessing, generic workspace reads, legacy GUI tools, direct application-state/sidecar reads, or shell access.',
   'For semantic visual inspection, invoke the discovered surface inspection operation with the observed resourceRef and an opaque targetRef when appropriate. For workspace PNG, JPEG, or WebP files, discover and invoke the artifact inspection operation. Do not pass coordinates, component ids, revisions, invocation ids, or resource handles.',
   'Use command execution only when no advertised specialized tool fits and the request is not about a current visible resource, or when the user explicitly asks for a command-based check.',
   'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
@@ -238,7 +239,9 @@ const CODEX_WORKSPACE_PATCH_DEVELOPER_INSTRUCTIONS = [
   'SciForge provides `gui_workspace_apply_patch` for safe in-process edits of one existing workspace file.',
   'Before calling it, read the same file in the current turn with `gui_workspace_read` so the patch is based on fresh bytes.',
   'Use `gui_workspace_apply_patch` instead of Python, shell redirection, sed, perl, or whole-file rewrite scripts when a bounded text patch is sufficient.',
-  'The patch tool requires explicit user approval and rejects add, delete, rename, multi-file, context-free, and ambiguous-context patches.'
+  'The patch tool requires explicit user approval and rejects add, delete, rename, multi-file, context-free, and ambiguous-context patches.',
+  'When several files must change, call the patch tool separately for each file; multiple hunks for one file are supported.',
+  'If a patch reports patch_context_mismatch or patch_target_changed, re-read that file and retry with a smaller hunk copied from the exact current text. Do not switch to a whole-file shell rewrite.'
 ].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
 const MAX_CODEX_THREAD_TITLE_LENGTH = 80
@@ -287,7 +290,7 @@ export class CodexRuntimeService {
   private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly workspaceReadKeys = new Set<string>()
+  private readonly workspaceReadKeys = new Map<string, string>()
   private readonly pendingWorkspacePatchApprovals = new Map<string, {
     request: CodexAppServerPendingRequest
     resolve: (allowed: boolean) => void
@@ -1292,10 +1295,13 @@ export class CodexRuntimeService {
     const path = stringValue(args?.path).trim()
     if (!threadId || !turnId || !workspaceRoot || !path) return
     try {
-      const canonicalPath = await canonicalWorkspaceFileKey({ workspaceRoot, path })
-      this.workspaceReadKeys.add(workspaceReadKey(threadId, turnId, canonicalPath))
+      const snapshot = await workspaceFileSnapshot({ workspaceRoot, path })
+      this.workspaceReadKeys.set(
+        workspaceReadKey(threadId, turnId, snapshot.canonicalPath),
+        snapshot.sha256
+      )
       while (this.workspaceReadKeys.size > 1_024) {
-        const oldest = this.workspaceReadKeys.values().next().value
+        const oldest = this.workspaceReadKeys.keys().next().value
         if (oldest === undefined) break
         this.workspaceReadKeys.delete(oldest)
       }
@@ -1310,14 +1316,36 @@ export class CodexRuntimeService {
   ): Promise<CodexAppServerDynamicToolCallResponse> {
     const threadId = stringValue(request.threadId).trim()
     const turnId = stringValue(request.turnId).trim()
-    if (!threadId || !turnId) return failedDynamicToolCall('gui_workspace_apply_patch requires threadId and turnId.')
+    if (!threadId || !turnId) {
+      return failedDynamicToolCall('gui_workspace_apply_patch requires threadId and turnId.', {
+        errorCode: 'patch_missing_call_context',
+        failureClass: 'invalid_arguments',
+        retryable: false,
+        evidenceDelta: true,
+        stateChanged: false
+      })
+    }
     const args = dynamicToolArgumentsRecord(request.arguments)
     const path = stringValue(args?.path).trim()
     const patch = stringValue(args?.patch)
-    if (!path || !patch.trim()) return failedDynamicToolCall('gui_workspace_apply_patch requires path and patch.')
+    if (!path || !patch.trim()) {
+      return failedDynamicToolCall('gui_workspace_apply_patch requires path and patch.', {
+        errorCode: !path ? 'patch_missing_path' : 'patch_missing_content',
+        failureClass: 'invalid_arguments',
+        retryable: true,
+        evidenceDelta: true,
+        stateChanged: false
+      })
+    }
     const runtime = getCodexRuntimeSettings(settings)
     if (runtime.sandboxMode === 'read-only') {
-      return failedDynamicToolCall('gui_workspace_apply_patch is blocked by the read-only sandbox.')
+      return failedDynamicToolCall('gui_workspace_apply_patch is blocked by the read-only sandbox.', {
+        errorCode: 'patch_permission_denied',
+        failureClass: 'permission_denied',
+        retryable: false,
+        evidenceDelta: true,
+        stateChanged: false
+      })
     }
     const storedThread = await this.findStoredThread(threadId)
     const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
@@ -1325,22 +1353,71 @@ export class CodexRuntimeService {
     try {
       canonicalPath = await canonicalWorkspaceFileKey({ workspaceRoot, path })
     } catch (error) {
-      return failedDynamicToolCall(error instanceof Error ? error.message : String(error))
+      return failedDynamicToolCall(error instanceof Error ? error.message : String(error), {
+        ...dynamicToolErrorMetadata(error),
+        evidenceDelta: true,
+        stateChanged: false
+      })
     }
     const readKey = workspaceReadKey(threadId, turnId, canonicalPath)
-    if (!this.workspaceReadKeys.has(readKey)) {
+    const readSha256 = this.workspaceReadKeys.get(readKey)
+    if (!readSha256) {
       return failedDynamicToolCall(
-        `read-before-edit guard blocked ${path}; call gui_workspace_read for this file in the current turn before applying a patch.`
+        `read-before-edit guard blocked ${path}; call gui_workspace_read for this file in the current turn before applying a patch.`,
+        {
+          errorCode: 'patch_read_required',
+          failureClass: 'precondition_failed',
+          retryable: true,
+          resourceIdentity: canonicalPath,
+          evidenceDelta: true,
+          stateChanged: false
+        }
+      )
+    }
+    let currentSnapshot: Awaited<ReturnType<typeof workspaceFileSnapshot>>
+    try {
+      currentSnapshot = await workspaceFileSnapshot({ workspaceRoot, path })
+    } catch (error) {
+      this.workspaceReadKeys.delete(readKey)
+      return failedDynamicToolCall(error instanceof Error ? error.message : String(error), {
+        ...dynamicToolErrorMetadata(error),
+        evidenceDelta: true,
+        stateChanged: false
+      })
+    }
+    if (currentSnapshot.sha256 !== readSha256) {
+      this.workspaceReadKeys.delete(readKey)
+      return failedDynamicToolCall(
+        `target changed after gui_workspace_read for ${path}; read the file again before rebuilding the patch.`,
+        {
+          errorCode: 'patch_target_changed',
+          failureClass: 'stale_resource',
+          retryable: true,
+          resourceIdentity: currentSnapshot.canonicalPath,
+          evidenceDelta: true,
+          stateChanged: false
+        }
       )
     }
     const approvalIsAutomatic =
       runtime.sandboxMode === 'danger-full-access' || runtime.approvalPolicy === 'never'
     if (!approvalIsAutomatic) {
       const approved = await this.requestWorkspacePatchApproval(request, path)
-      if (!approved) return failedDynamicToolCall(`User denied the patch for ${path}.`)
+      if (!approved) {
+        return failedDynamicToolCall(`User denied the patch for ${path}.`, {
+          errorCode: 'patch_user_denied',
+          failureClass: 'permission_denied',
+          retryable: false,
+          resourceIdentity: canonicalPath,
+          evidenceDelta: true,
+          stateChanged: false
+        })
+      }
     }
     const response = await this.workspacePatchTool.apply({ workspaceRoot, path, patch })
-    if (response.success) this.workspaceReadKeys.delete(readKey)
+    if (response.success || response.errorCode === 'patch_target_changed') {
+      this.workspaceReadKeys.delete(readKey)
+    }
     return response
   }
 
@@ -2965,10 +3042,23 @@ function workspacePatchApprovalId(request: CodexAppServerDynamicToolCallRequest)
   return `workspace-patch-${digest}`
 }
 
-function failedDynamicToolCall(message: string): CodexAppServerDynamicToolCallResponse {
+function failedDynamicToolCall(
+  message: string,
+  metadata: Partial<Pick<
+    CodexAppServerDynamicToolCallResponse,
+    | 'structuredContent'
+    | 'errorCode'
+    | 'failureClass'
+    | 'retryable'
+    | 'resourceIdentity'
+    | 'evidenceDelta'
+    | 'stateChanged'
+  >> = {}
+): CodexAppServerDynamicToolCallResponse {
   return {
     success: false,
-    contentItems: [{ type: 'inputText', text: message }]
+    contentItems: [{ type: 'inputText', text: message }],
+    ...metadata
   }
 }
 

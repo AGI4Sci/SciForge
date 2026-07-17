@@ -349,12 +349,15 @@ describe('AgentRuntimeProvider', () => {
       ]
     })
     await expect(provider.sendUserMessage('thread-2', 'hello', {
+      clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello'
     })).resolves.toEqual({ threadId: 'thread-2', turnId: 'turn-2', userMessageItemId: 'user-2' })
     await expect(provider.interruptTurn('thread-2', 'turn-2', { discard: true })).resolves.toBeUndefined()
-    await expect(provider.steerUserMessage?.('thread-2', 'turn-2', 'more')).resolves.toBeUndefined()
+    await expect(provider.steerUserMessage?.('thread-2', 'turn-2', 'more', {
+      clientDirectiveId: 'directive:steer:1'
+    })).resolves.toBeUndefined()
     await expect(provider.renameThread('thread-2', 'Renamed')).resolves.toBeUndefined()
     await expect(provider.compactThread?.('thread-2', 'manual')).resolves.toBeUndefined()
     await expect(provider.forkThread?.('thread-2', { relation: 'side', title: 'Side path' })).resolves.toEqual(
@@ -380,6 +383,7 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'thread-2',
       text: 'hello',
+      clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello'
@@ -394,7 +398,8 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'thread-2',
       turnId: 'turn-2',
-      text: 'more'
+      text: 'more',
+      clientDirectiveId: 'directive:steer:1'
     })
     expect(renameThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -649,7 +654,7 @@ describe('AgentRuntimeProvider', () => {
     const detail = await provider.getThreadDetail('thread-completed-tool')
 
     expect(detail.blocks).toEqual([
-      expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      expect.objectContaining({ kind: 'user', id: 'user-1', turnStatus: 'completed' }),
       expect.objectContaining({ kind: 'tool', id: 'tool-result-1', status: 'success' }),
       expect.objectContaining({ kind: 'assistant', id: 'assistant-1', text: 'done' })
     ])
@@ -698,7 +703,7 @@ describe('AgentRuntimeProvider', () => {
     const detail = await provider.getThreadDetail('thread-idle')
 
     expect(detail.blocks).toEqual([
-      expect.objectContaining({ kind: 'tool', id: 'tool-running', status: 'success' }),
+      expect.objectContaining({ kind: 'tool', id: 'tool-running', status: 'error' }),
       expect.objectContaining({ kind: 'user_input', id: 'input-pending', status: 'cancelled' })
     ])
     expect(detail.blocks.some((block) => block.kind === 'tool' && block.status === 'running')).toBe(false)
@@ -767,7 +772,7 @@ describe('AgentRuntimeProvider', () => {
     expect(detail.threadStatus).toBe('completed')
     expect(detail.blocks).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'assistant', id: 'assistant-latest', text: 'done' }),
-      expect.objectContaining({ kind: 'tool', id: 'tool-stale', status: 'success' })
+      expect.objectContaining({ kind: 'tool', id: 'tool-stale', status: 'error' })
     ]))
     expect(detail.blocks.some((block) => block.kind === 'tool' && block.status === 'running')).toBe(false)
   })

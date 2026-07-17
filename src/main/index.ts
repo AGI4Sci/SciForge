@@ -161,6 +161,7 @@ import { createAppCapabilityRegistry } from './capabilities/app-registry'
 import { registerCapabilityIpc } from './capabilities/ipc'
 import {
   createCapabilityAgentToolSurface,
+  capabilityAgentCallerId,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
 import { CapabilityRuntimeBridge } from './capabilities/runtime-bridge'
@@ -1891,6 +1892,9 @@ app.whenReady().then(async () => {
   const visibleContextService = new VisibleContextService(app.getPath('userData'), {
     surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
     visualInspector: resolveVisualInspector,
+    requestSurfaceRefresh: (windowId) => {
+      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
+    },
     onCaptureState: (windowId, active) => {
       emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
     }
@@ -1923,9 +1927,7 @@ app.whenReady().then(async () => {
     broker: capabilityBroker,
     resolveCaller: (context) => ({
       audience: 'agent',
-      callerId: context.threadId
-        ? `${context.runtimeId ?? 'codex'}:${context.threadId}`
-        : `${context.runtimeId ?? 'codex'}-request:${context.requestId}`,
+      callerId: capabilityAgentCallerId(context),
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
     })
   })

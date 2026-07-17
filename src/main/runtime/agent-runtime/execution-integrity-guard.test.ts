@@ -6,6 +6,7 @@ import type {
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
 import {
+  EXECUTION_CONTINUITY_TEXT_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   RuntimeExecutionIntegrityGuard,
   withExecutionIntegrityRequirement
@@ -27,6 +28,32 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     expect(observation.violation).toMatchObject({
       code: 'runtime_execution_incomplete',
       verdict: 'blocked',
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it('inherits a prior mutation obligation when the current message only says continue', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    const input = withExecutionIntegrityRequirement({
+      ...baseInput('codex', 'Continue.'),
+      metadata: {
+        [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: 'Modify the document and verify every annotation.'
+      }
+    })
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_execution_incomplete',
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it('adds a mutation obligation when a user steers an active turn', () => {
+    const guard = rememberedGuard('codex', 'Explain the current state.')
+    guard.rememberSteer('codex', 'codex-thread', 'codex-turn', 'Modify the document now.')
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_execution_incomplete',
       unsatisfiedObligationIds: ['requested-execution']
     })
   })

@@ -18,6 +18,7 @@ import {
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { getRuntimeErrorCode } from '../lib/format-runtime-error'
 import { parseSteerCommand } from '../lib/steer-command'
+import { createClientDirectiveId } from './chat-store-helpers'
 
 type SideContext = {
   set: (partial: Partial<ChatState> | ((state: ChatState) => Partial<ChatState>)) => void
@@ -374,6 +375,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
   try {
     rememberSideThreadRuntime(provider, sideId, side)
     const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
+      clientDirectiveId: queued.id,
       model: queued.model,
       ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
       ...(queued.attachmentIds?.length ? { attachmentIds: queued.attachmentIds } : {}),
@@ -720,6 +722,7 @@ export function createSideActions(ctx: SideContext): Pick<
       }
       const provider = ctx.getProvider()
       const reasoningEffort = sideReasoningEffortRequestValue(side.reasoningEffort)
+      const clientDirectiveId = createClientDirectiveId()
 
       if (side.busy) {
         const prefersSteer = side.source === 'child_agent' || explicitSteerText !== null
@@ -733,7 +736,9 @@ export function createSideActions(ctx: SideContext): Pick<
         if (canSteer && side.turnId && provider.steerUserMessage) {
           try {
             rememberSideThreadRuntime(provider, sideId, side)
-            await provider.steerUserMessage(sideId, side.turnId, messageText)
+            await provider.steerUserMessage(sideId, side.turnId, messageText, {
+              clientDirectiveId
+            })
             ctx.set((s) => patchSide(s, sideId, (cur) => ({ ...cur, input: '', error: null })))
             return true
           } catch (error) {
@@ -757,7 +762,7 @@ export function createSideActions(ctx: SideContext): Pick<
             queuedMessages: [
               ...(cur.queuedMessages ?? []),
               {
-                id: `side-q-${Date.now()}-${cur.queuedMessages?.length ?? 0}`,
+                id: clientDirectiveId,
                 text: messageText,
                 model: cur.model,
                 ...(reasoningEffort ? { reasoningEffort } : {}),
@@ -775,6 +780,7 @@ export function createSideActions(ctx: SideContext): Pick<
       try {
         rememberSideThreadRuntime(provider, sideId, side)
         const { turnId } = await provider.sendUserMessage(sideId, messageText, {
+          clientDirectiveId,
           model: side.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -805,7 +811,7 @@ export function createSideActions(ctx: SideContext): Pick<
               queuedMessages: [
                 ...(cur.queuedMessages ?? []),
                 {
-                  id: `side-q-${Date.now()}-${cur.queuedMessages?.length ?? 0}`,
+                  id: clientDirectiveId,
                   text: messageText,
                   model: cur.model,
                   ...(reasoningEffort ? { reasoningEffort } : {}),

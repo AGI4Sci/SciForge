@@ -7,6 +7,7 @@ import { countDiffStats, sumDiffStats } from '../../lib/diff-stats'
 import { useDeferredRender } from '../../hooks/use-deferred-render'
 import { DiffView } from '../DiffView'
 import { formatDuration } from './message-timeline-tools'
+import { normalizeAgentRuntimeTurnState } from '@shared/agent-runtime-contract'
 
 /**
  * Inline "Review Plan" card rendered under a turn whose `create_plan`
@@ -298,6 +299,7 @@ export function TurnChangeSummary({
 /** Turn-level work-process summary. Details stay collapsed until the user opens them. */
 export function WorkMetaRow({
   processing,
+  terminalStatus,
   stepCount,
   durationMs,
   liveStartedAtMs,
@@ -306,6 +308,7 @@ export function WorkMetaRow({
   onToggle
 }: {
   processing: boolean
+  terminalStatus?: string
   stepCount: number
   durationMs?: number
   liveStartedAtMs?: number
@@ -328,14 +331,22 @@ export function WorkMetaRow({
       ? Math.max(0, now - liveStartedAtMs)
       : undefined
   const effectiveDurationMs = durationMs ?? liveDurationMs
+  const terminalState = normalizeAgentRuntimeTurnState(terminalStatus)
+  const terminalLabel = terminalState === 'failed'
+    ? t('turnFailed')
+    : terminalState === 'aborted'
+      ? t('turnInterrupted')
+      : terminalState === 'cancelled'
+        ? t('turnCancelled')
+        : t('turnEnded')
 
   const mainLabel = processing
     ? typeof effectiveDurationMs === 'number'
       ? `${t('processing')} ${formatDuration(effectiveDurationMs)}`
       : t('processing')
     : typeof effectiveDurationMs === 'number'
-      ? `${t('processed')} ${formatDuration(effectiveDurationMs)}`
-      : `${t('processed')} · ${t('processStepCount', { count: stepCount })}`
+      ? `${terminalLabel} ${formatDuration(effectiveDurationMs)}`
+      : `${terminalLabel} · ${t('processStepCount', { count: stepCount })}`
 
   const showThoughtSuffix =
     !processing &&

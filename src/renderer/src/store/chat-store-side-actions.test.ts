@@ -74,13 +74,18 @@ class FakeProvider implements AgentProvider {
   async sendUserMessage(
     threadId: string,
     text: string,
-    options?: { model?: string; reasoningEffort?: string }
+    options?: Parameters<AgentProvider['sendUserMessage']>[2]
   ) {
     this.sendMock(threadId, text, options)
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
   }
-  async steerUserMessage(threadId: string, turnId: string, text: string) {
-    this.steerMock(threadId, turnId, text)
+  async steerUserMessage(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: Parameters<NonNullable<AgentProvider['steerUserMessage']>>[3]
+  ) {
+    this.steerMock(threadId, turnId, text, options)
   }
   async interruptTurn(threadId: string, turnId: string) {
     this.interruptMock(threadId, turnId)
@@ -329,10 +334,15 @@ describe('chat-store-side-actions', () => {
       })
     )
     expect(provider.forkMock).toHaveBeenCalledWith('thr_main', { relation: 'side', title: 'PDF: selected text' })
-    expect(provider.sendMock).toHaveBeenCalledWith('side_thr_main', 'Answer this selected PDF text.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'side_thr_main',
+      'Answer this selected PDF text.',
+      expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
+    )
   })
 
   it('spawns PDF annotation answers as standalone hidden side threads when fork is unavailable', async () => {
@@ -387,10 +397,15 @@ describe('chat-store-side-actions', () => {
       sidebarVisibility: 'hidden'
     })
     expect(provider.updateRelationMock).toHaveBeenCalledWith('standalone-side-thread', 'side')
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer this selected PDF text.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'standalone-side-thread',
+      'Answer this selected PDF text.',
+      expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
+    )
   })
 
   it('spawns standalone PDF annotation answers without an active main thread', async () => {
@@ -424,10 +439,15 @@ describe('chat-store-side-actions', () => {
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
     })
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer without a main thread.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'standalone-side-thread',
+      'Answer without a main thread.',
+      expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
+    )
   })
 
   it('connects the runtime before spawning standalone PDF annotation answers', async () => {
@@ -456,10 +476,15 @@ describe('chat-store-side-actions', () => {
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
     })
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer after connecting.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'standalone-side-thread',
+      'Answer after connecting.',
+      expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
+    )
   })
 
   it('openSideConversationDraft opens the side surface without forking a thread', () => {
@@ -651,6 +676,7 @@ describe('chat-store-side-actions', () => {
       id,
       'use less reasoning',
       expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         model: 'deepseek-chat',
         reasoningEffort: 'off'
       })
@@ -706,12 +732,17 @@ describe('chat-store-side-actions', () => {
     })
 
     const sent = await actions.sendSideMessage(id, 'hi from side')
+    const attemptedDirectiveId = provider.sendMock.mock.calls[0]?.[2]?.clientDirectiveId
 
     expect(sent).toBe(true)
+    expect(attemptedDirectiveId).toMatch(/^[0-9a-f-]{36}$/)
     expect(state.sideConversations[id]).toEqual(expect.objectContaining({
       busy: true,
       error: null,
-      queuedMessages: [expect.objectContaining({ text: 'hi from side' })]
+      queuedMessages: [expect.objectContaining({
+        id: attemptedDirectiveId,
+        text: 'hi from side'
+      })]
     }))
     expect(provider.subscribeMock).toHaveBeenCalledWith(id, 0, expect.anything(), expect.any(AbortSignal))
   })
@@ -737,10 +768,44 @@ describe('chat-store-side-actions', () => {
     expect(provider.steerMock).toHaveBeenCalledWith(
       'child-thread',
       'turn-child',
-      'inspect the visual evidence'
+      'inspect the visual evidence',
+      { clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/) }
     )
     expect(provider.sendMock).not.toHaveBeenCalled()
     expect(state.sideConversations[id].queuedMessages).toEqual([])
+  })
+
+  it('reuses the steer identity when turn_not_running falls back to a new side turn', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: true }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    provider.steerMock.mockImplementationOnce(() => {
+      throw new Error(JSON.stringify({ code: 'turn_not_running', message: 'turn ended' }))
+    })
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+
+    await expect(actions.sendSideMessage(id, '/steer continue safely')).resolves.toBe(true)
+
+    const steerDirectiveId = provider.steerMock.mock.calls[0]?.[3]?.clientDirectiveId
+    expect(steerDirectiveId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'continue safely',
+      expect.objectContaining({ clientDirectiveId: steerDirectiveId })
+    )
+    expect(state.sideConversations[id]).toEqual(expect.objectContaining({
+      busy: true,
+      queuedMessages: []
+    }))
   })
 
   it('queues complete multimodal payloads when a running child turn cannot be steered', async () => {
@@ -815,6 +880,7 @@ describe('chat-store-side-actions', () => {
     }))!
     await actions.sendSideMessage(id, 'follow up after completion')
     expect(state.sideConversations[id].queuedMessages).toHaveLength(1)
+    const queuedId = state.sideConversations[id].queuedMessages?.[0]?.id
     const subscription = provider.subscribeMock.mock.calls.at(-1) as
       | [string, number, ThreadEventSink, AbortSignal]
       | undefined
@@ -825,7 +891,11 @@ describe('chat-store-side-actions', () => {
     expect(provider.sendMock).toHaveBeenCalledWith(
       id,
       'follow up after completion',
-      expect.objectContaining({ model: 'deepseek-chat', reasoningEffort: 'max' })
+      expect.objectContaining({
+        clientDirectiveId: queuedId,
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
     )
     expect(state.sideConversations[id].queuedMessages).toEqual([])
     expect(state.sideConversations[id].busy).toBe(true)

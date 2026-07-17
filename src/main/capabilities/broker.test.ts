@@ -296,6 +296,35 @@ describe('CapabilityBroker', () => {
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_scope_mismatch'))
   })
 
+  it('renews a stable resource reference only after audience and workspace checks', async () => {
+    let now = new Date('2026-07-16T00:00:00.000Z')
+    const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(), mutationCapability()]), {
+      now: () => now,
+      handleTtlMs: 1_000
+    })
+    const sharedHandle = issueDocument(broker, ui, {
+      audiences: ['ui', 'agent', 'system'],
+      expiresInMs: 1_000
+    })
+    const shared = await broker.observe(ui, { resource: sharedHandle })
+    now = new Date('2026-07-16T00:00:02.000Z')
+
+    const renewed = broker.bindResourceRef(agent, shared.resourceRef)
+    await expect(broker.observe(agent, { resource: renewed })).resolves.toMatchObject({
+      resourceRef: shared.resourceRef,
+      resourceKind: 'document'
+    })
+    await expect(Promise.resolve().then(() => broker.bindResourceRef(
+      { ...agent, workspaceId: 'workspace-2' },
+      shared.resourceRef
+    ))).rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_scope_mismatch'))
+
+    const privateHandle = issueDocument(broker, ui, { expiresInMs: 1_000 })
+    const privateObservation = await broker.observe(ui, { resource: privateHandle })
+    await expect(Promise.resolve().then(() => broker.bindResourceRef(agent, privateObservation.resourceRef)))
+      .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_audience_denied'))
+  })
+
   it('observes current semantic state, keeps layout revisions separate, and returns executable operations', async () => {
     const broker = new CapabilityBroker(new CapabilityRegistry([readCapability(), mutationCapability()]))
     const handle = issueDocument(broker, agent, { layoutRevision: 'layout-1' })

@@ -31,6 +31,14 @@ const HIDDEN_CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'sciforge.hiddenCodeWorkspaceRoo
 export const MAX_CODE_WORKSPACE_ROOTS = 30
 export const MAX_TURN_MODEL_LABELS = 500
 
+export function createClientDirectiveId(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16)
+    return (token === 'x' ? value : (value & 0x3) | 0x8).toString(16)
+  })
+}
+
 export type RemoteChannelThreadStatusKind = 'bound' | 'watched' | 'running' | 'queued' | 'error'
 
 export type RemoteChannelThreadBinding = {

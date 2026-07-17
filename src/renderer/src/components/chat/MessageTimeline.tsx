@@ -324,6 +324,7 @@ function MessageTimelineComponent({
               <MemoMessageTurn
                 turn={turn}
                 isProcessing={(effectiveBusy && isLatestTurn) || turnPending || hasLiveStream}
+                terminalStatus={turn.user?.turnStatus}
                 liveReasoning={isLatestTurn ? liveReasoning : ''}
                 liveReasoningMeta={isLatestTurn ? liveReasoningMeta : null}
                 live={isLatestTurn ? live : ''}
@@ -398,6 +399,7 @@ const MemoMessageTimelineComponent = memo(MessageTimelineComponent)
 function MessageTurn({
   turn,
   isProcessing,
+  terminalStatus,
   liveReasoning,
   liveReasoningMeta,
   live,
@@ -414,6 +416,7 @@ function MessageTurn({
 }: {
   turn: Turn
   isProcessing: boolean
+  terminalStatus?: string
   liveReasoning: string
   liveReasoningMeta?: RuntimeDisclosureMetadata | null
   live: string
@@ -515,6 +518,7 @@ function MessageTurn({
         <div className="flex flex-col gap-1 pb-2">
           <WorkMetaRow
             processing={isProcessing}
+            terminalStatus={terminalStatus}
             stepCount={processBlocks.length}
             durationMs={durationMs}
             liveStartedAtMs={liveStartedAtMs}
@@ -618,6 +622,7 @@ function LiveTurnProgressRow(): ReactElement {
 const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
   prev.isProcessing === next.isProcessing &&
+  prev.terminalStatus === next.terminalStatus &&
   prev.liveReasoning === next.liveReasoning &&
   prev.liveReasoningMeta === next.liveReasoningMeta &&
   prev.live === next.live &&

@@ -345,7 +345,8 @@ type CurrentSurface = Awaited<ReturnType<VisibleContextService['currentSurface']
 
 function surfaceResource(
   service: Pick<VisibleContextService, 'currentSurface' | 'inspectSurface'>,
-  current: CurrentSurface
+  current: CurrentSurface,
+  callerId?: string
 ): CapabilityResourceRegistration {
   return {
     resourceId: current.resourceId,
@@ -355,7 +356,7 @@ function surfaceResource(
     semanticRevision: current.semanticRevision,
     layoutRevision: current.layoutRevision,
     observe: async () => {
-      const latest = await service.currentSurface()
+      const latest = await service.currentSurface(callerId)
       if (latest.resourceId !== current.resourceId) {
         throw new Error('The visible SciForge surface is no longer available.')
       }
@@ -388,8 +389,9 @@ function surfaceCapabilities(
       inputSchema: z.object({}).strict(),
       outputSchema: capabilityOutputSchema,
       handler: async (_, context) => {
-        const current = await service.currentSurface()
-        const surface = context.issueResource(surfaceResource(service, current))
+        const callerId = context.caller.audience === 'agent' ? context.caller.callerId : undefined
+        const current = await service.currentSurface(callerId)
+        const surface = context.issueResource(surfaceResource(service, current, callerId))
         return {
           output: capabilityJsonValueSchema.parse({
             surface,

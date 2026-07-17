@@ -39,7 +39,7 @@ export const surfaceVisibleResourceSchema = z.object({
 
 export const surfaceObservationStateSchema = z.object({
   route: z.string().trim().max(128).optional(),
-  freshness: z.object({
+  layoutFreshness: z.object({
     stale: z.boolean(),
     ageMs: z.number().finite().nonnegative(),
     staleAfterMs: z.number().finite().positive()

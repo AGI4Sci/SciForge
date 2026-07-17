@@ -38,7 +38,7 @@ export type CapabilityAgentToolDefinition = Readonly<{
 export type CapabilityAgentToolRequestContext = Readonly<{
   requestId: string | number
   /** Internal runtime provenance; never included in model-visible schemas. */
-  runtimeId?: 'codex' | 'sciforge'
+  runtimeId?: 'codex' | 'sciforge' | 'claude'
   threadId?: string
   turnId?: string
   callId?: string
@@ -130,6 +130,10 @@ export type CapabilityAgentBroker = Readonly<{
     caller: CapabilityCallerContext,
     request: CapabilityObserveRequest
   ) => CapabilityObservation | Promise<CapabilityObservation>
+  bindResourceRef: (
+    caller: CapabilityCallerContext,
+    resourceRef: string
+  ) => CapabilityResourceHandle | Promise<CapabilityResourceHandle>
   invoke: (
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
@@ -232,17 +236,33 @@ export class CapabilityAgentToolSurface {
       case CAPABILITY_AGENT_TOOL_NAMES.invoke: {
         const parsed = agentInvokeRequestSchema.parse(rawArguments)
         const descriptor = this.#operation(cache, parsed.operationRef)
-        const handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
+        let handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
         const invocationId = descriptor.effect === 'read' ? undefined : opaqueId('agent_inv')
-        const result = await this.#broker.invoke(caller, {
+        const invoke = (resource: CapabilityResourceHandle | undefined) => this.#broker.invoke(caller, {
           actionId: descriptor.id,
-          ...(handle ? { resource: handle } : {}),
-          ...(descriptor.concurrency.revision === 'optimistic' && handle
-            ? { expectedRevision: handle.semanticRevision }
+          ...(resource ? { resource } : {}),
+          ...(descriptor.concurrency.revision === 'optimistic' && resource
+            ? { expectedRevision: resource.semanticRevision }
             : {}),
           ...(invocationId ? { invocationId } : {}),
           input: parsed.input
         }, options)
+        let result: CapabilityInvocationResult
+        try {
+          result = await invoke(handle)
+        } catch (error) {
+          if (!parsed.resourceRef || !handle || !isExpiredResourceHandleError(error)) throw error
+          const renewed = await this.#bindResourceRef(caller, parsed.resourceRef)
+          if (renewed.semanticRevision !== handle.semanticRevision) {
+            throw new CapabilityAgentToolError(
+              'stale_resource_ref',
+              'The resource changed while its handle was expired. Observe the resource again before invoking an operation.'
+            )
+          }
+          handle = renewed
+          cache.resources.set(parsed.resourceRef, renewed)
+          result = await invoke(renewed)
+        }
         const sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output)
         let resourceRef = parsed.resourceRef
         if (result.resource) {
@@ -355,7 +375,16 @@ export class CapabilityAgentToolSurface {
     cache: CallerCache,
     resourceRef: string
   ): Promise<AgentCapabilityObservation> {
-    const observation = await this.#broker.observe(caller, { resource: this.#resource(cache, resourceRef) })
+    let resource = cache.resources.get(resourceRef)
+    if (!resource) resource = await this.#bindResourceRef(caller, resourceRef)
+    let observation: CapabilityObservation
+    try {
+      observation = await this.#broker.observe(caller, { resource })
+    } catch (error) {
+      if (!isExpiredResourceHandleError(error)) throw error
+      resource = await this.#bindResourceRef(caller, resourceRef)
+      observation = await this.#broker.observe(caller, { resource })
+    }
     this.#rememberObservation(cache, observation)
     const state = await this.#sanitizeOutput(caller, cache, observation.state)
     return {
@@ -364,6 +393,21 @@ export class CapabilityAgentToolSurface {
       observedAt: observation.observedAt,
       state,
       operations: observation.operations.map((descriptor) => this.#agentOperation(cache, descriptor, false))
+    }
+  }
+
+  async #bindResourceRef(
+    caller: CapabilityCallerContext,
+    resourceRef: string
+  ): Promise<CapabilityResourceHandle> {
+    try {
+      return capabilityResourceHandleSchema.parse(await this.#broker.bindResourceRef(caller, resourceRef))
+    } catch (error) {
+      const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : ''
+      if (code === 'resource_unavailable' || error instanceof z.ZodError) {
+        throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')
+      }
+      throw error
     }
   }
 
@@ -420,6 +464,7 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_agent_tool'
     | 'unknown_operation_ref'
     | 'unknown_resource_ref'
+    | 'stale_resource_ref'
 
   constructor(code: CapabilityAgentToolError['code'], message: string) {
     super(message)
@@ -432,6 +477,20 @@ export function createCapabilityAgentToolSurface(
   options: CapabilityAgentToolSurfaceOptions
 ): CapabilityAgentToolSurface {
   return new CapabilityAgentToolSurface(options)
+}
+
+export function capabilityAgentCallerId(
+  context: Pick<CapabilityAgentToolRequestContext, 'requestId' | 'runtimeId' | 'threadId'>
+): string {
+  return context.threadId
+    ? `${context.runtimeId ?? 'codex'}:${context.threadId}`
+    : `${context.runtimeId ?? 'codex'}-request:${context.requestId}`
+}
+
+function isExpiredResourceHandleError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false
+  const code = 'code' in error ? String(error.code) : ''
+  return code === 'resource_handle_expired' || code === 'invalid_resource_handle'
 }
 
 function defineTool(

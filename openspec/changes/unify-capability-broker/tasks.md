@@ -61,3 +61,4 @@
 - [ ] 10.2 Gate migrated preload facades and renderer hosts on readiness, surface failures to users, and remove empty-data error fallbacks.
 - [x] 10.3 Publish the current visible surface as a canonical capability resource summary and require agent routing to prefer that resource over path guessing or legacy direct-tool/shell access.
 - [ ] 10.4 Add readiness, version skew, missing-operation, resource freshness, and no-fallback regression tests.
+- [x] 10.5 Bind current semantic resources to the starting runtime/thread, treat renderer age as layout-only freshness, renew scoped resource references, and add hidden-session regression coverage.

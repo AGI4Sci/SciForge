@@ -147,7 +147,14 @@ export class RuntimeGovernanceSupervisor {
     controls: RuntimeGovernanceControls
   ): void {
     if (decision.action === 'allow') return
-    const key = `receipt:${decision.code || 'governance'}:${receipt.family}:${receipt.failureClass}:${receipt.resourceIdentity}`
+    const key = [
+      'receipt',
+      decision.code || 'governance',
+      receipt.family,
+      receipt.failureClass,
+      receipt.errorCode,
+      receipt.resourceIdentity
+    ].join(':')
     if (state.actions.has(key)) return
     state.actions.add(key)
     if (decision.action === 'deny') {
@@ -173,7 +180,7 @@ export class RuntimeGovernanceSupervisor {
       turnId: event.turnId?.trim() || '',
       text
     }).catch(() => undefined)
-    await publishGovernanceEvent(controls, event, runtimeId, level, decision, recoveryAttempt)
+    await publishGovernanceEvent(controls, event, runtimeId, level, decision, recoveryAttempt, receipt)
   }
 
   private async interrupt(
@@ -331,7 +338,8 @@ async function publishGovernanceEvent(
   runtimeId: AgentRuntimeId,
   level: 'soft' | 'recovery' | 'hard',
   decision: ExecutionGovernorDecision,
-  recoveryAttempt?: number
+  recoveryAttempt?: number,
+  receipt?: NormalizedExecutionReceipt
 ): Promise<void> {
   await controls.publishSyntheticEvent({
     kind: 'runtime_status',
@@ -350,6 +358,9 @@ async function publishGovernanceEvent(
       code: decision.code,
       family: decision.attempt.family,
       resourceIdentity: decision.attempt.resourceIdentity,
+      ...(receipt?.errorCode ? { errorCode: receipt.errorCode } : {}),
+      ...(receipt?.failureClass ? { failureClass: receipt.failureClass } : {}),
+      ...(receipt?.resourceIdentity ? { receiptResourceIdentity: receipt.resourceIdentity } : {}),
       ...(recoveryAttempt ? { recoveryAttempt } : {})
     }
   })

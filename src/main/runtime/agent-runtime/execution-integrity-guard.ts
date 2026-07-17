@@ -14,6 +14,7 @@ import {
 export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v1'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
 export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
+export const EXECUTION_CONTINUITY_TEXT_METADATA_KEY = 'sciforgeDirectiveContinuityText'
 
 const EXECUTION_INTEGRITY_MARKER = 'Runtime-enforced execution integrity gate:'
 const MAX_ASSISTANT_CLAIM_TEXT = 16_384
@@ -95,6 +96,15 @@ export class RuntimeExecutionIntegrityGuard {
       assistantText: '',
       enabled: true
     })
+  }
+
+  rememberSteer(runtimeId: AgentRuntimeId, threadId: string, turnId: string, text: string): void {
+    const key = executionKey(runtimeId, threadId, turnId)
+    const state = key ? this.states.get(key) : undefined
+    if (!state) return
+    const obligation = requestedExecutionObligationFromTexts([text])
+    if (!obligation) return
+    state.obligations = mergeRequestedExecutionObligation(state.obligations, obligation)
   }
 
   rejectedTurnIds(runtimeId: AgentRuntimeId, threadId: string): string[] {
@@ -216,10 +226,11 @@ function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionOblig
   if (metadata[VISUAL_EXECUTION_REQUIRED_METADATA_KEY] === true) {
     obligations.push({ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' })
   }
-  const displayText = input.displayText ?? input.text
-  if (requiresRuntimeExecution(displayText) && !obligations.some((item) => item.id === 'requested-execution')) {
-    obligations.push(requestedExecutionObligation(displayText))
-  }
+  const requested = requestedExecutionObligationFromTexts([
+    input.displayText ?? input.text,
+    stringValue(metadata[EXECUTION_CONTINUITY_TEXT_METADATA_KEY])
+  ])
+  if (requested) return dedupeObligations(mergeRequestedExecutionObligation(obligations, requested))
   return dedupeObligations(obligations)
 }
 
@@ -579,12 +590,40 @@ function isAcceptedAsyncResult(meta: Record<string, unknown>): boolean {
   return status === 'accepted' || status === 'submitted' || status === 'queued' || status === 'pending' || status === 'running'
 }
 
-function requestedExecutionObligation(text: string): ExecutionObligation {
-  const effectClass = requestedExecutionClass(text)
-  if (effectClass && effectClass !== 'any_success') {
-    return { id: 'requested-execution', kind: 'effect', effectClass, source: 'user' }
+function requestedExecutionObligationFromTexts(texts: string[]): ExecutionObligation | null {
+  let selected: RequestedExecutionClass | null = null
+  for (const text of texts) {
+    const candidate = requestedExecutionClass(text)
+    if (candidate && requestedExecutionRank(candidate) > requestedExecutionRank(selected)) selected = candidate
   }
-  return { id: 'requested-execution', kind: 'any_success', source: 'user' }
+  if (!selected) return null
+  return selected === 'any_success'
+    ? { id: 'requested-execution', kind: 'any_success', source: 'user' }
+    : { id: 'requested-execution', kind: 'effect', effectClass: selected, source: 'user' }
+}
+
+function mergeRequestedExecutionObligation(
+  obligations: ExecutionObligation[],
+  requested: ExecutionObligation
+): ExecutionObligation[] {
+  const existing = obligations.find((item) => item.id === 'requested-execution')
+  if (!existing) return [...obligations, requested]
+  const existingClass = existing.kind === 'effect' ? existing.effectClass ?? 'any_success' : 'any_success'
+  const requestedClass = requested.kind === 'effect' ? requested.effectClass ?? 'any_success' : 'any_success'
+  const strongest = requestedExecutionRank(requestedClass) > requestedExecutionRank(existingClass)
+    ? requested
+    : existing
+  return obligations.map((item) => item.id === 'requested-execution' ? strongest : item)
+}
+
+function requestedExecutionRank(value: RequestedExecutionClass | null): number {
+  switch (value) {
+    case 'external_mutation': return 4
+    case 'local_write': return 3
+    case 'command_execution': return 2
+    case 'any_success': return 1
+    default: return 0
+  }
 }
 
 type RequestedExecutionClass = ExecutionEffectClass | 'any_success'

@@ -153,6 +153,7 @@ export class CapabilityBroker {
   readonly #maxEvents: number
   readonly #maxIdempotencyEntries: number
   readonly #resources = new Map<string, ResourceState>()
+  readonly #resourcesByRef = new Map<string, ResourceState>()
   readonly #handles = new Map<string, ResourceGrant>()
   readonly #idempotency = new Map<string, IdempotencyEntry>()
   readonly #auditRecords: CapabilityAuditRecord[] = []
@@ -217,6 +218,7 @@ export class CapabilityBroker {
     resource.observe = registration.observe
     resource.contentTransport = registration.contentTransport
     this.#resources.set(key, resource)
+    this.#resourcesByRef.set(resource.resourceRef, resource)
 
     const token = opaqueId('cap')
     const ttl = Math.min(MAX_HANDLE_TTL_MS, Math.max(1, registration.expiresInMs ?? this.#handleTtlMs))
@@ -233,6 +235,33 @@ export class CapabilityBroker {
       token,
       semanticRevision: registration.semanticRevision,
       expiresAt
+    })
+  }
+
+  bindResourceRef(
+    rawCaller: CapabilityCallerContextInput,
+    resourceRef: string
+  ): CapabilityResourceHandle {
+    const caller = this.#parseCaller(rawCaller)
+    const state = this.#resourcesByRef.get(resourceRef)
+    if (!state) {
+      throw new CapabilityBrokerError('resource_unavailable', 'Resource reference is no longer available.')
+    }
+    if (state.workspaceId !== caller.workspaceId) {
+      throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
+    }
+    if (!state.allowedAudiences.includes(caller.audience)) {
+      throw new CapabilityBrokerError('resource_audience_denied', 'Resource reference is not transferable to this audience.')
+    }
+    return this.issueResourceHandle(caller, {
+      resourceId: state.resourceId,
+      resourceKind: state.resourceKind,
+      workspaceId: state.workspaceId,
+      audiences: state.allowedAudiences,
+      semanticRevision: state.semanticRevision,
+      layoutRevision: state.layoutRevision,
+      observe: state.observe,
+      contentTransport: state.contentTransport
     })
   }
 

@@ -1,4 +1,5 @@
 import type {
+  AgentRuntimeContextDirective,
   AgentRuntimeContextLedger,
   AgentRuntimeContextLedgerEvidence,
   AgentRuntimeContextLedgerMemory,
@@ -32,9 +33,16 @@ type StoredRuntimeContextLedgers = {
 }
 
 const RUNTIME_CONTEXT_LEDGERS_STORE = ['runtime-context-ledgers', 'ledgers.json'] as const
+export const RUNTIME_DIRECTIVE_CONTEXT_MAX_BYTES = 64 * 1024
+
+export type RuntimeDirectiveDeliveryStart = {
+  directive: AgentRuntimeContextDirective
+  deliver: boolean
+}
 
 export class RuntimeContextLedgerService {
   private loaded: Promise<StoredRuntimeContextLedgers> | null = null
+  private mutationTail: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly dataDir: string) {}
 
@@ -54,27 +62,124 @@ export class RuntimeContextLedgerService {
     threadId: string
     patch: RuntimeContextLedgerPatch
   }): Promise<AgentRuntimeContextLedger> {
-    const store = await this.load()
-    const current = this.ensure(store, input.runtimeId, input.threadId)
-    const patch = input.patch
-    const next: AgentRuntimeContextLedger = {
-      ...current,
-      objective: patchString(current.objective, patch, 'objective'),
-      status: patchStatus(current.status, patch),
-      summary: patchString(current.summary, patch, 'summary'),
-      completed: mergeStrings(current.completed, patch.completed),
-      pending: mergeStrings(current.pending, patch.pending),
-      evidence: mergeById(current.evidence, patch.evidence),
-      fileReferences: mergeWorkspaceReferences(current.fileReferences, patch.fileReferences),
-      explicitMemories: mergeById(current.explicitMemories, patch.explicitMemories),
-      recentTailDigest: patchString(current.recentTailDigest, patch, 'recentTailDigest'),
-      compactionDigest: patchString(current.compactionDigest, patch, 'compactionDigest'),
-      sourceMarker: patchString(current.sourceMarker, patch, 'sourceMarker'),
-      updatedAt: new Date().toISOString()
+    return this.mutate(async (store) => {
+      const current = this.ensure(store, input.runtimeId, input.threadId)
+      const patch = input.patch
+      const next: AgentRuntimeContextLedger = {
+        ...current,
+        objective: patchString(current.objective, patch, 'objective'),
+        status: patchStatus(current.status, patch),
+        summary: patchString(current.summary, patch, 'summary'),
+        completed: mergeStrings(current.completed, patch.completed),
+        pending: mergeStrings(current.pending, patch.pending),
+        evidence: mergeById(current.evidence, patch.evidence),
+        fileReferences: mergeWorkspaceReferences(current.fileReferences, patch.fileReferences),
+        explicitMemories: mergeById(current.explicitMemories, patch.explicitMemories),
+        recentTailDigest: patchString(current.recentTailDigest, patch, 'recentTailDigest'),
+        compactionDigest: patchString(current.compactionDigest, patch, 'compactionDigest'),
+        sourceMarker: patchString(current.sourceMarker, patch, 'sourceMarker'),
+        updatedAt: new Date().toISOString()
+      }
+      setLedger(store, next)
+      return cloneLedger(next)
+    })
+  }
+
+  async acceptDirective(input: {
+    runtimeId: AgentRuntimeId
+    threadId: string
+    id: string
+    text: string
+    acceptedAt?: string
+  }): Promise<AgentRuntimeContextDirective> {
+    const id = input.id.trim()
+    const text = input.text.trim()
+    if (!id || !text) throw new Error('Runtime directive id and text are required.')
+    return this.mutate(async (store) => {
+      const ledger = this.ensure(store, input.runtimeId, input.threadId)
+      const existing = ledger.directives.find((directive) => directive.id === id)
+      if (existing) {
+        if (existing.text !== text) {
+          throw new Error(`Runtime directive id ${id} was reused with different text.`)
+        }
+        return cloneDirective(existing)
+      }
+      const bytes = ledger.directives.reduce(
+        (total, directive) => total + Buffer.byteLength(directive.text, 'utf8'),
+        Buffer.byteLength(text, 'utf8')
+      )
+      if (bytes > RUNTIME_DIRECTIVE_CONTEXT_MAX_BYTES) {
+        throw new Error(
+          `Runtime directive context exceeds ${RUNTIME_DIRECTIVE_CONTEXT_MAX_BYTES} bytes; start a new thread with a task summary before sending more instructions.`
+        )
+      }
+      const directive: AgentRuntimeContextDirective = {
+        id,
+        text,
+        acceptedAt: input.acceptedAt?.trim() || new Date().toISOString(),
+        delivery: 'accepted'
+      }
+      ledger.directives.push(directive)
+      ledger.updatedAt = new Date().toISOString()
+      return cloneDirective(directive)
+    })
+  }
+
+  async beginDirectiveDelivery(input: {
+    runtimeId: AgentRuntimeId
+    threadId: string
+    id: string
+  }): Promise<RuntimeDirectiveDeliveryStart> {
+    const result = await this.mutate(async (store) => {
+      const ledger = this.ensure(store, input.runtimeId, input.threadId)
+      const directive = requiredDirective(ledger, input.id)
+      if (directive.delivery === 'delivered') {
+        return { directive: cloneDirective(directive), deliver: false }
+      }
+      if (directive.delivery === 'delivering') {
+        directive.delivery = 'uncertain'
+        directive.error = 'Delivery acknowledgement was interrupted.'
+        ledger.updatedAt = new Date().toISOString()
+        return { directive: cloneDirective(directive), deliver: false }
+      }
+      if (directive.delivery === 'uncertain') {
+        return { directive: cloneDirective(directive), deliver: false }
+      }
+      directive.delivery = 'delivering'
+      delete directive.error
+      ledger.updatedAt = new Date().toISOString()
+      return { directive: cloneDirective(directive), deliver: true }
+    })
+    if (result.directive.delivery === 'uncertain') {
+      throw new Error(`Runtime directive ${result.directive.id} has uncertain delivery and will not be sent twice.`)
     }
-    setLedger(store, next)
-    await this.save(store)
-    return cloneLedger(next)
+    return result
+  }
+
+  async finishDirectiveDelivery(input: {
+    runtimeId: AgentRuntimeId
+    threadId: string
+    id: string
+    delivery: Extract<AgentRuntimeContextDirective['delivery'], 'delivered' | 'rejected' | 'uncertain'>
+    turnId?: string
+    error?: string
+  }): Promise<AgentRuntimeContextDirective> {
+    return this.mutate(async (store) => {
+      const ledger = this.ensure(store, input.runtimeId, input.threadId)
+      const directive = requiredDirective(ledger, input.id)
+      if (directive.delivery === 'delivered') return cloneDirective(directive)
+      if (directive.delivery !== 'delivering') {
+        throw new Error(`Runtime directive ${directive.id} is ${directive.delivery}, not delivering.`)
+      }
+      directive.delivery = input.delivery
+      const turnId = input.turnId?.trim()
+      const error = input.error?.trim()
+      if (turnId) directive.turnId = turnId
+      if (error) directive.error = error
+      else delete directive.error
+      ledger.updatedAt = new Date().toISOString()
+      return cloneDirective(directive)
+    })
   }
 
   async observeEvent(event: AgentRuntimeEvent): Promise<void> {
@@ -169,6 +274,7 @@ export class RuntimeContextLedgerService {
       evidence: ledger.evidence.map((item) => ({ ...item, metadata: cloneRecord(item.metadata) })),
       fileReferences: ledger.fileReferences.map((reference) => ({ ...reference })),
       explicitMemories: ledger.explicitMemories.map((memory) => ({ ...memory })),
+      directives: ledger.directives.map(cloneDirective),
       ...(ledger.recentTailDigest ? { recentTailDigest: ledger.recentTailDigest } : {}),
       ...(ledger.compactionDigest ? { compactionDigest: ledger.compactionDigest } : {}),
       ...(ledger.sourceMarker ? { sourceMarker: ledger.sourceMarker } : {}),
@@ -189,6 +295,7 @@ export class RuntimeContextLedgerService {
       evidence: [],
       fileReferences: [],
       explicitMemories: [],
+      directives: [],
       updatedAt: new Date().toISOString()
     }
     store.ledgers.unshift(created)
@@ -206,6 +313,17 @@ export class RuntimeContextLedgerService {
 
   private async save(store: StoredRuntimeContextLedgers): Promise<void> {
     await atomicWriteAppDataJson(this.dataDir, RUNTIME_CONTEXT_LEDGERS_STORE, normalizeStore(store))
+  }
+
+  private async mutate<T>(mutation: (store: StoredRuntimeContextLedgers) => Promise<T>): Promise<T> {
+    const result = this.mutationTail.then(async () => {
+      const store = await this.load()
+      const value = await mutation(store)
+      await this.save(store)
+      return value
+    })
+    this.mutationTail = result.catch(() => undefined)
+    return result
   }
 }
 
@@ -253,6 +371,7 @@ function normalizeLedger(value: unknown): AgentRuntimeContextLedger | null {
     evidence: normalizeEvidenceArray(record.evidence),
     fileReferences: normalizeWorkspaceReferences(record.fileReferences),
     explicitMemories: normalizeMemoryArray(record.explicitMemories),
+    directives: normalizeDirectiveArray(record.directives),
     ...(stringValue(record.recentTailDigest) ? { recentTailDigest: stringValue(record.recentTailDigest) } : {}),
     ...(stringValue(record.compactionDigest) ? { compactionDigest: stringValue(record.compactionDigest) } : {}),
     ...(stringValue(record.sourceMarker) ? { sourceMarker: stringValue(record.sourceMarker) } : {}),
@@ -344,6 +463,41 @@ function normalizeMemory(value: unknown): AgentRuntimeContextLedgerMemory | null
     ...(memorySource(record.source) ? { source: memorySource(record.source) } : {}),
     ...(stringValue(record.createdAt) ? { createdAt: stringValue(record.createdAt) } : {})
   }
+}
+
+function normalizeDirectiveArray(value: unknown): AgentRuntimeContextDirective[] {
+  if (!Array.isArray(value)) return []
+  return value
+    .map(normalizeDirective)
+    .filter((item): item is AgentRuntimeContextDirective => item != null)
+}
+
+function normalizeDirective(value: unknown): AgentRuntimeContextDirective | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const record = value as Record<string, unknown>
+  const id = stringValue(record.id)
+  const text = stringValue(record.text)
+  const acceptedAt = stringValue(record.acceptedAt)
+  const delivery = directiveDelivery(record.delivery)
+  if (!id || !text || !acceptedAt || !delivery) return null
+  return {
+    id,
+    text,
+    acceptedAt,
+    delivery,
+    ...(stringValue(record.turnId) ? { turnId: stringValue(record.turnId) } : {}),
+    ...(stringValue(record.error) ? { error: stringValue(record.error) } : {})
+  }
+}
+
+function directiveDelivery(value: unknown): AgentRuntimeContextDirective['delivery'] | undefined {
+  return value === 'accepted' ||
+    value === 'delivering' ||
+    value === 'delivered' ||
+    value === 'rejected' ||
+    value === 'uncertain'
+    ? value
+    : undefined
 }
 
 function ledgerEvidenceKind(value: unknown): AgentRuntimeContextLedgerEvidence['kind'] {
@@ -461,8 +615,20 @@ function cloneLedger(ledger: AgentRuntimeContextLedger): AgentRuntimeContextLedg
     pending: ledger.pending ? [...ledger.pending] : undefined,
     evidence: ledger.evidence.map((item) => ({ ...item, metadata: cloneRecord(item.metadata) })),
     fileReferences: ledger.fileReferences.map((reference) => ({ ...reference })),
-    explicitMemories: ledger.explicitMemories.map((memory) => ({ ...memory }))
+    explicitMemories: ledger.explicitMemories.map((memory) => ({ ...memory })),
+    directives: ledger.directives.map(cloneDirective)
   }
+}
+
+function cloneDirective(directive: AgentRuntimeContextDirective): AgentRuntimeContextDirective {
+  return { ...directive }
+}
+
+function requiredDirective(ledger: AgentRuntimeContextLedger, id: string): AgentRuntimeContextDirective {
+  const directiveId = id.trim()
+  const directive = ledger.directives.find((item) => item.id === directiveId)
+  if (!directive) throw new Error(`Runtime directive ${directiveId || '<empty>'} was not accepted.`)
+  return directive
 }
 
 function cloneRecord(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {

@@ -173,6 +173,7 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
+  clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
   workspace: defaultPathSchema,
   mode: z.string().trim().max(64).optional(),
   model: z.string().trim().max(128).optional(),
@@ -203,7 +204,8 @@ export const agentRuntimeTurnSteerPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema,
   threadId: trimmedString(MAX_ID_LENGTH),
   turnId: trimmedString(MAX_ID_LENGTH),
-  text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH)
+  text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
+  clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH)
 }).strict()
 
 export const agentRuntimeEventSubscribePayloadSchema = z.object({

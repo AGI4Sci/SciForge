@@ -37,6 +37,7 @@ import type { ChatState, ChatStoreGet, ChatStoreSet, QueuedUserMessage } from '.
 import { resetAgentFocusState } from './chat-store-focus-actions'
 import {
   activeRemoteChannel,
+  createClientDirectiveId,
   remoteChannelThreadBindingsFromChannels,
   remoteChannelThreadIdsFromChannels,
   compactCodeWorkspaceRoots,
@@ -801,6 +802,7 @@ export function createThreadActions(
       }))
       const runtimeText = buildCodeRuntimePrompt(settings, latestQueued.text)
       const turnHandle = await provider.sendUserMessage(targetThreadId, runtimeText, {
+        clientDirectiveId: queued.id,
         ...(latestQueued.mode ? { mode: latestQueued.mode } : {}),
         ...(thread.workspace ? { workspace: thread.workspace } : {}),
         ...(thread.title ? { title: thread.title } : {}),
@@ -1007,7 +1009,9 @@ export function createThreadActions(
     }
     try {
       rememberProviderThreadRuntime(p, activeThreadId, get().threads)
-      await p.steerUserMessage(activeThreadId, currentTurnId, queued.text)
+      await p.steerUserMessage(activeThreadId, currentTurnId, queued.text, {
+        clientDirectiveId: queued.id
+      })
       set((s) => ({
         queuedMessages: s.queuedMessages.filter((message) => message.id !== id),
         error: null
@@ -1040,6 +1044,9 @@ export function createThreadActions(
     }
     const p = getProvider()
     const queued = overrides?.queued
+    const explicitSteerDirectiveId = explicitSteerText !== null
+      ? queued?.id ?? createClientDirectiveId()
+      : null
     const sourceRoute = queued?.sourceRoute ?? overrides?.sourceRoute ?? get().route
     const requestedGovernanceProfile = queued?.governanceProfile ?? overrides?.governanceProfile
     const remoteTargetId = (queued?.remoteTargetId ?? overrides?.remoteTargetId)?.trim() || ''
@@ -1081,10 +1088,15 @@ export function createThreadActions(
         set({ error: i18n.t('common:runtimeSteerUnsupported') })
         return false
       }
-      if (canSteerActiveTurn && activeThreadId && currentTurnId && p.steerUserMessage) {
+      if (
+        canSteerActiveTurn && activeThreadId && currentTurnId &&
+        explicitSteerDirectiveId && p.steerUserMessage
+      ) {
         try {
           rememberProviderThreadRuntime(p, activeThreadId, get().threads)
-          await p.steerUserMessage(activeThreadId, currentTurnId, messageText)
+          await p.steerUserMessage(activeThreadId, currentTurnId, messageText, {
+            clientDirectiveId: explicitSteerDirectiveId
+          })
           set({ error: null })
           return true
         } catch (e) {
@@ -1104,7 +1116,7 @@ export function createThreadActions(
         queuedMessages: [
           ...s.queuedMessages,
           {
-            id: `q-${now}-${s.queuedMessages.length}`,
+            id: explicitSteerDirectiveId ?? `q-${now}-${s.queuedMessages.length}`,
             ...(activeThreadId ? { threadId: activeThreadId } : {}),
             ...(threadSnap?.runtimeId ? { runtimeId: threadSnap.runtimeId } : {}),
             text: messageText,
@@ -1133,7 +1145,7 @@ export function createThreadActions(
       return true
     }
     const now = Date.now()
-    const userBlockId = queued?.id ?? `u-${now}`
+    const userBlockId = queued?.id ?? explicitSteerDirectiveId ?? `u-${now}`
     const attachmentIds =
       queued?.attachmentIds ??
       overrides?.attachmentIds?.filter((id) => id.trim().length > 0) ??
@@ -1379,6 +1391,7 @@ export function createThreadActions(
           : undefined
       )
       const turnHandle = await p.sendUserMessage(previousThreadId, runtimeText, {
+        clientDirectiveId: userBlockId,
         mode,
         ...(sendingThread?.workspace ? { workspace: sendingThread.workspace } : {}),
         ...(sendingThread?.title ? { title: sendingThread.title } : {}),

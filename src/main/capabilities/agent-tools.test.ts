@@ -91,7 +91,7 @@ describe('CapabilityAgentToolSurface', () => {
       'res_surface_abcdefghijklmnopqrstuvwxyz',
       'surface',
       {
-        freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+        layoutFreshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
         targets: [],
         resources: [{ kind: 'workspace-preview', resource: documentHandle }]
       },
@@ -117,7 +117,13 @@ describe('CapabilityAgentToolSurface', () => {
       completedAt: '2026-07-16T11:00:00.000Z'
     }))
     const surface = createCapabilityAgentToolSurface({
-      broker: { discover, observe, invoke, listEvents: vi.fn(async () => []) },
+      broker: {
+        discover,
+        observe,
+        bindResourceRef: vi.fn(async () => documentHandle),
+        invoke,
+        listEvents: vi.fn(async () => [])
+      },
       resolveCaller: () => caller
     })
 
@@ -162,6 +168,71 @@ describe('CapabilityAgentToolSurface', () => {
     expect(JSON.stringify({ opened, observed })).not.toMatch(
       /cap_|semanticRevision|expiresAt|actionId|invocationId|expectedRevision|snapshotToken|componentId/u
     )
+  })
+
+  it('binds a transferred resourceRef and renews its expired cached handle on observation', async () => {
+    let now = new Date('2026-07-16T11:00:00.000Z')
+    const read = defineCapability({
+      id: 'document.read',
+      version: '1',
+      title: 'Read document',
+      description: 'Reads a bound document resource.',
+      audiences: ['agent', 'ui'],
+      scope: 'resource',
+      resourceKinds: ['document'],
+      effect: 'read',
+      approval: 'none',
+      concurrency: { revision: 'none', idempotency: 'none' },
+      inputSchema: z.object({}).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async () => ({ output: { ok: true } })
+    })
+    const registry = new CapabilityRegistry([read])
+    const broker = new CapabilityBroker(registry, { now: () => now, handleTtlMs: 1_000 })
+    const uiCaller: CapabilityCallerContext = {
+      audience: 'ui',
+      callerId: 'window-1',
+      workspaceId: '/workspace',
+      approvals: []
+    }
+    const uiHandle = broker.issueResourceHandle(uiCaller, {
+      resourceId: 'internal-paper',
+      resourceKind: 'document',
+      workspaceId: '/workspace',
+      audiences: ['ui', 'agent'],
+      semanticRevision: '1',
+      expiresInMs: 1_000,
+      observe: async () => ({
+        state: { title: 'Paper' },
+        semanticRevision: '1',
+        operationIds: ['document.read']
+      })
+    })
+    const transferred = await broker.observe(uiCaller, { resource: uiHandle })
+    const surface = createCapabilityAgentToolSurface({ broker, resolveCaller: () => caller })
+
+    const first = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    expect(first.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
+    if (first.tool !== CAPABILITY_AGENT_TOOL_NAMES.observe) throw new Error('Expected observe result.')
+    const readRef = first.value.operations[0]?.operationRef
+
+    now = new Date('2026-07-16T11:00:02.000Z')
+    const invoked = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef: readRef, resourceRef: transferred.resourceRef, input: {} },
+      context
+    })
+    expect(invoked.value).toMatchObject({ resourceRef: transferred.resourceRef, output: { ok: true } })
+    const renewed = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.observe,
+      arguments: { resourceRef: transferred.resourceRef },
+      context
+    })
+    expect(renewed.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
   })
 
   it('derives caller identity from transport and rejects non-agent callers and unknown refs', async () => {
@@ -241,6 +312,9 @@ function brokerStub(): CapabilityAgentBroker {
   return {
     discover: vi.fn(async () => []),
     observe: vi.fn(),
+    bindResourceRef: vi.fn(() => {
+      throw new CapabilityAgentToolError('unknown_resource_ref', 'The resource reference is unknown or expired.')
+    }),
     invoke: vi.fn(),
     listEvents: vi.fn(async () => [])
   }
