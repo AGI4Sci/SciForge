@@ -1,7 +1,8 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import {
   biologyRoomFormatFromPath,
-  type BiologyRoomFormat
+  type BiologyRoomFormat,
+  type BiologyRoomSelection
 } from '@shared/biology-room'
 import type {
   VisibleContextComponentSnapshot,
@@ -61,6 +62,7 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   workspaceRoot: string
   className?: string
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
+  onAddSelectionToChat?: (context: string, selection: BiologyRoomSelection) => void
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }
@@ -138,6 +140,7 @@ export function WorkspaceFilePreviewPanelBridge({
   workspaceRoot,
   className,
   annotationQuestionBridge,
+  onAddSelectionToChat,
   onClose,
   onOpenDirectory
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
@@ -160,6 +163,7 @@ export function WorkspaceFilePreviewPanelBridge({
           workspaceRoot={target.workspaceRoot?.trim() || workspaceRoot}
           initialTarget={target}
           className={compactClassName('ds-no-drag h-full', className)}
+          onAddSelectionToChat={onAddSelectionToChat}
           onClose={onClose}
         />
       </Suspense>

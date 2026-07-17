@@ -2750,6 +2750,11 @@ export function Workbench(): ReactElement {
                           workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
                           className="h-full max-h-full w-full"
                           annotationQuestionBridge={annotationQuestionBridge}
+                          onAddSelectionToChat={(context) => {
+                            setInput((current) => current.trim()
+                              ? `${current.trim()}\n\n${context}`
+                              : context)
+                          }}
                           onClose={closeFilePreview}
                           onOpenDirectory={openFileTreeDirectory}
                         />
