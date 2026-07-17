@@ -332,15 +332,12 @@ test('propagates API request provenance through processing and publication manif
       metadataEndpoint: 'metadata',
       rawDataEndpoint: 'proteins'
     })
-    const raw = await call('dataset_api_raw_data', {
-      sourceId: 'provenance-db',
-      outputFileName: 'proteins.json',
-      expectedFormat: 'json'
-    })
     const prepared = await call('dataset_prepare_plan', {
       objective: 'Publish reviewed proteins with source provenance.',
       sources: [{ providerId: 'provenance-db', purpose: 'Download protein records.' }],
       operations: [
+        { tool: 'dataset_api_metadata', description: 'Inspect source metadata.' },
+        { tool: 'dataset_api_raw_data', description: 'Download protein records.' },
         { tool: 'dataset_filter', description: 'Keep reviewed records.' },
         { tool: 'dataset_validate', description: 'Validate accessions.' },
         { tool: 'dataset_publish', description: 'Publish the prepared dataset.' }
@@ -349,6 +346,14 @@ test('propagates API request provenance through processing and publication manif
       confirmedByUser: true
     })
     const planId = prepared.plan.planId as string
+    const raw = await call('dataset_api_raw_data', {
+      planId,
+      sourceId: 'provenance-db',
+      outputFileName: 'proteins.json',
+      expectedFormat: 'json'
+    })
+    const rawManifest = JSON.parse(await readFile(raw.artifact.manifestPath, 'utf8'))
+    assert.equal(rawManifest.parameters.planId, planId)
     const filtered = await call('dataset_filter', {
       planId,
       inputArtifact: raw.artifact.path,
@@ -368,6 +373,10 @@ test('propagates API request provenance through processing and publication manif
     assert.equal(published.publication.artifactCount, 2)
     assert.equal(published.quality.status, 'passed')
     assert.ok(JSON.stringify(published).length < 24 * 1024)
+    for (const key of ['manifestPath', 'schemaPath', 'qualityReportPath', 'preparationPlanPath', 'checksumsPath']) {
+      assert.equal(typeof published.publication[key], 'string', `${key} missing from compact MCP result`)
+      assert.ok((await readFile(published.publication[key] as string)).byteLength > 0)
+    }
     const filterManifest = JSON.parse(await readFile(filtered.artifact.manifestPath, 'utf8'))
     assert.equal(filterManifest.origins[0].source.id, 'provenance-db')
     assert.equal(filterManifest.origins[0].request.url, 'https://data.example.org/proteins')

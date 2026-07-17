@@ -3,7 +3,8 @@ import type { ChatBlock } from '../../agent/types'
 import {
   datasetResultsFromTimelineBlocks,
   datasetTextPreview,
-  metadataHighlights
+  metadataHighlights,
+  publicationReleaseFiles
 } from './TimelineDatasetResultsPanel'
 
 describe('TimelineDatasetResultsPanel', () => {
@@ -142,6 +143,22 @@ describe('TimelineDatasetResultsPanel', () => {
     expect(datasetTextPreview('{"id":"P04637","length":393}', 'json', 'P04637.json')).toContain(
       '\n  "length": 393\n'
     )
+  })
+
+  it('exposes every reproducible publication file to the conversation card', () => {
+    expect(publicationReleaseFiles({
+      manifestPath: '/release/manifest.json',
+      schemaPath: '/release/schema.json',
+      qualityReportPath: '/release/quality-report.json',
+      preparationPlanPath: '/release/preparation-plan.json',
+      checksumsPath: '/release/checksums.sha256'
+    })).toEqual([
+      { label: 'datasetResultOpenManifest', path: '/release/manifest.json' },
+      { label: 'datasetResultOpenSchema', path: '/release/schema.json' },
+      { label: 'datasetResultOpenQuality', path: '/release/quality-report.json' },
+      { label: 'datasetResultOpenPlan', path: '/release/preparation-plan.json' },
+      { label: 'datasetResultOpenChecksums', path: '/release/checksums.sha256' }
+    ])
   })
 
   it('extracts processing, validation, and publication results with row-count evidence', () => {

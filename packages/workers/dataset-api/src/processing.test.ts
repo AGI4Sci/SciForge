@@ -112,8 +112,25 @@ test('runs a reproducible JSON preparation, validation, and publication chain', 
     })
     assert.equal(published.publication.artifactCount, 2)
     assert.equal(published.quality.validationReportCount, 1)
-    assert.equal(JSON.parse(await readFile(published.publication.manifestPath, 'utf8')).planId, planId)
+    const publicationManifestBytes = await readFile(published.publication.manifestPath)
+    const publicationManifest = JSON.parse(publicationManifestBytes.toString('utf8'))
+    assert.equal(publicationManifest.planId, planId)
+    assert.deepEqual(JSON.parse(await readFile(published.publication.preparationPlanPath, 'utf8')).planId, planId)
+    assert.deepEqual(publicationManifest.artifacts[0].parameters.keys, ['accession'])
+    const checksumBytes = await readFile(published.publication.checksumsPath)
+    assert.match(checksumBytes.toString('utf8'), new RegExp(`${published.publication.sha256}  manifest\\.json`))
+    assert.match(checksumBytes.toString('utf8'), /  preparation-plan\.json/)
     assert.equal(await readFile(sourcePath, 'utf8'), sourceText)
+
+    const repeatedPublication = await service.publish({
+      planId,
+      name: 'tp53-prepared',
+      artifacts: [deduplicated.artifact.path, validation.artifact.path],
+      description: 'Human reviewed TP53 records.'
+    })
+    assert.equal(repeatedPublication.publication.sha256, published.publication.sha256)
+    assert.deepEqual(await readFile(repeatedPublication.publication.manifestPath), publicationManifestBytes)
+    assert.deepEqual(await readFile(repeatedPublication.publication.checksumsPath), checksumBytes)
 
     const repeated = await service.filter({
       planId,
@@ -688,6 +705,10 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
     }), /not confirmed/)
     const draftPath = draft.artifact.path
     const draftBytes = await readFile(draftPath)
+    await assert.rejects(service.authorizePlan({
+      planId: draft.plan.planId,
+      operation: 'dataset_api_raw_data'
+    }), /not confirmed/)
     const confirmedDraft = await service.preparePlan({
       draftPlanId: draft.plan.planId,
       confirmedByUser: true
@@ -705,6 +726,10 @@ test('requires confirmed plans and rejects inputs outside the workspace', async 
       confirmedByUser: true
     })
     assert.equal(repeatedConfirmation.artifact.sha256, confirmedDraft.artifact.sha256)
+    await assert.rejects(service.authorizePlan({
+      planId: draft.plan.planId,
+      operation: 'dataset_api_raw_data'
+    }), /does not authorize operation/)
     await service.filter({
       planId: draft.plan.planId,
       inputArtifact: sourcePath,

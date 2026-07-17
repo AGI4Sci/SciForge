@@ -109,6 +109,16 @@ export function createDatasetProcessingService(options: {
   const providerSleep = options.sleepImpl ?? ((milliseconds: number) => new Promise<void>((resolve) => setTimeout(resolve, milliseconds)))
 
   return {
+    async authorizePlan(raw: {
+      workspaceRoot?: string
+      planId: string
+      operation: 'dataset_api_metadata' | 'dataset_api_raw_data'
+    }) {
+      const workspaceRoot = await resolveWorkspaceRoot(raw.workspaceRoot, defaultWorkspaceRoot)
+      const confirmed = await requireConfirmedPlan(workspaceRoot, raw.planId, raw.operation)
+      return { planId: raw.planId, status: confirmed.plan.status }
+    },
+
     async preparePlan(raw: DatasetPreparePlanInput) {
       const input = datasetPreparePlanInputSchema.parse(raw)
       const workspaceRoot = await resolveWorkspaceRoot(input.workspaceRoot, defaultWorkspaceRoot)
@@ -992,6 +1002,7 @@ export function createDatasetProcessingService(options: {
             operation: sidecar.operation,
             format: sidecar.format,
             records: sidecar.records,
+            parameters: sidecar.parameters,
             summary: sidecar.summary,
             schema: sidecar.schema,
             parentArtifacts: sidecar.parents
@@ -1029,9 +1040,26 @@ export function createDatasetProcessingService(options: {
       const manifestPath = join(outputDirectory, 'manifest.json')
       const schemaPath = join(outputDirectory, 'schema.json')
       const qualityReportPath = join(outputDirectory, 'quality-report.json')
-      await writeIdempotentJson(manifestPath, publication)
+      const preparationPlanPath = join(outputDirectory, 'preparation-plan.json')
+      const checksumsPath = join(outputDirectory, 'checksums.sha256')
       await writeIdempotentJson(schemaPath, schema)
       await writeIdempotentJson(qualityReportPath, quality)
+      await writeIdempotentJson(preparationPlanPath, plan.plan)
+      await writeIdempotentJson(manifestPath, {
+        ...publication,
+        releaseFiles: { manifestPath, schemaPath, qualityReportPath, preparationPlanPath, checksumsPath }
+      })
+      const checksumTargets = [
+        ...artifacts.map((artifact) => artifact.path),
+        manifestPath,
+        schemaPath,
+        qualityReportPath,
+        preparationPlanPath
+      ]
+      const checksumLines = []
+      for (const path of checksumTargets) checksumLines.push(`${hash(await readFile(path))}  ${basename(path)}`)
+      await writeIdempotentBytes(checksumsPath, Buffer.from(`${checksumLines.join('\n')}\n`))
+      const manifestSha256 = hash(await readFile(manifestPath))
       return {
         publication: {
           name: input.name,
@@ -1039,8 +1067,10 @@ export function createDatasetProcessingService(options: {
           manifestPath,
           schemaPath,
           qualityReportPath,
+          preparationPlanPath,
+          checksumsPath,
           artifactCount: artifacts.length,
-          sha256: hash(jsonBytes(publication))
+          sha256: manifestSha256
         },
         artifacts,
         quality
@@ -2166,6 +2196,17 @@ async function writeIdempotentJson(path: string, value: unknown): Promise<void> 
     if (canonicalJson(stableExisting) !== canonicalJson(stableNext)) {
       throw new Error(`Refusing to overwrite a different dataset artifact: ${path}`)
     }
+  } catch (error) {
+    if (!isMissingFileError(error)) throw error
+    await atomicWrite(path, bytes)
+  }
+}
+
+async function writeIdempotentBytes(path: string, bytes: Buffer): Promise<void> {
+  await mkdir(resolve(path, '..'), { recursive: true })
+  try {
+    const existing = await readFile(path)
+    if (hash(existing) !== hash(bytes)) throw new Error(`Refusing to overwrite a different dataset artifact: ${path}`)
   } catch (error) {
     if (!isMissingFileError(error)) throw error
     await atomicWrite(path, bytes)

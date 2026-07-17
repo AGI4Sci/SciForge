@@ -63,6 +63,8 @@ const datasetPlanSourceSchema = z.object({
 
 const datasetPlanOperationSchema = z.object({
   tool: z.enum([
+    'dataset_api_metadata',
+    'dataset_api_raw_data',
     'dataset_profile',
     'dataset_filter',
     'dataset_select_columns',
@@ -420,6 +422,7 @@ export const datasetApiRegisterInputSchema = z.object({
 
 export const datasetApiMetadataInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema.optional(),
   sourceId: datasetIdSchema,
   pathParameters: pathParametersSchema,
   query: querySchema,
@@ -432,6 +435,7 @@ export const datasetApiMetadataInputSchema = z.object({
 
 export const datasetApiRawDataInputSchema = z.object({
   workspaceRoot: optionalWorkspaceRootSchema,
+  planId: datasetIdSchema.optional(),
   sourceId: datasetIdSchema,
   pathParameters: pathParametersSchema,
   query: querySchema,

@@ -143,7 +143,7 @@ function DatasetResultCard({
   const subtitle = item.success
     ? datasetSuccessSubtitle(item.kind, result, response, t)
     : stringValue(item.error?.message) || t('datasetResultFailed')
-  const rawPath = stringValue(artifact?.path) || stringValue(publication?.manifestPath)
+  const rawPath = stringValue(artifact?.path) || (item.kind === 'publication' ? '' : stringValue(publication?.manifestPath))
   const excludedPath = stringValue(asRecord(result?.excludedArtifact)?.path)
   const duplicatesPath = stringValue(asRecord(result?.duplicatesArtifact)?.path)
   const details = datasetDetails(item)
@@ -240,6 +240,10 @@ function DatasetResultCard({
         <DatasetProcessingHighlights item={item} />
       ) : null}
 
+      {item.success && item.kind === 'publication' && publication ? (
+        <DatasetPublicationFiles publication={publication} workspaceRoot={workspaceRoot} />
+      ) : null}
+
       {details !== undefined ? (
         <div className="border-t border-ds-border-muted/70">
           <button
@@ -261,6 +265,43 @@ function DatasetResultCard({
       ) : null}
     </article>
   )
+}
+
+function DatasetPublicationFiles({
+  publication,
+  workspaceRoot
+}: {
+  publication: Record<string, unknown>
+  workspaceRoot?: string
+}): ReactElement | null {
+  const { t } = useTranslation('common')
+  const files = publicationReleaseFiles(publication)
+  if (files.length === 0) return null
+  return (
+    <div data-dataset-publication-files className="flex flex-wrap gap-2 border-t border-ds-border-muted/70 px-5 py-3">
+      {files.map((file) => (
+        <button
+          key={file.path}
+          type="button"
+          onClick={() => previewWorkspaceFile({ path: file.path, workspaceRoot })}
+          className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+        >
+          <ExternalLink className="h-3.5 w-3.5" />
+          {t(file.label)}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+export function publicationReleaseFiles(publication: Record<string, unknown>): Array<{ label: string; path: string }> {
+  return [
+    { label: 'datasetResultOpenManifest', path: stringValue(publication.manifestPath) },
+    { label: 'datasetResultOpenSchema', path: stringValue(publication.schemaPath) },
+    { label: 'datasetResultOpenQuality', path: stringValue(publication.qualityReportPath) },
+    { label: 'datasetResultOpenPlan', path: stringValue(publication.preparationPlanPath) },
+    { label: 'datasetResultOpenChecksums', path: stringValue(publication.checksumsPath) }
+  ].filter((file) => file.path)
 }
 
 function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }): ReactElement | null {

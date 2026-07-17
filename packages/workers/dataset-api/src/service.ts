@@ -174,7 +174,11 @@ export function createDatasetApiService(options: {
           sha256,
           bytes: data.byteLength,
           parents: [],
-          parameters: { sourceId: source.id, responseMode: input.responseMode ?? 'auto' },
+          parameters: {
+            sourceId: source.id,
+            responseMode: input.responseMode ?? 'auto',
+            ...(input.planId ? { planId: input.planId } : {})
+          },
           summary: { responseBytes: responseRecord.bytes, artifactBytes: data.byteLength, reused },
           schema: rawArtifactSchema(format),
           source: sourceRecord,
@@ -294,6 +298,7 @@ export function createDatasetApiService(options: {
         parameters: {
           sourceId: source.id,
           expectedFormat,
+          ...(input.planId ? { planId: input.planId } : {}),
           ...(input.range ? { range: input.range } : {})
         },
         summary: { responseBytes: streamed.bytes, reused },

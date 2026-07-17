@@ -131,11 +131,12 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_api_metadata', {
     title: 'Read Dataset Metadata',
-    description: 'Read metadata from a registered dataset database with built-in transient-network retries and structured diagnostics. responseMode=auto (default) returns complete small payloads and a bounded structural summary for payloads over 64 KiB; use full only when the complete payload is necessary. Set outputFileName to persist the complete response as a non-overwriting, checksummed metadata artifact for downstream processing. Endpoint placeholders are supplied through pathParameters and query parameters remain structured. If this tool reports an error, report that Dataset API error; do not bypass it with shell, curl, or workspace search.',
+    description: 'Read metadata from a registered dataset database with built-in transient-network retries and structured diagnostics. responseMode=auto (default) returns complete small payloads and a bounded structural summary for payloads over 64 KiB; use full only when the complete payload is necessary. Set outputFileName to persist the complete response as a non-overwriting, checksummed metadata artifact for downstream processing. For an approved preparation workflow, pass its confirmed planId; exploratory read-only metadata lookup may omit it. Endpoint placeholders are supplied through pathParameters and query parameters remain structured. If this tool reports an error, report that Dataset API error; do not bypass it with shell, curl, or workspace search.',
     inputSchema: datasetApiMetadataInputSchema,
     annotations: { ...READ_ONLY_ANNOTATIONS, openWorldHint: true }
   }, async (args) => runTool(async () => {
     const input = datasetApiMetadataInputSchema.parse(args)
+    if (input.planId) await processing.authorizePlan({ workspaceRoot: input.workspaceRoot, planId: input.planId, operation: 'dataset_api_metadata' })
     const result = await service.metadata(input)
     return textResult(
       `Read ${result.response.bytes} metadata bytes from '${result.source.id}'${shouldSummarizeMetadata(result.response.bytes, input.responseMode) ? ' (returned as a bounded structural summary)' : ''}.`,
@@ -145,7 +146,7 @@ export function createDatasetApiMcpServer(
 
   server.registerTool('dataset_api_raw_data', {
     title: 'Download Dataset Raw Data',
-    description: 'Stream validated raw data from a registered dataset database into the workspace dataset cache. Supports endpoint placeholders, byte ranges, checksums, expected-format validation, size limits, transient-network retries, NCBI Gene-to-genomic-FASTA resolution, and non-overwriting writes. If this tool reports an error, report that Dataset API error; do not bypass it with shell or curl.',
+    description: 'Stream validated raw data from a registered dataset database into the workspace dataset cache. Supports endpoint placeholders, byte ranges, checksums, expected-format validation, size limits, transient-network retries, NCBI Gene-to-genomic-FASTA resolution, and non-overwriting writes. For an approved preparation workflow, pass its confirmed planId so the download is authorized and recorded; standalone downloads may omit it. If this tool reports an error, report that Dataset API error; do not bypass it with shell or curl.',
     inputSchema: datasetApiRawDataInputSchema,
     annotations: {
       readOnlyHint: false,
@@ -154,7 +155,9 @@ export function createDatasetApiMcpServer(
       openWorldHint: true
     }
   }, async (args) => runTool(async () => {
-    const result = await service.rawData(datasetApiRawDataInputSchema.parse(args))
+    const input = datasetApiRawDataInputSchema.parse(args)
+    if (input.planId) await processing.authorizePlan({ workspaceRoot: input.workspaceRoot, planId: input.planId, operation: 'dataset_api_raw_data' })
+    const result = await service.rawData(input)
     return textResult(
       `Downloaded ${result.response.bytes} raw-data bytes to ${result.artifact.path} (sha256 ${result.artifact.sha256}).`,
       { result: compactDatasetToolResult(result) }
@@ -540,7 +543,8 @@ function isArtifactDescriptor(value: unknown): value is Record<string, unknown> 
 function compactArtifactDescriptor(artifact: Record<string, unknown>): Record<string, unknown> {
   return Object.fromEntries([
     'version', 'artifactId', 'operation', 'format', 'path', 'manifestPath', 'sha256', 'bytes', 'records',
-    'fileName', 'reused', 'artifactCount', 'planId', 'name', 'status', 'summary'
+    'fileName', 'reused', 'artifactCount', 'planId', 'name', 'status', 'summary',
+    'schemaPath', 'qualityReportPath', 'preparationPlanPath', 'checksumsPath'
   ].flatMap((key) => artifact[key] === undefined ? [] : [[key, key === 'summary'
     ? boundedMetadataSummary(artifact[key])
     : artifact[key]]]))
