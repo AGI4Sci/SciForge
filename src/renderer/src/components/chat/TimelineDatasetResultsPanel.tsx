@@ -132,7 +132,7 @@ function DatasetResultCard({
   workspaceRoot?: string
 }): ReactElement {
   const { t } = useTranslation('common')
-  const [expanded, setExpanded] = useState(item.kind === 'metadata')
+  const [expanded, setExpanded] = useState(false)
   const result = item.result
   const source = asRecord(result?.source)
   const request = asRecord(result?.request)
@@ -270,6 +270,7 @@ function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }):
   const counts = asRecord(result?.counts)
   const validation = asRecord(result?.validation)
   const publication = asRecord(result?.publication)
+  const quality = asRecord(result?.quality)
   const plan = asRecord(result?.plan)
   const values: Array<{ label: string; value: string }> = []
   if (numberValue(profile?.records) !== undefined) values.push({ label: t('datasetResultRecords'), value: String(numberValue(profile?.records)) })
@@ -293,6 +294,7 @@ function DatasetProcessingHighlights({ item }: { item: TimelineDatasetResult }):
   if (numberValue(validation?.coordinateRecords) !== undefined) values.push({ label: t('datasetResultCoordinates'), value: String(numberValue(validation?.coordinateRecords)) })
   if (numberValue(validation?.errorCount) !== undefined) values.push({ label: t('datasetResultErrors'), value: String(numberValue(validation?.errorCount)) })
   if (numberValue(publication?.artifactCount) !== undefined) values.push({ label: t('datasetResultArtifacts'), value: String(numberValue(publication?.artifactCount)) })
+  if (stringValue(quality?.status)) values.push({ label: t('datasetResultQuality'), value: stringValue(quality?.status) })
   if (stringValue(plan?.status)) values.push({ label: t('datasetResultPlanStatus'), value: stringValue(plan?.status) })
   if (values.length === 0) return null
   return (

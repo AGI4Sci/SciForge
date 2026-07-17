@@ -223,7 +223,10 @@ describe('TimelineDatasetResultsPanel', () => {
         kind: 'tool', id: 'publish-1', summary: 'dataset_publish', status: 'success',
         meta: { datasetApi: {
           toolName: 'dataset_publish', success: true,
-          result: { publication: { artifactCount: 2, manifestPath: '/workspace/published/manifest.json' } }
+          result: {
+            publication: { artifactCount: 2, manifestPath: '/workspace/published/manifest.json' },
+            quality: { status: 'passed' }
+          }
         } }
       }
     ]
@@ -237,7 +240,7 @@ describe('TimelineDatasetResultsPanel', () => {
       { kind: 'profile', toolName: 'dataset_structure_profile', result: { profile: { coordinateRecords: 2500 } } },
       { kind: 'validation', toolName: 'dataset_structure_validate', result: { validation: { valid: true } } },
       { kind: 'validation', result: { validation: { valid: true } } },
-      { kind: 'publication', result: { publication: { artifactCount: 2 } } }
+      { kind: 'publication', result: { publication: { artifactCount: 2 }, quality: { status: 'passed' } } }
     ])
   })
 })

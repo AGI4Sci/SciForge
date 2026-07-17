@@ -15,7 +15,15 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
     workspaceRoot,
     fetchImpl: async (url) => {
       if (String(url).includes('/large')) {
-        return new Response(JSON.stringify({ id: 'large-dataset', description: 'x'.repeat(70 * 1024) }), {
+        return new Response(JSON.stringify({
+          id: 'large-dataset',
+          description: 'x'.repeat(70 * 1024),
+          records: Array.from({ length: 500 }, (_, index) => ({
+            id: `record-${index}`,
+            sequence: 'M'.repeat(1_000),
+            annotations: Array.from({ length: 20 }, (_entry, annotation) => ({ annotation }))
+          }))
+        }), {
           headers: { 'content-type': 'application/json' }
         })
       }
@@ -109,6 +117,7 @@ test('exposes metadata and raw-data tools as the Dataset API contract', async ()
     }
     assert.equal(largeResult.metadataTruncated, true)
     assert.match(largeResult.metadata.description, /…$/)
+    assert.ok(JSON.stringify(largeMetadata.structuredContent).length < 16 * 1024)
     const rawData = await client.callTool({
       name: 'dataset_api_raw_data',
       arguments: {
@@ -356,6 +365,9 @@ test('propagates API request provenance through processing and publication manif
       name: 'reviewed-proteins',
       artifacts: [filtered.artifact.path, validation.artifact.path]
     })
+    assert.equal(published.publication.artifactCount, 2)
+    assert.equal(published.quality.status, 'passed')
+    assert.ok(JSON.stringify(published).length < 24 * 1024)
     const filterManifest = JSON.parse(await readFile(filtered.artifact.manifestPath, 'utf8'))
     assert.equal(filterManifest.origins[0].source.id, 'provenance-db')
     assert.equal(filterManifest.origins[0].request.url, 'https://data.example.org/proteins')

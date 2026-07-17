@@ -690,8 +690,21 @@ function effectForRequestedAction(action: string, remainder: string): RequestedE
   if (/^(?:edit|modify|create|delete|remove|update|install|implement|fix|patch|write|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入)$/iu.test(action)) {
     return 'local_write'
   }
-  if (/^(?:run|execute|执行|运行)$/iu.test(action)) return 'command_execution'
+  if (/^(?:run|execute|执行|运行)$/iu.test(action)) {
+    return requestsCommandSurface(remainder) ? 'command_execution' : 'any_success'
+  }
   return 'any_success'
+}
+
+/**
+ * "Run/execute" often describes a tool-backed workflow rather than a shell
+ * command (for example, "执行一次 Dataset 验收"). Requiring a command receipt
+ * in that case rejects successful MCP receipts. Keep the stricter command
+ * obligation only when the requested object names a command-oriented surface.
+ */
+function requestsCommandSurface(value: string): boolean {
+  return /\b(?:tests?|checks?|commands?|scripts?|build|lint|typecheck|shell|terminal|server|service|process|binary|executable|npm|pnpm|yarn|vitest|jest|pytest)\b/iu.test(value) ||
+    /(?:测试|检查|命令|脚本|构建|编译|类型检查|终端|服务|进程|可执行文件)/u.test(value)
 }
 
 function isExternalObjectMutation(action: string, objectText: string): boolean {

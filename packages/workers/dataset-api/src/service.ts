@@ -325,7 +325,7 @@ export function createDatasetApiService(options: {
 async function registerSource(
   input: DatasetApiRegisterInput,
   defaultWorkspaceRoot: string | undefined
-): Promise<{ registryPath: string; source: DatasetApiSource }> {
+): Promise<{ registryPath: string; source: DatasetApiSource; reused: boolean }> {
   const registryPath = resolveRegistryPath(input.workspaceRoot, defaultWorkspaceRoot)
   validateBaseUrl(input.baseUrl)
   validateEndpoint(input.metadataEndpoint, 'metadataEndpoint')
@@ -333,9 +333,6 @@ async function registerSource(
   validateHeaders(input.defaultHeaders)
   const registry = await readRegistry(registryPath)
   const existingIndex = registry.sources.findIndex((source) => source.id === input.id)
-  if (existingIndex >= 0 && !input.overwrite) {
-    throw new Error(`Dataset source '${input.id}' already exists. Set overwrite=true to replace it.`)
-  }
   const now = new Date().toISOString()
   const previous = existingIndex >= 0 ? registry.sources[existingIndex] : undefined
   const source: DatasetApiSource = {
@@ -350,11 +347,31 @@ async function registerSource(
     createdAt: previous?.createdAt ?? now,
     updatedAt: now
   }
+  if (previous && !input.overwrite) {
+    if (sameSourceConfiguration(previous, source)) {
+      return { registryPath, source: previous, reused: true }
+    }
+    throw new Error(`Dataset source '${input.id}' already exists with different settings. Set overwrite=true to replace it.`)
+  }
   if (existingIndex >= 0) registry.sources[existingIndex] = source
   else registry.sources.push(source)
   registry.sources.sort((left, right) => left.id.localeCompare(right.id))
   await writeRegistry(registryPath, registry)
-  return { registryPath, source }
+  return { registryPath, source, reused: false }
+}
+
+function sameSourceConfiguration(left: DatasetApiSource, right: DatasetApiSource): boolean {
+  const configuration = (source: DatasetApiSource) => ({
+    id: source.id,
+    name: source.name,
+    description: source.description,
+    baseUrl: source.baseUrl,
+    metadataEndpoint: source.metadataEndpoint,
+    rawDataEndpoint: source.rawDataEndpoint,
+    defaultHeaders: source.defaultHeaders,
+    auth: source.auth
+  })
+  return JSON.stringify(configuration(left)) === JSON.stringify(configuration(right))
 }
 
 function withSourceId(example: Record<string, unknown>, sourceId: string): Record<string, unknown> {

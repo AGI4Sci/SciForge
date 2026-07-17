@@ -85,14 +85,14 @@ export function createDatasetApiMcpServer(
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: false,
+      idempotentHint: true,
       openWorldHint: false
     }
   }, async (args) => runTool(async () => {
     const result = await service.registerProvider(datasetApiRegisterProviderInputSchema.parse(args))
     return textResult(
-      `Registered built-in provider '${result.providerId}' as dataset source '${result.source.id}'.`,
-      { result }
+      `${result.reused ? 'Reused' : 'Registered'} built-in provider '${result.providerId}' as dataset source '${result.source.id}'.`,
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -107,7 +107,7 @@ export function createDatasetApiMcpServer(
       result.sources.length
         ? `Registered dataset databases:\n${result.sources.map((source) => `- ${source.id}: metadata=${source.metadataEndpoint}, raw=${source.rawDataEndpoint}`).join('\n')}`
         : 'No dataset databases are registered in this workspace.',
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -118,14 +118,14 @@ export function createDatasetApiMcpServer(
     annotations: {
       readOnlyHint: false,
       destructiveHint: false,
-      idempotentHint: false,
+      idempotentHint: true,
       openWorldHint: false
     }
   }, async (args) => runTool(async () => {
     const result = await service.register(datasetApiRegisterInputSchema.parse(args))
     return textResult(
-      `Registered dataset database '${result.source.id}' with metadata and raw-data endpoints.`,
-      { result }
+      `${result.reused ? 'Reused' : 'Registered'} dataset database '${result.source.id}' with metadata and raw-data endpoints.`,
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -157,7 +157,7 @@ export function createDatasetApiMcpServer(
     const result = await service.rawData(datasetApiRawDataInputSchema.parse(args))
     return textResult(
       `Downloaded ${result.response.bytes} raw-data bytes to ${result.artifact.path} (sha256 ${result.artifact.sha256}).`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -170,7 +170,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.preparePlan(datasetPreparePlanInputSchema.parse(args))
     return textResult(
       `Prepared ${result.plan.status} dataset plan '${result.plan.planId}' with ${result.plan.operations.length} operations.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -183,7 +183,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.profile(datasetProfileInputSchema.parse(args))
     return textResult(
       `Profiled ${result.profile.records} records from a ${result.profile.format} dataset. Report: ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -196,7 +196,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.filter(datasetFilterInputSchema.parse(args))
     return textResult(
       `Filtered ${result.counts.inputRecords} records to ${result.counts.outputRecords}; wrote ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -209,7 +209,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.selectColumns(datasetSelectColumnsInputSchema.parse(args))
     return textResult(
       `Selected fields for ${result.counts.outputRecords} records; wrote ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -222,7 +222,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.transform(datasetTransformInputSchema.parse(args))
     return textResult(
       `Applied ${result.operations.length} structured transformations to ${result.counts.outputRecords} records; wrote ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -235,7 +235,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.deduplicate(datasetDeduplicateInputSchema.parse(args))
     return textResult(
       `Removed ${result.counts.duplicateRecordsRemoved} duplicate records; wrote ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -248,7 +248,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.mapIds(datasetIdMapInputSchema.parse(args))
     return textResult(
       `Mapped ${result.counts.mappedRecords}/${result.counts.inputRecords} records; unmatched=${result.counts.unmatchedRecords}, ambiguous=${result.counts.ambiguousRecords}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -283,7 +283,7 @@ export function createDatasetApiMcpServer(
     })
     return textResult(
       `UniProt mapped ${result.counts.mappedRecords}/${result.counts.inputRecords} records from ${input.fromDatabase} to ${input.toDatabase}; unmatched=${result.counts.unmatchedRecords}, ambiguous=${result.counts.ambiguousRecords}.`,
-      { result: {
+      { result: compactDatasetToolResult({
         ...result,
         providerMappingArtifact: provider.mappingArtifact,
         providerJob: {
@@ -291,7 +291,7 @@ export function createDatasetApiMcpServer(
           resultsUrl: provider.mapping.resultsUrl,
           failedIdCount: provider.mapping.failedIds.length
         }
-      } }
+      }) }
     )
   }))
 
@@ -304,7 +304,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.join(datasetJoinInputSchema.parse(args))
     return textResult(
       `Joined ${result.counts.leftRecords} left and ${result.counts.rightRecords} right records into ${result.counts.outputRecords}; unmatched left=${result.counts.unmatchedLeftRecords}, right=${result.counts.unmatchedRightRecords}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -317,7 +317,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.structureProfile(datasetStructureProfileInputSchema.parse(args))
     return textResult(
       `Profiled ${result.profile.records} ${result.profile.format} structure records with ${result.profile.coordinateRecords} coordinate records; report: ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -330,7 +330,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.structureValidate(datasetStructureValidateInputSchema.parse(args))
     return textResult(
       `Structure validation ${result.validation.valid ? 'passed' : 'failed'} with ${result.validation.errorCount} errors; report: ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -343,7 +343,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.organizeGraph(datasetGraphOrganizeInputSchema.parse(args))
     return textResult(
       `Organized ${result.counts.edgeRecords} edges and ${result.counts.nodeRecords} nodes; invalid=${result.counts.invalidRecords}, duplicates removed=${result.counts.duplicateEdgesRemoved}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -356,7 +356,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.validate(datasetValidateInputSchema.parse(args))
     return textResult(
       `Dataset validation ${result.validation.valid ? 'passed' : 'failed'} with ${result.validation.errorCount} errors. Report: ${result.artifact.path}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -369,7 +369,7 @@ export function createDatasetApiMcpServer(
     const result = await processing.publish(datasetPublishInputSchema.parse(args))
     return textResult(
       `Published ${result.publication.artifactCount} artifacts to ${result.publication.path}. Manifest: ${result.publication.manifestPath}.`,
-      { result }
+      { result: compactDatasetToolResult(result) }
     )
   }))
 
@@ -435,26 +435,49 @@ function compactMetadataResult(
   const { metadata, ...rest } = result
   return {
     ...rest,
-    metadata: summarizeMetadata(metadata),
+    metadata: boundedMetadataSummary(metadata),
     metadataTruncated: true,
     metadataResponseMode: 'summary',
     guidance: 'Call dataset_api_metadata with responseMode=full only if the complete metadata payload is required.'
   }
 }
 
+const MAX_METADATA_SUMMARY_CHARACTERS = 12 * 1024
+const MAX_STRUCTURED_RESULT_CHARACTERS = 24 * 1024
+
+function boundedMetadataSummary(value: unknown): unknown {
+  const summary = summarizeMetadata(value)
+  if (JSON.stringify(summary).length <= MAX_METADATA_SUMMARY_CHARACTERS) return summary
+  if (Array.isArray(value)) return { type: 'array', count: value.length, sampleOmitted: true }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+    return {
+      type: 'object',
+      keys: entries.slice(0, 50).map(([key]) => key),
+      omittedKeyCount: Math.max(0, entries.length - 50),
+      scalarHighlights: Object.fromEntries(entries
+        .filter(([, entry]) => entry === null || ['string', 'number', 'boolean'].includes(typeof entry))
+        .slice(0, 16)
+        .map(([key, entry]) => [key, summarizeMetadata(entry, 1)])),
+      summaryOmittedForSize: true
+    }
+  }
+  return summarizeMetadata(value)
+}
+
 function summarizeMetadata(value: unknown, depth = 0): unknown {
   if (value === null || typeof value === 'number' || typeof value === 'boolean') return value
-  if (typeof value === 'string') return value.length <= 500 ? value : `${value.slice(0, 500)}…`
+  if (typeof value === 'string') return value.length <= 160 ? value : `${value.slice(0, 160)}…`
   if (Array.isArray(value)) {
     return {
       type: 'array',
       count: value.length,
-      sample: depth >= 2 ? [] : value.slice(0, 3).map((entry) => summarizeMetadata(entry, depth + 1))
+      sample: depth >= 1 ? [] : value.slice(0, 2).map((entry) => summarizeMetadata(entry, depth + 1))
     }
   }
   if (typeof value === 'object') {
     const entries = Object.entries(value as Record<string, unknown>)
-    const selected = entries.slice(0, 30).map(([key, entry]) => [
+    const selected = entries.slice(0, 16).map(([key, entry]) => [
       key,
       depth >= 2 && typeof entry === 'object' && entry !== null
         ? Array.isArray(entry) ? { type: 'array', count: entry.length } : { type: 'object', keys: Object.keys(entry).slice(0, 20) }
@@ -466,6 +489,61 @@ function summarizeMetadata(value: unknown, depth = 0): unknown {
     }
   }
   return String(value)
+}
+
+function compactDatasetToolResult(value: unknown): unknown {
+  const compact = compactStructuredValue(value, 0)
+  if (JSON.stringify(compact).length <= MAX_STRUCTURED_RESULT_CHARACTERS) return compact
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return boundedMetadataSummary(value)
+  const record = value as Record<string, unknown>
+  const fallback = Object.fromEntries(Object.entries(record).slice(0, 24).map(([key, entry]) => [
+    key,
+    isArtifactDescriptor(entry) ? compactArtifactDescriptor(entry as Record<string, unknown>) : boundedMetadataSummary(entry)
+  ]))
+  if (JSON.stringify(fallback).length <= MAX_STRUCTURED_RESULT_CHARACTERS) return fallback
+  return {
+    structuredResultTruncated: true,
+    keys: Object.keys(record).slice(0, 50),
+    artifacts: Object.fromEntries(Object.entries(record)
+      .filter(([, entry]) => isArtifactDescriptor(entry))
+      .slice(0, 12)
+      .map(([key, entry]) => [key, compactArtifactDescriptor(entry as Record<string, unknown>)]))
+  }
+}
+
+function compactStructuredValue(value: unknown, depth: number): unknown {
+  if (value === null || ['string', 'number', 'boolean'].includes(typeof value)) return summarizeMetadata(value, depth)
+  if (Array.isArray(value)) {
+    if (value.length > 12 || depth >= 3) {
+      return { type: 'array', count: value.length, sample: value.slice(0, 3).map((entry) => compactStructuredValue(entry, depth + 1)) }
+    }
+    return value.map((entry) => compactStructuredValue(entry, depth + 1))
+  }
+  if (!value || typeof value !== 'object') return String(value)
+  const record = value as Record<string, unknown>
+  if (isArtifactDescriptor(record)) return compactArtifactDescriptor(record)
+  const entries = Object.entries(record)
+  const limit = depth === 0 ? 32 : depth === 1 ? 20 : 12
+  const selected = entries.slice(0, limit).map(([key, entry]) => [key, compactStructuredValue(entry, depth + 1)])
+  return {
+    ...Object.fromEntries(selected),
+    ...(entries.length > selected.length ? { omittedKeyCount: entries.length - selected.length } : {})
+  }
+}
+
+function isArtifactDescriptor(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const record = value as Record<string, unknown>
+  return typeof record.path === 'string' && typeof record.sha256 === 'string' && typeof record.manifestPath === 'string'
+}
+
+function compactArtifactDescriptor(artifact: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries([
+    'version', 'artifactId', 'operation', 'format', 'path', 'manifestPath', 'sha256', 'bytes', 'records',
+    'fileName', 'reused', 'artifactCount', 'planId', 'name', 'status', 'summary'
+  ].flatMap((key) => artifact[key] === undefined ? [] : [[key, key === 'summary'
+    ? boundedMetadataSummary(artifact[key])
+    : artifact[key]]]))
 }
 
 function message(error: unknown): string {

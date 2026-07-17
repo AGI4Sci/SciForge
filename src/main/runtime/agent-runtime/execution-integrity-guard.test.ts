@@ -551,6 +551,20 @@ describe('execution integrity input policy', () => {
       .toContain('"effectClass":"command_execution"')
   })
 
+  it('accepts a successful Dataset MCP receipt for a conversational Dataset execution request', () => {
+    const request = '执行一次纯对话 Dataset 准备验收，只调用 dataset_prepare_plan 并等待确认。'
+    const guarded = withExecutionIntegrityRequirement(baseInput('codex', request))
+    expect(guarded.text).toContain('"kind":"any_success"')
+    expect(guarded.text).not.toContain('"effectClass":"command_execution"')
+
+    const guard = rememberedGuard('codex', request)
+    guard.observe('codex', {
+      ...tool('codex', 'succeeded'),
+      toolName: 'dataset_prepare_plan'
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
   it.each([
     ['Open an issue.', 'open_issue'],
     ['Create a pull request.', 'create_pull_request'],

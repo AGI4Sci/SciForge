@@ -138,10 +138,14 @@ test('registers and accesses executable biology provider presets', async () => {
   try {
     const registration = await service.registerProvider({ providerId: 'uniprot' })
     assert.equal(registration.source.id, 'uniprot')
+    assert.equal(registration.reused, false)
     assert.deepEqual(registration.usage.metadata, {
       sourceId: 'uniprot',
       pathParameters: { identifier: 'P04637' }
     })
+    const repeatedRegistration = await service.registerProvider({ providerId: 'uniprot' })
+    assert.equal(repeatedRegistration.reused, true)
+    assert.equal(repeatedRegistration.source.createdAt, registration.source.createdAt)
     const metadata = await service.metadata({
       sourceId: 'uniprot',
       pathParameters: { accession: 'P04637' }
