@@ -1,3 +1,4 @@
+import { executionOutcomeFromValue } from '@sciforge/execution-governance'
 import type { CodexThreadEventPayload } from '../codex-runtime-api'
 import {
   codexAppServerApprovalToolName,
@@ -306,9 +307,12 @@ function normalizeSessionResponseItem(
   }
   if (type === 'function_call_output') {
     const output = outputText(payload.output)
+    const detail = toolReceiptDetail(payload)
+    const exitCode = toolReceiptExitCode(payload, output)
+    const outcome = executionOutcomeFromValue(payload.outcome)
     const callId = stringValue(payload.call_id) || stringValue(payload.id) || 'codex-tool-output'
     const toolName = stringValue(payload.name) || stringValue(payload.tool_name)
-    const status = toolOutputStatus(payload, output)
+    const status = toolOutputStatus(payload, exitCode)
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
@@ -316,23 +320,32 @@ function normalizeSessionResponseItem(
         itemId: callId,
         summary: toolName || 'Tool output',
         status,
-        detail: output,
-        meta: toolExecutionMeta({
-          callId,
-          ...(toolName ? { toolName } : {}),
-          phase: status === 'success' ? 'succeeded' : 'failed',
-          factSource: 'executor_result',
-          evidenceStrength: 'executor_receipt',
-          success: status === 'success'
-        })
+        detail,
+        meta: {
+          ...toolExecutionMeta({
+            callId,
+            ...(toolName ? { toolName } : {}),
+            phase: status === 'success' ? 'succeeded' : 'failed',
+            factSource: 'executor_result',
+            evidenceStrength: 'executor_receipt',
+            success: status === 'success'
+          }),
+          ...(payload.output === undefined ? {} : { output: redactImagePayloads(payload.output) }),
+          ...(payload.error === undefined ? {} : { error: redactImagePayloads(payload.error) }),
+          ...(exitCode !== undefined ? { exitCode } : {}),
+          ...(outcome ? { outcome } : {})
+        }
       }
     }
   }
   if (type === 'local_shell_call') {
     const action = asRecord(payload.action)
     const command = stringValue(action?.command)
+    const detail = toolReceiptDetail(payload) || command
+    const exitCode = toolReceiptExitCode(payload)
+    const outcome = executionOutcomeFromValue(payload.outcome)
     const callId = stringValue(payload.call_id) || stringValue(payload.id) || 'codex-local-shell-call'
-    const status = localShellCallStatus(payload)
+    const status = localShellCallStatus(payload, exitCode)
     return {
       threadId,
       ...(turnId ? { turnId } : {}),
@@ -341,7 +354,7 @@ function normalizeSessionResponseItem(
         summary: command || 'Local shell',
         status,
         toolKind: 'command_execution',
-        ...(command ? { detail: command } : {}),
+        ...(detail ? { detail } : {}),
         meta: {
           ...toolExecutionMeta({
             callId,
@@ -351,7 +364,11 @@ function normalizeSessionResponseItem(
             evidenceStrength: status === 'running' ? 'runtime_lifecycle' : 'executor_receipt',
             ...(status === 'running' ? {} : { success: status === 'success' })
           }),
-          ...(command ? { command } : {})
+          ...(command ? { command } : {}),
+          ...(payload.output === undefined ? {} : { output: redactImagePayloads(payload.output) }),
+          ...(payload.error === undefined ? {} : { error: redactImagePayloads(payload.error) }),
+          ...(exitCode !== undefined ? { exitCode } : {}),
+          ...(outcome ? { outcome } : {})
         }
       }
     }
@@ -409,6 +426,7 @@ function normalizeThreadItem(
           ...terminalAwareToolExecutionMeta(callId, 'exec_command', status),
           ...(command ? { command } : {}),
           ...(cwd ? { cwd } : {}),
+          ...(output ? { output } : {}),
           ...(typeof item.exitCode === 'number' ? { exitCode: item.exitCode } : {})
         }
       }
@@ -992,27 +1010,42 @@ function toolItemCallId(item: Record<string, unknown>, fallback: string): string
 
 function toolOutputStatus(
   payload: Record<string, unknown>,
-  output: string
+  exitCode: number | undefined
 ): NonNullable<CodexThreadEventPayload['tool']>['status'] {
   if (typeof payload.success === 'boolean') return payload.success ? 'success' : 'error'
   if (payload.error !== undefined && payload.error !== null) return 'error'
   const status = stringValue(payload.status).toLowerCase()
   if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') return 'error'
   if (status === 'completed' || status === 'success' || status === 'succeeded') return 'success'
-  const exitCode = output.match(/Process exited with code\s+(-?\d+)/i)
-  if (!exitCode) return 'success'
-  return exitCode[1] === '0' ? 'success' : 'error'
+  return exitCode === undefined || exitCode === 0 ? 'success' : 'error'
 }
 
 function localShellCallStatus(
-  payload: Record<string, unknown>
+  payload: Record<string, unknown>,
+  exitCode: number | undefined
 ): NonNullable<CodexThreadEventPayload['tool']>['status'] {
   const status = stringValue(payload.status).toLowerCase()
   if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') return 'error'
-  if (typeof payload.exit_code === 'number' && payload.exit_code !== 0) return 'error'
-  if (typeof payload.exitCode === 'number' && payload.exitCode !== 0) return 'error'
+  if (exitCode !== undefined && exitCode !== 0) return 'error'
   if (status === 'completed' || status === 'success' || status === 'succeeded') return 'success'
   return 'running'
+}
+
+function toolReceiptExitCode(
+  payload: Record<string, unknown>,
+  output = outputText(payload.output)
+): number | undefined {
+  const explicit = payload.exitCode ?? payload.exit_code
+  if (typeof explicit === 'number' && Number.isFinite(explicit)) return explicit
+  const match = output.match(/Process exited with code\s+(-?\d+)/i)
+  return match ? Number(match[1]) : undefined
+}
+
+function toolReceiptDetail(payload: Record<string, unknown>): string {
+  return [payload.output, payload.error, payload.detail]
+    .map((value) => outputText(value) || threadItemJsonDetail(value) || '')
+    .filter((value, index, values) => value && values.indexOf(value) === index)
+    .join('\n')
 }
 
 function threadItemStatus(

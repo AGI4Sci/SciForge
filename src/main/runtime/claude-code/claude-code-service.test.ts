@@ -571,6 +571,7 @@ describe('ClaudeCodeRuntimeService', () => {
       event.kind === 'tool_event' && event.itemId === 'tool-read-1'
     )
     expect(toolEvents).toHaveLength(2)
+    expect(toolEvents[0]).not.toHaveProperty('receipt')
     expect(toolEvents).toEqual([
       expect.objectContaining({
         kind: 'tool_event',
@@ -587,6 +588,11 @@ describe('ClaudeCodeRuntimeService', () => {
       expect.objectContaining({
         kind: 'tool_event',
         status: 'success',
+        receipt: expect.objectContaining({
+          status: 'success',
+          outcome: 'progress',
+          output: 'file contents'
+        }),
         meta: expect.objectContaining({
           callId: 'tool-read-1',
           toolName: 'Read',
@@ -695,6 +701,12 @@ describe('ClaudeCodeRuntimeService', () => {
     )
     expect(toolEvents.at(-1)).toEqual(expect.objectContaining({
       status: 'error',
+      receipt: expect.objectContaining({
+        status: 'error',
+        outcome: 'retryable_error',
+        errorCode: 'claude_tool_error',
+        output: 'command exited with status 1'
+      }),
       meta: expect.objectContaining({
         callId: 'tool-bash-1',
         toolName: 'Bash',
@@ -736,6 +748,9 @@ describe('ClaudeCodeRuntimeService', () => {
       const detail = await service.readThread(thread.thread.id)
       return detail.ok && detail.detail.latestTurnStatus === 'failed'
     })
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.state === 'failed'
+    ))
 
     const events = await storedEvents(service, thread.thread.id)
     expect(events).toEqual(expect.arrayContaining([
@@ -743,6 +758,11 @@ describe('ClaudeCodeRuntimeService', () => {
         kind: 'tool_event',
         itemId: 'tool-write-1',
         status: 'error',
+        receipt: expect.objectContaining({
+          status: 'error',
+          outcome: 'retryable_error',
+          errorCode: 'claude_tool_result_missing'
+        }),
         meta: expect.objectContaining({
           callId: 'tool-write-1',
           toolName: 'Write',

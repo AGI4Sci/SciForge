@@ -631,6 +631,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
           summary: 'exec_command',
           status: 'success' as const,
           toolKind: 'command_execution' as const,
+          detail: 'no matches',
           meta: {
             callId: 'call-1',
             toolName: 'exec_command',
@@ -638,7 +639,14 @@ describe('createCodexAgentRuntimeAdapter', () => {
             factSource: 'executor_result',
             evidenceStrength: 'executor_receipt',
             attempt: 2,
-            resultDigest: 'sha256:abc'
+            resultDigest: 'sha256:abc',
+            outcome: 'negative_result',
+            exitCode: 1,
+            failureClass: 'no_match',
+            resourceIdentity: 'query:missing',
+            evidenceDelta: false,
+            stateChanged: false,
+            output: { matches: [] }
           }
         }
       }])
@@ -662,7 +670,19 @@ describe('createCodexAgentRuntimeAdapter', () => {
       factSource: 'executor_result',
       evidenceStrength: 'executor_receipt',
       attempt: 2,
-      resultDigest: 'sha256:abc'
+      resultDigest: 'sha256:abc',
+      receipt: {
+        status: 'success',
+        outcome: 'negative_result',
+        exitCode: 1,
+        errorCode: undefined,
+        failureClass: 'no_match',
+        resourceIdentity: 'query:missing',
+        evidenceDelta: false,
+        stateChanged: false,
+        output: { matches: [] },
+        detail: 'no matches'
+      }
     })])
   })
 

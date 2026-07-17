@@ -1,3 +1,5 @@
+import type { ExecutionReceipt } from '@sciforge/execution-governance'
+
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
 export type AgentRuntimeTransport = 'http_sse' | 'jsonrpc_stdio' | 'cli_process'
@@ -1052,6 +1054,40 @@ export type AgentRuntimeBaseEvent = {
   createdAt?: string
 }
 
+export type AgentRuntimeExecutionReceipt = ExecutionReceipt
+
+type AgentRuntimeToolEventBase = AgentRuntimeBaseEvent & {
+  kind: 'tool_event'
+  itemId: string
+  toolKind?: AgentRuntimeToolKind
+  callId?: string
+  toolName?: string
+  phase?: AgentRuntimeToolExecutionPhase
+  factSource?: AgentRuntimeToolFactSource
+  evidenceStrength?: AgentRuntimeToolEvidenceStrength
+  attempt?: number
+  resultDigest?: string
+  errorCode?: string
+  summary?: string
+  detail?: string
+  filePath?: string
+  meta?: Record<string, unknown>
+}
+
+export type AgentRuntimeToolEvent =
+  | (AgentRuntimeToolEventBase & {
+      status: 'running'
+      receipt?: never
+    })
+  | (AgentRuntimeToolEventBase & {
+      status: 'success'
+      receipt: ExecutionReceipt & { status: 'success' }
+    })
+  | (AgentRuntimeToolEventBase & {
+      status: 'error'
+      receipt: ExecutionReceipt & { status: 'error' }
+    })
+
 export type AgentRuntimeEvent =
   | (AgentRuntimeBaseEvent & {
       kind: 'thread_lifecycle'
@@ -1092,24 +1128,7 @@ export type AgentRuntimeEvent =
       kind: 'item_snapshot'
       item: AgentRuntimeItem
     })
-  | (AgentRuntimeBaseEvent & {
-      kind: 'tool_event'
-      itemId: string
-      status: 'running' | 'success' | 'error'
-      toolKind?: AgentRuntimeToolKind
-      callId?: string
-      toolName?: string
-      phase?: AgentRuntimeToolExecutionPhase
-      factSource?: AgentRuntimeToolFactSource
-      evidenceStrength?: AgentRuntimeToolEvidenceStrength
-      attempt?: number
-      resultDigest?: string
-      errorCode?: string
-      summary?: string
-      detail?: string
-      filePath?: string
-      meta?: Record<string, unknown>
-    })
+  | AgentRuntimeToolEvent
   | (AgentRuntimeBaseEvent & {
       kind: 'child_event'
       child: AgentRuntimeChild

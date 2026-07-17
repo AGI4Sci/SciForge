@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import type {
   AgentRuntimeCapabilities,
   AgentRuntimeChild,
   AgentRuntimeChildTranscriptEntry,
   AgentRuntimeChildTranscriptRef,
+  AgentRuntimeExecutionReceipt,
   AgentRuntimeEvent,
   AgentRuntimeInputQuestion,
   AgentRuntimeItem,
@@ -1238,18 +1240,32 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     if (pendingRequest) {
       mapped.push(pendingRequest)
     } else {
-      mapped.push({
+      const base = {
         ...common,
-        kind: 'tool_event',
+        kind: 'tool_event' as const,
         itemId: event.tool.itemId,
-        status: event.tool.status,
         toolKind: normalizeToolKind(event.tool.toolKind),
         ...execution,
         summary: event.tool.summary,
         detail: event.tool.detail,
         filePath: event.tool.filePath,
         meta: event.tool.meta
-      })
+      }
+      if (event.tool.status === 'running') {
+        mapped.push({ ...base, status: 'running' })
+      } else if (event.tool.status === 'success') {
+        mapped.push({
+          ...base,
+          status: 'success',
+          receipt: codexExecutionReceipt('success', event.tool)
+        })
+      } else {
+        mapped.push({
+          ...base,
+          status: 'error',
+          receipt: codexExecutionReceipt('error', event.tool)
+        })
+      }
     }
   }
   const child = normalizeCodexChild(event.child, event)
@@ -1331,6 +1347,20 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     })
   }
   return mapped
+}
+
+function codexExecutionReceipt<Status extends 'success' | 'error'>(
+  status: Status,
+  tool: NonNullable<CodexThreadEventPayload['tool']>
+): AgentRuntimeExecutionReceipt & { status: Status } {
+  const meta = tool.meta ?? {}
+  const output = meta.structuredContent ?? meta.output ?? meta.result ?? tool.detail
+  return createExecutionReceipt({
+    status,
+    output,
+    detail: tool.detail,
+    metadata: meta
+  })
 }
 
 function codexToolExecutionFields(

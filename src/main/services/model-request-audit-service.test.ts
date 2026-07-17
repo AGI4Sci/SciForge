@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import { ModelRequestAuditRecorder } from './model-request-audit-service'
 import type { AgentRuntimeEvent } from '../../shared/agent-runtime-contract'
 
@@ -62,6 +63,7 @@ describe('ModelRequestAuditRecorder', () => {
       turnId: 'turn-1',
       itemId: 'tool-1',
       status: 'success',
+      receipt: createExecutionReceipt({ status: 'success' }),
       summary: 'read_file',
       meta: { callId: 'call-1', toolName: 'read_file', Authorization: 'Bearer secret' }
     })
@@ -178,6 +180,7 @@ describe('ModelRequestAuditRecorder', () => {
       turnId: 'turn-secret',
       itemId: 'tool-secret',
       status: 'error',
+      receipt: createExecutionReceipt({ status: 'error' }),
       summary: 'call_api',
       meta: {
         callId: 'call-secret',
@@ -253,6 +256,7 @@ describe('ModelRequestAuditRecorder', () => {
       itemId: 'result-item',
       callId: 'call-proof',
       status: 'success',
+      receipt: createExecutionReceipt({ status: 'success', output: { exitCode: 0 } }),
       phase: 'succeeded',
       factSource: 'executor_result',
       evidenceStrength: 'executor_receipt',

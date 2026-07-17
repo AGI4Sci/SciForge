@@ -10,6 +10,11 @@ import type { ApprovalRequest } from '../../domain/approval.js'
 import { createApprovalRequest } from '../../domain/approval.js'
 import type { TurnItem } from '../../contracts/items.js'
 import { makeToolResultItem, makeApprovalItem } from '../../domain/item.js'
+import {
+  createExecutionReceipt,
+  type ExecutionOutcome,
+  type ExecutionReceipt
+} from '@sciforge/execution-governance'
 import { buildBuiltinLocalTools } from './builtin-tools.js'
 import { CapabilityRegistry } from './capability-registry.js'
 import {
@@ -60,7 +65,11 @@ export type LocalTool = {
     args: Record<string, unknown>,
     context: ToolHostContext,
     onUpdate?: (update: ToolExecutionUpdate) => Promise<void> | void
-  ) => Promise<{ output: unknown; isError?: boolean }>
+  ) => Promise<{
+    output: unknown
+    isError?: boolean
+    receiptMetadata?: Partial<Omit<ExecutionReceipt, 'status' | 'output' | 'detail'>>
+  }>
 }
 
 export type LocalToolHostOptions = {
@@ -120,14 +129,27 @@ export class LocalToolHost implements ToolHost {
     }
     const { tool } = this.registry.resolveTool(call.toolName, context, call.providerId)
     if (tool.policy === 'never') {
-      throw new Error(`tool ${call.toolName} is disabled by policy`)
+      return this.errorToolHostResult(
+        context,
+        call,
+        tool,
+        `tool ${call.toolName} is disabled by policy`,
+        'approval_policy_blocked',
+        false,
+        'fatal_error'
+      )
     }
     const sandboxBlock = sandboxBlockForTool(tool, context)
     if (sandboxBlock) {
-      return {
-        item: this.errorToolResult(context, call, tool, sandboxBlock.message, sandboxBlock.code),
-        approved: false
-      }
+      return this.errorToolHostResult(
+        context,
+        call,
+        tool,
+        sandboxBlock.message,
+        sandboxBlock.code,
+        false,
+        'fatal_error'
+      )
     }
     let preHookResults
     try {
@@ -140,38 +162,50 @@ export class LocalToolHost implements ToolHost {
         }
       })
     } catch (error) {
-      return {
-        item: this.errorToolResult(context, call, tool, hookErrorMessage(error), 'hook_failed'),
-        approved: false
-      }
+      return this.errorToolHostResult(
+        context,
+        call,
+        tool,
+        hookErrorMessage(error),
+        'hook_failed',
+        false
+      )
     }
     const preHookDecision = applyPreToolHookResults(call, preHookResults)
     if (preHookDecision.denied) {
-      return {
-        item: this.errorToolResult(context, preHookDecision.call, tool, preHookDecision.denied, 'hook_denied'),
-        approved: false
-      }
+      return this.errorToolHostResult(
+        context,
+        preHookDecision.call,
+        tool,
+        preHookDecision.denied,
+        'hook_denied',
+        false,
+        'fatal_error'
+      )
     }
     const activeCall = preHookDecision.call
     const readValidation = this.readTracker.validateBeforeTool({ context, call: activeCall })
     if (!readValidation.ok) {
-      return {
-        item: this.errorToolResult(context, activeCall, tool, readValidation.message, 'read_before_edit_required'),
-        approved: false
-      }
+      return this.errorToolHostResult(
+        context,
+        activeCall,
+        tool,
+        readValidation.message,
+        'read_before_edit_required',
+        false
+      )
     }
     const runtimeBlock = this.runtimePolicyBlock(tool, activeCall, context)
     if (runtimeBlock) {
-      return {
-        item: this.errorToolResult(
-          context,
-          activeCall,
-          tool,
-          runtimeBlock.message,
-          runtimeBlock.code
-        ),
-        approved: false
-      }
+      return this.errorToolHostResult(
+        context,
+        activeCall,
+        tool,
+        runtimeBlock.message,
+        runtimeBlock.code,
+        false,
+        'fatal_error'
+      )
     }
     const needsApproval = this.requiresApproval(tool, activeCall, context)
     if (needsApproval) {
@@ -193,7 +227,10 @@ export class LocalToolHost implements ToolHost {
           toolName: activeCall.toolName,
           summary: approval.summary
         })
-        return { item, approved: false }
+        return this.toolHostResult(item, false, {
+          outcome: 'fatal_error',
+          errorCode: 'approval_denied'
+        })
       }
     }
     if (context.abortSignal.aborted) {
@@ -241,10 +278,14 @@ export class LocalToolHost implements ToolHost {
         : rejectedUpdate?.reason
       if (context.abortSignal.aborted) throw terminalError
       const message = terminalError instanceof Error ? terminalError.message : String(terminalError)
-      return {
-        item: this.errorToolResult(context, activeCall, tool, message, 'tool_execution_failed'),
-        approved: true
-      }
+      return this.errorToolHostResult(
+        context,
+        activeCall,
+        tool,
+        message,
+        'tool_execution_failed',
+        true
+      )
     }
     const result = executionOutcome.result
     let postHookResults
@@ -259,10 +300,14 @@ export class LocalToolHost implements ToolHost {
         }
       })
     } catch (error) {
-      return {
-        item: this.errorToolResult(context, activeCall, tool, hookErrorMessage(error), 'hook_failed'),
-        approved: true
-      }
+      return this.errorToolHostResult(
+        context,
+        activeCall,
+        tool,
+        hookErrorMessage(error),
+        'hook_failed',
+        true
+      )
     }
     const hookedResult = applyPostToolHookResults(result, postHookResults)
     const rateLimited = shouldNormalizeRateLimitedToolOutput(activeCall.toolName)
@@ -286,7 +331,7 @@ export class LocalToolHost implements ToolHost {
       output,
       isError
     })
-    return { item, approved: !needsApproval }
+    return this.toolHostResult(item, !needsApproval, result.receiptMetadata)
   }
 
   clearReadTracker(threadId?: string): void {
@@ -355,23 +400,51 @@ export class LocalToolHost implements ToolHost {
     return redactSensitiveString(`Run ${call.toolName}(${args})`)
   }
 
-  private errorToolResult(
+  private errorToolHostResult(
     context: ToolHostContext,
     call: ToolCallLike,
     tool: LocalTool,
     message: string,
-    code: string
-  ): TurnItem {
-    return makeToolResultItem({
+    code: string,
+    approved: boolean,
+    outcome: ExecutionOutcome = 'retryable_error'
+  ): ToolHostResult {
+    const item = makeToolResultItem({
       id: `item_${call.callId}`,
       turnId: context.turnId,
       threadId: context.threadId,
       callId: call.callId,
       toolName: call.toolName,
       toolKind: call.toolKind ?? tool.toolKind,
-      output: { code, error: message },
+      output: { code, error: message, detail: message },
       isError: true
     })
+    return this.toolHostResult(item, approved, {
+      outcome,
+      errorCode: code
+    })
+  }
+
+  private toolHostResult(
+    item: TurnItem,
+    approved: boolean,
+    receiptMetadata?: Partial<Omit<ExecutionReceipt, 'status' | 'output' | 'detail'>>
+  ): ToolHostResult {
+    const output = item.kind === 'tool_result' ? item.output : { detail: 'tool execution cancelled' }
+    return {
+      item,
+      approved,
+      receipt: createExecutionReceipt({
+        status: item.kind !== 'tool_result'
+          ? 'cancelled'
+          : item.isError === true
+            ? 'error'
+            : 'success',
+        output,
+        detail: toolBoundaryDetail(output),
+        metadata: receiptMetadata as Record<string, unknown> | undefined
+      })
+    }
   }
 
   /** Tool builder helper for tests and feature scripts. */
@@ -424,6 +497,18 @@ function hasTrustedApprovalBypass(value: unknown): boolean {
 
 function objectRecord(value: unknown): Record<string, unknown> {
   return isObjectRecord(value) ? value : {}
+}
+
+function toolBoundaryDetail(output: unknown): string {
+  if (typeof output === 'string') return output
+  if (output == null) return ''
+  const detail = objectRecord(output).detail
+  if (typeof detail === 'string' && detail.trim()) return detail.trim()
+  try {
+    return JSON.stringify(output)
+  } catch {
+    return String(output)
+  }
 }
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

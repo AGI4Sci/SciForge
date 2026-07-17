@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import { RuntimeContextLedgerService } from './runtime-context-ledger-service'
 
 describe('RuntimeContextLedgerService', () => {
@@ -267,6 +268,7 @@ describe('RuntimeContextLedgerService', () => {
       turnId: 'turn-1',
       itemId: 'tool-1',
       status: 'success',
+      receipt: createExecutionReceipt({ status: 'success' }),
       toolKind: 'file_change',
       summary: 'Updated runtime-context-ledger-service.ts',
       meta: { path: 'src/main/services/runtime-context-ledger-service.ts' }

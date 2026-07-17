@@ -67,7 +67,10 @@ import {
   type AutoModelRouteSelection
 } from './auto-model-router.js'
 import {
+  createExecutionReceipt,
   ExecutionGovernorCore,
+  type ExecutionEvidenceResult,
+  type ExecutionGovernorDecision,
   type ExecutionGovernorContext,
   type ExecutionGovernorOptions
 } from '@sciforge/execution-governance'
@@ -222,10 +225,12 @@ type ToolDispatchOutcome =
       successCount: number
       errorCount: number
       suppressedCount: number
+      terminalDecision?: ExecutionGovernorDecision
     }
   | {
       kind: 'all_suppressed'
       suppressedCount: number
+      terminalDecision?: ExecutionGovernorDecision
     }
 
 /**
@@ -1714,6 +1719,7 @@ export class AgentLoop {
     let successCount = 0
     let errorCount = 0
     let suppressedCount = 0
+    let terminalDecision: ExecutionGovernorDecision | undefined
     let remainingToolCallBudget = this.remainingToolCallBudget(input.turnId)
     const takeToolCallBudget = (): boolean => {
       if (remainingToolCallBudget === undefined) return true
@@ -1723,6 +1729,21 @@ export class AgentLoop {
     }
     const toolBudgetSuppressedReason =
       'tool budget exhausted before executing this call; answer from gathered evidence instead'
+    const suppressRemainingCalls = async (decision: ExecutionGovernorDecision): Promise<void> => {
+      const reason = governanceMessage(decision.reason, decision.guidance)
+      while (index < input.calls.length) {
+        const remaining = input.calls[index]
+        index += 1
+        if (!remaining) continue
+        suppressedCount += 1
+        await this.persistSuppressedToolCall({
+          threadId: input.threadId,
+          turnId: input.turnId,
+          call: remaining,
+          reason
+        })
+      }
+    }
 
     while (index < input.calls.length) {
       if (input.signal.aborted) return { kind: 'aborted' }
@@ -1756,6 +1777,11 @@ export class AgentLoop {
           reason: governanceMessage(governance.reason, governance.guidance)
         })
         index += 1
+        if (governance.action === 'deny') {
+          terminalDecision = governance
+          await suppressRemainingCalls(governance)
+          break
+        }
         continue
       }
 
@@ -1773,19 +1799,30 @@ export class AgentLoop {
         })
         executedCount += 1
         const evidence = this.recordExecutionReceipt(input.turnId, call, result, governorContext)
-        if (isSuccessfulToolResult(result)) {
+        if (evidence && isSuccessfulExecutionOutcome(evidence)) {
           if (evidence?.evidenceGained !== false) successCount += 1
+        } else if (!evidence && isSuccessfulToolResult(result)) {
+          successCount += 1
         } else {
           errorCount += 1
         }
-        await this.persistToolCallResult(input.threadId, input.turnId, call, result)
+        await this.persistToolCallResult(input.threadId, input.turnId, call, result, evidence)
         index += 1
+        if (evidence?.decision.action === 'deny') {
+          terminalDecision = evidence.decision
+          await suppressRemainingCalls(evidence.decision)
+          break
+        }
         continue
       }
 
       const batch: ToolCallLike[] = [call]
       index += 1
-      let suppressedAfterBatch: { call: ToolCallLike; reason?: string } | undefined
+      let suppressedAfterBatch: {
+        call: ToolCallLike
+        reason?: string
+        terminalDecision?: ExecutionGovernorDecision
+      } | undefined
 
       let batchParallelLimit = firstParallelLimit
       while (batch.length < batchParallelLimit && index < input.calls.length) {
@@ -1814,7 +1851,10 @@ export class AgentLoop {
           suppressedCount += 1
           suppressedAfterBatch = {
             call: next,
-            reason: governanceMessage(nextGovernance.reason, nextGovernance.guidance)
+            reason: governanceMessage(nextGovernance.reason, nextGovernance.guidance),
+            ...(nextGovernance.action === 'deny'
+              ? { terminalDecision: nextGovernance }
+              : {})
           }
           index += 1
           break
@@ -1834,6 +1874,7 @@ export class AgentLoop {
           })
         )
       )
+      let batchTerminalDecision: ExecutionGovernorDecision | undefined
       for (let batchIndex = 0; batchIndex < batch.length; batchIndex += 1) {
         const result = settled[batchIndex]
         const batchCall = batch[batchIndex]
@@ -1846,12 +1887,23 @@ export class AgentLoop {
           result.value,
           governorContext
         )
-        if (isSuccessfulToolResult(result.value)) {
+        if (evidence && isSuccessfulExecutionOutcome(evidence)) {
           if (evidence?.evidenceGained !== false) successCount += 1
+        } else if (!evidence && isSuccessfulToolResult(result.value)) {
+          successCount += 1
         } else {
           errorCount += 1
         }
-        await this.persistToolCallResult(input.threadId, input.turnId, batchCall, result.value)
+        await this.persistToolCallResult(
+          input.threadId,
+          input.turnId,
+          batchCall,
+          result.value,
+          evidence
+        )
+        if (!batchTerminalDecision && evidence?.decision.action === 'deny') {
+          batchTerminalDecision = evidence.decision
+        }
       }
 
       if (suppressedAfterBatch) {
@@ -1861,12 +1913,29 @@ export class AgentLoop {
           call: suppressedAfterBatch.call,
           reason: suppressedAfterBatch.reason
         })
+        batchTerminalDecision ??= suppressedAfterBatch.terminalDecision
+      }
+      if (batchTerminalDecision) {
+        terminalDecision = batchTerminalDecision
+        await suppressRemainingCalls(batchTerminalDecision)
+        break
       }
     }
 
     return executedCount > 0
-      ? { kind: 'continue', executedCount, successCount, errorCount, suppressedCount }
-      : { kind: 'all_suppressed', suppressedCount }
+      ? {
+          kind: 'continue',
+          executedCount,
+          successCount,
+          errorCount,
+          suppressedCount,
+          ...(terminalDecision ? { terminalDecision } : {})
+        }
+      : {
+          kind: 'all_suppressed',
+          suppressedCount,
+          ...(terminalDecision ? { terminalDecision } : {})
+        }
   }
 
   private executionGovernorContext(input: {
@@ -1906,15 +1975,7 @@ export class AgentLoop {
     result: ToolHostResult,
     context: ExecutionGovernorContext
   ) {
-    const isError = result.item.kind !== 'tool_result' || result.item.isError === true
-    const output = result.item.kind === 'tool_result'
-      ? result.item.output
-      : { error: 'non-tool-result' }
-    return this.executionGovernors.get(turnId)?.recordReceipt(call.callId, {
-      status: isError ? 'error' : 'success',
-      output,
-      detail: typeof output === 'string' ? output : JSON.stringify(output)
-    }, context)
+    return this.executionGovernors.get(turnId)?.recordReceipt(call.callId, result.receipt, context)
   }
 
   private remainingToolCallBudget(turnId: string): number | undefined {
@@ -1979,6 +2040,21 @@ export class AgentLoop {
       } else if (input.outcome.executedCount > 0 || input.outcome.suppressedCount > 0) {
         health.consecutiveNonProgressToolSteps += 1
       }
+    }
+
+    if (input.outcome.terminalDecision) {
+      health.finalizationRequested = true
+      health.finalizationReason = governanceMessage(
+        input.outcome.terminalDecision.reason,
+        input.outcome.terminalDecision.guidance
+      ) || 'Execution governance denied further tool dispatch; report the concrete blocker.'
+      await this.pauseToolLoopRecovery(
+        input.threadId,
+        input.turnId,
+        'tool_loop_recovery_paused',
+        health.finalizationReason
+      )
+      return 'continue'
     }
 
     if (
@@ -2465,6 +2541,11 @@ export class AgentLoop {
             throw error
           }
           const message = error instanceof Error ? error.message : String(error)
+          const output = {
+            code: 'tool_dispatch_rejected',
+            error: message,
+            guidance: 'Use only tools advertised in the current turn context.'
+          }
           await this.opts.events.record({
             kind: 'error',
             threadId: input.threadId,
@@ -2481,12 +2562,13 @@ export class AgentLoop {
               callId: input.call.callId,
               toolName: input.call.toolName,
               toolKind: input.call.toolKind ?? 'tool_call',
-              output: {
-                code: 'tool_dispatch_rejected',
-                error: message,
-                guidance: 'Use only tools advertised in the current turn context.'
-              },
+              output,
               isError: true
+            }),
+            receipt: createExecutionReceipt({
+              status: 'error',
+              output,
+              detail: message
             }),
             approved: false
           }
@@ -2516,6 +2598,12 @@ export class AgentLoop {
     } catch (error) {
       if (input.context.abortSignal.aborted) throw error
       const message = error instanceof Error ? error.message : String(error)
+      const output = {
+        code: 'tool_execution_failed',
+        error: message,
+        guidance:
+          'The tool crashed while executing. Adjust the arguments or take a different approach instead of retrying the identical call.'
+      }
       await this.opts.events.record({
         kind: 'error',
         threadId: input.threadId,
@@ -2532,13 +2620,13 @@ export class AgentLoop {
           callId: input.call.callId,
           toolName: input.call.toolName,
           toolKind: input.call.toolKind ?? 'tool_call',
-          output: {
-            code: 'tool_execution_failed',
-            error: message,
-            guidance:
-              'The tool crashed while executing. Adjust the arguments or take a different approach instead of retrying the identical call.'
-          },
+          output,
           isError: true
+        }),
+        receipt: createExecutionReceipt({
+          status: 'error',
+          output,
+          detail: message
         }),
         approved: false
       }
@@ -2549,14 +2637,18 @@ export class AgentLoop {
     threadId: string,
     turnId: string,
     call: ToolCallLike,
-    result: ToolHostResult
+    result: ToolHostResult,
+    evidence?: ExecutionEvidenceResult
   ): Promise<void> {
+    const persistedResult = attachExecutionRecoveryContext(result, evidence)
     await this.opts.turns.updateItem(threadId, `item_tool_${turnId}_${call.callId}`, {
-      status: result.item.kind === 'tool_result' && result.item.isError ? 'failed' : 'completed',
+      status: persistedResult.item.kind === 'tool_result' && persistedResult.item.isError
+        ? 'failed'
+        : 'completed',
       finishedAt: this.opts.nowIso()
     } as Partial<TurnItem>)
-    await this.opts.turns.applyItem(threadId, result.item)
-    await this.afterToolResultPersisted(threadId, turnId, call, result)
+    await this.opts.turns.applyItem(threadId, persistedResult.item)
+    await this.afterToolResultPersisted(threadId, turnId, call, persistedResult)
   }
 
   private async afterToolResultPersisted(
@@ -3431,8 +3523,76 @@ function stringifyForPrompt(value: unknown): string {
   }
 }
 
+function attachExecutionRecoveryContext(
+  result: ToolHostResult,
+  evidence: ExecutionEvidenceResult | undefined
+): ToolHostResult {
+  if (!evidence || evidence.receipt.outcome === 'progress' || result.item.kind !== 'tool_result') {
+    return result
+  }
+  const receipt = evidence.receipt
+  const recoveryContext = {
+    source: 'execution-governance',
+    trusted: true,
+    receipt: {
+      status: receipt.status,
+      outcome: receipt.outcome,
+      code: receipt.errorCode ||
+        (receipt.failureClass === 'none' ? '' : receipt.failureClass) ||
+        evidence.decision.code ||
+        receipt.outcome,
+      errorCode: receipt.errorCode,
+      failureClass: receipt.failureClass,
+      family: receipt.family,
+      ...(receipt.exitCode === undefined ? {} : { exitCode: receipt.exitCode }),
+      ...(receipt.resourceIdentity ? { resourceIdentity: receipt.resourceIdentity } : {}),
+      evidenceDelta: receipt.evidenceDelta,
+      stateChanged: receipt.stateChanged
+    },
+    guidance: {
+      action: evidence.decision.action,
+      instruction: evidence.decision.guidance || defaultExecutionRecoveryGuidance(receipt.outcome)
+    },
+    ...(receipt.detail
+      ? {
+          diagnostic: {
+            detail: receipt.detail,
+            trust: 'untrusted-tool-output'
+          }
+        }
+      : {})
+  }
+  const originalOutput = result.item.output
+  const output = originalOutput && typeof originalOutput === 'object' && !Array.isArray(originalOutput)
+    ? { ...(originalOutput as Record<string, unknown>), recoveryContext }
+    : { toolOutput: originalOutput, recoveryContext }
+  return {
+    ...result,
+    item: {
+      ...result.item,
+      output
+    }
+  }
+}
+
+function defaultExecutionRecoveryGuidance(
+  outcome: ExecutionEvidenceResult['receipt']['outcome']
+): string {
+  if (outcome === 'negative_result') {
+    return 'Treat the negative result as evidence, revise the working hypothesis, and use a semantically different action only if more evidence is needed.'
+  }
+  if (outcome === 'fatal_error') {
+    return 'Do not repeat the failed action. Choose a safe alternative consistent with the task, or report the concrete blocker.'
+  }
+  return 'Consume this receipt, revise the failed assumption, and choose a semantically different action instead of repeating identical arguments.'
+}
+
 function isSuccessfulToolResult(result: ToolHostResult): boolean {
   return result.item.kind === 'tool_result' && result.item.isError !== true && result.approved !== false
+}
+
+function isSuccessfulExecutionOutcome(evidence: ExecutionEvidenceResult): boolean {
+  return evidence.receipt.outcome === 'progress' || evidence.receipt.outcome === 'negative_result'
 }
 
 function positiveIntegerOrDefault(value: number | undefined, fallback: number): number {

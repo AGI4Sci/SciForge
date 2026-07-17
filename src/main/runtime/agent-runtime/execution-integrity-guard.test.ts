@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 
 import type {
   AgentRuntimeEvent,
@@ -698,18 +699,41 @@ function tool(
   runtimeId: AgentRuntimeId,
   phase: 'requested' | 'succeeded' | 'failed'
 ): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
-  return {
-    kind: 'tool_event',
+  const common = {
+    kind: 'tool_event' as const,
     runtimeId,
     threadId: `${runtimeId}-thread`,
     turnId: `${runtimeId}-turn`,
     itemId: `${runtimeId}-call`,
     callId: `${runtimeId}-call`,
-    toolName: 'local_shell',
-    status: phase === 'requested' ? 'running' : phase === 'succeeded' ? 'success' : 'error',
+    toolName: 'local_shell'
+  }
+  if (phase === 'requested') {
+    return {
+      ...common,
+      status: 'running',
+      phase,
+      factSource: 'model_output',
+      evidenceStrength: 'intent'
+    }
+  }
+  if (phase === 'succeeded') {
+    return {
+      ...common,
+      status: 'success',
+      receipt: createExecutionReceipt({ status: 'success' }),
+      phase,
+      factSource: 'executor_result',
+      evidenceStrength: 'executor_receipt'
+    }
+  }
+  return {
+    ...common,
+    status: 'error',
+    receipt: createExecutionReceipt({ status: 'error' }),
     phase,
-    factSource: phase === 'requested' ? 'model_output' : 'executor_result',
-    evidenceStrength: phase === 'requested' ? 'intent' : 'executor_receipt'
+    factSource: 'executor_result',
+    evidenceStrength: 'executor_receipt'
   }
 }
 

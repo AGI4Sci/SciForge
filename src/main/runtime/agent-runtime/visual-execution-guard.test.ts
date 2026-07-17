@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 
 import type {
   AgentRuntimeEvent,
@@ -91,6 +92,7 @@ describe('RuntimeVisualExecutionGuard', () => {
       turnId: 'codex-turn',
       itemId: 'view-image-result',
       status: 'success',
+      receipt: createExecutionReceipt({ status: 'success' }),
       meta: { toolName: 'view_image' }
     })
 
@@ -222,6 +224,10 @@ function completedEvent(runtimeId: AgentRuntimeId): AgentRuntimeEvent {
 }
 
 function attestedCaptureEvent(runtimeId: AgentRuntimeId): AgentRuntimeEvent {
+  const detail = JSON.stringify({
+    ok: true,
+    evidence: { provider: 'model-router', attestation: ATTESTATION }
+  })
   return {
     kind: 'tool_event',
     runtimeId,
@@ -229,16 +235,15 @@ function attestedCaptureEvent(runtimeId: AgentRuntimeId): AgentRuntimeEvent {
     turnId: `${runtimeId}-turn`,
     itemId: `${runtimeId}-capture`,
     status: 'success',
+    receipt: createExecutionReceipt({ status: 'success', detail }),
     summary: 'sciforge_invoke',
-    detail: JSON.stringify({
-      ok: true,
-      evidence: { provider: 'model-router', attestation: ATTESTATION }
-    }),
+    detail,
     meta: { toolName: 'sciforge_invoke' }
   }
 }
 
 function captureOnlyEvent(): AgentRuntimeEvent {
+  const detail = JSON.stringify({ ok: true })
   return {
     kind: 'tool_event',
     runtimeId: 'codex',
@@ -246,8 +251,9 @@ function captureOnlyEvent(): AgentRuntimeEvent {
     turnId: 'codex-turn',
     itemId: 'capture-only',
     status: 'success',
+    receipt: createExecutionReceipt({ status: 'success', detail }),
     summary: 'sciforge_invoke',
-    detail: JSON.stringify({ ok: true }),
+    detail,
     meta: { toolName: 'sciforge_invoke' }
   }
 }
@@ -266,6 +272,7 @@ function reasoningOnlyEvent(): AgentRuntimeEvent {
 }
 
 function toolEvent(toolName: string, detail: unknown): AgentRuntimeEvent {
+  const serializedDetail = JSON.stringify(detail)
   return {
     kind: 'tool_event',
     runtimeId: 'codex',
@@ -273,8 +280,9 @@ function toolEvent(toolName: string, detail: unknown): AgentRuntimeEvent {
     turnId: 'codex-turn',
     itemId: `${toolName}-result`,
     status: 'success',
+    receipt: createExecutionReceipt({ status: 'success', detail: serializedDetail }),
     summary: toolName,
-    detail: JSON.stringify(detail),
+    detail: serializedDetail,
     meta: { toolName }
   }
 }

@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
@@ -835,6 +836,7 @@ describe('AgentRuntimeHost', () => {
           callId: 'call-1',
           toolName: 'local_shell',
           status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
           phase: 'succeeded',
           factSource: 'executor_result',
           evidenceStrength: 'executor_receipt'
@@ -1445,6 +1447,7 @@ describe('AgentRuntimeHost', () => {
           turnId: `${runtimeId}-turn`,
           itemId: `${runtimeId}-tool`,
           status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
           summary: 'read_file',
           meta: {
             callId: `${runtimeId}-call`,
@@ -3449,7 +3452,7 @@ describe('AgentRuntimeHost', () => {
     expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')
   })
 
-  it('observes repeated tool activity and steers Codex through recovery before interruption', async () => {
+  it('steers repeated tool activity once before interrupting the next exact repeat', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -3497,7 +3500,9 @@ describe('AgentRuntimeHost', () => {
     })) {
       events.push(event)
     }
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(3)
+    })
 
     expect(events).toHaveLength(3)
     expect(codex.steerTurn).toHaveBeenCalledWith(
@@ -3508,7 +3513,8 @@ describe('AgentRuntimeHost', () => {
         turnId: 'turn-1'
       })
     )
-    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(codex.interruptTurn).toHaveBeenCalledTimes(1)
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -3520,7 +3526,7 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       expect.objectContaining({
         kind: 'runtime_status',
-        metadata: expect.objectContaining({ level: 'recovery', recoveryAttempt: 1 })
+        metadata: expect.objectContaining({ level: 'hard', code: 'exact_repeat' })
       })
     )
   })
@@ -3662,11 +3668,11 @@ describe('AgentRuntimeHost', () => {
       // exhaust stream
     }
     await vi.waitFor(() => {
-      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(2)
+      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(3)
     })
 
-    expect(codex.steerTurn).toHaveBeenCalledTimes(2)
-    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(codex.interruptTurn).toHaveBeenCalledTimes(1)
     expect(codex.publishSyntheticEvent).toHaveBeenNthCalledWith(
       1,
       expect.anything(),
@@ -3684,11 +3690,16 @@ describe('AgentRuntimeHost', () => {
       expect.objectContaining({
         kind: 'runtime_status',
         metadata: expect.objectContaining({
-          level: 'recovery',
-          recoveryAttempt: 1,
+          level: 'hard',
+          code: 'exact_repeat',
           family: 'command_execution:shell/read-file'
         })
       })
+    )
+    expect(codex.publishSyntheticEvent).toHaveBeenNthCalledWith(
+      3,
+      expect.anything(),
+      expect.objectContaining({ kind: 'error', code: 'runtime_execution_interrupted' })
     )
   })
 

@@ -1031,7 +1031,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1041,7 +1041,7 @@ describe('AgentLoop', () => {
         model: 'storm-model',
         async *stream(): AsyncIterable<ModelStreamChunk> {
           calls += 1
-          if (calls <= 3) {
+          if (calls <= 4) {
             yield {
               kind: 'tool_call_complete',
               callId: `call_echo_${calls}`,
@@ -1063,15 +1063,15 @@ describe('AgentLoop', () => {
     const items = await h.sessionStore.loadItems(h.threadId)
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
     const stormResult = items.find(
-      (item) => item.kind === 'tool_result' && item.callId === 'call_echo_3'
+      (item) => item.kind === 'tool_result' && item.callId === 'call_echo_4'
     )
     const thirdCall = items.find(
-      (item) => item.kind === 'tool_call' && item.callId === 'call_echo_3'
+      (item) => item.kind === 'tool_call' && item.callId === 'call_echo_4'
     )
 
     expect(status).toBe('completed')
-    expect(calls).toBe(4)
-    expect(executions).toBe(2)
+    expect(calls).toBe(5)
+    expect(executions).toBe(3)
     expect(items.some((item) =>
       item.kind === 'assistant_text' && item.text === 'Stopped after duplicate tool call.'
     )).toBe(true)
@@ -1081,9 +1081,92 @@ describe('AgentLoop', () => {
       .toContain('repeated identical arguments 3 times')
     expect(events.find((event) => event.kind === 'execution_suppressed')).toMatchObject({
       kind: 'execution_suppressed',
-      callId: 'call_echo_3',
+      callId: 'call_echo_4',
       toolName: 'echo'
     })
+  })
+
+  it('finalizes a preflight deny and suppresses the remaining calls', async () => {
+    let repeatExecutions = 0
+    let laterExecutions = 0
+    const repeatTool = LocalToolHost.defineTool({
+      name: 'repeat_failure_fixture',
+      description: 'Returns a retryable failure',
+      inputSchema: {
+        type: 'object',
+        properties: { target: { type: 'string' } },
+        required: ['target']
+      },
+      policy: 'auto',
+      execute: async () => {
+        repeatExecutions += 1
+        return { output: { code: 'repeat_failure', detail: 'No progress.' }, isError: true }
+      }
+    })
+    const laterTool = LocalToolHost.defineTool({
+      name: 'later_after_deny_fixture',
+      description: 'Must be suppressed after preflight deny',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: async () => {
+        laterExecutions += 1
+        return { output: { ran: true } }
+      }
+    })
+    const requests: ModelRequest[] = []
+    let calls = 0
+    const h = makeHarness({
+      provider: 'preflight-deny-model',
+      model: 'preflight-deny-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        requests.push(request)
+        calls += 1
+        if (request.tools.length === 0) {
+          yield { kind: 'assistant_text_delta', text: 'The repeat guard is the blocker.' }
+          yield { kind: 'completed', stopReason: 'stop' }
+          return
+        }
+        yield {
+          kind: 'tool_call_complete',
+          callId: `call_repeat_${calls}`,
+          toolName: 'repeat_failure_fixture',
+          arguments: { target: 'same-target' }
+        }
+        if (calls === 4) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_later_after_deny',
+            toolName: 'later_after_deny_fixture',
+            arguments: {}
+          }
+        }
+        yield { kind: 'completed', stopReason: 'tool_calls' }
+      }
+    }, {
+      tools: [repeatTool, laterTool],
+      executionGovernance: {
+        enabled: true,
+        exactRepeatThreshold: 3,
+        semanticFailureThreshold: 10
+      }
+    })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(calls).toBe(5)
+    expect(repeatExecutions).toBe(2)
+    expect(laterExecutions).toBe(0)
+    expect(requests[4]?.tools).toHaveLength(0)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'tool_loop_recovery_paused'
+    }))
+    const laterResult = items.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_later_after_deny'
+    )
+    expect(laterResult?.kind === 'tool_result' ? laterResult.output : undefined)
+      .toMatchObject({ error: expect.stringContaining('repeated identical arguments 4 times') })
   })
 
   it('can disable the storm breaker through loop config', async () => {
@@ -1099,7 +1182,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1148,7 +1231,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1346,7 +1429,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1611,7 +1694,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1647,8 +1730,8 @@ describe('AgentLoop', () => {
     const events = await h.sessionStore.loadEventsSince(h.threadId, 0)
 
     expect(status).toBe('completed')
-    expect(calls).toBe(5)
-    expect(executions).toBe(2)
+    expect(calls).toBe(6)
+    expect(executions).toBe(3)
     expect(events.some((event) =>
       event.kind === 'error' && event.code === 'tool_loop_recovery'
     )).toBe(true)
@@ -1671,7 +1754,7 @@ describe('AgentLoop', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     let calls = 0
@@ -1682,7 +1765,7 @@ describe('AgentLoop', () => {
         async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
           observedInstructions.push(request.contextInstructions?.join('\n') ?? '')
           calls += 1
-          if (calls <= 3) {
+          if (calls <= 4) {
             yield {
               kind: 'tool_call_complete',
               callId: `call_echo_${calls}`,
@@ -1692,7 +1775,7 @@ describe('AgentLoop', () => {
             yield { kind: 'completed', stopReason: 'tool_calls' }
             return
           }
-          if (calls === 4) {
+          if (calls === 5) {
             yield {
               kind: 'tool_call_complete',
               callId: 'call_echo_different',
@@ -1713,9 +1796,371 @@ describe('AgentLoop', () => {
     const status = await h.loop.runTurn(h.threadId, h.turnId)
 
     expect(status).toBe('completed')
-    expect(calls).toBe(5)
-    expect(executions).toBe(3)
-    expect(observedInstructions[3]).toContain('Tool loop recovery')
+    expect(calls).toBe(6)
+    expect(executions).toBe(4)
+    expect(observedInstructions[4]).toContain('Tool loop recovery')
+  })
+
+  it('stops later tool dispatch after a fatal execution receipt', async () => {
+    const fatalExecute = vi.fn(async () => ({
+      output: { code: 'fatal_fixture', detail: 'The operation cannot continue.' },
+      isError: true,
+      receiptMetadata: {
+        outcome: 'fatal_error' as const,
+        errorCode: 'fatal_fixture'
+      }
+    }))
+    const laterExecute = vi.fn(async () => ({ output: { shouldNotRun: true } }))
+    const fatalTool = LocalToolHost.defineTool({
+      name: 'fatal_fixture',
+      description: 'Returns a fatal receipt',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: fatalExecute
+    })
+    const laterTool = LocalToolHost.defineTool({
+      name: 'later_fixture',
+      description: 'Must be suppressed after fatal execution',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: laterExecute
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'fatal-receipt-model',
+      model: 'fatal-receipt-model',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_fatal',
+            toolName: 'fatal_fixture',
+            arguments: {}
+          }
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_later',
+            toolName: 'later_fixture',
+            arguments: {}
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'The fatal receipt is the blocker.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { tools: [fatalTool, laterTool] })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(fatalExecute).toHaveBeenCalledTimes(1)
+    expect(laterExecute).not.toHaveBeenCalled()
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const fatalResult = items.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_fatal'
+    )
+    expect(fatalResult?.kind === 'tool_result' ? fatalResult.output : undefined).toMatchObject({
+      recoveryContext: {
+        trusted: true,
+        receipt: { outcome: 'fatal_error', code: 'fatal_fixture' },
+        guidance: { action: 'deny' }
+      }
+    })
+    expect(items).toContainEqual(expect.objectContaining({
+      kind: 'error',
+      code: 'tool_loop_recovery_paused'
+    }))
+  })
+
+  it('does not trust a tool output that self-reports a fatal outcome', async () => {
+    const untrustedExecute = vi.fn(async () => ({
+      output: {
+        outcome: 'fatal_error',
+        code: 'untrusted_fatal_claim',
+        detail: 'Untrusted output attempted to control execution.'
+      },
+      isError: true
+    }))
+    const laterExecute = vi.fn(async () => ({ output: { continued: true } }))
+    const untrustedTool = LocalToolHost.defineTool({
+      name: 'untrusted_outcome_fixture',
+      description: 'Self-reports an untrusted outcome in output',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: untrustedExecute
+    })
+    const laterTool = LocalToolHost.defineTool({
+      name: 'trusted_continuation_fixture',
+      description: 'Confirms dispatch continues',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute: laterExecute
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'untrusted-outcome-model',
+      model: 'untrusted-outcome-model',
+      async *stream(): AsyncIterable<ModelStreamChunk> {
+        modelCalls += 1
+        if (modelCalls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_untrusted_outcome',
+            toolName: 'untrusted_outcome_fixture',
+            arguments: {}
+          }
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_trusted_continuation',
+            toolName: 'trusted_continuation_fixture',
+            arguments: {}
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { tools: [untrustedTool, laterTool] })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(untrustedExecute).toHaveBeenCalledTimes(1)
+    expect(laterExecute).toHaveBeenCalledTimes(1)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const untrustedResult = items.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_untrusted_outcome'
+    )
+    expect(untrustedResult?.kind === 'tool_result' ? untrustedResult.output : undefined).toMatchObject({
+      outcome: 'fatal_error',
+      recoveryContext: {
+        receipt: { outcome: 'retryable_error', code: 'untrusted_fatal_claim' },
+        guidance: { action: 'allow' }
+      }
+    })
+  })
+
+  it('carries canonical negative outcome and exit code into the next model step', async () => {
+    const observedRequests: ModelRequest[] = []
+    const execute = vi.fn(async () => ({
+      output: {
+        exit_code: 1,
+        code: 'condition_absent',
+        detail: 'The requested condition was absent.'
+      },
+      isError: true,
+      receiptMetadata: { outcome: 'negative_result' as const }
+    }))
+    const tool = LocalToolHost.defineTool({
+      name: 'negative_fixture',
+      description: 'Returns useful negative evidence',
+      inputSchema: { type: 'object', properties: {} },
+      policy: 'auto',
+      execute
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'negative-receipt-model',
+      model: 'negative-receipt-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        observedRequests.push(request)
+        modelCalls += 1
+        if (modelCalls === 1) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_negative',
+            toolName: 'negative_fixture',
+            arguments: {}
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, { tools: [tool] })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(execute).toHaveBeenCalledTimes(1)
+    const nextStepResult = observedRequests[1]?.history.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_negative'
+    )
+    expect(nextStepResult?.kind === 'tool_result' ? nextStepResult.output : undefined).toMatchObject({
+      recoveryContext: {
+        receipt: {
+          outcome: 'negative_result',
+          code: 'condition_absent',
+          exitCode: 1
+        },
+        guidance: { action: 'allow' },
+        diagnostic: {
+          detail: 'The requested condition was absent.',
+          trust: 'untrusted-tool-output'
+        }
+      }
+    })
+    const items = await h.sessionStore.loadItems(h.threadId)
+    expect(items.some((item) =>
+      item.kind === 'error' && item.code === 'tool_loop_recovery_paused'
+    )).toBe(false)
+  })
+
+  it('continues after steer and stops only after the next real same-scope failure', async () => {
+    const observedRequests: ModelRequest[] = []
+    const execute = vi.fn(async () => ({
+      output: { code: 'repeatable_fixture', detail: 'Retry with a different strategy.' },
+      isError: true
+    }))
+    const tool = LocalToolHost.defineTool({
+      name: 'repeatable_fixture',
+      description: 'Returns the same retryable failure',
+      inputSchema: {
+        type: 'object',
+        properties: { target: { type: 'string' } },
+        required: ['target']
+      },
+      policy: 'auto',
+      execute
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'semantic-exhaustion-model',
+      model: 'semantic-exhaustion-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        observedRequests.push(request)
+        modelCalls += 1
+        if (modelCalls <= 3) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: `call_retry_${modelCalls}`,
+            toolName: 'repeatable_fixture',
+            arguments: { target: 'same-target' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'The repeated failure exhausted recovery.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [tool],
+      executionGovernance: {
+        enabled: true,
+        exactRepeatThreshold: 5,
+        semanticFailureThreshold: 2
+      }
+    })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(execute).toHaveBeenCalledTimes(3)
+    const thirdRequestReceipt = observedRequests[2]?.history.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_retry_2'
+    )
+    expect(thirdRequestReceipt?.kind === 'tool_result'
+      ? thirdRequestReceipt.output
+      : undefined).toMatchObject({
+      recoveryContext: {
+        trusted: true,
+        receipt: { outcome: 'retryable_error', code: 'repeatable_fixture' },
+        guidance: { action: 'steer' }
+      }
+    })
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const exhausted = items.find((item) =>
+      item.kind === 'tool_result' && item.callId === 'call_retry_3'
+    )
+    expect(exhausted?.kind === 'tool_result' ? exhausted.output : undefined).toMatchObject({
+      recoveryContext: {
+        receipt: { outcome: 'retryable_error', code: 'repeatable_fixture' },
+        guidance: { action: 'deny' }
+      }
+    })
+  })
+
+  it('does not exhaust recovery from receipts belonging to one parallel dispatch epoch', async () => {
+    const observedRequests: ModelRequest[] = []
+    let active = 0
+    let maxActive = 0
+    let executions = 0
+    const grepTool = LocalToolHost.defineTool({
+      name: 'grep',
+      description: 'Returns a parallel retryable failure',
+      inputSchema: {
+        type: 'object',
+        properties: { pattern: { type: 'string' } },
+        required: ['pattern']
+      },
+      policy: 'auto',
+      execute: async () => {
+        executions += 1
+        active += 1
+        maxActive = Math.max(maxActive, active)
+        await new Promise((resolve) => setTimeout(resolve, executions <= 3 ? 5 : 0))
+        active -= 1
+        return {
+          output: { code: 'parallel_failure', detail: 'Parallel attempt failed.' },
+          isError: true
+        }
+      }
+    })
+    let modelCalls = 0
+    const h = makeHarness({
+      provider: 'parallel-receipt-epoch-model',
+      model: 'parallel-receipt-epoch-model',
+      async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
+        observedRequests.push(request)
+        modelCalls += 1
+        if (modelCalls === 1) {
+          for (let index = 1; index <= 3; index += 1) {
+            yield {
+              kind: 'tool_call_complete',
+              callId: `call_parallel_${index}`,
+              toolName: 'grep',
+              arguments: { pattern: 'same-scope' }
+            }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        if (modelCalls === 2) {
+          yield {
+            kind: 'tool_call_complete',
+            callId: 'call_after_parallel_steer',
+            toolName: 'grep',
+            arguments: { pattern: 'same-scope' }
+          }
+          yield { kind: 'completed', stopReason: 'tool_calls' }
+          return
+        }
+        yield { kind: 'assistant_text_delta', text: 'Recovery was exhausted after the post-steer attempt.' }
+        yield { kind: 'completed', stopReason: 'stop' }
+      }
+    }, {
+      tools: [grepTool],
+      executionGovernance: {
+        enabled: true,
+        exactRepeatThreshold: 10,
+        semanticFailureThreshold: 2
+      }
+    })
+    await bootstrapThread(h)
+
+    expect(await h.loop.runTurn(h.threadId, h.turnId)).toBe('completed')
+    expect(executions).toBe(4)
+    expect(maxActive).toBe(3)
+    expect(observedRequests[1]?.tools.map((tool) => tool.name)).toContain('grep')
+    expect(observedRequests[2]?.tools).toHaveLength(0)
+    const items = await h.sessionStore.loadItems(h.threadId)
+    const recoveryAction = (callId: string) => {
+      const result = items.find((item) => item.kind === 'tool_result' && item.callId === callId)
+      if (result?.kind !== 'tool_result') return undefined
+      const output = result.output as { recoveryContext?: { guidance?: { action?: string } } }
+      return output.recoveryContext?.guidance?.action
+    }
+    expect(recoveryAction('call_parallel_2')).toBe('steer')
+    expect(recoveryAction('call_parallel_3')).toBe('allow')
+    expect(recoveryAction('call_after_parallel_steer')).toBe('deny')
   })
 
   it('pauses without failing when recovery ends with a generic trivial answer', async () => {
@@ -1737,7 +2182,7 @@ describe('AgentLoop', () => {
         model: 'storm-trivial-final',
         async *stream(): AsyncIterable<ModelStreamChunk> {
           calls += 1
-          if (calls <= 3) {
+          if (calls <= 4) {
             yield {
               kind: 'tool_call_complete',
               callId: `call_echo_${calls}`,

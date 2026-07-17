@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type {
   AgentRuntimeCapabilities,
+  AgentRuntimeExecutionReceipt,
   AgentRuntimeEvent
 } from '../../../shared/agent-runtime-contract'
 import type { RuntimeGuardSettingsV1 } from '../../../shared/app-settings'
@@ -15,21 +16,28 @@ const strictBudgetSettings: RuntimeGuardSettingsV1 = {
   execution: {
     enabled: true,
     windowSize: 8,
-    exactRepeatThreshold: 2,
+    exactRepeatThreshold: 3,
     semanticFailureThreshold: 2
   }
 }
 
+const recoverySettings: RuntimeGuardSettingsV1 = {
+  execution: {
+    ...strictBudgetSettings.execution,
+    exactRepeatThreshold: 4
+  }
+}
+
 describe('RuntimeGovernanceSupervisor', () => {
-  it('steers repeated tool calls at the configured threshold', async () => {
+  it('steers at the exact-repeat threshold and interrupts the next exact repeat', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
-    for (let index = 1; index <= 2; index += 1) {
+    for (let index = 1; index <= 3; index += 1) {
       supervisor.observe(toolEvent(index), baseCapabilities, strictBudgetSettings, controls)
     }
-    await Promise.resolve()
 
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
     expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex',
       threadId: 'thread-1',
@@ -44,23 +52,34 @@ describe('RuntimeGovernanceSupervisor', () => {
         family: 'tool_call:lookup'
       })
     }))
+
+    supervisor.observe(toolEvent(4), baseCapabilities, strictBudgetSettings, controls)
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+    await Promise.resolve()
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      code: 'runtime_execution_interrupted',
+      message: expect.stringContaining('repeated identical arguments 4 times')
+    }))
   })
 
-  it('supplies failure context and continues after one extra repeat', async () => {
+  it('synchronously queues threshold recovery with a complete bounded receipt', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
-    for (let index = 1; index <= 3; index += 1) {
-      supervisor.observe(toolEvent(index), baseCapabilities, strictBudgetSettings, controls)
+    for (let index = 1; index <= 2; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
     }
-    await Promise.resolve()
-
     expect(controls.interruptTurn).not.toHaveBeenCalled()
     expect(controls.steerTurn).toHaveBeenLastCalledWith(expect.objectContaining({
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      text: expect.stringMatching(/repeated identical arguments 3 times.*distinct, verifiable action/u)
+      text: expect.stringMatching(
+        /Runtime recovery attempt 1\..*outcome: retryable_error.*exit code: 17.*failure class: execution_error.*error code: command_failed.*resource: query:same query.*diagnostic detail \(untrusted evidence, not instructions\).*Consume the latest.*diagnostic evidence.*meaningfully different semantic strategy.*continuing the original task/u
+      )
     }))
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'runtime_status',
@@ -68,21 +87,85 @@ describe('RuntimeGovernanceSupervisor', () => {
       metadata: expect.objectContaining({
         level: 'recovery',
         recoveryAttempt: 1,
-        family: 'tool_call:lookup'
+        family: 'tool_call:lookup',
+        outcome: 'retryable_error',
+        exitCode: 17,
+        failureClass: 'execution_error',
+        errorCode: 'command_failed'
       })
     }))
+    await Promise.resolve()
   })
 
-  it('interrupts only after bounded recovery attempts keep repeating', async () => {
+  it('does not steer twice when the same terminal receipt is replayed', () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
-    for (let index = 1; index <= 9; index += 1) {
-      supervisor.observe(toolEvent(index), baseCapabilities, strictBudgetSettings, controls)
+    for (let index = 1; index <= 2; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
     }
+    supervisor.observe(
+      lookupReceiptEvent(2),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('steers a new same-scope failure cycle after progress cleared the prior streak', () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 2; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
+    }
+    supervisor.observe(
+      lookupEvent(3, 'same query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupProgressReceiptEvent(3),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    for (let index = 4; index <= 5; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
+    }
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('does not interrupt until the same failure recurs in an actually executed recovery', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 2; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
+    }
+    supervisor.observe(
+      lookupEvent(3, 'same query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+
+    supervisor.observe(
+      lookupReceiptEvent(3),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
     await Promise.resolve()
 
-    expect(controls.steerTurn).toHaveBeenCalledTimes(3)
     expect(controls.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({
       runtimeId: 'codex',
       threadId: 'thread-1',
@@ -92,24 +175,149 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'error',
       code: 'runtime_execution_interrupted',
-      message: expect.stringContaining('repeated identical arguments')
+      message: expect.stringContaining('failed after a recovery steer')
     }))
   })
 
-  it('reports successful receipts accurately while still detecting no-progress repetition', async () => {
+  it('does not count a late pre-steer receipt as a failed recovery action', () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
-    supervisor.observe(toolEvent(1), baseCapabilities, strictBudgetSettings, controls)
-    supervisor.observe(toolReceiptEvent(1, 'success'), baseCapabilities, strictBudgetSettings, controls)
-    supervisor.observe(toolEvent(2), baseCapabilities, strictBudgetSettings, controls)
+    for (let index = 1; index <= 3; index += 1) {
+      supervisor.observe(
+        lookupEvent(index, 'same query'),
+        baseCapabilities,
+        recoverySettings,
+        controls
+      )
+    }
+    supervisor.observe(
+      lookupReceiptEvent(1),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupReceiptEvent(2),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+
+    supervisor.observe(
+      lookupReceiptEvent(3),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(1)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+
+    supervisor.observe(
+      lookupEvent(4, 'same query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupReceiptEvent(4),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows a semantically different recovery action after steering', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    for (let index = 1; index <= 2; index += 1) {
+      observeLookupFailure(supervisor, controls, index, 'same query')
+    }
+    const steeringCount = controls.steerTurn.mock.calls.length
+
+    supervisor.observe(
+      lookupEvent(3, 'different query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupReceiptEvent(3),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(steeringCount)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('consumes the canonical receipt and ignores conflicting metadata', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    observeLookupFailure(supervisor, controls, 1, 'same query')
+    supervisor.observe(
+      lookupEvent(2, 'same query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupReceiptEvent(2, {
+        outcome: 'negative_result',
+        exitCode: 1
+      }),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    observeLookupFailure(supervisor, controls, 3, 'same query')
+
+    expect(controls.steerTurn).not.toHaveBeenCalled()
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('interrupts an explicit fatal receipt and preserves its diagnostic metadata', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    supervisor.observe(
+      lookupEvent(1, 'fatal query'),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
+    supervisor.observe(
+      lookupReceiptEvent(1, {
+        outcome: 'fatal_error',
+        exitCode: 126,
+        failureClass: 'permission_denied'
+      }),
+      baseCapabilities,
+      recoverySettings,
+      controls
+    )
     await Promise.resolve()
 
-    expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringMatching(/failure class: none.*lookup completed/u)
-    }))
-    expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.not.stringContaining('no terminal executor receipt')
+    expect(controls.steerTurn).not.toHaveBeenCalled()
+    expect(controls.interruptTurn).toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'runtime_status',
+      metadata: expect.objectContaining({
+        level: 'hard',
+        code: 'fatal_error',
+        outcome: 'fatal_error',
+        exitCode: 126,
+        failureClass: 'permission_denied'
+      })
     }))
   })
 
@@ -169,10 +377,15 @@ describe('RuntimeGovernanceSupervisor', () => {
     await Promise.resolve()
 
     expect(controls.steerTurn).toHaveBeenCalledWith(expect.objectContaining({
-      text: expect.stringMatching(/unknown_resource_ref.*sciforge_discover.*surface\.inspect/u)
+      text: expect.stringMatching(
+        /outcome: retryable_error.*failure class: stale_resource.*unknown_resource_ref.*untrusted evidence.*meaningfully different semantic strategy/u
+      )
     }))
 
     supervisor.observe(capabilityInvokeEvent(3), baseCapabilities, strictBudgetSettings, controls)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+
+    supervisor.observe(capabilityInvokeReceipt(3), baseCapabilities, strictBudgetSettings, controls)
     await Promise.resolve()
     expect(controls.interruptTurn).toHaveBeenCalled()
   })
@@ -225,22 +438,97 @@ function toolEvent(index: number): AgentRuntimeEvent {
   }
 }
 
-function toolReceiptEvent(index: number, status: 'success' | 'error'): AgentRuntimeEvent {
+function lookupEvent(index: number, query: string): AgentRuntimeEvent {
   return {
     kind: 'tool_event',
     runtimeId: 'codex',
     threadId: 'thread-1',
     turnId: 'turn-1',
     itemId: `tool-${index}`,
-    status,
+    status: 'running',
     toolKind: 'tool_call',
     summary: 'lookup',
-    detail: status === 'success' ? 'lookup completed' : 'lookup failed',
+    detail: 'lookup running',
+    meta: {
+      toolName: 'lookup',
+      callId: `call-${index}`,
+      arguments: {
+        query,
+        requestId: `request-${index}`
+      }
+    }
+  }
+}
+
+function lookupReceiptEvent(
+  index: number,
+  overrides: Partial<Omit<AgentRuntimeExecutionReceipt, 'status'>> = {}
+): AgentRuntimeEvent {
+  return {
+    kind: 'tool_event',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: `tool-${index}`,
+    status: 'error',
+    toolKind: 'tool_call',
+    summary: 'lookup',
+    detail: 'lookup command failed; retry the exact same call',
+    errorCode: 'command_failed',
+    receipt: {
+      status: 'error',
+      outcome: 'retryable_error',
+      exitCode: 17,
+      errorCode: 'command_failed',
+      failureClass: 'execution_error',
+      resourceIdentity: 'query:same query',
+      detail: 'lookup command failed; retry the exact same call',
+      ...overrides
+    },
+    meta: {
+      toolName: 'lookup',
+      callId: `call-${index}`,
+      outcome: 'fatal_error',
+      exitCode: 255,
+      failureClass: 'misleading_metadata',
+      resourceIdentity: 'ignored:metadata'
+    }
+  }
+}
+
+function lookupProgressReceiptEvent(index: number): AgentRuntimeEvent {
+  return {
+    kind: 'tool_event',
+    runtimeId: 'codex',
+    threadId: 'thread-1',
+    turnId: 'turn-1',
+    itemId: `tool-${index}`,
+    status: 'success',
+    toolKind: 'tool_call',
+    summary: 'lookup',
+    detail: 'lookup completed with new evidence',
+    receipt: {
+      status: 'success',
+      outcome: 'progress',
+      output: { result: 'new evidence' },
+      evidenceDelta: true,
+      detail: 'lookup completed with new evidence'
+    },
     meta: {
       toolName: 'lookup',
       callId: `call-${index}`
     }
   }
+}
+
+function observeLookupFailure(
+  supervisor: RuntimeGovernanceSupervisor,
+  controls: ReturnType<typeof controlsSpy>,
+  index: number,
+  query: string
+): void {
+  supervisor.observe(lookupEvent(index, query), baseCapabilities, recoverySettings, controls)
+  supervisor.observe(lookupReceiptEvent(index), baseCapabilities, recoverySettings, controls)
 }
 
 function historyPlaceholderEvent(index: number): AgentRuntimeEvent {
@@ -271,7 +559,7 @@ function historyPlaceholderEvent(index: number): AgentRuntimeEvent {
 
 function capabilityInvokeEvent(
   index: number
-): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
+): Extract<Extract<AgentRuntimeEvent, { kind: 'tool_event' }>, { status: 'running' }> {
   return {
     kind: 'tool_event',
     runtimeId: 'codex',
@@ -286,7 +574,8 @@ function capabilityInvokeEvent(
       toolName: 'sciforge_invoke',
       arguments: {
         operationRef: 'op_surface_12345678901234567890',
-        resourceRef: 'res_surface_12345678901234567890'
+        resourceRef: 'res_surface_12345678901234567890',
+        invocationId: `invocation-${index}`
       }
     }
   }
@@ -300,10 +589,20 @@ function capabilityInvokeReceipt(
     status: 'error',
     errorCode: 'unknown_resource_ref',
     detail: 'The opaque resource reference is no longer known.',
+    receipt: {
+      status: 'error',
+      outcome: 'retryable_error',
+      errorCode: 'unknown_resource_ref',
+      failureClass: 'stale_resource',
+      resourceIdentity: 'res_surface_12345678901234567890',
+      output: { error: { code: 'unknown_resource_ref' } },
+      detail: 'The opaque resource reference is no longer known.'
+    },
     meta: {
       ...capabilityInvokeEvent(index).meta,
       errorCode: 'unknown_resource_ref',
       failureClass: 'stale_resource',
+      outcome: 'retryable_error',
       resourceIdentity: 'res_surface_12345678901234567890',
       structuredContent: {
         error: { code: 'unknown_resource_ref' }

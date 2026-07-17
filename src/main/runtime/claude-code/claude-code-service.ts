@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import type {
   Options as ClaudeAgentSdkOptions,
   Query as ClaudeAgentSdkQuery,
@@ -11,6 +12,7 @@ import type {
   AgentRuntimeChild,
   AgentRuntimeChildStatus,
   AgentRuntimeChildTranscriptEntry,
+  AgentRuntimeExecutionReceipt,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeEvent,
@@ -130,6 +132,15 @@ type ClaudeToolResult = {
   payload?: Record<string, unknown>
   sessionId?: string
   fingerprint: string
+}
+
+function terminalExecutionReceipt<Status extends 'success' | 'error'>(
+  status: Status,
+  output: unknown,
+  detail: string,
+  metadata?: Record<string, unknown>
+): AgentRuntimeExecutionReceipt & { status: Status } {
+  return createExecutionReceipt({ status, output, detail, metadata })
 }
 
 export class ClaudeCodeRuntimeService {
@@ -881,12 +892,11 @@ export class ClaudeCodeRuntimeService {
           message: input.result.detail || `Claude tool ${input.toolUse.name} failed.`
         }
       : null
-    await this.emit({
+    const event = {
       threadId: input.threadId,
       turnId: input.turnId,
-      kind: 'tool_event',
+      kind: 'tool_event' as const,
       itemId: input.callId,
-      status: input.result.isError ? 'error' : 'success',
       toolKind: toolKindFromName(input.toolUse.name),
       summary: `Claude Code tool result: ${input.toolUse.name}`,
       detail: input.result.detail,
@@ -902,7 +912,23 @@ export class ClaudeCodeRuntimeService {
         error,
         ...(input.result.payload ? { output: input.result.payload } : {})
       }
-    })
+    }
+    const output = input.result.payload ?? input.result.content
+    if (input.result.isError) {
+      await this.emit({
+        ...event,
+        status: 'error',
+        receipt: terminalExecutionReceipt('error', output, input.result.detail, {
+          errorCode: error?.code
+        })
+      })
+    } else {
+      await this.emit({
+        ...event,
+        status: 'success',
+        receipt: terminalExecutionReceipt('success', output, input.result.detail)
+      })
+    }
     if (input.result.payload) {
       await this.emitChildFromToolResult({
         threadId: input.threadId,
@@ -934,6 +960,9 @@ export class ClaudeCodeRuntimeService {
       kind: 'tool_event',
       itemId: input.callId,
       status: 'error',
+      receipt: terminalExecutionReceipt('error', undefined, input.message, {
+        errorCode: 'claude_tool_result_conflict'
+      }),
       toolKind: toolKindFromName(input.toolName),
       summary: `Claude Code tool unresolved: ${input.toolName}`,
       detail: input.message,
@@ -969,6 +998,9 @@ export class ClaudeCodeRuntimeService {
         kind: 'tool_event',
         itemId: callId,
         status: 'error',
+        receipt: terminalExecutionReceipt('error', undefined, message, {
+          errorCode: 'claude_tool_result_missing'
+        }),
         toolKind: toolKindFromName(toolUse.name),
         summary: `Claude Code tool unresolved: ${toolUse.name}`,
         detail: message,
@@ -996,6 +1028,12 @@ export class ClaudeCodeRuntimeService {
         kind: 'tool_event',
         itemId: callId,
         status: 'error',
+        receipt: terminalExecutionReceipt(
+          'error',
+          result.payload ?? result.content,
+          result.detail || message,
+          { errorCode: 'claude_tool_use_missing' }
+        ),
         toolKind: 'tool_call',
         summary: 'Claude Code tool result unresolved',
         detail: result.detail || message,

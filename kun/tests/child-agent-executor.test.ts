@@ -239,7 +239,7 @@ describe('child agent executor', () => {
       policy: 'auto',
       execute: async () => {
         executions += 1
-        return { output: { ok: executions } }
+        return { output: { ok: true } }
       }
     })
     const executor = createChildAgentExecutor({
@@ -249,7 +249,7 @@ describe('child agent executor', () => {
         async *stream(request: ModelRequest): AsyncIterable<ModelStreamChunk> {
           seen.push(request)
           calls += 1
-          if (calls <= 3) {
+          if (calls <= 4) {
             yield {
               kind: 'tool_call_complete',
               callId: `call_echo_${calls}`,
@@ -283,8 +283,8 @@ describe('child agent executor', () => {
     })
 
     expect(result.summary).toBe('Recovered with a substantive child summary.')
-    expect(calls).toBe(4)
-    expect(executions).toBe(2)
+    expect(calls).toBe(5)
+    expect(executions).toBe(3)
     expect(seen.at(-1)?.contextInstructions?.join('\n')).toContain('Tool loop recovery')
     expect(result.transcript).toEqual(expect.arrayContaining([
       expect.objectContaining({
@@ -363,7 +363,7 @@ describe('child agent executor', () => {
     })
 
     expect(calls).toBeGreaterThanOrEqual(4)
-    expect(calls).toBeLessThanOrEqual(6)
+    expect(calls).toBeLessThanOrEqual(7)
     expect(seen.at(-1)?.contextInstructions?.join('\n')).toContain('Tool phase finalization')
     expect(result.summary).toContain('已收集到以下资料')
     expect(result.summary).toContain('主要来源')

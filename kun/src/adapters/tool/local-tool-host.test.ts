@@ -75,6 +75,42 @@ function lifecycleCall() {
 }
 
 describe('LocalToolHost execution updates', () => {
+  it('returns a canonical receipt with explicit tool-boundary execution metadata', async () => {
+    const host = new LocalToolHost({
+      tools: [
+        lifecycleTool(async () => ({
+          output: {
+            exit_code: 1,
+            error_code: 'no_result',
+            detail: 'The requested condition was not present.'
+          },
+          isError: true,
+          receiptMetadata: {
+            outcome: 'negative_result',
+            failureClass: 'negative_result',
+            resourceIdentity: 'resource-1',
+            evidenceDelta: true,
+            stateChanged: false
+          }
+        }))
+      ]
+    })
+
+    const result = await host.execute(lifecycleCall(), fakeContext())
+
+    expect(result.receipt).toMatchObject({
+      status: 'error',
+      outcome: 'negative_result',
+      exitCode: 1,
+      errorCode: 'no_result',
+      failureClass: 'negative_result',
+      resourceIdentity: 'resource-1',
+      evidenceDelta: true,
+      stateChanged: false
+    })
+    expect(result.receipt.detail).toBe('The requested condition was not present.')
+  })
+
   it('drains a started fire-and-forget update before returning the terminal result', async () => {
     let markUpdateStarted!: () => void
     const updateStarted = new Promise<void>((resolve) => {

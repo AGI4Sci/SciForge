@@ -4,6 +4,7 @@ import type { TurnItem } from '../contracts/items.js'
 import type { ModelCapabilityMetadata } from '../contracts/capabilities.js'
 import type { BashCommandPolicyJson, FilePathPolicyJson } from '../contracts/turns.js'
 import type { MemoryTaskType, MemoryThreadMode } from '../contracts/memory.js'
+import type { ExecutionReceipt } from '@sciforge/execution-governance'
 import type {
   UserInputRequest,
   UserInputResolution
@@ -124,6 +125,8 @@ export type ToolExecutionUpdate = {
 
 export type ToolHostResult = {
   item: TurnItem
+  /** Canonical execution receipt constructed at the trusted tool-host boundary. */
+  receipt: ExecutionReceipt
   /** True if the call was decided by an approval. */
   approved: boolean
 }

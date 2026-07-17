@@ -262,7 +262,7 @@ describe('LocalToolHost', () => {
       }
     })
     const host = new LocalToolHost({ tools: [disabledTool] })
-    await expect(host.execute(
+    const result = await host.execute(
       { callId: 'c1', toolName: 'disabled_tool', arguments: {} },
       {
         threadId: 'th',
@@ -272,7 +272,15 @@ describe('LocalToolHost', () => {
         abortSignal: new AbortController().signal,
         awaitApproval: async () => 'allow'
       }
-    )).rejects.toThrow(/disabled_tool is disabled by policy/)
+    )
+    expect(result).toMatchObject({
+      item: { kind: 'tool_result', isError: true },
+      receipt: {
+        status: 'error',
+        outcome: 'fatal_error',
+        errorCode: 'approval_policy_blocked'
+      }
+    })
     expect(executions).toBe(0)
   })
 
