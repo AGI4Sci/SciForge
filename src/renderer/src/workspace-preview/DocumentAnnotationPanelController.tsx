@@ -102,11 +102,14 @@ export type DocumentAnnotationQuestionBridge = {
       source: 'pdf_annotation'
       title: string
       openPanel: boolean
-      allowStandalone: boolean
-      standalone: boolean
+      displayText: string
     }
   ) => Promise<string | null>
-  sendSideMessage: (sideId: string, text: string) => Promise<boolean>
+  sendSideMessage: (
+    sideId: string,
+    text: string,
+    overrides?: { displayText?: string }
+  ) => Promise<boolean>
 }
 
 export type DocumentAnnotationPanelControllerProps = {
@@ -250,9 +253,8 @@ export function DocumentAnnotationPanelController({
     setPanelOpen(true)
   }, [])
 
-  const applyAnnotationOperation = useCallback(async (
-    operation: WorkspacePreviewEditOperation | null,
-    options: { revealThread?: boolean } = {}
+  const mutateAnnotationOperation = useCallback(async (
+    operation: WorkspacePreviewEditOperation | null
   ): Promise<boolean> => {
     if (!operation) return false
     try {
@@ -278,7 +280,20 @@ export function DocumentAnnotationPanelController({
         setAnnotationNotice({ tone: 'error', message: result.message })
         return false
       }
-      await context.host.observe(result.session.id)
+      setAnnotationNotice(null)
+      return true
+    } catch (error) {
+      setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  }, [context.host])
+
+  const applyAnnotationOperation = useCallback(async (
+    operation: WorkspacePreviewEditOperation | null,
+    options: { revealThread?: boolean } = {}
+  ): Promise<boolean> => {
+    if (!operation || !await mutateAnnotationOperation(operation)) return false
+    try {
       const sidecarLoaded = await loadSidecar()
       const threadId = annotationThreadIdFromOperation(operation)
       if (threadId && options.revealThread) {
@@ -292,7 +307,7 @@ export function DocumentAnnotationPanelController({
       setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
       return false
     }
-  }, [context.host, loadSidecar])
+  }, [loadSidecar, mutateAnnotationOperation])
 
   const applyPreviewOperation = useCallback(async (operation: WorkspacePreviewEditOperation): Promise<void> => {
     if (isAnnotationEditOperation(operation)) {
@@ -361,15 +376,16 @@ export function DocumentAnnotationPanelController({
             source: 'pdf_annotation',
             title,
             openPanel: false,
-            allowStandalone: true,
-            standalone: true
+            displayText: trimmed
           })
       if (!sideThreadId) {
         setAnnotationNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
         return
       }
       if (existingSide) {
-        const sent = await questionBridge.sendSideMessage(existingSide.threadId, prompt)
+        const sent = await questionBridge.sendSideMessage(existingSide.threadId, prompt, {
+          displayText: trimmed
+        })
         if (!sent) {
           setAnnotationNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
           return
@@ -399,10 +415,12 @@ export function DocumentAnnotationPanelController({
     if (!sidecar || !questionBridge || !path) return
     let cancelled = false
     const persist = async (): Promise<void> => {
+      let changed = false
       for (const thread of sidecar.threads) {
         if (cancelled || thread.kind !== 'question' || !thread.sourceMessageId) continue
         const side = questionBridge.sideConversations[thread.sourceMessageId]
         if (!side || side.source !== 'pdf_annotation') continue
+        if (side.busy) continue
         const turns = sideBlockTurns(side)
         for (const turn of turns) {
           if (cancelled) return
@@ -414,15 +432,18 @@ export function DocumentAnnotationPanelController({
             sideThreadId: side.threadId,
             turn
           })
-          if (operation) await applyAnnotationOperation(operation)
+          if (operation) {
+            changed = await mutateAnnotationOperation(operation) || changed
+          }
         }
       }
+      if (changed && !cancelled) await loadSidecar()
     }
     void persist()
     return () => {
       cancelled = true
     }
-  }, [applyAnnotationOperation, documentKind, path, questionBridge, sidecar])
+  }, [documentKind, loadSidecar, mutateAnnotationOperation, path, questionBridge, sidecar])
 
   const resolveThread = useCallback((threadId: string): void => {
     if (!path) return

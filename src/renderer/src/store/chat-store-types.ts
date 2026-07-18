@@ -365,6 +365,7 @@ export type ChatState = {
       openPanel?: boolean
       allowStandalone?: boolean
       standalone?: boolean
+      displayText?: string
     }
   ) => Promise<string | null>
   /**

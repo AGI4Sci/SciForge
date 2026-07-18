@@ -1376,7 +1376,8 @@ export class AgentRuntimeHost {
       threadId: input.threadId,
       requestId: input.threadId
     })
-    const snapshot = await service.bindCurrentSurface(callerId, input.threadId)
+    const visibleContextOwnerThreadId = input.visibleContextOwnerThreadId?.trim() || input.threadId
+    const snapshot = await service.bindCurrentSurface(callerId, visibleContextOwnerThreadId)
       .catch(() => service.get().catch(() => service.peek()))
     const hint = renderVisibleContextLookupHint(snapshot)
     if (!hint) return input

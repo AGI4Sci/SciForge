@@ -630,6 +630,7 @@ export type AgentRuntimeTurnStartInput = {
   remoteTargetId?: string
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
+  visibleContextOwnerThreadId?: string
   guiPlan?: AgentRuntimeThreadGuiPlan
   attachmentIds?: string[]
   fileReferences?: AgentRuntimeFileReference[]

@@ -317,7 +317,8 @@ describe('chat-store-side-actions', () => {
     const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
       source: 'pdf_annotation',
       title: 'PDF: selected text',
-      openPanel: false
+      openPanel: false,
+      displayText: 'What does this mean?'
     })
 
     expect(id).toBe('side_thr_main')
@@ -339,7 +340,9 @@ describe('chat-store-side-actions', () => {
       expect.objectContaining({
         clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         model: 'deepseek-chat',
-        reasoningEffort: 'max'
+        reasoningEffort: 'max',
+        displayText: 'What does this mean?',
+        visibleContextOwnerThreadId: 'thr_main'
       })
     )
   })

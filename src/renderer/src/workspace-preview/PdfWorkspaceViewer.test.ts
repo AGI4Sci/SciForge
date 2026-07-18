@@ -54,6 +54,7 @@ import {
   PdfWorkspaceViewer,
   buildPdfWorkspaceViewerModel,
   loadPdfWorkspacePreviewData,
+  pdfWorkspaceDocumentRevisionKey,
   resolvePdfMimeType
 } from './PdfWorkspaceViewer'
 
@@ -170,6 +171,39 @@ function createPdfTransportClient(input: {
 }
 
 describe('PdfWorkspaceViewer', () => {
+  it('keeps a stable document revision across observation and transport object refreshes', () => {
+    const observation = createPdfObservation()
+    const asset = createPdfAssetDescriptor()
+    const first = pdfWorkspaceDocumentRevisionKey({
+      observation,
+      asset,
+      transport: createPdfTransportClient({ asset })
+    })
+    const refreshedObservation = createPdfObservation({
+      file: { ...observation.file },
+      view: { ...observation.view },
+      visibleText: 'A refreshed observation must not reload unchanged PDF bytes.'
+    })
+    const refreshedAsset = createPdfAssetDescriptor({
+      file: { ...asset.file },
+      range: { ...asset.range },
+      strategies: asset.strategies.map((strategy) => ({ ...strategy }))
+    })
+
+    expect(pdfWorkspaceDocumentRevisionKey({
+      observation: refreshedObservation,
+      asset: refreshedAsset,
+      transport: createPdfTransportClient({ asset: refreshedAsset })
+    })).toBe(first)
+    expect(pdfWorkspaceDocumentRevisionKey({
+      observation: createPdfObservation({
+        file: { ...observation.file, mtimeMs: 42 }
+      }),
+      asset,
+      transport: createPdfTransportClient({ asset })
+    })).not.toBe(first)
+  })
+
   it('loads PDF bytes through transport and renders WritePdfViewer without file URLs', async () => {
     const observation = createPdfObservation()
     const asset = createPdfAssetDescriptor()

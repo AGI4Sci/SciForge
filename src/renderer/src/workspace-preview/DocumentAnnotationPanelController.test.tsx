@@ -223,7 +223,8 @@ describe('DocumentAnnotationPanelController', () => {
       body: '',
       target: operation.target
     })
-    expect(context.host.observe).toHaveBeenCalledWith('session-pdf')
+    expect(context.host.observe).not.toHaveBeenCalled()
+    expect(context.host.listAnnotations).toHaveBeenCalledTimes(1)
     expect(context.host.listAnnotations).toHaveBeenCalledWith('session-pdf')
   })
 })

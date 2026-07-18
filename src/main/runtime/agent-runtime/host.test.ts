@@ -581,7 +581,7 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
-  it('adds an on-demand capability lookup for right-sidebar PDF annotation requests', async () => {
+  it('binds a side turn to its visible-context owner for right-sidebar requests', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -639,13 +639,14 @@ describe('AgentRuntimeHost', () => {
 
     await host.startTurn({
       runtimeId: 'codex',
-      threadId: 'codex-thread',
+      threadId: 'codex-side-thread',
+      visibleContextOwnerThreadId: 'codex-thread',
       text: userText,
       displayText: userText
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
+    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-side-thread', 'codex-thread')
     expect(dispatched?.text).toContain('sciforge_discover')
     expect(dispatched?.text).toContain('sciforge_observe')
     expect(dispatched?.text).toContain('sciforge_invoke')

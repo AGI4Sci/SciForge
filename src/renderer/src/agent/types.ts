@@ -583,6 +583,7 @@ export interface AgentProvider {
       remoteTargetId?: string
       governanceProfile?: 'default' | 'write' | 'remote_guard'
       displayText?: string
+      visibleContextOwnerThreadId?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
         workspaceRoot: string

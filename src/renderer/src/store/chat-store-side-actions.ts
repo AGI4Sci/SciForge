@@ -381,7 +381,8 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
       ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
       ...(queued.attachmentIds?.length ? { attachmentIds: queued.attachmentIds } : {}),
       ...(queued.fileReferences?.length ? { fileReferences: queued.fileReferences } : {}),
-      ...(queued.displayText ? { displayText: queued.displayText } : {})
+      ...(queued.displayText ? { displayText: queued.displayText } : {}),
+      visibleContextOwnerThreadId: side.parentThreadId
     })
     ctx.set((s) =>
       patchSide(s, sideId, (cur) => ({
@@ -687,7 +688,9 @@ export function createSideActions(ctx: SideContext): Pick<
         // Call the side action directly through the closure we are
         // currently building so store-level `state.sendSideMessage`
         // shims (e.g. test harnesses) cannot swallow the seed send.
-        const started = await actions.sendSideMessage(sideThread.id, seedText.trim())
+        const started = await actions.sendSideMessage(sideThread.id, seedText.trim(), {
+          ...(options?.displayText?.trim() ? { displayText: options.displayText.trim() } : {})
+        })
         if (!started) return sideThread.id
       }
       return sideThread.id
@@ -790,7 +793,8 @@ export function createSideActions(ctx: SideContext): Pick<
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(attachmentIds?.length ? { attachmentIds } : {}),
           ...(fileReferences?.length ? { fileReferences } : {}),
-          ...(overrides?.displayText ? { displayText: overrides.displayText } : {})
+          ...(overrides?.displayText ? { displayText: overrides.displayText } : {}),
+          visibleContextOwnerThreadId: side.parentThreadId
         })
         ctx.set((s) =>
           patchSide(s, sideId, (cur) => ({
