@@ -133,7 +133,10 @@ class Handler(BaseHTTPRequestHandler):
         engine = self.engine
         if method == "POST" and parts == ["updates"]:
             body = self._body()
-            body["projectKey"] = self._project_key(query, body)
+            project_key = self._project_key(query, body)
+            for routing_field in ("workspaceRoot", "projectRoot", "project"):
+                body.pop(routing_field, None)
+            body["projectKey"] = project_key
             return engine.enqueue_update(body)
         if method == "GET" and parts == ["updates", "status"]:
             return engine.update_status(self._project_key(query))
@@ -251,7 +254,7 @@ def _audit_worker(engine: Engine, stop: threading.Event) -> None:
 def main() -> None:
     session_dir = os.environ.get("PDAG_SESSION_DIR") \
         or os.environ.get("EDAG_STORAGE_DIR") or "./threads"
-    db_path = os.environ.get("PDAG_DB_PATH", "./project.db")
+    db_path = os.environ.get("PDAG_DB_PATH", "./project-view.db")
     host = os.environ.get("PDAG_HOST", "127.0.0.1")
     port = int(os.environ.get("PDAG_PORT", "3898"))
     llm = None

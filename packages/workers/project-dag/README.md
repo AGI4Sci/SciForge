@@ -14,12 +14,6 @@ Content-Type: application/json
 {
   "projectKey": "path:/workspace/project-a",
   "evidenceVector": [{"threadId":"runtime:thread-1","digest":"sha256:..."}],
-  "evidenceSnapshots": [{
-    "threadId":"runtime:thread-1","version":1,"digest":"sha256:...",
-    "inputWatermark":"turn:9","schemaVersion":"evidence.v2",
-    "extractorVersion":"extractor.v2","verifierVersion":"verifier.v2",
-    "artifactDigests":["sha256:..."],"createdAt":"...","status":"committed"
-  }],
   "capturedScope": {
     "includedSessions":["runtime:thread-1"],
     "excludedSessions":[],"isolatedSessions":[]
@@ -30,9 +24,14 @@ Content-Type: application/json
 }
 ```
 
+`evidenceVector` 是跨 DAG 的唯一输入合同。Project DAG 使用 `threadId + digest`
+直接读取并验证 Evidence DAG 已提交的不可变文件，不接收、不复制、也不缓存
+Snapshot envelope。Evidence DAG 始终是来源、证据与 provenance 的唯一事实层；
+Project DAG 只按 Goal、scope 与 policy 编译派生视图。
+
 Evidence commit 可以只携带变化 session；worker 只与该 `projectKey` 已持久化 membership/vector 合并，绝不扫描全局 Evidence store 扩大 scope。显式 scope 命令必须携带完整 captured scope。每个 Project Snapshot 固化实际 included/excluded/isolated 集合与精确 digest vector。
 
-P2 worker 按项目合并触发、每项目同时最多一个 generation；重启时 running job 标记为 interrupted 并重新排队。编译 graph 与 Project Snapshot 在同一个 SQLite 事务提交，失败不会暴露中间图。失败任务保存 `last_error / attempts / next_attempt_at`，按指数退避自动重试；`POST /updates/{jobId}/retry` 可清除等待时间并立即重试，仍进入同一编译 lane。
+P2 worker 按项目合并触发、每项目同时最多一个 generation；重启时 running job 直接恢复为 queued。编译 graph 与 Project Snapshot 在同一个 SQLite 事务提交，失败不会暴露中间图。可重试失败进入 `retry_scheduled` 并保存 `last_error / attempts / next_attempt_at`；超过上限后进入终态 `failed`，只能通过 `POST /updates/{jobId}/retry` 重新进入同一编译 lane。
 
 Snapshot 提交事务只把绑定该 immutable digest 的 L0 请求写入独立 `audit_run` durable queue，不执行审计。P3 audit worker 使用独立数据库连接低优先级消费；进程退出后恢复 running job，失败同样持久化错误和指数退避。新 Project Snapshot 提交会把旧 digest 的 queued/running/completed/failed 审计统一标记为 `stale`，不会用旧 Finding 覆盖新图。审计/注意力是 fail-open 只读侧链，失败不会反向把已经提交的 Project job 标为失败。
 
@@ -40,7 +39,7 @@ Snapshot 提交事务只把绑定该 immutable digest 的 L0 请求写入独立 
 
 - `GET /updates/status?projectKey=...`：latest committed、desired vector、pending/error/next retry、audit target/status/error/next retry、attention。
 - `GET /updates/history?projectKey=...`
-- `POST /updates/{jobId}/retry`：人工立即重试 failed/interrupted 编译任务。
+- `POST /updates/{jobId}/retry`：人工立即重试 `retry_scheduled` 或 `failed` 编译任务。
 - `GET /snapshots/latest?projectKey=...`
 - `GET /snapshots/{digest}`
 - `GET /graph?projectKey=...`

@@ -24,7 +24,8 @@ import {
   Newspaper,
   RefreshCw,
   RotateCcw,
-  Terminal
+  Terminal,
+  Workflow
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
@@ -38,6 +39,7 @@ export const RIGHT_PANEL_MODES = [
   'browser',
   'evidence',
   'project-dag',
+  'workflow',
   'file',
   'plan',
   'sdd-ai',
@@ -105,6 +107,7 @@ export function WorkbenchTopBar({
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
     { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },
+    { mode: 'workflow' as const, label: t('workflow'), icon: Workflow },
     { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },

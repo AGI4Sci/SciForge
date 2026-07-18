@@ -35,7 +35,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'openConnectPhone'
   | 'setConnectPhonePanelOpen'
   | 'openSchedule'
-  | 'openWorkflow'
   | 'selectRemoteGuardChannel'
   | 'clearRemoteGuardChannel'
   | 'openInitialSetup'
@@ -152,10 +151,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     openSchedule: () => {
       set({ route: 'schedule', remoteGuardChannelId: null, connectPhonePanelOpen: false })
-    },
-
-    openWorkflow: () => {
-      set({ route: 'workflow', remoteGuardChannelId: null, connectPhonePanelOpen: false })
     },
 
     selectRemoteGuardChannel: (channelId) => {

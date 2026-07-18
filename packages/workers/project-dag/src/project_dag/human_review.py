@@ -61,30 +61,20 @@ def _signal(subject_type: str, subject_id: str, level: str, score: float,
 
 
 def normalize_upstream_review(value: Any, source_id: str) -> dict | None:
-    """Accept a forward-compatible Evidence ``humanReview`` summary."""
+    """Derive a Project gate from Evidence review state without copying its envelope."""
     if not isinstance(value, dict):
         return None
     level = value.get("level")
     status = value.get("status", "pending")
     if level not in LEVEL_WEIGHT or status not in REVIEW_STATUSES:
         return None
-    reasons = []
-    for item in value.get("reasons") or []:
-        if not isinstance(item, dict) or not str(item.get("code") or "").strip():
-            continue
-        reasons.append(_reason(
-            str(item["code"]), str(item.get("message") or item["code"]),
-            str(item.get("sourceType") or "evidenceSnapshot"),
-            str(item.get("sourceId") or source_id),
-        ))
-    if not reasons and level != "none":
-        reasons.append(_reason(
+    reasons = [] if level == "none" else [_reason(
             "upstream_review_required", "Evidence review metadata requests project review.",
             "evidenceSnapshot", source_id,
-        ))
-    checker = value.get("checker") if isinstance(value.get("checker"), dict) else _checker(
+        )]
+    checker = _checker(
         "blocking" if value.get("blocking") else "advisory",
-        method="evidence-human-review/compatible",
+        method="evidence-review-state/v1",
     )
     upstream_status = status
     # A rejected/deferred Evidence decision is not approval for Project use.
@@ -99,15 +89,17 @@ def normalize_upstream_review(value: Any, source_id: str) -> dict | None:
         ))
     return {
         "subjectType": "evidenceSnapshot", "subjectId": source_id,
-        "level": level, "score": _clamp(value.get("score")), "status": status,
+        "level": level,
+        "score": {"none": 0.0, "optional": 0.35, "recommended": 0.65,
+                  "required": 0.9}[level],
+        "status": status,
         "reasons": reasons, "checker": checker,
-        "blastRadius": _clamp(value.get("blastRadius")),
-        "machineChecks": [*list(value.get("machineChecks") or []), {
+        "blastRadius": 1.0 if value.get("blocking") else 0.0,
+        "machineChecks": [{
             "code": "upstream_review_status", "status": upstream_status,
             "sourceId": source_id,
         }],
         "upstreamBlocking": bool(value.get("blocking")),
-        "upstreamReviewPacketId": value.get("reviewPacketId"),
     }
 
 

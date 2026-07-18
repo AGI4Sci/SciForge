@@ -208,7 +208,6 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     openConnectPhone: () => undefined,
     setConnectPhonePanelOpen: () => undefined,
     openSchedule: () => undefined,
-    openWorkflow: () => undefined,
     refreshRemoteChannels: async () => undefined,
     addRemoteChannel: async () => undefined,
     selectRemoteChannel: async () => undefined,

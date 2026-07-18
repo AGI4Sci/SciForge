@@ -173,7 +173,7 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
     review_enqueued: 1
   },
   diff: { added: ['claim-1'] }
-}) {
+}, statusData?: Record<string, unknown>) {
   let committedVector: unknown[] = []
   let committedScope = { excludedSessions: [] as string[], isolatedSessions: [] as string[] }
   let autonomyMode = 'autonomous'
@@ -195,7 +195,7 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
       return new Response(
         JSON.stringify({
           ok: status >= 200 && status < 300,
-          data: { service: 'project-dag-engine', version: '0.2.0' }
+          data: { service: 'project-dag-engine', version: '0.3.0' }
         }),
         { status }
       )
@@ -228,7 +228,7 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
       }), { status: 200 })
     }
     if (href.includes('/updates/status') && method === 'GET') {
-      return new Response(JSON.stringify({ ok: true, data: {
+      return new Response(JSON.stringify({ ok: true, data: statusData ?? {
         state: 'fresh', pending: 0,
         committedSnapshot: { digest: 'project-snapshot-1', evidenceVector: committedVector, ...committedScope },
         autonomy: { autonomy_mode: autonomyMode }
@@ -977,9 +977,124 @@ describe('registerAppIpcHandlers', () => {
     })).resolves.toMatchObject({
       status: {
         freshness: 'failed',
-        pendingCount: 1,
+        pendingCount: 0,
         lastError: 'Evidence extractor unavailable',
-        progress: { stage: 'retrying', attempt: 1 }
+        progress: { stage: 'failed', attempt: 1 }
+      }
+    })
+  })
+
+  it('keeps a scheduled Evidence dependency retry distinct from terminal failure', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dependency-retry-'))
+    queueRoots.push(root)
+    const dependencyError = new Error('Evidence extractor temporarily unavailable')
+    const queue = configureEvidenceDagUpdateQueue({
+      storagePath: join(root, 'queue.json'),
+      env: {
+        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:4897',
+        SCIFORGE_EVIDENCE_DAG_API_KEY: 'evidence-token'
+      },
+      fetchImpl: vi.fn(async () => { throw dependencyError }),
+      maxAttempts: 2,
+      retryBaseMs: 60_000
+    })
+    await queue.enqueue({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      targetWatermark: '7',
+      reason: 'turn_committed',
+      items: [{ id: 'answer-1', kind: 'assistant_message', text: 'Evidence.' }],
+      projectContext: {
+        projectKey: '/tmp/project-alpha',
+        workspaceRoot: '/tmp/project-alpha',
+        projectRoot: '/tmp/project-alpha'
+      }
+    })
+    await vi.waitFor(async () => {
+      const status = await queue.status('codex', 'thread-1')
+      expect(status.state).toBe('failed')
+      expect(status.nextAttemptAt).toBeTruthy()
+    })
+
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    stubProjectDagReady()
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
+
+    await expect(handlers.get('projectDag:view')?.({}, {
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toMatchObject({
+      status: {
+        freshness: 'queued',
+        pendingCount: 1,
+        lastError: 'Evidence extractor temporarily unavailable',
+        nextAttemptAt: expect.any(String),
+        progress: { stage: 'retry_scheduled', attempt: 1 }
+      }
+    })
+  })
+
+  it('maps Project compiler retry deadlines without treating terminal failures as active', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    stubProjectDagReady(200, {}, {
+      state: 'update_failed',
+      pending: 0,
+      jobs: [{
+        id: 'project-job-1',
+        status: 'retry_scheduled',
+        attempts: 2,
+        last_error: 'Compiler temporarily unavailable',
+        next_attempt_at: '2026-07-18T12:00:00.000Z',
+        updated_at: '2026-07-18T11:59:00.000Z'
+      }]
+    })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
+
+    await expect(handlers.get('projectDag:view')?.({}, {
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toMatchObject({
+      status: {
+        freshness: 'queued',
+        pendingCount: 1,
+        lastError: 'Compiler temporarily unavailable',
+        nextAttemptAt: '2026-07-18T12:00:00.000Z',
+        progress: { stage: 'retry_scheduled', attempt: 2 }
+      }
+    })
+  })
+
+  it('maps a Project compiler failure without a retry deadline to terminal failure', async () => {
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
+    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
+    stubProjectDagReady(200, {}, {
+      state: 'update_failed',
+      pending: 0,
+      jobs: [{
+        id: 'project-job-1',
+        status: 'failed',
+        attempts: 3,
+        last_error: 'Compiler rejected the snapshot',
+        next_attempt_at: null,
+        updated_at: '2026-07-18T11:59:00.000Z'
+      }]
+    })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
+
+    await expect(handlers.get('projectDag:view')?.({}, {
+      view: 'graph',
+      workspaceRoot: '/tmp/project-alpha'
+    })).resolves.toMatchObject({
+      status: {
+        freshness: 'failed',
+        pendingCount: 0,
+        lastError: 'Compiler rejected the snapshot',
+        progress: { stage: 'failed', attempt: 3 }
       }
     })
   })
@@ -1178,7 +1293,8 @@ describe('registerAppIpcHandlers', () => {
     )
     const projectCall = fetchMock.mock.calls.find(([input, init]) =>
       String(input) === 'http://127.0.0.1:3898/updates' && init?.method === 'POST')
-    expect(JSON.parse(String(projectCall?.[1]?.body))).toMatchObject({
+    const projectBody = JSON.parse(String(projectCall?.[1]?.body))
+    expect(projectBody).toMatchObject({
       priority: 3,
       evidenceVector: [
         { threadId: 'codex:thread-1', digest: 'sha256:fresh:codex:thread-1' },
@@ -1186,6 +1302,7 @@ describe('registerAppIpcHandlers', () => {
       ],
       capturedScope: { includedSessions: ['codex:thread-1', 'sciforge:retired-thread'] }
     })
+    expect(projectBody).not.toHaveProperty('evidenceSnapshots')
   })
 
   it('applies excluded and isolated sessions through the same Project update command', async () => {

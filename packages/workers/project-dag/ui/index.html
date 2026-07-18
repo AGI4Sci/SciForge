@@ -208,7 +208,7 @@ function graphModel(graph){
   const snapshot=object(graph.snapshot),nodes=[],seen=new Set();
   const add=(id,kind,label,status,raw)=>{id=String(id||'').trim();if(!id||seen.has(id))return;seen.add(id);nodes.push({id,kind,label:String(label||id),status:String(status||''),raw:object(raw),review:projectHumanReviewForTarget(id,object(raw),graph)})};
   for(const item of list(snapshot.evidenceVector)){const threadId=String(item.threadId||'').trim();add(`session:${threadId}`,'session',threadId,shortDigest(item.digest),item)}
-  for(const item of list(graph.evidence))add(item.id,'evidence',item.content||item.title||item.id,item.evidence_type,item);
+  for(const item of list(graph.evidence))add(item.id,'evidence',item.node_id||item.id,shortDigest(item.snapshot_digest),item);
   for(const item of list(graph.claims))add(item.id,'claim',item.statement||item.id,item.status,item);
   for(const item of list(graph.entities))add(item.id,'entity',item.canonical_name||item.name||item.label||item.id,item.entity_type,item);
   for(const item of list(graph.goals))add(item.root_id||item.id,'goal',item.title||item.description||item.root_id||item.id,item.status,item);
@@ -221,15 +221,13 @@ function graphModel(graph){
   return {nodes,edges,counts};
 }
 function evidenceReviewModel(evidence,graph,claimDetails){
-  const raw=object(evidence),reference=String(raw.content_ref||''),separator=reference.lastIndexOf('#'),pointer=separator>0?{threadId:reference.slice(0,separator),sourceAssertionId:reference.slice(separator+1)}:null;
+  const raw=object(evidence),threadId=String(raw.thread_id||''),snapshotDigest=String(raw.snapshot_digest||''),sourceAssertionId=String(raw.node_id||''),pointer=threadId&&snapshotDigest&&sourceAssertionId?{threadId,snapshotDigest,sourceAssertionId}:null;
   const relatedClaimIds=[...new Set(list(graph.edges).filter(edge=>(edge.src===raw.id||edge.dst===raw.id)&&edge.edge_type==='supports').map(edge=>edge.src===raw.id?edge.dst:edge.src))];
   const claims=relatedClaimIds.map(id=>list(graph.claims).find(claim=>claim.id===id)||{id,statement:'关联 Claim 不在当前 committed scope'});
   let resolved=null;
   for(const detail of list(claimDetails))for(const path of list(object(detail.provenance).paths))for(const assertion of list(path.sourceAssertions)){
-    const sourceId=String(assertion.sourceAssertionId||'');
-    const pointerMatches=pointer&&path.threadId===pointer.threadId&&sourceId===pointer.sourceAssertionId;
-    const hashMatches=String(raw.source_hash||'')&&sourceId===String(raw.source_hash);
-    if(pointerMatches||hashMatches){resolved={claimId:detail.id,detail,path,assertion};break}
+    const sourceId=String(assertion.sourceAssertionId||''),pathDigest=String(object(path.evidenceSnapshot).digest||'');
+    if(pointer&&path.threadId===pointer.threadId&&pathDigest===pointer.snapshotDigest&&sourceId===pointer.sourceAssertionId){resolved={claimId:detail.id,detail,path,assertion};break}
   }
   return {pointer,relatedClaimIds,claims,resolved};
 }
@@ -287,16 +285,17 @@ function pretty(value){return escapeHtml(JSON.stringify(value,null,2))}
 function short(value,size=12){const text=String(value||'');return text.length>size?`${text.slice(0,size)}…`:text||'—'}
 function statusClass(value){return `status-${String(value||'undetermined').replace(/[^a-z_-]/gi,'')}`}
 function renderError(error){document.getElementById('error').innerHTML=error?`<div class="error">${escapeHtml(error.message||error)}</div>`:''}
-function updateIsActive(status){return ['pending','updating','update_failed'].includes(String(status?.state||''))}
-function activeUpdateJob(status){return list(status?.jobs).find(job=>['queued','running','failed','interrupted'].includes(job.status))||null}
+function updateIsVisible(status){return ['pending','updating','retry_scheduled','update_failed'].includes(String(status?.state||''))}
+function updateIsActive(status){return ['pending','updating','retry_scheduled'].includes(String(status?.state||''))}
+function activeUpdateJob(status){return list(status?.jobs).find(job=>['queued','running','retry_scheduled','failed'].includes(job.status))||null}
 function renderUpdateProgress(){
   const status=object(state.status),job=activeUpdateJob(status),container=document.getElementById('update-progress');
-  if(!updateIsActive(status)||!job){container.hidden=true;container.classList.remove('error-state');return}
-  const failed=status.state==='update_failed',running=status.state==='updating';
-  const percent=failed?68:running?86:68,title=failed?'更新失败，后台将按计划重试':running?'正在编译、校验并提交 Project Snapshot':'Session Evidence 已就绪，正在等待项目编译';
+  if(!updateIsVisible(status)||!job){container.hidden=true;container.classList.remove('error-state');return}
+  const failed=status.state==='update_failed',scheduled=status.state==='retry_scheduled',running=status.state==='updating';
+  const percent=running?86:68,title=failed?'更新失败，等待手动重试':scheduled?'更新遇到问题，已安排重试':running?'正在编译、校验并提交 Project Snapshot':'Session Evidence 已就绪，正在等待项目编译';
   const updated=job.updated_at?new Date(job.updated_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
-  const retry=status.state==='update_failed'&&job.next_attempt_at?` · 下次重试 ${new Date(job.next_attempt_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'';
-  container.hidden=false;container.classList.toggle('error-state',failed);
+  const retry=scheduled&&job.next_attempt_at?` · 下次重试 ${new Date(job.next_attempt_at).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit'})}`:'';
+  container.hidden=false;container.classList.toggle('error-state',failed||scheduled);
   document.getElementById('progress-title').textContent=title;
   document.getElementById('progress-percent').textContent=`${percent}%`;
   document.getElementById('progress-meta').textContent=`最后活动 ${updated} · 第 ${Number(job.attempts||0)+Number(job.status==='queued')} 次尝试${retry}${job.last_error?` · ${job.last_error}`:''}`;
@@ -360,9 +359,9 @@ function genericInspectorHtml(node,model){
   return `<div class="review-head"><span class="review-kind">${escapeHtml(node.kind)}</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p>${node.status?`<span class="badge">${escapeHtml(node.status)}</span>`:''}</div>${humanReviewDetailHtml(node.review)}${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',`<p>${escapeHtml(node.label)}</p><dl class="review-meta"><dt>节点类型</dt><dd>${escapeHtml(node.kind)}</dd><dt>状态</dt><dd>${escapeHtml(node.status||'未记录')}</dd></dl>`)}${reviewSection(prefix,'evidence','02','证据',relations)}${reviewSection(prefix,'original','03','原文','<p class="empty">该节点不是可解析的 Project Evidence；选择 Evidence 或 Claim 可继续追溯原文。</p>')}${reviewSection(prefix,'history','04','历史',`<p class="compact muted">Committed Snapshot v${escapeHtml(snapshot.version||'—')} · ${escapeHtml(snapshot.createdAt||'—')}</p><p class="mono muted">${escapeHtml(snapshot.digest||'—')}</p><details><summary>Committed node metadata</summary><pre>${pretty(node.raw)}</pre></details>`)}`;
 }
 function evidenceInspectorHtml(node,model){
-  const prefix='graph-review',review=evidenceReviewModel(node.raw,object(state.graph),state.graphInspectorDetails),raw=node.raw,resolved=review.resolved,quality=raw.quality_score==null?'未记录':Number(raw.quality_score).toFixed(2),relations=review.claims.length?`<div class="review-relations">${review.claims.map(claim=>`<button type="button" class="review-relation-button" data-inspector-node="${escapeHtml(claim.id)}"><b>${escapeHtml(claim.statement||claim.id)}</b><span>supports · ${escapeHtml(claim.id)}</span></button>`).join('')}</div>`:'<p class="empty">当前 committed graph 没有与此 Evidence 相连的 Claim。</p>',pointer=review.pointer?`<dl class="review-meta"><dt>Session</dt><dd class="mono">${escapeHtml(review.pointer.threadId)}</dd><dt>SourceAssertion</dt><dd class="mono">${escapeHtml(review.pointer.sourceAssertionId)}</dd></dl>`:'<p class="warn">content_ref 未提供可解析的 Session SourceAssertion 指针。</p>';
+  const prefix='graph-review',review=evidenceReviewModel(node.raw,object(state.graph),state.graphInspectorDetails),resolved=review.resolved,relations=review.claims.length?`<div class="review-relations">${review.claims.map(claim=>`<button type="button" class="review-relation-button" data-inspector-node="${escapeHtml(claim.id)}"><b>${escapeHtml(claim.statement||claim.id)}</b><span>supports · ${escapeHtml(claim.id)}</span></button>`).join('')}</div>`:'<p class="empty">当前 committed graph 没有与此 Evidence 相连的 Claim。</p>',pointer=review.pointer?`<dl class="review-meta"><dt>Session</dt><dd class="mono">${escapeHtml(review.pointer.threadId)}</dd><dt>Evidence Snapshot</dt><dd class="mono">${escapeHtml(review.pointer.snapshotDigest)}</dd><dt>SourceAssertion</dt><dd class="mono">${escapeHtml(review.pointer.sourceAssertionId)}</dd></dl>`:'<p class="warn">Evidence 引用不完整。</p>';
   const original=resolved?`${artifactHtml(resolved.assertion,resolved.path,0)}<div class="preview-feedback-slot" aria-live="polite"></div>`:state.graphInspectorLoading?'<div class="review-loading">正在固定 Snapshot 中解析 ArtifactVersion 与 SourceAnchor…</div>':state.graphInspectorError?`<p class="bad">${escapeHtml(state.graphInspectorError)}</p>`:'<p class="empty">未从关联 Claim 的固定 provenance 中匹配到 ArtifactVersion / SourceAnchor，不能提供可信本地预览。</p>';
-  return `<div class="review-head"><span class="review-kind">Evidence</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p><div class="facts"><span class="badge">${escapeHtml(raw.evidence_type||'evidence')}</span><span class="badge">quality ${escapeHtml(quality)}</span></div></div>${humanReviewDetailHtml(node.review)}${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',`<p>${escapeHtml(raw.content||node.label)}</p><dl class="review-meta"><dt>Evidence 类型</dt><dd>${escapeHtml(raw.evidence_type||'未记录')}</dd><dt>质量分</dt><dd>${escapeHtml(quality)}</dd><dt>有效期</dt><dd>${escapeHtml(raw.t_valid||'—')} → ${escapeHtml(raw.t_invalid||'current')}</dd></dl>`)}${reviewSection(prefix,'evidence','02','证据',`${pointer}<h3>支持的 Claims</h3>${relations}`)}${reviewSection(prefix,'original','03','原文',original)}${reviewSection(prefix,'history','04','历史',`<p class="compact muted">当前 Project Snapshot 仅引用固定的 Evidence 身份；历史不会重新解析未提交数据。</p><details><summary>Committed Evidence metadata</summary><pre>${pretty(raw)}</pre></details>`)}`;
+  return `<div class="review-head"><span class="review-kind">Evidence reference</span><h2 id="claim-detail-heading">${escapeHtml(node.label)}</h2><p class="compact muted mono">${escapeHtml(node.id)}</p></div>${humanReviewDetailHtml(node.review)}${reviewNav(prefix)}${reviewSection(prefix,'overview','01','概要',`<p>Project DAG 只保存固定 Evidence Snapshot 中 SourceAssertion 的不可变引用。</p>${pointer}`)}${reviewSection(prefix,'evidence','02','证据',`<h3>支持的 Claims</h3>${relations}`)}${reviewSection(prefix,'original','03','原文',original)}${reviewSection(prefix,'history','04','历史',`<p class="compact muted">内容与 provenance 由 Evidence DAG 按固定 digest 解析，不复制到 Project Snapshot。</p><details><summary>Committed Evidence reference</summary><pre>${pretty(raw)}</pre></details>`)}`;
 }
 function bindInspectorNavigation(container){for(const button of container.querySelectorAll('[data-inspector-node]'))button.onclick=()=>selectGraphNode(button.dataset.inspectorNode);bindHumanReviewActions(container)}
 function renderGraphInspector(model,nodeId){

@@ -17,7 +17,7 @@ const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const outputRoot = resolve(args.outputDir || join(repoRoot, 'temp', 'evidence-project-dag-e2e', runId))
 const storageRoot = join(outputRoot, 'isolated-storage')
 const evidenceStore = join(storageRoot, 'evidence')
-const projectDb = join(storageRoot, 'project', 'project.db')
+const projectDb = join(storageRoot, 'project', 'project-view.db')
 const logRoot = join(storageRoot, 'logs')
 const resultPath = join(outputRoot, 'result.json')
 const evidenceUrl = `http://127.0.0.1:${args.evidencePort}`
@@ -214,7 +214,6 @@ async function main() {
   const projectUpdateBody = {
     projectKey,
     evidenceVector: [{ threadId: args.sessionId, digest: evidenceSnapshot.digest }],
-    evidenceSnapshots: [evidenceSnapshot],
     capturedScope: {
       includedSessions: [args.sessionId], excludedSessions: [], isolatedSessions: [],
     },

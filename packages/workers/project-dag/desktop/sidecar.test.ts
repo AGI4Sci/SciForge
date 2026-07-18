@@ -60,7 +60,8 @@ describe('Project DAG sidecar launch', () => {
     if (!result.ok) return
     expect(result.launch.env.PDAG_SCHEDULE).toBeUndefined()
     expect(result.launch.env.EDAG_MODEL_ROUTER_TIMEOUT_S).toBe('45')
-    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('1')
+    expect(result.launch.env.EDAG_MODEL_ROUTER_MAX_ATTEMPTS).toBe('3')
+    expect(result.launch.dbPath).toBe('/tmp/sciforge/project-dag/project-view.db')
   })
 
   it('does not forward the removed PDAG_SCHEDULE bypass', () => {
@@ -88,7 +89,7 @@ describe('Project DAG sidecar launch', () => {
     await withProjectDagServer((_, response) => {
       sendJson(response, 200, {
         ok: true,
-        data: { service: 'project-dag-engine', version: '0.2.0' }
+        data: { service: 'project-dag-engine', version: '0.3.0' }
       })
     }, async (baseUrl, requests) => {
       await ensureProjectDagSidecar(settings(), {
@@ -124,7 +125,7 @@ describe('Project DAG sidecar launch', () => {
         appRoot: '/app/root',
         env: projectDagEnv(baseUrl),
         spawnImpl: spawnMock as unknown as ProjectDagSpawn
-      })).rejects.toThrow(/0\.1\.0.*requires 0\.2\.0.*Restart SciForge/)
+      })).rejects.toThrow(/0\.1\.0.*requires 0\.3\.0.*Restart SciForge/)
 
       expect(spawnMock).not.toHaveBeenCalled()
     })
@@ -140,7 +141,7 @@ describe('Project DAG sidecar launch', () => {
       }
       sendJson(response, 200, {
         ok: true,
-        data: { service: 'project-dag-engine', version: '0.2.0' }
+        data: { service: 'project-dag-engine', version: '0.3.0' }
       })
     }, async (baseUrl, requests) => {
       await ensureProjectDagSidecar(settings(), {
@@ -171,7 +172,7 @@ describe('Project DAG sidecar launch', () => {
         }
         sendJson(response, 200, {
           ok: true,
-          data: { service: 'project-dag-engine', version: '0.2.0' }
+          data: { service: 'project-dag-engine', version: '0.3.0' }
         })
       }, async (baseUrl) => {
         await ensureProjectDagSidecar(settings(), {
@@ -229,7 +230,7 @@ describe('Project DAG sidecar launch', () => {
         }
         sendJson(response, 200, {
           ok: true,
-          data: { service: 'project-dag-engine', version: '0.2.0' }
+          data: { service: 'project-dag-engine', version: '0.3.0' }
         })
       }, async (baseUrl) => {
         const options = {

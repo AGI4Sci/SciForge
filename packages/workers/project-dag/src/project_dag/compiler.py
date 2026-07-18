@@ -26,7 +26,7 @@ from collections.abc import Iterator
 from typing import Any, Optional
 
 from .judge import Judge, JudgePreparationRequired
-from .reader import SessionReader, source_ancestors, source_quality, supporting_subgraph
+from .reader import SessionReader, source_ancestors, supporting_subgraph
 from .reconcile import incremental_reconcile
 from .store import Store, new_id, now_iso
 
@@ -222,7 +222,10 @@ class Compiler:
         distill_outputs = outputs[-len(distill_inputs):] if distill_inputs else []
         entity_requests: list[tuple[str, dict, int]] = []
         with self.store.transaction_lock:
-            live_entities = self.store.q("SELECT * FROM entity WHERE merged_into IS NULL")
+            live_entities = self.store.q(
+                "SELECT * FROM entity WHERE project_key=? AND merged_into IS NULL",
+                (project_key,),
+            )
             for output in distill_outputs:
                 context = output.get("statement", "")
                 for name in output.get("mentioned_entities", []):
@@ -287,11 +290,6 @@ class Compiler:
         touched: set[str] = set()
 
         self._collect_decision_outputs(project_key, diff)
-        # Older compiler versions registered evidence for no-Goal candidates
-        # and advanced the session watermark, but left the candidates only in
-        # an orphan review.  Materialize those candidates before goal rematch
-        # so they are not permanently stranded after a Goal is later created.
-        touched |= self._materialize_legacy_orphans(project_key, run_id, diff)
         touched |= self._rematch_goals(project_key, run_id, diff)
 
         session_ids = (self.reader.list_sessions() if scope == "all"
@@ -343,7 +341,8 @@ class Compiler:
         if diff["errors"]:
             raise RuntimeError(json.dumps(diff["errors"], ensure_ascii=False))
 
-        relabelled = incremental_reconcile(st, touched, commit=False)      # Phase 6
+        relabelled = incremental_reconcile(
+            st, self.reader, project_key, touched, commit=False)          # Phase 6
         diff["relabelled"] = relabelled
 
         stats = {
@@ -403,87 +402,6 @@ class Compiler:
                 "evidenceDigest": decision["evidence_digest"],
                 "remediationCandidate": candidate,
             })
-
-    def _materialize_legacy_orphans(self, project_key: str, run_id: str,
-                                    diff: dict) -> set[str]:
-        """Recover no-Goal candidates stranded by the pre-v2 compiler.
-
-        The old path wrote their source rows into ``evidence`` and advanced
-        the Evidence watermark, but never created a Project Claim.  Replaying
-        the same immutable Evidence digest therefore returned no delta and the
-        candidate could never be adopted.  The orphan review is the durable
-        recovery record, so convert each still-unmaterialized candidate into
-        an unassigned, ``undetermined`` claim while keeping the review open.
-        """
-        touched: set[str] = set()
-        has_goals = bool(self.store.active_goals(project_key=project_key, scoped=True))
-        reviews = self.store.q(
-            "SELECT * FROM review WHERE project_key=? AND review_type='orphan_claims'"
-            " AND status='open' ORDER BY created_at,id",
-            (project_key,),
-        )
-        for review in reviews:
-            payload = _load_json_object(review.get("payload"))
-            candidates = payload.get("candidates")
-            if not isinstance(candidates, list):
-                continue
-            changed = False
-            for candidate in candidates:
-                if not isinstance(candidate, dict):
-                    continue
-                session_id = candidate.get("session")
-                node_id = candidate.get("node")
-                statement = candidate.get("statement")
-                if not all(isinstance(value, str) and value for value in
-                           (session_id, node_id, statement)):
-                    continue
-                existing = self.store.q1(
-                    "SELECT claim_id FROM claim_origin WHERE project_key=?"
-                    " AND session_id=? AND node_id=? LIMIT 1",
-                    (project_key, session_id, node_id),
-                )
-                if existing is not None:
-                    candidate["project_claim_id"] = existing["claim_id"]
-                    continue
-                evidence_ids = [
-                    evidence_id for evidence_id in candidate.get("evidence_ids", [])
-                    if isinstance(evidence_id, str) and self.store.q1(
-                        "SELECT 1 AS present FROM evidence WHERE id=? AND t_invalid IS NULL",
-                        (evidence_id,),
-                    ) is not None
-                ]
-                claim_id = self._insert_claim_record(
-                    session_id=session_id,
-                    node_id=node_id,
-                    out={
-                        "claim_type": candidate.get("claim_type"),
-                        "confidence": candidate.get("confidence", 0.5),
-                    },
-                    statement=statement,
-                    goal_id=None,
-                    entity_ids=[],
-                    evidence_ids=evidence_ids,
-                    run_id=run_id,
-                    project_key=project_key,
-                )
-                if has_goals:
-                    self.store.x("UPDATE claim SET needs_regoal=1 WHERE id=?", (claim_id,))
-                candidate["project_claim_id"] = claim_id
-                touched.add(claim_id)
-                changed = True
-                diff["added_claims"].append({
-                    "id": claim_id,
-                    "statement": statement,
-                    "goal": None,
-                    "recovered_from_review": review["id"],
-                })
-            if changed:
-                payload["materialized_run_id"] = run_id
-                self.store.x(
-                    "UPDATE review SET payload=? WHERE id=?",
-                    (json.dumps(payload, ensure_ascii=False), review["id"]),
-                )
-        return touched
 
     def _rematch_goals(self, project_key: str, run_id: str, diff: dict) -> set[str]:
         """Apply persisted Goal changes without re-reading or reinterpreting Evidence.
@@ -610,6 +528,15 @@ class Compiler:
                 "subgraph": sub,
                 "active_goals": goal_view,
             })
+            statement = out.get("statement")
+            if not isinstance(statement, str) or not statement.strip():
+                diff["errors"].append({
+                    "session": delta.session_id,
+                    "node": node_id,
+                    "error": "distill returned no derived statement",
+                })
+                continue
+            out = {**out, "statement": statement.strip()}
             valid_ids = {n["id"] for n in sub["nodes"]}
             cited = [x for x in out.get("source_node_ids", []) if x in valid_ids]
             if not cited:
@@ -625,14 +552,14 @@ class Compiler:
                 entity_ids = self._resolve_entities(
                     out.get("mentioned_entities", []), out.get("statement", ""), diff,
                     project_key=project_key)
-                evidence_ids = self._register_evidence(delta, cited)
+                evidence_ids = self._register_evidence(delta, cited, project_key=project_key)
                 claim_id = self._match_and_insert(
                     delta, node_id, out, None, entity_ids, evidence_ids,
                     run_id, diff, touched, project_key=project_key)
                 diff["orphans"].append({
                     "session": delta.session_id, "node": node_id,
                     "project_claim_id": claim_id,
-                    "statement": out.get("statement", node.content),
+                    "statement": out["statement"],
                     "claim_type": out.get("claim_type"),
                     "source_node_ids": cited,
                     "evidence_ids": evidence_ids,
@@ -642,7 +569,7 @@ class Compiler:
             entity_ids = self._resolve_entities(                  # Phase 3
                 out.get("mentioned_entities", []), out.get("statement", ""), diff,
                 project_key=project_key)
-            evidence_ids = self._register_evidence(delta, cited)
+            evidence_ids = self._register_evidence(delta, cited, project_key=project_key)
             self._match_and_insert(                                # Phase 4/5
                 delta, node_id, out, goal_id, entity_ids, evidence_ids,
                 run_id, diff, touched, project_key=project_key)
@@ -720,7 +647,10 @@ class Compiler:
         for name in names:
             if not (name or "").strip():
                 continue
-            live = st.q("SELECT * FROM entity WHERE merged_into IS NULL")
+            live = st.q(
+                "SELECT * FROM entity WHERE project_key=? AND merged_into IS NULL",
+                (project_key,),
+            )
             exact = None
             pool: list[tuple[float, dict]] = []
             for ent in live:
@@ -745,13 +675,13 @@ class Compiler:
                     continue
                 if conf >= self.auto_threshold:
                     aliases = sorted(set(json.loads(ent["aliases"]) + [name]))
-                    st.x("UPDATE entity SET aliases=? WHERE id=?",
-                         (json.dumps(aliases, ensure_ascii=False), ent["id"]))
+                    st.x("UPDATE entity SET aliases=? WHERE id=? AND project_key=?",
+                         (json.dumps(aliases, ensure_ascii=False), ent["id"], project_key))
                     diff["merged_entities"].append({"name": name, "into": ent["id"]})
                     out.append(ent["id"])
                     matched = True
                 elif conf >= self.review_threshold:
-                    prov = self._create_entity(name, provisional=True)
+                    prov = self._create_entity(project_key, name, provisional=True)
                     rid = st.enqueue_review(project_key, "entity_merge", {
                         "provisional": prov, "candidate": ent["id"],
                         "name": name, "candidate_name": ent["canonical_name"],
@@ -762,22 +692,25 @@ class Compiler:
                 if matched:
                     break
             if not matched:
-                eid = self._create_entity(name)
+                eid = self._create_entity(project_key, name)
                 diff["new_entities"].append({"id": eid, "name": name})
                 out.append(eid)
         return out
 
-    def _create_entity(self, name: str, *, provisional: bool = False) -> str:
+    def _create_entity(self, project_key: str, name: str, *,
+                       provisional: bool = False) -> str:
         eid = new_id("ent")
-        self.store.x("INSERT INTO entity (id,canonical_name,provisional,t_created)"
-                     " VALUES (?,?,?,?)", (eid, name.strip(), int(provisional), now_iso()))
+        self.store.x(
+            "INSERT INTO entity (id,project_key,canonical_name,provisional,t_created)"
+            " VALUES (?,?,?,?,?)",
+            (eid, project_key, name.strip(), int(provisional), now_iso()),
+        )
         return eid
 
     # ----------------------------------------------------- evidence registration
-    def _register_evidence(self, delta, cited_node_ids: list[str]) -> list[str]:
-        """Register the SOURCE ancestors of the cited nodes as evidence rows.
-        Node ids are content hashes, so `source_hash` = node id gives us
-        cross-session dedup (same finding cited twice == one evidence row)."""
+    def _register_evidence(self, delta, cited_node_ids: list[str], *,
+                           project_key: str) -> list[str]:
+        """Register immutable Evidence node references for this Project view."""
         st = self.store
         out: list[str] = []
         source_ids: set[str] = set()
@@ -787,18 +720,20 @@ class Compiler:
                 source_ids.add(nid)
             source_ids.update(source_ancestors(delta.graph, nid))
         for sid in sorted(source_ids):
-            existing = st.q1("SELECT id FROM evidence WHERE source_hash=? AND t_invalid IS NULL",
-                             (sid,))
+            existing = st.q1(
+                "SELECT id FROM evidence WHERE project_key=? AND thread_id=?"
+                " AND snapshot_digest=? AND node_id=?",
+                (project_key, delta.session_id, delta.dag_hash, sid),
+            )
             if existing:
                 out.append(existing["id"])
                 continue
-            node = delta.graph.nodes[sid]
             evid = new_id("ev")
-            st.x("INSERT INTO evidence (id,evidence_type,content,content_ref,source_hash,"
-                 "quality_score,t_valid) VALUES (?,?,?,?,?,?,?)",
-                 (evid, "external_source" if node.artifact_id else "agent_derived",
-                  node.content, f"{delta.session_id}#{sid}", sid,
-                  source_quality(delta.graph, sid), now_iso()))
+            st.x(
+                "INSERT INTO evidence (id,project_key,thread_id,snapshot_digest,node_id)"
+                " VALUES (?,?,?,?,?)",
+                (evid, project_key, delta.session_id, delta.dag_hash, sid),
+            )
             out.append(evid)
         return out
 
@@ -808,7 +743,10 @@ class Compiler:
                           run_id: str, diff: dict, touched: set[str], *,
                           project_key: str) -> str:
         st = self.store
-        statement = out.get("statement") or delta.graph.nodes[node_id].content
+        statement = out.get("statement")
+        if not isinstance(statement, str) or not statement.strip():
+            raise ValueError("distill returned no derived statement")
+        statement = statement.strip()
 
         pool = self._candidate_pool(project_key, goal_id, entity_ids)
         pool = sorted(pool, key=lambda c: -_sim(statement, c["statement"]))[:POOL_K]
@@ -981,7 +919,7 @@ class Compiler:
             r = self.judge("contradiction", {"a": statement, "b": old["statement"]})
             if not r.get("contradicts"):
                 continue
-            verdict = adjudicate(st, cid, old["id"])
+            verdict = adjudicate(st, self.reader, cid, old["id"])
             touched.update((cid, old["id"]))
             if verdict["winner"]:
                 loser, winner = verdict["loser"], verdict["winner"]
@@ -1008,29 +946,27 @@ class Compiler:
 
 
 # ---------------------------------------------------------------- adjudication
-def evidence_strength(store: Store, claim_id: str) -> dict:
+def evidence_strength(store: Store, reader: SessionReader, claim_id: str) -> dict:
     """Deterministic, explainable support summary for one claim."""
     rows = store.q(
         """SELECT ev.* FROM edge e JOIN evidence ev ON ev.id = e.src
            WHERE e.dst=? AND e.edge_type='supports'
-           AND e.t_invalid IS NULL AND ev.t_invalid IS NULL""", (claim_id,))
+           AND e.t_invalid IS NULL""", (claim_id,))
     acc, hashes = 1.0, set()
     for ev in rows:
-        w = ev["trust_score"] if ev["evidence_type"] == "human_attested" else ev["quality_score"]
-        w = float(w if w is not None else 0.5)
-        if ev["evidence_type"] == "human_attested" and \
-                (ev["attestation_method"] or "self_report") == "self_report":
-            w *= 0.5                       # uncorroborated human word discounts
+        resolved = reader.resolve_reference(
+            ev["thread_id"], ev["snapshot_digest"], ev["node_id"])
+        w = float(resolved["quality"])
         acc *= (1.0 - max(0.0, min(1.0, w)))
-        hashes.add(ev["source_hash"] or ev["id"])
+        hashes.add(resolved["sourceIdentity"])
     return {"strength": round(1.0 - acc, 4), "n_evidence": len(rows),
             "independent_sources": len(hashes)}
 
 
-def adjudicate(store: Store, a: str, b: str) -> dict:
+def adjudicate(store: Store, reader: SessionReader, a: str, b: str) -> dict:
     """Rule-only conflict verdict (no LLM): compare aggregate evidence strength
     and independent source count. The reasons land in edge.meta for audit."""
-    sa, sb = evidence_strength(store, a), evidence_strength(store, b)
+    sa, sb = evidence_strength(store, reader, a), evidence_strength(store, reader, b)
     why = {"a": a, "b": b, "a_score": sa, "b_score": sb}
     if abs(sa["strength"] - sb["strength"]) >= 0.2:
         w, l = (a, b) if sa["strength"] > sb["strength"] else (b, a)

@@ -129,7 +129,7 @@ export type SettingsRouteSection =
   | 'shortcuts'
   | 'connectPhone'
   | 'remoteResources'
-export type AppRoute = 'chat' | 'settings' | 'plugins' | 'schedule' | 'workflow'
+export type AppRoute = 'chat' | 'settings' | 'plugins' | 'schedule'
 export type PluginHostRoute = 'chat'
 
 /**
@@ -286,7 +286,6 @@ export type ChatState = {
   openConnectPhone: () => void
   setConnectPhonePanelOpen: (open: boolean) => void
   openSchedule: () => void
-  openWorkflow: () => void
   selectRemoteGuardChannel: (channelId: string) => void
   clearRemoteGuardChannel: () => void
   setRemoteTargetId: (targetId: string | null) => void

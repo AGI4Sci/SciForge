@@ -532,7 +532,7 @@ export type EvidenceDagViewRequest = {
 }
 export type DagAutonomyMode = 'autonomous' | 'checkpointed' | 'supervised'
 export type DagUpdateProgress = {
-  stage: 'capturing' | 'evidence' | 'project' | 'compile' | 'retrying'
+  stage: 'capturing' | 'evidence' | 'project' | 'compile' | 'retry_scheduled' | 'failed'
   completedItems: number
   totalItems: number
   updatedAt?: string

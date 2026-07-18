@@ -691,6 +691,8 @@ function snapshotDigest(value: unknown): string | undefined {
 function dagFreshness(value: unknown): DagPanelStatus['freshness'] | undefined {
   if (value === 'fresh' || value === 'dirty' || value === 'queued' || value === 'updating' ||
       value === 'failed' || value === 'paused' || value === 'degraded') return value
+  if (value === 'succeeded') return 'fresh'
+  if (value === 'retry_scheduled') return 'queued'
   if (value === 'running') return 'updating'
   if (value === 'pending') return 'queued'
   if (value === 'error' || value === 'update_failed') return 'failed'
@@ -702,9 +704,11 @@ function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPane
   const record = objectRecord(value) ?? {}
   const snapshot = objectRecord(record.snapshot ?? record.committedSnapshot)
   const workerPending = finiteNumberField(record, 'pending') ?? finiteNumberField(record, 'pendingCount') ?? 0
-  const localFreshness = local
-    ? dagFreshness(local.state)
-    : undefined
+  const localFreshness = local?.state === 'failed' && local.nextAttemptAt
+    ? 'queued'
+    : local
+      ? dagFreshness(local.state)
+      : undefined
   const freshness = localFreshness && localFreshness !== 'fresh'
     ? localFreshness
     : dagFreshness(record.state) ?? dagFreshness(record.status) ?? dagFreshness(record.freshness) ??
@@ -749,7 +753,9 @@ function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPane
   const localProgress = local && local.state !== 'fresh'
     ? {
         stage: local.state === 'failed'
-          ? 'retrying' as const
+          ? local.nextAttemptAt
+            ? 'retry_scheduled' as const
+            : 'failed' as const
           : local.phase === 'project'
             ? 'project' as const
             : 'evidence' as const,
@@ -804,11 +810,17 @@ function projectDagPanelStatus(
   const degradedEvidence = evidenceStatuses.find((item) => item.state === 'degraded')
   const totalItems = Math.max(sessionCount, evidenceStatuses.length)
   if (activeEvidence.length > 0) {
-    const failed = activeEvidence.find((item) => item.state === 'failed' || item.state === 'degraded')
+    const terminalFailure = activeEvidence.find((item) =>
+      item.state === 'degraded' || (item.state === 'failed' && !item.nextAttemptAt))
+    const scheduledRetry = activeEvidence.find((item) =>
+      item.state === 'failed' && Boolean(item.nextAttemptAt))
+    const problem = terminalFailure ?? scheduledRetry
     const updating = activeEvidence.some((item) => item.state === 'updating')
     const projectPhase = activeEvidence.some((item) => item.phase === 'project')
     const completedItems = evidenceStatuses.filter((item) =>
       item.state === 'fresh' || item.phase === 'project').length
+    const pendingEvidenceCount = activeEvidence.filter((item) =>
+      item.state !== 'degraded' && (item.state !== 'failed' || Boolean(item.nextAttemptAt))).length
     const updatedAt = activeEvidence
       .map((item) => item.updatedAt)
       .filter((item): item is string => Boolean(item))
@@ -816,16 +828,22 @@ function projectDagPanelStatus(
       .at(-1)
     return {
       ...status,
-      freshness: failed ? 'failed' : updating ? 'updating' : 'queued',
-      pendingCount: Math.max(status.pendingCount, activeEvidence.length),
-      ...(failed?.lastError ? { lastError: failed.lastError } : {}),
-      ...(failed?.nextAttemptAt ? { nextAttemptAt: failed.nextAttemptAt } : {}),
+      freshness: terminalFailure ? 'failed' : updating ? 'updating' : 'queued',
+      pendingCount: Math.max(status.pendingCount, pendingEvidenceCount),
+      ...(problem?.lastError ? { lastError: problem.lastError } : {}),
+      ...(scheduledRetry?.nextAttemptAt ? { nextAttemptAt: scheduledRetry.nextAttemptAt } : {}),
       progress: {
-        stage: failed ? 'retrying' : projectPhase ? 'project' : 'evidence',
+        stage: terminalFailure
+          ? 'failed'
+          : scheduledRetry
+            ? 'retry_scheduled'
+            : projectPhase
+              ? 'project'
+              : 'evidence',
         completedItems,
         totalItems,
         ...(updatedAt ? { updatedAt } : {}),
-        ...(failed?.attempts ? { attempt: failed.attempts } : {})
+        ...(problem?.attempts ? { attempt: problem.attempts } : {})
       }
     }
   }
@@ -835,7 +853,7 @@ function projectDagPanelStatus(
   const activeJob = jobs.find((job) => {
     const jobStatus = optionalStringField(job!, 'status')
     return jobStatus === 'queued' || jobStatus === 'running' ||
-      jobStatus === 'failed' || jobStatus === 'interrupted'
+      jobStatus === 'retry_scheduled' || jobStatus === 'failed'
   })
   if (!activeJob) {
     return degradedEvidence
@@ -852,11 +870,28 @@ function projectDagPanelStatus(
   const jobStatus = optionalStringField(activeJob, 'status')
   const attempts = finiteNumberField(activeJob, 'attempts')
   const updatedAt = optionalStringField(activeJob, 'updated_at') ?? optionalStringField(activeJob, 'updatedAt')
+  const nextAttemptAt = optionalStringField(activeJob, 'next_attempt_at') ??
+    optionalStringField(activeJob, 'nextAttemptAt')
+  const failed = jobStatus === 'failed'
+  const retryScheduled = jobStatus === 'retry_scheduled'
+  const lastError = optionalStringField(activeJob, 'last_error') ?? optionalStringField(activeJob, 'lastError')
   return {
     ...status,
+    freshness: retryScheduled
+      ? 'queued'
+      : failed
+        ? 'failed'
+      : jobStatus === 'running'
+        ? 'updating'
+        : 'queued',
+    pendingCount: failed ? status.pendingCount : Math.max(1, status.pendingCount),
+    ...(lastError ? { lastError } : {}),
+    ...(nextAttemptAt ? { nextAttemptAt } : {}),
     progress: {
-      stage: jobStatus === 'failed' || jobStatus === 'interrupted'
-        ? 'retrying'
+      stage: retryScheduled
+        ? 'retry_scheduled'
+        : failed
+          ? 'failed'
         : jobStatus === 'running'
           ? 'compile'
           : 'project',
@@ -3298,7 +3333,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         ...enqueued.jobs
       ]
     } else {
-      const evidenceSnapshots = evidenceStates.map((item) => item.snapshot!)
+      const committedEvidence = evidenceStates.map((item) => item.snapshot!)
+      const evidenceVector = committedEvidence.map((snapshot) => ({
+        threadId: snapshot.threadId,
+        digest: snapshot.digest
+      }))
       const projectJob = objectRecord(await requestProjectDagJson(
         serviceUrl,
         apiKey,
@@ -3313,18 +3352,14 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
             ...(projectContext.autonomyMode ? { autonomyMode: projectContext.autonomyMode } : {}),
             reason: projectContext.updateReason,
             priority: 3,
-            evidenceVector: evidenceSnapshots.map((snapshot) => ({
-              threadId: snapshot.threadId,
-              digest: snapshot.digest
-            })),
-            evidenceSnapshots,
+            evidenceVector,
             capturedScope: { includedSessions, excludedSessions, isolatedSessions }
           })
         }
       ))
       jobId = projectJob ? optionalStringField(projectJob, 'id') : undefined
-      await Promise.all(evidenceSnapshots.map((snapshot) => acknowledgeEvidenceDagSnapshot(snapshot)))
-      evidenceStatuses = evidenceSnapshots.map(() => ({ state: 'fresh' as const, pendingCount: 0 }))
+      await Promise.all(committedEvidence.map((snapshot) => acknowledgeEvidenceDagSnapshot(snapshot)))
+      evidenceStatuses = committedEvidence.map(() => ({ state: 'fresh' as const, pendingCount: 0 }))
     }
     const workerStatus = await requestProjectDagJson(
       serviceUrl,

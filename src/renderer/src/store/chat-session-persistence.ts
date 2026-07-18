@@ -54,7 +54,7 @@ function runtimeId(value: unknown): AgentRuntimeId | undefined {
 
 function appRoute(value: unknown): AppRoute | undefined {
   return value === 'chat' || value === 'settings' || value === 'plugins' ||
-    value === 'schedule' || value === 'workflow'
+    value === 'schedule'
     ? value
     : undefined
 }

@@ -240,6 +240,8 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'Evidence graph'
     case 'project-dag':
       return 'Project DAG'
+    case 'workflow':
+      return 'Create Loop'
     case 'checkpoints':
       return 'Git checkpoints'
     case 'visual-review':
@@ -630,7 +632,6 @@ export function Workbench(): ReactElement {
     openConnectPhone,
     setConnectPhonePanelOpen,
     openSchedule,
-    openWorkflow,
     chooseWorkspace,
     remoteChannels,
     activeRemoteChannelId,
@@ -710,7 +711,6 @@ export function Workbench(): ReactElement {
       openConnectPhone: s.openConnectPhone,
       setConnectPhonePanelOpen: s.setConnectPhonePanelOpen,
       openSchedule: s.openSchedule,
-      openWorkflow: s.openWorkflow,
       chooseWorkspace: s.chooseWorkspace,
       remoteChannels: s.remoteChannels,
       activeRemoteChannelId: s.activeRemoteChannelId,
@@ -1718,7 +1718,9 @@ export function Workbench(): ReactElement {
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
-    if (mode === 'evidence' || mode === 'project-dag') setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    if (mode === 'evidence' || mode === 'project-dag' || mode === 'workflow') {
+      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
+    }
     toggleRightPanelMode(mode)
   }
 
@@ -2661,11 +2663,6 @@ export function Workbench(): ReactElement {
     openSchedule()
   }
 
-  const openWorkflowView = (): void => {
-    setConnectPhonePanelOpen(false)
-    openWorkflow()
-  }
-
   const toggleConnectPhone = (): void => {
     if (connectPhonePanelOpen) {
       setConnectPhonePanelOpen(false)
@@ -2674,12 +2671,7 @@ export function Workbench(): ReactElement {
     }
   }
 
-  const sidebarView: 'chat' | 'schedule' | 'workflow' =
-    route === 'schedule'
-        ? 'schedule'
-      : route === 'workflow'
-        ? 'workflow'
-        : 'chat'
+  const sidebarView: 'chat' | 'schedule' = route === 'schedule' ? 'schedule' : 'chat'
 
   const renderRuntimeBanner = (message: string, detail?: string | null): ReactElement => (
     <RuntimeBanner
@@ -2974,6 +2966,8 @@ export function Workbench(): ReactElement {
                     : null
                 })}
               />
+            ) : workspaceMode === 'workflow' ? (
+              <WorkflowView onCollapse={closeOwnerRightPanel} />
             ) : workspaceMode === 'browser' ? (
               <DevBrowserPanel
                 blocks={snapshot.devPreviewBlocks}
@@ -3139,7 +3133,6 @@ export function Workbench(): ReactElement {
               onOpenPlugins={openPluginsView}
               onToggleConnectPhone={toggleConnectPhone}
               onScheduleOpen={openScheduleView}
-              onWorkflowOpen={openWorkflowView}
               onToggleSidebar={toggleLeftSidebar}
             />
           </div>
@@ -3173,14 +3166,6 @@ export function Workbench(): ReactElement {
         ) : route === 'schedule' ? (
           <Suspense fallback={<div className="h-full bg-ds-main" />}>
             <ScheduleTasksView
-              leftSidebarCollapsed={leftSidebarCollapsed}
-              onToggleLeftSidebar={toggleLeftSidebar}
-              onOpenThread={openThread}
-            />
-          </Suspense>
-        ) : route === 'workflow' ? (
-          <Suspense fallback={<div className="h-full bg-ds-main" />}>
-            <WorkflowView
               leftSidebarCollapsed={leftSidebarCollapsed}
               onToggleLeftSidebar={toggleLeftSidebar}
               onOpenThread={openThread}

@@ -8,6 +8,8 @@ import {
   consumeProjectDagInitialNode,
   parseProjectSessionList,
   projectDagFrameUrl,
+  projectDagProgressIsActive,
+  projectDagProgressLabel,
   projectDagProgressPercent,
   projectDagReviewRequest,
   projectDagUpdateScope
@@ -34,6 +36,8 @@ const labels: Record<string, string> = {
   projectDagUpdate: 'Update now',
   projectDagUpdating: 'Updating',
   projectDagUpdateHelp: 'Queue an end-to-end update to the captured project scope',
+  projectDagProgressRetryScheduled: 'Retry scheduled',
+  projectDagProgressFailed: 'Update failed; start a new update to retry',
   projectDagAutonomyMode: 'Autonomy',
   projectDagAutonomous: 'Autonomous',
   projectDagCheckpointed: 'Checkpointed',
@@ -210,5 +214,24 @@ describe('ProjectDagPanel', () => {
     expect(projectDagProgressPercent({
       stage: 'compile', completedItems: 4, totalItems: 4
     })).toBe(86)
+  })
+
+  it('keeps scheduled retries active and terminal failures actionable', () => {
+    const translate = (key: string): string => labels[key] ?? key
+    const scheduled = {
+      stage: 'retry_scheduled' as const,
+      completedItems: 2,
+      totalItems: 4
+    }
+    const failed = {
+      stage: 'failed' as const,
+      completedItems: 2,
+      totalItems: 4
+    }
+
+    expect(projectDagProgressLabel(scheduled, translate)).toBe('Retry scheduled')
+    expect(projectDagProgressIsActive(scheduled)).toBe(true)
+    expect(projectDagProgressLabel(failed, translate)).toBe('Update failed; start a new update to retry')
+    expect(projectDagProgressIsActive(failed)).toBe(false)
   })
 })

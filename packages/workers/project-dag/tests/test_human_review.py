@@ -119,6 +119,9 @@ class HumanReviewPolicyTests(unittest.TestCase):
                    for item in result["humanReviews"]}
         evidence = indexed[("evidenceSnapshot", "runtime:session-1")]
         assessment = result["assessments"][0]["humanReview"]
+        serialized = str(result)
+        self.assertNotIn("Source attestation needs review.", serialized)
+        self.assertNotIn("evidence-verifier", serialized)
         for review in (evidence, assessment):
             self.assertIn(review["status"], {
                 "not_needed", "pending", "approved", "rejected", "deferred", "expired",

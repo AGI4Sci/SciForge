@@ -19,6 +19,10 @@ from .workflow import ProjectWorkflow
 
 
 class Engine:
+    UPDATE_FIELDS = {
+        "projectKey", "evidenceVector", "capturedScope", "reason", "priority", "autonomyMode",
+    }
+
     def __init__(self, db_path: str, session_dir: str, llm: Any = None,
                  judge: Any = None) -> None:
         self.store = Store(db_path)
@@ -30,10 +34,12 @@ class Engine:
 
     # ---------------------------------------------------------- update lane
     def enqueue_update(self, payload: dict, *, actor: str = "runtime") -> dict:
+        unknown = sorted(set(payload) - self.UPDATE_FIELDS)
+        if unknown:
+            raise ValueError(f"unknown update fields: {unknown}")
         return self.workflow.enqueue_update(
             project_key=payload.get("projectKey"),
             evidence_vector=payload.get("evidenceVector") or [],
-            evidence_snapshots=payload.get("evidenceSnapshots") or [],
             captured_scope=payload.get("capturedScope"),
             reason=payload.get("reason"),
             priority=int(payload.get("priority", 0)),
@@ -94,17 +100,8 @@ class Engine:
             vector, scope = [], {
                 "includedSessions": [], "excludedSessions": [], "isolatedSessions": [],
             }
-        envelopes = []
-        for entry in vector:
-            row = self.store.q1(
-                "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
-                (entry["threadId"], entry["digest"]),
-            )
-            if row is None:
-                raise RuntimeError("registered Evidence Snapshot disappeared")
-            envelopes.append(json.loads(row["envelope"]))
         return self.workflow.enqueue_update(
-            project_key=project_key, evidence_vector=vector, evidence_snapshots=envelopes,
+            project_key=project_key, evidence_vector=vector,
             captured_scope=scope, reason=reason, priority=10,
             autonomy_mode=autonomy_mode, actor="project-domain-command",
         )
@@ -188,6 +185,20 @@ class Engine:
         return goal
 
     # ----------------------------------------------------------- graph/query
+    def _resolved_graph(self, snapshot: dict) -> dict:
+        graph = json.loads(json.dumps(snapshot["graph"]))
+        vector = {entry["threadId"]: entry["digest"]
+                  for entry in snapshot["evidenceVector"]}
+        for evidence in graph.get("evidence") or []:
+            thread_id = evidence["thread_id"]
+            snapshot_digest = evidence["snapshot_digest"]
+            if vector.get(thread_id) != snapshot_digest:
+                raise ValueError("Project evidence reference is outside its Evidence vector")
+            node = self.reader.resolve_node(
+                thread_id, snapshot_digest, evidence["node_id"])
+            evidence["content"] = node.content
+        return graph
+
     def claims(self, project_key: str, goal_id: Optional[str] = None) -> list[dict]:
         snapshot = self.workflow.latest_snapshot(project_key)
         claims = list((snapshot or {}).get("graph", {}).get("claims", []))
@@ -201,7 +212,7 @@ class Engine:
                     else self.workflow.latest_snapshot(project_key))
         if snapshot is None or snapshot["projectKey"] != project_key:
             return None
-        graph = snapshot["graph"]
+        graph = self._resolved_graph(snapshot)
         claim = next((item for item in graph["claims"] if item["id"] == claim_id), None)
         if claim is None:
             return None
@@ -245,6 +256,9 @@ class Engine:
     def graph(self, project_key: str) -> dict:
         latest = self.workflow.latest_snapshot(project_key)
         if latest:
+            # The graph endpoint exposes immutable Evidence references only.
+            # Content is hydrated at the access-controlled Claim/provenance
+            # boundary, never copied into the general Project graph view.
             graph = json.loads(json.dumps(latest["graph"]))
             packets = self.workflow.review_packets(project_key, latest["digest"])
             packet_by_id = {packet["id"]: packet for packet in packets}
@@ -278,7 +292,8 @@ class Engine:
                 project_key, latest["digest"])
             return {**graph, "snapshot": {
                 key: latest[key] for key in (
-                    "projectKey", "version", "digest", "goalVersion", "evidenceVector",
+                    "projectKey", "version", "digest", "goalVersion", "policyVersion",
+                    "evidenceVector",
                     "excludedSessions", "isolatedSessions", "createdAt", "status")
             }}
         return {"goals": self.goal_tree(project_key), "claims": [], "evidence": [],
@@ -329,12 +344,15 @@ class Engine:
         return result
 
     def configure_policy(self, project_key: str, payload: dict) -> dict:
-        return self.workflow.configure_policy(
+        policy = self.workflow.configure_policy(
             project_key, autonomy_mode=payload.get("autonomyMode"),
             checkpoints=payload.get("checkpoints"),
             allow_agent_critical_override=payload.get("allowAgentCriticalOverride"),
             actor=payload.get("actorId", "human"),
         )
+        self._enqueue_after_domain_change(
+            project_key, "policy_changed", policy["autonomy_mode"])
+        return policy
 
     def record_review_result(self, project_key: str, packet_id: str,
                              payload: dict) -> dict:

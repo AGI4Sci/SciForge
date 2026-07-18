@@ -146,7 +146,6 @@ class WorkflowTests(unittest.TestCase):
         return self.engine.enqueue_update({
             "projectKey": project or self.project,
             "evidenceVector": vector,
-            "evidenceSnapshots": snapshots,
             "capturedScope": {"includedSessions": [s["threadId"] for s in snapshots],
                               "excludedSessions": [], "isolatedSessions": []},
             "reason": reason, "priority": 5, "autonomyMode": mode,
@@ -187,6 +186,94 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn("distill", {a["actor"] for a in latest["assessments"]
                                      if a["level"] in {"A1", "A2"}})
         self.assertGreaterEqual(len(runs), 1)
+
+    def test_projects_with_different_goals_reuse_the_same_evidence_reference(self):
+        evidence = write_snapshot(
+            self.sessions, "shared-evidence",
+            [("The shared result supports either project view.",
+              "The immutable source records the shared result.")],
+        )
+        other_project = "path:/workspace/other-view"
+        other_goal = self.engine.create_goal(other_project, "Interpret the shared result")
+
+        self.enqueue([evidence], project=self.project, reason="manual_immediate")
+        self.drain(self.project)
+        self.enqueue([evidence], project=other_project, reason="manual_immediate")
+        self.drain(other_project)
+
+        primary = self.engine.workflow.latest_snapshot(self.project)
+        other = self.engine.workflow.latest_snapshot(other_project)
+        shared_vector = [{"threadId": "shared-evidence", "digest": evidence["digest"]}]
+        self.assertEqual(primary["evidenceVector"], shared_vector)
+        self.assertEqual(other["evidenceVector"], shared_vector)
+        self.assertEqual(primary["graph"]["goals"][0]["root_id"], self.goal["root_id"])
+        self.assertEqual(other["graph"]["goals"][0]["root_id"], other_goal["root_id"])
+        self.assertEqual(primary["graph"]["claims"][0]["goal_id"], self.goal["root_id"])
+        self.assertEqual(other["graph"]["claims"][0]["goal_id"], other_goal["root_id"])
+        self.assertEqual(primary["graph"]["entities"][0]["project_key"], self.project)
+        self.assertEqual(other["graph"]["entities"][0]["project_key"], other_project)
+        self.assertNotEqual(primary["graph"]["entities"][0]["id"],
+                            other["graph"]["entities"][0]["id"])
+        self.assertNotEqual(primary["digest"], other["digest"])
+
+    def test_project_database_does_not_copy_evidence_snapshot_envelopes(self):
+        table = self.engine.store.q1(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='evidence_snapshot'")
+        self.assertIsNone(table)
+        columns = {row["name"] for row in self.engine.store.q("PRAGMA table_info(evidence)")}
+        self.assertEqual(columns, {
+            "id", "project_key", "thread_id", "snapshot_digest", "node_id",
+        })
+        canary = "RAW_SOURCE_CONTENT_MUST_NOT_ENTER_PROJECT_DB"
+        evidence = write_snapshot(
+            self.sessions, "reference-only",
+            [("A derived project statement.", canary)],
+        )
+        self.enqueue([evidence], reason="manual_immediate"); self.drain()
+        payload = self.engine.store.q1(
+            "SELECT payload FROM project_snapshot WHERE project_key=?"
+            " ORDER BY version DESC LIMIT 1", (self.project,))["payload"]
+        self.assertNotIn(canary, payload)
+
+    def test_entity_reconciliation_never_reads_or_mutates_another_project(self):
+        def distill(payload):
+            goals = payload["active_goals"]
+            name = payload["claim"]
+            return {
+                "statement": f"Derived view for {name}.", "claim_type": "finding",
+                "mentioned_entities": [name],
+                "addresses_goal": goals[0]["id"] if goals else "none",
+                "source_node_ids": [n["id"] for n in payload["subgraph"]["nodes"]],
+                "confidence": 0.9,
+            }
+
+        self.engine.judge.handlers["distill"] = distill
+        self.engine.judge.handlers["entity_same"] = lambda _p: {
+            "same": True, "confidence": 0.95,
+        }
+        first = write_snapshot(self.sessions, "entity-a", [("pipeline", "source a")])
+        self.enqueue([first], reason="manual_immediate"); self.drain()
+        primary_entity = self.engine.workflow.latest_snapshot(
+            self.project)["graph"]["entities"][0]
+
+        other_project = "path:/workspace/entity-b"
+        self.engine.create_goal(other_project, "Other entity view")
+        self.engine.judge.calls.clear()
+        second = write_snapshot(self.sessions, "entity-b", [("pipelines", "source b")])
+        self.enqueue([second], project=other_project, reason="manual_immediate")
+        self.drain(other_project)
+
+        candidates = [payload.get("candidate") for task, payload in self.engine.judge.calls
+                      if task == "entity_same"]
+        self.assertNotIn("pipeline", candidates)
+        other_entity = self.engine.workflow.latest_snapshot(
+            other_project)["graph"]["entities"][0]
+        self.assertNotEqual(primary_entity["id"], other_entity["id"])
+        persisted_primary = self.engine.store.q1(
+            "SELECT aliases FROM entity WHERE id=? AND project_key=?",
+            (primary_entity["id"], self.project),
+        )
+        self.assertEqual(json.loads(persisted_primary["aliases"]), [])
 
     def test_supported_finding_uses_the_same_project_compile_path_as_claim(self):
         evidence = write_snapshot(
@@ -242,47 +329,6 @@ class WorkflowTests(unittest.TestCase):
         resolved = self.engine.store.q1("SELECT status FROM review WHERE id=?", (orphan["id"],))
         self.assertEqual(resolved["status"], "resolved")
 
-    def test_legacy_orphan_review_is_materialized_when_watermark_has_already_advanced(self):
-        project = "path:/workspace/legacy-orphan"
-        evidence = write_snapshot(
-            self.sessions, "legacy-session",
-            [("A legacy result was already distilled.", "A legacy source recorded the result.")],
-        )
-        graph, _, _ = self.engine.reader.load("legacy-session", evidence["digest"])
-        claim_node = next(node for node in graph.nodes.values() if node.type == NodeType.CLAIM)
-        source_node = next(
-            node for node in graph.nodes.values() if node.type == NodeType.SOURCE_ASSERTION)
-        self.engine.store.set_watermark(
-            project, "legacy-session", evidence["digest"], set(graph.nodes))
-        review_id = self.engine.store.enqueue_review(project, "orphan_claims", {
-            "run_id": "legacy-run",
-            "candidates": [{
-                "session": "legacy-session", "node": claim_node.id,
-                "statement": claim_node.content, "claim_type": "finding",
-                "source_node_ids": [source_node.id], "evidence_ids": [],
-            }],
-        })
-        self.engine.store.conn.commit()
-
-        # The immutable Evidence digest equals the stored watermark, so the
-        # reader returns no delta. Recovery must come from the durable review.
-        self.enqueue([evidence], project=project, reason="manual_immediate")
-        self.drain(project)
-        latest = self.engine.workflow.latest_snapshot(project)
-        self.assertEqual(len(latest["graph"]["claims"]), 1)
-        recovered = latest["graph"]["claims"][0]
-        self.assertIsNone(recovered["goal_id"])
-        self.assertEqual(recovered["status"], "undetermined")
-        self.assertIsNone(recovered["t_invalid"])
-        self.assertEqual(latest["graph"]["evidence"], [])
-        self.assertEqual(latest["graph"]["origins"][0]["node_id"], claim_node.id)
-        payload = json.loads(self.engine.store.q1(
-            "SELECT payload FROM review WHERE id=?", (review_id,))["payload"])
-        self.assertEqual(payload["candidates"][0]["project_claim_id"], recovered["id"])
-        run = self.engine.store.q1(
-            "SELECT stats FROM compile_run ORDER BY started_at DESC LIMIT 1")
-        self.assertEqual(json.loads(run["stats"])["sessions_compiled"], 0)
-
     def test_runtime_trace_artifact_remains_l0_across_project_provenance(self):
         evidence = write_snapshot(
             self.sessions,
@@ -301,13 +347,26 @@ class WorkflowTests(unittest.TestCase):
             for item in provenance["breakpoints"]
         ))
 
-    def test_rejects_uncommitted_or_missing_snapshot_envelope(self):
-        with self.assertRaises(ValueError):
+    def test_rejects_unknown_update_fields(self):
+        with self.assertRaisesRegex(ValueError, "unknown update fields"):
             self.engine.enqueue_update({
                 "projectKey": self.project,
                 "evidenceVector": [{"threadId": "s1", "digest": _sha("x")}],
-                "evidenceSnapshots": [{"threadId": "s1", "status": "updating"}],
+                "embeddedInput": {"threadId": "s1", "status": "updating"},
                 "capturedScope": {"includedSessions": ["s1"]},
+                "reason": "manual_update",
+            })
+
+    def test_rejects_missing_committed_snapshot_reference(self):
+        with self.assertRaisesRegex(ValueError, "committed Evidence Snapshot.*unavailable"):
+            self.engine.enqueue_update({
+                "projectKey": self.project,
+                "evidenceVector": [{"threadId": "s1", "digest": _sha("missing")}],
+                "capturedScope": {
+                    "includedSessions": ["s1"],
+                    "excludedSessions": [],
+                    "isolatedSessions": [],
+                },
                 "reason": "manual_update",
             })
 
@@ -328,6 +387,28 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([v["threadId"] for v in other_latest["evidenceVector"]], ["s3"])
         self.assertNotIn("s3", {v["threadId"] for v in latest["evidenceVector"]})
 
+    def test_cross_session_shared_artifact_is_one_independent_source(self):
+        first = write_snapshot(
+            self.sessions, "shared-source-a",
+            [("shared result", "identical immutable source")],
+        )
+        second = write_snapshot(
+            self.sessions, "shared-source-b",
+            [("again shared result", "identical immutable source")],
+        )
+        self.enqueue([first, second], reason="manual_immediate")
+        update = self.engine.process_updates(self.project)
+        graph = update["snapshot"]["graph"]
+        self.assertEqual(len(graph["claims"]), 1)
+        self.assertEqual(len(graph["evidence"]), 2)
+        self.assertEqual(graph["claims"][0]["status"], "fragile")
+
+        self.engine.process_audits(self.project)
+        findings = self.engine.workflow.findings(self.project)
+        self.assertTrue(any(
+            finding["finding_type"] == "hidden_shared_source" for finding in findings
+        ))
+
     def test_changed_digest_refreshes_same_id_support_and_artifact_provenance(self):
         first = write_snapshot(
             self.sessions, "s1", [("stable claim", "first source assertion")], version=1)
@@ -346,10 +427,13 @@ class WorkflowTests(unittest.TestCase):
             status["previousCommittedSnapshot"]["digest"], after["digest"])
         self.assertEqual(after["graph"]["claims"][0]["id"], claim_id)
         self.assertEqual(len(after["graph"]["claims"]), 1)
-        self.assertEqual(
-            [item["content"] for item in after["graph"]["evidence"]],
-            ["replacement source assertion"],
-        )
+        evidence_ref = after["graph"]["evidence"][0]
+        self.assertEqual(evidence_ref["thread_id"], "s1")
+        self.assertEqual(evidence_ref["snapshot_digest"], second["digest"])
+        self.assertNotIn("content", evidence_ref)
+        detail = self.engine.claim_detail(self.project, claim_id, after["digest"])
+        self.assertEqual([item["content"] for item in detail["supports"]],
+                         ["replacement source assertion"])
         provenance = self.engine.resolve_provenance(self.project, claim_id, after["digest"])
         version = provenance["paths"][0]["sourceAssertions"][0]["artifactVersion"]
         self.assertEqual(version["version"], "2")
@@ -383,7 +467,6 @@ class WorkflowTests(unittest.TestCase):
         self.engine.enqueue_update({
             "projectKey": self.project,
             "evidenceVector": [{"threadId": "s1", "digest": s1["digest"]}],
-            "evidenceSnapshots": [s1],
             "capturedScope": {
                 "includedSessions": ["s1"],
                 "excludedSessions": ["s2"],
@@ -419,7 +502,6 @@ class WorkflowTests(unittest.TestCase):
                 {"threadId": "s1", "digest": s1["digest"]},
                 {"threadId": "s2", "digest": changed_s2["digest"]},
             ],
-            "evidenceSnapshots": [s1, changed_s2],
             "capturedScope": {
                 "includedSessions": ["s1", "s2"],
                 "excludedSessions": [],
@@ -465,6 +547,26 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(claim["needs_regoal"], 0)
         self.assertTrue(any(item["id"] == claim_id for item in after["compileDiff"]["regoaled_claims"]))
 
+    def test_policy_change_recompiles_the_same_evidence_vector(self):
+        evidence = write_snapshot(self.sessions, "policy", [("claim", "source")])
+        self.enqueue([evidence], reason="manual_immediate"); self.drain()
+        before = self.engine.workflow.latest_snapshot(self.project)
+        self.assertEqual(before["policyVersion"], 1)
+
+        policy = self.engine.configure_policy(self.project, {
+            "autonomyMode": "supervised", "actorId": "researcher",
+        })
+        self.assertEqual(policy["policy_version"], 2)
+        self.assertEqual(self.engine.update_status(self.project)["state"], "pending")
+        update = self.engine.process_updates(self.project)
+        after = update["snapshot"]
+
+        self.assertEqual(after["evidenceVector"], before["evidenceVector"])
+        self.assertEqual(after["goalVersion"], before["goalVersion"])
+        self.assertEqual(after["policyVersion"], 2)
+        self.assertNotEqual(after["digest"], before["digest"])
+        self.assertEqual(update["job"]["reason"], "policy_changed")
+
     def test_autonomy_modes_share_pipeline_but_only_checkpoints_block(self):
         self.engine.configure_policy(self.project, {
             "autonomyMode": "checkpointed", "checkpoints": ["claim_fragile"],
@@ -488,7 +590,7 @@ class WorkflowTests(unittest.TestCase):
     def test_autonomous_a3_decision_queues_new_snapshot_without_false_resolution(self):
         snapshot = write_snapshot(self.sessions, "s1", [("fragile claim", "one source")])
         self.enqueue([snapshot]); first = self.engine.process_updates(self.project)
-        self.assertEqual(first["job"]["status"], "done")
+        self.assertEqual(first["job"]["status"], "succeeded")
         queued_audit = self.engine.store.q1(
             "SELECT * FROM audit_run WHERE project_key=?", (self.project,))
         self.assertEqual(queued_audit["status"], "queued")
@@ -663,13 +765,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(after["digest"], before["digest"])
         self.assertEqual(after_claims, before_claims)
         failed = self.engine.store.q1(
-            "SELECT * FROM project_update_job WHERE project_key=? AND status='failed'",
+            "SELECT * FROM project_update_job"
+            " WHERE project_key=? AND status='retry_scheduled'",
             (self.project,))
         self.assertIsNotNone(failed["next_attempt_at"])
+        retry_status = self.engine.update_status(self.project)
+        self.assertEqual(retry_status["state"], "retry_scheduled")
+        self.assertEqual(retry_status["pending"], 1)
         self.assertIsNone(self.engine.process_updates(self.project))
         retried = self.engine.retry_update(failed["id"], actor="researcher")
         self.assertEqual(retried["status"], "queued")
         self.assertIsNone(retried["next_attempt_at"])
+
+    def test_project_update_becomes_terminal_failed_after_retry_limit(self):
+        snapshot = write_snapshot(self.sessions, "terminal", [("claim", "source")])
+        self.enqueue([snapshot])
+        with patch("project_dag.workflow.UPDATE_MAX_ATTEMPTS", 1), \
+                patch.object(self.engine.workflow, "_commit_project_snapshot",
+                             side_effect=RuntimeError("terminal failure")):
+            with self.assertRaises(RuntimeError):
+                self.engine.process_updates(self.project)
+        failed = self.engine.store.q1(
+            "SELECT * FROM project_update_job WHERE project_key=?", (self.project,))
+        self.assertEqual(failed["status"], "failed")
+        self.assertIsNone(failed["next_attempt_at"])
+        status = self.engine.update_status(self.project)
+        self.assertEqual(status["state"], "update_failed")
+        self.assertEqual(status["pending"], 0)
 
     def test_queries_never_expose_inflight_graph_before_snapshot_commit(self):
         first = write_snapshot(self.sessions, "s1", [("claim one", "source one")])
@@ -804,7 +926,7 @@ class WorkflowTests(unittest.TestCase):
         with patch.object(self.engine.workflow, "_execute_audit") as execute:
             result = self.engine.process_updates(self.project)
             execute.assert_not_called()
-        self.assertEqual(result["job"]["status"], "done")
+        self.assertEqual(result["job"]["status"], "succeeded")
         self.assertIsNotNone(self.engine.workflow.latest_snapshot(self.project))
         queued = self.engine.store.q1(
             "SELECT * FROM audit_run WHERE project_key=?", (self.project,))
@@ -844,7 +966,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(recovered["attempts"], 2)
         self.assertIsNotNone(self.engine.process_audits(self.project))
 
-    def test_restart_recovers_interrupted_compile_with_same_desired_vector(self):
+    def test_restart_requeues_running_compile_with_same_desired_vector(self):
         snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
         queued = self.enqueue([snapshot])
         self.engine.store.x(
@@ -856,12 +978,12 @@ class WorkflowTests(unittest.TestCase):
         self.engine.store.close()
         self.engine = Engine(db_path, self.sessions, judge=make_judge())
         recovered = self.engine.workflow.job(queued["id"])
-        self.assertEqual(recovered["status"], "interrupted")
+        self.assertEqual(recovered["status"], "queued")
         self.assertEqual(recovered["desiredEvidenceVector"], [
             {"threadId": "s1", "digest": snapshot["digest"]},
         ])
         completed = self.engine.process_updates(self.project)
-        self.assertEqual(completed["job"]["status"], "done")
+        self.assertEqual(completed["job"]["status"], "succeeded")
 
     def test_audit_enqueue_is_idempotent_for_digest_level_and_policy(self):
         snapshot = write_snapshot(self.sessions, "s1", [("claim", "source")])
@@ -894,32 +1016,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.engine.workflow.audit(queued_audit["id"])["status"], "queued")
         self.assertIsNotNone(self.engine.process_updates(self.project))
 
-    def test_one_way_queue_schema_migrates_existing_audit_rows(self):
-        db_path = os.path.join(self.tmp.name, "legacy-audit.db")
-        connection = sqlite3.connect(db_path)
-        connection.executescript("""
-        CREATE TABLE audit_run (
-          id TEXT PRIMARY KEY, project_key TEXT NOT NULL, target_digest TEXT NOT NULL,
-          level TEXT NOT NULL, policy_version INTEGER NOT NULL, status TEXT NOT NULL,
-          digest TEXT, started_at TEXT, finished_at TEXT, error TEXT
-        );
-        INSERT INTO audit_run (
-          id,project_key,target_digest,level,policy_version,status,started_at
-        ) VALUES ('audit_old','path:/old','sha256:old','L0',1,'running',
-                  '2026-07-10T00:00:00Z');
-        """)
-        connection.commit(); connection.close()
-        store = Store(db_path)
-        try:
-            row = store.q1("SELECT * FROM audit_run WHERE id='audit_old'")
-            self.assertEqual(row["request_key"], "migrated:audit_old")
-            self.assertEqual(row["lane"], "P3")
-            self.assertIsNotNone(row["created_at"])
-            self.assertIn("next_attempt_at", row)
-        finally:
-            store.close()
-
-    def test_legacy_graph_schema_reports_offline_migration_instead_of_index_error(self):
+    def test_non_versioned_database_is_rejected_without_compatibility_path(self):
         db_path = os.path.join(self.tmp.name, "legacy-graph.db")
         connection = sqlite3.connect(db_path)
         connection.executescript("""
@@ -930,7 +1027,7 @@ class WorkflowTests(unittest.TestCase):
         """)
         connection.commit(); connection.close()
 
-        with self.assertRaisesRegex(RuntimeError, "explicit offline migration"):
+        with self.assertRaisesRegex(RuntimeError, "requires a clean project-view database"):
             Store(db_path)
 
     def test_new_snapshot_marks_older_queued_audit_stale(self):
@@ -1026,7 +1123,6 @@ class WorkflowTests(unittest.TestCase):
         vector = [{"threadId": snapshot["threadId"], "digest": snapshot["digest"]}]
         self.engine.enqueue_update({
             "projectKey": self.project, "evidenceVector": vector,
-            "evidenceSnapshots": [snapshot],
             "capturedScope": {"includedSessions": [snapshot["threadId"]],
                               "excludedSessions": [], "isolatedSessions": []},
             "reason": "manual_immediate", "priority": 5,

@@ -18,13 +18,14 @@ from .contracts import (
     select_a3_action,
     validate_autonomy_mode,
 )
-from .reader import EvidenceSnapshot, SessionReader
+from .reader import SessionReader
 from .store import Store, new_id, now_iso
 from .human_review import evaluate_project_human_review
 
 COMPILER_VERSION = "project-dag/1"
 UPDATE_RETRY_BASE_SECONDS = max(
     0.1, float(os.environ.get("PDAG_UPDATE_RETRY_BASE_SECONDS", "1")))
+UPDATE_MAX_ATTEMPTS = max(1, int(os.environ.get("PDAG_UPDATE_MAX_ATTEMPTS", "5")))
 AUDIT_RETRY_BASE_SECONDS = max(
     0.1, float(os.environ.get("PDAG_AUDIT_RETRY_BASE_SECONDS", "5")))
 RETRY_MAX_SECONDS = max(
@@ -64,9 +65,9 @@ class ProjectWorkflow:
     def recover(self) -> None:
         t = now_iso()
         self.store.x(
-            "UPDATE project_update_job SET status='interrupted', last_error=?, updated_at=?,"
-            " started_at=NULL,next_attempt_at=? WHERE status='running'",
-            ("worker interrupted; recovered on startup", t, t),
+            "UPDATE project_update_job SET status='queued',last_error=?,updated_at=?,"
+            " started_at=NULL,finished_at=NULL,next_attempt_at=NULL WHERE status='running'",
+            ("worker stopped; update requeued on startup", t),
         )
         self.store.x(
             "UPDATE audit_run SET status='queued',started_at=NULL,finished_at=NULL,"
@@ -115,33 +116,8 @@ class ProjectWorkflow:
         self.store.conn.commit()
         return self.policy(project_key)
 
-    def _register_snapshot(self, envelope: dict) -> EvidenceSnapshot:
-        snapshot = EvidenceSnapshot.from_dict(envelope)
-        _, disk_snapshot, _ = self.reader.load(snapshot.thread_id, snapshot.digest)
-        if disk_snapshot.to_dict() != snapshot.to_dict():
-            raise ValueError(f"{snapshot.thread_id}: snapshot envelope does not match committed file")
-        canonical = canonical_json(snapshot.to_dict())
-        existing = self.store.q1(
-            "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
-            (snapshot.thread_id, snapshot.digest),
-        )
-        if existing is not None:
-            if existing["envelope"] != canonical:
-                raise ValueError("immutable Evidence Snapshot digest was reused with different data")
-            return snapshot
-        self.store.x(
-            "INSERT INTO evidence_snapshot (thread_id,digest,version,input_watermark,"
-            "schema_version,extractor_version,verifier_version,artifact_digests,created_at,"
-            "registered_at,envelope) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-            (snapshot.thread_id, snapshot.digest, snapshot.version, snapshot.input_watermark,
-             snapshot.schema_version, snapshot.extractor_version, snapshot.verifier_version,
-             canonical_json(list(snapshot.artifact_digests)), snapshot.created_at, now_iso(), canonical),
-        )
-        return snapshot
-
     def enqueue_update(self, *, project_key: str, evidence_vector: list[dict],
-                       evidence_snapshots: list[dict], captured_scope: Optional[dict],
-                       reason: str, priority: int = 0,
+                       captured_scope: Optional[dict], reason: str, priority: int = 0,
                        autonomy_mode: Optional[str] = None,
                        actor: str = "runtime") -> dict:
         if not isinstance(project_key, str) or not project_key.strip():
@@ -170,7 +146,7 @@ class ProjectWorkflow:
             previous_vector: list[dict] = []
             active_job = self.store.q1(
                 "SELECT desired_vector FROM project_update_job WHERE project_key=?"
-                " AND status IN ('queued','running','failed','interrupted')",
+                " AND status IN ('queued','running','retry_scheduled','failed')",
                 (project_key,),
             )
             if active_job:
@@ -197,34 +173,27 @@ class ProjectWorkflow:
                 {"threadId": tid, "digest": merged_vector[tid]} for tid in included)
         if set(scope["includedSessions"]) != {x["threadId"] for x in vector}:
             raise ValueError("capturedScope.includedSessions must exactly match evidenceVector")
+
+        # Evidence DAG's committed immutable files are the sole source of
+        # truth.  References are resolved and integrity-checked before the
+        # Project update is made durable; no envelope copy is accepted or
+        # cached in the Project database.
+        for entry in vector:
+            try:
+                self.reader.load(entry["threadId"], entry["digest"])
+            except OSError as exc:
+                raise ValueError(
+                    f"{entry['threadId']}: committed Evidence Snapshot"
+                    f" {entry['digest']} is unavailable") from exc
         policy = self.policy(project_key)
         mode = validate_autonomy_mode(autonomy_mode or policy["autonomy_mode"])
-
-        envelopes = {s.get("threadId"): s for s in evidence_snapshots if isinstance(s, dict)}
-        extra = set(envelopes) - {x["threadId"] for x in vector}
-        if extra and reason != "evidence_snapshot_committed":
-            raise ValueError(f"evidenceSnapshots contains sessions outside captured scope: {sorted(extra)}")
-        for entry in vector:
-            if entry["threadId"] in envelopes:
-                continue
-            registered = self.store.q1(
-                "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
-                (entry["threadId"], entry["digest"]),
-            )
-            if registered is None:
-                raise ValueError(f"missing committed envelope for {entry['threadId']}")
-            envelopes[entry["threadId"]] = json.loads(registered["envelope"])
         with self._queue_lock, self.store.transaction_lock:
             self.store.x("BEGIN IMMEDIATE")
             try:
-                for entry in vector:
-                    snapshot = self._register_snapshot(envelopes[entry["threadId"]])
-                    if snapshot.digest != entry["digest"]:
-                        raise ValueError("evidenceVector digest does not match snapshot envelope")
                 self._replace_scope(project_key, scope)
                 job = self.store.q1(
                     "SELECT * FROM project_update_job WHERE project_key=?"
-                    " AND status IN ('queued','running','failed','interrupted')",
+                    " AND status IN ('queued','running','retry_scheduled','failed')",
                     (project_key,),
                 )
                 t = now_iso()
@@ -242,6 +211,7 @@ class ProjectWorkflow:
                         "UPDATE project_update_job SET desired_vector=?,captured_scope=?,reason=?,"
                         "priority=MAX(priority,?),autonomy_mode=?,request_version=request_version+1,"
                         "status=CASE WHEN status='running' THEN 'running' ELSE 'queued' END,"
+                        "attempts=CASE WHEN status='running' THEN attempts ELSE 0 END,"
                         "last_error=NULL,next_attempt_at=NULL,updated_at=?,finished_at=NULL WHERE id=?",
                         (canonical_json(vector), canonical_json(scope), reason, int(priority), mode,
                          t, job_id),
@@ -276,17 +246,8 @@ class ProjectWorkflow:
         if snapshot is None:
             raise RuntimeError("a committed Project Snapshot is required")
         vector = snapshot["evidenceVector"]
-        envelopes = []
-        for entry in vector:
-            row = self.store.q1(
-                "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
-                (entry["threadId"], entry["digest"]),
-            )
-            if row is None:
-                raise RuntimeError("registered Evidence Snapshot disappeared")
-            envelopes.append(json.loads(row["envelope"]))
         return self.enqueue_update(
-            project_key=project_key, evidence_vector=vector, evidence_snapshots=envelopes,
+            project_key=project_key, evidence_vector=vector,
             captured_scope={
                 "includedSessions": [e["threadId"] for e in vector],
                 "excludedSessions": snapshot["excludedSessions"],
@@ -300,8 +261,8 @@ class ProjectWorkflow:
         with self._queue_lock, self.store.transaction_lock:
             t = now_iso()
             args: tuple[Any, ...] = (t,)
-            where = ("status IN ('queued','failed','interrupted')"
-                     " AND (next_attempt_at IS NULL OR next_attempt_at<=?)")
+            where = ("(status='queued' OR"
+                     " (status='retry_scheduled' AND next_attempt_at<=?))")
             if project_key is not None:
                 where += " AND project_key=?"
                 args = (t, project_key)
@@ -336,11 +297,15 @@ class ProjectWorkflow:
             with self.store.transaction_lock:
                 self.store.conn.rollback()
                 failed_at = now_iso()
+                retrying = attempt < UPDATE_MAX_ATTEMPTS
+                status = "retry_scheduled" if retrying else "failed"
+                next_attempt_at = (
+                    _retry_at(attempt, UPDATE_RETRY_BASE_SECONDS) if retrying else None)
                 self.store.x(
-                    "UPDATE project_update_job SET status='failed',last_error=?,finished_at=?,updated_at=?,"
+                    "UPDATE project_update_job SET status=?,last_error=?,finished_at=?,updated_at=?,"
                     "next_attempt_at=? WHERE id=?",
-                    (str(exc), failed_at, failed_at,
-                     _retry_at(attempt, UPDATE_RETRY_BASE_SECONDS), job["id"]),
+                    (status, str(exc), None if retrying else failed_at, failed_at,
+                     next_attempt_at, job["id"]),
                 )
                 self.store.conn.commit()
             raise
@@ -349,26 +314,27 @@ class ProjectWorkflow:
             current = self.store.q1(
                 "SELECT request_version FROM project_update_job WHERE id=?", (job["id"],))
             superseded = current is not None and int(current["request_version"]) != generation
-            status = "queued" if superseded else "done"
+            status = "queued" if superseded else "succeeded"
             self.store.x(
-                "UPDATE project_update_job SET status=?,finished_at=?,updated_at=?,next_attempt_at=NULL"
+                "UPDATE project_update_job SET status=?,attempts=?,finished_at=?,updated_at=?,"
+                "next_attempt_at=NULL"
                 " WHERE id=?",
-                (status, now_iso(), now_iso(), job["id"]),
+                (status, 0 if superseded else attempt, now_iso(), now_iso(), job["id"]),
             )
             self.store.conn.commit()
         return {"job": self.job(job["id"]), "snapshot": snapshot, "compile": result}
 
     def retry_update(self, job_id: str, *, actor: str = "human") -> dict:
-        """Make a failed/interrupted compiler job immediately eligible again."""
+        """Make a scheduled or terminal failure immediately eligible again."""
         with self._queue_lock, self.store.transaction_lock:
             job = self.store.q1("SELECT * FROM project_update_job WHERE id=?", (job_id,))
             if job is None:
                 raise KeyError(job_id)
-            if job["status"] not in {"failed", "interrupted"}:
-                raise ValueError("only failed or interrupted Project update jobs can be retried")
+            if job["status"] not in {"retry_scheduled", "failed"}:
+                raise ValueError("only retry-scheduled or failed Project updates can be retried")
             t = now_iso()
             self.store.x(
-                "UPDATE project_update_job SET status='queued',next_attempt_at=NULL,"
+                "UPDATE project_update_job SET status='queued',attempts=0,next_attempt_at=NULL,"
                 "finished_at=NULL,updated_at=? WHERE id=?", (t, job_id),
             )
             self._event(job["project_key"], "ProjectCompileRetryQueued", actor, {
@@ -434,11 +400,16 @@ class ProjectWorkflow:
         support_ids = {e["src"] for e in edges if e["edge_type"] == "supports"
                        and e["dst"] in claim_ids}
         evidence = [e for e in self.store.q(
-            "SELECT * FROM evidence WHERE t_invalid IS NULL ORDER BY id") if e["id"] in support_ids]
+            "SELECT * FROM evidence WHERE project_key=? ORDER BY id",
+            (project_key,),
+        ) if e["id"] in support_ids]
         entity_ids = {e["dst"] for e in edges if e["edge_type"] == "mentions"
                       and e["src"] in claim_ids}
         entities = [e for e in self.store.q(
-            "SELECT * FROM entity WHERE merged_into IS NULL ORDER BY id") if e["id"] in entity_ids]
+            "SELECT * FROM entity WHERE project_key=? AND merged_into IS NULL ORDER BY id",
+            (project_key,),
+        ) if e["id"] in entity_ids]
+        entity_ids = {entity["id"] for entity in entities}
         keep = claim_ids | {g["root_id"] for g in goals} | support_ids | entity_ids
         edges = [e for e in edges if e["src"] in keep and e["dst"] in keep]
         decisions = self.store.q(
@@ -457,17 +428,19 @@ class ProjectWorkflow:
         version = int((latest or {}).get("version") or 0) + 1
         created_at = now_iso()
         graph = self._snapshot_graph(project_key, scope["includedSessions"])
+        vector_by_thread = {entry["threadId"]: entry["digest"] for entry in vector}
+        for evidence_ref in graph["evidence"]:
+            if vector_by_thread.get(evidence_ref["thread_id"]) != evidence_ref["snapshot_digest"]:
+                raise ValueError("Project evidence reference is outside the captured Evidence vector")
+        if any(origin["session_id"] not in vector_by_thread for origin in graph["origins"]):
+            raise ValueError("Project claim origin is outside the captured Evidence vector")
         assessment_specs = self._assessment_specs(graph)
         policy = self.policy(project_key)
         evidence_reviews = []
         for entry in vector:
-            registered = self.store.q1(
-                "SELECT envelope FROM evidence_snapshot WHERE thread_id=? AND digest=?",
-                (entry["threadId"], entry["digest"]),
-            )
-            envelope = _loads((registered or {}).get("envelope"), {})
-            if isinstance(envelope.get("humanReview"), dict):
-                evidence_reviews.append(envelope["humanReview"])
+            _, evidence_snapshot, _ = self.reader.load(entry["threadId"], entry["digest"])
+            if isinstance(evidence_snapshot.human_review, dict):
+                evidence_reviews.append(evidence_snapshot.human_review)
         open_reviews = self.store.q(
             "SELECT * FROM review WHERE project_key=? AND status='open'"
             " AND review_type<>'human_review_packet' ORDER BY created_at",
@@ -476,7 +449,11 @@ class ProjectWorkflow:
         review_result = evaluate_project_human_review(
             project_key=project_key, graph=graph, assessments=assessment_specs,
             evidence_reviews=evidence_reviews, open_reviews=open_reviews, policy=policy,
-            input_identity={"evidenceVector": vector, "goalVersion": self._goal_version(project_key)},
+            input_identity={
+                "evidenceVector": vector,
+                "goalVersion": self._goal_version(project_key),
+                "policyVersion": int(policy["policy_version"]),
+            },
             created_at=created_at,
         )
         packet = review_result["reviewPacket"]
@@ -493,6 +470,7 @@ class ProjectWorkflow:
             "projectKey": project_key,
             "version": version,
             "goalVersion": self._goal_version(project_key),
+            "policyVersion": int(policy["policy_version"]),
             "evidenceVector": vector,
             "excludedSessions": scope["excludedSessions"],
             "isolatedSessions": scope["isolatedSessions"],
@@ -514,10 +492,11 @@ class ProjectWorkflow:
                                  **assessment)
             self._persist_review_packet(project_key, payload["digest"], packet, created_at)
             self.store.x(
-                "INSERT INTO project_snapshot (project_key,version,digest,goal_version,"
+                "INSERT INTO project_snapshot (project_key,version,digest,goal_version,policy_version,"
                 "evidence_vector,excluded_sessions,isolated_sessions,compiler_version,created_at,"
-                "status,payload) VALUES (?,?,?,?,?,?,?,?,?,'committed',?)",
+                "status,payload) VALUES (?,?,?,?,?,?,?,?,?,?,'committed',?)",
                 (project_key, version, payload["digest"], payload["goalVersion"],
+                 payload["policyVersion"],
                  canonical_json(vector), canonical_json(scope["excludedSessions"]),
                  canonical_json(scope["isolatedSessions"]), COMPILER_VERSION, created_at,
                  canonical_json(payload)),
@@ -541,6 +520,7 @@ class ProjectWorkflow:
             self._event(project_key, "ProjectSnapshotCommitted", "project-compiler", {
                 "digest": payload["digest"], "version": version,
                 "evidenceVector": vector, "goalVersion": payload["goalVersion"],
+                "policyVersion": payload["policyVersion"],
             })
             self.store.conn.commit()
         except Exception:
@@ -595,7 +575,11 @@ class ProjectWorkflow:
         """Run independent model verification inside the P3 L1 worker."""
         specs: list[dict] = []
         supports = {c["id"]: [] for c in graph["claims"]}
-        evidence = {e["id"]: e for e in graph["evidence"]}
+        evidence = {}
+        for item in graph["evidence"]:
+            node = self.reader.resolve_node(
+                item["thread_id"], item["snapshot_digest"], item["node_id"])
+            evidence[item["id"]] = {**item, "content": node.content}
         for edge in graph["edges"]:
             if edge["edge_type"] == "supports" and edge["dst"] in supports:
                 supports[edge["dst"]].append(edge["src"])
@@ -729,8 +713,8 @@ class ProjectWorkflow:
             t = now_iso()
             p2_args: tuple[Any, ...] = (t,)
             p2_where = (
-                "(status IN ('queued','running','interrupted')"
-                " OR (status='failed' AND (next_attempt_at IS NULL OR next_attempt_at<=?)))"
+                "(status IN ('queued','running')"
+                " OR (status='retry_scheduled' AND next_attempt_at<=?))"
             )
             if project_key is not None:
                 p2_where += " AND project_key=?"
@@ -916,8 +900,13 @@ class ProjectWorkflow:
                     {"reason": "claim has no live support path", "auditLevel": "L0"},
                 ))
                 continue
-            hashes = [evidence[eid].get("source_hash") or eid
-                      for eid in supports if eid in evidence]
+            hashes = [
+                self.reader.resolve_reference(
+                    evidence[eid]["thread_id"], evidence[eid]["snapshot_digest"],
+                    evidence[eid]["node_id"],
+                )["sourceIdentity"]
+                for eid in supports if eid in evidence
+            ]
             if len(hashes) > 1 and len(set(hashes)) == 1:
                 findings.append(self._open_finding(
                     project_key, digest, "hidden_shared_source", cid,
@@ -990,8 +979,13 @@ class ProjectWorkflow:
         for origin in graph["origins"]:
             origin_count[origin["claim_id"]] = origin_count.get(origin["claim_id"], 0) + 1
         for claim in graph["claims"]:
-            hashes = {evidence[eid].get("source_hash") or eid
-                      for eid in support.get(claim["id"], []) if eid in evidence}
+            hashes = {
+                self.reader.resolve_reference(
+                    evidence[eid]["thread_id"], evidence[eid]["snapshot_digest"],
+                    evidence[eid]["node_id"],
+                )["sourceIdentity"]
+                for eid in support.get(claim["id"], []) if eid in evidence
+            }
             if origin_count.get(claim["id"], 0) > 1 and len(hashes) <= 1:
                 findings.append(self._open_finding(
                     project_key, digest, "suspicious_cross_session_merge", claim["id"],
@@ -1013,7 +1007,7 @@ class ProjectWorkflow:
             ))
         active = self.store.q1(
             "SELECT desired_vector FROM project_update_job WHERE project_key=?"
-            " AND status IN ('queued','running','failed','interrupted')", (project_key,))
+            " AND status IN ('queued','running','retry_scheduled','failed')", (project_key,))
         if active and _loads(active["desired_vector"], []) != snapshot["evidenceVector"]:
             findings.append(self._open_finding(
                 project_key, digest, "evidence_watermark_not_reached", "project-release",
@@ -1575,7 +1569,7 @@ class ProjectWorkflow:
         )
         pending = self.store.q1(
             "SELECT id FROM project_update_job WHERE project_key=?"
-            " AND status IN ('queued','running','failed','interrupted')", (project_key,))
+            " AND status IN ('queued','running','retry_scheduled','failed')", (project_key,))
         blocking_review_packets = [
             packet for packet in self.review_packets(project_key, project_snapshot_digest)
             if packet.get("blocking") and packet.get("status") in {
@@ -1763,7 +1757,7 @@ class ProjectWorkflow:
             (project_key,),
         )
         active = next((j for j in jobs if j["status"] in
-                       {"queued", "running", "failed", "interrupted"}), None)
+                       {"queued", "running", "retry_scheduled", "failed"}), None)
         snapshot = _loads(recent_snapshots[0]["payload"], None) if recent_snapshots else None
         previous_snapshot = (
             _loads(recent_snapshots[1]["payload"], None)
@@ -1785,13 +1779,15 @@ class ProjectWorkflow:
         return {
             "projectKey": project_key,
             "state": ("updating" if active and active["status"] == "running" else
-                      "update_failed" if active and active["status"] in {"failed", "interrupted"} else
+                      "retry_scheduled" if active and active["status"] == "retry_scheduled" else
+                      "update_failed" if active and active["status"] == "failed" else
                       "pending" if active else "fresh" if snapshot else "empty"),
             "committedSnapshot": snapshot,
             "previousCommittedSnapshot": previous_snapshot,
             "desiredEvidenceVector": (self.job(active["id"])["desiredEvidenceVector"]
                                       if active else snapshot["evidenceVector"] if snapshot else []),
-            "pending": sum(j["status"] in {"queued", "running"} for j in jobs),
+            "pending": sum(
+                j["status"] in {"queued", "running", "retry_scheduled"} for j in jobs),
             "jobs": jobs,
             "auditTargetDigest": latest_audit["target_digest"] if latest_audit else None,
             "auditStatus": latest_audit["status"] if latest_audit else "not_run",

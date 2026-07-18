@@ -23,8 +23,9 @@ const MODEL_ROUTER_MODEL_ENV = 'EDAG_MODEL_ROUTER_MODEL'
 const MODEL_ROUTER_TIMEOUT_S_ENV = 'EDAG_MODEL_ROUTER_TIMEOUT_S'
 const MODEL_ROUTER_MAX_ATTEMPTS_ENV = 'EDAG_MODEL_ROUTER_MAX_ATTEMPTS'
 const DEFAULT_MODEL_ROUTER_TIMEOUT_S = '45'
-const DEFAULT_MODEL_ROUTER_MAX_ATTEMPTS = '1'
+const DEFAULT_MODEL_ROUTER_MAX_ATTEMPTS = '3'
 const DEFAULT_READY_TIMEOUT_MS = 45_000
+const PROJECT_VIEW_DB_FILENAME = 'project-view.db'
 
 let projectDagChild: ChildProcess | null = null
 let projectDagLaunchSignature: string | null = null
@@ -101,7 +102,8 @@ export function buildProjectDagLaunch(
       : []
   // read-only input: the evidence-dag per-thread PROV-JSON store
   const sessionDir = baseEnv.PDAG_SESSION_DIR || evidenceDagStorageDir(options.userDataDir)
-  const dbPath = baseEnv.PDAG_DB_PATH || join(projectDagDataDir(options.userDataDir), 'project.db')
+  const dbPath = baseEnv.PDAG_DB_PATH ||
+    join(projectDagDataDir(options.userDataDir), PROJECT_VIEW_DB_FILENAME)
 
   return {
     ok: true,

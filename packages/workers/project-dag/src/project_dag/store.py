@@ -19,6 +19,11 @@ import uuid
 from typing import Any, Iterable, Optional
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS project_schema (
+  version INTEGER PRIMARY KEY CHECK(version=1)
+);
+INSERT OR IGNORE INTO project_schema(version) VALUES (1);
+
 CREATE TABLE IF NOT EXISTS goal (
   id          TEXT PRIMARY KEY,
   root_id     TEXT NOT NULL,            -- stable identity across versions
@@ -32,9 +37,11 @@ CREATE TABLE IF NOT EXISTS goal (
   t_created   TEXT NOT NULL,
   t_expired   TEXT                      -- non-null: replaced by a newer version
 );
+CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key);
 
 CREATE TABLE IF NOT EXISTS entity (
   id             TEXT PRIMARY KEY,
+  project_key    TEXT NOT NULL,
   canonical_name TEXT NOT NULL,
   entity_type    TEXT,
   aliases        TEXT NOT NULL DEFAULT '[]',   -- JSON array
@@ -43,6 +50,7 @@ CREATE TABLE IF NOT EXISTS entity (
   merged_from    TEXT NOT NULL DEFAULT '[]',   -- JSON array (audit trail)
   t_created      TEXT NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_entity_project ON entity(project_key, merged_into);
 
 CREATE TABLE IF NOT EXISTS claim (
   id            TEXT PRIMARY KEY,
@@ -64,19 +72,14 @@ CREATE TABLE IF NOT EXISTS claim (
 
 CREATE TABLE IF NOT EXISTS evidence (
   id            TEXT PRIMARY KEY,
-  evidence_type TEXT NOT NULL CHECK(evidence_type IN
-                ('agent_derived','human_attested','external_source','tool_output')),
-  content       TEXT,
-  content_ref   TEXT,                    -- session node id or local file/log path
-  source_hash   TEXT,                    -- dedup key (evidence-dag ids are content hashes)
-  quality_score REAL,
-  attestation_method TEXT CHECK(attestation_method IN
-                ('self_report','log_corroborated','artifact_hash')),
-  trust_score   REAL,
-  t_valid       TEXT NOT NULL,
-  t_invalid     TEXT
+  project_key   TEXT NOT NULL,
+  thread_id     TEXT NOT NULL,
+  snapshot_digest TEXT NOT NULL,
+  node_id       TEXT NOT NULL,
+  UNIQUE(project_key,thread_id,snapshot_digest,node_id)
 );
-CREATE INDEX IF NOT EXISTS idx_evidence_hash ON evidence(source_hash);
+CREATE INDEX IF NOT EXISTS idx_evidence_ref
+  ON evidence(project_key,thread_id,snapshot_digest,node_id);
 
 CREATE TABLE IF NOT EXISTS edge (
   id        TEXT PRIMARY KEY,
@@ -132,24 +135,6 @@ CREATE TABLE IF NOT EXISTS judge_cache (
   created_at TEXT
 );
 
--- Immutable cross-layer input registry.  A digest may only ever describe one
--- canonical snapshot envelope.
-CREATE TABLE IF NOT EXISTS evidence_snapshot (
-  thread_id          TEXT NOT NULL,
-  digest             TEXT NOT NULL,
-  version            INTEGER NOT NULL,
-  input_watermark    TEXT NOT NULL,
-  schema_version     TEXT NOT NULL,
-  extractor_version  TEXT NOT NULL,
-  verifier_version   TEXT NOT NULL,
-  artifact_digests   TEXT NOT NULL,
-  created_at         TEXT NOT NULL,
-  registered_at      TEXT NOT NULL,
-  envelope           TEXT NOT NULL,
-  PRIMARY KEY(thread_id, digest),
-  UNIQUE(thread_id, version)
-);
-
 CREATE TABLE IF NOT EXISTS project_policy (
   project_key        TEXT PRIMARY KEY,
   autonomy_mode      TEXT NOT NULL DEFAULT 'checkpointed'
@@ -184,7 +169,8 @@ CREATE TABLE IF NOT EXISTS project_update_job (
   request_version    INTEGER NOT NULL DEFAULT 1,
   processing_version INTEGER,
   status             TEXT NOT NULL DEFAULT 'queued'
-                     CHECK(status IN ('queued','running','done','failed','interrupted')),
+  CHECK(status IN
+                     ('queued','running','retry_scheduled','succeeded','failed')),
   attempts           INTEGER NOT NULL DEFAULT 0,
   last_error         TEXT,
   next_attempt_at    TEXT,
@@ -195,13 +181,14 @@ CREATE TABLE IF NOT EXISTS project_update_job (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_project_job_open
   ON project_update_job(project_key)
-  WHERE status IN ('queued','running','failed','interrupted');
+  WHERE status IN ('queued','running','retry_scheduled','failed');
 
 CREATE TABLE IF NOT EXISTS project_snapshot (
   project_key       TEXT NOT NULL,
   version           INTEGER NOT NULL,
   digest            TEXT NOT NULL UNIQUE,
   goal_version      TEXT NOT NULL,
+  policy_version    INTEGER NOT NULL,
   evidence_vector   TEXT NOT NULL,
   excluded_sessions TEXT NOT NULL,
   isolated_sessions TEXT NOT NULL,
@@ -321,6 +308,9 @@ CREATE TABLE IF NOT EXISTS audit_run (
   finished_at   TEXT,
   error         TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_request ON audit_run(request_key);
+CREATE INDEX IF NOT EXISTS idx_audit_queue
+  ON audit_run(lane,status,next_attempt_at,priority,created_at);
 CREATE TABLE IF NOT EXISTS attention_frontier (
   project_key    TEXT NOT NULL,
   snapshot_digest TEXT NOT NULL,
@@ -373,8 +363,17 @@ class Store:
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
+        existing_tables = {
+            row["name"] for row in self.q(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+        }
+        if existing_tables:
+            schema = (self.q1("SELECT version FROM project_schema")
+                      if "project_schema" in existing_tables else None)
+            if schema is None or schema["version"] != 1:
+                self.conn.close()
+                raise RuntimeError("Project DAG requires a clean project-view database")
         self.conn.executescript(SCHEMA)
-        self._migrate()
         self.conn.commit()
 
     def close(self) -> None:
@@ -390,52 +389,6 @@ class Store:
 
     def x(self, sql: str, args: Iterable[Any] = ()) -> None:
         self.conn.execute(sql, tuple(args))
-
-    def _migrate(self) -> None:
-        """Apply the one-way canonical queue schema, then reject older graph schemas."""
-        update_columns = {row["name"] for row in self.q(
-            "PRAGMA table_info(project_update_job)")}
-        if "next_attempt_at" not in update_columns:
-            self.x("ALTER TABLE project_update_job ADD COLUMN next_attempt_at TEXT")
-
-        audit_columns = {row["name"] for row in self.q("PRAGMA table_info(audit_run)")}
-        audit_additions = {
-            "request_key": "TEXT",
-            "reason": "TEXT NOT NULL DEFAULT 'manual'",
-            "priority": "INTEGER NOT NULL DEFAULT 0",
-            "lane": "TEXT NOT NULL DEFAULT 'P3'",
-            "autonomy_mode": "TEXT NOT NULL DEFAULT 'checkpointed'",
-            "attempts": "INTEGER NOT NULL DEFAULT 0",
-            "next_attempt_at": "TEXT",
-            "created_at": "TEXT",
-            "updated_at": "TEXT",
-        }
-        for name, declaration in audit_additions.items():
-            if name not in audit_columns:
-                self.x(f"ALTER TABLE audit_run ADD COLUMN {name} {declaration}")
-        migration_time = now_iso()
-        self.x(
-            "UPDATE audit_run SET request_key=COALESCE(request_key,'migrated:' || id),"
-            " created_at=COALESCE(created_at,started_at,finished_at,?),"
-            " updated_at=COALESCE(updated_at,finished_at,started_at,?)",
-            (migration_time, migration_time),
-        )
-        self.x("CREATE UNIQUE INDEX IF NOT EXISTS idx_audit_request ON audit_run(request_key)")
-        self.x(
-            "CREATE INDEX IF NOT EXISTS idx_audit_queue"
-            " ON audit_run(lane,status,next_attempt_at,priority,created_at)"
-        )
-
-        columns = {row["name"] for row in self.q("PRAGMA table_info(goal)")}
-        if "project_key" not in columns:
-            raise RuntimeError(
-                "legacy Project DAG database requires an explicit offline migration")
-        claim_columns = {row["name"] for row in self.q("PRAGMA table_info(claim)")}
-        watermark_columns = {row["name"] for row in self.q("PRAGMA table_info(watermark)")}
-        if "project_key" not in claim_columns or "project_key" not in watermark_columns:
-            raise RuntimeError(
-                "legacy Project DAG database requires an explicit offline migration")
-        self.x("CREATE INDEX IF NOT EXISTS idx_goal_project_key ON goal(project_key)")
 
     # --- edges ----------------------------------------------------------------
     def add_edge(self, src: str, dst: str, edge_type: str,

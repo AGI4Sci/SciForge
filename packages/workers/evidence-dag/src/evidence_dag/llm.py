@@ -8,10 +8,22 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.error
 import urllib.request
 from typing import Callable, Optional, Protocol
+
+
+_MAX_ROUTER_ERROR_BODY_BYTES = 8_192
+_MAX_ROUTER_ERROR_MESSAGE_CHARS = 300
+_ROUTER_ERROR_CODE = re.compile(r"^[a-z0-9][a-z0-9_.-]{0,79}$")
+_SENSITIVE_ERROR_TEXT = re.compile(
+    r"(?:authorization|proxy-authorization|cookie|set-cookie|"
+    r"api[\s_-]*key|access[\s_-]*token|secret|password|bearer|"
+    r"\bsk-[a-z0-9_-]{4,})",
+    re.IGNORECASE,
+)
 
 
 class LLM(Protocol):
@@ -60,7 +72,10 @@ class ModelRouterLLM:
         }).encode("utf-8")
         url = f"{self.base_url}/responses" if self.base_url.endswith("/v1") else f"{self.base_url}/v1/responses"
         last_err: Optional[Exception] = None
+        last_router_error: Optional[str] = None
+        attempts_made = 0
         for attempt in range(1, self.max_attempts + 1):
+            attempts_made = attempt
             req = urllib.request.Request(url, data=payload, method="POST")
             req.add_header("Content-Type", "application/json")
             req.add_header("Authorization", f"Bearer {self.api_key}")
@@ -70,6 +85,7 @@ class ModelRouterLLM:
                 return _response_text(body)
             except urllib.error.HTTPError as exc:
                 last_err = exc
+                last_router_error = _safe_router_http_error(exc, api_key=self.api_key)
                 # 4xx (except 408/429) means the request itself is wrong;
                 # retrying only burns the backoff budget.
                 if exc.code < 500 and exc.code not in (408, 429):
@@ -78,9 +94,48 @@ class ModelRouterLLM:
                     self._sleep(self.retry_base_s * (2 ** (attempt - 1)))
             except (urllib.error.URLError, TimeoutError, KeyError) as exc:
                 last_err = exc
+                last_router_error = None
                 if attempt < self.max_attempts:
                     self._sleep(self.retry_base_s * (2 ** (attempt - 1)))
-        raise RuntimeError(f"LLM call failed after {self.max_attempts} attempts: {last_err}")
+        detail = last_router_error or str(last_err)
+        raise RuntimeError(f"LLM call failed after {attempts_made} attempts: {detail}")
+
+
+def _safe_router_http_error(exc: urllib.error.HTTPError, *, api_key: str) -> str:
+    """Return bounded Model Router error details without reflecting credentials."""
+    fallback_code = f"router_http_{exc.code}"
+    fallback_message = f"Model Router returned HTTP {exc.code}."
+    try:
+        raw = exc.read(_MAX_ROUTER_ERROR_BODY_BYTES + 1)
+        if len(raw) > _MAX_ROUTER_ERROR_BODY_BYTES:
+            return f"{fallback_code}: {fallback_message}"
+        payload = json.loads(raw.decode("utf-8"))
+    except (AttributeError, UnicodeDecodeError, json.JSONDecodeError, OSError):
+        return f"{fallback_code}: {fallback_message}"
+
+    error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(error, dict):
+        return f"{fallback_code}: {fallback_message}"
+
+    raw_code = error.get("code")
+    code = raw_code.strip().lower() if isinstance(raw_code, str) else ""
+    if (
+        not _ROUTER_ERROR_CODE.fullmatch(code)
+        or _SENSITIVE_ERROR_TEXT.search(code)
+        or (api_key and api_key.lower() in code)
+    ):
+        code = fallback_code
+
+    raw_message = error.get("message")
+    message = " ".join(raw_message.split()) if isinstance(raw_message, str) else ""
+    if (
+        not message
+        or len(message) > _MAX_ROUTER_ERROR_MESSAGE_CHARS
+        or _SENSITIVE_ERROR_TEXT.search(message)
+        or (api_key and api_key in message)
+    ):
+        message = fallback_message
+    return f"{code}: {message}"
 
 
 def _float_env(name: str, default: float) -> float:

@@ -5,6 +5,8 @@ import json
 import os
 import sys
 import unittest
+import urllib.error
+from io import BytesIO
 from unittest.mock import patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -83,6 +85,70 @@ class TestModelRouterLLM(unittest.TestCase):
         finally:
             os.environ.clear()
             os.environ.update(old_env)
+
+    def test_retains_safe_structured_router_error_after_transient_retries(self):
+        errors = [
+            urllib.error.HTTPError(
+                "http://127.0.0.1:3892/v1/responses",
+                500,
+                "Internal Server Error",
+                {},
+                BytesIO(json.dumps({
+                    "error": {
+                        "code": "provider_exception_timeout",
+                        "message": "Provider request failed (provider_exception_timeout).",
+                    },
+                }).encode("utf-8")),
+            )
+            for _ in range(3)
+        ]
+        sleeps = []
+        with patch("evidence_dag.llm.urllib.request.urlopen", side_effect=errors) as urlopen:
+            llm = ModelRouterLLM(
+                base_url="http://127.0.0.1:3892/v1",
+                api_key="router-key",
+                max_attempts=3,
+                retry_base_s=0.1,
+                sleep=sleeps.append,
+            )
+
+            with self.assertRaisesRegex(
+                RuntimeError,
+                r"after 3 attempts: provider_exception_timeout: Provider request failed",
+            ):
+                llm.chat([{"role": "user", "content": "trace text"}])
+
+        self.assertEqual(urlopen.call_count, 3)
+        self.assertEqual(sleeps, [0.1, 0.2])
+
+    def test_router_error_never_reflects_credentials(self):
+        error = urllib.error.HTTPError(
+            "http://127.0.0.1:3892/v1/responses",
+            500,
+            "Internal Server Error",
+            {},
+            BytesIO(json.dumps({
+                "error": {
+                    "code": "provider_http_500",
+                    "message": "Authorization: Bearer router-key",
+                },
+            }).encode("utf-8")),
+        )
+        with patch("evidence_dag.llm.urllib.request.urlopen", side_effect=error):
+            llm = ModelRouterLLM(
+                base_url="http://127.0.0.1:3892/v1",
+                api_key="router-key",
+                max_attempts=1,
+                sleep=lambda _seconds: None,
+            )
+
+            with self.assertRaises(RuntimeError) as raised:
+                llm.chat([{"role": "user", "content": "trace text"}])
+
+        message = str(raised.exception)
+        self.assertIn("provider_http_500: Model Router returned HTTP 500.", message)
+        self.assertNotIn("router-key", message)
+        self.assertNotIn("Bearer", message)
 
 
 if __name__ == "__main__":

@@ -143,8 +143,10 @@ def _project_payload(*, graph_policy=None, claim_policy=None) -> dict:
         "claims": [claim],
         "evidence": [{
             "id": "evidence:restricted-project-support",
-            "content": "SENSITIVE PROJECT SUPPORT",
-            "source_hash": "SENSITIVE PROJECT SOURCE IDENTITY",
+            "project_key": PROJECT_KEY,
+            "thread_id": THREAD_ID,
+            "snapshot_digest": EVIDENCE_DIGEST,
+            "node_id": ASSERTION_ID,
         }],
         "origins": [{
             "claim_id": CLAIM_ID,
@@ -178,6 +180,7 @@ def _project_payload(*, graph_policy=None, claim_policy=None) -> dict:
         "version": 1,
         "digest": PROJECT_DIGEST,
         "goalVersion": "goal:test",
+        "policyVersion": 1,
         "evidenceVector": [{"threadId": THREAD_ID, "digest": EVIDENCE_DIGEST}],
         "excludedSessions": [], "isolatedSessions": [],
         "compilerVersion": "project-compiler.v2",
@@ -219,14 +222,15 @@ class ProvenanceAccessTests(unittest.TestCase):
         )
         header["digest"] = evidence_digest
         project["evidenceVector"][0]["digest"] = evidence_digest
+        project["graph"]["evidence"][0]["snapshot_digest"] = evidence_digest
         with open(os.path.join(self.sessions, snapshot_filename(THREAD_ID)), "w",
                   encoding="utf-8") as handle:
             json.dump(evidence, handle)
         self.store.x(
-            "INSERT INTO project_snapshot (project_key,version,digest,goal_version,"
+            "INSERT INTO project_snapshot (project_key,version,digest,goal_version,policy_version,"
             "evidence_vector,excluded_sessions,isolated_sessions,compiler_version,created_at,"
-            "status,payload) VALUES (?,?,?,?,?,?,?,?,?,'committed',?)",
-            (PROJECT_KEY, 1, PROJECT_DIGEST, "goal:test",
+            "status,payload) VALUES (?,?,?,?,?,?,?,?,?,?,'committed',?)",
+            (PROJECT_KEY, 1, PROJECT_DIGEST, "goal:test", 1,
              json.dumps(project["evidenceVector"]), "[]", "[]", "project-compiler.v2",
              "2026-07-10T00:00:00Z", json.dumps(project)),
         )

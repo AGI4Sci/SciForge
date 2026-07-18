@@ -13,6 +13,7 @@
 - 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
 - 所有修改必须通用，不能为特色例子写硬编码补丁。
 - 相同功能的工作链路需要统一，不要额外生出旁路；删除冗余，代码尽可能精简。
+- 方案尽可能简洁、有效，太复杂的方案往往不稳定
 - LLM API 只能走 Model Router。
 - 所有 text / vision / scientific / image / speech / workflow / schedule 模型调用严格 Model Router-only；Codex / Claude / local runtime 只能作为执行 runtime，不持有上游模型旁路。
 - GUI 只是方便用户交互的壳子；新增 GUI 前必须先问：这一步是否真的需要人类交互？

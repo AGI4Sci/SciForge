@@ -260,7 +260,7 @@ describe('Evidence DAG runtime feed', () => {
     expect(older.desiredWatermark).toBe('694')
   })
 
-  it('notifies the Project queue with only the changed Evidence snapshot', async () => {
+  it('notifies the Project queue with Evidence vector references only', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = []
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
@@ -313,6 +313,7 @@ describe('Evidence DAG runtime feed', () => {
         ]
       }
     })
+    expect(calls[1]?.body).not.toHaveProperty('evidenceSnapshots')
   })
 
   it('commits every same-priority Evidence job before coordinating a multi-session Project update', async () => {
@@ -421,6 +422,8 @@ describe('Evidence DAG runtime feed', () => {
     await failing.enqueue({ runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed', items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }], projectContext: projectContext(), coordinateProject: false })
     await vi.waitFor(async () => expect((await failing.status('sciforge', 'thread-1')).state).toBe('failed'))
     const persisted = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: Array<Record<string, unknown>> }
+    expect(persisted).toMatchObject({ version: 2, jobs: [{ status: 'retry_scheduled' }] })
+    expect(persisted.jobs[0]).toHaveProperty('nextAttemptAt')
     persisted.jobs[0] = { ...persisted.jobs[0], status: 'running', nextAttemptAt: undefined }
     await writeFile(storagePath, JSON.stringify(persisted), 'utf8')
 
@@ -435,7 +438,7 @@ describe('Evidence DAG runtime feed', () => {
     await vi.waitFor(async () => expect((await recovered.status('sciforge', 'thread-1')).state).toBe('fresh'))
   })
 
-  it('repairs a legacy open-circuit job without creating a startup retry storm', async () => {
+  it('backs up a v1 queue and starts a clean v2 state machine without converting jobs', async () => {
     const storagePath = await queuePath()
     await writeFile(storagePath, JSON.stringify({
       version: 1,
@@ -448,43 +451,19 @@ describe('Evidence DAG runtime feed', () => {
         lastError: 'workspaceRoot and projectKey are required'
       }]
     }), 'utf8')
-    const calls: string[] = []
     const queue = new EvidenceDagUpdateQueue({
       storagePath,
-      env: {
-        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://evidence.test', SCIFORGE_EVIDENCE_DAG_API_KEY: 'evidence-key',
-        SCIFORGE_PROJECT_DAG_SERVICE_URL: 'http://project.test', SCIFORGE_PROJECT_DAG_API_KEY: 'project-key'
-      },
-      resolveProjectContext: async () => ({ ...projectContext(), includedSessions: ['sciforge:thread-1'] }),
-      fetchImpl: vi.fn(async (input: RequestInfo | URL) => {
-        const url = String(input)
-        calls.push(url)
-        if (url === 'http://evidence.test/updates') return ok({ snapshot: committedSnapshot() })
-        if (url === 'http://project.test/updates') return ok({ id: 'project-job' })
-        if (url.startsWith('http://project.test/updates/status')) {
-          return ok({ state: 'fresh', pending: 0, committedSnapshot: {
-            evidenceVector: [{ threadId: 'sciforge:thread-1', digest: 'sha256:10' }]
-          } })
-        }
-        throw new Error(`Unexpected request: ${url}`)
-      })
+      fetchImpl: vi.fn()
     })
     await queue.start()
-    await expect(queue.status('sciforge', 'thread-1')).resolves.toMatchObject({
-      state: 'failed',
-      attempts: 5,
-      lastError: 'Project context recovered; retry this Evidence DAG update manually.'
+    const status = await queue.status('sciforge', 'thread-1')
+    expect(status).toMatchObject({
+      state: 'fresh',
+      pendingCount: 0
     })
-    expect(calls).toEqual([])
-
-    const repaired = await queue.enqueue({
-      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate',
-      priority: 'immediate', items: [{ id: 'a2', kind: 'assistant_message', text: 'retry' }],
-      projectContext: projectContext()
-    })
-    await expect(queue.waitForJob(repaired.jobId, 2_000)).resolves.toMatchObject({ digest: 'sha256:10' })
-    expect(calls).toContain('http://evidence.test/updates')
-    expect(calls).toContain('http://project.test/updates')
+    expect(status).not.toHaveProperty('lastError')
+    expect(JSON.parse(await readFile(storagePath, 'utf8'))).toMatchObject({ version: 2, jobs: [] })
+    expect((await readdir(join(storagePath, '..'))).some((name) => name.includes('.obsolete-v1-'))).toBe(true)
   })
 
   it('resumes an interrupted historical backfill after its committed batch watermark', async () => {
@@ -497,7 +476,7 @@ describe('Evidence DAG runtime feed', () => {
     }))
     expect(evidenceTraceBatches(trace)).toHaveLength(2)
     await writeFile(storagePath, JSON.stringify({
-      version: 1,
+      version: 2,
       jobs: [{
         id: 'recovery-job', runtimeId: 'sciforge', threadId: 'thread-1', engineThreadId: 'sciforge:thread-1',
         trace, targetWatermark: '10', reason: 'manual_immediate', priority: 'immediate', rebuild: false,
@@ -522,37 +501,6 @@ describe('Evidence DAG runtime feed', () => {
     await queue.start()
     await vi.waitFor(async () => expect((await queue.status('sciforge', 'thread-1')).state).toBe('fresh'))
     expect(postedWatermarks).toEqual(['10'])
-  })
-
-  it('resets a scheduled retry when a manual update supplies the missing legacy context', async () => {
-    const storagePath = await queuePath()
-    await writeFile(storagePath, JSON.stringify({
-      version: 1,
-      jobs: [{
-        id: 'legacy-job', runtimeId: 'sciforge', threadId: 'thread-1', engineThreadId: 'sciforge:thread-1',
-        trace: [{ id: 'a1', type: 'message', role: 'assistant', content: 'old' }],
-        targetWatermark: '9', reason: 'turn_committed', priority: 'background', rebuild: false,
-        coordinateProject: false, phase: 'evidence', status: 'retrying', attempts: 3,
-        createdAt: '2026-07-10T00:00:00.000Z', updatedAt: '2026-07-10T00:00:00.000Z',
-        nextAttemptAt: '2099-01-01T00:00:00.000Z', lastError: 'workspaceRoot and projectKey are required'
-      }]
-    }), 'utf8')
-    const fetchImpl = vi.fn(async () => {
-      const persisted = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: Array<{ attempts: number }> }
-      expect(persisted.jobs[0]?.attempts).toBe(1)
-      return ok({ snapshot: committedSnapshot('sciforge:thread-1', '10') })
-    }) as typeof fetch
-    const queue = new EvidenceDagUpdateQueue({
-      storagePath,
-      env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://evidence.test', SCIFORGE_EVIDENCE_DAG_API_KEY: 'key' },
-      fetchImpl
-    })
-    const repaired = await queue.enqueue({
-      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'manual_immediate',
-      priority: 'immediate', coordinateProject: false, projectContext: projectContext(),
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'new' }]
-    })
-    await expect(queue.waitForSnapshot(repaired.jobId, 2_000)).resolves.toMatchObject({ inputWatermark: '10' })
   })
 
   it('runs independent sessions concurrently while preserving one in-flight job per session', async () => {
@@ -638,10 +586,11 @@ describe('Evidence DAG runtime feed', () => {
     expect(order[0]).toBe('sciforge:visible')
   })
 
-  it('opens a retry circuit after the configured attempt limit and lets a human reset it', async () => {
+  it('ends exhausted retries as failed and lets a human reset the same workflow', async () => {
     const fetchImpl = vi.fn(async () => { throw new Error('router unavailable') }) as typeof fetch
+    const storagePath = await queuePath()
     const queue = new EvidenceDagUpdateQueue({
-      storagePath: await queuePath(),
+      storagePath,
       env: { SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:3897', SCIFORGE_EVIDENCE_DAG_API_KEY: 'secret' },
       fetchImpl,
       retryBaseMs: 1,
@@ -656,14 +605,14 @@ describe('Evidence DAG runtime feed', () => {
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(fetchImpl).toHaveBeenCalledTimes(2)
     const stopped = await queue.status('sciforge', 'thread-1')
-    expect(stopped).toMatchObject({ state: 'failed', attempts: 2 })
+    expect(stopped).toMatchObject({ state: 'failed', pendingCount: 0, attempts: 2 })
     expect(stopped).not.toHaveProperty('nextAttemptAt')
+    const persisted = JSON.parse(await readFile(storagePath, 'utf8')) as { jobs: Array<Record<string, unknown>> }
+    expect(persisted).toMatchObject({ version: 2, jobs: [{ status: 'failed', attempts: 2 }] })
+    expect(persisted.jobs[0]).not.toHaveProperty('nextAttemptAt')
 
     await expect(queue.waitForSnapshot(stopped.jobId!, 1_000)).rejects.toThrow('router unavailable')
-    await queue.enqueue({
-      runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '11', reason: 'manual_immediate', priority: 'immediate',
-      items: [{ id: 'a2', kind: 'assistant_message', text: 'try again explicitly' }], projectContext: projectContext()
-    })
+    await expect(queue.retry('sciforge', 'thread-1')).resolves.toMatchObject({ state: 'queued', attempts: 0 })
     await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(4))
   })
 

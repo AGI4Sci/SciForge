@@ -100,8 +100,10 @@ export type EnsureProjectFreshInput = {
   timeoutMs?: number
 }
 
-type QueueJobStatus = 'queued' | 'running' | 'retrying' | 'succeeded'
+type QueueJobStatus = 'queued' | 'running' | 'retry_scheduled' | 'failed' | 'succeeded'
 type QueueJobPhase = 'evidence' | 'project'
+
+type EvidenceVectorEntry = Pick<EvidenceSnapshot, 'threadId' | 'digest'>
 
 type EvidenceQueueJob = {
   id: string
@@ -127,7 +129,7 @@ type EvidenceQueueJob = {
 }
 
 type QueueFile = {
-  version: 1
+  version: 2
   jobs: EvidenceQueueJob[]
   recoveryWarning?: string
 }
@@ -614,54 +616,12 @@ export class EvidenceDagUpdateQueue {
     await this.exclusive(async () => {
       await this.loadUnlocked()
     })
-    await this.recoverMissingProjectContexts()
     this.schedule(0)
   }
 
   pause(): void {
     if (this.timer) clearTimeout(this.timer)
     this.timer = undefined
-  }
-
-  private async recoverMissingProjectContexts(): Promise<void> {
-    const legacyJobs = await this.exclusive(async () => this.jobs
-      .filter((job) => job.status !== 'succeeded' && !completeProjectContext(job.projectContext))
-      .map((job) => structuredClone(job)))
-    for (const legacyJob of legacyJobs) {
-      let resolved: EvidenceDagProjectContext | undefined
-      try {
-        resolved = completeProjectContext(await this.options.resolveProjectContext?.({
-          runtimeId: legacyJob.runtimeId,
-          threadId: legacyJob.threadId,
-          engineThreadId: legacyJob.engineThreadId
-        }))
-      } catch {
-        resolved = undefined
-      }
-      await this.exclusive(async () => {
-        const current = this.jobs.find((job) => job.id === legacyJob.id)
-        if (!current || current.status === 'succeeded' || completeProjectContext(current.projectContext)) return
-        if (resolved) {
-          current.projectContext = resolved
-          current.coordinateProject = true
-          if (current.status === 'queued') {
-            current.attempts = 0
-            current.nextAttemptAt = undefined
-            current.lastError = undefined
-          } else if (!current.nextAttemptAt) {
-            // Repair terminal legacy jobs without waking every historical
-            // backfill at startup. An explicit update is the recovery boundary.
-            current.lastError = 'Project context recovered; retry this Evidence DAG update manually.'
-          }
-        } else {
-          current.status = 'retrying'
-          current.nextAttemptAt = undefined
-          current.lastError = new MissingEvidenceDagProjectContextError().message
-        }
-        current.updatedAt = this.now().toISOString()
-        await this.persistUnlocked()
-      })
-    }
   }
 
   async enqueue(input: EnqueueEvidenceDagUpdateInput): Promise<EnqueueEvidenceDagUpdateResult> {
@@ -683,7 +643,8 @@ export class EvidenceDagUpdateQueue {
       await this.loadUnlocked()
       const existing = this.jobs.find((job) =>
         job.engineThreadId === engineThreadId && job.phase === 'evidence' &&
-        (job.status === 'queued' || job.status === 'retrying') && job.rebuild === Boolean(input.rebuild)
+        (job.status === 'queued' || job.status === 'retry_scheduled' || job.status === 'failed') &&
+        job.rebuild === Boolean(input.rebuild)
       )
       if (existing) {
         const existingWatermark = numericWatermark(existing.targetWatermark)
@@ -698,19 +659,16 @@ export class EvidenceDagUpdateQueue {
         if (PRIORITY_WEIGHT[input.priority ?? 'normal'] > PRIORITY_WEIGHT[existing.priority]) {
           existing.priority = input.priority ?? 'normal'
         }
-        const wasRetrying = existing.status === 'retrying'
+        const resetAttempts = existing.status === 'failed' || (
+          existing.status === 'retry_scheduled' &&
+          (input.reason === 'manual_immediate' || Boolean(input.rebuild))
+        )
         existing.projectContext = projectContext
         existing.coordinateProject = existing.coordinateProject ||
           (input.coordinateProject ?? true)
         existing.rebuildRationale = input.rebuildRationale ?? existing.rebuildRationale
         existing.status = 'queued'
-        if (wasRetrying && (input.reason === 'manual_immediate' || Boolean(input.rebuild))) {
-          // An explicit user action is the recovery boundary for an open
-          // circuit, including a retry whose backoff timer has not fired yet.
-          // Without resetting the counter, a coalesced job can immediately
-          // reopen the circuit after its repaired project context is submitted.
-          existing.attempts = 0
-        }
+        if (resetAttempts) existing.attempts = 0
         existing.nextAttemptAt = undefined
         existing.lastError = undefined
         existing.updatedAt = now
@@ -780,7 +738,7 @@ export class EvidenceDagUpdateQueue {
       let acknowledged = 0
       for (const job of this.jobs) {
         if (job.engineThreadId !== snapshot.threadId ||
-            (job.status !== 'queued' && job.status !== 'retrying') ||
+            (job.status !== 'queued' && job.status !== 'retry_scheduled') ||
             !watermarkCovers(snapshot.inputWatermark, job.targetWatermark)) continue
         job.snapshot = snapshot
         job.status = 'succeeded'
@@ -807,12 +765,15 @@ export class EvidenceDagUpdateQueue {
       await this.loadUnlocked()
       const engineThreadId = evidenceDagThreadId(runtimeId, threadId)
       const job = this.jobs
-        .filter((candidate) => candidate.engineThreadId === engineThreadId && candidate.status === 'retrying')
+        .filter((candidate) => candidate.engineThreadId === engineThreadId && (
+          candidate.status === 'retry_scheduled' || candidate.status === 'failed'
+        ))
         .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]
       if (!job) return { state: 'fresh', pendingCount: 0 } satisfies EvidenceDagQueueStatus
       job.status = 'queued'
       job.attempts = 0
       job.nextAttemptAt = undefined
+      job.lastError = undefined
       job.updatedAt = this.now().toISOString()
       await this.persistUnlocked()
       return this.statusForJob(job)
@@ -857,7 +818,7 @@ export class EvidenceDagUpdateQueue {
       })
       if (!job) throw new Error(`Durable DAG job ${jobId} is no longer available.`)
       if (job.snapshot && (!requireProjectCommit || job.status === 'succeeded')) return job.snapshot
-      if (job.status === 'retrying' && !job.nextAttemptAt) {
+      if (job.status === 'failed') {
         throw new Error(job.lastError ?? 'Automatic Evidence DAG retry limit reached.')
       }
       if (Date.now() - startedAt >= timeoutMs) {
@@ -872,13 +833,15 @@ export class EvidenceDagUpdateQueue {
 
   private statusForJob(job: EvidenceQueueJob): EvidenceDagQueueStatus {
     const pendingCount = this.jobs.filter((candidate) =>
-      candidate.engineThreadId === job.engineThreadId && candidate.status !== 'succeeded'
+      candidate.engineThreadId === job.engineThreadId && (
+        candidate.status === 'queued' || candidate.status === 'running' || candidate.status === 'retry_scheduled'
+      )
     ).length
     const state = job.status === 'succeeded'
       ? 'fresh'
       : job.status === 'running'
         ? 'updating'
-        : job.status === 'retrying'
+        : job.status === 'retry_scheduled' || job.status === 'failed'
           ? 'failed'
           : 'queued'
     return {
@@ -931,17 +894,18 @@ export class EvidenceDagUpdateQueue {
             current.snapshot = snapshot
             current.phase = current.coordinateProject ? 'project' : 'evidence'
             current.status = current.coordinateProject ? 'queued' : 'succeeded'
+            if (current.coordinateProject) current.attempts = 0
             current.lastError = undefined
             current.nextAttemptAt = undefined
             current.updatedAt = this.now().toISOString()
             await this.persistUnlocked()
           })
         } else {
-          await this.submitProjectSnapshot(preparedJob)
+          await this.submitProjectUpdate(preparedJob)
           await this.markSucceeded(preparedJob.id)
         }
       } catch (error) {
-        await this.markRetry(job.id, error)
+        await this.markAttemptFailure(job.id, error)
       }
     }
   }
@@ -978,7 +942,7 @@ export class EvidenceDagUpdateQueue {
         .filter((candidate) =>
           !runningThreads.has(candidate.engineThreadId) &&
           (candidate.status === 'queued' ||
-          (candidate.status === 'retrying' && Date.parse(candidate.nextAttemptAt ?? '') <= nowMs)) &&
+          (candidate.status === 'retry_scheduled' && Date.parse(candidate.nextAttemptAt ?? '') <= nowMs)) &&
           this.projectDependenciesReady(candidate)
         )
         .sort((left, right) => {
@@ -986,7 +950,7 @@ export class EvidenceDagUpdateQueue {
           // A repeatedly failing job must not monopolize the single drain slot. Give
           // newly queued work one attempt before returning to due retries at the same
           // priority; otherwise an old immediate job can starve every newer update.
-          const retryDelta = Number(left.status === 'retrying') - Number(right.status === 'retrying')
+          const retryDelta = Number(left.status === 'retry_scheduled') - Number(right.status === 'retry_scheduled')
           const phaseDelta = Number(left.phase === 'project') - Number(right.phase === 'project')
           return priorityDelta || retryDelta || phaseDelta || left.createdAt.localeCompare(right.createdAt)
         })[0]
@@ -1012,7 +976,7 @@ export class EvidenceDagUpdateQueue {
     if (this.options.canRunBackground?.() !== false) return false
     return this.exclusive(async () => {
       await this.loadUnlocked()
-      return this.jobs.some((job) => job.status === 'queued' || job.status === 'retrying')
+      return this.jobs.some((job) => job.status === 'queued' || job.status === 'retry_scheduled')
     })
   }
 
@@ -1080,7 +1044,7 @@ export class EvidenceDagUpdateQueue {
     return snapshot
   }
 
-  private async submitProjectSnapshot(job: EvidenceQueueJob): Promise<void> {
+  private async submitProjectUpdate(job: EvidenceQueueJob): Promise<void> {
     if (!job.snapshot) throw new Error('Project compile coordination requires a committed Evidence snapshot.')
     if (!job.projectContext || (
       !job.projectContext.projectKey?.trim() &&
@@ -1099,8 +1063,10 @@ export class EvidenceDagUpdateQueue {
     const evidenceApiKey = evidenceDagApiKeyFromEnv(env)
     if (!evidenceServiceUrl || !evidenceApiKey) throw new Error('Evidence DAG service is not configured.')
     const includedSessions = projectCoordinationSessions(job)
-    const evidenceSnapshots = await Promise.all(includedSessions.map(async (threadId) => {
-      if (threadId === job.snapshot?.threadId) return job.snapshot
+    const evidenceVector = await Promise.all(includedSessions.map(async (threadId): Promise<EvidenceVectorEntry> => {
+      if (threadId === job.snapshot?.threadId) {
+        return { threadId: job.snapshot.threadId, digest: job.snapshot.digest }
+      }
       const status = objectRecord(await requestServiceData(
         evidenceServiceUrl,
         evidenceApiKey,
@@ -1109,7 +1075,8 @@ export class EvidenceDagUpdateQueue {
         this.fetchImpl(),
         this.timeoutMs(env)
       ))
-      return canonicalSnapshot(status?.snapshot)
+      const snapshot = canonicalSnapshot(status?.snapshot)
+      return { threadId: snapshot.threadId, digest: snapshot.digest }
     }))
     await requestServiceData(
       serviceUrl,
@@ -1125,11 +1092,7 @@ export class EvidenceDagUpdateQueue {
           ...(job.projectContext.autonomyMode ? { autonomyMode: job.projectContext.autonomyMode } : {}),
           reason: job.projectContext.updateReason ?? 'evidence_snapshot_committed',
           priority: PRIORITY_WEIGHT[job.priority],
-          evidenceVector: evidenceSnapshots.map((snapshot) => ({
-            threadId: snapshot.threadId,
-            digest: snapshot.digest
-          })),
-          evidenceSnapshots,
+          evidenceVector,
           capturedScope: {
             includedSessions,
             excludedSessions: job.projectContext.excludedSessions ?? [],
@@ -1140,17 +1103,17 @@ export class EvidenceDagUpdateQueue {
       this.fetchImpl(),
       this.timeoutMs(env)
     )
-    await this.waitForProjectSnapshot(serviceUrl, apiKey, evidenceSnapshots, job.projectContext, env)
+    await this.waitForProjectSnapshot(serviceUrl, apiKey, evidenceVector, job.projectContext, env)
   }
 
   private async waitForProjectSnapshot(
     serviceUrl: string,
     apiKey: string,
-    evidenceSnapshots: EvidenceSnapshot[],
+    evidenceVector: EvidenceVectorEntry[],
     projectContext: EvidenceDagProjectContext,
     env: Record<string, string | undefined>
   ): Promise<void> {
-    const expected = new Map(evidenceSnapshots.map((snapshot) => [snapshot.threadId, snapshot.digest]))
+    const expected = new Map(evidenceVector.map((entry) => [entry.threadId, entry.digest]))
     const deadline = Date.now() + this.timeoutMs(env)
     const query = new URLSearchParams()
     if (projectContext.projectKey) query.set('projectKey', projectContext.projectKey)
@@ -1207,7 +1170,7 @@ export class EvidenceDagUpdateQueue {
     })
   }
 
-  private async markRetry(jobId: string, error: unknown): Promise<void> {
+  private async markAttemptFailure(jobId: string, error: unknown): Promise<void> {
     await this.exclusive(async () => {
       const job = this.jobs.find((candidate) => candidate.id === jobId)
       if (!job) return
@@ -1215,11 +1178,10 @@ export class EvidenceDagUpdateQueue {
       const cap = this.options.retryMaxMs ?? DEFAULT_RETRY_MAX_MS
       const maxAttempts = Math.max(1, Math.floor(this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
       const delay = Math.min(cap, base * 2 ** Math.max(0, job.attempts - 1))
-      job.status = 'retrying'
       job.lastError = errorMessage(error)
-      job.nextAttemptAt = error instanceof MissingEvidenceDagProjectContextError || job.attempts >= maxAttempts
-        ? undefined
-        : new Date(this.now().getTime() + delay).toISOString()
+      const exhausted = error instanceof MissingEvidenceDagProjectContextError || job.attempts >= maxAttempts
+      job.status = exhausted ? 'failed' : 'retry_scheduled'
+      job.nextAttemptAt = exhausted ? undefined : new Date(this.now().getTime() + delay).toISOString()
       job.updatedAt = this.now().toISOString()
       await this.persistUnlocked()
     })
@@ -1228,7 +1190,7 @@ export class EvidenceDagUpdateQueue {
   private async scheduleNextRetry(): Promise<void> {
     const delay = await this.exclusive(async () => {
       const next = this.jobs
-        .filter((job) => job.status === 'retrying' && job.nextAttemptAt)
+        .filter((job) => job.status === 'retry_scheduled' && job.nextAttemptAt)
         .map((job) => Date.parse(job.nextAttemptAt as string) - this.now().getTime())
         .filter(Number.isFinite)
         .sort((left, right) => left - right)[0]
@@ -1250,8 +1212,22 @@ export class EvidenceDagUpdateQueue {
     if (this.loaded) return
     this.loaded = true
     try {
-      const parsed = JSON.parse(await readFile(this.options.storagePath, 'utf8')) as QueueFile
-      if (parsed.version !== 1 || !Array.isArray(parsed.jobs)) throw new Error('unsupported queue file')
+      const parsedValue = JSON.parse(await readFile(this.options.storagePath, 'utf8')) as unknown
+      const parsedRecord = objectRecord(parsedValue)
+      if (parsedRecord?.version === 1 && Array.isArray(parsedRecord.jobs)) {
+        const obsoletePath = `${this.options.storagePath}.obsolete-v1-${this.now().toISOString().replace(/[:.]/g, '-')}`
+        await rename(this.options.storagePath, obsoletePath)
+        this.jobs = []
+        this.recoveryWarning = undefined
+        await this.persistUnlocked()
+        return
+      }
+      const parsed = parsedValue as QueueFile
+      if (parsed.version !== 2 || !Array.isArray(parsed.jobs)) throw new Error('unsupported queue file')
+      const validStatuses = new Set<QueueJobStatus>([
+        'queued', 'running', 'retry_scheduled', 'failed', 'succeeded'
+      ])
+      if (parsed.jobs.some((job) => !validStatuses.has(job.status))) throw new Error('unsupported queue state')
       this.recoveryWarning = nonEmptyString(parsed.recoveryWarning)
       this.jobs = parsed.jobs.map((storedJob) => {
         const maxAttempts = Math.max(1, Math.floor(this.options.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
@@ -1262,7 +1238,7 @@ export class EvidenceDagUpdateQueue {
         if (job.status !== 'succeeded' && job.attempts >= maxAttempts) {
           return {
             ...job,
-            status: 'retrying' as const,
+            status: 'failed' as const,
             lastError: job.lastError ?? 'Automatic retry limit reached; retry manually after checking the DAG service.',
             nextAttemptAt: undefined,
             updatedAt: this.now().toISOString()
@@ -1296,7 +1272,7 @@ export class EvidenceDagUpdateQueue {
     await mkdir(dirname(this.options.storagePath), { recursive: true })
     const temp = `${this.options.storagePath}.${process.pid}.${randomUUID()}.tmp`
     await writeFile(temp, `${JSON.stringify({
-      version: 1,
+      version: 2,
       jobs: this.jobs,
       ...(this.recoveryWarning ? { recoveryWarning: this.recoveryWarning } : {})
     } satisfies QueueFile, null, 2)}\n`, 'utf8')

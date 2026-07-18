@@ -437,7 +437,7 @@ Evidence DAG 不负责跨 session 合并，也不根据项目 Goal 改写 sessio
 }
 ```
 
-Snapshot 只有完整提交后才能被 Project DAG 和审计 worker 消费。处理中间状态不能暴露成最新有效图。
+Snapshot 只有完整提交后才能被 Project DAG 和审计 worker 消费。处理中间状态不能暴露成最新有效图。跨 DAG 合同只传递 `threadId + digest` 引用；Project DAG 必须从 Evidence DAG 的不可变提交文件读取并验证内容，不能接收、复制或缓存 Snapshot envelope。
 
 ## Project DAG
 
@@ -491,7 +491,7 @@ Project DAG 必须：
 }
 ```
 
-该 evidence vector 是复现 Project DAG 和判断审计结果是否过期的依据。
+该 evidence vector 是复现 Project DAG 和判断审计结果是否过期的依据，也是 Evidence DAG 到 Project DAG 的唯一数据合同。Project DAG 是由 Goal、scope、policy 和该 vector 编译出的派生视图，不拥有 Evidence 节点的第二份事实副本。
 
 ## 自动更新与任务调度
 
@@ -533,13 +533,13 @@ Project DAG 必须：
 ### 状态机
 
 ```text
-fresh -> dirty -> queued -> updating -> fresh
+fresh -> dirty -> queued -> running -> succeeded -> fresh
                     |          |
-                    v          v
-                  error <--- failed
-                    |
-                    v
-               retry queued
+                    |          v
+                    +--- retry_scheduled
+                               |
+                               v
+                             failed
 ```
 
 审计状态独立：
@@ -810,7 +810,7 @@ UI 必须区分：
 - durable queue 必须保留失败 job、目标 watermark 和最后错误。
 - Project compile 只能消费完整 Evidence Snapshot。
 - session 级 Project compile 使用事务提交；单个 session 失败不能留下半更新状态。
-- 应用重启后恢复 queued/running job；中断的 run 标记 interrupted 后重新排队。
+- 应用重启后保留 queued job，并把未完成的 running job 直接恢复为 queued；不引入额外中断状态。
 - Artifact 缺失不删除节点，只降低 availability 并产生 Finding。
 - Model Router 不可用时保留输入和 dirty 状态，恢复后继续。
 - UI 超时只表示客户端不再等待，不能假定后台任务已取消。

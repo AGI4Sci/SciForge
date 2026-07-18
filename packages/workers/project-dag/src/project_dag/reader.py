@@ -228,6 +228,25 @@ class SessionReader:
             refresh_prior, node_ids,
         )
 
+    def resolve_reference(self, session_id: str, snapshot_digest: str,
+                          node_id: str) -> dict:
+        """Resolve transient Evidence data for one immutable reference."""
+        graph, _, _ = self.load(session_id, snapshot_digest)
+        node = graph.nodes.get(node_id)
+        if node is None:
+            raise ValueError(
+                f"{session_id}: Evidence node {node_id} is absent from {snapshot_digest}")
+        version = graph.artifact_versions.get(node.artifact_version_id or "")
+        return {
+            "node": node,
+            "quality": source_quality(graph, node_id),
+            "sourceIdentity": (version.content_digest if version is not None
+                               and version.content_digest else node_id),
+        }
+
+    def resolve_node(self, session_id: str, snapshot_digest: str, node_id: str):
+        return self.resolve_reference(session_id, snapshot_digest, node_id)["node"]
+
 
 def supporting_subgraph(graph: ThreadGraph, claim_id: str) -> dict:
     """The claim + everything upstream of it along supports/refines/prerequisite

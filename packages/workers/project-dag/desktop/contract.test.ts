@@ -26,7 +26,7 @@ type PureUi = {
     graph: unknown,
     claimDetails: unknown[]
   ) => {
-    pointer: { threadId: string; sourceAssertionId: string } | null
+    pointer: { threadId: string; snapshotDigest: string; sourceAssertionId: string } | null
     relatedClaimIds: string[]
     resolved: null | {
       claimId: string
@@ -264,19 +264,28 @@ describe('Project DAG desktop contract', () => {
     }
     const review = pure.evidenceReviewModel({
       id: 'evidence-a',
-      content_ref: 'session-a#source-a',
-      source_hash: 'source-a'
+      thread_id: 'session-a',
+      snapshot_digest: 'sha256:snapshot-a',
+      node_id: 'source-a'
     }, {
       claims: [{ id: 'claim-a', statement: 'Supported Claim' }],
       edges: [{ src: 'evidence-a', dst: 'claim-a', edge_type: 'supports' }]
     }, [{
       id: 'claim-a',
       provenance: {
-        paths: [{ threadId: 'session-a', sourceAssertions: [assertion] }]
+        paths: [{
+          threadId: 'session-a',
+          evidenceSnapshot: { digest: 'sha256:snapshot-a' },
+          sourceAssertions: [assertion]
+        }]
       }
     }])
 
-    expect(review.pointer).toEqual({ threadId: 'session-a', sourceAssertionId: 'source-a' })
+    expect(review.pointer).toEqual({
+      threadId: 'session-a',
+      snapshotDigest: 'sha256:snapshot-a',
+      sourceAssertionId: 'source-a'
+    })
     expect(review.relatedClaimIds).toEqual(['claim-a'])
     expect(review.resolved).toMatchObject({
       claimId: 'claim-a',

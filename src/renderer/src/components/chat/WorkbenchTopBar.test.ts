@@ -59,6 +59,16 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
     expect(html).toContain('aria-pressed="true"')
   })
 
+  it('shows Create Loop as a right panel item', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'workflow',
+      onToggleRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('Create Loop')
+    expect(html).toContain('aria-pressed="true"')
+  })
+
   it('keeps the global comment actions in the top row', () => {
     const initial = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,

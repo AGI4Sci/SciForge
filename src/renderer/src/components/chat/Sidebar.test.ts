@@ -133,8 +133,8 @@ describe('SidebarRemoteChannelSection', () => {
 })
 
 describe('Sidebar navigation continuity', () => {
-  it.each(['schedule', 'workflow'] as const)(
-    'keeps new chat, all feature entries, and conversation history visible in %s view',
+  it.each(['schedule'] as const)(
+    'keeps core navigation and conversation history visible in the %s view',
     (activeView) => {
       const html = renderToStaticMarkup(
         createElement(Sidebar, {
@@ -159,7 +159,6 @@ describe('Sidebar navigation continuity', () => {
           onOpenPlugins: vi.fn(),
           onToggleConnectPhone: vi.fn(),
           onScheduleOpen: vi.fn(),
-          onWorkflowOpen: vi.fn(),
           onToggleSidebar: vi.fn()
         })
       )
@@ -167,7 +166,7 @@ describe('Sidebar navigation continuity', () => {
       expect(html).toContain('newAgent')
       expect(html).toContain('plugins')
       expect(html).toContain('schedule')
-      expect(html).toContain('workflow')
+      expect(html).not.toContain('workflow')
       expect(html).toContain('sidebarProjects')
       expect(html).not.toContain('workflowSidebarHint')
     }

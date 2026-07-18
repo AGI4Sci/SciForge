@@ -129,7 +129,7 @@ export function projectDagProgressPercent(progress: DagUpdateProgress): number {
   return 68
 }
 
-function progressLabel(
+export function projectDagProgressLabel(
   progress: DagUpdateProgress,
   t: (key: string, values?: Record<string, unknown>) => string
 ): string {
@@ -142,7 +142,12 @@ function progressLabel(
   }
   if (progress.stage === 'project') return t('projectDagProgressProject')
   if (progress.stage === 'compile') return t('projectDagProgressCompile')
-  return t('projectDagProgressRetrying')
+  if (progress.stage === 'retry_scheduled') return t('projectDagProgressRetryScheduled')
+  return t('projectDagProgressFailed')
+}
+
+export function projectDagProgressIsActive(progress: DagUpdateProgress | null | undefined): boolean {
+  return Boolean(progress && progress.stage !== 'failed')
 }
 
 function progressActivity(
@@ -294,7 +299,7 @@ export function ProjectDagPanel({
 
   useEffect(() => {
     const freshness = view?.status.freshness
-    if (!submitting && !optimisticProgress && !view?.status.progress &&
+    if (!submitting && !optimisticProgress && !projectDagProgressIsActive(view?.status.progress) &&
         freshness !== 'queued' && freshness !== 'updating' && freshness !== 'dirty') return
     const timer = setTimeout(() => setRequestNonce((current) => current + 1), 2_000)
     return () => clearTimeout(timer)
@@ -334,9 +339,11 @@ export function ProjectDagPanel({
   const goalDescription = description.trim()
   const inlineError = commandError || (view ? loadError : null)
   const activeProgress = status?.progress ?? optimisticProgress
-  const updateBusy = submitting || Boolean(activeProgress && activeProgress.stage !== 'retrying')
+  const updateBusy = submitting || projectDagProgressIsActive(activeProgress)
   const progressPercent = activeProgress ? projectDagProgressPercent(activeProgress) : 0
   const progressMeta = activeProgress ? progressActivity(activeProgress, t) : null
+  const progressFailed = activeProgress?.stage === 'failed'
+  const progressRetryScheduled = activeProgress?.stage === 'retry_scheduled'
 
   const cancelGoalEdit = (): void => {
     setTitle(savedGoal.title)
@@ -486,24 +493,26 @@ export function ProjectDagPanel({
         <div
           role="status"
           aria-live="polite"
-          className={`shrink-0 border-b px-4 py-3 ${activeProgress.stage === 'retrying' ? 'border-amber-200 bg-amber-50/70' : 'border-sky-200 bg-sky-50/70'}`}
+          className={`shrink-0 border-b px-4 py-3 ${progressFailed ? 'border-rose-200 bg-rose-50/70' : progressRetryScheduled ? 'border-amber-200 bg-amber-50/70' : 'border-sky-200 bg-sky-50/70'}`}
         >
           <div className="flex items-center justify-between gap-3">
-            <div className={`flex min-w-0 items-center gap-2 text-[11.5px] font-medium ${activeProgress.stage === 'retrying' ? 'text-amber-800' : 'text-sky-800'}`}>
-              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-              <span className="truncate">{progressLabel(activeProgress, t)}</span>
+            <div className={`flex min-w-0 items-center gap-2 text-[11.5px] font-medium ${progressFailed ? 'text-rose-800' : progressRetryScheduled ? 'text-amber-800' : 'text-sky-800'}`}>
+              {progressFailed
+                ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+                : <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />}
+              <span className="truncate">{projectDagProgressLabel(activeProgress, t)}</span>
             </div>
             <span className="shrink-0 text-[10.5px] tabular-nums text-ds-faint">{progressPercent}%</span>
           </div>
           <div
             className="mt-2 h-1.5 overflow-hidden rounded-full bg-ds-border-muted"
             role="progressbar"
-            aria-label={progressLabel(activeProgress, t)}
+            aria-label={projectDagProgressLabel(activeProgress, t)}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={progressPercent}
           >
-            <div className={`h-full rounded-full transition-[width] duration-500 ${activeProgress.stage === 'retrying' ? 'bg-amber-500' : 'bg-sky-500'}`} style={{ width: `${progressPercent}%` }} />
+            <div className={`h-full rounded-full transition-[width] duration-500 ${progressFailed ? 'bg-rose-500' : progressRetryScheduled ? 'bg-amber-500' : 'bg-sky-500'}`} style={{ width: `${progressPercent}%` }} />
           </div>
           {progressMeta ? <div className="mt-1.5 truncate text-[10.5px] text-ds-faint">{progressMeta}</div> : null}
           {status?.lastError ? <div className="mt-1 break-words text-[10.5px] text-amber-800">{status.lastError}</div> : null}
