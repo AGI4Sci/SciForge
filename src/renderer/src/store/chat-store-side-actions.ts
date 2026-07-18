@@ -55,11 +55,6 @@ function defaultSideModel(state: ChatState, parentThreadId: string): string {
   return DEFAULT_LOCAL_RUNTIME_MODEL
 }
 
-function defaultStandaloneSideModel(state: ChatState): string {
-  if (state.composerModel) return state.composerModel
-  return DEFAULT_LOCAL_RUNTIME_MODEL
-}
-
 function sideConversationIsRegular(side: SideConversation): boolean {
   return (side.source ?? 'side') === 'side'
 }
@@ -574,54 +569,33 @@ export function createSideActions(ctx: SideContext): Pick<
     spawnSideConversation: async (seedText, options) => {
       const state = ctx.get()
       const parentId = state.activeThreadId
-      const standalone = options?.standalone === true
-      if (!parentId && !standalone) {
+      if (!parentId) {
         ctx.set({ error: ctx.t('common:sideConversationNeedsActiveThread') })
         return null
       }
       const provider = ctx.getProvider()
       if (state.runtimeConnection !== 'ready') {
-        if (!standalone) {
-          ctx.set({ error: ctx.t('common:runtimeActionNeedsConnection') })
-          return null
-        }
-        try {
-          ctx.set({ runtimeConnection: 'checking' })
-          await provider.connect()
-          ctx.set({ runtimeConnection: 'ready', error: null, runtimeErrorDetail: null })
-        } catch (e) {
-          ctx.set({
-            runtimeConnection: 'offline',
-            error: ctx.formatRuntimeError(e),
-            ...(ctx.shouldOpenSettingsForError(e)
-              ? { route: 'settings' as const, settingsSection: 'agents' as const }
-              : {})
-          })
-          return null
-        }
+        ctx.set({ error: ctx.t('common:runtimeActionNeedsConnection') })
+        return null
       }
       const connectedState = ctx.get()
       const connectedParentId = connectedState.activeThreadId
+      if (!connectedParentId) {
+        ctx.set({ error: ctx.t('common:sideConversationNeedsActiveThread') })
+        return null
+      }
       const canForkSide =
-        !standalone &&
-        Boolean(connectedParentId) &&
         typeof provider.forkThread === 'function' &&
         providerSupportsCapability(provider, 'fork') &&
         providerSupportsCapability(provider, 'sideConversations')
-      if (!canForkSide && !options?.allowStandalone) {
-        ctx.set({ error: ctx.t('common:runtimeFeatureUnsupported') })
-        return null
-      }
-      const parentThread = connectedParentId
-        ? connectedState.threads.find((thread) => thread.id === connectedParentId)
-        : null
-      const title = options?.title?.trim() || defaultSideTitle(parentThread?.title ?? '', connectedParentId ?? 'standalone')
+      const parentThread = connectedState.threads.find((thread) => thread.id === connectedParentId)
+      const title = options?.title?.trim() || defaultSideTitle(parentThread?.title ?? '', connectedParentId)
       const source = options?.source ?? 'side'
       const openPanel = options?.openPanel ?? true
       const createMetadata = sideThreadCreateMetadata(source)
       let sideThread: NormalizedThread
       try {
-        if (canForkSide && connectedParentId) {
+        if (canForkSide) {
           rememberProviderThreadRuntime(provider, connectedParentId, connectedState.threads)
           sideThread = await provider.forkThread!(connectedParentId, { relation: 'side', title })
         } else {
@@ -631,14 +605,6 @@ export function createSideActions(ctx: SideContext): Pick<
             workspace: parentThread?.workspace ?? connectedState.workspaceRoot,
             ...createMetadata
           })
-          if (typeof provider.updateThreadRelation === 'function') {
-            try {
-              await provider.updateThreadRelation(sideThread.id, 'side')
-            } catch {
-              // Some runtimes can create ad-hoc threads but cannot persist
-              // the side relation; the local side map still keeps it hidden.
-            }
-          }
         }
         provider.rememberThreadRuntime?.(sideThread.id, sideThread.runtimeId)
       } catch (e) {
@@ -654,7 +620,7 @@ export function createSideActions(ctx: SideContext): Pick<
       const side: SideConversation = {
         threadId: sideThread.id,
         ...(sideThread.runtimeId ? { runtimeId: sideThread.runtimeId } : {}),
-        parentThreadId: connectedParentId ?? sideThread.id,
+        parentThreadId: connectedParentId,
         source,
         title: sideThread.title ?? title,
         createdAt: now,
@@ -665,9 +631,7 @@ export function createSideActions(ctx: SideContext): Pick<
         lastSeq: 0,
         input: '',
         queuedMessages: [],
-        model: connectedParentId
-          ? defaultSideModel(connectedState, connectedParentId)
-          : defaultStandaloneSideModel(connectedState),
+        model: defaultSideModel(connectedState, connectedParentId),
         reasoningEffort: 'max',
         busy: false,
         turnId: null,

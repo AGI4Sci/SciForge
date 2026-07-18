@@ -363,8 +363,6 @@ export type ChatState = {
       source?: SideConversation['source']
       title?: string
       openPanel?: boolean
-      allowStandalone?: boolean
-      standalone?: boolean
       displayText?: string
     }
   ) => Promise<string | null>
