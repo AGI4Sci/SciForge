@@ -87,6 +87,32 @@ export type ChildAgentsPanelProps = {
   className?: string
 }
 
+/**
+ * A session-owned child-agent panel. It resolves runtime refresh signals from
+ * the store inside the mounted panel, so an inactive session keeps polling its
+ * own child tree without following the globally focused thread.
+ */
+export type SessionChildAgentsPanelProps = {
+  sessionId: string
+  thread: NormalizedThread | null
+  busy?: boolean
+  focusChildId?: string | null
+  focusChildRequestKey?: number
+  onOpenChildInFocus?: (child: AgentRuntimeChild) => void
+  onCollapse: () => void
+  className?: string
+}
+
+export function sessionChildAgentsOwner(
+  sessionId: string,
+  thread: NormalizedThread | null
+): Pick<UseThreadChildrenInput, 'activeThreadId' | 'activeRuntimeId'> {
+  return {
+    activeThreadId: sessionId.trim() || null,
+    activeRuntimeId: thread?.runtimeId
+  }
+}
+
 export type ChildAgentNavigationCrumb = {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -1682,6 +1708,46 @@ export function useThreadChildren({
   return { children, loading, error }
 }
 
+export function SessionChildAgentsPanel({
+  sessionId,
+  thread,
+  busy = false,
+  focusChildId = null,
+  focusChildRequestKey = 0,
+  onOpenChildInFocus,
+  onCollapse,
+  className = ''
+}: SessionChildAgentsPanelProps): ReactElement {
+  const { runtimeConnection, childRefreshKey } = useChatStore(
+    useShallow((state) => ({
+      runtimeConnection: state.runtimeConnection,
+      childRefreshKey: state.childRefreshKey
+    }))
+  )
+  const owner = sessionChildAgentsOwner(sessionId, thread)
+  const childrenState = useThreadChildren({
+    ...owner,
+    childRefreshKey,
+    runtimeReady: runtimeConnection === 'ready',
+    busy
+  })
+
+  return (
+    <ChildAgentsPanel
+      activeThreadId={owner.activeThreadId}
+      activeThread={thread}
+      children={childrenState.children}
+      loading={childrenState.loading}
+      error={childrenState.error}
+      focusChildId={focusChildId}
+      focusChildRequestKey={focusChildRequestKey}
+      onOpenChildInFocus={onOpenChildInFocus}
+      onCollapse={onCollapse}
+      className={className}
+    />
+  )
+}
+
 export function ChildAgentsPanel({
   activeThreadId,
   activeThread,
@@ -1950,7 +2016,7 @@ export function ChildAgentsPanel({
     return () => {
       cancelled = true
     }
-  }, [currentParentThreadId, selectedTranscriptKey, t])
+  }, [currentParentThreadId, selectedChild, selectedTranscriptKey, t])
 
   return (
     <ChildAgentsPanelView

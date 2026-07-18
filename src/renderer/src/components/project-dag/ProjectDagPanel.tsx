@@ -17,7 +17,7 @@ import {
   type ProjectDagRequestContext
 } from './project-dag-panel-state'
 import { handleProjectDagPreviewMessage } from './project-dag-preview-bridge'
-import { normalizeProjectDagGraphNodeId } from '../../lib/workspace-file-preview'
+import { normalizeProjectDagGraphNodeId, previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
 import {
   DagRuntimeDisabledState,
@@ -28,6 +28,8 @@ import {
 
 type Props = {
   workspaceRoot?: string
+  ownerSessionId: string
+  active?: boolean
   initialClaimId?: string
   initialNodeId?: string
   className?: string
@@ -164,6 +166,8 @@ function progressActivity(
 
 export function ProjectDagPanel({
   workspaceRoot = '',
+  ownerSessionId,
+  active = true,
   initialClaimId,
   initialNodeId,
   className = '',
@@ -204,7 +208,8 @@ export function ProjectDagPanel({
   const { signalNow: signalFramePriority } = useDagPanelPrioritySignal({
     iframeRef,
     dag: 'project',
-    status
+    status,
+    active
   })
 
   useEffect(() => {
@@ -305,6 +310,7 @@ export function ProjectDagPanel({
         frameWindow: iframeRef.current?.contentWindow ?? null,
         frameUrl,
         workspaceRoot: root,
+        openPreview: (target) => previewWorkspaceFile({ ...target, sessionId: ownerSessionId }),
         ...(requestContext.projectRoot ? { projectRoot: requestContext.projectRoot } : {}),
         expectedSnapshotDigest: view?.status.latestSnapshotDigest,
         resolveProjectDagEvidencePreview: typeof resolver === 'function'
@@ -321,7 +327,7 @@ export function ProjectDagPanel({
     }
     window.addEventListener('message', onMessage)
     return () => window.removeEventListener('message', onMessage)
-  }, [frameUrl, requestContext.projectRoot, t, view?.status.latestSnapshotDigest, workspaceRoot])
+  }, [frameUrl, ownerSessionId, requestContext.projectRoot, t, view?.status.latestSnapshotDigest, workspaceRoot])
 
   const projectSubtitle = projectName ? t('projectDagCurrentProject', { project: projectName }) : t('projectDagGlobalView')
   const goalTitle = title.trim()

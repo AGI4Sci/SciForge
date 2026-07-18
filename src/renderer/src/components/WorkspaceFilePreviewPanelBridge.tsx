@@ -60,6 +60,8 @@ type WorkspacePreviewShellRoute = Extract<
 export type WorkspaceFilePreviewPanelBridgeProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
+  sessionId?: string
+  active?: boolean
   className?: string
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onAddSelectionToChat?: (context: string, selection: BiologyRoomSelection) => void
@@ -138,6 +140,8 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
 export function WorkspaceFilePreviewPanelBridge({
   target,
   workspaceRoot,
+  sessionId,
+  active = true,
   className,
   annotationQuestionBridge,
   onAddSelectionToChat,
@@ -162,6 +166,7 @@ export function WorkspaceFilePreviewPanelBridge({
         <BiologyRoomPanelBridge
           workspaceRoot={target.workspaceRoot?.trim() || workspaceRoot}
           initialTarget={target}
+          visibleContextActive={active}
           className={compactClassName('ds-no-drag h-full', className)}
           onAddSelectionToChat={onAddSelectionToChat}
           onClose={onClose}
@@ -182,6 +187,8 @@ export function WorkspaceFilePreviewPanelBridge({
           target={target}
           route={route}
           workspaceRoot={workspaceRoot}
+          sessionId={sessionId}
+          active={active}
           annotationQuestionBridge={annotationQuestionBridge}
           onClose={onClose}
           onOpenDirectory={onOpenDirectory}
@@ -321,6 +328,8 @@ function WorkspacePreviewShellBody({
   target,
   route,
   workspaceRoot,
+  sessionId,
+  active,
   annotationQuestionBridge,
   onClose,
   onOpenDirectory
@@ -329,6 +338,8 @@ function WorkspacePreviewShellBody({
   target: WorkspaceFileTarget | null
   route: WorkspacePreviewShellRoute
   workspaceRoot: string
+  sessionId?: string
+  active: boolean
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
@@ -342,16 +353,19 @@ function WorkspacePreviewShellBody({
     state: context.state,
     assetError: context.assetError
   })
-  const visibleContextComponent = useMemo(
-    () => buildWorkspacePreviewVisibleContextComponent({
+  const visibleContextComponent = useMemo(() => {
+    if (!active) return null
+    const component = buildWorkspacePreviewVisibleContextComponent({
       context,
       target,
       route,
       workspaceRoot,
       updatedAt: new Date().toISOString()
-    }),
-    [context, route, target, workspaceRoot]
-  )
+    })
+    return component && sessionId
+      ? { ...component, id: `${component.id}:${encodeURIComponent(sessionId)}` }
+      : component
+  }, [active, context, route, sessionId, target, workspaceRoot])
 
   useEffect(() => {
     if (!visibleContextComponent) return undefined

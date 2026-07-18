@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import { useChatStore } from './store/chat-store'
 import { clearPersistedActiveThread } from './store/chat-session-persistence'
+import type { AppRoute } from './store/chat-store-types'
 import { supportsDesktopTitleBar, WindowsTitleBar } from './components/WindowsTitleBar'
 
 const Workbench = lazy(() =>
@@ -50,6 +51,34 @@ export function RouteFallback(): React.ReactElement {
   )
 }
 
+export function PersistentWorkbenchRoutes({
+  route,
+  workbench,
+  settings
+}: {
+  route: AppRoute
+  workbench: React.ReactNode
+  settings: React.ReactNode
+}): React.ReactElement {
+  const settingsOpen = route === 'settings'
+  return (
+    <>
+      <div
+        className={settingsOpen ? 'invisible pointer-events-none absolute inset-0' : 'flex min-h-0 flex-1 flex-col'}
+        aria-hidden={settingsOpen}
+        inert={settingsOpen}
+      >
+        {workbench}
+      </div>
+      {settingsOpen ? (
+        <div className="absolute inset-0 flex min-h-0 flex-col bg-ds-main">
+          {settings}
+        </div>
+      ) : null}
+    </>
+  )
+}
+
 export default function AppShell(): React.ReactElement {
   const route = useChatStore((s) => s.route)
   const boot = useChatStore((s) => s.boot)
@@ -64,9 +93,13 @@ export default function AppShell(): React.ReactElement {
   return (
     <div className={hasDesktopTitleBar ? 'ds-windows-app-frame flex h-full min-h-0 flex-col bg-ds-main' : 'flex h-full min-h-0 flex-col bg-transparent'}>
       {hasDesktopTitleBar ? <WindowsTitleBar platform={platform} /> : null}
-      <div className="flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 flex-1 flex-col">
         <Suspense fallback={<RouteFallback />}>
-          {route === 'settings' ? <SettingsView /> : <Workbench />}
+          <PersistentWorkbenchRoutes
+            route={route}
+            workbench={<Workbench />}
+            settings={<SettingsView />}
+          />
         </Suspense>
       </div>
       {initialSetupOpen ? (

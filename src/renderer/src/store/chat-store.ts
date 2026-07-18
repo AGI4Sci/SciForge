@@ -88,6 +88,15 @@ import { createMaintenanceActions } from './chat-store-maintenance-actions'
 import { createFocusActions, clearedAgentFocusState } from './chat-store-focus-actions'
 import { trackZustandSet } from '../lib/performance-monitor'
 import { persistChatSession, readPersistedChatSession } from './chat-session-persistence'
+import {
+  forgetThreadBlocks,
+  moveThreadBlocks,
+  withThreadBlockCache
+} from './chat-store-thread-blocks'
+import {
+  subscribeSessionRightPanelDisposals,
+  subscribeSessionRightPanelRekeys
+} from '../lib/session-right-panel-lifecycle'
 
 export type { AppRoute, SettingsRouteSection } from './chat-store-types'
 export { REMOTE_CHANNEL_COMPOSER_MODEL_IDS } from './chat-store-helpers'
@@ -105,7 +114,7 @@ let composerModelLoadPromise: Promise<void> | null = null
 const restoredChatSession = readPersistedChatSession()
 
 export const useChatStore = create<ChatState>((set, get) => {
-  const trackedSet = trackZustandSet<ChatState>('chat', set)
+  const trackedSet = withThreadBlockCache(trackZustandSet<ChatState>('chat', set))
   return {
   route: 'chat',
   settingsReturnRoute: 'chat',
@@ -128,6 +137,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   activeThreadGoal: null,
   activeThreadTodos: null,
   activeThreadContextState: null,
+  threadBlocksById: {},
   blocks: [],
   liveReasoning: '',
   liveReasoningMeta: null,
@@ -144,7 +154,6 @@ export const useChatStore = create<ChatState>((set, get) => {
   turnDurationByUserId: {},
   turnReasoningFirstAtByUserId: {},
   turnReasoningLastAtByUserId: {},
-  inspectorSelectedId: null,
   composerModel: '',
   composerPickList: mergeComposerPickList(false, []),
   composerModelGroups: [],
@@ -227,8 +236,22 @@ const unsubscribeChatSessionPersistence = useChatStore.subscribe((state, previou
   }
 })
 
+const unsubscribeSessionRightPanelDisposals = subscribeSessionRightPanelDisposals((sessionId) => {
+  useChatStore.setState((state) => ({
+    threadBlocksById: forgetThreadBlocks(state.threadBlocksById, [sessionId])
+  }))
+})
+
+const unsubscribeSessionRightPanelRekeys = subscribeSessionRightPanelRekeys((previous, next) => {
+  useChatStore.setState((state) => ({
+    threadBlocksById: moveThreadBlocks(state.threadBlocksById, previous, next)
+  }))
+})
+
 if (import.meta.hot) {
   import.meta.hot.dispose(() => unsubscribeChatSessionPersistence())
+  import.meta.hot.dispose(() => unsubscribeSessionRightPanelDisposals())
+  import.meta.hot.dispose(() => unsubscribeSessionRightPanelRekeys())
 }
 
 if (import.meta.env.DEV && typeof document !== 'undefined') {

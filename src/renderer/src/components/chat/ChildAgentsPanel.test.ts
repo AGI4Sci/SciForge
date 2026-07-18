@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeChild } from '@shared/agent-runtime-contract'
 import type { SideConversation } from '../../store/chat-store-types'
-import { ChildAgentsPanelView } from './ChildAgentsPanel'
+import { ChildAgentsPanelView, sessionChildAgentsOwner } from './ChildAgentsPanel'
 
 const labels: Record<string, string> = {
   sidebarChildren: 'Children',
@@ -147,6 +147,37 @@ function side(overrides: Partial<SideConversation> = {}): SideConversation {
     ...overrides
   }
 }
+
+describe('sessionChildAgentsOwner', () => {
+  it('binds polling to the resident panel session instead of the globally focused session', () => {
+    const sessionOne = sessionChildAgentsOwner('session-1', {
+      id: 'session-1',
+      runtimeId: 'codex',
+      title: 'Session 1',
+      updatedAt: '2026-07-18T00:00:00.000Z',
+      model: 'gpt-5',
+      mode: 'agent'
+    })
+    const sessionTwo = sessionChildAgentsOwner('session-2', {
+      id: 'session-2',
+      runtimeId: 'claude',
+      title: 'Session 2',
+      updatedAt: '2026-07-18T00:00:00.000Z',
+      model: 'claude',
+      mode: 'agent'
+    })
+
+    expect(sessionOne).toEqual({ activeThreadId: 'session-1', activeRuntimeId: 'codex' })
+    expect(sessionTwo).toEqual({ activeThreadId: 'session-2', activeRuntimeId: 'claude' })
+  })
+
+  it('does not fall back to another session when the owner id is empty', () => {
+    expect(sessionChildAgentsOwner('   ', null)).toEqual({
+      activeThreadId: null,
+      activeRuntimeId: undefined
+    })
+  })
+})
 
 describe('ChildAgentsPanelView', () => {
   it('shows direct children of the active thread as horizontal tabs in a right panel', () => {

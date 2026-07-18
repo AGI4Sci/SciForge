@@ -32,20 +32,22 @@ import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { AnchoredCommentsTopBarActions } from '../anchored-comments'
 
-export type RightPanelMode =
-  | 'todo'
-  | 'changes'
-  | 'browser'
-  | 'evidence'
-  | 'project-dag'
-  | 'file'
-  | 'plan'
-  | 'sdd-ai'
-  | 'checkpoints'
-  | 'paper'
-  | 'visual-review'
-  | 'child-agents'
-  | null
+export const RIGHT_PANEL_MODES = [
+  'todo',
+  'changes',
+  'browser',
+  'evidence',
+  'project-dag',
+  'file',
+  'plan',
+  'sdd-ai',
+  'checkpoints',
+  'paper',
+  'visual-review',
+  'child-agents'
+] as const
+
+export type RightPanelMode = (typeof RIGHT_PANEL_MODES)[number] | null
 
 type Props = {
   rightPanelMode: RightPanelMode

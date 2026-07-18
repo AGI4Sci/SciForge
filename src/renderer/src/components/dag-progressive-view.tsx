@@ -165,6 +165,13 @@ export function postDagPanelPrioritySignal(
   return true
 }
 
+export function dagPanelIsForeground(
+  active: boolean,
+  visibilityState?: DocumentVisibilityState
+): boolean {
+  return active && (visibilityState === undefined || visibilityState === 'visible')
+}
+
 /**
  * Expresses foreground priority to embedded DAG views. Current services may
  * ignore this backwards-compatible signal; future schedulers can bridge it to
@@ -174,18 +181,26 @@ export function useDagPanelPrioritySignal(input: {
   iframeRef: RefObject<HTMLIFrameElement | null>
   dag: DagPanelPrioritySignal['dag']
   status?: DagPanelStatus
+  active?: boolean
   onPriorityChange?: (visible: boolean) => void
 }): { signalNow: () => void } {
   const statusRef = useRef(input.status)
   statusRef.current = input.status
-  const signalNow = useCallback(() => {
-    const visible = typeof document === 'undefined' || document.visibilityState === 'visible'
+  const { iframeRef, dag, onPriorityChange } = input
+  const active = input.active ?? true
+  const signalPriority = useCallback((visible: boolean) => {
     postDagPanelPrioritySignal(
-      input.iframeRef.current?.contentWindow,
-      buildDagPanelPrioritySignal({ dag: input.dag, visible, status: statusRef.current })
+      iframeRef.current?.contentWindow,
+      buildDagPanelPrioritySignal({ dag, visible, status: statusRef.current })
     )
-    input.onPriorityChange?.(visible)
-  }, [input.dag, input.iframeRef, input.onPriorityChange])
+    onPriorityChange?.(visible)
+  }, [dag, iframeRef, onPriorityChange])
+  const signalNow = useCallback(() => {
+    signalPriority(dagPanelIsForeground(
+      active,
+      typeof document === 'undefined' ? undefined : document.visibilityState
+    ))
+  }, [active, signalPriority])
 
   useEffect(() => {
     signalNow()
@@ -193,12 +208,9 @@ export function useDagPanelPrioritySignal(input: {
     document.addEventListener('visibilitychange', signalNow)
     return () => {
       document.removeEventListener('visibilitychange', signalNow)
-      postDagPanelPrioritySignal(
-        input.iframeRef.current?.contentWindow,
-        buildDagPanelPrioritySignal({ dag: input.dag, visible: false, status: statusRef.current })
-      )
+      signalPriority(false)
     }
-  }, [input.dag, input.iframeRef, signalNow])
+  }, [signalNow, signalPriority])
 
   return { signalNow }
 }

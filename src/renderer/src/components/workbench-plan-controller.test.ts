@@ -3,6 +3,7 @@ import { createGuiPlanArtifact } from '../plan/plan-store'
 import {
   buildDraftGuiPlanTurnOverrides,
   buildGuiPlanTurnOverrides,
+  buildOwnerPlanSendScope,
   extractPlanModeOriginalRequest,
   resolvePlanTurnWorkspaceRoot
 } from './workbench-plan-controller'
@@ -15,6 +16,13 @@ describe('workbench plan controller helpers', () => {
     expect(resolvePlanTurnWorkspaceRoot(undefined, '/Users/codex/current-workspace/')).toBe(
       '/Users/codex/current-workspace'
     )
+  })
+
+  it('fixes every plan send to its owner Session and normalized workspace', () => {
+    expect(buildOwnerPlanSendScope(' session-a ', 'C:\\Users\\Codex\\APP\\')).toEqual({
+      targetThreadId: 'session-a',
+      workspaceRoot: 'C:/Users/Codex/APP'
+    })
   })
 
   it('builds refine context only for the current plan workspace and thread', () => {
@@ -61,7 +69,7 @@ describe('workbench plan controller helpers', () => {
     const result = buildDraftGuiPlanTurnOverrides({
       request: 'Build Login: OAuth / SSO?',
       workspaceRoot: '/Users/codex/app/',
-      activeThreadId: 'thread-current',
+      ownerSessionId: 'thread-current',
       existingRelativePaths: ['.sciforge/plan/build-login-oauth-sso.md']
     })
 
@@ -94,7 +102,7 @@ describe('workbench plan controller helpers', () => {
     const result = buildDraftGuiPlanTurnOverrides({
       request: extractPlanModeOriginalRequest(wrappedPrompt),
       workspaceRoot: '/Users/codex/app/',
-      activeThreadId: 'thread-current'
+      ownerSessionId: 'thread-current'
     })
     expect(result.guiPlan.sourceRequest).toBe('阅读Deepseek R1,并在本地复现')
     expect(result.guiPlan.relativePath).not.toContain('plan-mode-prompt')

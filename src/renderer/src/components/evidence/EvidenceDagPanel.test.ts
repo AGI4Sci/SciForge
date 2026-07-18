@@ -37,7 +37,7 @@ vi.mock('react-i18next', () => ({
 describe('EvidenceDagPanel', () => {
   it('renders a visible update action for the active thread DAG', () => {
     const html = renderToStaticMarkup(createElement(EvidenceDagPanel, {
-      activeThreadId: 'thread-1',
+      ownerSessionId: 'thread-1',
       runtimeId: 'codex',
       onCollapse: vi.fn()
     }))
@@ -51,7 +51,7 @@ describe('EvidenceDagPanel', () => {
 
   it('keeps the runtime switch available while DAG processing is paused', () => {
     const html = renderToStaticMarkup(createElement(EvidenceDagPanel, {
-      activeThreadId: 'thread-1',
+      ownerSessionId: 'thread-1',
       runtimeId: 'codex',
       onCollapse: vi.fn(),
       dagRuntimeControl: {
@@ -64,6 +64,18 @@ describe('EvidenceDagPanel', () => {
 
     expect(html).toContain('aria-checked="false"')
     expect(html).toContain('DAG background processing is paused')
+  })
+
+  it('keeps the retained panel rendered while it has background priority', () => {
+    const html = renderToStaticMarkup(createElement(EvidenceDagPanel, {
+      ownerSessionId: 'thread-1',
+      runtimeId: 'codex',
+      active: false,
+      onCollapse: vi.fn()
+    }))
+
+    expect(html).toContain('Evidence DAG')
+    expect(html).toContain('Update now')
   })
 
   it('uses the dedicated update bridge when it is available', async () => {

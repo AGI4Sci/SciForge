@@ -49,6 +49,7 @@ import {
   syncTurnCompletionPoll as syncTurnCompletionPollImpl
 } from './chat-store-schedulers'
 import { performanceMonitor } from '../lib/performance-monitor'
+import { cacheThreadBlocks } from './chat-store-thread-blocks'
 
 const BUSY_WATCHDOG_MS = 180_000
 const MAX_BUSY_RECOVERY_ATTEMPTS = 3
@@ -642,7 +643,12 @@ export function syncTurnCompletionPoll(
     loadThreadState: async (state, threadId) => {
       const provider = getProvider()
       rememberProviderThreadRuntime(provider, threadId, state.threads)
-      return provider.getThreadDetail(threadId)
+      const detail = await provider.getThreadDetail(threadId)
+      const blocks = hydrateBlockModelLabels(threadId, detail.blocks)
+      set((snapshot) => ({
+        threadBlocksById: cacheThreadBlocks(snapshot.threadBlocksById, threadId, blocks)
+      }))
+      return { ...detail, blocks }
     },
     threadLooksRunning: threadSnapshotLooksRunning,
     onCompletedThreads: async (doneIds, state, setState, getState) => {

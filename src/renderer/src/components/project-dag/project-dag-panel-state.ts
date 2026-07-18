@@ -1,5 +1,3 @@
-export const PROJECT_DAG_SETUP_EVENT = 'sciforge:project-dag-setup'
-
 export type ProjectDagRequestContext = {
   workspaceRoot?: string
   projectRoot?: string

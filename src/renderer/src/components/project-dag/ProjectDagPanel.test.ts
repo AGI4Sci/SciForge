@@ -115,6 +115,7 @@ describe('ProjectDagPanel', () => {
 
     const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
       workspaceRoot: '/tmp/molclaw',
+      ownerSessionId: 'session-1',
       onCollapse: vi.fn(),
       dagRuntimeControl: enabledDagRuntime
     }))
@@ -131,6 +132,7 @@ describe('ProjectDagPanel', () => {
   it('renders a visible current-project update action', () => {
     const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
       workspaceRoot: '/tmp/molclaw',
+      ownerSessionId: 'session-1',
       onCollapse: vi.fn(),
       dagRuntimeControl: enabledDagRuntime
     }))
@@ -150,6 +152,7 @@ describe('ProjectDagPanel', () => {
   it('shows the shared runtime switch instead of a service error when DAG processing is paused', () => {
     const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
       workspaceRoot: '/tmp/molclaw',
+      ownerSessionId: 'session-1',
       onCollapse: vi.fn(),
       dagRuntimeControl: {
         enabled: false,
@@ -162,6 +165,19 @@ describe('ProjectDagPanel', () => {
     expect(html).toContain('aria-checked="false"')
     expect(html).toContain('DAG background processing is paused')
     expect(html).not.toContain('Could not load project evidence')
+  })
+
+  it('keeps the retained panel rendered while it has background priority', () => {
+    const html = renderToStaticMarkup(createElement(ProjectDagPanel, {
+      workspaceRoot: '/tmp/molclaw',
+      ownerSessionId: 'session-1',
+      active: false,
+      onCollapse: vi.fn(),
+      dagRuntimeControl: enabledDagRuntime
+    }))
+
+    expect(html).toContain('Project evidence')
+    expect(html).toContain('Update now')
   })
 
   it('normalizes editable session dispositions without project-specific rules', () => {

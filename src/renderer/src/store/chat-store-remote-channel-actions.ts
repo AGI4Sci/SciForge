@@ -47,7 +47,6 @@ type CreateRemoteChannelActionsOptions = {
     | 'lastSeq'
     | 'currentTurnId'
     | 'currentTurnUserId'
-    | 'inspectorSelectedId'
   >
   sseAbortRef: { current: AbortController | null }
   clearBusyWatchdog: () => void

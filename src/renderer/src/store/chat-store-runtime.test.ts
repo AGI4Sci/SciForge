@@ -48,6 +48,7 @@ function makeSinkHarness(overrides: Partial<ChatState> = {}): {
 } {
   let state = {
     activeThreadId: 'thread-current',
+    threadBlocksById: {},
     blocks: [],
     liveReasoning: '',
     liveReasoningMeta: null,
@@ -113,6 +114,9 @@ describe('thread event sink binding', () => {
       expect(drainQueuedMessagesForThread).toHaveBeenCalledWith('thread-a')
     })
     expect(getState().activeThreadId).toBe('thread-b')
+    expect(getState().threadBlocksById['thread-a']).toEqual([
+      { kind: 'assistant', id: 'done-a', text: 'done' }
+    ])
     expect(getState().watchTurnCompletion).toEqual({})
     expect(refreshThreads).toHaveBeenCalled()
   })

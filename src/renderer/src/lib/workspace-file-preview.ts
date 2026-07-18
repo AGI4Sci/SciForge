@@ -23,6 +23,7 @@ export type WorkspaceFilePreviewReturnContext =
     }
 
 export type WorkspaceFilePreviewDetail = WorkspaceFileTarget & {
+  sessionId?: string
   kind?: 'file' | 'directory'
   returnTo?: WorkspaceFilePreviewReturnContext
 }

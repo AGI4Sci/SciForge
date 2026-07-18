@@ -86,6 +86,7 @@ import {
   watchTurnCompletionNotification
 } from './chat-store-runtime'
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
+import { rekeySessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -682,8 +683,7 @@ export function createThreadActions(
         turnStartedAtByUserId: {},
         turnDurationByUserId,
         turnReasoningFirstAtByUserId: {},
-        turnReasoningLastAtByUserId: {},
-        inspectorSelectedId: null
+        turnReasoningLastAtByUserId: {}
       })
       publishRemoteChannelActiveThreadContext(get(), id)
       syncTurnCompletionPoll(set, get)
@@ -1050,23 +1050,30 @@ export function createThreadActions(
     const sourceRoute = queued?.sourceRoute ?? overrides?.sourceRoute ?? get().route
     const requestedGovernanceProfile = queued?.governanceProfile ?? overrides?.governanceProfile
     const remoteTargetId = (queued?.remoteTargetId ?? overrides?.remoteTargetId)?.trim() || ''
-    let targetThreadId = (queued?.targetThreadId ?? overrides?.targetThreadId)?.trim() || ''
-    const hasPendingActiveTurn = get().blocks.some(hasPendingRuntimeWork)
-    if (get().busy || hasPendingActiveTurn) {
+    const requestedTargetThreadId = (queued?.targetThreadId ?? overrides?.targetThreadId)?.trim() || ''
+    const initialState = get()
+    const initialActiveThreadId = initialState.activeThreadId
+    const initialActiveRuntimeId = initialState.activeAgentRuntime
+    const deliveryStartedInForeground =
+      !requestedTargetThreadId || requestedTargetThreadId === initialActiveThreadId
+    const ownerThreadId = requestedTargetThreadId || initialActiveThreadId || ''
+    const hasPendingOwnerTurn = deliveryStartedInForeground &&
+      initialState.blocks.some(hasPendingRuntimeWork)
+    if (deliveryStartedInForeground && (initialState.busy || hasPendingOwnerTurn)) {
       if (overrides?.guiPlan) {
         set({ error: i18n.t('common:composerQueuePlaceholder') })
         return false
       }
       const now = Date.now()
-      const activeThreadId = get().activeThreadId
+      const activeThreadId = initialActiveThreadId
       const threadSnap = activeThreadId
-        ? get().threads.find((thread) => thread.id === activeThreadId)
+        ? initialState.threads.find((thread) => thread.id === activeThreadId)
         : undefined
-      const queuedTargetThreadId = targetThreadId || activeThreadId || undefined
-      const remoteChannel = remoteChannelForThread(get(), queuedTargetThreadId || activeThreadId)
+      const queuedTargetThreadId = ownerThreadId || undefined
+      const remoteChannel = remoteChannelForThread(initialState, queuedTargetThreadId)
       const overrideModel = overrides?.model?.trim()
       const composerModel =
-        overrideModel ?? remoteChannel?.model ?? get().composerModel.trim()
+        overrideModel ?? remoteChannel?.model ?? initialState.composerModel.trim()
       const userModelChip =
         overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
       const displayText = overrides?.displayText?.trim()
@@ -1074,7 +1081,7 @@ export function createThreadActions(
       const attachmentIds = overrides?.attachmentIds?.filter((id) => id.trim().length > 0)
       const attachments = overrides?.attachments?.filter((attachment) => attachment.id.trim().length > 0)
       const fileReferences = normalizeRuntimeFileReferences(overrides?.fileReferences)
-      const currentTurnId = get().currentTurnId
+      const currentTurnId = initialState.currentTurnId
       const canSteerActiveTurn =
         explicitSteerText !== null &&
         Boolean(activeThreadId && currentTurnId) &&
@@ -1139,13 +1146,13 @@ export function createThreadActions(
       }))
       // UI/runtime can briefly drift (busy=false while runtime still has an active turn).
       // Kick recovery so queued input drains as soon as the in-flight turn settles.
-      if (!get().busy && hasPendingActiveTurn) {
+      if (!get().busy && hasPendingOwnerTurn) {
         void get().recoverActiveTurn()
       }
       return true
     }
     const now = Date.now()
-    const userBlockId = queued?.id ?? explicitSteerDirectiveId ?? `u-${now}`
+    const userBlockId = queued?.id ?? explicitSteerDirectiveId ?? `u-${createClientDirectiveId()}`
     const attachmentIds =
       queued?.attachmentIds ??
       overrides?.attachmentIds?.filter((id) => id.trim().length > 0) ??
@@ -1157,24 +1164,24 @@ export function createThreadActions(
     const fileReferences = normalizeRuntimeFileReferences(
       queued?.fileReferences ?? overrides?.fileReferences
     )
-    let activeThreadId = targetThreadId || get().activeThreadId
+    let activeThreadId = ownerThreadId || null
     const displayText = queued?.displayText ?? overrides?.displayText?.trim() ?? messageText
     const userDisplayText = displayText !== messageText ? displayText : undefined
     const generatedTitle = deriveThreadTitleFromPrompt(displayText)
-    const initialRemoteChannel = remoteChannelForThread(get(), activeThreadId)
+    const initialRemoteChannel = remoteChannelForThread(initialState, activeThreadId)
     const shouldAutoRenameForRoute = sourceRoute === 'chat' && initialRemoteChannel == null
     const activeThread = activeThreadId
-      ? get().threads.find((thread) => thread.id === activeThreadId) ?? null
+      ? initialState.threads.find((thread) => thread.id === activeThreadId) ?? null
       : null
     let shouldRenameThreadAfterSend =
       shouldAutoRenameForRoute &&
       !!activeThreadId &&
       shouldAutoTitleThread(activeThread)
-    const threadSnap = get().threads.find((thread) => thread.id === activeThreadId)
-    const remoteChannel = remoteChannelForThread(get(), activeThreadId)
+    const threadSnap = initialState.threads.find((thread) => thread.id === activeThreadId)
+    const remoteChannel = remoteChannelForThread(initialState, activeThreadId)
     const overrideModel = overrides?.model?.trim()
     const composerModel =
-      queued?.model ?? overrideModel ?? remoteChannel?.model ?? get().composerModel.trim()
+      queued?.model ?? overrideModel ?? remoteChannel?.model ?? initialState.composerModel.trim()
     const reasoningEffort = queued?.reasoningEffort ?? overrides?.reasoningEffort?.trim()
     const userModelChip =
       queued?.modelLabel ?? overrides?.modelLabel ?? optimisticUserModelLabel(composerModel, threadSnap?.model)
@@ -1205,46 +1212,50 @@ export function createThreadActions(
       ...(fileReferences.length ? { fileReferences } : {}),
       deliveryAttempt
     }
-    const previousBlocks = get().blocks
-    const previousActiveThreadId = get().activeThreadId
-    const previousLastSeq = get().lastSeq
-    const previousCurrentTurnId = get().currentTurnId
-    const previousCurrentTurnUserId = get().currentTurnUserId
-    const previousTurnStartedAtByUserId = get().turnStartedAtByUserId
-    const previousTurnDurationByUserId = get().turnDurationByUserId
-    const previousTurnReasoningFirstAtByUserId = get().turnReasoningFirstAtByUserId
-    const previousTurnReasoningLastAtByUserId = get().turnReasoningLastAtByUserId
-    const previousQueuedMessages = get().queuedMessages
+    const previousBlocks = initialState.blocks
+    const previousActiveThreadId = initialActiveThreadId
+    const previousLastSeq = initialState.lastSeq
+    const previousCurrentTurnId = initialState.currentTurnId
+    const previousCurrentTurnUserId = initialState.currentTurnUserId
+    const previousTurnStartedAtByUserId = initialState.turnStartedAtByUserId
+    const previousTurnDurationByUserId = initialState.turnDurationByUserId
+    const previousTurnReasoningFirstAtByUserId = initialState.turnReasoningFirstAtByUserId
+    const previousTurnReasoningLastAtByUserId = initialState.turnReasoningLastAtByUserId
+    const previousQueuedMessages = initialState.queuedMessages
     const sendSessionStillFocused = (): boolean =>
       get().activeThreadId === previousActiveThreadId && get().currentTurnUserId === userBlockId
-    resetBusyRecoveryAttempts()
+    if (deliveryStartedInForeground) resetBusyRecoveryAttempts()
     set((s) => ({
-      busy: true,
-      blocks: [
-        ...s.blocks,
-        {
-          kind: 'user' as const,
-          id: userBlockId,
-          createdAt: new Date(now).toISOString(),
-          text: displayText,
-          ...(userModelChip ? { modelLabel: userModelChip } : {}),
-          ...(userDisplayText || attachmentIds.length || attachments.length
-            ? {
-                meta: {
-                  source: 'desktop',
-                  ...(userDisplayText ? { displayText: userDisplayText } : {}),
-                  ...(attachmentIds.length ? { attachmentIds } : {}),
-                  ...(attachments.length ? { attachments } : {})
-                }
+      ...(deliveryStartedInForeground
+        ? {
+            busy: true,
+            blocks: [
+              ...s.blocks,
+              {
+                kind: 'user' as const,
+                id: userBlockId,
+                createdAt: new Date(now).toISOString(),
+                text: displayText,
+                ...(userModelChip ? { modelLabel: userModelChip } : {}),
+                ...(userDisplayText || attachmentIds.length || attachments.length
+                  ? {
+                      meta: {
+                        source: 'desktop',
+                        ...(userDisplayText ? { displayText: userDisplayText } : {}),
+                        ...(attachmentIds.length ? { attachmentIds } : {}),
+                        ...(attachments.length ? { attachments } : {})
+                      }
+                    }
+                  : { meta: { source: 'desktop' } })
               }
-            : { meta: { source: 'desktop' } })
-        }
-      ],
-      liveReasoning: '',
-      liveAssistant: '',
-      error: null,
-      currentTurnUserId: userBlockId,
-      turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now },
+            ],
+            liveReasoning: '',
+            liveAssistant: '',
+            error: null,
+            currentTurnUserId: userBlockId,
+            turnStartedAtByUserId: { ...s.turnStartedAtByUserId, [userBlockId]: now }
+          }
+        : {}),
       queuedMessages: queued
         ? s.queuedMessages.map((message) =>
             message.id === queued.id
@@ -1307,7 +1318,6 @@ export function createThreadActions(
             activeThreadId: threadId,
             codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [workspaceRoot, createdThread?.workspace]),
             lastSeq: 0,
-            inspectorSelectedId: null,
             threads:
               createdThread && !s.threads.some((thread) => thread.id === createdThread.id)
                 ? [createdThread, ...s.threads]
@@ -1361,18 +1371,30 @@ export function createThreadActions(
         return false
       }
     }
-    sseAbortRef.current?.abort()
-    sseAbortRef.current = null
-    clearBusyWatchdog()
+    if (deliveryStartedInForeground) {
+      sseAbortRef.current?.abort()
+      sseAbortRef.current = null
+      clearBusyWatchdog()
+    }
     let turnAccepted = false
+    let acceptedUserMessageItemId: string | undefined
+    const deliveryOwnsActiveSession = (): boolean => {
+      if (!deliveryStartedInForeground || get().activeThreadId !== activeThreadId) return false
+      const currentUserId = get().currentTurnUserId
+      return currentUserId === userBlockId || (
+        Boolean(acceptedUserMessageItemId) && currentUserId === acceptedUserMessageItemId
+      )
+    }
     try {
       if (!activeThreadId) throw new Error('Failed to resolve target thread id.')
       const previousThreadId = activeThreadId
-      const seqAtSend = get().lastSeq
+      const seqAtSend = deliveryStartedInForeground ? previousLastSeq : 0
       const sendingThread = get().threads.find((thread) => thread.id === previousThreadId)
       rememberProviderThreadRuntime(p, previousThreadId, get().threads)
       const channel = remoteChannelForThread(get(), previousThreadId)
-      const desiredRuntimeId = channel?.runtimeId ?? get().activeAgentRuntime
+      const desiredRuntimeId = channel?.runtimeId ?? (
+        deliveryStartedInForeground ? initialActiveRuntimeId : sendingThread?.runtimeId
+      )
       const sendingRuntimeId = sendingThread?.runtimeId
       const runtimeSwitchExpected = Boolean(
         sendingRuntimeId && desiredRuntimeId && sendingRuntimeId !== desiredRuntimeId
@@ -1415,18 +1437,31 @@ export function createThreadActions(
         : sendingRuntimeId
       const subscribedFromSeq = runtimeSwitchExpected ? 0 : seqAtSend
       const threadIdChange = turnHandle.threadIdChange
+      const deliveredSessionAlreadyExists = get().threads.some(
+        (thread) => thread.id === deliveredThreadId
+      )
+      const sourceSessionStillExists = get().threads.some(
+        (thread) => thread.id === previousThreadId && !thread.archived
+      )
       const canAdoptDeliveredThread =
         deliveredThreadChanged &&
         Boolean(subscribedRuntimeId) &&
+        sourceSessionStillExists &&
         (threadIdChange === 'handoff' || threadIdChange === 'promote')
-      if (get().activeThreadId !== previousThreadId) {
-        watchBackgroundThreadCompletion(set, get, previousThreadId)
-        return true
-      }
+      const ownedActiveSessionBeforeHandoff = deliveryOwnsActiveSession()
       if (canAdoptDeliveredThread && subscribedRuntimeId) {
+        get().rekeySessionSideConversations(previousThreadId, deliveredThreadId)
+        rekeySessionRightPanelWorkspace(previousThreadId, deliveredThreadId)
         set((s) => ({
-          activeThreadId: deliveredThreadId,
-          lastSeq: subscribedFromSeq,
+          ...(ownedActiveSessionBeforeHandoff
+            ? {
+                activeThreadId: deliveredThreadId,
+                lastSeq: subscribedFromSeq,
+                ...(deliveredSessionAlreadyExists
+                  ? { blocks: s.threadBlocksById[deliveredThreadId] ?? [] }
+                  : {})
+              }
+            : {}),
           threads: adoptExplicitHandoffThread(
             s.threads,
             previousThreadId,
@@ -1438,7 +1473,7 @@ export function createThreadActions(
         activeThreadId = deliveredThreadId
       } else if (runtimeSwitchExpected && subscribedRuntimeId) {
         set((s) => ({
-          lastSeq: subscribedFromSeq,
+          ...(ownedActiveSessionBeforeHandoff ? { lastSeq: subscribedFromSeq } : {}),
           threads: s.threads.map((thread) =>
             thread.id === previousThreadId ? { ...thread, runtimeId: subscribedRuntimeId } : thread
           )
@@ -1453,13 +1488,17 @@ export function createThreadActions(
         }).catch(() => undefined)
       }
       const { turnId, userMessageItemId } = turnHandle
+      acceptedUserMessageItemId = userMessageItemId
       // Mirror the composer model selection against the runtime's stable
       // user_message item id so the badge survives page refresh / thread
       // re-selection. The runtime itself doesn't persist per-turn metadata.
       if (userMessageItemId && userModelChip) {
         rememberTurnModel(activeThreadId, userMessageItemId, userModelChip)
       }
-      if (userMessageItemId && userMessageItemId !== userBlockId) {
+      if (
+        userMessageItemId && userMessageItemId !== userBlockId &&
+        deliveryOwnsActiveSession()
+      ) {
         set((s) => ({
           blocks: reconcileOptimisticUserBlock(
             s.blocks,
@@ -1532,6 +1571,11 @@ export function createThreadActions(
           }))
         }
       }
+      if (!deliveryOwnsActiveSession()) {
+        watchBackgroundThreadCompletion(set, get, activeThreadId)
+        await get().refreshThreads()
+        return true
+      }
       set({ currentTurnId: turnId })
       const ac = new AbortController()
       sseAbortRef.current = ac
@@ -1542,8 +1586,8 @@ export function createThreadActions(
       return true
     } catch (e) {
       const failedThreadId = activeThreadId
-      const failedSessionStillActive = Boolean(failedThreadId && get().activeThreadId === failedThreadId)
-      if (failedSessionStillActive) clearBusyWatchdog()
+      const failedDeliveryOwnsActiveSession = deliveryOwnsActiveSession()
+      if (failedDeliveryOwnsActiveSession) clearBusyWatchdog()
       void window.sciforge.logError('send-message', 'Failed to send message', {
         message: e instanceof Error ? e.message : String(e),
         threadId: failedThreadId
@@ -1552,7 +1596,8 @@ export function createThreadActions(
         // A turn handle is the delivery boundary. Failures in mirroring,
         // renaming, subscription setup, or thread refresh must not turn a
         // successfully accepted prompt into a retryable send.
-        if (failedThreadId && get().activeThreadId !== failedThreadId) {
+        if (!failedDeliveryOwnsActiveSession) {
+          if (!failedThreadId) return true
           watchBackgroundThreadCompletion(set, get, failedThreadId)
           await get().refreshThreads().catch(() => undefined)
           return true
@@ -1561,7 +1606,7 @@ export function createThreadActions(
         await get().recoverActiveTurn()
         return true
       }
-      if (failedThreadId && get().activeThreadId !== failedThreadId) {
+      if (failedThreadId && !failedDeliveryOwnsActiveSession) {
         // The user may switch threads while the provider call is in flight.
         // Keep the durable journal visible and retryable on its original
         // thread; never strand a journalOnly entry until the next restart.
@@ -1682,7 +1727,6 @@ export function createThreadActions(
           activeThreadId,
           codeWorkspaceRoots: rememberCodeWorkspaceRoots(s.codeWorkspaceRoots, [workspaceRoot, createdThread?.workspace]),
           lastSeq: 0,
-          inspectorSelectedId: null,
           threads:
             createdThread && !s.threads.some((thread) => thread.id === createdThread.id)
               ? [createdThread, ...s.threads]

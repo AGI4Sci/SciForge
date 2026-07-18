@@ -25,13 +25,13 @@ describe('sdd-draft-restore', () => {
     vi.useRealTimers()
     vi.stubGlobal('localStorage', createMemoryStorage())
     vi.stubGlobal('window', { localStorage })
-    useSddDraftStore.getState().clearActiveDraft()
+    useSddDraftStore.setState({ sessions: {} })
   })
 
   afterEach(() => {
     vi.useRealTimers()
     vi.unstubAllGlobals()
-    useSddDraftStore.getState().clearActiveDraft()
+    useSddDraftStore.setState({ sessions: {} })
   })
 
   it('restores a remembered draft from disk', async () => {
@@ -40,7 +40,7 @@ describe('sdd-draft-restore', () => {
       workspaceRoot: '/tmp/app/',
       now: 1
     })
-    useSddDraftStore.getState().setActiveDraft(draft, '# Previous')
+    useSddDraftStore.getState().setSessionDraft('session-1', draft, '# Previous')
     const readWorkspaceFile = vi.fn().mockResolvedValue({
       ok: true,
       path: '/tmp/app/.sciforge/sdd/requirements/123e4567-e89b-12d3-a456-426614174000/requirement.md',
@@ -75,11 +75,11 @@ describe('sdd-draft-restore', () => {
       workspaceRoot: '/tmp/app/',
       now: 1
     })
-    useSddDraftStore.getState().setActiveDraft(draft, '# Disk draft')
+    useSddDraftStore.getState().setSessionDraft('session-1', draft, '# Disk draft')
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-01-02T03:04:05.000Z'))
-    useSddDraftStore.getState().setContent('# Disk draft\n\nUnsaved local line')
-    useSddDraftStore.getState().clearActiveDraft()
+    useSddDraftStore.getState().setSessionContent('session-1', '# Disk draft\n\nUnsaved local line')
+    useSddDraftStore.getState().removeSession('session-1')
     const readWorkspaceFile = vi.fn().mockResolvedValue({
       ok: true,
       path: '/tmp/app/.sciforge/sdd/requirements/123e4567-e89b-12d3-a456-426614174000/requirement.md',
@@ -107,8 +107,8 @@ describe('sdd-draft-restore', () => {
       workspaceRoot: '/tmp/app/',
       now: 1
     })
-    useSddDraftStore.getState().setActiveDraft(draft, '# Previous')
-    useSddDraftStore.getState().clearActiveDraft()
+    useSddDraftStore.getState().setSessionDraft('session-1', draft, '# Previous')
+    useSddDraftStore.getState().removeSession('session-1')
     const readWorkspaceFile = vi.fn().mockResolvedValue({
       ok: true,
       path: '/tmp/app/.sciforge/sdd/requirements/123e4567-e89b-12d3-a456-426614174000/requirement.md',
@@ -136,7 +136,7 @@ describe('sdd-draft-restore', () => {
       workspaceRoot: '/tmp/app',
       now: 1
     })
-    useSddDraftStore.getState().setActiveDraft(draft, '# Previous')
+    useSddDraftStore.getState().setSessionDraft('session-1', draft, '# Previous')
     const readWorkspaceFile = vi.fn().mockResolvedValue({
       ok: false,
       message: 'ENOENT'

@@ -12,6 +12,9 @@ const runtimeClientMock = vi.hoisted(() => ({
   getSettings: vi.fn(),
   setSettings: vi.fn()
 }))
+const lifecycleMock = vi.hoisted(() => ({
+  disposeSessionRightPanelWorkspace: vi.fn()
+}))
 
 vi.mock('../agent/registry', () => ({
   getProvider: registryMock.getProvider
@@ -22,6 +25,7 @@ vi.mock('../agent/runtime-client', () => ({
     setSettings: runtimeClientMock.setSettings
   }
 }))
+vi.mock('../lib/session-right-panel-lifecycle', () => lifecycleMock)
 
 import { createNavigationActions, syncRemoteChannelActivityToStore } from './chat-store-navigation-actions'
 
@@ -515,6 +519,7 @@ describe('chat-store-navigation-actions chooseWorkspace', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()
     runtimeClientMock.getSettings.mockReset()
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockReset()
     runtimeClientMock.setSettings.mockReset()
   })
 
@@ -912,6 +917,7 @@ describe('chat-store-navigation-actions deleteWorkspace', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()
     runtimeClientMock.getSettings.mockReset()
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockReset()
     vi.stubGlobal('window', {
       localStorage: {
         getItem: vi.fn(() => null),
@@ -963,6 +969,10 @@ describe('chat-store-navigation-actions deleteWorkspace', () => {
     await actions.deleteWorkspace('/workspace/sciforge')
 
     expect(provider.deleteThread).not.toHaveBeenCalled()
+    expect(lifecycleMock.disposeSessionRightPanelWorkspace.mock.calls).toEqual([
+      ['stale-thread'],
+      ['healthy-thread']
+    ])
     expect(state.threads.map((item) => item.id)).toEqual([
       'stale-thread',
       'healthy-thread',

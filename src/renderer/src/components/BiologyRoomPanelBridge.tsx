@@ -83,6 +83,7 @@ export type BiologyRoomPanelBridgeProps = {
   initialRoomId?: string | null
   runEvent?: BioGymRunEvent | null
   className?: string
+  visibleContextActive?: boolean
   onAddSelectionToChat?: (context: string, selection: BiologyRoomSelection) => void
   onClose?: () => void
 }
@@ -93,6 +94,7 @@ export function BiologyRoomPanelBridge({
   initialRoomId,
   runEvent,
   className,
+  visibleContextActive = true,
   onAddSelectionToChat,
   onClose
 }: BiologyRoomPanelBridgeProps): ReactElement {
@@ -301,13 +303,13 @@ export function BiologyRoomPanelBridge({
   }, [acceptRoom, initialRoomId, runEvent, workspaceRoot])
 
   useEffect(() => {
-    if (!room) return undefined
+    if (!room || !visibleContextActive) return undefined
     return registerVisibleContextComponent(buildBiologyRoomVisibleContextComponent({
       room,
       workspaceRoot,
       conflicted: Boolean(conflict)
     }))
-  }, [conflict, room, workspaceRoot])
+  }, [conflict, room, visibleContextActive, workspaceRoot])
 
   useEffect(() => {
     const capabilities = window.sciforge?.capabilities

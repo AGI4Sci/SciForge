@@ -1,10 +1,9 @@
-import type { ReactElement } from 'react'
+import type { ReactElement, SetStateAction } from 'react'
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { ArrowLeft, ArrowRight, Bot, CircleAlert, Eye } from 'lucide-react'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
-import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
 import { sddDraftTraceRelativePath } from '@shared/sdd'
 import { buildSddTraceSnapshot } from '@shared/sdd-trace'
@@ -19,7 +18,12 @@ import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
 import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import type { ClipboardImageReadResult } from '@shared/workspace-file'
 import type { AgentRuntimeChild, AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
-import type { AgentProviderCapabilities, AttachmentReference, ChatBlock, NormalizedThread } from '../agent/types'
+import type {
+  AgentProviderCapabilities,
+  AttachmentReference,
+  ChatBlock,
+  NormalizedThread
+} from '../agent/types'
 import type { LocalRuntimeInfoJson, LocalRuntimeSkillJson } from '../agent/local-runtime-contract'
 import { getProvider } from '../agent/registry'
 import { rendererRuntimeClient } from '../agent/runtime-client'
@@ -53,7 +57,7 @@ import {
 } from './chat/FloatingComposerModelPicker'
 import { SideConversationPanel } from './chat/SideConversationPanel'
 import {
-  ChildAgentsPanel,
+  SessionChildAgentsPanel,
   filterDirectChildAgents,
   useThreadChildren
 } from './chat/ChildAgentsPanel'
@@ -68,13 +72,21 @@ import {
 } from './chat/RemoteGuardDetailView'
 import { ThreadTargetSelector } from './chat/ThreadTargetSelector'
 import { SessionHeader } from './SessionHeader'
-import { SddAssistantPanel } from './sdd/SddAssistantPanel'
+import {
+  SessionSddAssistantPanel,
+  type SddAssistantSendRequest
+} from './sdd/SessionSddAssistantPanel'
 import { SddDraftEditorView } from './sdd/SddDraftEditorView'
 import { SidebarTitlebarToggleButton } from './sidebar/SidebarPrimitives'
 import { useWriteWorkspaceStore } from '../write/write-workspace-store'
-import { buildSddDraftId, forgetRememberedSddDraft, useSddDraftStore } from '../sdd/sdd-draft-store'
+import {
+  buildSddDraftId,
+  forgetRememberedSddDraft,
+  selectSddDraftSession,
+  useSddDraftStore
+} from '../sdd/sdd-draft-store'
 import type { SddDraft, SddDraftSaveStatus } from '../sdd/sdd-draft-store'
-import { saveActiveSddDraftToDisk } from '../sdd/sdd-draft-actions'
+import { saveSddDraftToDisk } from '../sdd/sdd-draft-actions'
 import { restoreSddDraft } from '../sdd/sdd-draft-restore'
 import { composeSddAssistantPrompt } from '../sdd/sdd-assistant-prompt'
 import { collectSddDraftImages, withAttachmentIds, type SddDraftImageReference } from '../sdd/sdd-draft-images'
@@ -93,11 +105,18 @@ import { RuntimeBanner } from './RuntimeBanner'
 import {
   CODE_PANEL_PREFERRED,
   projectDagReturnSelection,
-  readStoredRightPanelContext,
   useWorkbenchLayout
 } from './workbench-layout'
+import {
+  SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
+  type SessionRightPanelWorkspace
+} from './session-right-panel-workspaces'
+import { SessionRightPanelStack } from './SessionRightPanelStack'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
-import { PROJECT_DAG_SETUP_EVENT } from './project-dag/project-dag-panel-state'
+import {
+  PROJECT_DAG_SETUP_EVENT,
+  type ProjectDagSetupDetail
+} from '../lib/project-dag-setup'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
 import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availability'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
@@ -126,7 +145,10 @@ import {
   relativeWorkspacePath,
 } from '../lib/composer-file-references'
 import { readComposerFileContextEntries as readComposerFileContextEntriesFromReferences } from '../lib/composer-file-context'
-import { buildWorkspaceReferenceGroups } from '../lib/workspace-reference-groups'
+import {
+  buildWorkspaceReferenceGroups,
+  type WorkspaceReferenceGroup
+} from '../lib/workspace-reference-groups'
 import {
   registerVisibleContextComponent,
   registerVisibleContextSensitiveElements,
@@ -144,6 +166,10 @@ import {
   type AnchoredCommentsAddToConversationDetail
 } from './anchored-comments'
 import { scheduleMolecularMolstarPrewarm } from '../workspace-preview/molecular-prewarm'
+import {
+  subscribeSessionRightPanelDisposals,
+  subscribeSessionRightPanelRekeys
+} from '../lib/session-right-panel-lifecycle'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -549,6 +575,21 @@ function base64ToFile(dataBase64: string, name: string, mimeType: string): File 
   return new File([bytes], name || 'image', { type: mimeType })
 }
 
+type SessionRightPanelRenderer = (
+  workspace: SessionRightPanelWorkspace,
+  active: boolean
+) => ReactElement | null
+
+type SessionRightPanelRenderSnapshot = {
+  thread: NormalizedThread | null
+  blocks: ChatBlock[]
+  devPreviewBlocks: ChatBlock[]
+  latestDevPreviewUrl: string | null
+  workspaceRoot: string
+  workspaceReferenceGroups: WorkspaceReferenceGroup[]
+  composerFileReferences: ComposerFileReference[]
+}
+
 export function Workbench(): ReactElement {
   const { t } = useTranslation('common')
 
@@ -571,6 +612,7 @@ export function Workbench(): ReactElement {
     focusAgentParent,
     createThread,
     blocks,
+    threadBlocksById,
     liveReasoning,
     liveAssistant,
     error,
@@ -650,6 +692,7 @@ export function Workbench(): ReactElement {
       focusAgentParent: s.focusAgentParent,
       createThread: s.createThread,
       blocks: s.blocks,
+      threadBlocksById: s.threadBlocksById,
       liveReasoning: s.liveReasoning,
       liveAssistant: s.liveAssistant,
       error: s.error,
@@ -718,12 +761,27 @@ export function Workbench(): ReactElement {
   const [mode, setMode] = useState<'plan' | 'agent'>('agent')
   const [composerReasoningEffort, setComposerReasoningEffort] =
     useState<ComposerReasoningEffort>('max')
-  const [assistantReasoningEffort, setAssistantReasoningEffort] =
-    useState<ComposerReasoningEffort>('medium')
   const [runtimeInfo, setRuntimeInfo] = useState<LocalRuntimeInfoJson | null>(null)
   const [runtimeSkills, setRuntimeSkills] = useState<LocalRuntimeSkillJson[]>([])
   const [composerAttachments, setComposerAttachments] = useState<AttachmentReference[]>([])
-  const [composerFileReferences, setComposerFileReferences] = useState<ComposerFileReference[]>([])
+  const [composerFileReferencesBySession, setComposerFileReferencesBySession] = useState<
+    Record<string, ComposerFileReference[]>
+  >({})
+  const composerFileReferences = activeThreadId
+    ? composerFileReferencesBySession[activeThreadId] ?? []
+    : []
+  const setComposerFileReferences = useCallback((
+    value: SetStateAction<ComposerFileReference[]>
+  ): void => {
+    const ownerSessionId = activeThreadId
+    if (!ownerSessionId) return
+    setComposerFileReferencesBySession((current) => {
+      const ownerReferences = current[ownerSessionId] ?? []
+      const nextReferences = typeof value === 'function' ? value(ownerReferences) : value
+      if (nextReferences === ownerReferences) return current
+      return { ...current, [ownerSessionId]: nextReferences }
+    })
+  }, [activeThreadId])
   const [composerCommentReferences, setComposerCommentReferences] = useState<AttachedComposerComment[]>([])
   const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
@@ -790,24 +848,11 @@ export function Workbench(): ReactElement {
     spawnSideConversation,
     sendSideMessage
   }), [sendSideMessage, sideConversations, spawnSideConversation])
-  const assistantModel = useWriteWorkspaceStore((s) => s.assistantModel)
-  const setAssistantModel = useWriteWorkspaceStore((s) => s.setAssistantModel)
-  const activeSddDraft = useSddDraftStore((s) => s.activeDraft)
-  const sddDraftOperationStatus = useSddDraftStore((s) => s.operationStatus)
-  const assistantPickList = useMemo(() => {
-    const ordered = new Set<string>()
-    for (const id of DEFAULT_COMPOSER_MODEL_IDS) {
-      const normalized = id.trim()
-      if (normalized) ordered.add(normalized)
-    }
-    for (const id of composerPickList) {
-      const normalized = id.trim()
-      if (normalized) ordered.add(normalized)
-    }
-    const current = assistantModel.trim()
-    if (current) ordered.add(current)
-    return [...ordered]
-  }, [assistantModel, composerPickList])
+  const activeSddSession = useSddDraftStore((state) =>
+    selectSddDraftSession(state, activeThreadId)
+  )
+  const activeSddDraft = activeSddSession?.draft ?? null
+  const sddDraftOperationStatus = activeSddSession?.operationStatus ?? 'idle'
   const stageInsetClass = 'ds-stage-inset'
   const paperRadarEnabled = import.meta.env.DEV && isPluginInstalled('extension', PAPER_RADAR_EXTENSION_ID)
   const keyboardShortcuts = useKeyboardShortcutSettings()
@@ -818,8 +863,8 @@ export function Workbench(): ReactElement {
 
   const prevThreadId = useRef<string | null>(null)
   const inputRef = useRef('')
-  const sddUpgradeInFlightRef = useRef(false)
-  const sddUpgradeTargetRef = useRef<PendingSddPlanTarget | null>(null)
+  const composerReferenceContextBySessionRef = useRef(new Map<string, string>())
+  const sddUpgradeTargetsRef = useRef<Record<string, PendingSddPlanTarget>>({})
   const timelineBlocks = blocks
   const timelineLiveReasoning = liveReasoning
   const timelineLiveAssistant = liveAssistant
@@ -879,21 +924,6 @@ export function Workbench(): ReactElement {
       }
     }
   }, [activeAgentRuntime, focusedRuntimeId, focusedSide, focusedThreadId])
-  const focusedPanelThread = useMemo<NormalizedThread | null>(() => {
-    if (!focusedSide || !focusedThreadId) return activeThread
-    return {
-      id: focusedThreadId,
-      title: focusedSide.title,
-      updatedAt: focusedSide.createdAt,
-      model: focusedSide.model,
-      mode: 'agent',
-      status: focusedSide.busy ? 'running' : 'idle',
-      runtimeId: focusedSide.runtimeId ?? focusedRuntimeId,
-      relation: 'side',
-      parentThreadId: focusedSide.parentThreadId,
-      workspace: activeThread?.workspace
-    }
-  }, [activeThread, focusedRuntimeId, focusedSide, focusedThreadId])
   const childAgentAttention = useChildAgentAttention({
     rootThreadId: activeThreadId,
     rootLabel: activeThread?.title,
@@ -966,20 +996,6 @@ export function Workbench(): ReactElement {
     }),
     [activeThread?.workspace, codeWorkspaceRoots, workspaceRoot]
   )
-  const [fileTreeWorkspaceOverride, setFileTreeWorkspaceOverride] = useState<string | null>(null)
-  const fileTreeWorkspaceRoot = fileTreeWorkspaceOverride || activeWorkspaceReferenceRoot || workspaceRoot
-  const fileTreeWorkspaceGroups = useMemo(
-    () =>
-      fileTreeWorkspaceOverride
-        ? [{
-            id: `workspace:${fileTreeWorkspaceOverride}`,
-            label: t('rightPanelFiles'),
-            workspaceRoot: fileTreeWorkspaceOverride,
-            kind: 'worktree' as const
-          }]
-        : workspaceReferenceGroups,
-    [fileTreeWorkspaceOverride, t, workspaceReferenceGroups]
-  )
   useEffect(() => {
     const updateRemoteChannelActiveThreadContext = typeof window !== 'undefined'
       ? updateRemoteChannelActiveThreadContextApi(window.sciforge)
@@ -1047,22 +1063,6 @@ export function Workbench(): ReactElement {
     [agentFocusLineage, sideConversations]
   )
   const activeVisualDocumentId = activeThreadId ? `visual-${activeThreadId}` : 'visual-default'
-  const [visualReviewRequest, setVisualReviewRequest] = useState<{
-    documentId: string
-    refreshKey: number
-    workspaceRoot?: string
-    restored?: boolean
-  } | null>(() => {
-    const restored = readStoredRightPanelContext()
-    return restored?.mode === 'visual-review' && restored.visualDocumentId
-      ? {
-          documentId: restored.visualDocumentId,
-          refreshKey: 0,
-          restored: true,
-          ...(restored.workspaceRoot ? { workspaceRoot: restored.workspaceRoot } : {})
-        }
-      : null
-  })
   const {
     beginLeftResize,
     beginRightResize,
@@ -1078,88 +1078,34 @@ export function Workbench(): ReactElement {
     navigateRightPanelForward,
     openDevPreview,
     rightPanelMode,
+    rightPanelWorkspaces,
     rightPanelVisible,
     rightSidebarWidth,
     setFilePreviewTarget,
     setFilePreviewReturnContext,
     setRightPanelMode,
     setRightSidebarWidth,
+    setRightSidebarWidthForSession,
     shellRef,
     terminalHeight,
     terminalOpen,
     toggleLeftSidebar,
     toggleRightPanelMode,
     toggleTerminal,
+    updateRightPanelWorkspace,
   } = useWorkbenchLayout({
     activeThreadId,
     latestAutoOpenDevPreviewUrl,
     latestDevPreviewUrl,
-    route,
-    workspaceRoot,
-    contextValidationReady: runtimeConnection === 'ready',
-    visualDocumentId: visualReviewRequest?.documentId ?? activeVisualDocumentId
+    route
   })
-  const restoredFilePreviewTargetRef = useRef(filePreviewTarget)
-  useEffect(() => {
-    const target = restoredFilePreviewTargetRef.current
-    if (runtimeConnection !== 'ready' || !target) return
-    restoredFilePreviewTargetRef.current = null
-    const targetWorkspaceRoot = target.workspaceRoot || workspaceRoot
-    if (!targetWorkspaceRoot || typeof window.sciforge?.readWorkspaceFile !== 'function') {
-      discardRightPanelResource('file', target.path)
-      return
-    }
-    let cancelled = false
-    void window.sciforge.readWorkspaceFile({
-      path: target.path,
-      workspaceRoot: targetWorkspaceRoot
-    }).then((result) => {
-      if (cancelled || result.ok) return
-      discardRightPanelResource('file', target.path)
-    }).catch(() => {
-      if (cancelled) return
-      discardRightPanelResource('file', target.path)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [discardRightPanelResource, runtimeConnection, workspaceRoot])
-
-  useEffect(() => {
-    if (runtimeConnection !== 'ready' || !visualReviewRequest?.restored) return
-    if (rightPanelMode !== 'visual-review') {
-      setVisualReviewRequest(null)
-      return
-    }
-    const targetWorkspaceRoot = visualReviewRequest.workspaceRoot || workspaceRoot
-    if (!targetWorkspaceRoot || typeof window.sciforge?.openVisualDocument !== 'function') {
-      setVisualReviewRequest(null)
-      discardRightPanelResource('visual-review', visualReviewRequest.documentId)
-      return
-    }
-    let cancelled = false
-    void window.sciforge.openVisualDocument({
-      workspaceRoot: targetWorkspaceRoot,
-      documentId: visualReviewRequest.documentId,
-      createIfMissing: false
-    }).then(() => {
-      if (cancelled) return
-      setVisualReviewRequest((current) => current
-        ? { ...current, restored: false }
-        : null)
-    }).catch(() => {
-      if (cancelled) return
-      setVisualReviewRequest(null)
-      discardRightPanelResource('visual-review', visualReviewRequest.documentId)
-    })
-    return () => {
-      cancelled = true
-    }
-  }, [discardRightPanelResource, rightPanelMode, runtimeConnection, visualReviewRequest, workspaceRoot])
-  const [childPanelFocusRequest, setChildPanelFocusRequest] = useState<{
-    childId: string | null
-    key: number
-  }>({ childId: null, key: 0 })
+  const sessionRightPanelSnapshotsRef = useRef(new Map<string, SessionRightPanelRenderSnapshot>())
+  const setFileTreeWorkspaceOverride = useCallback((value: string | null): void => {
+    if (activeThreadId) updateRightPanelWorkspace(activeThreadId, { fileTreeWorkspaceOverride: value })
+  }, [activeThreadId, updateRightPanelWorkspace])
+  const setChildPanelFocusRequest = useCallback((request: { childId: string | null; key: number }): void => {
+    if (activeThreadId) updateRightPanelWorkspace(activeThreadId, { childPanelFocusRequest: request })
+  }, [activeThreadId, updateRightPanelWorkspace])
 
   const openChildInFocus = useCallback(async (child: AgentRuntimeChild): Promise<boolean> => {
     const threadId = child.openAsThreadRef?.threadId?.trim()
@@ -1236,22 +1182,39 @@ export function Workbench(): ReactElement {
     childAgentAttention.summary.primaryTarget,
     composerModel,
     focusAgentThread,
+    setChildPanelFocusRequest,
     setRightPanelMode
   ])
-  const [projectDagReturnTarget, setProjectDagReturnTarget] = useState<{
-    claimId?: string
-    nodeId?: string
-  } | null>(null)
-  const [evidenceDagReturnNode, setEvidenceDagReturnNode] = useState<{
-    nodeId: string
-    threadId: string
-  } | null>(null)
-  useEffect(() => {
-    setEvidenceDagReturnNode((current) =>
-      current && current.threadId !== activeThreadId ? null : current
-    )
-  }, [activeThreadId])
-  const [fileTreeInitialDirectory, setFileTreeInitialDirectory] = useState<FileTreeInitialDirectory | null>(null)
+  const setProjectDagReturnTarget = useCallback((
+    value: SetStateAction<{ claimId?: string; nodeId?: string } | null>
+  ): void => {
+    if (!activeThreadId) return
+    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
+      ?.projectDagReturnTarget ?? null
+    updateRightPanelWorkspace(activeThreadId, {
+      projectDagReturnTarget: typeof value === 'function' ? value(current) : value
+    })
+  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
+  const setEvidenceDagReturnNode = useCallback((
+    value: SetStateAction<{ nodeId: string; threadId: string } | null>
+  ): void => {
+    if (!activeThreadId) return
+    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
+      ?.evidenceDagReturnNode ?? null
+    updateRightPanelWorkspace(activeThreadId, {
+      evidenceDagReturnNode: typeof value === 'function' ? value(current) : value
+    })
+  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
+  const setFileTreeInitialDirectory = useCallback((
+    value: SetStateAction<FileTreeInitialDirectory | null>
+  ): void => {
+    if (!activeThreadId) return
+    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
+      ?.fileTreeInitialDirectory ?? null
+    updateRightPanelWorkspace(activeThreadId, {
+      fileTreeInitialDirectory: typeof value === 'function' ? value(current) : value
+    })
+  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
   const {
     activeGuiPlan,
     buildGuiPlan,
@@ -1261,6 +1224,7 @@ export function Workbench(): ReactElement {
     sendPlanTurn,
     verifyGuiPlan
   } = useWorkbenchPlanController({
+    ownerSessionId: activeThreadId,
     blocks,
     busy,
     mode,
@@ -1502,13 +1466,16 @@ export function Workbench(): ReactElement {
   }, [paperRadarEnabled, rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
-    const openProjectDagPanel = (): void => {
-      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
-      setRightPanelMode('project-dag')
+    const openProjectDagPanel = (event: Event): void => {
+      const detail = (event as CustomEvent<ProjectDagSetupDetail>).detail
+      const sessionId = detail?.sessionId?.trim()
+      if (!sessionId) return
+      setRightSidebarWidthForSession(sessionId, (width) => Math.max(width, CODE_PANEL_PREFERRED))
+      updateRightPanelWorkspace(sessionId, { mode: 'project-dag' })
     }
     window.addEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
     return () => window.removeEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
-  }, [setRightPanelMode, setRightSidebarWidth])
+  }, [setRightSidebarWidthForSession, updateRightPanelWorkspace])
 
   const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
   const activeTodoAutoOpenKey = activeThreadId && activeTodoItemCount > 0
@@ -1542,39 +1509,46 @@ export function Workbench(): ReactElement {
   ])
 
   useEffect(() => {
+    if (!activeThreadId) return
+    const pendingTarget = sddUpgradeTargetsRef.current[activeThreadId] ?? null
     if (
       !activeGuiPlan ||
-      !sddUpgradeInFlightRef.current ||
-      !sddPlanMatchesPendingTarget(activeGuiPlan, sddUpgradeTargetRef.current)
+      !pendingTarget ||
+      !sddPlanMatchesPendingTarget(activeGuiPlan, pendingTarget)
     ) {
       return
     }
-    sddUpgradeInFlightRef.current = false
-    sddUpgradeTargetRef.current = null
-    useSddDraftStore.getState().setOperationStatus('idle')
-    const completedDraft = useSddDraftStore.getState().activeDraft
+    delete sddUpgradeTargetsRef.current[activeThreadId]
+    const completedSession = selectSddDraftSession(useSddDraftStore.getState(), activeThreadId)
+    const completedDraft = completedSession?.draft ?? null
     if (completedDraft) forgetRememberedSddDraft(completedDraft)
-    useSddDraftStore.getState().clearActiveDraft()
-  }, [activeGuiPlan])
+    useSddDraftStore.getState().removeSession(activeThreadId)
+  }, [activeGuiPlan, activeThreadId])
 
   useEffect(() => {
+    if (!activeThreadId) return
+    const pendingTarget = sddUpgradeTargetsRef.current[activeThreadId] ?? null
     if (
       busy ||
-      !sddUpgradeInFlightRef.current ||
+      !pendingTarget ||
       sddDraftOperationStatus !== 'upgrading' ||
-      sddPlanMatchesPendingTarget(activeGuiPlan, sddUpgradeTargetRef.current)
+      sddPlanMatchesPendingTarget(activeGuiPlan, pendingTarget)
     ) {
       return
     }
     const timeout = window.setTimeout(() => {
-      if (!sddUpgradeInFlightRef.current) return
-      if (useSddDraftStore.getState().operationStatus !== 'upgrading') return
-      sddUpgradeInFlightRef.current = false
-      sddUpgradeTargetRef.current = null
-      useSddDraftStore.getState().setOperationStatus('error', t('planToolResultMissing'))
+      if (!sddUpgradeTargetsRef.current[activeThreadId]) return
+      const session = selectSddDraftSession(useSddDraftStore.getState(), activeThreadId)
+      if (session?.operationStatus !== 'upgrading') return
+      delete sddUpgradeTargetsRef.current[activeThreadId]
+      useSddDraftStore.getState().setSessionOperationStatus(
+        activeThreadId,
+        'error',
+        t('planToolResultMissing')
+      )
     }, 800)
     return () => window.clearTimeout(timeout)
-  }, [activeGuiPlan, busy, sddDraftOperationStatus, t])
+  }, [activeGuiPlan, activeThreadId, busy, sddDraftOperationStatus, t])
 
   useEffect(() => {
     let cancelled = false
@@ -1689,24 +1663,58 @@ export function Workbench(): ReactElement {
     activeWorkspaceReferenceRoot,
     setFilePreviewReturnContext,
     setFilePreviewTarget,
+    setFileTreeInitialDirectory,
+    setFileTreeWorkspaceOverride,
     setRightPanelMode,
     workspaceReferenceGroups,
     workspaceRoot
   ])
 
   useEffect(() => {
-    const onPreviewWorkspaceDirectory = (event: Event): void => {
+    const onPreviewWorkspaceFile = (event: Event): void => {
       const detail = (event as CustomEvent<WorkspaceFilePreviewDetail>).detail
-      if (detail?.kind !== 'directory' || !detail.path) return
-      openFileTreeDirectory({
-        workspaceRoot: detail.workspaceRoot || activeWorkspaceReferenceRoot || workspaceRoot,
-        path: detail.path
+      if (!detail?.path) return
+      const ownerSessionId = detail.sessionId?.trim() || activeThreadId
+      if (!ownerSessionId) return
+      const ownerThread = threads.find((thread) => thread.id === ownerSessionId)
+      const ownerWorkspaceRoot = normalizeWorkspaceRoot(
+        detail.workspaceRoot || ownerThread?.workspace || workspaceRoot
+      )
+      if (detail.kind === 'directory') {
+        updateRightPanelWorkspace(ownerSessionId, {
+          fileTreeWorkspaceOverride: ownerWorkspaceRoot || null,
+          fileTreeInitialDirectory: {
+            workspaceRoot: ownerWorkspaceRoot,
+            path: relativeWorkspacePath(detail.path, ownerWorkspaceRoot),
+            nonce: Date.now()
+          },
+          filePreviewReturnContext: null,
+          filePreviewTarget: null,
+          width: Math.max(
+            rightPanelWorkspaces.find((candidate) => candidate.sessionId === ownerSessionId)?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
+            CODE_PANEL_PREFERRED
+          ),
+          mode: 'file'
+        })
+        return
+      }
+      updateRightPanelWorkspace(ownerSessionId, {
+        filePreviewTarget: {
+          path: detail.path,
+          workspaceRoot: ownerWorkspaceRoot
+        },
+        filePreviewReturnContext: detail.returnTo ?? null,
+        width: Math.max(
+          rightPanelWorkspaces.find((candidate) => candidate.sessionId === ownerSessionId)?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
+          CODE_PANEL_PREFERRED
+        ),
+        mode: 'file'
       })
     }
 
-    window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceDirectory)
-    return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceDirectory)
-  }, [activeWorkspaceReferenceRoot, openFileTreeDirectory, workspaceRoot])
+    window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
+    return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
+  }, [activeThreadId, rightPanelWorkspaces, threads, updateRightPanelWorkspace, workspaceRoot])
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
@@ -1726,11 +1734,41 @@ export function Workbench(): ReactElement {
 
   useEffect(() => {
     if (route !== 'chat') setComposerFileReferences([])
-  }, [route])
+  }, [route, setComposerFileReferences])
 
   useEffect(() => {
-    setComposerFileReferences([])
-  }, [activeSddDraft?.id, activeThreadId, activeWorkspaceReferenceRoot])
+    if (!activeThreadId) return
+    const contextKey = `${activeSddDraft?.id ?? '-'}|${activeWorkspaceReferenceRoot}`
+    const previousContextKey = composerReferenceContextBySessionRef.current.get(activeThreadId)
+    composerReferenceContextBySessionRef.current.set(activeThreadId, contextKey)
+    if (previousContextKey && previousContextKey !== contextKey) setComposerFileReferences([])
+  }, [activeSddDraft?.id, activeThreadId, activeWorkspaceReferenceRoot, setComposerFileReferences])
+
+  useEffect(() => subscribeSessionRightPanelDisposals((sessionId) => {
+    composerReferenceContextBySessionRef.current.delete(sessionId)
+    setComposerFileReferencesBySession((current) => {
+      if (!current[sessionId]) return current
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    })
+  }), [])
+
+  useEffect(() => subscribeSessionRightPanelRekeys((previousSessionId, nextSessionId) => {
+    const previousContext = composerReferenceContextBySessionRef.current.get(previousSessionId)
+    composerReferenceContextBySessionRef.current.delete(previousSessionId)
+    if (previousContext && !composerReferenceContextBySessionRef.current.has(nextSessionId)) {
+      composerReferenceContextBySessionRef.current.set(nextSessionId, previousContext)
+    }
+    setComposerFileReferencesBySession((current) => {
+      const previousReferences = current[previousSessionId]
+      if (!previousReferences) return current
+      const next = { ...current }
+      delete next[previousSessionId]
+      if (!next[nextSessionId]) next[nextSessionId] = previousReferences
+      return next
+    })
+  }), [])
 
   const handlePickAttachments = async (inputs: ComposerImageAttachmentInput[]): Promise<void> => {
     if (!inputs.length) return
@@ -1897,6 +1935,7 @@ export function Workbench(): ReactElement {
   }
 
   const createSddAssistantThreadForDraft = async (draft: SddDraft): Promise<string | null> => {
+    const initiatingSessionId = useChatStore.getState().activeThreadId
     const normalizedWorkspace = normalizeWorkspaceRoot(draft.workspaceRoot)
     if (!normalizedWorkspace) {
       setError(t('workspaceRequiredToCreateThread'))
@@ -1919,17 +1958,23 @@ export function Workbench(): ReactElement {
       }
       markSddAssistantThread(draft, normalizedThread.id)
       useChatStore.setState((state) => ({
-        activeThreadId: normalizedThread.id,
+        ...(state.activeThreadId === initiatingSessionId
+          ? { activeThreadId: normalizedThread.id }
+          : {}),
         threads: state.threads.some((item) => item.id === normalizedThread.id)
           ? state.threads
           : [normalizedThread, ...state.threads]
       }))
-      setRoute('chat')
-      await selectThread(normalizedThread.id)
+      if (useChatStore.getState().activeThreadId === normalizedThread.id) {
+        setRoute('chat')
+        await selectThread(normalizedThread.id)
+      }
       void useChatStore.getState().refreshThreads()
       return normalizedThread.id
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error))
+      if (useChatStore.getState().activeThreadId === initiatingSessionId) {
+        setError(error instanceof Error ? error.message : String(error))
+      }
       return null
     }
   }
@@ -1937,13 +1982,12 @@ export function Workbench(): ReactElement {
   const ensureSddAssistantThreadForDraft = async (draft: SddDraft): Promise<string | null> => {
     const registeredThreadId = sddAssistantThreadIdForDraft(draft)
     if (registeredThreadId) {
-      setRoute('chat')
-      if (useChatStore.getState().activeThreadId !== registeredThreadId) {
+      const initiatingSessionId = useChatStore.getState().activeThreadId
+      if (initiatingSessionId !== registeredThreadId) {
         await selectThread(registeredThreadId)
       }
-      if (useChatStore.getState().activeThreadId === registeredThreadId) {
-        return registeredThreadId
-      }
+      if (useChatStore.getState().activeThreadId === registeredThreadId) setRoute('chat')
+      return registeredThreadId
     }
     return createSddAssistantThreadForDraft(draft)
   }
@@ -1957,33 +2001,45 @@ export function Workbench(): ReactElement {
       openAssistant?: boolean
     } = {}
   ): Promise<boolean> => {
-    useSddDraftStore.getState().setActiveDraft(draft, content, {
-      lastSavedContent: options.lastSavedContent,
-      saveStatus: options.saveStatus
-    })
-    setInput('')
-    setMode('agent')
     setRoute('chat')
+    let ownerSessionId = useChatStore.getState().activeThreadId
     if (options.openAssistant ?? runtimeConnection === 'ready') {
-      setRightSidebarWidth((width) => Math.max(width, 420))
       const sddThreadId = await ensureSddAssistantThreadForDraft(draft)
       if (sddThreadId) {
-        setRightPanelMode('sdd-ai')
+        ownerSessionId = sddThreadId
+        useSddDraftStore.getState().setSessionDraft(ownerSessionId, draft, content, {
+          lastSavedContent: options.lastSavedContent,
+          saveStatus: options.saveStatus
+        })
+        const workspaceWidth = rightPanelWorkspaces.find(
+          (workspace) => workspace.sessionId === ownerSessionId
+        )?.width ?? 420
+        updateRightPanelWorkspace(ownerSessionId, {
+          mode: 'sdd-ai',
+          width: Math.max(workspaceWidth, 420)
+        })
       } else {
-        setRightPanelMode(null)
+        return false
       }
     } else {
+      if (!ownerSessionId) return false
+      useSddDraftStore.getState().setSessionDraft(ownerSessionId, draft, content, {
+        lastSavedContent: options.lastSavedContent,
+        saveStatus: options.saveStatus
+      })
       setRightPanelMode(null)
     }
     return true
   }
 
-  const dismissActiveSddDraft = (options: { closeAssistant?: boolean } = {}): void => {
-    const draft = useSddDraftStore.getState().activeDraft
-    if (draft) {
-      void saveActiveSddDraftToDisk()
-      useSddDraftStore.getState().clearActiveDraft()
-    }
+  const dismissSddDraft = (
+    ownerSessionId: string,
+    options: { closeAssistant?: boolean } = {}
+  ): void => {
+    const session = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
+    if (session) void saveSddDraftToDisk(ownerSessionId)
+    useSddDraftStore.getState().removeSession(ownerSessionId)
+    delete sddUpgradeTargetsRef.current[ownerSessionId]
     if (options.closeAssistant && rightPanelMode === 'sdd-ai') setRightPanelMode(null)
   }
 
@@ -1992,11 +2048,10 @@ export function Workbench(): ReactElement {
       setRightPanelMode(null)
       return
     }
-    const draft = useSddDraftStore.getState().activeDraft
-    if (!draft) return
+    if (!activeThreadId) return
+    const session = selectSddDraftSession(useSddDraftStore.getState(), activeThreadId)
+    if (!session) return
     setRightSidebarWidth((width) => Math.max(width, 420))
-    const threadId = await ensureSddAssistantThreadForDraft(draft)
-    if (!threadId) return
     setRightPanelMode('sdd-ai')
   }
 
@@ -2023,10 +2078,8 @@ export function Workbench(): ReactElement {
     if (!shouldTryRestore) return false
     const draft = sddDraftFromRegisteredThread(threadId)
     if (!draft) return false
-    const current = useSddDraftStore.getState().activeDraft
-    if (current && current.id !== draft.id) {
-      await saveActiveSddDraftToDisk()
-    }
+    const current = selectSddDraftSession(useSddDraftStore.getState(), threadId)
+    if (current) await saveSddDraftToDisk(threadId)
     const restored = await restoreSddDraft({
       draft,
       readWorkspaceFile: window.sciforge.readWorkspaceFile
@@ -2044,47 +2097,40 @@ export function Workbench(): ReactElement {
   }
 
   const sendSddAssistantPrompt = async (
-    value: string,
-    references: readonly ComposerFileReference[] = []
-  ): Promise<void> => {
-    const v = value.trim()
-    const draft = useSddDraftStore.getState().activeDraft
-    const fileReferences = [...references]
-    if ((!v && fileReferences.length === 0) || !draft) return
-    const threadId = await ensureSddAssistantThreadForDraft(draft)
-    if (!threadId) return
-    const snapshot = useSddDraftStore.getState()
-    void saveActiveSddDraftToDisk()
+    request: SddAssistantSendRequest
+  ): Promise<boolean> => {
+    const v = request.value.trim()
+    const fileReferences = [...request.fileReferences]
+    if (!v && fileReferences.length === 0) return false
+    const session = selectSddDraftSession(useSddDraftStore.getState(), request.ownerSessionId)
+    if (session?.draft.id !== request.draft.id) return false
+    void saveSddDraftToDisk(request.ownerSessionId)
     const messageText = v || t('composerFileOnlyPrompt')
     let prompt = composeSddAssistantPrompt({
       userPrompt: messageText,
-      draftMarkdown: snapshot.content,
-      draftRelativePath: draft.relativePath,
-      workspaceRoot: draft.workspaceRoot
+      draftMarkdown: request.draftContent,
+      draftRelativePath: request.draft.relativePath,
+      workspaceRoot: request.draft.workspaceRoot
     })
     if (fileReferences.length > 0) {
       try {
-        const fileContext = await readComposerFileContextEntries(fileReferences, draft.workspaceRoot)
+        const fileContext = await readComposerFileContextEntries(
+          fileReferences,
+          request.draft.workspaceRoot
+        )
         prompt = buildComposerFileContextPrompt(prompt, fileContext)
       } catch (error) {
-        setError(error instanceof Error ? error.message : String(error))
-        return
+        if (useChatStore.getState().activeThreadId === request.ownerSessionId) {
+          setError(error instanceof Error ? error.message : String(error))
+        }
+        return false
       }
     }
-    setInput('')
-    const model = assistantModel.trim()
-    const reasoningEffort = composerReasoningEffortRequestValue(assistantReasoningEffort)
-    const sent = await sendMessage(prompt, mode === 'plan' ? 'plan' : 'agent', {
+    return sendSideMessage(request.ownerSessionId, prompt, {
+      mode: request.mode,
       displayText: v || t('composerFileOnlyDisplay', { count: fileReferences.length }),
-      ...(model ? { model } : {}),
-      ...(reasoningEffort ? { reasoningEffort } : {}),
       ...(fileReferences.length ? { fileReferences } : {})
     })
-    if (sent) {
-      if (fileReferences.length > 0) clearComposerFileReferences()
-    } else {
-      setInput(v)
-    }
   }
 
   const uploadSddImagesAsAttachments = async (
@@ -2115,16 +2161,29 @@ export function Workbench(): ReactElement {
   }
 
   const handleSddNextStep = async (): Promise<void> => {
-    const snapshot = useSddDraftStore.getState()
-    const draft = snapshot.activeDraft
-    if (!draft) return
-    if (sddUpgradeInFlightRef.current || snapshot.operationStatus === 'upgrading') return
+    const ownerSessionId = activeThreadId
+    if (!ownerSessionId) return
+    const snapshot = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
+    if (!snapshot) return
+    const draft = snapshot.draft
+    if (
+      sddUpgradeTargetsRef.current[ownerSessionId] ||
+      snapshot.operationStatus === 'upgrading'
+    ) return
     if (!snapshot.content.trim()) {
-      useSddDraftStore.getState().setOperationStatus('error', t('sddEmptyDraftError'))
+      useSddDraftStore.getState().setSessionOperationStatus(
+        ownerSessionId,
+        'error',
+        t('sddEmptyDraftError')
+      )
       return
     }
     const chatSnapshot = useChatStore.getState()
-    if (chatSnapshot.busy || chatSnapshot.blocks.some(hasPendingRuntimeWork)) {
+    const assistantSession = chatSnapshot.sideConversations[ownerSessionId]
+    if (
+      assistantSession?.busy ||
+      (assistantSession?.blocks ?? chatSnapshot.blocks).some(hasPendingRuntimeWork)
+    ) {
       setError(t('composerQueuePlaceholder'))
       return
     }
@@ -2132,30 +2191,34 @@ export function Workbench(): ReactElement {
       setError(t('runtimeActionNeedsConnection'))
       return
     }
-    sddUpgradeInFlightRef.current = true
-    useSddDraftStore.getState().setOperationStatus('upgrading')
-    const saved = await saveActiveSddDraftToDisk()
+    useSddDraftStore.getState().setSessionOperationStatus(ownerSessionId, 'upgrading')
+    const saved = await saveSddDraftToDisk(ownerSessionId)
     if (!saved) {
-      sddUpgradeInFlightRef.current = false
-      useSddDraftStore.getState().setOperationStatus('error', useSddDraftStore.getState().error)
+      const latest = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
+      useSddDraftStore.getState().setSessionOperationStatus(
+        ownerSessionId,
+        'error',
+        latest?.error
+      )
       return
     }
 
-    const threadId = await ensureSddAssistantThreadForDraft(draft)
-    if (!threadId) {
-      sddUpgradeInFlightRef.current = false
-      useSddDraftStore.getState().setOperationStatus('idle')
+    const latestAfterSave = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
+    if (latestAfterSave?.draft.id !== draft.id) {
       return
     }
 
     const collected = await collectSddDraftImages({
-      markdown: useSddDraftStore.getState().content,
+      markdown: latestAfterSave.content,
       draftRelativePath: draft.relativePath,
       workspaceRoot: draft.workspaceRoot
     })
     if (collected.errors.length > 0) {
-      sddUpgradeInFlightRef.current = false
-      useSddDraftStore.getState().setOperationStatus('error', collected.errors.join('\n'))
+      useSddDraftStore.getState().setSessionOperationStatus(
+        ownerSessionId,
+        'error',
+        collected.errors.join('\n')
+      )
       return
     }
 
@@ -2172,13 +2235,17 @@ export function Workbench(): ReactElement {
 
     if (supportsImageAttachments) {
       try {
-        const uploaded = await uploadSddImagesAsAttachments(collected.images, threadId, draft.workspaceRoot)
+        const uploaded = await uploadSddImagesAsAttachments(
+          collected.images,
+          ownerSessionId,
+          draft.workspaceRoot
+        )
         imagesForPrompt = uploaded.images
         attachmentIds = uploaded.attachmentIds
         imageMode = 'attachments'
       } catch (error) {
-        sddUpgradeInFlightRef.current = false
-        useSddDraftStore.getState().setOperationStatus(
+        useSddDraftStore.getState().setSessionOperationStatus(
+          ownerSessionId,
           'error',
           error instanceof Error ? error.message : String(error)
         )
@@ -2186,11 +2253,15 @@ export function Workbench(): ReactElement {
       }
     }
 
-    const latestDraftContent = useSddDraftStore.getState().content
+    const latestSession = selectSddDraftSession(useSddDraftStore.getState(), ownerSessionId)
+    if (latestSession?.draft.id !== draft.id) return
+    const latestDraftContent = latestSession.content
     const planRelativePath = sddDraftPlanRelativePath(draft)
     const planId = buildGuiPlanId(draft.workspaceRoot, planRelativePath)
     const sourceRequest = sddDraftSourceRequest(latestDraftContent, draft.relativePath)
-    const assistantContext = sddAssistantContextFromBlocks(blocks)
+    const assistantContext = sddAssistantContextFromBlocks(
+      useChatStore.getState().sideConversations[ownerSessionId]?.blocks ?? blocks
+    )
     const prompt = buildSddDraftToPlanPrompt({
       draftMarkdown: latestDraftContent,
       draftRelativePath: draft.relativePath,
@@ -2200,12 +2271,11 @@ export function Workbench(): ReactElement {
       images: imagesForPrompt,
       imageMode
     })
-    sddUpgradeTargetRef.current = {
+    sddUpgradeTargetsRef.current[ownerSessionId] = {
       planId,
       relativePath: planRelativePath,
       workspaceRoot: draft.workspaceRoot
     }
-    setMode('plan')
     const sent = await sendPlanTurn(prompt, {
       displayText: t('sddGeneratePlanAction'),
       workspaceRoot: draft.workspaceRoot,
@@ -2219,9 +2289,8 @@ export function Workbench(): ReactElement {
       ...(attachmentIds.length ? { attachmentIds } : {})
     })
     if (!sent) {
-      sddUpgradeInFlightRef.current = false
-      sddUpgradeTargetRef.current = null
-      useSddDraftStore.getState().setOperationStatus('idle')
+      delete sddUpgradeTargetsRef.current[ownerSessionId]
+      useSddDraftStore.getState().setSessionOperationStatus(ownerSessionId, 'idle')
       return
     }
     const tracePath = sddDraftTraceRelativePath(draft.relativePath)
@@ -2344,10 +2413,6 @@ export function Workbench(): ReactElement {
       }
     }
 
-    if (activeSddDraft && rightPanelMode === 'sdd-ai') {
-      void sendSddAssistantPrompt(v, fileReferences)
-      return
-    }
     const planCommand = parseGuiPlanCommand(v)
     if (planCommand) {
       setInput('')
@@ -2492,21 +2557,24 @@ export function Workbench(): ReactElement {
     })
   }
 
-  const sendVisualReviewRequest = async (text: string): Promise<void> => {
+  const sendVisualReviewRequest = async (
+    text: string,
+    ownerSessionId: string
+  ): Promise<void> => {
     const trimmed = text.trim()
     if (!trimmed) return
     const displayText = '请根据图片批注生成候选修改版，完成后让我对比确认。'
-    setRoute('chat')
-    setMode('agent')
     const reasoningEffort = composerReasoningEffortRequestValue(composerReasoningEffort)
     const sent = await sendMessage(trimmed, 'agent', {
       displayText,
+      targetThreadId: ownerSessionId,
       ...(reasoningEffort ? { reasoningEffort } : {})
     })
-    if (!sent) setInput(displayText)
+    if (!sent && useChatStore.getState().activeThreadId === ownerSessionId) setInput(displayText)
   }
 
   const openImageArtifactInVisualReview = async (artifact: TimelineVisualReviewArtifact): Promise<void> => {
+    const ownerSessionId = artifact.threadId?.trim() || activeThreadId
     const root = artifact.workspaceRoot || activeThread?.workspace || workspaceRoot
     const sourcePath = [
       artifact.outputPath,
@@ -2515,13 +2583,12 @@ export function Workbench(): ReactElement {
       artifact.renderedPagePath,
       artifact.svgPath
     ].find((path) => path?.trim() && /\.(?:png|jpe?g|webp|svg)(?:[?#].*)?$/i.test(path))
-    if (!root?.trim() || !sourcePath?.trim()) {
+    if (!ownerSessionId || !root?.trim() || !sourcePath?.trim()) {
       setError(t('visualReviewArtifactUnavailable'))
       return
     }
 
-    const contextId = artifact.threadId || activeThreadId || 'default'
-    const documentId = artifact.visualDocumentId || visualDocumentIdForArtifact(contextId, sourcePath)
+    const documentId = artifact.visualDocumentId || visualDocumentIdForArtifact(ownerSessionId, sourcePath)
     try {
       const opened = await window.sciforge.openVisualDocument({ workspaceRoot: root, documentId })
       if (!opened.document.artifact) {
@@ -2546,11 +2613,15 @@ export function Workbench(): ReactElement {
           ...(artifact.caption ? { caption: artifact.caption } : {})
         })
       }
-      setVisualReviewRequest({ documentId, refreshKey: Date.now(), workspaceRoot: root })
-      setRightSidebarWidth((width) => Math.max(width, 760))
-      setRightPanelMode('visual-review')
+      updateRightPanelWorkspace(ownerSessionId, {
+        visualReviewRequest: { documentId, refreshKey: Date.now(), workspaceRoot: root },
+        mode: 'visual-review'
+      })
+      setRightSidebarWidthForSession(ownerSessionId, (width) => Math.max(width, 760))
     } catch (error) {
-      setError(error instanceof Error ? error.message : String(error))
+      if (useChatStore.getState().activeThreadId === ownerSessionId) {
+        setError(error instanceof Error ? error.message : String(error))
+      }
     }
   }
 
@@ -2561,7 +2632,6 @@ export function Workbench(): ReactElement {
         setConnectPhonePanelOpen(false)
         return
       }
-      if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
       setConnectPhonePanelOpen(false)
       setRoute('chat')
       getProvider().rememberThreadRuntime?.(id, runtimeId)
@@ -2570,14 +2640,12 @@ export function Workbench(): ReactElement {
   }
 
   const startNewChat = (): void => {
-    if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhonePanelOpen(false)
     setRoute('chat')
     void createThread({ forceNew: true })
   }
 
   const startNewChatInWorkspace = (workspaceRoot: string): void => {
-    if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     setConnectPhonePanelOpen(false)
     setRoute('chat')
     void createThread({ workspaceRoot, forceNew: true })
@@ -2599,7 +2667,6 @@ export function Workbench(): ReactElement {
   }
 
   const toggleConnectPhone = (): void => {
-    if (activeSddDraft) dismissActiveSddDraft({ closeAssistant: true })
     if (connectPhonePanelOpen) {
       setConnectPhonePanelOpen(false)
     } else {
@@ -2613,42 +2680,6 @@ export function Workbench(): ReactElement {
       : route === 'workflow'
         ? 'workflow'
         : 'chat'
-
-  const closeRightPanel = (): void => {
-    if (rightPanelMode === 'file') {
-      setRightPanelMode(null)
-      setFilePreviewTarget(null)
-      setFilePreviewReturnContext(null)
-      return
-    }
-    setRightPanelMode(null)
-    setFilePreviewTarget(null)
-    setFilePreviewReturnContext(null)
-  }
-
-  const closeFilePreview = (): void => {
-    if (filePreviewReturnContext?.kind === 'project-dag') {
-      setProjectDagReturnTarget(projectDagReturnSelection(filePreviewReturnContext))
-      setFilePreviewTarget(null)
-      setFilePreviewReturnContext(null)
-      setRightPanelMode('project-dag')
-      return
-    }
-    if (filePreviewReturnContext?.kind === 'evidence-dag') {
-      const returnThreadId = filePreviewReturnContext.threadId.trim()
-      const returnNodeId = filePreviewReturnContext.nodeId.trim()
-      setEvidenceDagReturnNode(
-        returnThreadId && returnNodeId && returnThreadId === activeThreadId
-          ? { threadId: returnThreadId, nodeId: returnNodeId }
-          : null
-      )
-      setFilePreviewTarget(null)
-      setFilePreviewReturnContext(null)
-      setRightPanelMode(returnThreadId === activeThreadId ? 'evidence' : null)
-      return
-    }
-    setFilePreviewTarget(null)
-  }
 
   const renderRuntimeBanner = (message: string, detail?: string | null): ReactElement => (
     <RuntimeBanner
@@ -2668,17 +2699,95 @@ export function Workbench(): ReactElement {
     />
   )
 
-  const renderRightPanel = (): ReactElement | null => {
-    if (!rightPanelVisible) return null
+  const createSessionRightPanelRenderer = (
+    snapshot: SessionRightPanelRenderSnapshot
+  ): SessionRightPanelRenderer => (
+    workspace,
+    active
+  ) => {
+    const ownerSessionId = workspace.sessionId
+    const workspaceMode = workspace.mode
+    const ownerFilePreviewTarget = workspace.filePreviewTarget
+    const ownerFilePreviewReturnContext = workspace.filePreviewReturnContext
+    const ownerVisualReviewRequest = workspace.visualReviewRequest
+    const ownerThread = threads.find((thread) => thread.id === ownerSessionId) ?? snapshot.thread
+    const ownerWorkspaceRoot = ownerThread?.workspace || snapshot.workspaceRoot
+    const ownerStatus = ownerThread?.status?.toLowerCase()
+    const ownerBusy = active
+      ? busy
+      : ownerStatus === 'running' ||
+        ownerStatus === 'streaming' ||
+        ownerStatus === 'busy' ||
+        ownerStatus === 'queued'
+    const ownerVisualDocumentId = ownerVisualReviewRequest?.documentId || `visual-${ownerSessionId}`
+    const closeOwnerRightPanel = (): void => {
+      updateRightPanelWorkspace(ownerSessionId, {
+        mode: null,
+        filePreviewTarget: null,
+        filePreviewReturnContext: null
+      })
+    }
+    const closeOwnerFilePreview = (): void => {
+      if (ownerFilePreviewReturnContext?.kind === 'project-dag') {
+        updateRightPanelWorkspace(ownerSessionId, {
+          projectDagReturnTarget: projectDagReturnSelection(ownerFilePreviewReturnContext),
+          filePreviewTarget: null,
+          filePreviewReturnContext: null,
+          mode: 'project-dag'
+        })
+        return
+      }
+      if (ownerFilePreviewReturnContext?.kind === 'evidence-dag') {
+        const returnThreadId = ownerFilePreviewReturnContext.threadId.trim()
+        const returnNodeId = ownerFilePreviewReturnContext.nodeId.trim()
+        updateRightPanelWorkspace(ownerSessionId, {
+          evidenceDagReturnNode: returnThreadId === ownerSessionId && returnNodeId
+            ? { threadId: returnThreadId, nodeId: returnNodeId }
+            : null,
+          filePreviewTarget: null,
+          filePreviewReturnContext: null,
+          mode: returnThreadId === ownerSessionId ? 'evidence' : null
+        })
+        return
+      }
+      updateRightPanelWorkspace(ownerSessionId, { filePreviewTarget: null })
+    }
+    const previewOwnerWorkspaceReference = (reference: AgentRuntimeWorkspaceReference): void => {
+      if (reference.kind === 'directory') return
+      updateRightPanelWorkspace(ownerSessionId, {
+        filePreviewReturnContext: null,
+        filePreviewTarget: {
+          path: reference.relativePath,
+          workspaceRoot: reference.workspaceRoot || ownerWorkspaceRoot
+        },
+        mode: 'file'
+      })
+    }
+    const openOwnerFileTreeDirectory = (target: { workspaceRoot: string; path: string }): void => {
+      const nextWorkspaceRoot = normalizeWorkspaceRoot(target.workspaceRoot || ownerWorkspaceRoot)
+      updateRightPanelWorkspace(ownerSessionId, {
+        fileTreeWorkspaceOverride: nextWorkspaceRoot || null,
+        fileTreeInitialDirectory: {
+          workspaceRoot: nextWorkspaceRoot,
+          path: relativeWorkspacePath(target.path, nextWorkspaceRoot),
+          nonce: Date.now()
+        },
+        filePreviewReturnContext: null,
+        filePreviewTarget: null,
+        mode: 'file'
+      })
+    }
+    const ownerFileTreeWorkspaceRoot = workspace.fileTreeWorkspaceOverride || ownerWorkspaceRoot
+    const ownerFileTreeWorkspaceGroups = workspace.fileTreeWorkspaceOverride
+      ? [{
+          id: `workspace:${workspace.fileTreeWorkspaceOverride}`,
+          label: t('rightPanelFiles'),
+          workspaceRoot: workspace.fileTreeWorkspaceOverride,
+          kind: 'worktree' as const
+        }]
+      : snapshot.workspaceReferenceGroups
     return (
-      <>
-        <div
-          role="separator"
-          aria-orientation="vertical"
-          className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
-          onPointerDown={beginRightResize}
-        />
-        <div className="flex h-full min-h-0 shrink-0 flex-col bg-ds-sidebar" style={{ width: rightSidebarWidth }}>
+        <div className="flex h-full min-h-0 flex-col bg-ds-sidebar">
           <div
             className="ds-no-drag flex h-9 shrink-0 items-center gap-1 border-b border-ds-border bg-ds-sidebar px-2"
             data-right-panel-history-navigation
@@ -2704,39 +2813,39 @@ export function Workbench(): ReactElement {
               <ArrowRight className="h-4 w-4" aria-hidden="true" />
             </button>
             <span className="ml-1 min-w-0 truncate text-[11.5px] font-medium text-ds-faint">
-              {rightPanelMode ? rightPanelVisibleContextTitle(rightPanelMode) : ''}
+              {workspaceMode ? rightPanelVisibleContextTitle(workspaceMode) : ''}
             </span>
           </div>
           <div className="min-h-0 flex-1">
             <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
-            {rightPanelMode === 'file' ? (
+            {workspaceMode === 'file' ? (
               <div className="relative h-full max-h-full w-full overflow-hidden">
                 <ChatFileTreePanel
-                  workspaceRoot={fileTreeWorkspaceRoot}
-                  workspaceGroups={fileTreeWorkspaceGroups}
-                  selectedPath={filePreviewTarget?.path}
-                  initialDirectory={fileTreeInitialDirectory}
-                  selectedReferences={composerFileReferences}
-                  className={`h-full max-h-full w-full ${filePreviewTarget ? 'hidden' : ''}`}
-                  onPreviewFile={previewWorkspaceReference}
+                  workspaceRoot={ownerFileTreeWorkspaceRoot}
+                  workspaceGroups={ownerFileTreeWorkspaceGroups}
+                  selectedPath={ownerFilePreviewTarget?.path}
+                  initialDirectory={workspace.fileTreeInitialDirectory}
+                  selectedReferences={snapshot.composerFileReferences}
+                  className={`h-full max-h-full w-full ${ownerFilePreviewTarget ? 'hidden' : ''}`}
+                  onPreviewFile={previewOwnerWorkspaceReference}
                   onAddReference={addComposerFileReference}
-                  onCollapse={closeRightPanel}
+                  onCollapse={closeOwnerRightPanel}
                 />
-                {filePreviewTarget ? (
+                {ownerFilePreviewTarget ? (
                   <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
                     <div className="flex h-full min-h-0 flex-col">
-                      {filePreviewReturnContext?.kind === 'project-dag' ||
-                      filePreviewReturnContext?.kind === 'evidence-dag' ? (
+                      {ownerFilePreviewReturnContext?.kind === 'project-dag' ||
+                      ownerFilePreviewReturnContext?.kind === 'evidence-dag' ? (
                         <div className="shrink-0 border-b border-ds-border bg-ds-sidebar px-2 py-1.5">
                           <button
                             type="button"
                             className="inline-flex max-w-full items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] font-medium text-ds-muted hover:bg-ds-hover hover:text-ds-ink"
-                            onClick={closeFilePreview}
+                            onClick={closeOwnerFilePreview}
                           >
                             <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate">{t('workspacePreviewReturnToReview', {
-                              label: filePreviewReturnContext.label || (
-                                filePreviewReturnContext.kind === 'evidence-dag'
+                              label: ownerFilePreviewReturnContext.label || (
+                                ownerFilePreviewReturnContext.kind === 'evidence-dag'
                                   ? t('rightPanelEvidenceDag')
                                   : t('projectDagPanelTitle')
                               )
@@ -2746,8 +2855,10 @@ export function Workbench(): ReactElement {
                       ) : null}
                       <div className="min-h-0 flex-1">
                         <WorkspaceFilePreviewPanelBridge
-                          target={filePreviewTarget}
-                          workspaceRoot={filePreviewTarget.workspaceRoot || fileTreeWorkspaceRoot}
+                          target={ownerFilePreviewTarget}
+                          workspaceRoot={ownerFilePreviewTarget.workspaceRoot || ownerFileTreeWorkspaceRoot}
+                          sessionId={ownerSessionId}
+                          active={active}
                           className="h-full max-h-full w-full"
                           annotationQuestionBridge={annotationQuestionBridge}
                           onAddSelectionToChat={(context) => {
@@ -2755,154 +2866,156 @@ export function Workbench(): ReactElement {
                               ? `${current.trim()}\n\n${context}`
                               : context)
                           }}
-                          onClose={closeFilePreview}
-                          onOpenDirectory={openFileTreeDirectory}
+                          onClose={closeOwnerFilePreview}
+                          onOpenDirectory={openOwnerFileTreeDirectory}
                         />
                       </div>
                     </div>
                   </Suspense>
                 ) : null}
               </div>
-            ) : rightPanelMode === 'sdd-ai' && activeSddDraft ? (
-              <SddAssistantPanel
-                draft={activeSddDraft}
-                input={input}
-                setInput={setInput}
-                mode={mode}
-                setMode={setMode}
-                busy={busy}
-                runtimeConnection={runtimeConnection}
-                activeThreadId={activeThreadId}
-                blocks={blocks}
-                liveReasoning={liveReasoning}
-                liveAssistant={liveAssistant}
-                composerModel={assistantModel}
-                composerPickList={assistantPickList}
-                composerModelGroups={composerModelGroups}
-                composerReasoningEffort={assistantReasoningEffort}
-                setComposerModel={setAssistantModel}
-                setComposerReasoningEffort={setAssistantReasoningEffort}
-                queuedMessages={activeQueuedMessages}
-                removeQueuedMessage={removeQueuedMessage}
-                updateQueuedMessage={updateQueuedMessage}
-                steerQueuedMessage={steerQueuedMessage}
-                retryQueuedMessage={retryQueuedMessage}
-                fileReferenceEnabled={Boolean(normalizeWorkspaceRoot(activeSddDraft.workspaceRoot))}
-                fileReferences={composerFileReferences}
-                onAddFileReference={addComposerFileReference}
-                onPreviewFileReference={previewComposerFileReference}
-                onRemoveFileReference={removeComposerFileReference}
-                onSend={handleSend}
-                onInterrupt={(options) => void interrupt(options)}
+            ) : workspaceMode === 'sdd-ai' ? (
+              <SessionSddAssistantPanel
+                ownerSessionId={ownerSessionId}
+                title={t('sddAssistant')}
+                runtimeId={ownerThread?.runtimeId}
                 runtimeCapabilities={runtimeCapabilities}
-                onRetryConnection={() => void probeRuntime('user')}
-                onOpenSettings={() => openSettings('agents')}
-                onNewConversation={() => {
-                  setInput('')
-                  void createSddAssistantThreadForDraft(activeSddDraft)
+                onSend={sendSddAssistantPrompt}
+                onPreviewFileReference={(_sessionId, reference) => {
+                  previewOwnerWorkspaceReference({
+                    workspaceRoot: reference.workspaceRoot || ownerWorkspaceRoot,
+                    relativePath: reference.relativePath,
+                    name: reference.name,
+                    kind: reference.kind ?? 'file',
+                    ...(reference.mimeType ? { mimeType: reference.mimeType } : {})
+                  })
                 }}
-                onCollapse={closeRightPanel}
+                onNewConversation={(sessionId, draft) => {
+                  const current = selectSddDraftSession(useSddDraftStore.getState(), sessionId)
+                  if (!current || current.draft.id !== draft.id) return
+                  void createSddAssistantThreadForDraft(draft).then((newSessionId) => {
+                    if (!newSessionId) return
+                    useSddDraftStore.getState().setSessionDraft(
+                      newSessionId,
+                      draft,
+                      current.content,
+                      {
+                        lastSavedContent: current.lastSavedContent,
+                        saveStatus: current.saveStatus
+                      }
+                    )
+                    updateRightPanelWorkspace(newSessionId, { mode: 'sdd-ai', width: 420 })
+                  })
+                }}
+                onCollapse={closeOwnerRightPanel}
                 className="h-full max-h-full w-full"
               />
-            ) : rightPanelMode === 'changes' ? (
+            ) : workspaceMode === 'changes' ? (
               <ChangeInspector
-                blocks={blocks}
+                blocks={snapshot.blocks}
+                workspaceRoot={ownerWorkspaceRoot}
                 className="h-full max-h-full w-full flex-col"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
               />
-            ) : rightPanelMode === 'child-agents' ? (
-              <ChildAgentsPanel
-                activeThreadId={focusedThreadId}
-                activeThread={focusedPanelThread}
-                children={visibleThreadChildren}
-                loading={threadChildrenState.loading}
-                error={threadChildrenState.error}
-                focusChildId={childPanelFocusRequest.childId}
-                focusChildRequestKey={childPanelFocusRequest.key}
+            ) : workspaceMode === 'child-agents' ? (
+              <SessionChildAgentsPanel
+                sessionId={ownerSessionId}
+                thread={ownerThread ?? null}
+                busy={ownerBusy}
+                focusChildId={workspace.childPanelFocusRequest.childId}
+                focusChildRequestKey={workspace.childPanelFocusRequest.key}
                 onOpenChildInFocus={(child) => { void openChildInFocus(child) }}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
               />
-            ) : rightPanelMode === 'todo' ? (
+            ) : workspaceMode === 'todo' ? (
               <TodoPanel
+                threadId={ownerSessionId}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
                 onOpenPlan={openGuiPlanPanel}
               />
-            ) : rightPanelMode === 'paper' && paperRadarEnabled ? (
+            ) : workspaceMode === 'paper' && paperRadarEnabled ? (
               <PaperRadarPanel
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
               />
-            ) : rightPanelMode === 'evidence' ? (
+            ) : workspaceMode === 'evidence' ? (
               <EvidenceDagPanel
-                activeThreadId={activeThreadId}
-                runtimeId={activeThread?.runtimeId}
+                ownerSessionId={ownerSessionId}
+                runtimeId={ownerThread?.runtimeId}
                 initialNodeId={
-                  evidenceDagReturnNode?.threadId === activeThreadId
-                    ? evidenceDagReturnNode.nodeId
+                  workspace.evidenceDagReturnNode?.threadId === ownerSessionId
+                    ? workspace.evidenceDagReturnNode.nodeId
                     : undefined
                 }
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
-                onInitialNodeConsumed={() => setEvidenceDagReturnNode(null)}
+                active={active}
+                onCollapse={closeOwnerRightPanel}
+                onInitialNodeConsumed={() => updateRightPanelWorkspace(ownerSessionId, { evidenceDagReturnNode: null })}
               />
-            ) : rightPanelMode === 'project-dag' ? (
+            ) : workspaceMode === 'project-dag' ? (
               <ProjectDagPanel
-                workspaceRoot={activeThread?.workspace || workspaceRoot}
-                initialClaimId={projectDagReturnTarget?.claimId}
-                initialNodeId={projectDagReturnTarget?.nodeId}
+                workspaceRoot={ownerWorkspaceRoot}
+                ownerSessionId={ownerSessionId}
+                initialClaimId={workspace.projectDagReturnTarget?.claimId}
+                initialNodeId={workspace.projectDagReturnTarget?.nodeId}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
-                onInitialClaimConsumed={() => setProjectDagReturnTarget((current) =>
-                  current?.nodeId ? { nodeId: current.nodeId } : null
-                )}
-                onInitialNodeConsumed={() => setProjectDagReturnTarget((current) =>
-                  current?.claimId ? { claimId: current.claimId } : null
-                )}
+                active={active}
+                onCollapse={closeOwnerRightPanel}
+                onInitialClaimConsumed={() => updateRightPanelWorkspace(ownerSessionId, {
+                  projectDagReturnTarget: workspace.projectDagReturnTarget?.nodeId
+                    ? { nodeId: workspace.projectDagReturnTarget.nodeId }
+                    : null
+                })}
+                onInitialNodeConsumed={() => updateRightPanelWorkspace(ownerSessionId, {
+                  projectDagReturnTarget: workspace.projectDagReturnTarget?.claimId
+                    ? { claimId: workspace.projectDagReturnTarget.claimId }
+                    : null
+                })}
               />
-            ) : rightPanelMode === 'browser' ? (
+            ) : workspaceMode === 'browser' ? (
               <DevBrowserPanel
-                blocks={devPreviewBlocks}
-                preferredUrl={latestDevPreviewUrl}
+                blocks={snapshot.devPreviewBlocks}
+                preferredUrl={snapshot.latestDevPreviewUrl}
                 className="h-full max-h-full w-full flex-col"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
               />
-            ) : rightPanelMode === 'checkpoints' ? (
+            ) : workspaceMode === 'checkpoints' ? (
               <GitCheckpointPanel
-                threadId={activeThreadId}
-                runtimeId={activeThread?.runtimeId}
-                workspaceRoot={activeThread?.workspace || workspaceRoot}
+                threadId={ownerSessionId}
+                runtimeId={ownerThread?.runtimeId}
+                workspaceRoot={ownerWorkspaceRoot}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
                 onRestored={() => useChatStore.getState().refreshThreads()}
               />
-            ) : rightPanelMode === 'visual-review' ? (
+            ) : workspaceMode === 'visual-review' ? (
               <VisualReviewPanel
-                workspaceRoot={visualReviewRequest?.workspaceRoot || activeThread?.workspace || workspaceRoot}
-                documentId={visualReviewRequest?.documentId || activeVisualDocumentId}
+                workspaceRoot={ownerVisualReviewRequest?.workspaceRoot || ownerWorkspaceRoot}
+                documentId={ownerVisualDocumentId}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
                 onSendReviewRequest={(text) => {
-                  void sendVisualReviewRequest(text)
+                  void sendVisualReviewRequest(text, ownerSessionId)
                 }}
-                refreshKey={visualReviewRequest?.refreshKey}
+                refreshKey={ownerVisualReviewRequest?.refreshKey}
                 onAccepted={() => {
                   void sendMessage(
                     '我已在人类审改页面接受候选图片。请重新编译所有引用该图片的文档，并检查最终输出中的裁切、重叠、标签可读性和引用是否正确。',
                     'agent',
-                    { displayText: '已接受图片，请重新编译并检查最终文档。' }
+                    { displayText: '已接受图片，请重新编译并检查最终文档。', targetThreadId: ownerSessionId }
                   )
                 }}
               />
-            ) : rightPanelMode === 'plan' ? (
+            ) : workspaceMode === 'plan' ? (
               <PlanPanel
-                workspaceRoot={workspaceRoot}
-                activeThreadId={activeThreadId}
+                workspaceRoot={ownerWorkspaceRoot}
+                ownerSessionId={ownerSessionId}
                 runtimeReady={runtimeConnection === 'ready'}
-                busy={busy}
+                busy={ownerBusy}
                 className="h-full max-h-full w-full"
-                onCollapse={closeRightPanel}
+                onCollapse={closeOwnerRightPanel}
                 onBuildPlan={() => void buildGuiPlan()}
                 onVerifyPlan={() => void verifyGuiPlan()}
                 onReplanChanged={(changedIds) => void replanChangedRequirements(changedIds)}
@@ -2910,6 +3023,76 @@ export function Workbench(): ReactElement {
             ) : null}
             </Suspense>
           </div>
+        </div>
+    )
+  }
+
+  const sessionRightPanelRenderers = new Map<string, SessionRightPanelRenderer>()
+  for (const workspace of rightPanelWorkspaces) {
+    const active = workspace.sessionId === activeThreadId
+    const previousSnapshot = sessionRightPanelSnapshotsRef.current.get(workspace.instanceKey)
+    const liveThread = threads.find((thread) => thread.id === workspace.sessionId) ?? null
+    const ownerBlocks = active
+      ? blocks
+      : threadBlocksById[workspace.sessionId] ?? previousSnapshot?.blocks ?? []
+    const ownerDevPreviewBlocks = active ? devPreviewBlocks : ownerBlocks
+    const snapshot: SessionRightPanelRenderSnapshot = {
+      thread: liveThread ?? (active ? activeThread : previousSnapshot?.thread ?? null),
+      blocks: ownerBlocks,
+      devPreviewBlocks: ownerDevPreviewBlocks,
+      latestDevPreviewUrl: active
+        ? latestDevPreviewUrl
+        : extractLatestTurnDevPreviewUrls(ownerDevPreviewBlocks)[0] ?? null,
+      workspaceRoot: active
+        ? workspaceRoot
+        : liveThread?.workspace || previousSnapshot?.workspaceRoot || '',
+      workspaceReferenceGroups: active
+        ? workspaceReferenceGroups
+        : previousSnapshot?.workspaceReferenceGroups ?? [],
+      composerFileReferences: active
+        ? composerFileReferences
+        : previousSnapshot?.composerFileReferences ?? []
+    }
+    sessionRightPanelSnapshotsRef.current.set(workspace.instanceKey, snapshot)
+    sessionRightPanelRenderers.set(
+      workspace.instanceKey,
+      createSessionRightPanelRenderer(snapshot)
+    )
+  }
+  const residentInstanceKeys = new Set(rightPanelWorkspaces.map((workspace) => workspace.instanceKey))
+  for (const instanceKey of sessionRightPanelSnapshotsRef.current.keys()) {
+    if (!residentInstanceKeys.has(instanceKey)) {
+      sessionRightPanelSnapshotsRef.current.delete(instanceKey)
+    }
+  }
+
+  const renderRightPanel = (): ReactElement | null => {
+    const hasResidentPanel = rightPanelWorkspaces.some((workspace) => workspace.mode !== null)
+    if (!hasResidentPanel) return null
+    return (
+      <>
+        {rightPanelVisible ? (
+          <div
+            role="separator"
+            aria-orientation="vertical"
+            className="ds-workbench-divider ds-no-drag relative z-20 shrink-0 cursor-col-resize"
+            onPointerDown={beginRightResize}
+          />
+        ) : null}
+        <div
+          className={rightPanelVisible
+            ? 'h-full min-h-0 shrink-0 bg-ds-sidebar'
+            : 'pointer-events-none fixed h-0 w-0 overflow-hidden invisible'}
+          style={rightPanelVisible ? { width: rightSidebarWidth } : undefined}
+          aria-hidden={!rightPanelVisible}
+        >
+          <SessionRightPanelStack
+            activeSessionId={rightPanelVisible ? activeThreadId : null}
+            workspaces={rightPanelWorkspaces}
+            renderWorkspace={(workspace, active) =>
+              sessionRightPanelRenderers.get(workspace.instanceKey)?.(workspace, active) ?? null
+            }
+          />
         </div>
       </>
     )
@@ -3011,12 +3194,15 @@ export function Workbench(): ReactElement {
           <div className={`flex min-h-0 min-w-0 flex-1 ${activeSddDraft ? '' : stageInsetClass}`}>
           {activeSddDraft ? (
             <SddDraftEditorView
+              ownerSessionId={activeSddSession!.ownerSessionId}
               leftSidebarCollapsed={leftSidebarCollapsed}
               assistantOpen={rightPanelMode === 'sdd-ai'}
               onToggleLeftSidebar={toggleLeftSidebar}
               onToggleAssistant={() => void toggleSddAssistantPanel()}
               onNext={() => void handleSddNextStep()}
-              onClose={() => dismissActiveSddDraft({ closeAssistant: true })}
+              onClose={() => {
+                if (activeThreadId) dismissSddDraft(activeThreadId, { closeAssistant: true })
+              }}
               nextDisabled={busy || runtimeConnection !== 'ready' || sddDraftOperationStatus === 'upgrading'}
             />
           ) : (

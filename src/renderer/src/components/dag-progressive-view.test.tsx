@@ -6,6 +6,7 @@ import {
   DAG_PANEL_PRIORITY_SIGNAL,
   DagProgressiveLegend,
   buildDagPanelPrioritySignal,
+  dagPanelIsForeground,
   dagProgressiveView,
   postDagPanelPrioritySignal
 } from './dag-progressive-view'
@@ -111,5 +112,14 @@ describe('DAG progressive view', () => {
       dag: 'evidence',
       visible: false
     }))).toBe(false)
+  })
+
+  it('requires both an active panel and a visible document for foreground priority', () => {
+    expect(dagPanelIsForeground(true, 'visible')).toBe(true)
+    expect(dagPanelIsForeground(false, 'visible')).toBe(false)
+    expect(dagPanelIsForeground(true, 'hidden')).toBe(false)
+    expect(dagPanelIsForeground(false, 'hidden')).toBe(false)
+    expect(dagPanelIsForeground(true)).toBe(true)
+    expect(dagPanelIsForeground(false)).toBe(false)
   })
 })

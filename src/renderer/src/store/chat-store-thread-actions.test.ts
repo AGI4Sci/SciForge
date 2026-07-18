@@ -4,7 +4,7 @@ import type {
   AgentRuntimeWorkspaceReference
 } from '@shared/agent-runtime-contract'
 import { defaultRemoteChannelSettings } from '@shared/app-settings'
-import type { NormalizedThread, ThreadEventSink } from '../agent/types'
+import type { ChatBlock, NormalizedThread, ThreadEventSink } from '../agent/types'
 import type { ChatState, ChatStoreGet, ChatStoreSet, GuiPlanMessageContext } from './chat-store-types'
 
 const registryMock = vi.hoisted(() => ({
@@ -13,6 +13,9 @@ const registryMock = vi.hoisted(() => ({
 const runtimeClientMock = vi.hoisted(() => ({
   getSettings: vi.fn(),
   setSettings: vi.fn()
+}))
+const rightPanelLifecycleMock = vi.hoisted(() => ({
+  rekeySessionRightPanelWorkspace: vi.fn()
 }))
 
 vi.mock('../agent/registry', () => ({
@@ -24,11 +27,14 @@ vi.mock('../agent/runtime-client', () => ({
     setSettings: runtimeClientMock.setSettings
   }
 }))
+vi.mock('../lib/session-right-panel-lifecycle', () => ({
+  rekeySessionRightPanelWorkspace: rightPanelLifecycleMock.rekeySessionRightPanelWorkspace
+}))
 
 import { createThreadActions, publishRemoteChannelActiveThreadContext } from './chat-store-thread-actions'
 import { clearPendingRemoteChannelMirrors, takePendingRemoteChannelMirror } from './chat-store-runtime'
 import { composerReferenceFromWorkspaceReference } from '../lib/workspace-reference-composer'
-import { PLAN_REGISTRY_STORAGE_KEY, useGuiPlanStore } from '../plan/plan-store'
+import { guiPlanSession, useGuiPlanStore } from '../plan/plan-store'
 import { normalizePersistedQueuedMessages } from './chat-session-persistence'
 
 function thread(id: string): NormalizedThread {
@@ -46,6 +52,7 @@ function thread(id: string): NormalizedThread {
 function buildHarness(): {
   actions: ReturnType<typeof createThreadActions>
   state: ChatState
+  sseAbortRef: { current: AbortController | null }
 } {
   let state: ChatState
   state = {
@@ -64,6 +71,7 @@ function buildHarness(): {
     liveAssistant: '',
     liveReasoning: '',
     queuedMessages: [],
+    rekeySessionSideConversations: vi.fn(),
     recoverActiveTurn: vi.fn(async () => true),
     refreshThreads: vi.fn(async () => undefined),
     route: 'chat',
@@ -80,14 +88,15 @@ function buildHarness(): {
     Object.assign(state, update)
   }
   const get: ChatStoreGet = () => state
+  const sseAbortRef: { current: AbortController | null } = { current: null }
   const actions = createThreadActions({
     set,
     get,
-    sseAbortRef: { current: null }
+    sseAbortRef
   })
   state.sendMessage = actions.sendMessage
   state.drainQueuedMessages = actions.drainQueuedMessages
-  return { actions, state }
+  return { actions, state, sseAbortRef }
 }
 
 function deferred<T>(): {
@@ -110,6 +119,7 @@ describe('chat-store-thread-actions queued messages', () => {
     registryMock.getProvider.mockReturnValue({})
     runtimeClientMock.getSettings.mockReset()
     runtimeClientMock.setSettings.mockReset()
+    rightPanelLifecycleMock.rekeySessionRightPanelWorkspace.mockReset()
     runtimeClientMock.getSettings.mockResolvedValue({
       codePromptPrefix: '',
       workspaceRoot: '/workspace/sciforge',
@@ -121,7 +131,7 @@ describe('chat-store-thread-actions queued messages', () => {
       remoteChannel: defaultRemoteChannelSettings()
     }))
     clearPendingRemoteChannelMirrors()
-    useGuiPlanStore.getState().clearActivePlan()
+    useGuiPlanStore.getState().clearAllSessions()
     vi.stubGlobal('window', {
       sciforge: {
         logError: vi.fn(async () => undefined)
@@ -968,19 +978,8 @@ describe('chat-store-thread-actions queued messages', () => {
     )
   })
 
-  it('does not activate GUI plan registry from thread metadata during thread selection', async () => {
+  it('does not activate owner plan state from thread metadata during thread selection', async () => {
     const { actions, state } = buildHarness()
-    const storage = {
-      getItem: vi.fn(() => null),
-      setItem: vi.fn(),
-      removeItem: vi.fn()
-    }
-    vi.stubGlobal('window', {
-      sciforge: {
-        logError: vi.fn(async () => undefined)
-      },
-      localStorage: storage
-    })
     const provider = {
       getThreadDetail: vi.fn(async () => ({
         blocks: [],
@@ -1004,11 +1003,7 @@ describe('chat-store-thread-actions queued messages', () => {
     await actions.selectThread('thr_existing')
 
     expect(provider.getThreadDetail).toHaveBeenCalledWith('thr_existing')
-    expect(useGuiPlanStore.getState().activePlan).toBeNull()
-    expect(storage.setItem).not.toHaveBeenCalledWith(
-      PLAN_REGISTRY_STORAGE_KEY,
-      expect.any(String)
-    )
+    expect(guiPlanSession(useGuiPlanStore.getState(), 'thr_existing').activePlan).toBeNull()
   })
 
   it('does not let stale turn recovery restore a thread after the user switches away', async () => {
@@ -1583,6 +1578,7 @@ describe('chat-store-thread-actions queued messages', () => {
       expect.any(AbortSignal)
     )
     expect(provider.rememberThreadRuntime).toHaveBeenLastCalledWith('thr_existing', 'codex')
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).not.toHaveBeenCalled()
   })
 
   it('keeps the GUI conversation id stable when the runtime returns a different thread id', async () => {
@@ -1635,16 +1631,132 @@ describe('chat-store-thread-actions queued messages', () => {
         deliveredThreadId: 'runtime-returned-other'
       })
     )
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).not.toHaveBeenCalled()
   })
 
-  it('adopts a returned thread id only when the provider marks an explicit handoff', async () => {
+  it.each(['handoff', 'promote'] as const)(
+    'adopts and rekeys a returned thread id when the provider marks an explicit %s',
+    async (threadIdChange) => {
+      const { actions, state } = buildHarness()
+      const deliveredThreadId = `${threadIdChange}-target`
+      const provider = {
+        rememberThreadRuntime: vi.fn(),
+        sendUserMessage: vi.fn(async () => ({
+          threadId: deliveredThreadId,
+          turnId: `turn-${threadIdChange}`,
+          userMessageItemId: `runtime-user-${threadIdChange}`,
+          threadIdChange
+        })),
+        subscribeThreadEvents: vi.fn(async () => undefined),
+        renameThread: vi.fn(async () => undefined)
+      }
+      registryMock.getProvider.mockReturnValue(provider)
+      state.busy = false
+      state.activeAgentRuntime = 'codex'
+      state.lastSeq = 12
+      state.threads = [{
+        ...thread('thr_existing'),
+        runtimeId: 'sciforge'
+      }]
+
+      await expect(actions.sendMessage('continue in codex')).resolves.toBe(true)
+
+      expect(state.activeThreadId).toBe(deliveredThreadId)
+      expect(state.threads.some((item) => item.id === 'thr_existing')).toBe(false)
+      expect(state.threads.find((item) => item.id === deliveredThreadId)?.runtimeId).toBe('codex')
+      expect(provider.subscribeThreadEvents).toHaveBeenCalledWith(
+        deliveredThreadId,
+        0,
+        expect.any(Object),
+        expect.any(AbortSignal)
+      )
+      expect(provider.rememberThreadRuntime).toHaveBeenLastCalledWith(deliveredThreadId, 'codex')
+      expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).toHaveBeenCalledOnce()
+      expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).toHaveBeenCalledWith(
+        'thr_existing',
+        deliveredThreadId
+      )
+      expect(state.rekeySessionSideConversations).toHaveBeenCalledWith(
+        'thr_existing',
+        deliveredThreadId
+      )
+    }
+  )
+
+  it('ignores a late handoff after its source Session was removed', async () => {
+    const { actions, state } = buildHarness()
+    const sent = deferred<{
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+      threadIdChange: 'handoff'
+    }>()
+    const provider = {
+      rememberThreadRuntime: vi.fn(),
+      sendUserMessage: vi.fn(() => sent.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.activeAgentRuntime = 'codex'
+    state.threads = [{ ...thread('thr_existing'), runtimeId: 'sciforge' }]
+
+    const sendPromise = actions.sendMessage('handoff after deletion')
+    await Promise.resolve()
+    state.activeThreadId = null
+    state.threads = []
+    sent.resolve({
+      threadId: 'late-target',
+      turnId: 'turn-late',
+      userMessageItemId: 'user-late',
+      threadIdChange: 'handoff'
+    })
+
+    await expect(sendPromise).resolves.toBe(true)
+    expect(state.activeThreadId).toBeNull()
+    expect(state.threads).toEqual([])
+    expect(state.rekeySessionSideConversations).not.toHaveBeenCalled()
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not hand off when the source Session was already absent at send capture', async () => {
     const { actions, state } = buildHarness()
     const provider = {
       rememberThreadRuntime: vi.fn(),
       sendUserMessage: vi.fn(async () => ({
-        threadId: 'handoff-target',
-        turnId: 'turn-handoff',
-        userMessageItemId: 'runtime-user-handoff',
+        threadId: 'orphan-target',
+        turnId: 'turn-orphan',
+        userMessageItemId: 'user-orphan',
+        threadIdChange: 'handoff' as const
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.threads = []
+
+    await expect(actions.sendMessage('orphan handoff')).resolves.toBe(true)
+
+    expect(state.activeThreadId).toBe('thr_existing')
+    expect(state.rekeySessionSideConversations).not.toHaveBeenCalled()
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('keeps an existing handoff target canonical instead of projecting source blocks onto it', async () => {
+    const { actions, state } = buildHarness()
+    const targetBlocks: ChatBlock[] = [{
+      kind: 'assistant',
+      id: 'target-history',
+      text: 'canonical target history'
+    }]
+    const provider = {
+      rememberThreadRuntime: vi.fn(),
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_target',
+        turnId: 'turn-target',
+        userMessageItemId: 'user-target',
         threadIdChange: 'handoff' as const
       })),
       subscribeThreadEvents: vi.fn(async () => undefined),
@@ -1653,24 +1765,26 @@ describe('chat-store-thread-actions queued messages', () => {
     registryMock.getProvider.mockReturnValue(provider)
     state.busy = false
     state.activeAgentRuntime = 'codex'
-    state.lastSeq = 12
-    state.threads = [{
-      ...thread('thr_existing'),
-      runtimeId: 'sciforge'
-    }]
+    state.blocks = [{ kind: 'assistant', id: 'source-history', text: 'source history' }]
+    state.threadBlocksById = { thr_target: targetBlocks }
+    state.threads = [
+      { ...thread('thr_existing'), runtimeId: 'sciforge' },
+      { ...thread('thr_target'), runtimeId: 'codex' }
+    ]
 
-    await expect(actions.sendMessage('continue in codex')).resolves.toBe(true)
+    await expect(actions.sendMessage('continue in target')).resolves.toBe(true)
 
-    expect(state.activeThreadId).toBe('handoff-target')
-    expect(state.threads.some((item) => item.id === 'thr_existing')).toBe(false)
-    expect(state.threads.find((item) => item.id === 'handoff-target')?.runtimeId).toBe('codex')
-    expect(provider.subscribeThreadEvents).toHaveBeenCalledWith(
-      'handoff-target',
-      0,
-      expect.any(Object),
-      expect.any(AbortSignal)
+    expect(state.activeThreadId).toBe('thr_target')
+    expect(state.blocks).toEqual(targetBlocks)
+    expect(state.threads.map((item) => item.id)).toEqual(['thr_target'])
+    expect(state.rekeySessionSideConversations).toHaveBeenCalledWith(
+      'thr_existing',
+      'thr_target'
     )
-    expect(provider.rememberThreadRuntime).toHaveBeenLastCalledWith('handoff-target', 'codex')
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).toHaveBeenCalledWith(
+      'thr_existing',
+      'thr_target'
+    )
   })
 
   it('does not apply a slow send result to a different active session after the user switches threads', async () => {
@@ -1718,6 +1832,152 @@ describe('chat-store-thread-actions queued messages', () => {
     expect(state.blocks).toEqual([])
     expect(state.watchTurnCompletion).toMatchObject({ thr_existing: true })
     expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
+  })
+
+  it('delivers an explicitly targeted background send without touching the active turn or SSE', async () => {
+    const { actions, state, sseAbortRef } = buildHarness()
+    const activeAbort = new AbortController()
+    sseAbortRef.current = activeAbort
+    const provider = {
+      sendUserMessage: vi.fn(async () => ({
+        threadId: 'thr_background',
+        turnId: 'turn-background',
+        userMessageItemId: 'runtime-user-background'
+      })),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thr_existing'
+    state.threads = [
+      { ...thread('thr_existing'), runtimeId: 'codex' },
+      { ...thread('thr_background'), runtimeId: 'codex' }
+    ]
+    state.blocks = [{ kind: 'assistant', id: 'active-block', text: 'active session output' }]
+    state.busy = true
+    state.currentTurnId = 'active-turn'
+    state.currentTurnUserId = 'active-user'
+    state.error = null
+
+    await expect(actions.sendMessage('background instruction', 'agent', {
+      targetThreadId: 'thr_background'
+    })).resolves.toBe(true)
+
+    expect(provider.sendUserMessage).toHaveBeenCalledWith(
+      'thr_background',
+      'background instruction',
+      expect.objectContaining({ clientDirectiveId: expect.stringMatching(/^u-/) })
+    )
+    expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
+    expect(activeAbort.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(activeAbort)
+    expect(state.activeThreadId).toBe('thr_existing')
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'active-block', text: 'active session output' }
+    ])
+    expect(state.busy).toBe(true)
+    expect(state.currentTurnId).toBe('active-turn')
+    expect(state.currentTurnUserId).toBe('active-user')
+    expect(state.watchTurnCompletion).toMatchObject({ thr_background: true })
+    expect(state.queuedMessages).toEqual([])
+  })
+
+  it('keeps a background delivery detached even if its owner becomes active before acceptance', async () => {
+    const { actions, state, sseAbortRef } = buildHarness()
+    const activeAbort = new AbortController()
+    sseAbortRef.current = activeAbort
+    const sent = deferred<{
+      threadId: string
+      turnId: string
+      userMessageItemId: string
+    }>()
+    const provider = {
+      sendUserMessage: vi.fn(() => sent.promise),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.busy = false
+    state.error = null
+    state.threads = [
+      { ...thread('thr_existing'), runtimeId: 'codex' },
+      { ...thread('thr_background'), runtimeId: 'codex' }
+    ]
+
+    const sendPromise = actions.sendMessage('background instruction', 'agent', {
+      targetThreadId: 'thr_background'
+    })
+    await vi.waitFor(() => expect(provider.sendUserMessage).toHaveBeenCalledTimes(1))
+
+    state.activeThreadId = 'thr_background'
+    state.blocks = [{ kind: 'assistant', id: 'selected-block', text: 'selected snapshot' }]
+    state.busy = false
+    state.currentTurnId = null
+    state.currentTurnUserId = null
+    sent.resolve({
+      threadId: 'thr_background',
+      turnId: 'turn-background',
+      userMessageItemId: 'runtime-user-background'
+    })
+
+    await expect(sendPromise).resolves.toBe(true)
+
+    expect(activeAbort.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(activeAbort)
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'selected-block', text: 'selected snapshot' }
+    ])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(state.currentTurnUserId).toBeNull()
+    expect(provider.subscribeThreadEvents).not.toHaveBeenCalled()
+    expect(state.watchTurnCompletion).toMatchObject({ thr_background: true })
+  })
+
+  it('keeps a targeted background failure retryable without replacing the active error or timeline', async () => {
+    const { actions, state, sseAbortRef } = buildHarness()
+    const activeAbort = new AbortController()
+    sseAbortRef.current = activeAbort
+    const provider = {
+      sendUserMessage: vi.fn(async () => {
+        throw new Error('background send failed')
+      }),
+      subscribeThreadEvents: vi.fn(async () => undefined),
+      renameThread: vi.fn(async () => undefined)
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    state.activeThreadId = 'thr_existing'
+    state.threads = [
+      { ...thread('thr_existing'), runtimeId: 'codex' },
+      { ...thread('thr_background'), runtimeId: 'codex' }
+    ]
+    state.blocks = [{ kind: 'assistant', id: 'active-block', text: 'active session output' }]
+    state.busy = false
+    state.currentTurnId = null
+    state.currentTurnUserId = null
+    state.error = 'active session error'
+
+    await expect(actions.sendMessage('background instruction', 'agent', {
+      targetThreadId: 'thr_background'
+    })).resolves.toBe(false)
+
+    expect(activeAbort.signal.aborted).toBe(false)
+    expect(sseAbortRef.current).toBe(activeAbort)
+    expect(state.blocks).toEqual([
+      { kind: 'assistant', id: 'active-block', text: 'active session output' }
+    ])
+    expect(state.busy).toBe(false)
+    expect(state.currentTurnId).toBeNull()
+    expect(state.currentTurnUserId).toBeNull()
+    expect(state.error).toBe('active session error')
+    expect(state.queuedMessages).toEqual([
+      expect.objectContaining({
+        threadId: 'thr_background',
+        targetThreadId: 'thr_background',
+        text: 'background instruction',
+        sendFailure: expect.objectContaining({ message: 'background send failed' })
+      })
+    ])
   })
 
   it('does not apply a slow send failure to a different active session after the user switches threads', async () => {

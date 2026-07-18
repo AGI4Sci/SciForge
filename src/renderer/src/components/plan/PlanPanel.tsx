@@ -1,4 +1,4 @@
-import { useEffect, type ReactElement } from 'react'
+import { useEffect, useState, type ReactElement } from 'react'
 import {
   ClipboardList,
   ExternalLink,
@@ -15,20 +15,15 @@ import { useShallow } from 'zustand/react/shallow'
 import { WriteMarkdownEditor } from '../write/WriteMarkdownEditor'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { useChatStore } from '../../store/chat-store'
-import {
-  guiPlanMatchesContext,
-  readRememberedGuiPlan,
-  useGuiPlanStore,
-  type GuiPlanArtifact,
-  type GuiPlanOperationStatus
-} from '../../plan/plan-store'
+import { guiPlanSession, useGuiPlanStore } from '../../plan/plan-store'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { sddDraftRelativePathForPlanPath } from '@shared/sdd'
 import { useSddTrace } from '../../sdd/use-sdd-trace'
+import { trimWriteRecentEdits, type WriteRecentEdit } from '../../write/recent-edits'
 
 type Props = {
   workspaceRoot: string
-  activeThreadId: string | null
+  ownerSessionId: string
   runtimeReady: boolean
   busy: boolean
   className?: string
@@ -52,70 +47,9 @@ function statusLabelKey(saveStatus: string, operationStatus: string): string {
   return 'planStatusSaved'
 }
 
-type PlanPanelReadWorkspaceFile = (input: {
-  workspaceRoot: string
-  path: string
-}) => Promise<
-  | { ok: true; path: string; content: string }
-  | { ok: false; message: string }
->
-
-export function runPlanPanelRememberedPlanRestore(input: {
-  workspaceRoot: string
-  activeThreadId: string | null
-  activePlan: GuiPlanArtifact | null
-  readWorkspaceFile: PlanPanelReadWorkspaceFile
-  setActivePlan: (plan: GuiPlanArtifact, content: string) => void
-  setOperationStatus: (status: GuiPlanOperationStatus, error?: string | null) => void
-  clearActivePlan: () => void
-}): (() => void) | undefined {
-  const normalizedWorkspace = normalizeWorkspaceRoot(input.workspaceRoot)
-  if (!normalizedWorkspace) {
-    if (input.activePlan) input.clearActivePlan()
-    return undefined
-  }
-  if (input.activePlan) {
-    if (guiPlanMatchesContext(input.activePlan, normalizedWorkspace, input.activeThreadId)) {
-      return undefined
-    }
-    input.clearActivePlan()
-    return undefined
-  }
-
-  const remembered = readRememberedGuiPlan(normalizedWorkspace, input.activeThreadId)
-  if (!remembered) return undefined
-
-  let cancelled = false
-  input.setOperationStatus('idle')
-  void input.readWorkspaceFile({
-    workspaceRoot: normalizedWorkspace,
-    path: remembered.relativePath
-  })
-    .then((result) => {
-      if (cancelled) return
-      if (!result.ok) {
-        input.clearActivePlan()
-        input.setOperationStatus('error', result.message)
-        return
-      }
-      input.setActivePlan({ ...remembered, absolutePath: result.path }, result.content)
-    })
-    .catch((loadError) => {
-      if (cancelled) return
-      input.clearActivePlan()
-      input.setOperationStatus(
-        'error',
-        loadError instanceof Error ? loadError.message : String(loadError)
-      )
-    })
-  return () => {
-    cancelled = true
-  }
-}
-
 export function PlanPanel({
   workspaceRoot,
-  activeThreadId,
+  ownerSessionId,
   runtimeReady,
   busy,
   className = '',
@@ -125,81 +59,51 @@ export function PlanPanel({
   onReplanChanged
 }: Props): ReactElement {
   const { t } = useTranslation('common')
+  const planSession = useGuiPlanStore((state) => guiPlanSession(state, ownerSessionId))
   const {
     activePlan,
     content,
     saveStatus,
     operationStatus,
-    error,
-    setActivePlan,
+    error
+  } = planSession
+  const {
     setContent,
     setSaveStatus,
     markSaved,
-    setOperationStatus,
-    clearActivePlan
+    setOperationStatus
   } = useGuiPlanStore(
     useShallow((s) => ({
-      activePlan: s.activePlan,
-      content: s.content,
-      saveStatus: s.saveStatus,
-      operationStatus: s.operationStatus,
-      error: s.error,
-      setActivePlan: s.setActivePlan,
       setContent: s.setContent,
       setSaveStatus: s.setSaveStatus,
       markSaved: s.markSaved,
-      setOperationStatus: s.setOperationStatus,
-      clearActivePlan: s.clearActivePlan
+      setOperationStatus: s.setOperationStatus
     }))
   )
   const {
     inlineCompletion,
     inlineCompletionApiReady,
-    recentEdits,
-    loadWriteSettings,
-    setSelection,
-    recordRecentEdits
+    loadWriteSettings
   } = useWriteWorkspaceStore(
     useShallow((s) => ({
       inlineCompletion: s.inlineCompletion,
       inlineCompletionApiReady: s.inlineCompletionApiReady,
-      recentEdits: s.recentEdits,
-      loadWriteSettings: s.loadWriteSettings,
-      setSelection: s.setSelection,
-      recordRecentEdits: s.recordRecentEdits
+      loadWriteSettings: s.loadWriteSettings
     }))
   )
+  const [recentEdits, setRecentEdits] = useState<WriteRecentEdit[]>([])
 
   useEffect(() => {
     void loadWriteSettings()
   }, [loadWriteSettings])
 
   useEffect(() => {
-    return runPlanPanelRememberedPlanRestore({
-      workspaceRoot,
-      activeThreadId,
-      activePlan,
-      readWorkspaceFile: window.sciforge.readWorkspaceFile,
-      setActivePlan,
-      setOperationStatus,
-      clearActivePlan
-    })
-  }, [
-    activePlan,
-    activeThreadId,
-    clearActivePlan,
-    setActivePlan,
-    setOperationStatus,
-    workspaceRoot
-  ])
-
-  useEffect(() => {
     if (!activePlan || saveStatus !== 'dirty') return
     const timer = window.setTimeout(() => {
-      const snapshot = useGuiPlanStore.getState()
+      const snapshot = guiPlanSession(useGuiPlanStore.getState(), ownerSessionId)
       if (snapshot.activePlan?.id !== activePlan.id || snapshot.saveStatus !== 'dirty') return
       const contentToSave = snapshot.content
-      setSaveStatus('saving')
+      setSaveStatus(ownerSessionId, 'saving')
       void window.sciforge
         .writeWorkspaceFile({
           workspaceRoot: activePlan.workspaceRoot,
@@ -207,27 +111,35 @@ export function PlanPanel({
           content: contentToSave
         })
         .then((result) => {
-          const latest = useGuiPlanStore.getState()
+          const latest = guiPlanSession(useGuiPlanStore.getState(), ownerSessionId)
           if (latest.activePlan?.id !== activePlan.id) return
           if (!result.ok) {
-            setSaveStatus('error', result.message)
+            setSaveStatus(ownerSessionId, 'error', result.message)
             return
           }
           if (latest.content === contentToSave) {
-            markSaved(contentToSave)
-            if (activeThreadId && runtimeReady) {
-              void useChatStore.getState().syncPlanTodosFromMarkdown(activePlan, contentToSave)
+            markSaved(ownerSessionId, activePlan.id, contentToSave)
+            if (runtimeReady) {
+              void useChatStore
+                .getState()
+                .syncPlanTodosFromMarkdown(ownerSessionId, activePlan, contentToSave)
             }
           } else {
-            setSaveStatus('dirty')
+            setSaveStatus(ownerSessionId, 'dirty')
           }
         })
         .catch((saveError) => {
-          setSaveStatus('error', saveError instanceof Error ? saveError.message : String(saveError))
+          const latest = guiPlanSession(useGuiPlanStore.getState(), ownerSessionId)
+          if (latest.activePlan?.id !== activePlan.id) return
+          setSaveStatus(
+            ownerSessionId,
+            'error',
+            saveError instanceof Error ? saveError.message : String(saveError)
+          )
         })
     }, 650)
     return () => window.clearTimeout(timer)
-  }, [activePlan, activeThreadId, content, markSaved, runtimeReady, saveStatus, setSaveStatus])
+  }, [activePlan, content, markSaved, ownerSessionId, runtimeReady, saveStatus, setSaveStatus])
 
   const readOnly =
     operationStatus === 'drafting' ||
@@ -240,6 +152,7 @@ export function PlanPanel({
     ? sddDraftRelativePathForPlanPath(activePlan.relativePath)
     : null
   const trace = useSddTrace({
+    ownerSessionId,
     workspaceRoot: activePlan?.workspaceRoot ?? workspaceRoot,
     draftRelativePath: sddDraftRelativePath
   })
@@ -380,19 +293,22 @@ export function PlanPanel({
                 completionLongDebounceMs={inlineCompletion.longDebounceMs}
                 completionLongMinAcceptScore={inlineCompletion.longMinAcceptScore}
                 recentEdits={recentEdits}
-                onChange={setContent}
-                onDocumentEdit={recordRecentEdits}
-                onSelectionChange={setSelection}
+                onChange={(nextContent) => setContent(ownerSessionId, nextContent)}
+                onDocumentEdit={(edits) => {
+                  setRecentEdits((current) => trimWriteRecentEdits([...current, ...edits]))
+                }}
+                onSelectionChange={() => undefined}
                 onSaveShortcut={() => {
-                  const snapshot = useGuiPlanStore.getState()
+                  const snapshot = guiPlanSession(useGuiPlanStore.getState(), ownerSessionId)
                   if (snapshot.activePlan?.id === activePlan!.id && snapshot.saveStatus === 'dirty') {
-                    setSaveStatus('dirty')
+                    setSaveStatus(ownerSessionId, 'dirty')
                   }
                 }}
                 onImagePasteSaved={() => {
-                  setOperationStatus('idle')
+                  setOperationStatus(ownerSessionId, 'idle')
                 }}
-                onImagePasteError={(message) => setOperationStatus('error', message)}
+                onImagePasteError={(message) =>
+                  setOperationStatus(ownerSessionId, 'error', message)}
               />
             </div>
           </div>

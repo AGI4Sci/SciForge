@@ -12,6 +12,7 @@ import type {
 import {
   handleEvidenceDagPreviewMessage
 } from './evidence-dag-preview-bridge'
+import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
 import { DagProgressiveLegend, useDagPanelPrioritySignal } from '../dag-progressive-view'
 import {
   DagRuntimeDisabledState,
@@ -21,8 +22,9 @@ import {
 } from '../dag-runtime-toggle'
 
 type Props = {
-  activeThreadId: string | null
+  ownerSessionId: string
   runtimeId?: AgentRuntimeId
+  active?: boolean
   initialNodeId?: string
   className?: string
   onCollapse: () => void
@@ -89,8 +91,9 @@ function statusTone(status: DagPanelStatus): string {
 }
 
 export function EvidenceDagPanel({
-  activeThreadId,
+  ownerSessionId,
   runtimeId,
+  active = true,
   initialNodeId,
   className = '',
   onCollapse,
@@ -110,8 +113,8 @@ export function EvidenceDagPanel({
   const settingsDagRuntime = useDagRuntimeControl()
   const dagRuntime = dagRuntimeControl ?? settingsDagRuntime
   const iframeRef = useRef<HTMLIFrameElement | null>(null)
-  const requestedNodeThreadRef = useRef<string | null>(activeThreadId)
-  const threadId = useMemo(() => activeThreadId?.trim() || null, [activeThreadId])
+  const requestedNodeThreadRef = useRef<string | null>(ownerSessionId)
+  const threadId = useMemo(() => ownerSessionId.trim(), [ownerSessionId])
   const viewCacheKey = `${runtimeId ?? ''}:${threadId ?? ''}`
   const frameUrl = useMemo(
     () => view ? evidenceDagViewUrlWithNode(
@@ -130,6 +133,7 @@ export function EvidenceDagPanel({
     iframeRef,
     dag: 'evidence',
     status,
+    active,
     onPriorityChange: updatePanelPriority
   })
 
@@ -212,6 +216,7 @@ export function EvidenceDagPanel({
         frameUrl,
         runtimeId,
         currentThreadId: view.threadId || threadId,
+        openPreview: (target) => previewWorkspaceFile({ ...target, sessionId: threadId }),
         expectedSnapshotDigest: view.status.latestSnapshotDigest,
         resolveEvidenceDagEvidencePreview: typeof resolver === 'function'
           ? (input) => resolver(input)

@@ -1,28 +1,42 @@
-import type { PointerEvent as ReactPointerEvent } from 'react'
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type { PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import type { AppRoute } from '../store/chat-store-types'
 import {
+  subscribeSessionRightPanelDisposals,
+  subscribeSessionRightPanelRekeys
+} from '../lib/session-right-panel-lifecycle'
+import {
   readBrowserStorageItem,
-  removeBrowserStorageItem,
   writeBrowserStorageItem
 } from '../lib/browser-storage'
 import {
   normalizeProjectDagGraphNodeId,
-  WORKSPACE_FILE_PREVIEW_EVENT,
-  type WorkspaceFilePreviewDetail,
   type WorkspaceFilePreviewReturnContext
 } from '../lib/workspace-file-preview'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
+import {
+  SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
+  createSessionRightPanelWorkspace,
+  discardSessionRightPanelResource,
+  ensureSessionRightPanelWorkspace,
+  moveSessionRightPanelWorkspaceOwner,
+  navigateSessionRightPanelHistory,
+  sessionRightPanelWorkspaceList,
+  toggleSessionRightPanelMode,
+  updateSessionRightPanelWorkspace,
+  type SessionRightPanelWorkspacePatch,
+  type SessionRightPanelWorkspaceMap
+} from './session-right-panel-workspaces'
+import {
+  forgetRightPanelContextStateForSession,
+  moveRightPanelContextStateOwner
+} from './right-panel-context-state'
 
 const LEFT_PANEL_WIDTH_KEY = 'sciforge.layout.leftSidebarWidth'
 const LEFT_PANEL_COLLAPSED_KEY = 'sciforge.layout.leftSidebarCollapsed'
-const RIGHT_PANEL_WIDTH_KEY = 'sciforge.layout.rightInspectorWidth'
-const RIGHT_PANEL_MODE_KEY = 'sciforge.layout.rightPanelMode'
-export const RIGHT_PANEL_SESSION_CONTEXT_KEY = 'sciforge.layout.rightPanelContext.v1'
 const TERMINAL_HEIGHT_KEY = 'sciforge.layout.terminalHeight'
 const LEFT_PANEL_DEFAULT = 304
-const RIGHT_PANEL_DEFAULT = 360
 export const CODE_PANEL_PREFERRED = 560
 const LEFT_PANEL_MIN = 280
 const LEFT_PANEL_MAX = 480
@@ -34,180 +48,6 @@ const PANEL_RESIZE_HANDLE_WIDTH = 7
 const TERMINAL_HEIGHT_DEFAULT = 360
 const TERMINAL_HEIGHT_MIN = 220
 const TERMINAL_HEIGHT_MAX = 760
-const RIGHT_PANEL_HISTORY_LIMIT = 50
-const RIGHT_PANEL_CONTEXT_MAX_CHARS = 4_000
-
-export type RightPanelSessionContext = {
-  version: 1
-  mode: Exclude<RightPanelMode, null>
-  workspaceRoot?: string
-  threadId?: string
-  filePreviewTarget?: Pick<WorkspaceFileTarget, 'path' | 'workspaceRoot'>
-  filePreviewReturnContext?: WorkspaceFilePreviewReturnContext
-  visualDocumentId?: string
-}
-
-const THREAD_BOUND_PANEL_MODES = new Set<Exclude<RightPanelMode, null>>([
-  'child-agents',
-  'evidence'
-])
-
-function safeContextText(value: unknown, max = 1_024): string | undefined {
-  if (typeof value !== 'string') return undefined
-  const normalized = value.trim()
-  return normalized ? normalized.slice(0, max) : undefined
-}
-
-function isRestorableRightPanelMode(value: unknown): value is Exclude<RightPanelMode, null> {
-  return value === 'changes' || value === 'browser' || value === 'checkpoints' ||
-    value === 'evidence' || value === 'project-dag' || value === 'file' ||
-    value === 'paper' || value === 'plan' || value === 'visual-review' ||
-    value === 'child-agents'
-}
-
-function safeReturnContext(value: unknown): WorkspaceFilePreviewReturnContext | undefined {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
-  const input = value as Record<string, unknown>
-  if (input.kind === 'evidence-dag') {
-    const nodeId = safeContextText(input.nodeId, 512)
-    const threadId = safeContextText(input.threadId)
-    return nodeId && threadId ? { kind: 'evidence-dag', nodeId, threadId } : undefined
-  }
-  if (input.kind === 'project-dag') {
-    const claimId = safeContextText(input.claimId, 512)
-    const nodeId = normalizeProjectDagGraphNodeId(input.nodeId)
-    return claimId || nodeId
-      ? { kind: 'project-dag', ...(claimId ? { claimId } : {}), ...(nodeId ? { nodeId } : {}) }
-      : undefined
-  }
-  return undefined
-}
-
-export function normalizeRightPanelSessionContext(value: unknown): RightPanelSessionContext | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const input = value as Record<string, unknown>
-  if (input.version !== 1 || !isRestorableRightPanelMode(input.mode)) return null
-  const workspaceRoot = safeContextText(input.workspaceRoot)
-  const threadId = THREAD_BOUND_PANEL_MODES.has(input.mode)
-    ? safeContextText(input.threadId)
-    : undefined
-  const visualDocumentId = safeContextText(input.visualDocumentId)
-  const targetInput = input.filePreviewTarget && typeof input.filePreviewTarget === 'object' &&
-    !Array.isArray(input.filePreviewTarget)
-    ? input.filePreviewTarget as Record<string, unknown>
-    : null
-  const targetPath = safeContextText(targetInput?.path, 2_048)
-  const targetWorkspaceRoot = safeContextText(targetInput?.workspaceRoot)
-  const filePreviewTarget = targetPath
-    ? { path: targetPath, ...(targetWorkspaceRoot ? { workspaceRoot: targetWorkspaceRoot } : {}) }
-    : undefined
-  const filePreviewReturnContext = safeReturnContext(input.filePreviewReturnContext)
-  if (input.mode === 'file' && !filePreviewTarget) return null
-  if (input.mode === 'visual-review' && !visualDocumentId) return null
-  if (THREAD_BOUND_PANEL_MODES.has(input.mode) && !threadId) return null
-  return {
-    version: 1,
-    mode: input.mode,
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(threadId ? { threadId } : {}),
-    ...(filePreviewTarget ? { filePreviewTarget } : {}),
-    ...(filePreviewReturnContext ? { filePreviewReturnContext } : {}),
-    ...(visualDocumentId ? { visualDocumentId } : {})
-  }
-}
-
-export function readStoredRightPanelContext(): RightPanelSessionContext | null {
-  try {
-    const raw = readBrowserStorageItem(RIGHT_PANEL_SESSION_CONTEXT_KEY)
-    if (!raw || raw.length > RIGHT_PANEL_CONTEXT_MAX_CHARS) return null
-    return normalizeRightPanelSessionContext(JSON.parse(raw))
-  } catch {
-    return null
-  }
-}
-
-export function persistRightPanelContext(context: RightPanelSessionContext | null): void {
-  const normalized = normalizeRightPanelSessionContext(context)
-  if (!normalized) {
-    removeBrowserStorageItem(RIGHT_PANEL_SESSION_CONTEXT_KEY)
-    return
-  }
-  writeBrowserStorageItem(RIGHT_PANEL_SESSION_CONTEXT_KEY, JSON.stringify(normalized))
-}
-
-export function validateRestoredRightPanelContext(
-  context: RightPanelSessionContext | null,
-  current: { activeThreadId: string | null; workspaceRoot: string }
-): RightPanelSessionContext | null {
-  if (!context) return null
-  const activeThreadId = current.activeThreadId?.trim() || ''
-  const workspaceRoot = current.workspaceRoot.trim()
-  if (context.threadId && context.threadId !== activeThreadId) return null
-  if (context.workspaceRoot && workspaceRoot && context.workspaceRoot !== workspaceRoot) return null
-  if (
-    context.filePreviewTarget?.workspaceRoot && workspaceRoot &&
-    context.filePreviewTarget.workspaceRoot !== workspaceRoot
-  ) return null
-  if (context.filePreviewReturnContext?.kind === 'evidence-dag' &&
-    context.filePreviewReturnContext.threadId !== activeThreadId) return null
-  return context
-}
-
-export type RightPanelHistoryEntry = {
-  mode: Exclude<RightPanelMode, null>
-  filePreviewTarget: WorkspaceFileTarget | null
-  filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
-  threadId?: string
-  workspaceRoot?: string
-  visualDocumentId?: string
-}
-
-export type RightPanelHistory = {
-  entries: RightPanelHistoryEntry[]
-  index: number
-}
-
-export function rightPanelHistoryEntryKey(entry: RightPanelHistoryEntry): string {
-  return JSON.stringify(entry)
-}
-
-export function pushRightPanelHistoryEntry(
-  history: RightPanelHistory,
-  entry: RightPanelHistoryEntry
-): RightPanelHistory {
-  if (rightPanelHistoryEntryKey(history.entries[history.index]) === rightPanelHistoryEntryKey(entry)) {
-    return history
-  }
-  const entries = [...history.entries.slice(0, history.index + 1), entry]
-  const boundedEntries = entries.slice(-RIGHT_PANEL_HISTORY_LIMIT)
-  return { entries: boundedEntries, index: boundedEntries.length - 1 }
-}
-
-export function moveRightPanelHistory(
-  history: RightPanelHistory,
-  offset: -1 | 1
-): RightPanelHistory {
-  if (history.entries.length === 0) return history
-  const index = Math.min(history.entries.length - 1, Math.max(0, history.index + offset))
-  return index === history.index ? history : { ...history, index }
-}
-
-export function pruneRightPanelHistory(
-  history: RightPanelHistory,
-  current: { activeThreadId: string | null; workspaceRoot: string }
-): RightPanelHistory {
-  const activeThreadId = current.activeThreadId?.trim() || ''
-  const workspaceRoot = current.workspaceRoot.trim()
-  const entries = history.entries.filter((entry) => {
-    if (entry.threadId && entry.threadId !== activeThreadId) return false
-    if (entry.workspaceRoot && workspaceRoot && entry.workspaceRoot !== workspaceRoot) return false
-    if (entry.mode === 'file' && !entry.filePreviewTarget?.path.trim()) return false
-    if (entry.mode === 'visual-review' && !entry.visualDocumentId?.trim()) return false
-    return true
-  })
-  if (entries.length === history.entries.length) return history
-  return { entries, index: Math.min(entries.length - 1, Math.max(-1, history.index)) }
-}
 
 function clampWidth(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value))
@@ -234,39 +74,6 @@ function readStoredBoolean(key: string, fallback: boolean): boolean {
 
 function persistBoolean(key: string, value: boolean): void {
   writeBrowserStorageItem(key, value ? '1' : '0')
-}
-
-export function readStoredRightPanelMode(): RightPanelMode {
-  const raw = readBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
-  return raw === 'changes' || raw === 'browser' || raw === 'checkpoints' || raw === 'evidence' || raw === 'project-dag' || raw === 'file' || raw === 'paper' || raw === 'plan' || raw === 'visual-review'
-    ? raw
-    : null
-}
-
-export function persistRightPanelMode(mode: RightPanelMode): void {
-  if (mode === 'changes' || mode === 'browser' || mode === 'checkpoints' || mode === 'evidence' || mode === 'project-dag' || mode === 'file' || mode === 'paper' || mode === 'plan' || mode === 'visual-review') {
-    writeBrowserStorageItem(RIGHT_PANEL_MODE_KEY, mode)
-  } else {
-    removeBrowserStorageItem(RIGHT_PANEL_MODE_KEY)
-  }
-}
-
-export function initialRightPanelMode(
-  context: RightPanelSessionContext | null,
-  legacyMode: RightPanelMode
-): RightPanelMode {
-  if (context) return context.mode
-  // Legacy mode-only state cannot prove which thread/file/document it belongs
-  // to. Restore only context-free panels and fail open for targeted surfaces.
-  return legacyMode === 'file' || legacyMode === 'evidence' ||
-    legacyMode === 'visual-review' || legacyMode === 'child-agents'
-    ? null
-    : legacyMode
-}
-
-export function shouldCloseRightPanelOnThreadChange(mode: RightPanelMode): boolean {
-  void mode
-  return false
 }
 
 export function projectDagReturnSelection(
@@ -363,49 +170,148 @@ export function useWorkbenchLayout({
   activeThreadId,
   latestAutoOpenDevPreviewUrl,
   latestDevPreviewUrl,
-  route,
-  workspaceRoot,
-  contextValidationReady = false,
-  visualDocumentId = null
+  route
 }: {
   activeThreadId: string | null
   latestAutoOpenDevPreviewUrl: string | null
   latestDevPreviewUrl: string | null
   route: AppRoute
-  workspaceRoot: string
-  contextValidationReady?: boolean
-  visualDocumentId?: string | null
 }) {
-  const restoredContextRef = useRef<RightPanelSessionContext | null>(readStoredRightPanelContext())
-  const [rightPanelMode, setRightPanelMode] = useState<RightPanelMode>(
-    () => initialRightPanelMode(restoredContextRef.current, readStoredRightPanelMode())
-  )
-  const [filePreviewTarget, setFilePreviewTarget] = useState<WorkspaceFileTarget | null>(
-    () => restoredContextRef.current?.filePreviewTarget ?? null
-  )
-  const [filePreviewReturnContext, setFilePreviewReturnContext] = useState<WorkspaceFilePreviewReturnContext | null>(
-    () => restoredContextRef.current?.filePreviewReturnContext ?? null
-  )
+  const activeSessionId = activeThreadId?.trim() || null
+  const [rightPanelWorkspaceMap, setRightPanelWorkspaceMap] =
+    useState<SessionRightPanelWorkspaceMap>({})
+  const rightPanelWorkspaceMapRef = useRef(rightPanelWorkspaceMap)
+  rightPanelWorkspaceMapRef.current = rightPanelWorkspaceMap
   const [leftSidebarWidth, setLeftSidebarWidth] = useState(() =>
     readStoredWidth(LEFT_PANEL_WIDTH_KEY, LEFT_PANEL_DEFAULT)
   )
   const [leftSidebarCollapsed, setLeftSidebarCollapsed] = useState(() =>
     readStoredBoolean(LEFT_PANEL_COLLAPSED_KEY, false)
   )
-  const [rightSidebarWidth, setRightSidebarWidth] = useState(() =>
-    readStoredWidth(RIGHT_PANEL_WIDTH_KEY, RIGHT_PANEL_DEFAULT)
-  )
   const [terminalOpen, setTerminalOpen] = useState(false)
   const [terminalHeight, setTerminalHeight] = useState(() =>
     readStoredWidth(TERMINAL_HEIGHT_KEY, TERMINAL_HEIGHT_DEFAULT)
   )
   const shellRef = useRef<HTMLDivElement | null>(null)
-  const previewThreadId = useRef<string | null>(activeThreadId)
-  const autoOpenedPreviewUrlRef = useRef<string | null>(null)
-  const rightPanelHistoryRef = useRef<RightPanelHistory>({ entries: [], index: -1 })
-  const restoringRightPanelEntryKeyRef = useRef<string | null>(null)
-  const [, setRightPanelHistoryRevision] = useState(0)
+  const autoOpenedPreviewUrlBySessionRef = useRef(new Map<string, string>())
+  const disposedSessionIdsRef = useRef(new Set<string>())
+  const activeRightPanelWorkspace = activeSessionId
+    ? rightPanelWorkspaceMap[activeSessionId] ?? createSessionRightPanelWorkspace(activeSessionId)
+    : null
+  const rightPanelMode = activeRightPanelWorkspace?.mode ?? null
+  const filePreviewTarget = activeRightPanelWorkspace?.filePreviewTarget ?? null
+  const filePreviewReturnContext = activeRightPanelWorkspace?.filePreviewReturnContext ?? null
+  const rightSidebarWidth = activeRightPanelWorkspace?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
   const rightPanelVisible = rightPanelMode !== null
+  const rightPanelWorkspaces = useMemo(
+    () => sessionRightPanelWorkspaceList(rightPanelWorkspaceMap),
+    [rightPanelWorkspaceMap]
+  )
+
+  useEffect(() => {
+    if (!activeSessionId) return
+    disposedSessionIdsRef.current.delete(activeSessionId)
+    setRightPanelWorkspaceMap((current) => ensureSessionRightPanelWorkspace(current, activeSessionId))
+  }, [activeSessionId])
+
+  useEffect(() => subscribeSessionRightPanelDisposals((sessionId) => {
+    disposedSessionIdsRef.current.add(sessionId)
+    autoOpenedPreviewUrlBySessionRef.current.delete(sessionId)
+    forgetRightPanelContextStateForSession(sessionId)
+    setRightPanelWorkspaceMap((current) => {
+      if (!current[sessionId]) return current
+      const next = { ...current }
+      delete next[sessionId]
+      return next
+    })
+  }), [])
+
+  useEffect(() => subscribeSessionRightPanelRekeys((previousSessionId, nextSessionId) => {
+    const targetWorkspaceExists = Boolean(rightPanelWorkspaceMapRef.current[nextSessionId])
+    disposedSessionIdsRef.current.add(previousSessionId)
+    disposedSessionIdsRef.current.delete(nextSessionId)
+    const autoOpenedPreviewUrl = autoOpenedPreviewUrlBySessionRef.current.get(previousSessionId)
+    autoOpenedPreviewUrlBySessionRef.current.delete(previousSessionId)
+    if (autoOpenedPreviewUrl && !targetWorkspaceExists) {
+      autoOpenedPreviewUrlBySessionRef.current.set(nextSessionId, autoOpenedPreviewUrl)
+    }
+    if (targetWorkspaceExists) {
+      forgetRightPanelContextStateForSession(previousSessionId)
+    } else {
+      moveRightPanelContextStateOwner(previousSessionId, nextSessionId)
+    }
+    setRightPanelWorkspaceMap((current) =>
+      moveSessionRightPanelWorkspaceOwner(current, previousSessionId, nextSessionId)
+    )
+  }), [])
+
+  const updateRightPanelWorkspace = useCallback((
+    sessionId: string,
+    patch: SessionRightPanelWorkspacePatch,
+    options?: { recordHistory?: boolean }
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      updateSessionRightPanelWorkspace(current, sessionId, patch, options)
+    )
+  }, [])
+
+  const setRightPanelModeForSession = useCallback((sessionId: string, mode: RightPanelMode): void => {
+    updateRightPanelWorkspace(sessionId, { mode })
+  }, [updateRightPanelWorkspace])
+
+  const setRightPanelMode = useCallback((value: SetStateAction<RightPanelMode>): void => {
+    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    setRightPanelWorkspaceMap((current) => {
+      const ensured = ensureSessionRightPanelWorkspace(current, activeSessionId)
+      const mode = typeof value === 'function' ? value(ensured[activeSessionId].mode) : value
+      return updateSessionRightPanelWorkspace(ensured, activeSessionId, { mode })
+    })
+  }, [activeSessionId])
+
+  const setFilePreviewTargetForSession = useCallback((
+    sessionId: string,
+    target: WorkspaceFileTarget | null
+  ): void => {
+    updateRightPanelWorkspace(sessionId, { filePreviewTarget: target })
+  }, [updateRightPanelWorkspace])
+
+  const setFilePreviewTarget = useCallback((target: WorkspaceFileTarget | null): void => {
+    if (activeSessionId) setFilePreviewTargetForSession(activeSessionId, target)
+  }, [activeSessionId, setFilePreviewTargetForSession])
+
+  const setFilePreviewReturnContextForSession = useCallback((
+    sessionId: string,
+    context: WorkspaceFilePreviewReturnContext | null
+  ): void => {
+    updateRightPanelWorkspace(sessionId, { filePreviewReturnContext: context })
+  }, [updateRightPanelWorkspace])
+
+  const setFilePreviewReturnContext = useCallback((
+    context: WorkspaceFilePreviewReturnContext | null
+  ): void => {
+    if (activeSessionId) setFilePreviewReturnContextForSession(activeSessionId, context)
+  }, [activeSessionId, setFilePreviewReturnContextForSession])
+
+  const setRightSidebarWidthForSession = useCallback((
+    sessionId: string,
+    value: number | ((current: number) => number)
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) => {
+      const ensured = ensureSessionRightPanelWorkspace(current, sessionId)
+      const width = ensured[sessionId]?.width ?? SESSION_RIGHT_PANEL_DEFAULT_WIDTH
+      return updateSessionRightPanelWorkspace(ensured, sessionId, {
+        width: typeof value === 'function' ? value(width) : value
+      }, { recordHistory: false })
+    })
+  }, [])
+
+  const setRightSidebarWidth = useCallback((
+    value: number | ((current: number) => number)
+  ): void => {
+    if (activeSessionId) setRightSidebarWidthForSession(activeSessionId, value)
+  }, [activeSessionId, setRightSidebarWidthForSession])
 
   useEffect(() => {
     persistWidth(LEFT_PANEL_WIDTH_KEY, leftSidebarWidth)
@@ -416,123 +322,15 @@ export function useWorkbenchLayout({
   }, [leftSidebarCollapsed])
 
   useEffect(() => {
-    persistWidth(RIGHT_PANEL_WIDTH_KEY, rightSidebarWidth)
-  }, [rightSidebarWidth])
-
-  useEffect(() => {
-    persistRightPanelMode(rightPanelMode)
-  }, [rightPanelMode])
-
-  useEffect(() => {
-    if (!rightPanelMode) {
-      persistRightPanelContext(null)
-      return
-    }
-    persistRightPanelContext({
-      version: 1,
-      mode: rightPanelMode,
-      ...(workspaceRoot ? { workspaceRoot } : {}),
-      ...(THREAD_BOUND_PANEL_MODES.has(rightPanelMode) && activeThreadId
-        ? { threadId: activeThreadId }
-        : {}),
-      ...(rightPanelMode === 'file' && filePreviewTarget ? {
-        filePreviewTarget: {
-          path: filePreviewTarget.path,
-          ...(filePreviewTarget.workspaceRoot ? { workspaceRoot: filePreviewTarget.workspaceRoot } : {})
-        },
-        ...(filePreviewReturnContext ? { filePreviewReturnContext } : {})
-      } : {}),
-      ...(rightPanelMode === 'visual-review' && visualDocumentId ? { visualDocumentId } : {})
-    })
-  }, [activeThreadId, filePreviewReturnContext, filePreviewTarget, rightPanelMode, visualDocumentId, workspaceRoot])
-
-  useEffect(() => {
-    if (!contextValidationReady || !restoredContextRef.current) return
-    const restored = validateRestoredRightPanelContext(restoredContextRef.current, {
-      activeThreadId,
-      workspaceRoot
-    })
-    restoredContextRef.current = null
-    if (restored) return
-    rightPanelHistoryRef.current = { entries: [], index: -1 }
-    setFilePreviewTarget(null)
-    setFilePreviewReturnContext(null)
-    setRightPanelMode(null)
-    persistRightPanelContext(null)
-    setRightPanelHistoryRevision((revision) => revision + 1)
-  }, [activeThreadId, contextValidationReady, workspaceRoot])
-
-  useEffect(() => {
-    if (!rightPanelMode) return
-    const entry: RightPanelHistoryEntry = {
-      mode: rightPanelMode,
-      filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
-      filePreviewReturnContext: rightPanelMode === 'file' ? filePreviewReturnContext : null,
-      ...(THREAD_BOUND_PANEL_MODES.has(rightPanelMode) && activeThreadId
-        ? { threadId: activeThreadId }
-        : {}),
-      ...((rightPanelMode === 'file' || rightPanelMode === 'visual-review') && workspaceRoot
-        ? { workspaceRoot }
-        : {}),
-      ...(rightPanelMode === 'visual-review' && visualDocumentId ? { visualDocumentId } : {})
-    }
-    const entryKey = rightPanelHistoryEntryKey(entry)
-    if (restoringRightPanelEntryKeyRef.current === entryKey) {
-      restoringRightPanelEntryKeyRef.current = null
-      return
-    }
-    const nextHistory = pushRightPanelHistoryEntry(rightPanelHistoryRef.current, entry)
-    if (nextHistory === rightPanelHistoryRef.current) return
-    rightPanelHistoryRef.current = nextHistory
-    setRightPanelHistoryRevision((revision) => revision + 1)
-  }, [activeThreadId, filePreviewReturnContext, filePreviewTarget, rightPanelMode, visualDocumentId, workspaceRoot])
-
-  useEffect(() => {
-    const nextHistory = pruneRightPanelHistory(rightPanelHistoryRef.current, {
-      activeThreadId,
-      workspaceRoot
-    })
-    if (nextHistory === rightPanelHistoryRef.current) return
-    rightPanelHistoryRef.current = nextHistory
-    setRightPanelHistoryRevision((revision) => revision + 1)
-  }, [activeThreadId, workspaceRoot])
-
-  useEffect(() => {
     persistWidth(TERMINAL_HEIGHT_KEY, terminalHeight)
   }, [terminalHeight])
 
   useEffect(() => {
-    const onPreview = (event: Event): void => {
-      const detail = (event as CustomEvent<WorkspaceFilePreviewDetail>).detail
-      if (!detail?.path) return
-      if (detail.kind === 'directory') return
-      setFilePreviewTarget({
-        ...detail,
-        workspaceRoot: detail.workspaceRoot ?? workspaceRoot
-      })
-      setFilePreviewReturnContext(detail.returnTo ?? null)
-      setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
-      setRightPanelMode('file')
-    }
-
-    window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreview)
-    return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreview)
-  }, [workspaceRoot])
-
-  useEffect(() => {
-    if (previewThreadId.current === activeThreadId) return
-    previewThreadId.current = activeThreadId
-    autoOpenedPreviewUrlRef.current = null
-    setFilePreviewReturnContext(null)
-    if (shouldCloseRightPanelOnThreadChange(rightPanelMode)) setRightPanelMode(null)
-  }, [activeThreadId, rightPanelMode])
-
-  useEffect(() => {
-    if (!latestAutoOpenDevPreviewUrl || route !== 'chat') return
-    if (autoOpenedPreviewUrlRef.current === latestAutoOpenDevPreviewUrl) return
-    autoOpenedPreviewUrlRef.current = latestAutoOpenDevPreviewUrl
-    setRightPanelMode('browser')
-  }, [latestAutoOpenDevPreviewUrl, route])
+    if (!activeSessionId || !latestAutoOpenDevPreviewUrl || route !== 'chat') return
+    if (autoOpenedPreviewUrlBySessionRef.current.get(activeSessionId) === latestAutoOpenDevPreviewUrl) return
+    autoOpenedPreviewUrlBySessionRef.current.set(activeSessionId, latestAutoOpenDevPreviewUrl)
+    setRightPanelModeForSession(activeSessionId, 'browser')
+  }, [activeSessionId, latestAutoOpenDevPreviewUrl, route, setRightPanelModeForSession])
 
   useLayoutEffect(() => {
     const sync = (): void => {
@@ -552,10 +350,11 @@ export function useWorkbenchLayout({
     sync()
     window.addEventListener('resize', sync)
     return () => window.removeEventListener('resize', sync)
-  }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth])
+  }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth, setRightSidebarWidth])
 
   const toggleRightPanelMode = (nextMode: Exclude<RightPanelMode, null>): void => {
-    setRightPanelMode((current) => (current === nextMode ? null : nextMode))
+    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    setRightPanelWorkspaceMap((current) => toggleSessionRightPanelMode(current, activeSessionId, nextMode))
   }
 
   const toggleLeftSidebar = (): void => {
@@ -563,46 +362,35 @@ export function useWorkbenchLayout({
   }
 
   const openDevPreview = (): void => {
-    if (latestDevPreviewUrl) {
-      autoOpenedPreviewUrlRef.current = latestDevPreviewUrl
-    }
+    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    if (latestDevPreviewUrl) autoOpenedPreviewUrlBySessionRef.current.set(activeSessionId, latestDevPreviewUrl)
     setRightPanelMode('browser')
   }
 
   const navigateRightPanelHistory = useCallback((offset: -1 | 1): void => {
-    const nextHistory = moveRightPanelHistory(rightPanelHistoryRef.current, offset)
-    if (nextHistory === rightPanelHistoryRef.current) return
-    rightPanelHistoryRef.current = nextHistory
-    const entry = nextHistory.entries[nextHistory.index]
-    restoringRightPanelEntryKeyRef.current = rightPanelHistoryEntryKey(entry)
-    setFilePreviewTarget(entry.filePreviewTarget)
-    setFilePreviewReturnContext(entry.filePreviewReturnContext)
-    setRightPanelMode(entry.mode)
-    setRightPanelHistoryRevision((revision) => revision + 1)
+    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      navigateSessionRightPanelHistory(current, activeSessionId, offset)
+    )
+  }, [activeSessionId])
+
+  const discardRightPanelResourceForSession = useCallback((
+    sessionId: string,
+    mode: 'file' | 'visual-review',
+    resourceId: string
+  ): void => {
+    if (disposedSessionIdsRef.current.has(sessionId)) return
+    setRightPanelWorkspaceMap((current) =>
+      discardSessionRightPanelResource(current, sessionId, mode, resourceId)
+    )
   }, [])
 
   const discardRightPanelResource = useCallback((
     mode: 'file' | 'visual-review',
     resourceId: string
   ): void => {
-    const normalizedResourceId = resourceId.trim()
-    const entries = rightPanelHistoryRef.current.entries.filter((entry) => {
-      if (entry.mode !== mode) return true
-      return mode === 'file'
-        ? entry.filePreviewTarget?.path.trim() !== normalizedResourceId
-        : entry.visualDocumentId?.trim() !== normalizedResourceId
-    })
-    rightPanelHistoryRef.current = { entries, index: entries.length - 1 }
-    if (mode === 'file' && filePreviewTarget?.path.trim() === normalizedResourceId) {
-      setFilePreviewTarget(null)
-      setFilePreviewReturnContext(null)
-      setRightPanelMode((current) => current === 'file' ? null : current)
-    }
-    if (mode === 'visual-review' && visualDocumentId?.trim() === normalizedResourceId) {
-      setRightPanelMode((current) => current === 'visual-review' ? null : current)
-    }
-    setRightPanelHistoryRevision((revision) => revision + 1)
-  }, [filePreviewTarget?.path, visualDocumentId])
+    if (activeSessionId) discardRightPanelResourceForSession(activeSessionId, mode, resourceId)
+  }, [activeSessionId, discardRightPanelResourceForSession])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return
@@ -757,34 +545,43 @@ export function useWorkbenchLayout({
     setTerminalOpen((current) => !current)
   }
 
+  const activeHistory = activeRightPanelWorkspace?.history ?? { entries: [], index: -1 }
+
   return {
     beginLeftResize,
     beginRightResize,
     beginTerminalResize,
     discardRightPanelResource,
+    discardRightPanelResourceForSession,
     filePreviewReturnContext,
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
     openDevPreview,
-    canNavigateRightPanelBack: rightPanelHistoryRef.current.index > 0,
+    canNavigateRightPanelBack: activeHistory.index > 0,
     canNavigateRightPanelForward:
-      rightPanelHistoryRef.current.index >= 0 &&
-      rightPanelHistoryRef.current.index < rightPanelHistoryRef.current.entries.length - 1,
+      activeHistory.index >= 0 &&
+      activeHistory.index < activeHistory.entries.length - 1,
     navigateRightPanelBack: () => navigateRightPanelHistory(-1),
     navigateRightPanelForward: () => navigateRightPanelHistory(1),
     rightPanelMode,
+    rightPanelWorkspaces,
     rightPanelVisible,
     rightSidebarWidth,
     setFilePreviewTarget,
+    setFilePreviewTargetForSession,
     setFilePreviewReturnContext,
+    setFilePreviewReturnContextForSession,
     setRightPanelMode,
+    setRightPanelModeForSession,
     setRightSidebarWidth,
+    setRightSidebarWidthForSession,
     shellRef,
     terminalHeight,
     terminalOpen,
     toggleLeftSidebar,
     toggleRightPanelMode,
-    toggleTerminal
+    toggleTerminal,
+    updateRightPanelWorkspace
   }
 }

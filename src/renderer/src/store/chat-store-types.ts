@@ -145,7 +145,7 @@ export type SideConversation = {
   threadId: string
   runtimeId?: AgentRuntimeId
   parentThreadId: string
-  source?: 'side' | 'child_agent' | 'pdf_annotation'
+  source?: 'side' | 'child_agent' | 'pdf_annotation' | 'sdd_assistant'
   title: string
   createdAt: string
   /** Timestamp the snapshot was taken from the parent. */
@@ -166,6 +166,7 @@ export type SideConversation = {
 }
 
 export type SideMessageOverrides = {
+  mode?: string
   attachmentIds?: string[]
   fileReferences?: AgentRuntimeFileReference[]
   displayText?: string
@@ -237,6 +238,8 @@ export type ChatState = {
   activeThreadGoal: ThreadGoal | null
   activeThreadTodos: ThreadTodoList | null
   activeThreadContextState: AgentRuntimeContextState | null
+  /** In-memory canonical block snapshots for resident Session workspaces. */
+  threadBlocksById: Record<string, ChatBlock[]>
   blocks: ChatBlock[]
   liveReasoning: string
   liveReasoningMeta: RuntimeDisclosureMetadata | null
@@ -253,7 +256,6 @@ export type ChatState = {
   turnDurationByUserId: Record<string, number>
   turnReasoningFirstAtByUserId: Record<string, number>
   turnReasoningLastAtByUserId: Record<string, number>
-  inspectorSelectedId: string | null
   composerModel: string
   composerPickList: string[]
   composerModelGroups: ModelProviderModelGroup[]
@@ -344,9 +346,10 @@ export type ChatState = {
   setActiveThreadGoal: (objective: string) => Promise<boolean>
   setActiveThreadGoalStatus: (status: ThreadGoalStatus) => Promise<boolean>
   clearActiveThreadGoal: () => Promise<boolean>
-  setActiveThreadTodoStatus: (todoId: string, status: ThreadTodoStatus) => Promise<boolean>
-  clearActiveThreadTodos: () => Promise<boolean>
+  setThreadTodoStatus: (threadId: string, todoId: string, status: ThreadTodoStatus) => Promise<boolean>
+  clearThreadTodos: (threadId: string) => Promise<boolean>
   syncPlanTodosFromMarkdown: (
+    threadId: string,
     plan: { id: string; relativePath: string },
     markdown: string
   ) => Promise<boolean>
@@ -395,6 +398,7 @@ export type ChatState = {
   setSideReasoningEffort: (sideId: string, effort: string) => void
   selectSideConversation: (sideId: string) => void
   setSidePanelOpen: (open: boolean) => void
+  rekeySessionSideConversations: (previousSessionId: string, nextSessionId: string) => void
   closeSideConversation: (sideId: string) => Promise<void>
   discardSideConversation: (sideId: string) => Promise<void>
   promoteSideConversation: (sideId: string) => Promise<void>
@@ -408,7 +412,6 @@ export type ChatState = {
     blockId: string,
     action: { kind: 'submit'; answers: UserInputAnswer[] } | { kind: 'cancel' }
   ) => Promise<void>
-  selectInspectorItem: (id: string | null) => void
   applyI18nFromSettings: (locale: 'en' | 'zh') => Promise<void>
   reloadUiSettings: () => Promise<void>
 }

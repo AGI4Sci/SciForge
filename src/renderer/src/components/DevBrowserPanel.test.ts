@@ -43,7 +43,6 @@ describe('DevBrowserPanel initial URL resolution', () => {
     expect(
       resolveInitialDevBrowserUrl({
         normalizedPreferredUrl: null,
-        storedUrl: null,
         latestDetectedUrl: null
       })
     ).toBe(DEFAULT_DEV_PREVIEW_URL)
@@ -53,7 +52,6 @@ describe('DevBrowserPanel initial URL resolution', () => {
     expect(
       resolveInitialDevBrowserUrl({
         normalizedPreferredUrl: 'http://localhost:3000/',
-        storedUrl: 'http://localhost:4000/',
         latestDetectedUrl: 'http://localhost:5000/'
       })
     ).toBe('http://localhost:3000/')
@@ -61,15 +59,6 @@ describe('DevBrowserPanel initial URL resolution', () => {
     expect(
       resolveInitialDevBrowserUrl({
         normalizedPreferredUrl: null,
-        storedUrl: 'http://localhost:4000/',
-        latestDetectedUrl: 'http://localhost:5000/'
-      })
-    ).toBe('http://localhost:4000/')
-
-    expect(
-      resolveInitialDevBrowserUrl({
-        normalizedPreferredUrl: null,
-        storedUrl: null,
         latestDetectedUrl: 'http://localhost:5000/'
       })
     ).toBe('http://localhost:5000/')

@@ -376,6 +376,7 @@ async function drainNextSideMessage(sideId: string, ctx: SideContext): Promise<v
     rememberSideThreadRuntime(provider, sideId, side)
     const { turnId } = await provider.sendUserMessage(sideId, queued.text, {
       clientDirectiveId: queued.id,
+      ...(queued.mode ? { mode: queued.mode } : {}),
       model: queued.model,
       ...(queued.reasoningEffort ? { reasoningEffort: queued.reasoningEffort } : {}),
       ...(queued.attachmentIds?.length ? { attachmentIds: queued.attachmentIds } : {}),
@@ -468,6 +469,7 @@ export function createSideActions(ctx: SideContext): Pick<
   | 'setSideReasoningEffort'
   | 'selectSideConversation'
   | 'setSidePanelOpen'
+  | 'rekeySessionSideConversations'
   | 'closeSideConversation'
   | 'discardSideConversation'
   | 'promoteSideConversation'
@@ -485,6 +487,7 @@ export function createSideActions(ctx: SideContext): Pick<
     | 'setSideReasoningEffort'
     | 'selectSideConversation'
     | 'setSidePanelOpen'
+    | 'rekeySessionSideConversations'
     | 'closeSideConversation'
     | 'discardSideConversation'
     | 'promoteSideConversation'
@@ -765,6 +768,7 @@ export function createSideActions(ctx: SideContext): Pick<
                 id: clientDirectiveId,
                 text: messageText,
                 model: cur.model,
+                ...(overrides?.mode ? { mode: overrides.mode } : {}),
                 ...(reasoningEffort ? { reasoningEffort } : {}),
                 ...(attachmentIds?.length ? { attachmentIds } : {}),
                 ...(fileReferences?.length ? { fileReferences } : {}),
@@ -781,6 +785,7 @@ export function createSideActions(ctx: SideContext): Pick<
         rememberSideThreadRuntime(provider, sideId, side)
         const { turnId } = await provider.sendUserMessage(sideId, messageText, {
           clientDirectiveId,
+          ...(overrides?.mode ? { mode: overrides.mode } : {}),
           model: side.model,
           ...(reasoningEffort ? { reasoningEffort } : {}),
           ...(attachmentIds?.length ? { attachmentIds } : {}),
@@ -814,6 +819,7 @@ export function createSideActions(ctx: SideContext): Pick<
                   id: clientDirectiveId,
                   text: messageText,
                   model: cur.model,
+                  ...(overrides?.mode ? { mode: overrides.mode } : {}),
                   ...(reasoningEffort ? { reasoningEffort } : {}),
                   ...(attachmentIds?.length ? { attachmentIds } : {}),
                   ...(fileReferences?.length ? { fileReferences } : {}),
@@ -894,6 +900,56 @@ export function createSideActions(ctx: SideContext): Pick<
 
     setSidePanelOpen: (open) => {
       ctx.set((s) => ({ sidePanel: setSidePanel(s.sidePanel, { open }) }))
+    },
+
+    rekeySessionSideConversations: (previousSessionId, nextSessionId) => {
+      const previous = previousSessionId.trim()
+      const next = nextSessionId.trim()
+      if (!previous || !next || previous === next) return
+      const shouldMoveOwnedSide = Boolean(
+        ctx.get().sideConversations[previous] && !ctx.get().sideConversations[next]
+      )
+      teardownSideSubscription(previous)
+      ctx.set((state) => {
+        const source = state.sideConversations[previous]
+        const target = state.sideConversations[next]
+        let changed = false
+        const sideConversations = { ...state.sideConversations }
+        if (source) {
+          delete sideConversations[previous]
+          changed = true
+          if (!target) {
+            sideConversations[next] = {
+              ...source,
+              threadId: next,
+              parentThreadId: source.parentThreadId === previous
+                ? next
+                : source.parentThreadId
+            }
+          }
+        }
+        for (const [sideId, side] of Object.entries(sideConversations)) {
+          if (side.parentThreadId !== previous) continue
+          sideConversations[sideId] = { ...side, parentThreadId: next }
+          changed = true
+        }
+        if (!changed && state.sidePanel.activeSideId !== previous) return {}
+        return {
+          sideConversations,
+          sidePanel: state.sidePanel.activeSideId === previous
+            ? setSidePanel(state.sidePanel, {
+                activeSideId: sideConversations[next] ? next : null,
+                open: Boolean(sideConversations[next]) && state.sidePanel.open
+              })
+            : state.sidePanel
+        }
+      })
+      const movedSide = shouldMoveOwnedSide ? ctx.get().sideConversations[next] : null
+      if (movedSide) {
+        const provider = ctx.getProvider()
+        rememberSideThreadRuntime(provider, next, movedSide)
+        startSideSubscription(next, movedSide.lastSeq, ctx)
+      }
     },
 
     closeSideConversation: async (sideId) => {

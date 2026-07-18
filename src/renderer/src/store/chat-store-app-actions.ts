@@ -40,7 +40,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'clearRemoteGuardChannel'
   | 'openInitialSetup'
   | 'closeInitialSetup'
-  | 'selectInspectorItem'
   | 'applyI18nFromSettings'
   | 'reloadUiSettings'
 > {
@@ -177,8 +176,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set({ initialSetupOpen: true, initialSetupMode: mode }),
 
     closeInitialSetup: () => set({ initialSetupOpen: false, initialSetupMode: 'required' }),
-
-    selectInspectorItem: (id) => set({ inspectorSelectedId: id }),
 
     applyI18nFromSettings: async (locale) => {
       await i18n.changeLanguage(locale)

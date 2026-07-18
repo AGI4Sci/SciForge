@@ -990,4 +990,68 @@ describe('chat-store-side-actions', () => {
     expect(state.activeThreadId).toBe('thr_other')
     expect(state.busy).toBe(false)
   })
+
+  it('rekeys a Session-owned side conversation without losing its running state', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.threadDetail = {
+      blocks: [{ kind: 'assistant', id: 'answer', text: 'working' }],
+      latestSeq: 7,
+      threadStatus: 'running',
+      latestTurnId: 'turn-old'
+    }
+    await actions.attachSideConversation({
+      threadId: 'session-old',
+      parentThreadId: 'session-old',
+      source: 'sdd_assistant'
+    })
+    actions.setSideInput('session-old', 'keep this draft')
+    const previousSubscription = provider.subscribeMock.mock.calls.at(-1) as
+      | [string, number, ThreadEventSink, AbortSignal]
+      | undefined
+
+    actions.rekeySessionSideConversations('session-old', 'session-new')
+
+    expect(previousSubscription?.[3].aborted).toBe(true)
+    expect(state.sideConversations['session-old']).toBeUndefined()
+    expect(state.sideConversations['session-new']).toMatchObject({
+      threadId: 'session-new',
+      parentThreadId: 'session-new',
+      blocks: [{ kind: 'assistant', id: 'answer', text: 'working' }],
+      input: 'keep this draft',
+      busy: true,
+      turnId: 'turn-old',
+      lastSeq: 7
+    })
+    expect(provider.subscribeMock).toHaveBeenLastCalledWith(
+      'session-new',
+      7,
+      expect.anything(),
+      expect.any(AbortSignal)
+    )
+  })
+
+  it('preserves an existing canonical target side conversation on rekey collision', async () => {
+    const { actions, state, provider } = buildHarness()
+    await actions.attachSideConversation({
+      threadId: 'session-old',
+      parentThreadId: 'session-old',
+      source: 'sdd_assistant'
+    })
+    await actions.attachSideConversation({
+      threadId: 'session-target',
+      parentThreadId: 'session-target',
+      source: 'sdd_assistant'
+    })
+    actions.setSideInput('session-old', 'source')
+    actions.setSideInput('session-target', 'canonical target')
+    const target = state.sideConversations['session-target']
+    const subscriptionCount = provider.subscribeMock.mock.calls.length
+
+    actions.rekeySessionSideConversations('session-old', 'session-target')
+
+    expect(state.sideConversations['session-old']).toBeUndefined()
+    expect(state.sideConversations['session-target']).toBe(target)
+    expect(state.sideConversations['session-target'].input).toBe('canonical target')
+    expect(provider.subscribeMock).toHaveBeenCalledTimes(subscriptionCount)
+  })
 })

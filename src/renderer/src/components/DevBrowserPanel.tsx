@@ -18,18 +18,12 @@ import type { ChatBlock } from '../agent/types'
 import {
   DEFAULT_DEV_PREVIEW_ADDRESS,
   DEFAULT_DEV_PREVIEW_URL,
-  isDefaultDevPreviewUrl,
   normalizeDevPreviewUrlInput
 } from '@shared/dev-preview-url'
 import {
   extractDetectedDevPreviewUrls,
   formatDevPreviewUrlLabel
 } from '../lib/dev-preview-detection'
-import {
-  readBrowserStorageItem,
-  removeBrowserStorageItem,
-  writeBrowserStorageItem
-} from '../lib/browser-storage'
 import { openSafeExternalUrl } from '../lib/open-external'
 
 type DevWebviewTag = HTMLElement & {
@@ -56,45 +50,6 @@ type WebviewTitleEvent = Event & {
   title: string
 }
 
-const PREVIEW_URL_STORAGE_KEY = 'sciforge.devPreview.url'
-const PREVIEW_AUTO_FOLLOW_STORAGE_KEY = 'sciforge.devPreview.autoFollow'
-
-function readStoredUrl(): string | null {
-  try {
-    const raw = readBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
-    const normalized = raw ? normalizeDevPreviewUrlInput(raw) : null
-    if (!normalized) return null
-    if (normalized === DEFAULT_DEV_PREVIEW_URL) {
-      removeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
-      return null
-    }
-    const parsed = new URL(normalized)
-    const pathname = decodeURIComponent(parsed.pathname).toLowerCase()
-    if (/^\/(?:health|metrics|readyz?|livez?|v\d+)(?:\/|$)/.test(pathname)) return null
-    if (/\/(?:health|metrics|readyz?|livez?)(?:\/|$)/.test(pathname)) return null
-    return normalized
-  } catch {
-    return null
-  }
-}
-
-function persistUrl(url: string): void {
-  if (isDefaultDevPreviewUrl(url)) {
-    removeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
-    return
-  }
-  writeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY, url)
-}
-
-function readStoredAutoFollow(): boolean {
-  const raw = readBrowserStorageItem(PREVIEW_AUTO_FOLLOW_STORAGE_KEY)
-  return raw == null ? true : raw === 'true'
-}
-
-function persistAutoFollow(value: boolean): void {
-  writeBrowserStorageItem(PREVIEW_AUTO_FOLLOW_STORAGE_KEY, String(value))
-}
-
 function formatAddressInput(url: string): string {
   try {
     const parsed = new URL(url)
@@ -111,10 +66,9 @@ type LoadOptions = {
 
 export function resolveInitialDevBrowserUrl(input: {
   normalizedPreferredUrl?: string | null
-  storedUrl?: string | null
   latestDetectedUrl?: string | null
 }): string {
-  return input.normalizedPreferredUrl ?? input.storedUrl ?? input.latestDetectedUrl ?? DEFAULT_DEV_PREVIEW_URL
+  return input.normalizedPreferredUrl ?? input.latestDetectedUrl ?? DEFAULT_DEV_PREVIEW_URL
 }
 
 export function canUseElectronWebviewEnvironment(input: {
@@ -166,13 +120,12 @@ export function DevBrowserPanel({
   )
   const initialUrl = resolveInitialDevBrowserUrl({
     normalizedPreferredUrl,
-    storedUrl: readStoredUrl(),
     latestDetectedUrl
   })
   const preferredUrlRef = useRef<string | null>(normalizedPreferredUrl)
   const [activeUrl, setActiveUrl] = useState<string | null>(initialUrl)
   const [draftUrl, setDraftUrl] = useState(() => formatAddressInput(initialUrl))
-  const [autoFollow, setAutoFollow] = useState(readStoredAutoFollow)
+  const [autoFollow, setAutoFollow] = useState(true)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [pageTitle, setPageTitle] = useState('')
@@ -184,14 +137,6 @@ export function DevBrowserPanel({
   const [previewInstanceNonce, setPreviewInstanceNonce] = useState(0)
   const canNavigateBack = useElectronWebview ? canGoBack : iframeBackStack.length > 0
   const canNavigateForward = useElectronWebview ? canGoForward : iframeForwardStack.length > 0
-
-  useEffect(() => {
-    persistAutoFollow(autoFollow)
-  }, [autoFollow])
-
-  useEffect(() => {
-    if (activeUrl) persistUrl(activeUrl)
-  }, [activeUrl])
 
   useEffect(() => {
     if (!normalizedPreferredUrl || preferredUrlRef.current === normalizedPreferredUrl) return
@@ -286,7 +231,7 @@ export function DevBrowserPanel({
       webview.removeEventListener('did-navigate-in-page', handleNavigate)
       webview.removeEventListener('did-fail-load', handleFailLoad)
       webview.removeEventListener('page-title-updated', handleTitle)
-      if (webviewRef.current === webview) webviewContentsIdRef.current = null
+      webviewContentsIdRef.current = null
     }
   }, [activeUrl, previewInstanceNonce, t, useElectronWebview])
 
@@ -381,7 +326,6 @@ export function DevBrowserPanel({
     setDraftUrl(formatAddressInput(DEFAULT_DEV_PREVIEW_URL))
     setLoading(true)
     setActiveUrl(DEFAULT_DEV_PREVIEW_URL)
-    removeBrowserStorageItem(PREVIEW_URL_STORAGE_KEY)
   }
 
   const openExternal = (): void => {
