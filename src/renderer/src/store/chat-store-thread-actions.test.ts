@@ -527,6 +527,10 @@ describe('chat-store-thread-actions queued messages', () => {
       })
     )
     expect(state.activeThreadId).toBe('thr_created_in_draft_workspace')
+    expect(rightPanelLifecycleMock.rekeySessionRightPanelWorkspace).toHaveBeenCalledWith(
+      'right-panel-draft:%2Fworkspace%2Fdraft',
+      'thr_created_in_draft_workspace'
+    )
   })
 
   it('creates the runtime thread when the first draft message is sent', async () => {

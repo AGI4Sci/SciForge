@@ -111,6 +111,7 @@ import {
   SESSION_RIGHT_PANEL_DEFAULT_WIDTH,
   type SessionRightPanelWorkspace
 } from './session-right-panel-workspaces'
+import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import { SessionRightPanelStack } from './SessionRightPanelStack'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
 import {
@@ -764,16 +765,17 @@ export function Workbench(): ReactElement {
   const [runtimeInfo, setRuntimeInfo] = useState<LocalRuntimeInfoJson | null>(null)
   const [runtimeSkills, setRuntimeSkills] = useState<LocalRuntimeSkillJson[]>([])
   const [composerAttachments, setComposerAttachments] = useState<AttachmentReference[]>([])
+  const rightPanelOwnerId = activeThreadId ?? draftSessionRightPanelId(workspaceRoot)
   const [composerFileReferencesBySession, setComposerFileReferencesBySession] = useState<
     Record<string, ComposerFileReference[]>
   >({})
-  const composerFileReferences = activeThreadId
-    ? composerFileReferencesBySession[activeThreadId] ?? []
+  const composerFileReferences = rightPanelOwnerId
+    ? composerFileReferencesBySession[rightPanelOwnerId] ?? []
     : []
   const setComposerFileReferences = useCallback((
     value: SetStateAction<ComposerFileReference[]>
   ): void => {
-    const ownerSessionId = activeThreadId
+    const ownerSessionId = rightPanelOwnerId
     if (!ownerSessionId) return
     setComposerFileReferencesBySession((current) => {
       const ownerReferences = current[ownerSessionId] ?? []
@@ -781,7 +783,7 @@ export function Workbench(): ReactElement {
       if (nextReferences === ownerReferences) return current
       return { ...current, [ownerSessionId]: nextReferences }
     })
-  }, [activeThreadId])
+  }, [rightPanelOwnerId])
   const [composerCommentReferences, setComposerCommentReferences] = useState<AttachedComposerComment[]>([])
   const [attachmentUploadBusy, setAttachmentUploadBusy] = useState(false)
   const [attachmentUploadError, setAttachmentUploadError] = useState<string | null>(null)
@@ -1094,15 +1096,15 @@ export function Workbench(): ReactElement {
     toggleTerminal,
     updateRightPanelWorkspace,
   } = useWorkbenchLayout({
-    activeThreadId,
+    activeSessionId: rightPanelOwnerId,
     latestAutoOpenDevPreviewUrl,
     latestDevPreviewUrl,
     route
   })
   const sessionRightPanelSnapshotsRef = useRef(new Map<string, SessionRightPanelRenderSnapshot>())
   const setFileTreeWorkspaceOverride = useCallback((value: string | null): void => {
-    if (activeThreadId) updateRightPanelWorkspace(activeThreadId, { fileTreeWorkspaceOverride: value })
-  }, [activeThreadId, updateRightPanelWorkspace])
+    if (rightPanelOwnerId) updateRightPanelWorkspace(rightPanelOwnerId, { fileTreeWorkspaceOverride: value })
+  }, [rightPanelOwnerId, updateRightPanelWorkspace])
   const setChildPanelFocusRequest = useCallback((request: { childId: string | null; key: number }): void => {
     if (activeThreadId) updateRightPanelWorkspace(activeThreadId, { childPanelFocusRequest: request })
   }, [activeThreadId, updateRightPanelWorkspace])
@@ -1208,13 +1210,13 @@ export function Workbench(): ReactElement {
   const setFileTreeInitialDirectory = useCallback((
     value: SetStateAction<FileTreeInitialDirectory | null>
   ): void => {
-    if (!activeThreadId) return
-    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
+    if (!rightPanelOwnerId) return
+    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === rightPanelOwnerId)
       ?.fileTreeInitialDirectory ?? null
-    updateRightPanelWorkspace(activeThreadId, {
+    updateRightPanelWorkspace(rightPanelOwnerId, {
       fileTreeInitialDirectory: typeof value === 'function' ? value(current) : value
     })
-  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
+  }, [rightPanelOwnerId, rightPanelWorkspaces, updateRightPanelWorkspace])
   const {
     activeGuiPlan,
     buildGuiPlan,
@@ -1674,7 +1676,7 @@ export function Workbench(): ReactElement {
     const onPreviewWorkspaceFile = (event: Event): void => {
       const detail = (event as CustomEvent<WorkspaceFilePreviewDetail>).detail
       if (!detail?.path) return
-      const ownerSessionId = detail.sessionId?.trim() || activeThreadId
+      const ownerSessionId = detail.sessionId?.trim() || rightPanelOwnerId
       if (!ownerSessionId) return
       const ownerThread = threads.find((thread) => thread.id === ownerSessionId)
       const ownerWorkspaceRoot = normalizeWorkspaceRoot(
@@ -1714,7 +1716,7 @@ export function Workbench(): ReactElement {
 
     window.addEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
     return () => window.removeEventListener(WORKSPACE_FILE_PREVIEW_EVENT, onPreviewWorkspaceFile)
-  }, [activeThreadId, rightPanelWorkspaces, threads, updateRightPanelWorkspace, workspaceRoot])
+  }, [rightPanelOwnerId, rightPanelWorkspaces, threads, updateRightPanelWorkspace, workspaceRoot])
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
@@ -3023,7 +3025,7 @@ export function Workbench(): ReactElement {
 
   const sessionRightPanelRenderers = new Map<string, SessionRightPanelRenderer>()
   for (const workspace of rightPanelWorkspaces) {
-    const active = workspace.sessionId === activeThreadId
+    const active = workspace.sessionId === rightPanelOwnerId
     const previousSnapshot = sessionRightPanelSnapshotsRef.current.get(workspace.instanceKey)
     const liveThread = threads.find((thread) => thread.id === workspace.sessionId) ?? null
     const ownerBlocks = active
@@ -3081,7 +3083,7 @@ export function Workbench(): ReactElement {
           aria-hidden={!rightPanelVisible}
         >
           <SessionRightPanelStack
-            activeSessionId={rightPanelVisible ? activeThreadId : null}
+            activeSessionId={rightPanelVisible ? rightPanelOwnerId : null}
             workspaces={rightPanelWorkspaces}
             renderWorkspace={(workspace, active) =>
               sessionRightPanelRenderers.get(workspace.instanceKey)?.(workspace, active) ?? null

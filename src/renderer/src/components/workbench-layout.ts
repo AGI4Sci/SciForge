@@ -167,17 +167,17 @@ export function fitWorkbenchWidths(
 }
 
 export function useWorkbenchLayout({
-  activeThreadId,
+  activeSessionId,
   latestAutoOpenDevPreviewUrl,
   latestDevPreviewUrl,
   route
 }: {
-  activeThreadId: string | null
+  activeSessionId: string | null
   latestAutoOpenDevPreviewUrl: string | null
   latestDevPreviewUrl: string | null
   route: AppRoute
 }) {
-  const activeSessionId = activeThreadId?.trim() || null
+  const normalizedActiveSessionId = activeSessionId?.trim() || null
   const [rightPanelWorkspaceMap, setRightPanelWorkspaceMap] =
     useState<SessionRightPanelWorkspaceMap>({})
   const rightPanelWorkspaceMapRef = useRef(rightPanelWorkspaceMap)
@@ -195,8 +195,8 @@ export function useWorkbenchLayout({
   const shellRef = useRef<HTMLDivElement | null>(null)
   const autoOpenedPreviewUrlBySessionRef = useRef(new Map<string, string>())
   const disposedSessionIdsRef = useRef(new Set<string>())
-  const activeRightPanelWorkspace = activeSessionId
-    ? rightPanelWorkspaceMap[activeSessionId] ?? createSessionRightPanelWorkspace(activeSessionId)
+  const activeRightPanelWorkspace = normalizedActiveSessionId
+    ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? createSessionRightPanelWorkspace(normalizedActiveSessionId)
     : null
   const rightPanelMode = activeRightPanelWorkspace?.mode ?? null
   const filePreviewTarget = activeRightPanelWorkspace?.filePreviewTarget ?? null
@@ -209,10 +209,10 @@ export function useWorkbenchLayout({
   )
 
   useEffect(() => {
-    if (!activeSessionId) return
-    disposedSessionIdsRef.current.delete(activeSessionId)
-    setRightPanelWorkspaceMap((current) => ensureSessionRightPanelWorkspace(current, activeSessionId))
-  }, [activeSessionId])
+    if (!normalizedActiveSessionId) return
+    disposedSessionIdsRef.current.delete(normalizedActiveSessionId)
+    setRightPanelWorkspaceMap((current) => ensureSessionRightPanelWorkspace(current, normalizedActiveSessionId))
+  }, [normalizedActiveSessionId])
 
   useEffect(() => subscribeSessionRightPanelDisposals((sessionId) => {
     disposedSessionIdsRef.current.add(sessionId)
@@ -261,13 +261,13 @@ export function useWorkbenchLayout({
   }, [updateRightPanelWorkspace])
 
   const setRightPanelMode = useCallback((value: SetStateAction<RightPanelMode>): void => {
-    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
     setRightPanelWorkspaceMap((current) => {
-      const ensured = ensureSessionRightPanelWorkspace(current, activeSessionId)
-      const mode = typeof value === 'function' ? value(ensured[activeSessionId].mode) : value
-      return updateSessionRightPanelWorkspace(ensured, activeSessionId, { mode })
+      const ensured = ensureSessionRightPanelWorkspace(current, normalizedActiveSessionId)
+      const mode = typeof value === 'function' ? value(ensured[normalizedActiveSessionId].mode) : value
+      return updateSessionRightPanelWorkspace(ensured, normalizedActiveSessionId, { mode })
     })
-  }, [activeSessionId])
+  }, [normalizedActiveSessionId])
 
   const setFilePreviewTargetForSession = useCallback((
     sessionId: string,
@@ -277,8 +277,8 @@ export function useWorkbenchLayout({
   }, [updateRightPanelWorkspace])
 
   const setFilePreviewTarget = useCallback((target: WorkspaceFileTarget | null): void => {
-    if (activeSessionId) setFilePreviewTargetForSession(activeSessionId, target)
-  }, [activeSessionId, setFilePreviewTargetForSession])
+    if (normalizedActiveSessionId) setFilePreviewTargetForSession(normalizedActiveSessionId, target)
+  }, [normalizedActiveSessionId, setFilePreviewTargetForSession])
 
   const setFilePreviewReturnContextForSession = useCallback((
     sessionId: string,
@@ -290,8 +290,8 @@ export function useWorkbenchLayout({
   const setFilePreviewReturnContext = useCallback((
     context: WorkspaceFilePreviewReturnContext | null
   ): void => {
-    if (activeSessionId) setFilePreviewReturnContextForSession(activeSessionId, context)
-  }, [activeSessionId, setFilePreviewReturnContextForSession])
+    if (normalizedActiveSessionId) setFilePreviewReturnContextForSession(normalizedActiveSessionId, context)
+  }, [normalizedActiveSessionId, setFilePreviewReturnContextForSession])
 
   const setRightSidebarWidthForSession = useCallback((
     sessionId: string,
@@ -310,8 +310,8 @@ export function useWorkbenchLayout({
   const setRightSidebarWidth = useCallback((
     value: number | ((current: number) => number)
   ): void => {
-    if (activeSessionId) setRightSidebarWidthForSession(activeSessionId, value)
-  }, [activeSessionId, setRightSidebarWidthForSession])
+    if (normalizedActiveSessionId) setRightSidebarWidthForSession(normalizedActiveSessionId, value)
+  }, [normalizedActiveSessionId, setRightSidebarWidthForSession])
 
   useEffect(() => {
     persistWidth(LEFT_PANEL_WIDTH_KEY, leftSidebarWidth)
@@ -326,11 +326,11 @@ export function useWorkbenchLayout({
   }, [terminalHeight])
 
   useEffect(() => {
-    if (!activeSessionId || !latestAutoOpenDevPreviewUrl || route !== 'chat') return
-    if (autoOpenedPreviewUrlBySessionRef.current.get(activeSessionId) === latestAutoOpenDevPreviewUrl) return
-    autoOpenedPreviewUrlBySessionRef.current.set(activeSessionId, latestAutoOpenDevPreviewUrl)
-    setRightPanelModeForSession(activeSessionId, 'browser')
-  }, [activeSessionId, latestAutoOpenDevPreviewUrl, route, setRightPanelModeForSession])
+    if (!normalizedActiveSessionId || !latestAutoOpenDevPreviewUrl || route !== 'chat') return
+    if (autoOpenedPreviewUrlBySessionRef.current.get(normalizedActiveSessionId) === latestAutoOpenDevPreviewUrl) return
+    autoOpenedPreviewUrlBySessionRef.current.set(normalizedActiveSessionId, latestAutoOpenDevPreviewUrl)
+    setRightPanelModeForSession(normalizedActiveSessionId, 'browser')
+  }, [normalizedActiveSessionId, latestAutoOpenDevPreviewUrl, route, setRightPanelModeForSession])
 
   useLayoutEffect(() => {
     const sync = (): void => {
@@ -353,8 +353,8 @@ export function useWorkbenchLayout({
   }, [leftSidebarCollapsed, leftSidebarWidth, rightPanelVisible, rightSidebarWidth, setRightSidebarWidth])
 
   const toggleRightPanelMode = (nextMode: Exclude<RightPanelMode, null>): void => {
-    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
-    setRightPanelWorkspaceMap((current) => toggleSessionRightPanelMode(current, activeSessionId, nextMode))
+    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
+    setRightPanelWorkspaceMap((current) => toggleSessionRightPanelMode(current, normalizedActiveSessionId, nextMode))
   }
 
   const toggleLeftSidebar = (): void => {
@@ -362,17 +362,17 @@ export function useWorkbenchLayout({
   }
 
   const openDevPreview = (): void => {
-    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
-    if (latestDevPreviewUrl) autoOpenedPreviewUrlBySessionRef.current.set(activeSessionId, latestDevPreviewUrl)
+    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
+    if (latestDevPreviewUrl) autoOpenedPreviewUrlBySessionRef.current.set(normalizedActiveSessionId, latestDevPreviewUrl)
     setRightPanelMode('browser')
   }
 
   const navigateRightPanelHistory = useCallback((offset: -1 | 1): void => {
-    if (!activeSessionId || disposedSessionIdsRef.current.has(activeSessionId)) return
+    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
     setRightPanelWorkspaceMap((current) =>
-      navigateSessionRightPanelHistory(current, activeSessionId, offset)
+      navigateSessionRightPanelHistory(current, normalizedActiveSessionId, offset)
     )
-  }, [activeSessionId])
+  }, [normalizedActiveSessionId])
 
   const discardRightPanelResourceForSession = useCallback((
     sessionId: string,
@@ -389,8 +389,8 @@ export function useWorkbenchLayout({
     mode: 'file' | 'visual-review',
     resourceId: string
   ): void => {
-    if (activeSessionId) discardRightPanelResourceForSession(activeSessionId, mode, resourceId)
-  }, [activeSessionId, discardRightPanelResourceForSession])
+    if (normalizedActiveSessionId) discardRightPanelResourceForSession(normalizedActiveSessionId, mode, resourceId)
+  }, [normalizedActiveSessionId, discardRightPanelResourceForSession])
 
   const beginLeftResize = (event: ReactPointerEvent<HTMLDivElement>): void => {
     if (leftSidebarCollapsed || event.button !== 0) return

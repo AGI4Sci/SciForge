@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { RIGHT_PANEL_MODES, type RightPanelMode } from './chat/WorkbenchTopBar'
+import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import {
   ensureSessionRightPanelWorkspace,
   moveSessionRightPanelWorkspaceOwner,
@@ -24,6 +25,13 @@ function workspacesFor(...sessionIds: string[]): SessionRightPanelWorkspaceMap {
 }
 
 describe('Session right-panel workspaces', () => {
+  it('derives one stable draft owner from the workspace root', () => {
+    expect(draftSessionRightPanelId(' /workspace/project a ')).toBe(
+      'right-panel-draft:%2Fworkspace%2Fproject%20a'
+    )
+    expect(draftSessionRightPanelId('')).toBeNull()
+  })
+
   it.each(RIGHT_PANEL_MODES)(
     'keeps the %s mode on the same Session-owned state path',
     (mode) => {

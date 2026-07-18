@@ -87,6 +87,7 @@ import {
 } from './chat-store-runtime'
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
 import { rekeySessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
+import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -1311,6 +1312,10 @@ export function createThreadActions(
         const threadId = reusableThreadId ?? createdThread?.id ?? null
         if (!threadId) {
           throw new Error('Failed to resolve target thread id.')
+        }
+        if (!initialActiveThreadId && sendSessionStillFocused()) {
+          const draftSessionId = draftSessionRightPanelId(workspaceRoot)
+          if (draftSessionId) rekeySessionRightPanelWorkspace(draftSessionId, threadId)
         }
         activeThreadId = threadId
         if (sendSessionStillFocused()) {
