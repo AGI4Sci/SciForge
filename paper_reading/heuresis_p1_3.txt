@@ -1,0 +1,206 @@
+6
+2
+0
+2
+
+l
+u
+J
+
+1
+
+]
+I
+
+A
+.
+s
+c
+[
+
+2
+v
+8
+9
+1
+5
+2
+.
+6
+0
+6
+2
+:
+v
+i
+X
+r
+a
+
+Heuresis: Search Strategies for Autonomous AI
+Research Agents Across Quality, Diversity and Novelty
+
+Antonis Antoniades⋆,1 Deepak Nathani⋆,1 Ritam Saha⋆,1
+
+Alfonso Amayuelas⋄,1
+Ivan Bercovich⋄,†,1 Zhaotian Weng⋄,1
+Vignesh Baskaran2 Kunal Bhatia2 William Yang Wang†,1
+
+1University of California, Santa Barbara
+⋆Equal contribution.
+
+⋄Core contributor.
+
+2Hexo AI
+†Equal advising.
+
+Correspondence: antonis@ucsb.edu
+
+Abstract
+
+Autonomous AI Research promises to accelerate the scientific progress of machine
+learning. To realise this goal, current Large Language Model (LLM)-based agents
+need to go beyond just writing code, to mastering the exploration of simultane-
+ously performant, diverse and novel ideas. To this end, we introduce Heuresis, a
+framework that abstracts the research pipeline into a set of general and compos-
+able primitives, enabling open-ended scientific exploration in machine learning
+research. We implement six search strategies: a greedy baseline, two archive-based
+(MAP-ELITES, GO-EXPLORE), one evolutionary (ISLANDS), and two divergent
+(CURIOSITY, OMNI), and evaluate them across three axes (Quality, Diversity, and
+Novelty) on three domains (LLM Pretraining, On-Policy RL, and Model Unlearn-
+ing), totalling 3,222 scored runs. We find that completely novel ideas are rare. No
+idea across our scored runs is rated as “Original”, and only a few achieve only
+“Minor Similarity” to prior work. Moreover, novel ideas never approach the highest-
+performing known-recipe scores. Across all six strategies and three domains, only
+one such idea lands in the top-10 by quality. We also observed agents resorting to a
+variety of reward-hacking techniques during execution (40 confirmed fabrications
+across 1,628 scored runs), and detecting them was necessary to keep the search
+faithful to the task. Our results show that while current search and Quality-Diversity
+strategies enable us to steer where the generated ideas land on the quality, diversity,
+and novelty axes, they do not expand the quality–novelty frontier. Bridging this gap
+is the open challenge towards the ultimate goal of perpetual, autonomous scientific
+progress. Code is available at github.com/a-antoniades/Heuresis.
+
+1
+
+Introduction
+
+The state of current LLM-based systems has reached a point where, at least in silico, agents can
+autonomously take actions over large horizons. This naturally opens up the opportunity to fulfill fully-
+autonomous machine learning research. Some early attempts at this goal have shown promise [39,
+54, 28], but while the results show that agents are indeed able to improve results on a given ML
+benchmark given a certain baseline, they also show that agents are not able to adequately explore the
+space of possible solutions, and indeed arrive at new, materially novel ideas that push the frontier of
+AI beyond current human knowledge.
+
+The primary reasons for this stem from the strong priors the models possess within their training
+data [41, 24], and an inherent lack of ability to search and plan effectively [61] by incorporating
+
+Preprint.
+
+ 
+ 
+ 
+ 
+ 
+ 
+Figure 1: Agentic loop internals. An Ideator (1) proposes a code change and an Executor (2) imple-
+ments it, sharing a swappable agent backend. Multiple Ideator–Executor pairs run asynchronously
+in parallel. The MemoryServer (3) stores framework-recorded experiments and agent-authored
+learnings, queryable by semantic KNN or SQL. The GradingServer (4) scores the run; the Hack-
+erJudge (5) audits the workspace and emits a tri-state verdict, optionally triggering an agent-free
+re-grade. The SearchStrategy (6) updates its archive and selects the next parent workspaces (7) to
+close the loop.
+
+global context across large experiments, making strategic decisions about how to allocate resources,
+and break out of existing trajectories, avoiding dead-ends or premature optimization [32]. Key to
+scientific progress is humans’ ability to think abstractly and creatively about a problem, often coming
+to solutions in completely unexpected or unplanned ways [57].
+
+The field of open-endedness has advocated for the need of AI to also do the same [57, 32]. Central to
+this line of research are “Quality-Diversity” (QD) algorithms [44, 38]. These algorithms advocate for
+the need of search and planning to not only optimize across raw performance or fitness of a solution,
+but also across other more abstract axes, particularly diversity.
+
+In our work, we investigate whether search, when paired with state-of-the-art research agents, can
+deliver novel, high-quality research ideas. We find that completely novel ideas are rare. No idea in our
+study is rated as outright “Original”, and the rare novel ideas do not approach the highest-performing
+known-recipe ideas across tasks. These findings point both to ideation, whose proposals collapse to
+training-set priors, and to the search methods’ inability to exploit novel ideas that may perform better
+once optimized further.
+
+Towards understanding how search shapes autonomous ML research, we present Heuresis and make
+three contributions. (a) We release an open-source framework in which fully agentic ideators and
+executors conduct end-to-end ML experiments, composable with state-of-the-art coding agents and
+six search strategies spanning linear refinement and quality-diversity methods. (b) We introduce the
+Quality/Diversity/Novelty frontier as an evaluation lens for automated research, arguing that progress
+requires jointly measuring solution quality, behavioral diversity, and novelty relative to prior work,
+and provide a set of tools to automate this analysis. (c) We conduct a large-scale empirical study
+across three AI research challenges (nanoGPT, On-Policy RL, and Model Unlearning) spanning 9,000
+runs.
+
+2
+
+2 Related Work
+
+Autonomous AI research-agents Several recent systems target end-to-end ML research as a single
+monolithic loop: tree search over code edits at the software-engineering [3] and ML-engineering [25]
+levels, full ideation-to-paper pipelines [36, 59], multi-agent generate–debate–evolve [18], decoupled
+R&D phases [64], and human-in-the-loop scaffolds [46]. Closest to our setup is the AIRA family of
+search-based agents over MLE-bench [60, 20], alongside SkyDiscover and AdaEvolve [56, 8]. We
+differ by holding the agent loop fixed and varying the search strategy, enabling head-to-head com-
+parison rather than monolithic-system advocacy. We depart from AIRA specifically by spanning six
+strategies across greedy, archive-based, population-based, and divergent-objective families, operating
+at the repository level rather than single-script edits, and targeting frontier-ML research questions
+(nanoGPT pretraining, On-Policy RL discovery). Some existing ML research benchmarks include
+MLAgentBench [23], MLE-bench [9], DSBench [26], MLGym [39], and DiscoGen [17], the last of
+which supplies the On-Policy RL and Model Unlearning tasks in our study.
+
+Search and Openendedness Stanley and Lehman [57] advocates that in order for AI systems to
+make new, fundamental discoveries, they need not just focus on a singular metric or goal, but rather
+follow a less constrained, more serendipitous process. The class of algorithms are generally named
+"Quality-Diversity", and these fall into the broader area of Search algorithms. In our work we
+classify these into three distinct classes, Divergent Objectives, Diversity-Preserving Archives, and
+Evolutionary Search. Divergent objectives replace task fitness with an exploration-rewarding
+signal. The classical formulation is Schmidhuber’s curiosity / learning-progress, where intrinsic
+reward is world-model prediction error [47]; novelty search drops the objective entirely [32], and the
+deep-RL era scales the same idea via forward-model error [43], random-network distillation [7], and
+episodic + lifelong novelty [5], with diversity-as-objective skill discovery as a parallel thread [14]. A
+recent line replaces the hand-crafted signal with a foundation-model judge: OMNI scores candidates
+against context as a Model of Interestingness [66], extended to archive-aware rejection in OMNI-
+EPIC [15]; both were originally proposed for environment generation, and we adapt the mechanism
+to solution-space search. Diversity-preserving archives reframe search as illuminating a behaviour
+space. MAP-Elites maintains a grid of behaviourally distinct elites [11, 38, 44]; Go-Explore augments
+this with return-then-explore from archived stepping stones [13]. The LLM era reuses these archives
+with foundation-model variation: LLMs as MAP-Elites mutators [33], joint variation-and-evaluator
+scoring of quality and diversity [6], and foundation-model abstractions replacing hand-crafted Go-
+Explore features [37]. Evolutionary search treats the LLM itself as the evolutionary operator over
+programs. FunSearch combines an LLM mutation with an island-model GA over code [45]; the
+template extends to architecture search [10], prompt co-evolution [16], and groups of coding agents
+that evolve their harness through shared experience [62]. Recent systems push scale and selection:
+AlphaEvolve uses model ensembles for evolutionary code search [40], EvoTune RL-finetunes the
+proposer mid-search [58], and ShinkaEvolve adds bandit LLM selection with novelty rejection
+and weighted parent sampling [30] — the closest published precedent for our OMNI judge gate.
+Open-source reimplementations include OpenEvolve [2] and CodeEvolve [4].
+
+3 Heuresis Framework
+
+3.1 Problem setting
+
+We frame any machine learning research task as a tuple T = (D, c0, M, R, env), where D is the
+domain description handed to the agent, c0 is the seed implementation (initial code and supporting
+scripts), M is the primary scalar metric, R ∈ {min, max} specifies the direction of improvement,
+and env is the environment setup including code, dependencies, data, and constraints such as which
+files are editable.
+
+3.2 Framework
+
+In order to carry out our experiments, we needed to design a framework that satisfies two key needs:
+1) the agent should have the ability to make repository-level changes and access system hardware
+to deploy experiments, and 2) framework should support integration of diverse search algorithms
+without any change to the agent interface. To this end, our framework consists of a general set of
+composable primitives which can be arbitrarily incorporated inside a main loop. (Fig. 1).
+
+3
+
+

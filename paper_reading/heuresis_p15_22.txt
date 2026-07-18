@@ -1,0 +1,548 @@
+7 Conclusion
+
+During this work we have conducted an extensive study across three structurally distinct tasks
+(nanoGPT pretraining, On-Policy RL algorithm discovery, and WMDP-cyber Model Unlearning),
+six search strategies (Greedy, MAP-Elites, Go-Explore, Islands, Curiosity, and Omni) and three
+evaluation axes (quality, diversity, and novelty), totalling 3,222 scored runs. Through this we
+investigated the tradeoffs between Quality, Diversity, and Novelty, and found that search strategies
+reliably alter where executed ideas land on all three axes, yet completely novel ideas remain rare
+and the rare novel ideas never approach the per-task quality peak. Across the study, no idea reaches
+NS = 1 (“Original”), the top-10 ∩ NS ≤ 2 (“Minor Similarity”) intersection contains only one idea,
+and on Model Unlearning no novel-side idea crosses the unlearned-but-still-capable baseline.
+
+While diversity is often regarded as a key prerequisite for quality and novelty, we did not observe
+any clear relationship between them in our experiments. Breadth converts to quality only when the
+task’s quality landscape is itself broad, and a diverse accepted pool does not imply that any single
+idea is unprecedented. In general, MAP-ELITES and GO-EXPLORE sit at or near the top of the
+pairwise-distance ranking on every task. Novel-side ideas typically reach comparable median quality
+to known-side ideas on every task, but their peaks fall short of the per-task quality leader. This
+suggests that current LLM and search methods lack the capability to strategically allocate resources
+and to foresee potential in novel ideas that may currently perform poorly but produce breakthroughs
+given further refinement. Lastly, the fact that no idea across our experiments received a score of “1”
+(“Original”) can be attributed both to the inability of current research agents to produce novelty and
+to the tension inherent in the word “Original” itself. Can any research idea truly be original?
+
+To work towards the goal of fully automated, (super)human researchers, systems should be able to
+quickly adapt based on accumulated experience [42, 22], what Silver and Sutton [55] call the “era of
+experience.” An agent that integrates outcomes over time can recognise promising research directions
+from the trajectory of past attempts, just like seasoned human researchers strategically re-orient their
+attempts during research given new evidence. Secondly, another promising avenue is developing new
+intrinsic (encoded with base model) and extrinsic (search agorithms) exploration mechanisms that
+better utilize and integrate within state-of-the-art models and harnesses, going beyond the search
+strategies we evaluated which are based on traditional open-ended-search literature [32, 57]. Work
+across these two axes (continual learning, Quality–Diversity–Novelty search) has the potential to
+deliver on the promise of fully autonomous AI research agents and beyond.
+
+Acknowledgments and Disclosure of Funding
+
+Antonis Antoniades led the project, originated the idea, chose and implemented the search algorithms,
+built the nanoGPT task, contributed to the code abstractions, and ran experiments and analysis.
+Deepak Nathani co-originated the idea, implemented the DiscoGen tasks, and contributed to the
+code abstractions and experiments. Ritam Saha originated the fully-agentic framework, wrote
+the initial codebase, and led the implementation of the code abstractions. Alfonso Amayuelas
+implemented and ran experiments for the Curiosity search strategy. Ivan Bercovich ran the reward-
+hacking analysis, provided advice, and donated funding for part of the project via the Coefficient
+Giving grant. Zhaotian Weng implemented the Go-Explore search strategy. Vignesh Baskaran and
+Kunal Bhatia (Hexo AI) provided advice and donated part of the compute. William Yang Wang
+provided advice.
+
+References
+
+[1] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zemlyanskiy, Federico Lebrón, and
+Sumit Sanghai. GQA: training generalized multi-query transformer models from multi-head
+checkpoints. In Houda Bouamor, Juan Pino, and Kalika Bali, editors, Proceedings of the 2023
+Conference on Empirical Methods in Natural Language Processing, EMNLP 2023, Singapore,
+December 6-10, 2023, pages 4895–4901. Association for Computational Linguistics, 2023.
+doi: 10.18653/V1/2023.EMNLP-MAIN.298. URL https://doi.org/10.18653/v1/2023.
+emnlp-main.298.
+
+15
+
+[2] Algorithmic Superintelligence. openevolve: Open-source implementation of alphaevolve.
+GitHub repository, 2025. URL https://github.com/algorithmicsuperintelligence/
+openevolve. Accessed: 2026-05-06.
+
+[3] Antonis Antoniades, Albert Örwall, Kexun Zhang, Yuxi Xie, Anirudh Goyal, and William Yang
+Wang. Swe-search: Enhancing software agents with monte carlo tree search and iterative
+refinement. CoRR, abs/2410.20285, 2024. doi: 10.48550/ARXIV.2410.20285. URL https:
+//doi.org/10.48550/arXiv.2410.20285.
+
+[4] Henrique S. Assumpção, Diego Ferreira, Leandro Lacerda Campos, and Fabricio Murai.
+Codeevolve: An open source evolutionary coding agent for algorithm discovery and op-
+timization. CoRR, abs/2510.14150, 2025.
+doi: 10.48550/ARXIV.2510.14150. URL
+https://doi.org/10.48550/arXiv.2510.14150.
+
+[5] Adrià Puigdomènech Badia, Pablo Sprechmann, Alex Vitvitskyi, Zhaohan Daniel Guo, Bilal
+Piot, Steven Kapturowski, Olivier Tieleman, Martín Arjovsky, Alexander Pritzel, Andrew
+Bolt, and Charles Blundell. Never give up: Learning directed exploration strategies. CoRR,
+abs/2002.06038, 2020. URL https://arxiv.org/abs/2002.06038.
+
+[6] Herbie Bradley, Andrew Dai, Hannah Teufel, Jenny Zhang, Koen Oostermeijer, Marco Bel-
+lagente, Jeff Clune, Kenneth O. Stanley, Grégory Schott, and Joel Lehman. Quality-diversity
+through AI feedback. CoRR, abs/2310.13032, 2023. doi: 10.48550/ARXIV.2310.13032. URL
+https://doi.org/10.48550/arXiv.2310.13032.
+
+[7] Yuri Burda, Harrison Edwards, Amos J. Storkey, and Oleg Klimov. Exploration by random
+network distillation. CoRR, abs/1810.12894, 2018. URL http://arxiv.org/abs/1810.
+12894.
+
+[8] Mert Cemri, Shubham Agrawal, Akshat Gupta, Shu Liu, Audrey Cheng, Qiuyang Mang,
+Ashwin Naren, Lutfi Eren Erdogan, Koushik Sen, Matei Zaharia, Alex Dimakis, and Ion Stoica.
+Adaevolve: Adaptive LLM driven zeroth-order optimization. CoRR, abs/2602.20133, 2026. doi:
+10.48550/ARXIV.2602.20133. URL https://doi.org/10.48550/arXiv.2602.20133.
+
+[9] Jun Shern Chan, Neil Chowdhury, Oliver Jaffe, James Aung, Dane Sherburn, Evan Mays,
+Giulio Starace, Kevin Liu, Leon Maksin, Tejal Patwardhan, Lilian Weng, and Aleksander
+Madry. Mle-bench: Evaluating machine learning agents on machine learning engineering.
+CoRR, abs/2410.07095, 2024. doi: 10.48550/ARXIV.2410.07095. URL https://doi.org/
+10.48550/arXiv.2410.07095.
+
+[10] Angelica Chen, David Dohan, and David R. So.
+Evoprompting: Language mod-
+In Alice Oh, Tristan Naumann, Amir
+els for code-level neural architecture search.
+Globerson, Kate Saenko, Moritz Hardt, and Sergey Levine, editors, Advances in Neu-
+ral Information Processing Systems 36: Annual Conference on Neural Information
+Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 -
+16, 2023, 2023.
+URL http://papers.nips.cc/paper_files/paper/2023/hash/
+184c1e18d00d7752805324da48ad25be-Abstract-Conference.html.
+
+[11] Antoine Cully, Jeff Clune, Danesh Tarapore, and Jean-Baptiste Mouret. Robots that can
+adapt like animals. Nat., 521(7553):503–507, 2015. doi: 10.1038/NATURE14422. URL
+https://doi.org/10.1038/nature14422.
+
+[12] Shizhe Diao, Yu Yang, Yonggan Fu, Xin Dong, Dan Su, Markus Kliegl, Zijia Chen, Peter
+Belcak, Yoshi Suhara, Hongxu Yin, Mostofa Patwary, Yingyan Lin, Jan Kautz, and Pavlo
+Molchanov. CLIMB: clustering-based iterative data mixture bootstrapping for language model
+pre-training. CoRR, abs/2504.13161, 2025. doi: 10.48550/ARXIV.2504.13161. URL https:
+//doi.org/10.48550/arXiv.2504.13161.
+
+[13] Adrien Ecoffet, Joost Huizinga, Joel Lehman, Kenneth O. Stanley, and Jeff Clune. First return,
+then explore. Nat., 590(7847):580–586, 2021. doi: 10.1038/S41586-020-03157-9. URL
+https://doi.org/10.1038/s41586-020-03157-9.
+
+[14] Benjamin Eysenbach, Abhishek Gupta, Julian Ibarz, and Sergey Levine. Diversity is all
+you need: Learning skills without a reward function. CoRR, abs/1802.06070, 2018. URL
+http://arxiv.org/abs/1802.06070.
+
+16
+
+[15] Maxence Faldor, Jenny Zhang, Antoine Cully, and Jeff Clune. OMNI-EPIC: open-endedness
+via models of human notions of interestingness with environments programmed in code. CoRR,
+abs/2405.15568, 2024. doi: 10.48550/ARXIV.2405.15568. URL https://doi.org/10.
+48550/arXiv.2405.15568.
+
+[16] Chrisantha Fernando, Dylan Banarse, Henryk Michalewski, Simon Osindero, and Tim Rock-
+täschel. Promptbreeder: Self-referential self-improvement via prompt evolution. In Ruslan
+Salakhutdinov, Zico Kolter, Katherine A. Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett,
+and Felix Berkenkamp, editors, Forty-first International Conference on Machine Learning,
+ICML 2024, Vienna, Austria, July 21-27, 2024, Proceedings of Machine Learning Research,
+pages 13481–13544. PMLR / OpenReview.net, 2024. URL https://proceedings.mlr.
+press/v235/fernando24a.html.
+
+[17] Alexander D. Goldie, Zilin Wang, Adrian Hayler, Deepak Nathani, Edan Toledo, Ken Tham-
+piratwong, Aleksandra Kalisz, Michael Beukman, Alistair Letcher, Shashank Reddy, Clarisse
+Wibault, Theo Wolf, Charles O’Neill, Uljad Berdica, Nicholas Roberts, Saeed Rahmani,
+Hannah Erlebach, Roberta Raileanu, Shimon Whiteson, and Jakob N. Foerster. Proce-
+dural generation of algorithm discovery tasks in machine learning, 2026. URL https:
+//arxiv.org/abs/2603.17863.
+
+[18] Juraj Gottweis, Wei-Hung Weng, Alexander N. Daryin, Tao Tu, Anil Palepu, Petar Sirkovic,
+Artiom Myaskovsky, Felix Weissenberger, Keran Rong, Ryutaro Tanno, Khaled Saab, Dan
+Popovici, Jacob Blum, Fan Zhang, Katherine Chou, Avinatan Hassidim, Burak Gokturk, Amin
+Vahdat, Pushmeet Kohli, Yossi Matias, Andrew Carroll, Kavita Kulkarni, Nenad Tomasev, Yuan
+Guan, Vikram Dhillon, Eeshit Dhaval Vaishnav, Byron Lee, Tiago R. D. Costa, José R. Penadés,
+Gary Peltz, Yunhan Xu, Annalisa Pawlosky, Alan Karthikesalingam, and Vivek Natarajan.
+Towards an AI co-scientist. CoRR, abs/2502.18864, 2025. doi: 10.48550/ARXIV.2502.18864.
+URL https://doi.org/10.48550/arXiv.2502.18864.
+
+[19] Tarun Gupta and Danish Pruthi. All that glitters is not novel: Plagiarism in AI generated
+research. In Proceedings of the 63rd Annual Meeting of the Association for Computational
+Linguistics, ACL 2025, 2025. URL https://arxiv.org/abs/2502.16487.
+
+[20] Karen Hambardzumyan, Nicolas Mario Baldwin, Edan Toledo, Rishi Hazra, Michael Kuchnik,
+Bassel Al Omari, Thomas Foster, Anton Protopopov, Jean-Christophe Gagnon-Audet, Ishita
+Mediratta, Kelvin Niu, Michael Shvartsman, Alisia Maria Lupidi, Alexis Audran-Reiss, Parth
+Pathak, Tatiana Shavrina, Despoina Magka, Hela Momand, Derek Dunfield, Nicola Cancedda,
+Pontus Stenetorp, Carole-Jean Wu, Jakob Nicolaus Foerster, Yoram Bachrach, and Martin
+Josifoski. Aira_2: Overcoming bottlenecks in AI research agents. CoRR, abs/2603.26499,
+2026. doi: 10.48550/ARXIV.2603.26499. URL https://doi.org/10.48550/arXiv.2603.
+26499.
+
+[21] Dan Hendrycks, Collin Burns, Steven Basart, Andy Zou, Mantas Mazeika, Dawn Song, and
+Jacob Steinhardt. Measuring massive multitask language understanding. In 9th International
+Conference on Learning Representations, ICLR 2021, Virtual Event, Austria, May 3-7, 2021.
+OpenReview.net, 2021. URL https://openreview.net/forum?id=d7KBjmI3GmQ.
+
+[22] Jinwu Hu, Zitian Zhang, Guohao Chen, Xutao Wen, Chao Shuai, Wei Luo, Bin Xiao, Yuanqing
+Li, and Mingkui Tan. Test-time learning for large language models. In Aarti Singh, Maryam
+Fazel, Daniel Hsu, Simon Lacoste-Julien, Felix Berkenkamp, Tegan Maharaj, Kiri Wagstaff, and
+Jerry Zhu, editors, Forty-second International Conference on Machine Learning, ICML 2025,
+Vancouver, BC, Canada, July 13-19, 2025, volume 267 of Proceedings of Machine Learning
+Research. PMLR / OpenReview.net, 2025. URL https://proceedings.mlr.press/v267/
+hu25z.html.
+
+[23] Qian Huang, Jian Vora, Percy Liang, and Jure Leskovec. Mlagentbench: Evaluating language
+agents on machine learning experimentation. In Ruslan Salakhutdinov, Zico Kolter, Katherine A.
+Heller, Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp, editors, Forty-first
+International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024,
+Proceedings of Machine Learning Research, pages 20271–20309. PMLR / OpenReview.net,
+2024. URL https://proceedings.mlr.press/v235/huang24y.html.
+
+17
+
+[24] Liwei Jiang, Yuanjun Chai, Margaret Li, Mickel Liu, Raymond Fok, Nouha Dziri, Yulia
+Tsvetkov, Maarten Sap, Alon Albalak, and Yejin Choi. Artificial hivemind: The open-ended
+homogeneity of language models (and beyond). CoRR, abs/2510.22954, 2025. doi: 10.48550/
+ARXIV.2510.22954. URL https://doi.org/10.48550/arXiv.2510.22954.
+
+[25] Zhengyao Jiang, Dominik Schmidt, Dhruv Srikanth, Dixing Xu, Ian Kaplan, Deniss Jacenko,
+and Yuxiang Wu. AIDE: ai-driven exploration in the space of code. CoRR, abs/2502.13138,
+2025. doi: 10.48550/ARXIV.2502.13138. URL https://doi.org/10.48550/arXiv.2502.
+13138.
+
+[26] Liqiang Jing, Zhehui Huang, Xiaoyang Wang, Wenlin Yao, Wenhao Yu, Kaixin Ma, Hongming
+Zhang, Xinya Du, and Dong Yu. Dsbench: How far are data science agents to becoming data
+science experts? CoRR, abs/2409.07703, 2024. doi: 10.48550/ARXIV.2409.07703. URL
+https://doi.org/10.48550/arXiv.2409.07703.
+
+[27] Keller Jordan. modded-nanogpt: NanoGPT (124m) in 90 seconds. https://github.com/
+KellerJordan/modded-nanogpt, 2024. URL https://github.com/KellerJordan/
+modded-nanogpt.
+
+[28] Andrej Karpathy. autoresearch: AI agents running research on single-GPU nanochat train-
+ing automatically. GitHub repository, 2026. URL https://github.com/karpathy/
+autoresearch. Accessed: 2026-05-01.
+
+[29] Meghdad Kurmanji, Peter Triantafillou, Jamie Hayes, and Eleni Triantafillou.
+
+To-
+In Alice Oh, Tristan Naumann, Amir Glober-
+wards unbounded machine unlearning.
+son, Kate Saenko, Moritz Hardt, and Sergey Levine, editors, Advances in Neu-
+ral Information Processing Systems 36: Annual Conference on Neural Information
+Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December 10 -
+16, 2023, 2023.
+URL http://papers.nips.cc/paper_files/paper/2023/hash/
+062d711fb777322e2152435459e6e9d9-Abstract-Conference.html.
+
+[30] Robert Tjarko Lange, Yuki Imajuku, and Edoardo Cetin. Shinkaevolve: Towards open-ended
+and sample-efficient program evolution. CoRR, abs/2509.19349, 2025. doi: 10.48550/ARXIV.
+2509.19349. URL https://doi.org/10.48550/arXiv.2509.19349.
+
+[31] Jinhyuk Lee, Feiyang Chen, Sahil Dua, Daniel Cer, Madhuri Shanbhogue, Iftekhar Naim,
+Gustavo Hernández Ábrego, Zhe Li, Kaifeng Chen, Henrique Schechter Vera, Xiaoqi Ren,
+Shanfeng Zhang, Daniel Salz, Michael Boratko, Jay Han, Blair Chen, Shuo Huang, Vikram Rao,
+Paul Suganthan, Feng Han, Andreas Doumanoglou, Nithi Gupta, Fedor Moiseev, Cathy Yip,
+Aashi Jain, Simon Baumgartner, Shahrokh Shahi, Frank Palma Gomez, Sandeep Mariserla, Min
+Choi, Parashar Shah, Sonam Goenka, Ke Chen, Ye Xia, Koert Chen, Sai Meher Karthik Duddu,
+Yichang Chen, Trevor Walker, Wenlei Zhou, Rakesh Ghiya, Zach Gleicher, Karan Gill, Zhe
+Dong, Mojtaba Seyedhosseini, Yunhsuan Sung, Raphael Hoffmann, and Tom Duerig. Gemini
+embedding: Generalizable embeddings from gemini, 2025. URL https://arxiv.org/abs/
+2503.07891.
+
+[32] Joel Lehman and Kenneth O. Stanley. Abandoning objectives: Evolution through the search for
+novelty alone. Evol. Comput., 19(2):189–223, 2011. doi: 10.1162/EVCO\_A\_00025. URL
+https://doi.org/10.1162/EVCO_a_00025.
+
+[33] Joel Lehman, Jonathan Gordon, Shawn Jain, Kamal Ndousse, Cathy Yeh, and Kenneth O.
+Stanley. Evolution through large models. CoRR, abs/2206.08896, 2022. doi: 10.48550/ARXIV.
+2206.08896. URL https://doi.org/10.48550/arXiv.2206.08896.
+
+[34] Nathaniel Li, Alexander Pan, Anjali Gopal, Summer Yue, Daniel Berrios, Alice Gatti, Justin D.
+Li, Ann-Kathrin Dombrowski, Shashwat Goel, Gabriel Mukobi, Nathan Helm-Burger, Rassin
+Lababidi, Lennart Justen, Andrew B. Liu, Michael Chen, Isabelle Barrass, Oliver Zhang,
+Xiaoyuan Zhu, Rishub Tamirisa, Bhrugu Bharathi, Ariel Herbert-Voss, Cort B. Breuer, Andy
+Zou, Mantas Mazeika, Zifan Wang, Palash Oswal, Weiran Lin, Adam A. Hunt, Justin Tienken-
+Harder, Kevin Y. Shih, Kemper Talley, John Guan, Ian Steneker, David Campbell, Brad
+Jokubaitis, Steven Basart, Stephen Fitz, Ponnurangam Kumaraguru, Kallol Krishna Karmakar,
+Uday Kiran Tupakula, Vijay Varadharajan, Yan Shoshitaishvili, Jimmy Ba, Kevin M. Esvelt,
+
+18
+
+Alexandr Wang, and Dan Hendrycks. The WMDP benchmark: Measuring and reducing
+malicious use with unlearning. In Ruslan Salakhutdinov, Zico Kolter, Katherine A. Heller,
+Adrian Weller, Nuria Oliver, Jonathan Scarlett, and Felix Berkenkamp, editors, Forty-first
+International Conference on Machine Learning, ICML 2024, Vienna, Austria, July 21-27, 2024,
+volume 235 of Proceedings of Machine Learning Research, pages 28525–28550. PMLR /
+OpenReview.net, 2024. URL https://proceedings.mlr.press/v235/li24bc.html.
+
+[35] Rosanne Liu, Joel Lehman, Piero Molino, Felipe Petroski Such, Eric Frank, Alex Sergeev, and Ja-
+son Yosinski. An intriguing failing of convolutional neural networks and the coordconv solution.
+In Samy Bengio, Hanna M. Wallach, Hugo Larochelle, Kristen Grauman, Nicolò Cesa-Bianchi,
+and Roman Garnett, editors, Advances in Neural Information Processing Systems 31: Annual
+Conference on Neural Information Processing Systems 2018, NeurIPS 2018, December 3-8,
+2018, Montréal, Canada, pages 9628–9639, 2018. URL https://proceedings.neurips.
+cc/paper/2018/hash/60106888f8977b71e1f15db7bc9a88d1-Abstract.html.
+
+[36] Chris Lu, Cong Lu, Robert Tjarko Lange, Jakob N. Foerster, Jeff Clune, and David Ha. The AI
+scientist: Towards fully automated open-ended scientific discovery. CoRR, abs/2408.06292,
+2024. doi: 10.48550/ARXIV.2408.06292. URL https://doi.org/10.48550/arXiv.2408.
+06292.
+
+[37] Cong Lu, Shengran Hu, and Jeff Clune.
+
+Intelligent go-explore: Standing on the shoul-
+ders of giant foundation models. In The Thirteenth International Conference on Learning
+Representations, ICLR 2025, Singapore, April 24-28, 2025. OpenReview.net, 2025. URL
+https://openreview.net/forum?id=apErWGzCAA.
+
+[38] Jean-Baptiste Mouret and Jeff Clune. Illuminating search spaces by mapping elites. CoRR,
+
+abs/1504.04909, 2015. URL http://arxiv.org/abs/1504.04909.
+
+[39] Deepak Nathani, Lovish Madaan, Nicholas Roberts, Nikolay Bashlykov, Ajay Menon, Vincent
+Moens, Amar Budhiraja, Despoina Magka, Vladislav Vorotilov, Gaurav Chaurasia, Dieuwke
+Hupkes, Ricardo Silveira Cabral, Tatiana Shavrina, Jakob N. Foerster, Yoram Bachrach,
+William Yang Wang, and Roberta Raileanu. Mlgym: A new framework and benchmark for ad-
+vancing AI research agents. CoRR, abs/2502.14499, 2025. doi: 10.48550/ARXIV.2502.14499.
+URL https://doi.org/10.48550/arXiv.2502.14499.
+
+[40] Alexander Novikov, Ngân Vu, Marvin Eisenberger, Emilien Dupont, Po-Sen Huang, Adam Zsolt
+Wagner, Sergey Shirobokov, Borislav Kozlovskii, Francisco J. R. Ruiz, Abbas Mehrabian,
+M. Pawan Kumar, Abigail See, Swarat Chaudhuri, George Holland, Alex Davies, Sebastian
+Nowozin, Pushmeet Kohli, and Matej Balog. Alphaevolve: A coding agent for scientific and
+algorithmic discovery. CoRR, abs/2506.13131, 2025. doi: 10.48550/ARXIV.2506.13131. URL
+https://doi.org/10.48550/arXiv.2506.13131.
+
+[41] Vishakh Padmakumar and He He. Does writing with language models reduce content diversity?
+In The Twelfth International Conference on Learning Representations, ICLR 2024, Vienna,
+Austria, May 7-11, 2024. OpenReview.net, 2024. URL https://openreview.net/forum?
+id=Feiz5HtCD0.
+
+[42] German Ignacio Parisi, Ronald Kemker, Jose L. Part, Christopher Kanan, and Stefan Wermter.
+Continual lifelong learning with neural networks: A review. Neural Networks, 113:54–71, 2019.
+doi: 10.1016/J.NEUNET.2019.01.012. URL https://doi.org/10.1016/j.neunet.2019.
+01.012.
+
+[43] Deepak Pathak, Pulkit Agrawal, Alexei A. Efros, and Trevor Darrell. Curiosity-driven explo-
+ration by self-supervised prediction. In Doina Precup and Yee Whye Teh, editors, Proceedings
+of the 34th International Conference on Machine Learning, ICML 2017, Sydney, NSW, Australia,
+6-11 August 2017, Proceedings of Machine Learning Research, pages 2778–2787. PMLR, 2017.
+URL http://proceedings.mlr.press/v70/pathak17a.html.
+
+[44] Justin K. Pugh, Lisa B. Soros, and Kenneth O. Stanley. Quality diversity: A new frontier for
+evolutionary computation. Frontiers Robotics AI, 3:40, 2016. doi: 10.3389/FROBT.2016.00040.
+URL https://doi.org/10.3389/frobt.2016.00040.
+
+19
+
+[45] Bernardino Romera-Paredes, Mohammadamin Barekatain, Alexander Novikov, Matej Balog,
+M. Pawan Kumar, Emilien Dupont, Francisco J. R. Ruiz, Jordan S. Ellenberg, Pengming
+Wang, Omar Fawzi, Pushmeet Kohli, and Alhussein Fawzi. Mathematical discoveries from
+program search with large language models. Nat., 625(7995):468–475, 2024. doi: 10.1038/
+S41586-023-06924-6. URL https://doi.org/10.1038/s41586-023-06924-6.
+
+[46] Samuel Schmidgall, Yusheng Su, Ze Wang, Ximeng Sun, Jialian Wu, Xiaodong Yu, Jiang Liu,
+Michael Moor, Zicheng Liu, and Emad Barsoum. Agent laboratory: Using LLM agents as
+research assistants. CoRR, abs/2501.04227, 2025. doi: 10.48550/ARXIV.2501.04227. URL
+https://arxiv.org/abs/2501.04227v2.
+
+[47] Jürgen Schmidhuber. Adaptive confidence and adaptive curiosity. Forschungsberichte, TU
+
+Munich, FKI 149 91:1–9, 1991. URL https://d-nb.info/920717624.
+
+[48] Jürgen Schmidhuber. Formal theory of creativity, fun, and intrinsic motivation (1990-2010).
+IEEE Trans. Auton. Ment. Dev., 2(3):230–247, 2010. doi: 10.1109/TAMD.2010.2056368. URL
+https://doi.org/10.1109/TAMD.2010.2056368.
+
+[49] John Schulman, Philipp Moritz, Sergey Levine, Michael I. Jordan, and Pieter Abbeel. High-
+dimensional continuous control using generalized advantage estimation. In Yoshua Bengio
+and Yann LeCun, editors, 4th International Conference on Learning Representations, ICLR
+2016, San Juan, Puerto Rico, May 2-4, 2016, Conference Track Proceedings, 2016. URL
+http://arxiv.org/abs/1506.02438.
+
+[50] John Schulman, Filip Wolski, Prafulla Dhariwal, Alec Radford, and Oleg Klimov. Proximal
+policy optimization algorithms. CoRR, abs/1707.06347, 2017. URL http://arxiv.org/
+abs/1707.06347.
+
+[51] Noam Shazeer.
+
+Fast transformer decoding: One write-head is all you need. CoRR,
+
+abs/1911.02150, 2019. URL http://arxiv.org/abs/1911.02150.
+
+[52] Noam Shazeer. GLU variants improve transformer. CoRR, abs/2002.05202, 2020. URL
+
+https://arxiv.org/abs/2002.05202.
+
+[53] Weijia Shi, Jaechan Lee, Yangsibo Huang, Sadhika Malladi, Jieyu Zhao, Ari Holtzman, Daogao
+Liu, Luke Zettlemoyer, Noah A. Smith, and Chiyuan Zhang. Muse: Machine unlearning six-way
+evaluation for language models, 2024. URL https://arxiv.org/abs/2407.06460.
+
+[54] Chenglei Si, Zitong Yang, Yejin Choi, Emmanuel Candès, Diyi Yang, and Tatsunori Hashimoto.
+Towards execution-grounded automated ai research, 2026. URL https://arxiv.org/abs/
+2601.14525.
+
+[55] David Silver and Richard S. Sutton. Welcome to the era of experience, 2025. URL
+https://storage.googleapis.com/deepmind-media/Era-of-Experience/The%
+20Era%20of%20Experience%20Paper.pdf. To appear in Designing an Intelligence, ed. G.
+Konidaris, MIT Press.
+
+[56] SkyDiscover Authors. Skydiscover: A flexible framework for AI-driven scientific and algo-
+rithmic discovery. GitHub repository, 2026. URL https://github.com/skydiscover-ai/
+skydiscover. Accessed: 2026-05-07.
+
+[57] Kenneth O. Stanley and Joel Lehman. Why Greatness Cannot Be Planned - The Myth of the
+Objective. Springer, 2015. ISBN 978-3-319-15523-4. doi: 10.1007/978-3-319-15524-1. URL
+https://doi.org/10.1007/978-3-319-15524-1.
+
+[58] Anja Surina, Amin Mansouri, Lars Quaedvlieg, Amal Seddas, Maryna Viazovska, Emmanuel
+Abbe, and Caglar Gulcehre. Algorithm discovery with llms: Evolutionary search meets
+reinforcement learning. CoRR, abs/2504.05108, 2025. doi: 10.48550/ARXIV.2504.05108.
+URL https://doi.org/10.48550/arXiv.2504.05108.
+
+[59] Jiabin Tang, Lianghao Xia, Zhonghang Li, and Chao Huang. Ai-researcher: Autonomous
+scientific innovation. CoRR, abs/2505.18705, 2025. doi: 10.48550/ARXIV.2505.18705. URL
+https://doi.org/10.48550/arXiv.2505.18705.
+
+20
+
+[60] Edan Toledo, Karen Hambardzumyan, Martin Josifoski, Rishi Hazra, Nicolas Mario Bald-
+win, Alexis Audran-Reiss, Michael Kuchnik, Despoina Magka, Minqi Jiang, Alisia Maria
+Lupidi, Andrei Lupu, Roberta Raileanu, Kelvin Niu, Tatiana Shavrina, Jean-Christophe Gagnon-
+Audet, Michael Shvartsman, Shagun Sodhani, Alexander H. Miller, Abhishek Charnalia, Derek
+Dunfield, Carole-Jean Wu, Pontus Stenetorp, Nicola Cancedda, Jakob Nicolaus Foerster, and
+Yoram Bachrach. AI research agents for machine learning: Search, exploration, and generaliza-
+tion in mle-bench. CoRR, abs/2507.02554, 2025. doi: 10.48550/ARXIV.2507.02554. URL
+https://doi.org/10.48550/arXiv.2507.02554.
+
+[61] Karthik Valmeekam, Matthew Marquez, Sarath Sreedharan, and Subbarao Kambhampati.
+On the planning abilities of large language models - A critical investigation. In Alice Oh,
+Tristan Naumann, Amir Globerson, Kate Saenko, Moritz Hardt, and Sergey Levine, edi-
+tors, Advances in Neural Information Processing Systems 36: Annual Conference on Neu-
+ral Information Processing Systems 2023, NeurIPS 2023, New Orleans, LA, USA, December
+10 - 16, 2023, 2023. URL http://papers.nips.cc/paper_files/paper/2023/hash/
+efb2072a358cefb75886a315a6fcf880-Abstract-Conference.html.
+
+[62] Zhaotian Weng, Antonis Antoniades, Deepak Nathani, Zhen Zhang, Xiao Pu, and Xin Eric
+Wang. Group-evolving agents: Open-ended self-improvement via experience sharing, 2026.
+URL https://arxiv.org/abs/2602.04837.
+
+[63] An Yang, Baosong Yang, Beichen Zhang, Binyuan Hui, Bo Zheng, Bowen Yu, Chengyuan
+Li, Dayiheng Liu, Fei Huang, Haoran Wei, Huan Lin, Jian Yang, Jianhong Tu, Jianwei Zhang,
+Jianxin Yang, Jiaxi Yang, Jingren Zhou, Junyang Lin, Kai Dang, Keming Lu, Keqin Bao, Kexin
+Yang, Le Yu, Mei Li, Mingfeng Xue, Pei Zhang, Qin Zhu, Rui Men, Runji Lin, Tianhao Li,
+Tingyu Xia, Xingzhang Ren, Xuancheng Ren, Yang Fan, Yang Su, Yichang Zhang, Yu Wan,
+Yuqiong Liu, Zeyu Cui, Zhenru Zhang, and Zihan Qiu. Qwen2.5 technical report. CoRR,
+abs/2412.15115, 2024. doi: 10.48550/ARXIV.2412.15115. URL https://doi.org/10.
+48550/arXiv.2412.15115.
+
+[64] Xu Yang, Xiao Yang, Shikai Fang, Yifei Zhang, Jian Wang, Bowen Xian, Qizheng Li, Jingyuan
+Li, Minrui Xu, Yuante Li, Haoran Pan, Yuge Zhang, Weiqing Liu, Yelong Shen, Weizhu Chen,
+and Jiang Bian. R&d-agent: An llm-agent framework towards autonomous data science. CoRR,
+abs/2505.14738, 2025. doi: 10.48550/ARXIV.2505.14738. URL https://arxiv.org/abs/
+2505.14738v2.
+
+[65] Kenny Young and Tian Tian. Minatar: An atari-inspired testbed for thorough and reproducible
+
+reinforcement learning experiments. arXiv preprint arXiv:1903.03176, 2019.
+
+[66] Jenny Zhang, Joel Lehman, Kenneth O. Stanley, and Jeff Clune. OMNI: open-endedness via
+models of human notions of interestingness. CoRR, abs/2306.01711, 2023. doi: 10.48550/
+ARXIV.2306.01711. URL https://doi.org/10.48550/arXiv.2306.01711.
+
+[67] Jenny Zhang, Shengran Hu, Cong Lu, Robert Lange, and Jeff Clune. Darwin godel machine:
+Open-ended evolution of self-improving agents. arXiv preprint arXiv:2505.22954, 2025.
+
+[68] Jenny Zhang, Bingchen Zhao, Wannan Yang, Jakob Foerster, Jeff Clune, Minqi Jiang, Sam
+
+Devlin, and Tatiana Shavrina. Hyperagents. arXiv preprint arXiv:2603.19461, 2026.
+
+[69] Ruiqi Zhang, Licong Lin, Yu Bai, and Song Mei. Negative preference optimization: From
+catastrophic collapse to effective unlearning. CoRR, abs/2404.05868, 2024. doi: 10.48550/
+ARXIV.2404.05868. URL https://doi.org/10.48550/arXiv.2404.05868.
+
+[70] Zhanchao Zhou, Tianyi Wu, Zhiyun Jiang, Fares Obeid, and Zhenzhong Lan. Value residual
+
+learning, 2025. URL https://arxiv.org/abs/2410.17897.
+
+A Supplementary material
+
+A.1 Problem-setting details
+
+Refers to §3.1.
+
+21
+
+Per-task configuration.
+
+• NanoGPT: full train.py model config (DEPTH=8 with derived nembd = 512, nhead = 4 via
+ASPECT_RATIO=64 + HEAD_DIM=128); TIME_BUDGET=1200 s; ClimbMix shard layout;
+tokenizer details.
+
+• DiscoGen / OnPolicyRL: discovered/ edit boundary, run_main.py byte-identical invari-
+
+ant, per-domain baseline_scores.yaml, the 14-domain family extension.
+
+A.2 Agent-loop details
+
+Refers to §3.2.2.
+
+Sandbox and workspace contract.
+
+• Each agent turn runs in a bwrap workspace with explicit bind-mounts for seed files, read-
+only parent workspaces, task data, and host-side sockets. The editable surface is task-specific:
+train.py for NanoGPT and discovered/ for DiscoGen.
+
+• The task environment
+
+is copied from a project venv using hardlinks (cp -al
+venvs/<task>/ ...) where supported by the filesystem, keeping per-run startup cheap
+while preserving a read-only dependency base.
+
+• Workspaces expose system tools through /opt/qd/bin/ and carry an idempotent
+
+.workspace_id; the same identifier is used by telemetry and memory attribution.
+
+Harness and sessions.
+
+• The harness wraps interchangeable agent CLIs and models, currently OpenCode/Gemini
+for ideation and execution and Claude Code/Sonnet for the auditor. It owns GPU pinning,
+timeout handling, and CLI-specific session identifiers.
+
+• Stateful ideation is a strategy-level choice exposed through the same harness API; stateless
+strategies create fresh sessions, while Greedy and steady-state Curiosity can reuse sessions
+with bounded reset intervals.
+
+• Claude Code runs with ANTHROPIC_API_KEY stripped so OAuth authentication remains
+
+active across multi-day campaigns.
+
+Scoring and audit.
+
+• The grader is a host-side service reached over a Unix socket. It reads executor artefacts and
+returns the task metric or ⊥; test answers and scoring code are never mounted read-write
+inside the sandbox.
+
+• The auditor (HackerJudge) returns a tri-state verdict: valid / suspicious_evidence /
+
+invalid_idea. Regression suite of 10 curated cases (5 fakes, 5 legit).
+
+• verify:
+
+task-config schema (regen command, stdout file, min_stdout_bytes,
+
+evidence_description, invariants, fabrication_patterns, diff_scope).
+
+• Common executor failure modes are recorded before strategy update: run.log < 300 B
+(import crash), large run.log without val_bpb (eval-timeout), missing run.log (agent
+never ran train.py), NaN/inf loss.
+
+Storage and persistence.
+
+• ResultStore schema — six SQLite tables:
+
+experiments, runs, run_files,
+
+archive_events, novelty_reviews, judge_reviews.
+
+• Every executor run stores its metric, validity, parent ids, generation, strategy metadata, and
+
+snapshots of bounded-size artefacts (idea.md, edited source, run.log, notes.md).
+
+22
+
+

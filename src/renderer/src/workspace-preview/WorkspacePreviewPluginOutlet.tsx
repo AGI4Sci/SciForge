@@ -59,6 +59,9 @@ import {
 import type {
   WorkspacePreviewPanelShellContext
 } from './WorkspacePreviewPanelShell'
+import type {
+  WorkspacePreviewPresentationStateChangeHandler
+} from './presentation-state'
 
 export type WorkspacePreviewPluginOutletRouteReason =
   | 'deferred-non-life-science'
@@ -74,6 +77,7 @@ export type WorkspacePreviewPluginOutletProps = {
   renderers?: readonly WorkspacePreviewPluginRendererContribution[]
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   visualContextComponentId?: string
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 export type WorkspacePreviewPluginRendererInput = {
@@ -87,6 +91,7 @@ export type WorkspacePreviewPluginRendererInput = {
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   visualContextComponentId?: string
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 export type WorkspacePreviewPluginRendererContribution = {
@@ -206,7 +211,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         observation.file.mimeType === 'application/pdf' ||
         observation.file.mimeType === 'application/x-pdf'
       )),
-    render: ({ context, observation, asset, transport, annotationQuestionBridge, visualContextComponentId }) => (
+    render: ({ context, observation, asset, transport, annotationQuestionBridge, visualContextComponentId, onPresentationStateChange }) => (
       <DocumentAnnotationPanelController
         context={context}
         observation={observation}
@@ -229,6 +234,7 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
             onOpenAnnotations={pdf.onOpenAnnotations}
             onToggleAnnotations={pdf.onToggleAnnotations}
             visualContextComponentId={visualContextComponentId}
+            onPresentationStateChange={onPresentationStateChange}
           />
         )}
       />
@@ -427,7 +433,8 @@ export function WorkspacePreviewPluginOutlet({
   routeModality,
   renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
   annotationQuestionBridge,
-  visualContextComponentId
+  visualContextComponentId,
+  onPresentationStateChange
 }: WorkspacePreviewPluginOutletProps): ReactElement {
   const observation = context.state.observation
   const pluginId = observation?.view.pluginId ??
@@ -459,7 +466,8 @@ export function WorkspacePreviewPluginOutlet({
       modality,
       applyEdit,
       annotationQuestionBridge,
-      visualContextComponentId
+      visualContextComponentId,
+      onPresentationStateChange
     })
   }
 

@@ -31,6 +31,9 @@ import type {
 import type {
   WritePdfSelectionPageRect
 } from '../components/write/WritePdfViewer'
+import type {
+  WorkspacePreviewPresentationStateChangeHandler
+} from './presentation-state'
 
 export const PDF_WORKSPACE_VIEWER_MAX_BYTES = WORKSPACE_PREVIEW_MAX_RANGE_BYTES
 const StableWritePdfViewer = memo(WritePdfViewer)
@@ -101,6 +104,7 @@ export type PdfWorkspaceViewerProps = {
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
   onToggleAnnotations?: () => void
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 export type PdfWorkspaceViewerLoadResult =
@@ -281,7 +285,8 @@ export function PdfWorkspaceViewer({
   onSelectionChange,
   onAnnotationSelect,
   onOpenAnnotations,
-  onToggleAnnotations
+  onToggleAnnotations,
+  onPresentationStateChange
 }: PdfWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation()
   const rightPanelSessionId = useRightPanelSessionId()
@@ -435,6 +440,7 @@ export function PdfWorkspaceViewer({
               onAnnotationSelect={onAnnotationSelect}
               onOpenAnnotations={onOpenAnnotations}
               onToggleAnnotations={onToggleAnnotations}
+              onPresentationStateChange={onPresentationStateChange}
               className="h-full min-h-0"
             />
           </div>

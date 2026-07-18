@@ -1,0 +1,225 @@
+\relax 
+\bibstyle{sn-basic}
+\providecommand\hyper@newdestlabel[2]{}
+\providecommand\HyperFirstAtBeginDocument{\AtBeginDocument}
+\HyperFirstAtBeginDocument{\ifx\hyper@anchor\@undefined
+\global\let\oldnewlabel\newlabel
+\gdef\newlabel#1#2{\newlabelxx{#1}#2}
+\gdef\newlabelxx#1#2#3#4#5#6{\oldnewlabel{#1}{{#2}{#3}}}
+\AtEndDocument{\ifx\hyper@anchor\@undefined
+\let\newlabel\oldnewlabel
+\fi}
+\fi}
+\global\let\hyper@last\relax 
+\gdef\HyperFirstAtBeginDocument#1{#1}
+\providecommand\HyField@AuxAddToFields[1]{}
+\providecommand\HyField@AuxAddToCoFields[2]{}
+\citation{paperQA2024,openScholar2024,googleCoScientist2025,sakanaAIScientist2024,yamada2025aiscientistv2,agentLaboratory2025,ghareeb2026robin,huang2025biomni}
+\citation{anthropicClaudeScience2026,omicOSOverview2026,omicsClaw2026,operonGitHub2026,claudePrism2026}
+\@writefile{lof}{\contentsline {figure}{\numberline {1}{\ignorespaces SciForge at a glance: a live scientific-research thread (left) and its inspectable Evidence DAG (right). In this target-discovery example, source assertions, reasoning nodes, and claims remain connected to support and contradiction edges, while node-level provenance and audit metrics stay visible to the researcher.}}{2}{figure.2}\protected@file@percent }
+\newlabel{fig:sciforge-workbench-at-a-glance}{{1}{2}{SciForge at a glance: a live scientific-research thread (left) and its inspectable Evidence DAG (right). In this target-discovery example, source assertions, reasoning nodes, and claims remain connected to support and contradiction edges, while node-level provenance and audit metrics stay visible to the researcher}{figure.2}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {1}Introduction}{2}{section.3}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.1}Background and Motivation}{2}{subsection.4}\protected@file@percent }
+\citation{wilkinson2016fair,sandve2013reproducible}
+\citation{rizvi2025c2s}
+\citation{lin2023esm2}
+\citation{abdine2023prot2text}
+\citation{pei2024biot5}
+\citation{w3cprov2013}
+\@writefile{toc}{\contentsline {subsection}{\numberline {1.2}Contributions}{3}{subsection.5}\protected@file@percent }
+\citation{anthropicClaudeScience2026}
+\citation{claudePrism2026}
+\citation{elicit2026,consensus2026}
+\citation{omicOSOverview2026,omicOSServe2026,omicOSCLI2026}
+\citation{omicsClaw2026}
+\citation{operonGitHub2026}
+\@writefile{toc}{\contentsline {section}{\numberline {2}Related Work}{4}{section.6}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.1}GUI-Based Scientific Workbenches}{4}{subsection.7}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.2}Terminal Workbenches}{4}{subsection.8}\protected@file@percent }
+\citation{futureHousePlatform2025}
+\citation{paperQA2024,openScholar2024,scholarQA2025}
+\citation{sakanaAIScientist2024,yamada2025aiscientistv2,agentLaboratory2025,ifargan2025datatopaper}
+\citation{googleCoScientist2025,ghareeb2026robin}
+\citation{bran2024chemcrow,boiko2023coscientist}
+\citation{huang2025biomni,qu2026crisprgpt,swanson2025virtuallab}
+\citation{ghafarollahi2025sciagents,szymanski2023alab}
+\citation{jansen2024discoveryworld,chen2025scienceagentbench}
+\citation{lin2023esm2}
+\citation{abdine2023prot2text}
+\citation{pei2024biot5}
+\citation{rizvi2025c2s}
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.3}AI Scientists and Research Agents}{5}{subsection.9}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {2.4}Comparison and Positioning}{5}{subsection.10}\protected@file@percent }
+\citation{jansen2024discoveryworld,chen2025scienceagentbench}
+\citation{w3cprov2013,huynh2013provjson}
+\citation{anthropicMCP2024}
+\@writefile{lot}{\contentsline {table}{\numberline {1}{\ignorespaces High-level comparison of scientific AI system categories. A checkmark indicates first-class or documented support as a primary design goal in the publicly reviewed materials. Absence of a checkmark does not prove absence of a feature; it indicates we did not find documented first-class support in the reviewed materials. $\dagger $\nobreakspace  {}Planned for a future release.}}{7}{table.12}\protected@file@percent }
+\newlabel{tab:terminal_related_work}{{1}{7}{High-level comparison of scientific AI system categories. A checkmark indicates first-class or documented support as a primary design goal in the publicly reviewed materials. Absence of a checkmark does not prove absence of a feature; it indicates we did not find documented first-class support in the reviewed materials. $\dagger $~Planned for a future release}{table.12}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {3}System Architecture}{7}{section.13}\protected@file@percent }
+\newlabel{sec:system-architecture}{{3}{7}{System Architecture}{section.13}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.1}Overall Design Philosophy}{7}{subsection.14}\protected@file@percent }
+\citation{w3cprov2013,huynh2013provjson}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.2}User Interaction and Collaboration (Layer\nobreakspace  {}1)}{8}{subsection.20}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.3}Research Capability Patterns (Layer\nobreakspace  {}2)}{8}{subsection.21}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.4}Core Engine (Layer\nobreakspace  {}3)}{8}{subsection.22}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {2}{\ignorespaces SciForge system framework. Layer\nobreakspace  {}2 exposes six scientific-workflow capabilities---Literature Review, Idea Generation, Experiment Design, Experiment Execution, Analysis \& Iteration, and Scientific Communication. Each capability enters the same evidence-aware control chain---ingress, translation, execution, evidence capture, audit, and release---built on the interaction surfaces, core engine, scientific model router, and local-first infrastructure.}}{9}{figure.19}\protected@file@percent }
+\newlabel{fig:sciforge_framework}{{2}{9}{SciForge system framework. Layer~2 exposes six scientific-workflow capabilities---Literature Review, Idea Generation, Experiment Design, Experiment Execution, Analysis \& Iteration, and Scientific Communication. Each capability enters the same evidence-aware control chain---ingress, translation, execution, evidence capture, audit, and release---built on the interaction surfaces, core engine, scientific model router, and local-first infrastructure}{figure.19}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.5}Scientific Model Router (Layer\nobreakspace  {}4)}{10}{subsection.23}\protected@file@percent }
+\citation{abramson2024alphafold3}
+\@writefile{toc}{\contentsline {subsection}{\numberline {3.6}Infrastructure (Layer\nobreakspace  {}5)}{11}{subsection.24}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {4}Use Cases}{11}{section.25}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.1}Agentic Research Sprint: From Question to Manuscript Package}{11}{subsection.26}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {3}{\ignorespaces Automated research pipeline executed during the SciForge scenario-01 research sprint. The 132-stage, 199+-commit agentic loop progresses from a biological research question through literature mining (DCT-M3), candidate gene curation, AlphaFold3 structural prediction, evidence triangulation, manuscript synthesis, and submission packaging. Quantitative metrics: 132 research stages, 199+ Git commits, 6 parallel child-agent runs, 9 generated figures, $\sim $164 papers reviewed, and $\sim $85 evidence nodes produced. Selected artifacts and thread evidence are linked to versioned records, evidence summaries, and audit findings where captured.}}{12}{figure.29}\protected@file@percent }
+\newlabel{fig:research-pipeline}{{3}{12}{Automated research pipeline executed during the SciForge scenario-01 research sprint. The 132-stage, 199+-commit agentic loop progresses from a biological research question through literature mining (DCT-M3), candidate gene curation, AlphaFold3 structural prediction, evidence triangulation, manuscript synthesis, and submission packaging. Quantitative metrics: 132 research stages, 199+ Git commits, 6 parallel child-agent runs, 9 generated figures, $\sim $164 papers reviewed, and $\sim $85 evidence nodes produced. Selected artifacts and thread evidence are linked to versioned records, evidence summaries, and audit findings where captured}{figure.29}{}}
+\citation{lin2023esm2,hayes2025esm3}
+\@writefile{lof}{\contentsline {figure}{\numberline {4}{\ignorespaces Key biological conclusions reported by the SciForge agentic research sprint. The DCT-M3 causal-module triangulation framework decomposes the meiosis initiation switch into four regulatory layers: (1)\nobreakspace  {}permissive licensing---chromatin opening and epigenetic priming; (2)\nobreakspace  {}brake release---degradation of meiotic inhibitors via ubiquitin-proteasome pathways; (3)\nobreakspace  {}trigger execution---SPO11-mediated double-strand breaks and synaptonemal complex assembly; (4)\nobreakspace  {}chromatin/RNA competence---transcriptional activation, splicing regulation, and 3D genome reorganization. The sprint reported a candidate-gene atlas of 23 genes across 12\nobreakspace  {}molecular classes, supported by multi-omics evidence, AlphaFold3 structure-based computational assessment, and literature triangulation; formal expert adjudication remains future work.}}{13}{figure.31}\protected@file@percent }
+\newlabel{fig:meiosis-conclusions}{{4}{13}{Key biological conclusions reported by the SciForge agentic research sprint. The DCT-M3 causal-module triangulation framework decomposes the meiosis initiation switch into four regulatory layers: (1)~permissive licensing---chromatin opening and epigenetic priming; (2)~brake release---degradation of meiotic inhibitors via ubiquitin-proteasome pathways; (3)~trigger execution---SPO11-mediated double-strand breaks and synaptonemal complex assembly; (4)~chromatin/RNA competence---transcriptional activation, splicing regulation, and 3D genome reorganization. The sprint reported a candidate-gene atlas of 23 genes across 12~molecular classes, supported by multi-omics evidence, AlphaFold3 structure-based computational assessment, and literature triangulation; formal expert adjudication remains future work}{figure.31}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.2}AI4AI: Automated Modeling for Scientific Discovery}{13}{subsection.32}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {5}{\ignorespaces Primary metric (\texttt  {eval\_long\_P@L}) trajectory across AI4AI design iterations for ESMC-based protein contact prediction. Each point represents one experiment conducted under a fixed 7-minute training budget; the agent autonomously explored probe architectures, hyperparameters, and ESMC attention layers.}}{14}{figure.34}\protected@file@percent }
+\newlabel{fig:ai4ai-contact-probe}{{5}{14}{Primary metric (\texttt {eval\_long\_P@L}) trajectory across AI4AI design iterations for ESMC-based protein contact prediction. Each point represents one experiment conducted under a fixed 7-minute training budget; the agent autonomously explored probe architectures, hyperparameters, and ESMC attention layers}{figure.34}{}}
+\citation{vcbench2026}
+\@writefile{lof}{\contentsline {figure}{\numberline {6}{\ignorespaces Contact map visualizations for the three evaluation monomers (PDB IDs: 1a3a, 5ahw, 1xcr) from the representative AI4AI experiment (iteration\nobreakspace  {}24). Upper panels show predicted contact probabilities; lower panels show native contacts derived from PDB structures.}}{15}{figure.36}\protected@file@percent }
+\newlabel{fig:ai4ai-contact-maps}{{6}{15}{Contact map visualizations for the three evaluation monomers (PDB IDs: 1a3a, 5ahw, 1xcr) from the representative AI4AI experiment (iteration~24). Upper panels show predicted contact probabilities; lower panels show native contacts derived from PDB structures}{figure.36}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.3}Reviewer / Rebuttal Mode: Evidence-Governed Peer Review and Response}{15}{subsection.37}\protected@file@percent }
+\citation{stahl2016spatial}
+\citation{zhao2021bayesspace,hu2021spagcn,xu2024sedr,long2023graphst}
+\citation{MCFST2025}
+\@writefile{lof}{\contentsline {figure}{\numberline {7}{\ignorespaces Reviewer/Rebuttal workflow exercised on the VCBench manuscript (arXiv:2604.27646v1). Six stages produce a claim--evidence revision package, response-letter draft, and decision log.}}{16}{figure.40}\protected@file@percent }
+\newlabel{fig:reviewer-rebuttal-workflow}{{7}{16}{Reviewer/Rebuttal workflow exercised on the VCBench manuscript (arXiv:2604.27646v1). Six stages produce a claim--evidence revision package, response-letter draft, and decision log}{figure.40}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.4}Guided Paper Reproduction: MCFST Spatial Transcriptomics}{16}{subsection.41}\protected@file@percent }
+\citation{xu2024sedr}
+\citation{papalexi2021eccite}
+\citation{uniprot2025}
+\citation{reactome2024}
+\citation{tsherniak2017depmap}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.5}Cross-Scale Cell Atlas from Multi-Database Integration}{18}{subsection.48}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {8}{\ignorespaces Cross-Scale Layer Coverage and Dataset Construction. The 35-guide integrated dataset spans six biological layers (L0--L5). Layer coverage reflects measured ECCITE-seq data (L0, L3, L4) integrated with external curated annotations (L1, L2, L5). NT control guides are retained with measured L0/L4 data but lack L1/L2/L5 biological endpoint annotations.}}{19}{figure.50}\protected@file@percent }
+\newlabel{fig:cross-scale-pipeline}{{8}{19}{Cross-Scale Layer Coverage and Dataset Construction. The 35-guide integrated dataset spans six biological layers (L0--L5). Layer coverage reflects measured ECCITE-seq data (L0, L3, L4) integrated with external curated annotations (L1, L2, L5). NT control guides are retained with measured L0/L4 data but lack L1/L2/L5 biological endpoint annotations}{figure.50}{}}
+\citation{watson2023rfdiffusion}
+\citation{dauparas2022proteinmpnn}
+\citation{passaro2025boltz2}
+\citation{lin2023esm2}
+\@writefile{lof}{\contentsline {figure}{\numberline {9}{\ignorespaces Multi-Modal L3/L4 Evidence Landscape. Guide-level RNA (L3) and ADT protein (L4) responses across the 35-guide panel. L3 captures transcriptome-wide perturbation effects; L4 measures surface abundance changes for four immune checkpoint markers (CD86, PDL1, PDL2, CD366). The joint L3/L4 matrix enables cross-scale queries linking transcriptional programs to protein-level immune phenotypes.}}{20}{figure.52}\protected@file@percent }
+\newlabel{fig:cross-scale-coverage}{{9}{20}{Multi-Modal L3/L4 Evidence Landscape. Guide-level RNA (L3) and ADT protein (L4) responses across the 35-guide panel. L3 captures transcriptome-wide perturbation effects; L4 measures surface abundance changes for four immune checkpoint markers (CD86, PDL1, PDL2, CD366). The joint L3/L4 matrix enables cross-scale queries linking transcriptional programs to protein-level immune phenotypes}{figure.52}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.6}AI-Guided Protein Design}{20}{subsection.55}\protected@file@percent }
+\citation{watson2023rfdiffusion}
+\citation{dauparas2022proteinmpnn}
+\citation{passaro2025boltz2}
+\@writefile{lof}{\contentsline {figure}{\numberline {10}{\ignorespaces AI-guided de novo protein design pipeline. The workflow integrates four stages: (1)\nobreakspace  {}backbone generation via RFdiffusion \cite  {watson2023rfdiffusion} produces three 80--100-residue scaffolds; (2)\nobreakspace  {}sequence design via ProteinMPNN \cite  {dauparas2022proteinmpnn} generates five candidate sequences per backbone (15 total); (3)\nobreakspace  {}structural verification via Boltz-2 \cite  {passaro2025boltz2} and ESMFold \cite  {lin2023esm2} provides confidence ranking and consensus validation; and (4)\nobreakspace  {}candidate selection filters for pTM $\geq 0.85$ and pLDDT $\geq 0.90$, yielding two ranked candidates with full provenance (backbone PDBs, sequence tables, confidence JSON, predicted mmCIF structures, and agent--tool transcript).}}{21}{figure.54}\protected@file@percent }
+\newlabel{fig:protein-design-pipeline}{{10}{21}{AI-guided de novo protein design pipeline. The workflow integrates four stages: (1)~backbone generation via RFdiffusion \cite {watson2023rfdiffusion} produces three 80--100-residue scaffolds; (2)~sequence design via ProteinMPNN \cite {dauparas2022proteinmpnn} generates five candidate sequences per backbone (15 total); (3)~structural verification via Boltz-2 \cite {passaro2025boltz2} and ESMFold \cite {lin2023esm2} provides confidence ranking and consensus validation; and (4)~candidate selection filters for pTM $\geq 0.85$ and pLDDT $\geq 0.90$, yielding two ranked candidates with full provenance (backbone PDBs, sequence tables, confidence JSON, predicted mmCIF structures, and agent--tool transcript)}{figure.54}{}}
+\citation{jumper2021alphafold}
+\citation{rocklin2017proteinFolding}
+\@writefile{lof}{\contentsline {figure}{\numberline {11}{\ignorespaces Protein design candidate evaluation. (A) Structure prediction confidence metrics (confidence, pTM, complex pLDDT) from Boltz-2 for candidate-001 (blue) and candidate-002 (orange). (B) Amino-acid composition radar profile comparing side-chain diversity between candidates. (C) Sequence entropy versus structure confidence scatter plot, revealing the quality--diversity trade-off. (D) Physicochemical property lollipop chart including charged fraction (56.5\% and 53.3\%), hydrophobic fraction (38.0\% and 39.1\%), and sequence entropy.}}{22}{figure.57}\protected@file@percent }
+\newlabel{fig:protein-design-eval}{{11}{22}{Protein design candidate evaluation. (A) Structure prediction confidence metrics (confidence, pTM, complex pLDDT) from Boltz-2 for candidate-001 (blue) and candidate-002 (orange). (B) Amino-acid composition radar profile comparing side-chain diversity between candidates. (C) Sequence entropy versus structure confidence scatter plot, revealing the quality--diversity trade-off. (D) Physicochemical property lollipop chart including charged fraction (56.5\% and 53.3\%), hydrophobic fraction (38.0\% and 39.1\%), and sequence entropy}{figure.57}{}}
+\citation{park2012egfr}
+\citation{bickerton2012qed,lipinski2001ruleoffive,baell2010pains,ertl2009sa}
+\citation{alhossary2015quickvina2}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.7}AI-Guided Molecular Design and Iterative Optimization}{23}{subsection.58}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {2}{\ignorespaces Convergence trajectory across six optimization rounds. Best and mean docking scores (QuickVina\nobreakspace  {}2, kcal/mol) improve monotonically from Round\nobreakspace  {}1 to Round\nobreakspace  {}6, with the strategy type evolving to balance exploitation, exploration, and pivoting.}}{24}{table.60}\protected@file@percent }
+\newlabel{tab:molopt-convergence}{{2}{24}{Convergence trajectory across six optimization rounds. Best and mean docking scores (QuickVina~2, kcal/mol) improve monotonically from Round~1 to Round~6, with the strategy type evolving to balance exploitation, exploration, and pivoting}{table.60}{}}
+\citation{rogers2010ecfp}
+\citation{landrum2016rdkit}
+\@writefile{lot}{\contentsline {table}{\numberline {3}{\ignorespaces Physicochemical properties of the best candidate from each optimization round.}}{25}{table.64}\protected@file@percent }
+\newlabel{tab:molopt-properties}{{3}{25}{Physicochemical properties of the best candidate from each optimization round}{table.64}{}}
+\citation{keller2019fungal}
+\citation{blin2023antismash}
+\citation{zdouc2025mibig4}
+\citation{navarro2020bigscape}
+\@writefile{lof}{\contentsline {figure}{\numberline {12}{\ignorespaces Iterative optimization trajectory for EGFR kinase inhibitors. (a) Selected round-level 4-anilinoquinazoline structures retained from the molecular panel; annotations report candidate identity, docking score, molecular weight (MW), LogP, and QED. (b) Best (solid) and mean (dashed) QuickVina\nobreakspace  {}2 docking scores from the Erlotinib baseline through R1--R6; lower values indicate stronger predicted binding. (c) Baseline-relative $\Delta $Score by round and strategy, with the pre-registered success threshold at $-2.0$\nobreakspace  {}kcal/mol. The best score reaches $-10.3$\nobreakspace  {}kcal/mol in the Round\nobreakspace  {}6 pivot ($\Delta =-1.7$\nobreakspace  {}kcal/mol versus Erlotinib), so the primary success criterion remains unmet. Physicochemical properties are reported in Table\nobreakspace  {}\ref {tab:molopt-properties}.}}{26}{figure.62}\protected@file@percent }
+\newlabel{fig:molopt-optimization}{{12}{26}{Iterative optimization trajectory for EGFR kinase inhibitors. (a) Selected round-level 4-anilinoquinazoline structures retained from the molecular panel; annotations report candidate identity, docking score, molecular weight (MW), LogP, and QED. (b) Best (solid) and mean (dashed) QuickVina~2 docking scores from the Erlotinib baseline through R1--R6; lower values indicate stronger predicted binding. (c) Baseline-relative $\Delta $Score by round and strategy, with the pre-registered success threshold at $-2.0$~kcal/mol. The best score reaches $-10.3$~kcal/mol in the Round~6 pivot ($\Delta =-1.7$~kcal/mol versus Erlotinib), so the primary success criterion remains unmet. Physicochemical properties are reported in Table~\ref {tab:molopt-properties}}{figure.62}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {4.8}Genome-to-BGC Discovery and Prioritization}{26}{subsection.67}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {13}{\ignorespaces 4-Anilinoquinazoline scaffold modification strategy. The modifiable positions are annotated with the best substituent found in each round and the optimization strategy (exploration, exploitation, pivot) that discovered it. R\textsubscript  {1}=CF\textsubscript  {3} + R\textsubscript  {2}=OCH\textsubscript  {2}CF\textsubscript  {3} + R\textsubscript  {3}=F together produce the largest docking score improvement ($\Delta =-1.7$\nobreakspace  {}kcal/mol vs. erlotinib).}}{27}{figure.66}\protected@file@percent }
+\newlabel{fig:molopt-scaffold}{{13}{27}{4-Anilinoquinazoline scaffold modification strategy. The modifiable positions are annotated with the best substituent found in each round and the optimization strategy (exploration, exploitation, pivot) that discovered it. R\textsubscript {1}=CF\textsubscript {3} + R\textsubscript {2}=OCH\textsubscript {2}CF\textsubscript {3} + R\textsubscript {3}=F together produce the largest docking score improvement ($\Delta =-1.7$~kcal/mol vs. erlotinib)}{figure.66}{}}
+\@writefile{lof}{\contentsline {figure}{\numberline {14}{\ignorespaces SciForge Genome-to-BGC Discovery pipeline. The workflow integrates genome intake, antiSMASH BGC discovery, MIBiG reference matching, BiG-SCAPE family clustering, Candidate BGC Card generation, multi-agent scientific analysis, and evidence-grounded prioritization into a single auditable research record.}}{28}{figure.69}\protected@file@percent }
+\newlabel{fig:bgc-workflow}{{14}{28}{SciForge Genome-to-BGC Discovery pipeline. The workflow integrates genome intake, antiSMASH BGC discovery, MIBiG reference matching, BiG-SCAPE family clustering, Candidate BGC Card generation, multi-agent scientific analysis, and evidence-grounded prioritization into a single auditable research record}{figure.69}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {5}Discussion}{28}{section.70}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.1}Design Trade-offs}{28}{subsection.71}\protected@file@percent }
+\@writefile{toc}{\contentsline {subsection}{\numberline {5.2}Limitations and Future Work}{28}{subsection.72}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {6}Conclusion}{29}{section.73}\protected@file@percent }
+\@writefile{toc}{\contentsline {section}{\numberline {A}Capability Differentiation}{30}{appendix.74}\protected@file@percent }
+\@writefile{lot}{\contentsline {table}{\numberline {A1}{\ignorespaces Capability positioning based on reviewed public materials. Typical-approach entries summarize common documented emphases and do not prove absence of unlisted features.}}{30}{table.76}\protected@file@percent }
+\newlabel{tab:capability_differentiation}{{A1}{30}{Capability positioning based on reviewed public materials. Typical-approach entries summarize common documented emphases and do not prove absence of unlisted features}{table.76}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {B}Workbench Interface Examples}{31}{appendix.77}\protected@file@percent }
+\newlabel{app:workbench-interfaces}{{B}{31}{Workbench Interface Examples}{appendix.77}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B.1}Thread-Level Evidence DAG}{31}{subsection.78}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {B1}{\ignorespaces Thread-level Evidence DAG embedded beside the originating SciForge research session. Source assertions, reasoning, claims, edge semantics, audit controls, and node-level provenance are visible in one review surface.}}{31}{figure.80}\protected@file@percent }
+\newlabel{fig:appendix-evidence-dag}{{B1}{31}{Thread-level Evidence DAG embedded beside the originating SciForge research session. Source assertions, reasoning, claims, edge semantics, audit controls, and node-level provenance are visible in one review surface}{figure.80}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B.2}Project-Level DAG}{32}{subsection.81}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {B2}{\ignorespaces Project DAG for the same research workspace. The committed project snapshot aggregates evidence and claims across sessions, exposing the project-level relationship structure and review diagnostics.}}{32}{figure.83}\protected@file@percent }
+\newlabel{fig:appendix-project-dag}{{B2}{32}{Project DAG for the same research workspace. The committed project snapshot aggregates evidence and claims across sessions, exposing the project-level relationship structure and review diagnostics}{figure.83}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B.3}Review-to-Revision PDF Workflow}{33}{subsection.84}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {B3}{\ignorespaces Review-to-revision PDF workflow in SciForge. The agent thread records concrete manuscript changes and validation (left), the recompiled paper remains inspectable (center), and page-anchored reviewer comments retain their source context and improvement actions (right).}}{33}{figure.86}\protected@file@percent }
+\newlabel{fig:appendix-pdf-review}{{B3}{33}{Review-to-revision PDF workflow in SciForge. The agent thread records concrete manuscript changes and validation (left), the recompiled paper remains inspectable (center), and page-anchored reviewer comments retain their source context and improvement actions (right)}{figure.86}{}}
+\@writefile{toc}{\contentsline {subsection}{\numberline {B.4}Selection-Grounded Protein Structure Dialogue}{34}{subsection.87}\protected@file@percent }
+\@writefile{lof}{\contentsline {figure}{\numberline {B4}{\ignorespaces Selection-grounded protein structure dialogue in SciForge. The Biology Room (right) retains the active ALA\nobreakspace  {}86 selection in the 9VMR structure, while the linked chat (left) receives the file hash, room revision, and residue locator and uses them to drive an identity-checked structural interpretation.}}{34}{figure.89}\protected@file@percent }
+\newlabel{fig:appendix-biology-selection-chat}{{B4}{34}{Selection-grounded protein structure dialogue in SciForge. The Biology Room (right) retains the active ALA~86 selection in the 9VMR structure, while the linked chat (left) receives the file hash, room revision, and residue locator and uses them to drive an identity-checked structural interpretation}{figure.89}{}}
+\@writefile{toc}{\contentsline {section}{\numberline {C}Author Contributions}{35}{appendix.90}\protected@file@percent }
+\bibdata{sn-bibliography}
+\bibcite{abdine2023prot2text}{{1}{2023}{{Abdine et~al.}}{{Abdine, Chatzianastasis, Bouyioukos, and Vazirgiannis}}}
+\bibcite{abramson2024alphafold3}{{2}{2024}{{Abramson et~al.}}{{Abramson, Adler, Dunger et~al.}}}
+\bibcite{alhossary2015quickvina2}{{3}{2015}{{Alhossary et~al.}}{{Alhossary, Handoko, Mu, and Kwoh}}}
+\bibcite{scholarQA2025}{{4}{2025}{{Allen Institute for AI}}{{}}}
+\bibcite{anthropicMCP2024}{{5}{2024}{{Anthropic}}{{}}}
+\bibcite{anthropicClaudeScience2026}{{6}{2026}{{Anthropic}}{{}}}
+\bibcite{openScholar2024}{{7}{2026}{{Asai et~al.}}{{}}}
+\bibcite{baell2010pains}{{8}{2010}{{Baell and Holloway}}{{}}}
+\bibcite{bickerton2012qed}{{9}{2012}{{Bickerton et~al.}}{{Bickerton, Paolini, Besnard, Muresan, and Hopkins}}}
+\bibcite{blin2023antismash}{{10}{2023}{{Blin et~al.}}{{Blin, Shaw, Augustijn et~al.}}}
+\bibcite{boiko2023coscientist}{{11}{2023}{{Boiko et~al.}}{{Boiko, MacKnight, Kline, and Gomes}}}
+\bibcite{bran2024chemcrow}{{12}{2024}{{Bran et~al.}}{{Bran, Cox, Schilter, Baldassari, White, and Schwaller}}}
+\bibcite{chen2025scienceagentbench}{{13}{2025}{{Chen et~al.}}{{Chen, Chen, Ning et~al.}}}
+\bibcite{claudePrism2026}{{14}{2026}{{ClaudePrism Contributors}}{{}}}
+\bibcite{consensus2026}{{15}{2026}{{Consensus}}{{}}}
+\bibcite{dauparas2022proteinmpnn}{{16}{2022}{{Dauparas et~al.}}{{Dauparas, Anishchenko, Bennett et~al.}}}
+\bibcite{elicit2026}{{17}{2026}{{Elicit}}{{}}}
+\bibcite{ertl2009sa}{{18}{2009}{{Ertl and Schuffenhauer}}{{}}}
+\bibcite{futureHousePlatform2025}{{19}{2025}{{FutureHouse}}{{}}}
+\bibcite{ghafarollahi2025sciagents}{{20}{2025}{{Ghafarollahi and Buehler}}{{}}}
+\bibcite{ghareeb2026robin}{{21}{2026}{{Ghareeb et~al.}}{{Ghareeb, Chang, Mitchener et~al.}}}
+\bibcite{reactome2024}{{22}{2024}{{Gillespie et~al.}}{{Gillespie, Jassal, Stephan et~al.}}}
+\bibcite{googleCoScientist2025}{{23}{2026}{{Gottweis et~al.}}{{Gottweis, Weng, Daryin et~al.}}}
+\bibcite{hayes2025esm3}{{24}{2025}{{Hayes et~al.}}{{Hayes, Rao, Akin et~al.}}}
+\bibcite{hu2021spagcn}{{25}{2021}{{Hu et~al.}}{{Hu, Li, Coleman et~al.}}}
+\bibcite{huang2025biomni}{{26}{2025}{{Huang et~al.}}{{Huang, Zhang, Wang et~al.}}}
+\bibcite{huynh2013provjson}{{27}{2013}{{Huynh et~al.}}{{Huynh, Jewell, Keshavarz, Michaelides, Yang, and Moreau}}}
+\bibcite{ifargan2025datatopaper}{{28}{2025}{{Ifargan et~al.}}{{Ifargan, Hafner, Kern, Alcalay, and Kishony}}}
+\bibcite{jansen2024discoveryworld}{{29}{2024}{{Jansen et~al.}}{{Jansen, C{\^o}t{\'e}, Khot et~al.}}}
+\bibcite{jumper2021alphafold}{{30}{2021}{{Jumper et~al.}}{{Jumper, Evans, Pritzel et~al.}}}
+\bibcite{keller2019fungal}{{31}{2019}{{Keller}}{{}}}
+\bibcite{paperQA2024}{{32}{2024}{{L\'ala et~al.}}{{L\'ala, O'Donoghue, Shtedritski, Cox, Rodriques, and White}}}
+\bibcite{landrum2016rdkit}{{33}{2016}{{Landrum}}{{}}}
+\bibcite{lin2023esm2}{{34}{2023}{{Lin et~al.}}{{Lin, Akin, Rao, Hie, Zhu, Lu, Smetanin, Verkuil, Kabeli, Shmueli, dos Santos~Costa, Fazel-Zarandi, Sercu, Candido, and Rives}}}
+\bibcite{lipinski2001ruleoffive}{{35}{2001}{{Lipinski et~al.}}{{Lipinski, Lombardo, Dominy, and Feeney}}}
+\bibcite{long2023graphst}{{36}{2023}{{Long et~al.}}{{Long, Ang, Li et~al.}}}
+\bibcite{sakanaAIScientist2024}{{37}{2026}{{Lu et~al.}}{{Lu, Lu, Lange, Yamada, Hu, Foerster, Ha, and Clune}}}
+\bibcite{w3cprov2013}{{38}{2013}{{Moreau and Missier}}{{}}}
+\bibcite{navarro2020bigscape}{{39}{2020}{{Navarro-Mu\~noz et~al.}}{{Navarro-Mu\~noz, Selem-Mojica, Mullowney et~al.}}}
+\bibcite{omicOSOverview2026}{{40}{2026{}}{{OmicOS}}{{}}}
+\bibcite{omicOSCLI2026}{{41}{2026{}}{{OmicOS}}{{}}}
+\bibcite{omicOSServe2026}{{42}{2026{}}{{OmicOS}}{{}}}
+\bibcite{omicsClaw2026}{{43}{2026}{{OmicsClaw Contributors}}{{}}}
+\bibcite{papalexi2021eccite}{{44}{2021}{{Papalexi et~al.}}{{Papalexi, Mimitou, Butler et~al.}}}
+\bibcite{park2012egfr}{{45}{2012}{{Park et~al.}}{{Park, Liu, Lemmon, and Radhakrishnan}}}
+\bibcite{passaro2025boltz2}{{46}{2025}{{Passaro et~al.}}{{Passaro, Corso, Wohlwend et~al.}}}
+\bibcite{pei2024biot5}{{47}{2024}{{Pei et~al.}}{{Pei, Wu, Gao, Liang, Fang, Zhu, Xie, Qin, and Yan}}}
+\bibcite{qu2026crisprgpt}{{48}{2026}{{Qu et~al.}}{{Qu, Huang, Yin et~al.}}}
+\bibcite{rizvi2025c2s}{{49}{2025}{{Rizvi et~al.}}{{Rizvi, Levine, Patel, Zhang, Wang, Perry, Vrkic, Constante, Fu, He, Zhang, Tang, Lyu, Darji, Li, Sun, Jeong, Zhao, Kwan, Braun, Hafler, Chung, Dhodapkar, Jaeger, Perozzi, Ishizuka, Azizi, and van Dijk}}}
+\bibcite{rocklin2017proteinFolding}{{50}{2017}{{Rocklin et~al.}}{{Rocklin, Chidyausiku, Goreshnik et~al.}}}
+\bibcite{rogers2010ecfp}{{51}{2010}{{Rogers and Hahn}}{{}}}
+\bibcite{sandve2013reproducible}{{52}{2013}{{Sandve et~al.}}{{Sandve, Nekrutenko, Taylor, and Hovig}}}
+\bibcite{agentLaboratory2025}{{53}{2025}{{Schmidgall et~al.}}{{Schmidgall, Su, Wang et~al.}}}
+\bibcite{stahl2016spatial}{{54}{2016}{{St{\r a}hl et~al.}}{{St{\r a}hl, Salm{\'e}n, Vickovic et~al.}}}
+\bibcite{swanson2025virtuallab}{{55}{2025}{{Swanson et~al.}}{{Swanson, Wu, Bulaong, Pak, and Zou}}}
+\bibcite{operonGitHub2026}{{56}{2026}{{Swarup Lab}}{{}}}
+\bibcite{szymanski2023alab}{{57}{2023}{{Szymanski et~al.}}{{Szymanski, Rendy, Fei et~al.}}}
+\bibcite{tsherniak2017depmap}{{58}{2017}{{Tsherniak et~al.}}{{Tsherniak, Vazquez, Montgomery et~al.}}}
+\bibcite{uniprot2025}{{59}{2025}{{UniProt Consortium}}{{}}}
+\bibcite{watson2023rfdiffusion}{{60}{2023}{{Watson et~al.}}{{Watson, Juergens, Bennett et~al.}}}
+\bibcite{wilkinson2016fair}{{61}{2016}{{Wilkinson et~al.}}{{Wilkinson, Dumontier, Aalbersberg et~al.}}}
+\bibcite{xu2024sedr}{{62}{2024}{{Xu et~al.}}{{Xu, Fu, Long et~al.}}}
+\bibcite{yamada2025aiscientistv2}{{63}{2025}{{Yamada et~al.}}{{Yamada, Lange, Lu, Hu, Lu, Foerster, Clune, and Ha}}}
+\bibcite{vcbench2026}{{64}{2026}{{Yang et~al.}}{{}}}
+\bibcite{zdouc2025mibig4}{{65}{2025}{{Zdouc et~al.}}{{Zdouc, Blin, Louwen et~al.}}}
+\bibcite{MCFST2025}{{66}{2026}{{Zhang et~al.}}{{Zhang, Duan, and Gao}}}
+\bibcite{zhao2021bayesspace}{{67}{2021}{{Zhao et~al.}}{{Zhao, Stone, Ren et~al.}}}
+\gdef \@abspage@last{42}

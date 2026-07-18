@@ -54,6 +54,10 @@ import {
   type RotatedPdfTextGeometry
 } from './write-pdf-viewer-geometry'
 import { normalizedBoundsForPageRects } from './write-pdf-visible-context'
+import {
+  boundWorkspacePreviewPresentationState,
+  type WorkspacePreviewPresentationStateChangeHandler
+} from '../../workspace-preview/presentation-state'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
@@ -68,6 +72,66 @@ const TEXT_LAYER_TOKEN_HIT_PAD_Y = 5
 const TEXT_LAYER_TOKEN_MAX_PICK_DISTANCE = 18
 const MAX_SEARCH_HIGHLIGHTS_PER_PAGE = 240
 const PDF_RENDER_WINDOW_RADIUS = 2
+
+type PdfDocumentMetadata = { info: Object; metadata: unknown }
+
+function pdfDocumentTitleFromMetadata(metadata: PdfDocumentMetadata): string {
+  const info = metadata.info as Record<string, unknown>
+  const infoTitle = typeof info.Title === 'string' ? info.Title.trim() : ''
+  if (infoTitle) return infoTitle
+
+  const documentMetadata = metadata.metadata
+  if (!documentMetadata || typeof documentMetadata !== 'object' || !('get' in documentMetadata)) return ''
+  const get = (documentMetadata as { get?: unknown }).get
+  if (typeof get !== 'function') return ''
+  const metadataTitle = get.call(documentMetadata, 'dc:title')
+  return typeof metadataTitle === 'string' ? metadataTitle.trim() : ''
+}
+
+function pdfSelectionPresentationSummary(selection: WritePdfSelection): string {
+  const start = selection.pageStart ?? selection.rects?.[0]?.page
+  const end = selection.pageEnd ?? selection.rects?.at(-1)?.page ?? start
+  const pageLabel = start == null
+    ? 'PDF selection'
+    : end != null && end !== start
+      ? `Pages ${start}-${end}`
+      : `Page ${start}`
+  return `${pageLabel}; ${selection.charCount} selected characters`
+}
+
+export function buildPdfPresentationState(input: {
+  title: string
+  currentPage: number
+  pageCount: number
+  currentPageText: string
+  selection?: WritePdfSelection | null
+}) {
+  return boundWorkspacePreviewPresentationState({
+    schemaVersion: 1,
+    kind: 'document',
+    title: input.title,
+    position: {
+      index: input.currentPage,
+      ...(input.pageCount > 0 ? { count: input.pageCount } : {}),
+      label: input.pageCount > 0
+        ? `Page ${input.currentPage} of ${input.pageCount}`
+        : `Page ${input.currentPage}`
+    },
+    visibleContent: {
+      kind: 'text',
+      label: `Page ${input.currentPage}`,
+      text: input.currentPageText,
+      truncated: false
+    },
+    selection: input.selection
+      ? {
+          kind: input.selection.visualImage ? 'visual' : 'text',
+          ...(input.selection.text ? { text: input.selection.text } : {}),
+          summary: pdfSelectionPresentationSummary(input.selection)
+        }
+      : null
+  })
+}
 const DEFAULT_PDF_PAGE_WIDTH = 612
 const DEFAULT_PDF_PAGE_HEIGHT = 792
 
@@ -237,6 +301,7 @@ export type WritePdfViewerProps = {
   onAnnotationSelect?: (annotationId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
   onToggleAnnotations?: () => void
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 type PdfSelectionContext = {
@@ -2139,7 +2204,8 @@ export function WritePdfViewer({
   onAnnotationAction,
   onAnnotationSelect,
   onOpenAnnotations,
-  onToggleAnnotations
+  onToggleAnnotations,
+  onPresentationStateChange
 }: WritePdfViewerProps): ReactElement {
   const { t } = useTranslation('common')
   const rememberedInitialView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
@@ -2155,6 +2221,7 @@ export function WritePdfViewer({
   const skipMouseUpSelectionSyncRef = useRef(false)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onQuoteSelectionRef = useRef(onQuoteSelection)
+  const onPresentationStateChangeRef = useRef(onPresentationStateChange)
   const currentPageRef = useRef(Math.max(1, Math.round(restoredInitialPage)))
   const initialPageRef = useRef(initialPage)
   const activeFilePathRef = useRef(filePath)
@@ -2170,6 +2237,7 @@ export function WritePdfViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const [pageTexts, setPageTexts] = useState<PageText[]>([])
+  const [documentTitle, setDocumentTitle] = useState('')
   const [pageBaseSizes, setPageBaseSizes] = useState<Map<number, { width: number; height: number }>>(new Map())
   const [committedSelection, setCommittedSelection] = useState<WritePdfSelection | null>(null)
   const [committedSelectionRects, setCommittedSelectionRects] = useState<WritePdfSelectionPageRect[]>([])
@@ -2218,6 +2286,10 @@ export function WritePdfViewer({
     onQuoteSelectionRef.current = onQuoteSelection
   }, [onQuoteSelection])
 
+  useEffect(() => {
+    onPresentationStateChangeRef.current = onPresentationStateChange
+  }, [onPresentationStateChange])
+
   const emitSelection = useCallback((selection: WritePdfSelection): void => {
     onSelectionChangeRef.current?.(selection)
   }, [])
@@ -2234,6 +2306,7 @@ export function WritePdfViewer({
     setError('')
     setPdfDocument(null)
     setPageTexts([])
+    setDocumentTitle('')
     setPageBaseSizes(new Map())
     setCommittedSelection(null)
     setCommittedSelectionRects([])
@@ -2271,6 +2344,16 @@ export function WritePdfViewer({
       setCurrentPage(targetPage)
       setPageInput(String(targetPage))
       setLoading(false)
+      const metadataLoader = (pdf as PDFDocumentProxy & {
+        getMetadata?: () => Promise<PdfDocumentMetadata>
+      }).getMetadata
+      if (metadataLoader) {
+        void metadataLoader.call(pdf)
+          .then((metadata) => {
+            if (!cancelled) setDocumentTitle(pdfDocumentTitleFromMetadata(metadata))
+          })
+          .catch(() => undefined)
+      }
     }).catch((reason: unknown) => {
       if (!cancelled) {
         setError(reason instanceof Error ? reason.message : String(reason))
@@ -2380,7 +2463,9 @@ export function WritePdfViewer({
         } finally {
           page?.cleanup()
         }
-        if (indexed.length % 8 === 0 || pageNumber === pdfDocument.numPages) {
+        if (indexed.length % 8 === 0 ||
+          pageNumber === currentPageRef.current ||
+          pageNumber === pdfDocument.numPages) {
           setPageTexts([...indexed])
           if (indexedSizes.size > 0) {
             setPageBaseSizes((current) => {
@@ -2468,6 +2553,21 @@ export function WritePdfViewer({
   const allPageTextLoaded = pageCount > 0 && pageTexts.length >= pageCount
   const pdfHasText = pageTexts.some((page) => page.text.trim().length > 0)
   const visualSelectionEnabled = allPageTextLoaded && !pdfHasText
+  const currentPageText = pageTexts.find((entry) => entry.page === currentPage)?.text ?? ''
+
+  useEffect(() => {
+    onPresentationStateChangeRef.current?.(buildPdfPresentationState({
+      title: documentTitle || sourceTitle,
+      currentPage,
+      pageCount,
+      currentPageText,
+      selection: committedSelection
+    }))
+  }, [committedSelection, currentPage, currentPageText, documentTitle, pageCount, sourceTitle])
+
+  useEffect(() => () => {
+    onPresentationStateChangeRef.current?.(null)
+  }, [])
   const committedRectsByPage = useMemo(() => {
     const byPage = new Map<number, WritePdfSelectionPageRect[]>()
     for (const rect of committedSelectionRects) {

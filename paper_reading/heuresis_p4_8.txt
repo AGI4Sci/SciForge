@@ -1,0 +1,359 @@
+Figure 2: Search methods overview. Six pluggable search strategies that share the same agent
+loop (Fig. 1). (a) Greedy: top-K parents by score, no diversity. (b) MAP-Elites: one elite per
+cell of a feature-binned grid. (c) Islands: parallel demes with periodic migration every k iterations.
+(d) Go-Explore: archived anchors, return-and-explore from under-visited states. (e) Curiosity:
+novelty-weighted parent selection biased toward unexplored regions. (f) Omni: KNN-gated archive
+admission via an interestingness reviewer.
+
+3.2.1 Substrate primitives.
+
+The six components shown in Fig. 1 are listed below. Three of them — ideator, execu-
+tor, and auditor — are agentic and share a common realization: an agent harness H =
+(agent CLI, model, workspace, sandbox) whose agent CLI (e.g., Claude Code, Codex, OpenCode)
+and backend model are swappable hyperparameters.
+
+Ideator (πI ): a multi-turn H-agent that reads the filesystem of prior parent workspaces (train.py,
+run.log, idea.md, notes.md → read-only) and emits a structured idea.md against a per-task
+schema. Gemini-3.1-Pro + OpenCode is used for the harness.
+
+Executor (πE): an H-agent that implements the idea, runs the task on real hardware, and emits
+execution evidence (edited source, run logs, notes). A key implementation detail which differs from
+prior work, is that the agent is tasked with both writing and executing the experiment. This enables
+the agent to identify issues or bugs, such as overshooting the GPUs memory, and iteratively address
+them, informing the code design and side-stepping the issue of minor bugs causing a submitted run to
+fail. The executor may only modify a per-task whitelist of files (e.g. train.py for nanogpt), keeping
+the experiment well-defined. Gemini-3.1-Pro + OpenCode is used for the harness.
+
+Grader: a host-side per-task service that extracts the primary metric M from the executor’s evidence,
+returning ⊥ when execution fails or yields no metric. It lives outside the sandbox so the agent cannot
+tamper with scoring or test data.
+
+Auditor: an H-agent that audits the executor’s evidence post-hoc, producing a tri-state verdict;
+valid admits the score, suspicious_evidence triggers a no-agent regeneration of the run, and
+invalid_idea rejects the candidate. Per-task authenticity signals and correctness invariants drive
+its judgement; activation is an experimental control held constant within a comparison. In a small
+four-case pilot, Gemini-3.1-Pro + OpenCode was correct on 2 of 4 cases (legitimate runs timed out
+before the auditor could submit), while Claude Code + Claude-Sonnet-4-6 was correct on 4 of 4; we
+therefore elected Sonnet for the harness and confirmed at full scale on a ten-case regression suite
+(10/10, §B.4).
+
+Memory (optional): a per-campaign store with two tables, experiments, written by the framework
+(one row per executor finish), and learnings, written by the agents themselves as free-form tagged
+insights. The memory tool exposes append, search (semantic KNN), and read (read-only SQL) to
+both policies; memory is opt-in and orthogonal to S.
+
+4
+
+Search strategy: Maintains an archive A of attempts, and selects parents for the next iteration using a
+selection function σ. A selection q contains the parent(s) selected and any algorithm-specific context.
+Each algorithm comprises of a certain operator o, which is responsible for mapping q into a new
+experiment. An update rule υ is invoked to update A with the resulting outcome. §3.3 contextualizes
+each of the search algorithms within this framework S = (A, σ, υ, o).
+
+3.2.2 Loop
+
+Each iteration unfolds in five stages, shown in Fig. 1. An ideator agent reads prior parent workspaces
+and proposes a modification; an executor agent implements the modification and runs the task inside a
+sandboxed workspace; the grader extracts a score from the run artefacts; an optional auditor reviews
+the executor’s evidence and may invalidate the score or trigger a regenerate-and- rescore cycle. This
+was necessary to avoid potential reward hacking which could corrupt the archive (§B) and the search
+strategy admits the candidate to its archive only if it is valid — i.e. execution produced a metric (we
+call such a run scored) and the auditor corroborates the validity of the idea. We use scored and valid
+in this sense throughout. The same loop runs for every search strategy in this paper; what differs is
+the search policy.
+
+3.2.3 Asynchronous parallelism.
+
+The loop runs N independent parallel Ideator and Executor workers. Each carries an index used to
+manage selections so workers do not collide on the same parent, cell (map-elites), or anchor (Omni,
+Curiosity). Running N executors across N devices amortises wall-clock linearly. Updates to A
+via υ are serialised by an experiment-level lock, so strategies need not be thread-safe internally. In
+our experiments we run one worker per available GPU, which saturates an 8-GPU node without
+algorithmic changes to any strategy.
+
+Table 1: Search strategies as S = (A, σ, υ, o). Update families: monotonic (append every valid
+run), displacement (keep the best per slot), routing (assign to outcome buckets).
+
+Archive A
+
+Selection σ
+
+Update υ
+
+Operator o
+
+Strategy
+
+GREEDY
+
+MAP-ELITES
+
+Flat store of all prior
+runs
+Feature-binned grid,
+one elite per cell
+
+GO-EXPLORE
+
+Inherited from
+MAP-ELITES
+
+ISLANDS
+
+OMNI
+
+CURIOSITY
+
+Bounded island
+populations on a
+migration topology
+KNN-indexed
+accepted and
+failed-train buckets
+All executed runs
+with embeddings and
+surprise si
+
+3.3 Search strategies
+
+Top-K experiments
+by score
+Weighted cell
+sampling biased to
+empty cells, optional
+donor elite
+Cells weighted by
+√
+
+sq +α
+1+nvisits
+
+Tournament within
+the worker’s pinned
+island
+Diversity-biased
+anchor with KNN
+neighbour context
+Anchors weighted by
+learning progress
+
+Monotonic, admit
+every valid run
+Displacement,
+classify via ϕ, keep
+cell best
+
+IMPROVE on the
+selected parents
+EXPLORE-EMPTY /
+MUTATE /
+CROSSOVER
+
+Displacement, plus
+visit counts
+
+Inherited from
+MAP-ELITES
+
+Displacement, rank
+insert, evict worst
+
+MUTATE /
+CROSSOVER
+
+Routing, bucket by
+execution outcome
+
+MOI-GATED-
+IMPROVE
+
+Monotonic, admit all
+with surprise
+
+PREDICT-THEN-
+IMPROVE
+
+We now instantiate S = (A, σ, υ, o) for each strategy in Fig. 2; Table 1 summarizes the six instantia-
+tions side by side.
+
+Greedy Search A is a store of all previous parents. σ provides a query containing the top-K experi-
+ments by score. The only operator used is improve on the previous best solutions. υ admits solutions
+unconditionally on every valid run. The search hyperparameters are reported in Appendix A.3.1.
+
+MAP-Elites Based on Cully et al. [11], Mouret and Clune [38], MAP-Elites is an archive-based QD
+algorithm (§2) where A is a discretized grid whose axes are task-specific semantic features, extracted
+
+5
+
+post-hoc by an LLM classifier ϕ. Each cell is occupied by its best-performing candidate (the “elite”).
+σ samples a target cell over the grid, with a bias toward unexplored cells; if the target cell is occupied,
+a second elite may be sampled as a crossover donor [33]. When the target cell is empty, o is rendered
+as EXPLORE-EMPTY, which provides the cell’s feature definitions to the ideator and asks for an idea
+that satisfies them; for occupied cells, o is MUTATE when a single elite was sampled or CROSSOVER
+when two were. υ then admits the resulting candidate by classifying it via ϕ into a cell, and either
+occupying the cell if empty or displacing its current elite when the new candidate’s score is better.
+The search hyperparameters are reported in Appendix A.3.2.
+
+Go-Explore Based on Ecoffet et al. [13], Go-Explore extends MAP-Elites with a σ that biases
+selection toward cells that are both high-performing and under-visited (§2). This design has also been
+adopted by subsequent work such as Zhang et al. [67], and Zhang et al. [68]. Concretely, the target
+cell is sampled with weight (squality + α)/
+1 + nvisits, where squality is the cell elite’s improvement
+over the task baseline (clipped at 0), α floors empty cells so they remain selectable, and nvisits is
+the number of times the cell has been selected. A and o are inherited unchanged from MAP-Elites.
+υ inherits cell-elitist displacement and additionally increments nvisits for the source cell on every
+attempt. The search hyperparameters are reported in Appendix A.3.3.
+
+√
+
+Island-based Evolution Sits in the LLM-as-variation-operator family (§2), based on Romera-Paredes
+et al. [45], Novikov et al. [40]. A is a set of islands, each a bounded-size population, connected by a
+migration topology; in practice, one ideator/executor worker (and one GPU) is round-robin-pinned
+to each island. σ runs tournament selection within the worker’s pinned island and draws either one
+parent for mutation or two parents for crossover. The operator is per-child: MUTATE asks the ideator
+for a single-parent variation, while CROSSOVER asks it to synthesise the two parents into a coherent
+child. υ inserts the executed candidate at its score-sorted position in the source island, evicting the
+lowest-scoring solution past the population cap. Periodically, the top elite from each island migrates
+to its neighbour. The search hyperparameters are reported in Appendix A.3.4.
+
+Omni Based on Zhang et al. [66], Faldor et al. [15], OMNI is a divergent-objectives method
+(§2) that gates ideas on a binary foundation-model interestingness verdict, adapting the Model-of-
+Interestingness (MoI) gate and KNN-indexed archive of the OMNI line, originally proposed for open-
+ended environment generation to solution-space search on a fixed task. A is a KNN-indexed archive
+of accepted ideas, with a parallel index of executed-but-unscored candidates surfaced as negative-
+example context. σ samples a single anchor from accepted under diversity-biased probabilities (used
+anchors are temporarily deweighted) and conditions the ideator on KNN neighbours from both buckets,
+anchor-and-context, not multi-parent recombination. The operator o = MOI-GATED-IMPROVE(a, N )
+drafts an improvement around the anchor and applies a single LLM reviewer that compares it to its
+nearest accepted neighbours, returning a binary interesting verdict; on rejection o yields fail. υ
+routes scored executions to accepted and unscored ones to failed-train; gate rejections are retried
+at the loop level with the prior reasoning forwarded into the next ideator prompt, after which the
+iteration ends without execution. The search hyperparameters are reported in Appendix A.3.5.
+
+Curiosity Curiosity sits in the divergent-objectives family (§2) and is based on Schmidhuber
+[48], Pathak et al. [43]. It scores each candidate by how much the LLM mispredicted its outcome and
+steers selection toward regions where this prediction error is decreasing. The memory A stores every
+executed candidate together with its idea embedding, fitness, surprise si = |y − ˆy|/σM , and prediction
+metadata. σ samples an anchor from a recent candidate window with probability proportional to
+wi = exp(ℓi/τ ) · ri, where ℓi = ¯sold
+is the learning progress, the difference in mean surprise
+between the older and recent halves of its k nearest neighbors. The second factor, ri, penalizes
+re-anchoring near recent anchors. The algorithm starts with farthest-point sampling in embedding
+space until the prediction-error signal is meaningful. The operator o is PREDICT-THEN-IMPROVE:
+the ideator reads the anchor’s code, proposes a modification, and emits ˆy before the executor runs it to
+produce y. υ admits every executed candidate to A with surprise si when prediction and outcome are
+both valid, λ on a validity mismatch, and 0 when both predict failure. The search hyperparameters
+are reported in Appendix A.3.6.
+
+i − ¯snew
+
+i
+
+6
+
+4 Experiments
+
+4.1 Tasks
+
+NanoGPT The domain description D frames the task as autoregressive language model pretraining
+from scratch on the ClimbMix-400B shuffle [12]. The seed c0 is Karpathy’s autoresearch [28]
+setup, a small decoder-only transformer (8 layers, hidden size 512, 4 attention heads, sequence
+length 2048) with a combined Muon + AdamW optimizer (Muon for 2D matrix parameters, AdamW
+for the rest), adapted from a single H100 to a single A100 with an extended training budget, so
+the baseline reaches a comparable score. The environment env pins the executor to a single A100
+with a 35-minute wall-clock training budget, exposes only train.py as editable, and requires that
+modifications remain compatible with the surrounding evaluation harness. Common axes of variation
+in agent-proposed edits are the optimizer, depth/width trade-offs, attention variants, normalization,
+and learning-rate schedules.
+
+On-Policy RL The domain description D describes the classic On-Policy reinforcement learning
+task on the MinAtar Breakout environment introduced in Young and Tian [65]. The seed c0 is the
+baseline provided in DiscoGen [17], which is an MLP-based network architecture, Proximal Policy
+Optimization [50], generalized advantage estimation [49], and Adam optimizer with clipping.
+
+The metric M is the baseline_normalized_mean, with direction R = max. M is calculated
+as the ratio of the current mean score and the baseline score provided by DiscoGen, making c0
+obtain the score of M = 1.0. The mean score for each training run is calculated across 8 seeds
+and 10 learning rates. The environment env pins the executor to a single A100 with a 20-minute
+wall-clock time training budget, and exposes the discovered folder, which contains all the editable
+modules in the codebase, and constrains the agent to keep the core runtime logic byte identical to
+avoid reward hacking (§B). Common axes of variation in agent-proposed edits are the optimizer,
+network architecture, loss function, training algorithm, and advantages. Additionally, DiscoGen splits
+the meta-train and meta-test sets for agent optimization and evaluation, respectively. In our work,
+we use MinAtar Breakout [65] as the optimization target for the agent and search strategy, and we
+additionally report MinAtar Asterix [65] as our hold-out environment.
+
+Model Unlearning The domain description D frames the task as targeted unlearning: scrub-
+bing hazardous cybersecurity knowledge, measured by the WMDP-cyber benchmark [34], from
+Qwen2.5-1.5B-Instruct [63], while preserving general capability, measured by the STEM sub-
+set of MMLU [21]. The seed c0 is the Model Unlearning baseline provided in DiscoGen [17], a
+CustomUnlearnTrainer whose compute_loss combines a forget-set objective with a retain-set
+regularizer over paired forget and retain sub-batches. The metric M is the baseline-normalized
+composite score with direction R = max: WMDP-cyber accuracy (forget, lower is better) and
+MMLU-STEM accuracy (retain, higher is better) are each normalized so that values above 1.0 beat
+the baseline in their own direction, and M is their mean, so c0 scores M = 1.0. The environment env
+pins the executor to a single A100, exposes only discovered/loss.py as editable while keeping
+the CustomUnlearnTrainer class name and compute_loss signature byte identical, and holds the
+runner and the WMDP+MMLU evaluation harness fixed to avoid reward hacking (§B). Common
+axes of variation in agent-proposed edits are the forget-set objective (gradient ascent, representation
+steering, max-entropy), the retain regularizer (KL or hidden-state MSE against a reference model),
+and the weighting between the two.
+
+We provide all the hyperparameters used in this work in Appendix A.
+
+Protocol We run each of the six strategies on each of the three tasks for 300 executed runs per cell,
+5,400 in total. Of these, 3,222 are scored — the grader returned a metric — and the remainder are
+lost to training crashes, timeouts, or gate rejections (Appendix 30). Unless stated otherwise, the
+quality, diversity, and novelty results below are measured over valid runs (scored runs the auditor did
+not flag, §3), taking the first 300 executed ideas per strategy.
+
+4.2 Quality
+
+Metric Quality is the task-specific metric returned by the grader for each run. We use validation
+bits-per-byte val_bpb for nanoGPT (lower is better), the baseline-normalized mean reward for
+On-Policy RL (higher is better), and the baseline-normalized composite score for Model Unlearning
+(higher is better), which combines post-unlearning WMDP-cyber accuracy (forget, lower is better)
+
+7
+
+Figure 3: Fitness curves and score distributions. Top row: fitness curves; bottom row: score
+distributions across search strategies on the three tasks. (a) nanoGPT fitness curve, (b) On-Policy RL
+fitness curve, (c) Model Unlearning fitness curve, (d) nanoGPT score distribution, (e) On-Policy RL
+score distribution, (f) Model Unlearning score distribution.
+
+and MMLU-STEM accuracy (retain, higher is better) normalized to a common direction. Figure 3
+reports the running best across valid solutions in the top row and the per-strategy score distribution in
+the bottom row.
+
+Results The strategy that achieves the best performance is different for every task, and no single
+strategy performs well on all three. GREEDY wins where a known good recipe exists to grind
+(nanoGPT, Model Unlearning), and archive-based and population-based strategies win where the
+space of well-performing solutions is broader and therefore more likely to benefit from structured
+exploration (On-Policy RL). The per-strategy score distributions in the bottom row of Figure 3 reveal
+two regimes. On nanoGPT and Model Unlearning, GREEDY’s entire distribution sits at the top of the
+field — its median run is close to its best, so the lead is not a single lucky run. On On-Policy RL
+the archive- and population-based winners instead lead through their upper tail: their best runs top
+the field while their medians sit mid-pack, consistent with broader exploration yielding occasional
+high-scoring outliers.
+
+On nanoGPT, GREEDY is the most performant method with a best val_bpb of 0.9567 and a top-10
+mean of 0.9579 over 185 valid runs in 300 iterations (Fig. 3a,d). Its stateful ideator converges to
+a narrow refinement family, with all ten of its best ideas inside a 0.003 BPB band, scalar tunes of
+UNEMBEDDING_LR and β2 over the modded-nanogpt SOTA backbone [27]. OMNI reaches parity at
+0.9584 in less than half the valid runs (75/300), driven by the strict MoI gate. The other strategies
+trail.
+
+On On-Policy RL, premature commitment hurts GREEDY, which plateaus at 1.368, below the top-10
+mean of every archive-based strategy (Fig. 3b,e). Broader exploration pays off. MAP-ELITES
+produces the best single run at 1.582 with a top-10 mean of 1.572 over 240 valid ideas, ISLANDS
+matches with a best of 1.563 on roughly half the valid budget (136), and GO-EXPLORE ties at 1.561
+with the highest validity rate in the study (249/300). OMNI (1.196) and CURIOSITY (1.298) sit
+below the baseline-matching strategies.
+
+On Model Unlearning, GREEDY again leads with a best accuracy of 1.0309 (NS = 4 “Combined
+Borrowing”; Fig. 3c,f). Its top run combines an MSE term on active-vs-reference final hidden states,
+a KL term on the retain set, and a margin scrub, a variant of the SCRUB [29] and RMU [34] family.
+
+8
+
+050100150200Valid solutions0.960.970.980.991.001.01Running best val_bpb ↓ananoGPT0100200Valid solutions0.40.60.81.01.21.41.6Running best score ↑bOn-Policy RL0100200Valid solutions0.850.900.951.00Running best accuracy ↑cModel UnlearningGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.960.981.001.021.04val_bpb (↓ better)dGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.00.51.01.5score (↑ better)eGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.70.80.91.0accuracy (↑ better)fGreedyIslandsMAP-ElitesGo-ExploreOmniCuriositybaseline

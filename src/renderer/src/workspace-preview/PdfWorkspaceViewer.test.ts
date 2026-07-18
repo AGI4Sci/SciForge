@@ -28,6 +28,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     onAnnotationSelect?: unknown
     onOpenAnnotations?: unknown
     onToggleAnnotations?: unknown
+    onPresentationStateChange?: unknown
   }) => createElement('div', {
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
@@ -45,6 +46,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-has-annotation-select': props.onAnnotationSelect ? 'true' : 'false',
     'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false',
     'data-has-toggle-annotations': props.onToggleAnnotations ? 'true' : 'false',
+    'data-has-presentation-state-change': props.onPresentationStateChange ? 'true' : 'false',
     ...(props.sourceUrl ? { 'data-source-url': props.sourceUrl } : {})
   })
 }))
@@ -230,12 +232,14 @@ describe('PdfWorkspaceViewer', () => {
       observation,
       asset,
       transport,
-      previewState: result
+      previewState: result,
+      onPresentationStateChange: vi.fn()
     }))
 
     expect(html).toContain('data-workspace-preview-pdf-viewer')
     expect(html).toContain('data-pdf-ready-shell')
     expect(html).toContain('data-write-pdf-viewer="true"')
+    expect(html).toContain('data-has-presentation-state-change="true"')
     expect(html).not.toContain('data-pdf-agent-summary')
     expect(html).not.toContain('data-pdf-load-summary')
     expect(html).toContain('data-pdf-data-length="4"')

@@ -1,0 +1,210 @@
+\begin{thebibliography}{67}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{{#1}}
+\providecommand{\urlprefix}{URL }
+\providecommand{\doi}[1]{\url{https://doi.org/#1}}
+\providecommand{\eprint}[2][]{\url{#2}}
+ \bibcommenthead
+
+\bibitem[{Abdine et~al.(2023)Abdine, Chatzianastasis, Bouyioukos, and Vazirgiannis}]{abdine2023prot2text}
+Abdine H, Chatzianastasis M, Bouyioukos C, et~al (2023) {Prot2Text}: Multimodal protein's function generation with {GNNs} and transformers. arXiv preprint arXiv:2307.14367
+
+\bibitem[{Abramson et~al.(2024)Abramson, Adler, Dunger et~al.}]{abramson2024alphafold3}
+Abramson J, Adler J, Dunger J, et~al (2024) {Accurate Structure Prediction of Biomolecular Interactions with {AlphaFold 3}}. Nature 630:493--500. \doi{10.1038/s41586-024-07487-w}
+
+\bibitem[{Alhossary et~al.(2015)Alhossary, Handoko, Mu, and Kwoh}]{alhossary2015quickvina2}
+Alhossary A, Handoko SD, Mu Y, et~al (2015) {Fast, Accurate, and Reliable Molecular Docking with {QuickVina 2}}. Bioinformatics 31(13):2214--2216. \doi{10.1093/bioinformatics/btv082}
+
+\bibitem[{{Allen Institute for AI}(2025)}]{scholarQA2025}
+{Allen Institute for AI} (2025) {Ai2 ScholarQA}. Available at \url{https://allenai.org/blog/ai2-scholarqa} (accessed 4 July 2026)
+
+\bibitem[{{Anthropic}(2024)}]{anthropicMCP2024}
+{Anthropic} (2024) {Introducing the Model Context Protocol}. Available at \url{https://www.anthropic.com/news/model-context-protocol} (accessed 4 July 2026)
+
+\bibitem[{{Anthropic}(2026)}]{anthropicClaudeScience2026}
+{Anthropic} (2026) {Claude Science: An AI Workbench for Scientists}. Available at \url{https://www.anthropic.com/news/claude-science-ai-workbench} (accessed 4 July 2026)
+
+\bibitem[{Asai et~al.(2026)}]{openScholar2024}
+Asai A, et~al (2026) {Synthesizing Scientific Literature with Retrieval-Augmented Language Models}. Nature 650(8103):857--863. \doi{10.1038/s41586-025-10072-4}
+
+\bibitem[{Baell and Holloway(2010)}]{baell2010pains}
+Baell JB, Holloway GA (2010) {New Substructure Filters for Removal of Pan Assay Interference Compounds ({PAINS}) from Screening Libraries and for Their Exclusion in Bioassays}. Journal of Medicinal Chemistry 53(7):2719--2740. \doi{10.1021/jm901137j}
+
+\bibitem[{Bickerton et~al.(2012)Bickerton, Paolini, Besnard, Muresan, and Hopkins}]{bickerton2012qed}
+Bickerton GR, Paolini GV, Besnard J, et~al (2012) {Quantifying the Chemical Beauty of Drugs}. Nature Chemistry 4:90--98. \doi{10.1038/nchem.1243}
+
+\bibitem[{Blin et~al.(2023)Blin, Shaw, Augustijn et~al.}]{blin2023antismash}
+Blin K, Shaw S, Augustijn HE, et~al (2023) {{antiSMASH 7.0}: New and Improved Predictions for Detection, Regulation, Chemical Structures and Visualisation}. Nucleic Acids Research 51(W1):W46--W50. \doi{10.1093/nar/gkad344}
+
+\bibitem[{Boiko et~al.(2023)Boiko, MacKnight, Kline, and Gomes}]{boiko2023coscientist}
+Boiko DA, MacKnight R, Kline B, et~al (2023) {Autonomous Chemical Research with Large Language Models}. Nature 624:570--578. \doi{10.1038/s41586-023-06792-0}
+
+\bibitem[{Bran et~al.(2024)Bran, Cox, Schilter, Baldassari, White, and Schwaller}]{bran2024chemcrow}
+Bran AM, Cox S, Schilter O, et~al (2024) {Augmenting Large Language Models with Chemistry Tools}. Nature Machine Intelligence 6(5):525--535. \doi{10.1038/s42256-024-00832-8}
+
+\bibitem[{Chen et~al.(2025)Chen, Chen, Ning et~al.}]{chen2025scienceagentbench}
+Chen Z, Chen S, Ning Y, et~al (2025) {ScienceAgentBench: Toward Rigorous Assessment of Language Agents for Data-Driven Scientific Discovery}. In: International Conference on Learning Representations, available at \url{https://proceedings.iclr.cc/paper_files/paper/2025/hash/f12b4df26344f3be803c06b555252efe-Abstract-Conference.html}
+
+\bibitem[{{ClaudePrism Contributors}(2026)}]{claudePrism2026}
+{ClaudePrism Contributors} (2026) {ClaudePrism: Desktop Workspace for Scientific Writing}. Available at \url{https://github.com/delibae/claude-prism} (accessed 4 July 2026)
+
+\bibitem[{{Consensus}(2026)}]{consensus2026}
+{Consensus} (2026) {Consensus Research Agent}. Available at \url{https://help.consensus.app/en/articles/12641232-research-agent} (accessed 4 July 2026)
+
+\bibitem[{Dauparas et~al.(2022)Dauparas, Anishchenko, Bennett et~al.}]{dauparas2022proteinmpnn}
+Dauparas J, Anishchenko I, Bennett N, et~al (2022) {Robust Deep Learning-Based Protein Sequence Design Using {ProteinMPNN}}. Science 378(6615):49--56. \doi{10.1126/science.add2187}
+
+\bibitem[{{Elicit}(2026)}]{elicit2026}
+{Elicit} (2026) {Elicit Research Agent}. Available at \url{https://elicit.com/} (accessed 4 July 2026)
+
+\bibitem[{Ertl and Schuffenhauer(2009)}]{ertl2009sa}
+Ertl P, Schuffenhauer A (2009) {Estimation of Synthetic Accessibility Score of Drug-Like Molecules Based on Molecular Complexity and Fragment Contributions}. Journal of Cheminformatics 1:8. \doi{10.1186/1758-2946-1-8}
+
+\bibitem[{{FutureHouse}(2025)}]{futureHousePlatform2025}
+{FutureHouse} (2025) {Launching FutureHouse Platform AI Agents}. Available at \url{https://www.futurehouse.org/news/launching-futurehouse-platform-ai-agents} (accessed 4 July 2026)
+
+\bibitem[{Ghafarollahi and Buehler(2025)}]{ghafarollahi2025sciagents}
+Ghafarollahi A, Buehler MJ (2025) {{SciAgents}: Automating Scientific Discovery through Bioinspired Multi-Agent Intelligent Graph Reasoning}. Advanced Materials \doi{10.1002/adma.202413523}
+
+\bibitem[{Ghareeb et~al.(2026)Ghareeb, Chang, Mitchener et~al.}]{ghareeb2026robin}
+Ghareeb AE, Chang B, Mitchener L, et~al (2026) {A Multi-Agent System for Automating Scientific Discovery}. Nature 655:497--505. \doi{10.1038/s41586-026-10652-y}
+
+\bibitem[{Gillespie et~al.(2024)Gillespie, Jassal, Stephan et~al.}]{reactome2024}
+Gillespie M, Jassal B, Stephan R, et~al (2024) {{Reactome} Pathway Knowledgebase 2024}. Nucleic Acids Research 52(D1):D672--D678. \doi{10.1093/nar/gkad1025}
+
+\bibitem[{Gottweis et~al.(2026)Gottweis, Weng, Daryin et~al.}]{googleCoScientist2025}
+Gottweis J, Weng WH, Daryin A, et~al (2026) {Accelerating Scientific Discovery with Co-Scientist}. Nature 655(8122):487--496. \doi{10.1038/s41586-026-10644-y}
+
+\bibitem[{Hayes et~al.(2025)Hayes, Rao, Akin et~al.}]{hayes2025esm3}
+Hayes T, Rao R, Akin H, et~al (2025) {Simulating 500 Million Years of Evolution with a Language Model}. Science 387(6736):850--858. \doi{10.1126/science.ads0018}
+
+\bibitem[{Hu et~al.(2021)Hu, Li, Coleman et~al.}]{hu2021spagcn}
+Hu J, Li X, Coleman K, et~al (2021) {SpaGCN: Integrating Gene Expression, Spatial Location and Histology to Identify Spatial Domains and Spatially Variable Genes by Graph Convolutional Network}. Nature Methods 18(11):1342--1351. \doi{10.1038/s41592-021-01255-8}
+
+\bibitem[{Huang et~al.(2025)Huang, Zhang, Wang et~al.}]{huang2025biomni}
+Huang K, Zhang S, Wang H, et~al (2025) {{Biomni}: A General-Purpose Biomedical AI Agent}. bioRxiv \doi{10.1101/2025.05.30.656746}
+
+\bibitem[{Huynh et~al.(2013)Huynh, Jewell, Keshavarz, Michaelides, Yang, and Moreau}]{huynh2013provjson}
+Huynh TD, Jewell MO, Keshavarz AS, et~al (2013) {The PROV-JSON Serialization: A JSON Representation for the PROV Data Model}. W3c member submission, World Wide Web Consortium, available at \url{https://www.w3.org/submissions/2013/SUBM-prov-json-20130424/}
+
+\bibitem[{Ifargan et~al.(2025)Ifargan, Hafner, Kern, Alcalay, and Kishony}]{ifargan2025datatopaper}
+Ifargan T, Hafner L, Kern M, et~al (2025) {Autonomous LLM-Driven Research from Data to Human-Verifiable Research Papers}. NEJM AI 2(1). \doi{10.1056/AIoa2400555}
+
+\bibitem[{Jansen et~al.(2024)Jansen, C{\^o}t{\'e}, Khot et~al.}]{jansen2024discoveryworld}
+Jansen P, C{\^o}t{\'e} MA, Khot T, et~al (2024) {DiscoveryWorld: A Virtual Environment for Developing and Evaluating Automated Scientific Discovery Agents}. In: Advances in Neural Information Processing Systems, pp 10088--10116, \doi{10.52202/079017-0324}
+
+\bibitem[{Jumper et~al.(2021)Jumper, Evans, Pritzel et~al.}]{jumper2021alphafold}
+Jumper J, Evans R, Pritzel A, et~al (2021) {Highly Accurate Protein Structure Prediction with AlphaFold}. Nature 596(7873):583--589. \doi{10.1038/s41586-021-03819-2}
+
+\bibitem[{Keller(2019)}]{keller2019fungal}
+Keller NP (2019) {Fungal Secondary Metabolism: Regulation, Function and Drug Discovery}. Nature Reviews Microbiology 17:167--180. \doi{10.1038/s41579-018-0121-1}
+
+\bibitem[{L\'ala et~al.(2024)L\'ala, O'Donoghue, Shtedritski, Cox, Rodriques, and White}]{paperQA2024}
+L\'ala J, O'Donoghue O, Shtedritski A, et~al (2024) {Language Agents Achieve Superhuman Synthesis of Scientific Knowledge}. Preprint at \url{https://arxiv.org/abs/2409.13740}
+
+\bibitem[{Landrum(2016)}]{landrum2016rdkit}
+Landrum G (2016) {{RDKit}: Open-Source Cheminformatics Software}. \url{https://www.rdkit.org}; software archive \url{https://doi.org/10.5281/zenodo.591637}
+
+\bibitem[{Lin et~al.(2023)Lin, Akin, Rao, Hie, Zhu, Lu, Smetanin, Verkuil, Kabeli, Shmueli, dos Santos~Costa, Fazel-Zarandi, Sercu, Candido, and Rives}]{lin2023esm2}
+Lin Z, Akin H, Rao R, et~al (2023) Evolutionary-scale prediction of atomic-level protein structure with a language model. Science 379(6637):1123--1130. \doi{10.1126/science.ade2574}
+
+\bibitem[{Lipinski et~al.(2001)Lipinski, Lombardo, Dominy, and Feeney}]{lipinski2001ruleoffive}
+Lipinski CA, Lombardo F, Dominy BW, et~al (2001) {Experimental and Computational Approaches to Estimate Solubility and Permeability in Drug Discovery and Development Settings}. Advanced Drug Delivery Reviews 46(1--3):3--26. \doi{10.1016/S0169-409X(00)00129-0}
+
+\bibitem[{Long et~al.(2023)Long, Ang, Li et~al.}]{long2023graphst}
+Long Y, Ang KS, Li M, et~al (2023) {Spatially Informed Clustering, Integration, and Deconvolution of Spatial Transcriptomics with GraphST}. Nature Communications 14(1):1155. \doi{10.1038/s41467-023-36796-3}
+
+\bibitem[{Lu et~al.(2026)Lu, Lu, Lange, Yamada, Hu, Foerster, Ha, and Clune}]{sakanaAIScientist2024}
+Lu C, Lu C, Lange RT, et~al (2026) {Towards End-to-End Automation of AI Research}. Nature 651:914--919. \doi{10.1038/s41586-026-10265-5}
+
+\bibitem[{Moreau and Missier(2013)}]{w3cprov2013}
+Moreau L, Missier P (2013) {{PROV-DM}: The {PROV} Data Model}. W3C Recommendation, \url{https://www.w3.org/TR/prov-dm/}
+
+\bibitem[{Navarro-Mu\~noz et~al.(2020)Navarro-Mu\~noz, Selem-Mojica, Mullowney et~al.}]{navarro2020bigscape}
+Navarro-Mu\~noz JC, Selem-Mojica N, Mullowney MW, et~al (2020) {A Computational Framework to Explore Large-Scale Biosynthetic Diversity}. Nature Chemical Biology 16:60--68. \doi{10.1038/s41589-019-0400-9}
+
+\bibitem[{{OmicOS}(2026{\natexlab{a}})}]{omicOSOverview2026}
+{OmicOS} (2026{\natexlab{a}}) {OmicOS Overview}. Available at \url{https://docs.omicos.cn/zh/part1/01-overview.html} (accessed 4 July 2026)
+
+\bibitem[{{OmicOS}(2026{\natexlab{b}})}]{omicOSCLI2026}
+{OmicOS} (2026{\natexlab{b}}) {Starting OmicOS CLI}. Available at \url{https://docs.omicos.cn/zh/part1/08-starting-cli.html} (accessed 4 July 2026)
+
+\bibitem[{{OmicOS}(2026{\natexlab{c}})}]{omicOSServe2026}
+{OmicOS} (2026{\natexlab{c}}) {Starting OmicOS Serve}. Available at \url{https://docs.omicos.cn/zh/part1/07-starting-serve.html} (accessed 4 July 2026)
+
+\bibitem[{{OmicsClaw Contributors}(2026)}]{omicsClaw2026}
+{OmicsClaw Contributors} (2026) {OmicsClaw: Local-First Multi-Omics Research Assistant}. Available at \url{https://github.com/TianGzlab/OmicsClaw} (accessed 4 July 2026)
+
+\bibitem[{Papalexi et~al.(2021)Papalexi, Mimitou, Butler et~al.}]{papalexi2021eccite}
+Papalexi E, Mimitou EP, Butler AW, et~al (2021) {Characterizing the Molecular Regulation of Inhibitory Immune Checkpoints with Multimodal Single-Cell Screens}. Nature Genetics 53:322--331. \doi{10.1038/s41588-021-00778-2}
+
+\bibitem[{Park et~al.(2012)Park, Liu, Lemmon, and Radhakrishnan}]{park2012egfr}
+Park JH, Liu Y, Lemmon MA, et~al (2012) {Erlotinib Binds Both Inactive and Active Conformations of the {EGFR} Tyrosine Kinase Domain}. Biochemical Journal 448(3):417--423. \doi{10.1042/BJ20121513}
+
+\bibitem[{Passaro et~al.(2025)Passaro, Corso, Wohlwend et~al.}]{passaro2025boltz2}
+Passaro S, Corso G, Wohlwend J, et~al (2025) {{Boltz-2}: Towards Accurate and Efficient Binding Affinity Prediction}. bioRxiv \doi{10.1101/2025.06.14.659707}
+
+\bibitem[{Pei et~al.(2024)Pei, Wu, Gao, Liang, Fang, Zhu, Xie, Qin, and Yan}]{pei2024biot5}
+Pei Q, Wu L, Gao K, et~al (2024) {BioT5+}: Towards generalized biological understanding with {IUPAC} integration and multi-task tuning. arXiv preprint arXiv:2402.17810
+
+\bibitem[{Qu et~al.(2026)Qu, Huang, Yin et~al.}]{qu2026crisprgpt}
+Qu Y, Huang K, Yin M, et~al (2026) {{CRISPR-GPT} for Agentic Automation of Gene-Editing Experiments}. Nature Biomedical Engineering 10:245--258. \doi{10.1038/s41551-025-01463-z}
+
+\bibitem[{Rizvi et~al.(2025)Rizvi, Levine, Patel, Zhang, Wang, Perry, Vrkic, Constante, Fu, He, Zhang, Tang, Lyu, Darji, Li, Sun, Jeong, Zhao, Kwan, Braun, Hafler, Chung, Dhodapkar, Jaeger, Perozzi, Ishizuka, Azizi, and van Dijk}]{rizvi2025c2s}
+Rizvi SA, Levine D, Patel A, et~al (2025) Scaling large language models for next-generation single-cell analysis. bioRxiv \doi{10.1101/2025.04.14.648850}
+
+\bibitem[{Rocklin et~al.(2017)Rocklin, Chidyausiku, Goreshnik et~al.}]{rocklin2017proteinFolding}
+Rocklin GJ, Chidyausiku TM, Goreshnik I, et~al (2017) {Global Analysis of Protein Folding Using Massively Parallel Design, Synthesis, and Testing}. Science 357(6347):168--175. \doi{10.1126/science.aan0693}
+
+\bibitem[{Rogers and Hahn(2010)}]{rogers2010ecfp}
+Rogers D, Hahn M (2010) {Extended-Connectivity Fingerprints}. Journal of Chemical Information and Modeling 50(5):742--754. \doi{10.1021/ci100050t}
+
+\bibitem[{Sandve et~al.(2013)Sandve, Nekrutenko, Taylor, and Hovig}]{sandve2013reproducible}
+Sandve GK, Nekrutenko A, Taylor J, et~al (2013) {Ten Simple Rules for Reproducible Computational Research}. PLoS Computational Biology 9(10):e1003285. \doi{10.1371/journal.pcbi.1003285}
+
+\bibitem[{Schmidgall et~al.(2025)Schmidgall, Su, Wang et~al.}]{agentLaboratory2025}
+Schmidgall S, Su Y, Wang Z, et~al (2025) {Agent Laboratory: Using LLM Agents as Research Assistants}. In: Findings of the Association for Computational Linguistics: EMNLP 2025. Association for Computational Linguistics, pp 5977--6043, \doi{10.18653/v1/2025.findings-emnlp.320}
+
+\bibitem[{St{\aa}hl et~al.(2016)St{\aa}hl, Salm{\'e}n, Vickovic et~al.}]{stahl2016spatial}
+St{\aa}hl PL, Salm{\'e}n F, Vickovic S, et~al (2016) {Visualization and Analysis of Gene Expression in Tissue Sections by Spatial Transcriptomics}. Science 353(6294):78--82. \doi{10.1126/science.aaf2403}
+
+\bibitem[{Swanson et~al.(2025)Swanson, Wu, Bulaong, Pak, and Zou}]{swanson2025virtuallab}
+Swanson K, Wu W, Bulaong NL, et~al (2025) {The Virtual Lab of AI Agents Designs New SARS-CoV-2 Nanobodies}. Nature 646:716--723. \doi{10.1038/s41586-025-09442-9}
+
+\bibitem[{{Swarup Lab}(2026)}]{operonGitHub2026}
+{Swarup Lab} (2026) {Operon: AI-Powered IDE for Bioinformatics}. Available at \url{https://github.com/swaruplab/operon} (accessed 4 July 2026)
+
+\bibitem[{Szymanski et~al.(2023)Szymanski, Rendy, Fei et~al.}]{szymanski2023alab}
+Szymanski NJ, Rendy B, Fei Y, et~al (2023) {An Autonomous Laboratory for the Accelerated Synthesis of Inorganic Materials}. Nature 624:86--91. \doi{10.1038/s41586-023-06734-w}
+
+\bibitem[{Tsherniak et~al.(2017)Tsherniak, Vazquez, Montgomery et~al.}]{tsherniak2017depmap}
+Tsherniak A, Vazquez F, Montgomery PG, et~al (2017) {Defining a Cancer Dependency Map}. Cell 170(3):564--576.e16. \doi{10.1016/j.cell.2017.06.010}
+
+\bibitem[{{UniProt Consortium}(2025)}]{uniprot2025}
+{UniProt Consortium} (2025) {{UniProt}: The Universal Protein Knowledgebase in 2025}. Nucleic Acids Research 53(D1):D609--D617. \doi{10.1093/nar/gkae1010}
+
+\bibitem[{Watson et~al.(2023)Watson, Juergens, Bennett et~al.}]{watson2023rfdiffusion}
+Watson JL, Juergens D, Bennett NR, et~al (2023) {De Novo Design of Protein Structure and Function with {RFdiffusion}}. Nature 620:1089--1100. \doi{10.1038/s41586-023-06415-8}
+
+\bibitem[{Wilkinson et~al.(2016)Wilkinson, Dumontier, Aalbersberg et~al.}]{wilkinson2016fair}
+Wilkinson MD, Dumontier M, Aalbersberg IJ, et~al (2016) {The FAIR Guiding Principles for Scientific Data Management and Stewardship}. Scientific Data 3:160018. \doi{10.1038/sdata.2016.18}
+
+\bibitem[{Xu et~al.(2024)Xu, Fu, Long et~al.}]{xu2024sedr}
+Xu H, Fu H, Long Y, et~al (2024) {Unsupervised Spatially Embedded Deep Representation of Spatial Transcriptomics}. Genome Medicine 16(1):12. \doi{10.1186/s13073-024-01283-x}
+
+\bibitem[{Yamada et~al.(2025)Yamada, Lange, Lu, Hu, Lu, Foerster, Clune, and Ha}]{yamada2025aiscientistv2}
+Yamada Y, Lange RT, Lu C, et~al (2025) {The AI Scientist-v2: Workshop-Level Automated Scientific Discovery via Agentic Tree Search}. Preprint at \url{https://arxiv.org/abs/2504.08066}
+
+\bibitem[{Yang et~al.(2026)}]{vcbench2026}
+Yang K, et~al (2026) Benchmarking virtual cell models for in-the-wild perturbation response. arXiv preprint ArXiv:2604.27646v1
+
+\bibitem[{Zdouc et~al.(2025)Zdouc, Blin, Louwen et~al.}]{zdouc2025mibig4}
+Zdouc MM, Blin K, Louwen NLL, et~al (2025) {{MIBiG 4.0}: Advancing Biosynthetic Gene Cluster Curation through Global Collaboration}. Nucleic Acids Research 53(D1). \doi{10.1093/nar/gkae1115}
+
+\bibitem[{Zhang et~al.(2026)Zhang, Duan, and Gao}]{MCFST2025}
+Zhang Z, Duan H, Gao X (2026) {MCFST}: Spatial domain identification method based on multi-view graph convolutional network and graph fusion network. Bioinformatics 42(7). \doi{10.1093/bioinformatics/btag469}
+
+\bibitem[{Zhao et~al.(2021)Zhao, Stone, Ren et~al.}]{zhao2021bayesspace}
+Zhao E, Stone MR, Ren X, et~al (2021) {Spatial Transcriptomics at Subspot Resolution with BayesSpace}. Nature Biotechnology 39(11):1375--1384. \doi{10.1038/s41587-021-00935-2}
+
+\end{thebibliography}

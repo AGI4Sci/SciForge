@@ -8,7 +8,10 @@ import {
 } from '@shared/workspace-preview'
 
 vi.mock('../components/write/WritePdfViewer', () => ({
-  WritePdfViewer: () => createElement('div', { 'data-write-pdf-viewer': 'true' })
+  WritePdfViewer: (props: { onPresentationStateChange?: unknown }) => createElement('div', {
+    'data-write-pdf-viewer': 'true',
+    'data-has-presentation-state-change': props.onPresentationStateChange ? 'true' : 'false'
+  })
 }))
 
 vi.mock('../components/write/WriteDocxViewer', () => ({
@@ -329,6 +332,25 @@ describe('WorkspacePreviewPluginOutlet', () => {
       actionId: 'markdown.readImage',
       input: { path: '/workspace/lab/docs/figures/cell.png' }
     })
+  })
+
+  it('passes the shared presentation-state channel through to the active viewer', () => {
+    const observation = createObservation('document')
+
+    const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation),
+      routeReason: 'registered-plugin',
+      renderers: [{
+        id: 'presentation-aware',
+        matches: () => true,
+        render: ({ onPresentationStateChange }) => createElement('div', {
+          'data-has-presentation-state-change': onPresentationStateChange ? 'true' : 'false'
+        })
+      }],
+      onPresentationStateChange: vi.fn()
+    }))
+
+    expect(html).toContain('data-has-presentation-state-change="true"')
   })
 
   it('renders a generic plugin summary for deferred shell routes without a dedicated viewer', () => {

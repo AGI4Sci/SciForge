@@ -17,6 +17,7 @@ import {
 import type { DesktopCommand, SkillListItem } from '@shared/sciforge-api'
 import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import type { ClipboardImageReadResult } from '@shared/workspace-file'
+import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import type { AgentRuntimeChild, AgentRuntimeWorkspaceReference } from '@shared/agent-runtime-contract'
 import type {
   AgentProviderCapabilities,
@@ -253,6 +254,121 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'SDD assistant'
     default:
       return String(mode)
+  }
+}
+
+const RIGHT_PANEL_RESOURCE_KINDS: Record<Exclude<RightPanelMode, null>, string> = {
+  file: 'workspace-files',
+  browser: 'dev-preview',
+  'child-agents': 'child-agents',
+  changes: 'session-changes',
+  todo: 'session-todos',
+  paper: 'paper-radar',
+  evidence: 'evidence-graph',
+  'project-dag': 'project-dag',
+  workflow: 'workflow-builder',
+  checkpoints: 'git-checkpoints',
+  'visual-review': 'visual-document',
+  plan: 'gui-plan',
+  'sdd-ai': 'sdd-assistant'
+}
+
+export type RightPanelVisibleContextInput = {
+  mode: Exclude<RightPanelMode, null>
+  sessionId: string
+  width: number
+  workspaceRoot?: string
+  filePreviewTarget?: { path: string; workspaceRoot?: string } | null
+  browserUrl?: string | null
+  childAgentCount?: number
+  childAgentRunningCount?: number
+  evidenceNodeId?: string | null
+  projectDagClaimId?: string | null
+  projectDagNodeId?: string | null
+  visualDocumentId?: string | null
+  planId?: string | null
+  sddDraftId?: string | null
+  updatedAt?: string
+}
+
+/**
+ * Builds the single, mode-independent directory entry for the visible right panel.
+ * Mode-specific panels may publish richer observations, but this component always
+ * identifies which session owns the panel and which resource is currently selected.
+ */
+export function buildRightPanelVisibleContextComponent(
+  input: RightPanelVisibleContextInput
+): VisibleContextComponentSnapshot {
+  const title = rightPanelVisibleContextTitle(input.mode)
+  const workspaceRoot = input.filePreviewTarget?.workspaceRoot || input.workspaceRoot || undefined
+  const baseResource = {
+    kind: RIGHT_PANEL_RESOURCE_KINDS[input.mode],
+    title,
+    summary: `${title} state owned by session ${input.sessionId}.`,
+    sessionId: input.sessionId,
+    ...(workspaceRoot ? { workspaceRoot } : {})
+  }
+  let currentResource: Record<string, unknown> = baseResource
+  switch (input.mode) {
+    case 'file':
+      if (input.filePreviewTarget?.path) {
+        const fileTitle = fileNameFromPath(input.filePreviewTarget.path)
+        currentResource = {
+          ...baseResource,
+          kind: 'workspace-file-preview',
+          title: fileTitle,
+          summary: `Canonical workspace preview for ${fileTitle}.`,
+          path: input.filePreviewTarget.path,
+          canonicalComponentId: 'right-sidebar.file-preview'
+        }
+      }
+      break
+    case 'browser':
+      currentResource = { ...baseResource, url: input.browserUrl || null }
+      break
+    case 'child-agents':
+      currentResource = {
+        ...baseResource,
+        count: input.childAgentCount ?? 0,
+        runningCount: input.childAgentRunningCount ?? 0
+      }
+      break
+    case 'evidence':
+      currentResource = { ...baseResource, selectedNodeId: input.evidenceNodeId || null }
+      break
+    case 'project-dag':
+      currentResource = {
+        ...baseResource,
+        selectedClaimId: input.projectDagClaimId || null,
+        selectedNodeId: input.projectDagNodeId || null
+      }
+      break
+    case 'visual-review':
+      currentResource = { ...baseResource, documentId: input.visualDocumentId || null }
+      break
+    case 'plan':
+      currentResource = { ...baseResource, planId: input.planId || null }
+      break
+    case 'sdd-ai':
+      currentResource = { ...baseResource, draftId: input.sddDraftId || null }
+      break
+  }
+
+  return {
+    id: 'right-sidebar',
+    region: 'right-sidebar',
+    component: 'right-panel',
+    title,
+    visible: true,
+    priority: 10,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    summary: `Right sidebar for session ${input.sessionId} is showing the ${title} panel.`,
+    state: {
+      mode: input.mode,
+      sessionId: input.sessionId,
+      width: input.width,
+      currentResource
+    }
   }
 }
 
@@ -1285,34 +1401,39 @@ export function Workbench(): ReactElement {
   }, [])
 
   useEffect(() => {
-    if (!rightPanelMode) return undefined
-    const targetWorkspaceRoot = filePreviewTarget?.workspaceRoot || workspaceRoot
-    return registerVisibleContextComponent({
-      id: 'right-sidebar',
-      region: 'right-sidebar',
-      component: 'right-panel',
-      title: rightPanelVisibleContextTitle(rightPanelMode),
-      visible: true,
-      priority: 10,
-      updatedAt: new Date().toISOString(),
-      summary: `Right sidebar is showing the ${rightPanelVisibleContextTitle(rightPanelMode)} panel.`,
-      resources: rightPanelMode === 'file' && filePreviewTarget?.path
-        ? [{
-            kind: 'workspaceFile',
-            role: 'selected-file-preview-target',
-            title: filePreviewTarget.path.split(/[/\\]/).filter(Boolean).pop() ?? filePreviewTarget.path,
-            workspaceRoot: targetWorkspaceRoot,
-            path: filePreviewTarget.path
-          }]
-        : undefined,
-      state: {
-        mode: rightPanelMode,
-        width: rightSidebarWidth,
-        filePreviewPath: filePreviewTarget?.path ?? null,
-        filePreviewWorkspaceRoot: rightPanelMode === 'file' ? targetWorkspaceRoot : null
-      }
-    })
-  }, [filePreviewTarget?.path, filePreviewTarget?.workspaceRoot, rightPanelMode, rightSidebarWidth, workspaceRoot])
+    if (!rightPanelMode || !rightPanelOwnerId) return undefined
+    const ownerWorkspace = rightPanelWorkspaces.find(
+      (candidate) => candidate.sessionId === rightPanelOwnerId
+    )
+    return registerVisibleContextComponent(buildRightPanelVisibleContextComponent({
+      mode: rightPanelMode,
+      sessionId: rightPanelOwnerId,
+      width: rightSidebarWidth,
+      workspaceRoot,
+      filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
+      browserUrl: rightPanelMode === 'browser' ? latestDevPreviewUrl : null,
+      childAgentCount,
+      childAgentRunningCount,
+      evidenceNodeId: ownerWorkspace?.evidenceDagReturnNode?.nodeId,
+      projectDagClaimId: ownerWorkspace?.projectDagReturnTarget?.claimId,
+      projectDagNodeId: ownerWorkspace?.projectDagReturnTarget?.nodeId,
+      visualDocumentId: ownerWorkspace?.visualReviewRequest?.documentId,
+      planId: activeGuiPlan?.id,
+      sddDraftId: activeSddDraft?.id
+    }))
+  }, [
+    activeGuiPlan?.id,
+    activeSddDraft?.id,
+    childAgentCount,
+    childAgentRunningCount,
+    filePreviewTarget,
+    latestDevPreviewUrl,
+    rightPanelMode,
+    rightPanelOwnerId,
+    rightPanelWorkspaces,
+    rightSidebarWidth,
+    workspaceRoot
+  ])
 
   useEffect(() => {
     const runDesktopShortcut = (command: DesktopCommand): void => {

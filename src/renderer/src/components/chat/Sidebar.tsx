@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Bot,
@@ -11,6 +11,8 @@ import {
   Smartphone
 } from 'lucide-react'
 import type { NormalizedThread } from '../../agent/types'
+import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
+import { registerVisibleContextComponent } from '../../lib/visible-context'
 import { useChatStore, type SettingsRouteSection } from '../../store/chat-store'
 import {
   remoteChannelThreadBindingsFromChannels,
@@ -51,6 +53,106 @@ type Props = {
   onToggleConnectPhone: () => void
   onScheduleOpen: () => void
   onToggleSidebar: () => void
+}
+
+type SidebarVisibleContextInput = {
+  activeThreadId: string | null
+  activeView: Props['activeView']
+  connectPhoneSidebarOpen: boolean
+  pluginsActive: boolean
+  runtimeReady: boolean
+  threadSearch: string
+  showArchivedThreads: boolean
+  threads: NormalizedThread[]
+  workspaceRoot: string
+  workspaceCount: number
+  hiddenWorkspaceCount: number
+  remoteChannels: RemoteChannelV1[]
+  selectedRemoteChannelId: string | null
+  updatedAt?: string
+}
+
+export function buildSidebarVisibleContextComponent({
+  activeThreadId,
+  activeView,
+  connectPhoneSidebarOpen,
+  pluginsActive,
+  runtimeReady,
+  threadSearch,
+  showArchivedThreads,
+  threads,
+  workspaceRoot,
+  workspaceCount,
+  hiddenWorkspaceCount,
+  remoteChannels,
+  selectedRemoteChannelId,
+  updatedAt = new Date().toISOString()
+}: SidebarVisibleContextInput): VisibleContextComponentSnapshot {
+  const visibleRemoteChannelCount = remoteChannels.filter(isSidebarRemoteChannelVisible).length
+  const activeEntry = connectPhoneSidebarOpen
+    ? 'connect-phone'
+    : selectedRemoteChannelId
+      ? 'remote-channel'
+      : pluginsActive
+        ? 'plugins'
+        : activeView === 'schedule'
+          ? 'schedule'
+          : activeThreadId
+            ? 'session'
+            : 'projects'
+  const resources = [
+    ...(workspaceRoot
+      ? [{
+          kind: 'workspace',
+          role: 'selected-workspace',
+          workspaceRoot
+        }]
+      : []),
+    ...(activeThreadId
+      ? [{
+          kind: 'agentSession',
+          role: 'selected-session',
+          selectedThreadId: activeThreadId
+        }]
+      : [])
+  ]
+
+  return {
+    id: 'left-sidebar',
+    region: 'left-sidebar',
+    component: 'navigation-sidebar',
+    title: 'Navigation sidebar',
+    visible: true,
+    priority: 20,
+    updatedAt,
+    summary: `Left navigation is focused on ${activeEntry}; ${threads.length} sessions, ${workspaceCount} workspaces, and ${remoteChannels.length} remote channels are available.`,
+    ...(resources.length > 0 ? { resources } : {}),
+    state: {
+      activeEntry,
+      selectedSessionId: activeThreadId,
+      selectedWorkspaceRoot: workspaceRoot || null,
+      selectedRemoteChannelId,
+      sessionCount: threads.length,
+      archivedSessionCount: threads.filter((thread) => thread.archived === true).length,
+      workspaceCount,
+      hiddenWorkspaceCount,
+      remoteChannelCount: remoteChannels.length,
+      visibleRemoteChannelCount,
+      enabledRemoteChannelCount: remoteChannels.filter((channel) => channel.enabled).length,
+      searchActive: threadSearch.trim().length > 0,
+      showingArchivedSessions: showArchivedThreads,
+      runtimeReady,
+      availableEntries: [
+        'new-agent',
+        'plugins',
+        'schedule',
+        ...(visibleRemoteChannelCount > 0 ? ['remote-channels'] : []),
+        'projects',
+        'connect-phone',
+        'settings'
+      ]
+    }
+  }
 }
 
 export function Sidebar({
@@ -112,6 +214,35 @@ export function Sidebar({
     }
     return ids
   }, [activeRemoteChannelId, botThreadBindings])
+  useEffect(() => registerVisibleContextComponent(buildSidebarVisibleContextComponent({
+    activeThreadId,
+    activeView,
+    connectPhoneSidebarOpen,
+    pluginsActive,
+    runtimeReady,
+    threadSearch,
+    showArchivedThreads,
+    threads,
+    workspaceRoot,
+    workspaceCount: codeWorkspaceRoots.length,
+    hiddenWorkspaceCount: hiddenCodeWorkspaceRoots.length,
+    remoteChannels,
+    selectedRemoteChannelId: remoteGuardChannelId
+  })), [
+    activeThreadId,
+    activeView,
+    codeWorkspaceRoots.length,
+    connectPhoneSidebarOpen,
+    hiddenCodeWorkspaceRoots.length,
+    pluginsActive,
+    remoteChannels,
+    remoteGuardChannelId,
+    runtimeReady,
+    showArchivedThreads,
+    threadSearch,
+    threads,
+    workspaceRoot
+  ])
   return (
     <>
     <SidebarFrame
@@ -241,11 +372,7 @@ export function SidebarRemoteChannelSection({
   t
 }: SidebarRemoteChannelSectionProps): ReactElement | null {
   const visibleChannels = [...channels]
-    .filter((channel) =>
-      channel.enabled ||
-      channel.conversations.length > 0 ||
-      (channel.recentMessages?.length ?? 0) > 0
-    )
+    .filter(isSidebarRemoteChannelVisible)
     .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt))
 
   if (visibleChannels.length === 0) return null
@@ -302,6 +429,12 @@ export function SidebarRemoteChannelSection({
       </div>
     </div>
   )
+}
+
+function isSidebarRemoteChannelVisible(channel: RemoteChannelV1): boolean {
+  return channel.enabled ||
+    channel.conversations.length > 0 ||
+    (channel.recentMessages?.length ?? 0) > 0
 }
 
 function SidebarRemoteProviderPill({

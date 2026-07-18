@@ -2,6 +2,7 @@ import type { ReactElement, RefObject } from 'react'
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatBlock, RuntimeConnectionStatus, RuntimeDisclosureMetadata } from '../../agent/types'
+import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { useChatStore } from '../../store/chat-store'
 import { isRemoteChannelThread } from '../../store/chat-store-helpers'
 import { useTimelineStores } from './use-timeline-stores'
@@ -63,6 +64,53 @@ type Props = {
 const TURN_PAGE_SIZE = 18
 const AUTO_COLLAPSE_THRESHOLD = 24
 const PROCESS_SECTION_PAGE_SIZE = 80
+
+export function messageTimelineVisibleContextComponentId(activeThreadId: string | null): string {
+  return activeThreadId ? `chat.timeline.${activeThreadId}` : 'chat.timeline.empty'
+}
+
+export function buildMessageTimelineVisibleContextComponent(input: {
+  activeThreadId: string | null
+  blockCount: number
+  turnCount: number
+  visibleTurnCount: number
+  hiddenTurnCount: number
+  pendingRuntimeTurnCount: number
+  busy: boolean
+  live: boolean
+  reasoning: boolean
+  runtimeConnection: RuntimeConnectionStatus
+  remoteChannelMode: boolean
+  updatedAt?: string
+}): VisibleContextComponentSnapshot {
+  const active = Boolean(input.activeThreadId)
+  return {
+    id: messageTimelineVisibleContextComponentId(input.activeThreadId),
+    region: 'main',
+    component: 'message-timeline',
+    title: 'Chat timeline',
+    visible: true,
+    priority: 100,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    summary: active
+      ? `Active chat timeline with ${input.turnCount} turns; ${input.visibleTurnCount} visible and ${input.hiddenTurnCount} hidden.`
+      : 'Chat timeline without an active thread.',
+    state: {
+      activeThreadId: input.activeThreadId,
+      blockCount: input.blockCount,
+      turnCount: input.turnCount,
+      visibleTurnCount: input.visibleTurnCount,
+      hiddenTurnCount: input.hiddenTurnCount,
+      pendingRuntimeTurnCount: input.pendingRuntimeTurnCount,
+      busy: input.busy,
+      live: input.live,
+      reasoning: input.reasoning,
+      runtimeConnection: input.runtimeConnection,
+      remoteChannelMode: input.remoteChannelMode,
+      hasContent: input.blockCount > 0 || input.live || input.reasoning
+    }
+  }
+}
 
 function useStableOptionalCallback<Args extends unknown[]>(
   callback: ((...args: Args) => void) | undefined
@@ -199,20 +247,6 @@ function MessageTimelineComponent({
   const endRef = useRef<HTMLDivElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => registerVisibleContextComponent({
-    id: 'chat.timeline',
-    region: 'main',
-    component: 'message-timeline',
-    title: 'Chat timeline',
-    visible: true,
-    priority: 100,
-    updatedAt: new Date().toISOString(),
-    summary: activeThreadId
-      ? `Visible messages and generated artifacts for thread ${activeThreadId}.`
-      : 'Chat timeline without an active thread.',
-    state: { activeThreadId }
-  }), [activeThreadId])
-
   const turns = useMemo(() => groupTurns(blocks), [blocks])
   const latestBlock = blocks[blocks.length - 1]
   const scrollContentKey = [
@@ -249,6 +283,36 @@ function MessageTimelineComponent({
     () => (hiddenTurnCount > 0 ? turns.slice(hiddenTurnCount) : turns),
     [hiddenTurnCount, turns]
   )
+  const pendingRuntimeTurnCount = useMemo(
+    () => turns.filter(turnHasPendingRuntimeWork).length,
+    [turns]
+  )
+
+  useEffect(() => registerVisibleContextComponent(buildMessageTimelineVisibleContextComponent({
+    activeThreadId,
+    blockCount: blocks.length,
+    turnCount: turns.length,
+    visibleTurnCount,
+    hiddenTurnCount,
+    pendingRuntimeTurnCount,
+    busy: effectiveBusy,
+    live: Boolean(live.trim()),
+    reasoning: Boolean(liveReasoning.trim()),
+    runtimeConnection,
+    remoteChannelMode
+  })), [
+    activeThreadId,
+    blocks.length,
+    effectiveBusy,
+    hiddenTurnCount,
+    live,
+    liveReasoning,
+    pendingRuntimeTurnCount,
+    remoteChannelMode,
+    runtimeConnection,
+    turns.length,
+    visibleTurnCount
+  ])
   const forkedFromTitle = activeThread?.forkedFromTitle?.trim() ?? ''
   const forkBoundaryTurnCount =
     typeof activeThread?.forkedFromTurnCount === 'number'

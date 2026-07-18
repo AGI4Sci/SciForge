@@ -1,0 +1,115 @@
+import { describe, expect, it } from 'vitest'
+import { RIGHT_PANEL_MODES } from './chat/WorkbenchTopBar'
+import { buildRightPanelVisibleContextComponent } from './Workbench'
+
+const UPDATED_AT = '2026-07-19T00:00:00.000Z'
+
+describe('Workbench right-panel visible context', () => {
+  it('publishes every right-panel mode through the same session-owned component', () => {
+    for (const mode of RIGHT_PANEL_MODES) {
+      const component = buildRightPanelVisibleContextComponent({
+        mode,
+        sessionId: 'session-a',
+        width: 420,
+        workspaceRoot: '/workspace/a',
+        updatedAt: UPDATED_AT
+      })
+
+      expect(component.id).toBe('right-sidebar')
+      expect(component.region).toBe('right-sidebar')
+      expect(component.component).toBe('right-panel')
+      expect(component.state).toMatchObject({
+        mode,
+        sessionId: 'session-a',
+        width: 420,
+        currentResource: {
+          sessionId: 'session-a',
+          workspaceRoot: '/workspace/a'
+        }
+      })
+    }
+  })
+
+  it('switches modes without retaining resource state from the previous panel', () => {
+    const evidence = buildRightPanelVisibleContextComponent({
+      mode: 'evidence',
+      sessionId: 'session-a',
+      width: 420,
+      workspaceRoot: '/workspace/a',
+      evidenceNodeId: 'claim:one',
+      updatedAt: UPDATED_AT
+    })
+    const browser = buildRightPanelVisibleContextComponent({
+      mode: 'browser',
+      sessionId: 'session-a',
+      width: 500,
+      workspaceRoot: '/workspace/a',
+      browserUrl: 'http://localhost:5173/',
+      updatedAt: UPDATED_AT
+    })
+
+    expect(evidence.state?.currentResource).toMatchObject({ selectedNodeId: 'claim:one' })
+    expect(browser.state).toMatchObject({
+      mode: 'browser',
+      width: 500,
+      currentResource: {
+        kind: 'dev-preview',
+        url: 'http://localhost:5173/'
+      }
+    })
+    expect(browser.state?.currentResource).not.toHaveProperty('selectedNodeId')
+  })
+
+  it('isolates otherwise identical panels by their owning session', () => {
+    const first = buildRightPanelVisibleContextComponent({
+      mode: 'todo',
+      sessionId: 'session-a',
+      width: 360,
+      workspaceRoot: '/workspace/a',
+      updatedAt: UPDATED_AT
+    })
+    const second = buildRightPanelVisibleContextComponent({
+      mode: 'todo',
+      sessionId: 'session-b',
+      width: 640,
+      workspaceRoot: '/workspace/b',
+      updatedAt: UPDATED_AT
+    })
+
+    expect(first.state).toMatchObject({
+      sessionId: 'session-a',
+      width: 360,
+      currentResource: { sessionId: 'session-a', workspaceRoot: '/workspace/a' }
+    })
+    expect(second.state).toMatchObject({
+      sessionId: 'session-b',
+      width: 640,
+      currentResource: { sessionId: 'session-b', workspaceRoot: '/workspace/b' }
+    })
+  })
+
+  it('points at the canonical file-preview component without republishing its resource', () => {
+    const component = buildRightPanelVisibleContextComponent({
+      mode: 'file',
+      sessionId: 'session-a',
+      width: 480,
+      workspaceRoot: '/workspace/a',
+      filePreviewTarget: {
+        path: 'papers/current.pdf',
+        workspaceRoot: '/workspace/a'
+      },
+      updatedAt: UPDATED_AT
+    })
+
+    expect(component.resources).toBeUndefined()
+    expect(component.state?.currentResource).toMatchObject({
+      kind: 'workspace-file-preview',
+      title: 'current.pdf',
+      summary: 'Canonical workspace preview for current.pdf.',
+      sessionId: 'session-a',
+      workspaceRoot: '/workspace/a',
+      path: 'papers/current.pdf',
+      canonicalComponentId: 'right-sidebar.file-preview'
+    })
+  })
+})

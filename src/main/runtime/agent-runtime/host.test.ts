@@ -581,61 +581,80 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
-  it('binds a side turn to its visible-context owner for right-sidebar requests', async () => {
+  it('atomically binds every user turn and injects a bounded left-center-right component catalog', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
       title: 'Codex',
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
-    const visibleContext = {
-      get: vi.fn(async () => ({
-        schemaVersion: 1,
-        updatedAt: '2026-07-04T00:00:00.000Z',
-        activeThreadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace',
-        route: 'chat',
-        components: [{
+    const snapshot = {
+      schemaVersion: 3,
+      windowId: 'main-window',
+      revision: 12,
+      publishedAt: '2026-07-04T00:00:00.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      workspaceRoot: '/tmp/workspace',
+      route: 'chat',
+      components: [
+        {
+          id: 'left-sidebar.sessions',
+          region: 'left-sidebar',
+          component: 'session-list',
+          title: 'Sessions',
+          visible: true,
+          updatedAt: '2026-07-04T00:00:00.000Z',
+          summary: 'The current workspace session list.',
+          state: { selectedThreadId: 'codex-thread', count: 4, nested: { filter: 'local', ignored: { deep: true } } },
+          resources: []
+        },
+        {
+          id: 'center.conversation',
+          region: 'center',
+          component: 'conversation',
+          title: 'Codex',
+          visible: true,
+          updatedAt: '2026-07-04T00:00:00.000Z',
+          summary: 'The active agent conversation.',
+          state: { running: false, messageCount: 9 },
+          resources: [{
+            kind: 'conversation',
+            capability: { resourceRef: 'res_centerabcdefghijklmnopqrstuvwxyz', operations: [] }
+          }]
+        },
+        {
           id: 'right-sidebar.file-preview',
           region: 'right-sidebar',
           component: 'workspace-preview',
           title: 'paper.pdf',
           visible: true,
           updatedAt: '2026-07-04T00:00:00.000Z',
-          summary: 'Previewing pdf file paper.pdf.',
+          summary: 'Previewing the bound paper.',
+          state: {
+            presentation: {
+              kind: 'document',
+              position: { index: 3, count: 42 },
+              visibleContent: { kind: 'text', text: 'VOYAGER current page excerpt' }
+            }
+          },
           resources: [{
             kind: 'workspaceFile',
             role: 'preview-target',
-            workspaceRoot: '/tmp/workspace',
-            relativePath: 'paper.pdf',
-            annotationCount: 2,
-            threadCount: 2,
-            openThreadCount: 2,
-            capability: {
-              resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
-              resource: {
-                token: 'cap_abcdefghijklmnopqrstuvwxyz',
-                semanticRevision: 'revision-2',
-                expiresAt: '2026-07-16T14:00:00.000Z'
-              },
-              operations: [{ id: 'workspace-preview.apply-edit' }]
-            }
+            capability: { resourceRef: 'res_rightabcdefghijklmnopqrstuvwxyz', operations: [] }
           }]
-        }]
-      })),
-      peek: vi.fn(() => ({
-        schemaVersion: 1,
-        updatedAt: '1970-01-01T00:00:00.000Z',
-        components: []
-      })),
-      bindCurrentSurface: vi.fn(async () => visibleContext.get())
+        }
+      ]
+    }
+    const visibleContext = {
+      bindCurrentSurface: vi.fn(async () => snapshot)
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [adapter],
       services: { visibleContext: visibleContext as never }
     })
-    const userText = '看一下右侧的pdf批注，然后修改论文。'
+    const userText = 'Run the unit tests.'
 
     await host.startTurn({
       runtimeId: 'codex',
@@ -647,17 +666,23 @@ describe('AgentRuntimeHost', () => {
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-side-thread', 'codex-thread')
-    expect(dispatched?.text).toContain('sciforge_discover')
+    expect(dispatched?.text).toContain('Canonical visible state bound atomically for this turn:')
+    expect(dispatched?.text).toContain('"region": "left-sidebar"')
+    expect(dispatched?.text).toContain('"region": "center"')
+    expect(dispatched?.text).toContain('"region": "right-sidebar"')
+    expect(dispatched?.text).toContain('"selectedThreadId": "codex-thread"')
+    expect(dispatched?.text).toContain('"resourceRef": [')
     expect(dispatched?.text).toContain('sciforge_observe')
     expect(dispatched?.text).toContain('sciforge_invoke')
-    expect(dispatched?.text).not.toContain('cap_abcdefghijklmnopqrstuvwxyz')
-    expect(dispatched?.text).not.toContain('workspace-preview.apply-edit')
-    expect(dispatched?.text).toContain('res_abcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('res_centerabcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('res_rightabcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('VOYAGER current page excerpt')
+    expect(dispatched?.text).toContain('"index": 3')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
   })
 
-  it('does not add visible GUI lookup hints to unrelated turns', async () => {
+  it('fails closed when canonical visible state cannot be bound', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -665,16 +690,9 @@ describe('AgentRuntimeHost', () => {
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     const visibleContext = {
-      get: vi.fn(async () => ({
-        schemaVersion: 1,
-        updatedAt: '2026-07-04T00:00:00.000Z',
-        components: []
-      })),
-      peek: vi.fn(() => ({
-        schemaVersion: 1,
-        updatedAt: '1970-01-01T00:00:00.000Z',
-        components: []
-      }))
+      bindCurrentSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
+      get: vi.fn(),
+      peek: vi.fn()
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -690,8 +708,12 @@ describe('AgentRuntimeHost', () => {
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
     expect(visibleContext.get).not.toHaveBeenCalled()
-    expect(dispatched?.text).not.toContain('sciforge_discover')
+    expect(visibleContext.peek).not.toHaveBeenCalled()
+    expect(dispatched?.text).toContain('Canonical visible state for this turn: unavailable.')
+    expect(dispatched?.text).toContain('Do not guess from file paths, mtimes, recent files, workspace scans')
+    expect(dispatched?.text).not.toContain('surface.current')
     expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
     expect(dispatched?.displayText).toBe('Run the unit tests.')
   })

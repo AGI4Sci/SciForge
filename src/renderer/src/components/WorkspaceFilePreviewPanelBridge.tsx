@@ -16,9 +16,11 @@ import { FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
 import {
   lazy,
   Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ReactElement
 } from 'react'
 import {
@@ -31,6 +33,11 @@ import {
   rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor
 } from '../workspace-preview'
+import {
+  boundWorkspacePreviewPresentationState,
+  workspacePreviewPresentationStatesEqual,
+  type WorkspacePreviewPresentationState
+} from '../workspace-preview/presentation-state'
 import {
   registerVisibleContextComponent,
   registerVisibleContextVisualTarget
@@ -208,6 +215,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
   route: WorkspacePreviewShellRoute
   workspaceRoot: string
   updatedAt: string
+  presentationState?: WorkspacePreviewPresentationState | null
 }): VisibleContextComponentSnapshot | null {
   const path = input.context.state.observation?.file.path ??
     input.context.state.file?.path ??
@@ -233,11 +241,14 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
   const selectionKind = observation?.selection?.kind ?? input.context.state.session?.selection?.kind
   const compactCapability = compactVisibleContextCapability(input.context.state.capability)
   const documentAnnotations = observation?.documentAnnotations
-  const summary = observation
+  const presentationState = boundWorkspacePreviewPresentationState(input.presentationState)
+  const presentationSummary = formatPresentationSummary(presentationState)
+  const baseSummary = observation
     ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)}.`
     : input.context.assetError
       ? `Workspace preview for ${fileNameFromPath(path)} has an asset error: ${input.context.assetError}.`
       : `Workspace preview for ${fileNameFromPath(path)} is ${input.context.assetStatus}.`
+  const summary = presentationSummary ? `${baseSummary} ${presentationSummary}` : baseSummary
   const resources: VisibleContextResource[] = [{
     kind: 'workspaceFile',
     role: 'preview-target',
@@ -266,7 +277,9 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         kind: strategy.kind,
         status: strategy.status
       })),
-      selectionKind
+      selectionKind,
+      presentationKind: presentationState?.kind,
+      presentationPosition: presentationState?.position
     }
   }]
 
@@ -274,7 +287,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     id: 'right-sidebar.file-preview',
     region: 'right-sidebar',
     component: 'workspace-preview',
-    title: observation?.view.title || fileNameFromPath(path),
+    title: presentationState?.title || observation?.view.title || fileNameFromPath(path),
     visible: true,
     priority: 20,
     updatedAt: input.updatedAt,
@@ -301,6 +314,7 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         status: strategy.status
       })) ?? [],
       selectionKind: selectionKind ?? null,
+      presentation: presentationState,
       error: input.context.state.error ?? input.context.assetError,
       workspaceObservation: observation ?? null
     }
@@ -321,6 +335,22 @@ function compactVisibleContextCapability(
       schemaRef: `sciforge://capability-schema/${encodeURIComponent(operation.id)}?version=${encodeURIComponent(operation.version)}`
     }))
   }
+}
+
+function formatPresentationSummary(
+  presentation: WorkspacePreviewPresentationState | null
+): string {
+  if (!presentation) return ''
+  const title = presentation.title ? `Showing ${presentation.title}.` : ''
+  const position = presentation.position?.label
+    ? `Current position: ${presentation.position.label}.`
+    : presentation.position
+      ? `Current position: ${presentation.position.index}${presentation.position.count ? ` of ${presentation.position.count}` : ''}.`
+      : ''
+  const selection = presentation.selection?.summary
+    ? `Selection: ${presentation.selection.summary}.`
+    : ''
+  return [title, position, selection].filter(Boolean).join(' ')
 }
 
 function WorkspacePreviewShellBody({
@@ -345,6 +375,21 @@ function WorkspacePreviewShellBody({
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const presentationOwnerKey = `${context.state.session?.id ?? ''}:${target?.path ?? ''}`
+  const [presentationSnapshot, setPresentationSnapshot] = useState<{
+    ownerKey: string
+    state: WorkspacePreviewPresentationState | null
+  }>(() => ({ ownerKey: presentationOwnerKey, state: null }))
+  const presentationState = presentationSnapshot.ownerKey === presentationOwnerKey
+    ? presentationSnapshot.state
+    : null
+  const handlePresentationStateChange = useCallback((next: WorkspacePreviewPresentationState | null): void => {
+    const bounded = boundWorkspacePreviewPresentationState(next)
+    setPresentationSnapshot((current) => current.ownerKey === presentationOwnerKey &&
+      workspacePreviewPresentationStatesEqual(current.state, bounded)
+      ? current
+      : { ownerKey: presentationOwnerKey, state: bounded })
+  }, [presentationOwnerKey])
   const capabilityWorkspaceRoot = target?.workspaceRoot?.trim() || workspaceRoot
   const lastEditSummary = context.state.lastEditSummary
   const canOpenDirectory = Boolean(target && onOpenDirectory)
@@ -360,12 +405,13 @@ function WorkspacePreviewShellBody({
       target,
       route,
       workspaceRoot,
-      updatedAt: new Date().toISOString()
+      updatedAt: new Date().toISOString(),
+      presentationState
     })
     return component && sessionId
       ? { ...component, id: `${component.id}:${encodeURIComponent(sessionId)}` }
       : component
-  }, [active, context, route, sessionId, target, workspaceRoot])
+  }, [active, context, presentationState, route, sessionId, target, workspaceRoot])
 
   useEffect(() => {
     if (!visibleContextComponent) return undefined
@@ -494,6 +540,7 @@ function WorkspacePreviewShellBody({
         routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
         visualContextComponentId={visibleContextComponent?.id}
+        onPresentationStateChange={handlePresentationStateChange}
       />
     </div>
   )

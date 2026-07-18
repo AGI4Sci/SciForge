@@ -973,14 +973,30 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         modality: 'molecular'
       },
       workspaceRoot: '/workspace/lab',
-      updatedAt: '2026-07-08T00:00:01.000Z'
+      updatedAt: '2026-07-08T00:00:01.000Z',
+      presentationState: {
+        schemaVersion: 1,
+        kind: 'document',
+        position: { index: 2, count: 12, label: 'Page 2 of 12' },
+        visibleContent: {
+          kind: 'text',
+          label: 'Page 2',
+          text: 'Bounded visible page text.',
+          truncated: false
+        },
+        selection: {
+          kind: 'text',
+          text: 'visible selection',
+          summary: 'Page 2; 17 selected characters'
+        }
+      }
     })
 
     expect(component).toMatchObject({
       id: 'right-sidebar.file-preview',
       component: 'workspace-preview',
       title: 'protein.pdb',
-      summary: 'Workspace preview observation for Molecular file protein.pdb.',
+      summary: 'Workspace preview observation for Molecular file protein.pdb. Current position: Page 2 of 12. Selection: Page 2; 17 selected characters.',
       state: {
         currentPreview: {
           resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
@@ -994,6 +1010,18 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         pluginId: 'molecular',
         modality: 'molecular',
         selectionKind: 'molecular',
+        presentation: {
+          kind: 'document',
+          position: { index: 2, count: 12, label: 'Page 2 of 12' },
+          visibleContent: {
+            text: 'Bounded visible page text.',
+            truncated: false
+          },
+          selection: {
+            kind: 'text',
+            text: 'visible selection'
+          }
+        },
         assetPrimary: 'byte-range',
         assetStrategies: [
           {
@@ -1037,6 +1065,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           },
           metadata: {
             routeReason: 'registered-plugin',
+            presentationKind: 'document',
+            presentationPosition: { index: 2, count: 12, label: 'Page 2 of 12' },
             assetStrategies: [
               {
                 kind: 'byte-range',
