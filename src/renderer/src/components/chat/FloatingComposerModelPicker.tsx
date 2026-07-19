@@ -21,6 +21,7 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   activeAgentRuntime?: AgentRuntimeId
+  runtimeLocked?: boolean
   canChangeModel: boolean
   stretch?: boolean
   composerReasoningEffort?: string
@@ -84,6 +85,7 @@ export function FloatingComposerModelPicker({
   composerPickList,
   composerModelGroups = [],
   activeAgentRuntime = 'sciforge',
+  runtimeLocked = false,
   canChangeModel,
   stretch = false,
   composerReasoningEffort = 'max',
@@ -316,13 +318,20 @@ export function FloatingComposerModelPicker({
             <div className="-mt-1 px-2 pb-1 text-[11.5px] leading-4 text-ds-faint">
               {t('composerRuntimeHint')}
             </div>
+            {runtimeLocked ? (
+              <div className="-mt-1 px-2 pb-1 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300">
+                {t('composerRuntimeCodexPlanLocked')}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1">
               {RUNTIME_OPTIONS.map((option) => (
                 <PickerRow
                   key={option.id}
                   selected={currentRuntime === option.id}
                   title={t(option.labelKey)}
+                  disabled={runtimeLocked && option.id !== 'codex'}
                   onClick={() => {
+                    if (runtimeLocked && option.id !== 'codex') return
                     onActiveAgentRuntimeChange?.(option.id)
                     setMenuOpen(false)
                   }}
@@ -685,10 +694,12 @@ function MenuSeparator(): ReactElement {
 function PickerRow({
   selected,
   title,
+  disabled = false,
   onClick
 }: {
   selected: boolean
   title: string
+  disabled?: boolean
   onClick: () => void
 }): ReactElement {
   return (
@@ -696,9 +707,10 @@ function PickerRow({
       type="button"
       role="menuitemradio"
       aria-checked={selected}
+      disabled={disabled}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
-      className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+      className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
         selected
           ? 'bg-ds-hover text-ds-ink'
           : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'

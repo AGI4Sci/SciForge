@@ -52,3 +52,4 @@ export {
   type UpstreamTraceAttemptStart,
   type UpstreamWireProtocol,
 } from './upstream-drivers';
+export { assertLoopbackBinding, isLoopbackHost, normalizeLoopbackHost } from './network-policy';

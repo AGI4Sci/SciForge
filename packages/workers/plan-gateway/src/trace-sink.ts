@@ -82,7 +82,10 @@ export class PlanGatewayTraceRecorder {
         responseChunks: [],
         responseChunkByteLengths: [],
         responseChunkTimestamps: [],
-        sensitiveValues: new Set(this.#staticSensitiveValues),
+        sensitiveValues: new Set([
+          ...this.#staticSensitiveValues,
+          ...(event.sensitiveValues ?? []),
+        ]),
       };
       this.#captureSensitiveHeaders(state, event.headers);
       this.#requests.set(event.requestId, state);
@@ -270,8 +273,13 @@ function resolveCorrelation(
   adapter: Partial<TraceCorrelation>,
   headers: Partial<TraceCorrelation> & Pick<TraceCorrelation, 'requestId'>,
 ): TraceCorrelation {
-  const combined = { ...adapter, ...headers };
-  const traceId = combined.traceId ?? (
+  // Adapter-inspected request metadata is tied to the forwarded body and is
+  // authoritative over caller-supplied correlation headers.
+  const adapterScope = adapter.runtimeId !== undefined && adapter.threadId !== undefined;
+  const combined = adapterScope
+    ? { ...headers, ...adapter, traceId: adapter.traceId }
+    : { ...headers, ...adapter };
+  const traceId = (adapterScope ? adapter.traceId : combined.traceId) ?? (
     combined.runtimeId && combined.threadId
       ? deriveTraceId({
           runtimeId: combined.runtimeId,

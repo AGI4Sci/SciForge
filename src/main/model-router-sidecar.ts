@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   getModelAccessSettings,
@@ -21,6 +21,11 @@ import {
   isUpstreamProviderConfigEnv
 } from './upstream-provider-env'
 import { resolveModelAccessSidecarProcessLaunch } from './model-access-sidecar-launch'
+import {
+  stopModelAccessGatewaySidecar,
+  synchronizeModelAccessGatewaySidecar,
+  type ModelAccessGatewayLaunchSpec
+} from './model-access-gateway-sidecar'
 
 const ROUTER_RUNTIME_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY'
 const TEXT_REASONER_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY'
@@ -44,10 +49,6 @@ const LEGACY_MODEL_ROUTER_ENV_NAMES = [
   'MODEL_ROUTER_BASE_URL',
   'MODEL_ROUTER_MODEL'
 ] as const
-
-let modelRouterChild: ChildProcess | null = null
-let modelRouterLaunchSignature: string | null = null
-let modelRouterStatePath: string | null = null
 
 type ModelRouterMemberConfig = {
   baseUrl: string
@@ -226,87 +227,46 @@ export async function ensureModelRouterSidecar(
     log?: (message: string) => void
   }
 ): Promise<void> {
+  const spec = buildModelRouterGatewayLaunchSpec(settings, options)
+  if (!spec.ok) {
+    options.log?.(spec.reason)
+    await synchronizeModelAccessGatewaySidecar(null, options)
+    return
+  }
+  await synchronizeModelAccessGatewaySidecar(spec.spec, options)
+}
+
+type ModelRouterGatewayLaunchSpecResult =
+  | { ok: true; spec: ModelAccessGatewayLaunchSpec }
+  | { ok: false; reason: string }
+
+export function buildModelRouterGatewayLaunchSpec(
+  settings: AppSettingsV1,
+  options: Parameters<typeof buildModelRouterSidecarLaunch>[1]
+): ModelRouterGatewayLaunchSpecResult {
   const instanceId = randomUUID()
   const launchEnv = {
     ...(options.env ?? process.env),
     [MODEL_ROUTER_INSTANCE_ID_ENV]: instanceId
   }
-  const launch = buildModelRouterSidecarLaunch(settings, {
-    userDataDir: options.userDataDir,
-    appRoot: options.appRoot,
-    resourcesPath: options.resourcesPath,
-    execPath: options.execPath,
-    isPackaged: options.isPackaged,
-    env: launchEnv
-  })
-  if (!launch.ok) {
-    options.log?.(launch.reason)
-    if (isModelRouterChildRunning()) {
-      await stopModelRouterSidecar()
-    }
-    return
-  }
-
-  const signature = modelRouterManagedLaunchSignature(launch.launch)
-  if (isModelRouterChildRunning()) {
-    if (modelRouterLaunchSignature === signature) return
-    options.log?.('Model Router sidecar launch settings changed; restarting sidecar.')
-    await stopModelRouterSidecar()
-  }
-
-  await stopRecordedModelRouterSidecar(settings, options.userDataDir, options.log)
-
-  const postStopLaunch = buildModelRouterSidecarLaunch(settings, {
-    userDataDir: options.userDataDir,
-    appRoot: options.appRoot,
-    resourcesPath: options.resourcesPath,
-    execPath: options.execPath,
-    isPackaged: options.isPackaged,
-    env: launchEnv
-  })
-  if (!postStopLaunch.ok) {
-    options.log?.(postStopLaunch.reason)
-    return
-  }
-  await syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir })
-  const spawnImpl = options.spawnImpl ?? spawn
-  options.log?.(`Starting Model Router sidecar from ${postStopLaunch.launch.cwd}.`)
-  // On Windows the command is `npm.cmd`; Node >= 18.20 refuses to spawn a `.cmd`
-  // without a shell (throws EINVAL). Use a shell on win32 and quote any args that
-  // contain spaces/special chars so cmd.exe parses them correctly.
-  const useShell = postStopLaunch.launch.command.toLowerCase().endsWith('.cmd')
-  const spawnArgs = useShell
-    ? postStopLaunch.launch.args.map(quoteWindowsShellArg)
-    : postStopLaunch.launch.args
-  modelRouterChild = spawnImpl(postStopLaunch.launch.command, spawnArgs, {
-    cwd: postStopLaunch.launch.cwd,
-    env: postStopLaunch.launch.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-    shell: useShell
-  })
-  modelRouterLaunchSignature = modelRouterManagedLaunchSignature(postStopLaunch.launch)
-  modelRouterStatePath = modelRouterSidecarStatePath(options.userDataDir)
-  const child = modelRouterChild
-  if (child.pid) {
-    await writeFile(modelRouterStatePath, `${JSON.stringify({
-      pid: child.pid,
+  const result = buildModelRouterSidecarLaunch(settings, { ...options, env: launchEnv })
+  if (!result.ok) return result
+  const router = getModelRouterSettings(settings)
+  const healthUrl = router.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health'
+  const signature = modelRouterManagedLaunchSignature(result.launch)
+  return {
+    ok: true,
+    spec: {
+      mode: 'model-router',
+      ...result.launch,
+      signature,
       instanceId,
-      signature: modelRouterLaunchSignature
-    }, null, 2)}\n`, 'utf8')
-  }
-  attachModelRouterChildLogging(child, options.log)
-  child.once('error', (error) => {
-    options.log?.(`Model Router sidecar failed to start: ${error.message}`)
-  })
-  child.once('exit', (code, signal) => {
-    if (modelRouterChild !== child) return
-    modelRouterChild = null
-    modelRouterLaunchSignature = null
-    if (code !== 0 || signal) {
-      options.log?.(`Model Router sidecar exited unexpectedly (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`)
+      healthUrl,
+      startMessage: `Starting Model Router sidecar from ${result.launch.cwd}.`,
+      logLabel: 'Model Router',
+      prepare: () => syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir }).then(() => undefined)
     }
-  })
+  }
 }
 
 function defaultModelRouterSidecarConfig(
@@ -338,70 +298,13 @@ function defaultModelRouterSidecarConfig(
   }
 }
 
-export async function stopModelRouterSidecar(): Promise<void> {
-  const child = modelRouterChild
-  if (!child) return
-  modelRouterChild = null
-  modelRouterLaunchSignature = null
-  if (child.exitCode !== null || child.signalCode !== null) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve()
-    }, 2_000)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-    child.kill('SIGTERM')
-  })
-  if (modelRouterStatePath) {
-    await rm(modelRouterStatePath, { force: true })
-    modelRouterStatePath = null
-  }
-}
-
-function modelRouterSidecarStatePath(userDataDir: string): string {
-  return join(userDataDir, 'model-router', 'sidecar-state.json')
-}
-
-async function stopRecordedModelRouterSidecar(
-  settings: AppSettingsV1,
-  userDataDir: string,
+export async function stopModelRouterSidecar(options: {
+  userDataDir?: string
+  fetchImpl?: typeof fetch
+  killProcessImpl?: typeof process.kill
   log?: (message: string) => void
-): Promise<void> {
-  const statePath = modelRouterSidecarStatePath(userDataDir)
-  let state: { pid?: unknown; instanceId?: unknown }
-  try {
-    state = JSON.parse(await readFile(statePath, 'utf8')) as { pid?: unknown; instanceId?: unknown }
-  } catch {
-    return
-  }
-  const pid = typeof state.pid === 'number' && Number.isInteger(state.pid) && state.pid > 1 ? state.pid : 0
-  const instanceId = typeof state.instanceId === 'string' ? state.instanceId.trim() : ''
-  if (!pid || !instanceId) {
-    await rm(statePath, { force: true })
-    return
-  }
-  const router = getModelRouterSettings(settings)
-  const healthUrl = router.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health'
-  try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) })
-    const health = await response.json() as { instanceId?: unknown }
-    if (health.instanceId !== instanceId) {
-      await rm(statePath, { force: true })
-      return
-    }
-    process.kill(pid, 'SIGTERM')
-    log?.('Stopped a stale app-managed Model Router sidecar before launching the current runtime.')
-  } catch {
-    // A missing process or unreachable endpoint means the recorded sidecar is already gone.
-  }
-  await rm(statePath, { force: true })
-}
-
-function isModelRouterChildRunning(): boolean {
-  return Boolean(modelRouterChild && modelRouterChild.exitCode === null && modelRouterChild.signalCode === null)
+} = {}): Promise<void> {
+  await stopModelAccessGatewaySidecar(options)
 }
 
 function modelRouterManagedLaunchSignature(launch: ModelRouterSidecarLaunch): string {
@@ -448,13 +351,6 @@ function isModelRouterMemberConfigured(member: ModelRouterMemberSettingsV1): boo
   return Boolean(member.baseUrl.trim() && member.apiKey.trim() && member.model.trim())
 }
 
-// When spawning through a Windows shell (cmd.exe), wrap args containing spaces or
-// shell metacharacters in double quotes so they survive command-line parsing.
-function quoteWindowsShellArg(arg: string): string {
-  if (arg.length > 0 && !/[\s"&|<>^()]/.test(arg)) return arg
-  return `"${arg.replace(/"/g, '\\"')}"`
-}
-
 function localPortFromRouterBaseUrl(baseUrl: string): number | null {
   try {
     const url = new URL(baseUrl)
@@ -465,24 +361,4 @@ function localPortFromRouterBaseUrl(baseUrl: string): number | null {
   } catch {
     return null
   }
-}
-
-function attachModelRouterChildLogging(
-  child: ChildProcess,
-  log: ((message: string) => void) | undefined
-): void {
-  if (!log) return
-  child.stdout?.on('data', (chunk) => logModelRouterChildChunk('stdout', chunk, log))
-  child.stderr?.on('data', (chunk) => logModelRouterChildChunk('stderr', chunk, log))
-}
-
-function logModelRouterChildChunk(
-  stream: 'stdout' | 'stderr',
-  chunk: unknown,
-  log: (message: string) => void
-): void {
-  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (!normalized) return
-  log(`Model Router sidecar ${stream}: ${normalized.slice(0, 1_000)}`)
 }

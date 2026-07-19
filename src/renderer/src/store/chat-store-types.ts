@@ -220,6 +220,7 @@ export type ChatState = {
   workspaceLabel: string
   runtimeConnection: RuntimeConnectionStatus
   activeAgentRuntime: AgentRuntimeId
+  modelAccessMode: 'api' | 'coding-plan' | null
   codeWorkspaceRoots: string[]
   hiddenCodeWorkspaceRoots: string[]
   threads: NormalizedThread[]

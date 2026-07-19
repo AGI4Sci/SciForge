@@ -14,6 +14,7 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import {
   createRequestId,
   sanitizeTraceText,
+  sensitiveTraceValuesFromHeaders,
   traceCorrelationFromHeaders,
 } from '@sciforge/full-trace';
 
@@ -36,6 +37,11 @@ import {
 import { isLoopbackHost, normalizeMountPath } from './network-policy';
 import { proxyUrlFromRules } from './proxy';
 import type { CodingPlanAdapterRegistry } from './registry';
+import {
+  assertBearerToken,
+  createDelegatedCredentialProvider,
+  type PlanGatewayCredentialProvider,
+} from './credential';
 
 const HOP_BY_HOP_HEADERS = new Set([
   'connection',
@@ -46,6 +52,35 @@ const HOP_BY_HOP_HEADERS = new Set([
   'trailer',
   'transfer-encoding',
   'upgrade',
+]);
+const INBOUND_CREDENTIAL_HEADERS = new Set([
+  'authorization',
+  'proxy-authorization',
+  'cookie',
+  'set-cookie',
+  'api-key',
+  'x-api-key',
+  'anthropic-api-key',
+  'x-anthropic-api-key',
+  'token',
+  'x-auth-token',
+  'x-access-token',
+  'access-token',
+  'refresh-token',
+  'id-token',
+  'client-secret',
+  'password',
+  'credential',
+]);
+const CREDENTIAL_QUERY_PARAMETERS = new Set([
+  'accesstoken',
+  'apikey',
+  'key',
+  'token',
+  'authtoken',
+  'authorization',
+  'refreshtoken',
+  'clientsecret',
 ]);
 const inFlightHandlers = new WeakMap<Server, Set<Promise<void>>>();
 const { getProxyForUrl } = createRequire(import.meta.url)('proxy-from-env') as {
@@ -80,6 +115,7 @@ export function createPlanGatewayServer(options: PlanGatewayServerOptions): Serv
   validateBinding(host, port);
   const adapter = options.adapterRegistry.get(options.adapterId);
   const transport = options.transport ?? new HttpsPlanGatewayTransport();
+  const credentialProvider = createDelegatedCredentialProvider();
   const handlers = new Set<Promise<void>>();
 
   const server = createServer((request, response) => {
@@ -89,6 +125,7 @@ export function createPlanGatewayServer(options: PlanGatewayServerOptions): Serv
       adapter,
       mountPath,
       transport,
+      credentialProvider,
       instanceId: options.instanceId,
       eventSink: options.eventSink,
       log: options.log,
@@ -140,6 +177,7 @@ type RequestContext = {
   adapter: ReturnType<CodingPlanAdapterRegistry['get']>;
   mountPath: string;
   transport: PlanGatewayTransport;
+  credentialProvider: PlanGatewayCredentialProvider;
   instanceId?: string;
   eventSink?: PlanGatewayEventSink;
   log?: (message: string) => void;
@@ -187,39 +225,54 @@ async function forwardPlanRequest(context: RequestContext, target: URL): Promise
   const method = (request.method ?? 'GET').toUpperCase();
   const relativePath = stripMountPath(target.pathname, context.mountPath);
   assertAllowedRoute(adapter.allowedRoutes, method, relativePath);
-  adapter.validateRequest(request);
+  assertNoCredentialQuery(target);
 
-  let forwardHeaders = stripHopByHopHeaders(headersFromIncomingRequest(request));
+  const incomingHeaders = headersFromIncomingRequest(request);
+  const sensitiveValues = sensitiveTraceValuesFromHeaders(incomingHeaders);
+  let forwardHeaders = stripHopByHopHeaders(incomingHeaders);
   forwardHeaders.delete('host');
   forwardHeaders = stripHopByHopHeaders(adapter.transformForwardHeaders(forwardHeaders));
   forwardHeaders.delete('host');
+  stripInboundCredentialHeaders(forwardHeaders);
   // Traces record model payloads as text. Request a semantically equivalent
   // uncompressed representation so the same forwarded bytes remain readable
   // and can pass through the shared secret redactor without a decode side path.
   forwardHeaders.set('accept-encoding', 'identity');
-  const propagatedCorrelation = traceCorrelationFromHeaders(forwardHeaders);
-  const requestId = propagatedCorrelation.requestId ?? createRequestId();
-  const correlation = { ...propagatedCorrelation, requestId };
-  const startedAt = Date.now();
   const controller = new AbortController();
   request.once('aborted', () => controller.abort());
   response.once('close', () => {
     if (!response.writableFinished) controller.abort();
   });
+  const upstreamUrl = createUpstreamUrl(adapter.upstreamBaseUrl, relativePath, target.search);
+  const propagatedCorrelation = traceCorrelationFromHeaders(forwardHeaders);
+  const requestId = propagatedCorrelation.requestId ?? createRequestId();
+  const correlation = { ...propagatedCorrelation, requestId };
+  const startedAt = Date.now();
 
-  await emitEvent(context, {
+  const emitRequestStart = async (headers: Headers): Promise<void> => emitEvent(context, {
     type: 'request.start',
     requestId,
     adapterId: adapter.id,
     method,
     path: `${target.pathname}${target.search}`,
-    headers: [...forwardHeaders.entries()],
+    headers: [...headers.entries()],
+    sensitiveValues,
     correlation,
     at: now(),
   });
+  let traceStarted = false;
 
-  const upstreamUrl = createUpstreamUrl(adapter.upstreamBaseUrl, relativePath, target.search);
   try {
+    const bearerToken = await context.credentialProvider.getBearerToken({
+      adapterId: adapter.id,
+      upstreamOrigin: upstreamUrl.origin,
+      incomingHeaders: new Headers([...incomingHeaders.entries()]),
+      signal: controller.signal,
+    });
+    forwardHeaders.delete('authorization');
+    forwardHeaders.set('authorization', `Bearer ${assertBearerToken(bearerToken)}`);
+    await emitRequestStart(forwardHeaders);
+    traceStarted = true;
     const upstreamResponse = await context.transport.forward({
       url: upstreamUrl,
       method,
@@ -264,6 +317,7 @@ async function forwardPlanRequest(context: RequestContext, target: URL): Promise
       at: now(),
     });
   } catch (error) {
+    if (!traceStarted) await emitRequestStart(forwardHeaders);
     await emitEvent(context, {
       type: 'request.error',
       requestId,
@@ -385,6 +439,19 @@ function assertAllowedRoute(
   );
 }
 
+function assertNoCredentialQuery(target: URL): void {
+  for (const name of target.searchParams.keys()) {
+    const normalized = name.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '_');
+    const compact = normalized.replaceAll('_', '');
+    if (!CREDENTIAL_QUERY_PARAMETERS.has(compact) && !isCredentialName(normalized)) continue;
+    throw new PlanGatewayRequestError(
+      400,
+      'PLAN_QUERY_CREDENTIAL_NOT_ALLOWED',
+      'Coding-plan credentials must be supplied only through the configured credential provider.',
+    );
+  }
+}
+
 function createUpstreamUrl(baseUrl: string, path: string, search: string): URL {
   const url = new URL(baseUrl);
   url.pathname = `${url.pathname.replace(/\/+$/, '')}${path}`;
@@ -405,6 +472,18 @@ function stripHopByHopHeaders(input: Headers): Headers {
   const connectionHeaders = connectionHeaderNames(output.get('connection'));
   for (const name of [...HOP_BY_HOP_HEADERS, ...connectionHeaders]) output.delete(name);
   return output;
+}
+
+function stripInboundCredentialHeaders(headers: Headers): void {
+  for (const name of [...headers.keys()]) {
+    if (INBOUND_CREDENTIAL_HEADERS.has(name) || isCredentialName(name)) headers.delete(name);
+  }
+}
+
+/** Keep provider-specific token headers from becoming a second auth channel. */
+function isCredentialName(value: string): boolean {
+  const normalized = value.trim().toLowerCase().replaceAll(/[^a-z0-9]+/g, '_');
+  return /(?:^|_)(?:auth|token|key|secret|credential|password|cookie|session)(?:_|$)/.test(normalized);
 }
 
 function stripHopByHopHeaderPairs(headers: ReadonlyArray<readonly [string, string]>): Array<[string, string]> {

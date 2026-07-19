@@ -150,6 +150,22 @@ describe('chat-store app actions', () => {
     expect(probeRuntime).not.toHaveBeenCalled()
   })
 
+  it('rejects switching away from Codex while Codex Plan is active', async () => {
+    const setSettings = vi.fn()
+    vi.stubGlobal('window', { sciforge: { setSettings } })
+    const { actions, state } = buildHarness({
+      activeAgentRuntime: 'codex',
+      modelAccessMode: 'coding-plan',
+      error: null
+    })
+
+    await actions.setActiveAgentRuntime('sciforge')
+
+    expect(state.activeAgentRuntime).toBe('codex')
+    expect(state.error).toBe('Codex Plan requires the Codex runtime.')
+    expect(setSettings).not.toHaveBeenCalled()
+  })
+
   it('opens a remote guard entry without selecting its mapped local thread', () => {
     const { actions, state } = buildHarness()
 

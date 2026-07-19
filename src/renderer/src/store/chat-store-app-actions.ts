@@ -1,6 +1,7 @@
 import type i18next from 'i18next'
 import {
   getActiveAgentRuntime,
+  getModelAccessSettings,
   type AgentRuntimeId,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -67,6 +68,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     },
 
     setActiveAgentRuntime: async (runtimeId: AgentRuntimeId) => {
+      if (get().modelAccessMode === 'coding-plan' && runtimeId !== 'codex') {
+        set({ error: 'Codex Plan requires the Codex runtime.' })
+        return
+      }
       const previousRuntimeId = get().activeAgentRuntime
       set({
         activeAgentRuntime: runtimeId,
@@ -187,6 +192,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceRoot,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         activeAgentRuntime: getActiveAgentRuntime(settings),
+        modelAccessMode: getModelAccessSettings(settings)?.mode ?? null,
         remoteChannels: settings.remoteChannel.channels,
         activeRemoteChannelId: settings.remoteChannel.channels.some(
           (channel) => channel.id === get().activeRemoteChannelId && channel.enabled

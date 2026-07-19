@@ -1,11 +1,10 @@
 import { constants } from 'node:fs'
-import { access, chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
+import { access, lstat, mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-  DEFAULT_CODEX_DATA_DIR,
   getCodexRuntimeSettings,
   getModelAccessSettings,
   getModelRouterSettings,
@@ -98,7 +97,7 @@ export async function prepareCodexAppServerLaunch(options: {
   const modelAccess = codexModelAccessConfig(options.settings, options.planGateway)
   const cwd = resolveCodexWorkspace(options.settings, options.workspace)
   if (!cwd) throw new Error('Codex workspace is required.')
-  await prepareManagedCodexHome(codexHome, modelAccess, codexAuthSourceHomes(runtime.codexHome))
+  await prepareManagedCodexHome(codexHome, modelAccess)
   return {
     command,
     args: ['app-server', '--listen', 'stdio://', ...codexAppServerExtraArgs(runtime.extraArgs)],
@@ -179,15 +178,6 @@ function expandHomeFrom(raw: string, homeDir: string): string {
   return raw
 }
 
-export function codexAuthSourceHomes(raw: string, homeDir: string = homedir()): string[] {
-  const value = raw.trim()
-  const configured = expandHomeFrom(value, homeDir)
-  if (value === DEFAULT_CODEX_DATA_DIR) {
-    return [configured, join(homeDir, '.codex')]
-  }
-  return configured ? [configured] : []
-}
-
 export function codexAppServerExtraArgs(args: readonly string[]): string[] {
   const filtered: string[] = []
   for (let index = 0; index < args.length; index += 1) {
@@ -262,15 +252,15 @@ function isLegacyDirectWorkerEnv(key: string): boolean {
 
 async function prepareManagedCodexHome(
   codexHome: string,
-  modelAccess: CodexModelAccessConfig,
-  authSourceCodexHomes: readonly string[]
+  modelAccess: CodexModelAccessConfig
 ): Promise<void> {
   await mkdir(codexHome, { recursive: true })
+  await assertManagedCodexHome(codexHome)
   await Promise.all(
     CODEX_MANAGED_DIRS.map((dir) => mkdir(join(codexHome, dir), { recursive: true }))
   )
   if (modelAccess.mode === 'coding-plan') {
-    await importExistingCodexAuth(codexHome, authSourceCodexHomes)
+    await assertManagedCodexAuth(codexHome)
   }
   await writeFile(
     join(codexHome, 'config.toml'),
@@ -279,23 +269,33 @@ async function prepareManagedCodexHome(
   )
 }
 
-async function importExistingCodexAuth(
-  managedCodexHome: string,
-  sourceCodexHomes: readonly string[]
-): Promise<void> {
-  const destination = join(managedCodexHome, 'auth.json')
-  for (const sourceCodexHome of sourceCodexHomes) {
-    if (!sourceCodexHome || sourceCodexHome === managedCodexHome) continue
-    try {
-      await copyFile(join(sourceCodexHome, 'auth.json'), destination, constants.COPYFILE_EXCL)
-      await chmod(destination, 0o600)
-      return
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code
-      if (code === 'ENOENT') continue
-      if (code === 'EEXIST') return
-      throw error
-    }
+async function assertManagedCodexHome(codexHome: string): Promise<void> {
+  const info = await lstat(codexHome)
+  if (info.isSymbolicLink()) {
+    throw new Error('Codex managed CODEX_HOME must not be a symbolic link.')
+  }
+  if (!info.isDirectory()) {
+    throw new Error('Codex managed CODEX_HOME must be a directory.')
+  }
+}
+
+async function assertManagedCodexAuth(codexHome: string): Promise<void> {
+  const authPath = join(codexHome, 'auth.json')
+  let info
+  try {
+    info = await lstat(authPath)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (info.isSymbolicLink()) {
+    throw new Error('Codex managed auth.json must not be a symbolic link.')
+  }
+  if (!info.isFile()) {
+    throw new Error('Codex managed auth.json must be a regular file.')
+  }
+  if (process.platform !== 'win32' && (info.mode & 0o077) !== 0) {
+    throw new Error('Codex managed auth.json must not be group or world accessible.')
   }
 }
 

@@ -597,6 +597,7 @@
   "composerModelRouterRouteHint": "当前请求会经 Model Router；供应商配置在设置中维护。",
   "composerRuntime": "执行运行时",
   "composerRuntimeHint": "只选择代理在哪里执行，不选择上游模型链路。",
+  "composerRuntimeCodexPlanLocked": "当前使用 Codex Plan，本聊天已绑定 Codex 运行时。",
   "composerRuntimeLocal": "local 执行运行时",
   "composerRuntimeLocalShort": "执行: local",
   "composerRuntimeCodex": "codex 执行运行时",

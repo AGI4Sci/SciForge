@@ -1,6 +1,9 @@
 import { getModelAccessSettings, type AppSettingsV1 } from '../shared/app-settings'
-import { ensureModelRouterSidecar, stopModelRouterSidecar } from './model-router-sidecar'
-import { ensurePlanGatewaySidecar, stopPlanGatewaySidecar } from './plan-gateway-sidecar'
+import { ensureModelRouterSidecar } from './model-router-sidecar'
+import { ensurePlanGatewaySidecar } from './plan-gateway-sidecar'
+import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
+
+let modelAccessSynchronizationQueue = Promise.resolve()
 
 export async function synchronizeModelAccessSidecar(
   settings: AppSettingsV1,
@@ -16,9 +19,20 @@ export async function synchronizeModelAccessSidecar(
     logPlanGateway?: (message: string) => void
   }
 ): Promise<void> {
+  const next = modelAccessSynchronizationQueue.then(
+    () => synchronizeModelAccessSidecarNow(settings, options),
+    () => synchronizeModelAccessSidecarNow(settings, options)
+  )
+  modelAccessSynchronizationQueue = next.catch(() => undefined)
+  return next
+}
+
+async function synchronizeModelAccessSidecarNow(
+  settings: AppSettingsV1,
+  options: Parameters<typeof synchronizeModelAccessSidecar>[1]
+): Promise<void> {
   const access = getModelAccessSettings(settings)
   if (access?.mode === 'coding-plan') {
-    await stopModelRouterSidecar()
     await ensurePlanGatewaySidecar(settings, {
       userDataDir: options.userDataDir,
       appRoot: options.appRoot,
@@ -31,10 +45,6 @@ export async function synchronizeModelAccessSidecar(
     })
     return
   }
-  await stopPlanGatewaySidecar({
-    userDataDir: options.userDataDir,
-    log: options.logPlanGateway
-  })
   if (access?.mode === 'api') {
     await ensureModelRouterSidecar(settings, {
       userDataDir: options.userDataDir,
@@ -47,6 +57,9 @@ export async function synchronizeModelAccessSidecar(
     })
     return
   }
-  await stopModelRouterSidecar()
+  await stopModelAccessGatewaySidecar({
+    userDataDir: options.userDataDir,
+    log: options.logModelRouter
+  })
   options.logModelRouter?.('Model access setup is required; no model service was started.')
 }

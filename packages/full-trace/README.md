@@ -30,8 +30,14 @@ was propagated, every producer derives it with `deriveTraceId` from the same
 runtime/thread/turn identifiers. Individual model calls use
 `createRequestId`; nested calls also set `parentRequestId`.
 
-`read` returns full sanitized events, `summaries` derives diagnostic cards
-from those events, `export` writes a portable owner-only JSONL bundle, and
-`clear` removes trace history. `initialize` performs the daily 30-day
-retention check automatically. All inputs are filtered before persistence,
-and reads and exports apply the same filter again.
+`read` returns full sanitized events. `requestSummaries` is the primary
+request-level view: it groups model events by `requestId`, keeps each
+`parentRequestId`, reports nested attempt counts, and supports `scope: 'all'`
+or `scope: 'roots'`. `summaries` remains the compatible trajectory-level card
+with Agent-event counts; it intentionally uses only root-request status and
+usage so failed retries do not make a successful turn look failed or double
+count tokens. Both views are derived from the durable events, not a second
+capture path. `export` writes a portable owner-only JSONL bundle, and `clear`
+removes trace history. `initialize` performs the daily 30-day retention check
+automatically. All inputs are filtered before persistence, and reads and
+exports apply the same filter again.

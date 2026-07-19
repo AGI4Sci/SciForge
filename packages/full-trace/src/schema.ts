@@ -143,6 +143,7 @@ export type TraceReadQuery = {
   threadId?: string
   turnId?: string
   requestId?: string
+  parentRequestId?: string
   kinds?: readonly TraceEventKind[]
   from?: string
   to?: string
@@ -157,6 +158,12 @@ export type TraceReadResult = {
 }
 
 export type TraceSummaryStatus = 'active' | 'completed' | 'error'
+
+export type TraceSummaryUsage = {
+  inputTokens?: number
+  outputTokens?: number
+  totalTokens?: number
+}
 
 export type TraceSummary = {
   traceId: string
@@ -175,14 +182,40 @@ export type TraceSummary = {
   errorCount: number
   preview?: string
   error?: string
-  usage?: {
-    inputTokens?: number
-    outputTokens?: number
-    totalTokens?: number
-  }
+  usage?: TraceSummaryUsage
 }
 
 export type TraceSummaryQuery = Omit<TraceReadQuery, 'kinds' | 'requestId'>
+
+/** A single model request or a nested upstream attempt within a trace. */
+export type TraceRequestSummary = {
+  requestId: string
+  parentRequestId?: string
+  traceId: string
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  sources: string[]
+  model?: string
+  protocol?: string
+  retry?: number
+  startedAt: string
+  endedAt: string
+  durationMs: number
+  status: TraceSummaryStatus
+  eventCount: number
+  childRequestCount: number
+  errorCount: number
+  preview?: string
+  error?: string
+  usage?: TraceSummaryUsage
+}
+
+export type TraceRequestSummaryScope = 'roots' | 'all'
+
+export type TraceRequestSummaryQuery = Omit<TraceReadQuery, 'kinds' | 'requestId' | 'parentRequestId'> & {
+  scope?: TraceRequestSummaryScope
+}
 
 export type TraceExportOptions = {
   destination: string

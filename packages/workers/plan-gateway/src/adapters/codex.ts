@@ -1,6 +1,5 @@
 import type { CodingPlanAdapter, CodingPlanRoute } from '../contract';
 import type { TraceCorrelation } from '@sciforge/full-trace';
-import { PlanGatewayRequestError } from '../contract';
 import { isLoopbackHost } from '../network-policy';
 
 export const CODEX_PLAN_ADAPTER_ID = 'codex';
@@ -20,16 +19,6 @@ export function createCodexPlanAdapter(): CodingPlanAdapter {
     wireProtocol: 'responses',
     allowedRoutes: CODEX_PLAN_ALLOWED_ROUTES,
     createRuntimeConfig: createCodexPlanRuntimeConfig,
-    validateRequest(request) {
-      const authorization = request.headers.authorization;
-      if (!authorization || !/^Bearer\s+\S+/i.test(authorization)) {
-        throw new PlanGatewayRequestError(
-          401,
-          'PLAN_AUTH_REQUIRED',
-          'Codex ChatGPT authentication is required for coding-plan access.',
-        );
-      }
-    },
     transformForwardHeaders(headers) {
       return new Headers(headers);
     },

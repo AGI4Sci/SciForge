@@ -30,6 +30,7 @@ import {
   type ModelRouterTraceSession,
 } from './full-trace-recorder';
 import { redactTraceText, redactUserVisibleText } from './trace-redaction';
+import { normalizeLoopbackHost } from './network-policy';
 import {
   UpstreamProtocolNegotiator,
   UpstreamRequestError,
@@ -912,7 +913,7 @@ function modelRouterHealthzUpstreamDiagnostic(
 export async function startModelRouterServer(
   options: ModelRouterServerOptions & { host?: string; port?: number },
 ): Promise<StartedModelRouterServer> {
-  const host = options.host ?? '127.0.0.1';
+  const host = normalizeLoopbackHost(options.host ?? '127.0.0.1');
   const server = createModelRouterServer(options);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -922,7 +923,8 @@ export async function startModelRouterServer(
     });
   });
   const address = server.address() as AddressInfo;
-  const url = `http://${host}:${address.port}`;
+  const displayHost = host.includes(':') ? `[${host.replace(/^\[|\]$/g, '')}]` : host;
+  const url = `http://${displayHost}:${address.port}`;
   return {
     server,
     url,
@@ -1540,14 +1542,13 @@ async function routeResponsesRequest(
   let responseStatus: string | undefined;
   let incompleteDetails: JsonObject | undefined;
   let terminalDetails: JsonObject | undefined;
-  try {
-    let supplementRounds = 0;
+  let supplementRounds = 0;
     const configuredSupplementRounds = profile.translators.vision?.maxSupplementRounds ?? 0;
     const maxSupplementRounds = Number.isFinite(configuredSupplementRounds)
       ? Math.max(0, Math.floor(configuredSupplementRounds))
       : 0;
 
-    while (true) {
+  while (true) {
       const textResult = await callTextReasoner({
         profile,
         secret: textSecret,
@@ -1629,9 +1630,6 @@ async function routeResponsesRequest(
       outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
       outputItems = reasoningItems;
       break;
-    }
-  } catch (error) {
-    throw error;
   }
 
   if (!outputText) {
@@ -1692,7 +1690,7 @@ function preferredResponsesProtocol(
   // returns HTTP 200 without a terminal response.completed event. Prefer their
   // broadly supported Chat Completions wire so a request is never replayed after
   // an ambiguous 2xx response.
-  return /(?:^|[\/_.-])deepseek(?:[\/_.-]|$)/i.test(model)
+  return /(?:^|[/_.-])deepseek(?:[/_.-]|$)/i.test(model)
     ? 'chat-completions'
     : 'responses';
 }

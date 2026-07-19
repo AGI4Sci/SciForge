@@ -43,7 +43,17 @@ test('records concurrent Codex requests with Agent-compatible correlation and no
       input: 'Second request',
     });
 
-    await capture.recorder.record(requestStart('request-a', 'Bearer opaque-split-secret-a'));
+    await capture.recorder.record(requestStart(
+      'request-a',
+      'Bearer opaque-split-secret-a',
+      {
+        requestId: 'request-a',
+        traceId: 'forged-header-trace',
+        runtimeId: 'forged-header-runtime',
+        threadId: 'forged-header-thread',
+        turnId: 'forged-header-turn',
+      },
+    ));
     await capture.recorder.record(requestStart('request-b', 'Bearer opaque-split-secret-b'));
     await capture.recorder.record(requestChunk('request-a', requestA.subarray(0, 23), 1));
     await capture.recorder.record(requestChunk('request-b', requestB, 2));
@@ -57,7 +67,7 @@ test('records concurrent Codex requests with Agent-compatible correlation and no
     await capture.recorder.record(responseStart('request-b', 7));
     await capture.recorder.record(responseChunk('request-a', 'echo opaque-split-', 8));
     await capture.recorder.record(responseChunk('request-b', 'second response', 9));
-    await capture.recorder.record(responseChunk('request-a', 'secret-a complete', 10));
+    await capture.recorder.record(responseChunk('request-a', 'secret-a complete session=stripped-secret', 10));
     await Promise.all([
       capture.recorder.record(responseEnd('request-a', 11)),
       capture.recorder.record(responseEnd('request-b', 12)),
@@ -125,8 +135,8 @@ test('records concurrent Codex requests with Agent-compatible correlation and no
       'opaque-split-secret-a',
       'opaque-split-secret-b',
       'sk-live-0123456789abcdef',
-      'query-value',
       'upstream-private',
+      'session=stripped-secret',
       'metadata-auth-secret',
       'metadata-cookie-secret',
       'sk-metadata-0123456789abcdef',
@@ -207,18 +217,23 @@ test('clears request-scoped secrets even when durable trace persistence fails', 
   assert.deepEqual(recorder.activeSensitiveValues(), []);
 });
 
-function requestStart(requestId: string, authorization: string): PlanGatewayEvent {
+function requestStart(
+  requestId: string,
+  authorization: string,
+  correlation: Extract<PlanGatewayEvent, { type: 'request.start' }>['correlation'] = { requestId },
+): PlanGatewayEvent {
   return {
     type: 'request.start',
     requestId,
     adapterId: 'codex',
     method: 'POST',
-    path: '/v1/responses?stream=true&access_token=query-value',
+    path: '/v1/responses?stream=true&cursor=next',
     headers: [
       ['authorization', authorization],
       ['content-type', 'application/json'],
     ],
-    correlation: { requestId },
+    sensitiveValues: ['session=stripped-secret'],
+    correlation,
     at: time(0),
   };
 }

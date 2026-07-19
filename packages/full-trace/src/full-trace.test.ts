@@ -348,6 +348,199 @@ describe('LocalTraceStore', () => {
     assert.deepEqual(await store.summaries(), [])
   })
 
+  test('derives request views and excludes child-attempt failures and usage from trajectory cards', async () => {
+    const temporary = await createTemporaryDirectory()
+    const recordedAt = new Date('2026-07-19T11:00:00.000Z')
+    const store = new LocalTraceStore({
+      storageDirectory: path.join(temporary, 'traces'),
+      now: () => recordedAt
+    })
+    const traceId = 'trace-request-summaries'
+    const rootRequestId = 'request-root'
+    const childFailureId = 'request-child-failure'
+    const childSuccessId = 'request-child-success'
+    await store.appendMany([
+      {
+        traceId,
+        requestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_request',
+        timestamp: '2026-07-19T10:00:00.000Z',
+        payload: { model: 'test-model', protocol: 'responses', body: { input: 'root' } }
+      },
+      {
+        traceId,
+        requestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'usage',
+        timestamp: '2026-07-19T10:00:00.040Z',
+        eventId: 'z-usage-after-response-end',
+        payload: { inputTokens: 100, outputTokens: 50, totalTokens: 150 }
+      },
+      {
+        traceId,
+        requestId: childFailureId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_request',
+        timestamp: '2026-07-19T10:00:00.020Z',
+        payload: { model: 'test-model', protocol: 'responses', retry: 1, body: { input: 'retry 1' } }
+      },
+      {
+        traceId,
+        requestId: childFailureId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'usage',
+        timestamp: '2026-07-19T10:00:00.021Z',
+        payload: { inputTokens: 9, outputTokens: 3, totalTokens: 12 }
+      },
+      {
+        traceId,
+        requestId: childFailureId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'error',
+        timestamp: '2026-07-19T10:00:00.022Z',
+        payload: { message: 'temporary upstream failure' }
+      },
+      {
+        traceId,
+        requestId: childFailureId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_response_end',
+        timestamp: '2026-07-19T10:00:00.023Z',
+        payload: { status: 500, usage: { inputTokens: 9, outputTokens: 3, totalTokens: 12 } }
+      },
+      {
+        traceId,
+        requestId: childSuccessId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_request',
+        timestamp: '2026-07-19T10:00:00.030Z',
+        payload: { model: 'test-model', protocol: 'responses', retry: 2, body: { input: 'retry 2' } }
+      },
+      {
+        traceId,
+        requestId: childSuccessId,
+        parentRequestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_response_end',
+        timestamp: '2026-07-19T10:00:00.031Z',
+        payload: { status: 200, usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 } }
+      },
+      {
+        traceId,
+        source: 'agent-runtime',
+        kind: 'agent_event',
+        timestamp: '2026-07-19T10:00:00.035Z',
+        payload: { eventKind: 'tool', event: { name: 'read_file', result: 'ok' } }
+      },
+      {
+        traceId,
+        requestId: rootRequestId,
+        source: 'generic-client',
+        kind: 'model_response_end',
+        timestamp: '2026-07-19T10:00:00.040Z',
+        eventId: 'a-response-end-before-usage',
+        payload: { status: 200, usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 } }
+      }
+    ])
+
+    const all = await store.requestSummaries({ order: 'asc', scope: 'all' })
+    assert.equal(all.length, 3)
+    assert.deepEqual(all.map((summary) => summary.requestId), [
+      rootRequestId,
+      childFailureId,
+      childSuccessId
+    ])
+    assert.deepEqual(all[0], {
+      requestId: rootRequestId,
+      traceId,
+      sources: ['generic-client'],
+      model: 'test-model',
+      protocol: 'responses',
+      startedAt: '2026-07-19T10:00:00.000Z',
+      endedAt: '2026-07-19T10:00:00.040Z',
+      durationMs: 40,
+      status: 'completed',
+      eventCount: 3,
+      childRequestCount: 2,
+      errorCount: 0,
+      preview: '{"input":"root"}',
+      usage: { inputTokens: 100, outputTokens: 50, totalTokens: 150 }
+    })
+    assert.equal(all[1]?.status, 'error')
+    assert.equal(all[1]?.errorCount, 1)
+    assert.deepEqual(all[1]?.usage, { inputTokens: 9, outputTokens: 3, totalTokens: 12 })
+    assert.equal(all[2]?.status, 'completed')
+    assert.deepEqual(all[2]?.usage, { inputTokens: 20, outputTokens: 10, totalTokens: 30 })
+
+    const roots = await store.requestSummaries({ scope: 'roots' })
+    assert.deepEqual(roots.map((summary) => summary.requestId), [rootRequestId])
+    const [latestStarted] = await store.requestSummaries({ order: 'desc', limit: 1 })
+    assert.equal(latestStarted?.requestId, childSuccessId)
+    const childEvents = await store.read({ parentRequestId: rootRequestId })
+    assert.equal(childEvents.events.length, 6)
+    assert.deepEqual(
+      new Set(childEvents.events.map((event) => event.requestId)),
+      new Set([childFailureId, childSuccessId])
+    )
+
+    const [trajectory] = await store.summaries({ order: 'asc' })
+    assert.equal(trajectory.status, 'completed')
+    assert.equal(trajectory.requestCount, 1)
+    assert.equal(trajectory.errorCount, 0)
+    assert.deepEqual(trajectory.usage, { inputTokens: 100, outputTokens: 50, totalTokens: 150 })
+  })
+
+  test('keeps identical request identifiers isolated between traces', async () => {
+    const temporary = await createTemporaryDirectory()
+    const store = new LocalTraceStore({ storageDirectory: path.join(temporary, 'traces') })
+    await store.appendMany([
+      {
+        traceId: 'trace-a',
+        requestId: 'shared-request',
+        source: 'generic-client',
+        kind: 'model_request',
+        timestamp: '2026-07-19T10:00:00.000Z',
+        payload: { model: 'model-a', body: 'first' }
+      },
+      {
+        traceId: 'trace-a',
+        requestId: 'shared-request',
+        source: 'generic-client',
+        kind: 'model_response_end',
+        timestamp: '2026-07-19T10:00:00.010Z',
+        payload: { status: 200 }
+      },
+      {
+        traceId: 'trace-b',
+        requestId: 'shared-request',
+        source: 'generic-client',
+        kind: 'model_request',
+        timestamp: '2026-07-19T10:00:01.000Z',
+        payload: { model: 'model-b', body: 'second' }
+      },
+      {
+        traceId: 'trace-b',
+        requestId: 'shared-request',
+        source: 'generic-client',
+        kind: 'model_response_end',
+        timestamp: '2026-07-19T10:00:01.010Z',
+        payload: { status: 503 }
+      }
+    ])
+
+    const summaries = await store.requestSummaries({ order: 'asc' })
+    assert.deepEqual(summaries.map(({ traceId, model, status }) => ({ traceId, model, status })), [
+      { traceId: 'trace-a', model: 'model-a', status: 'completed' },
+      { traceId: 'trace-b', model: 'model-b', status: 'error' }
+    ])
+  })
+
   test('hashes credential-shaped identifiers once and keeps correlation stable when keys rotate', async () => {
     const temporary = await createTemporaryDirectory()
     let activeSecrets = ['identifier-secret-one']

@@ -39,12 +39,18 @@ test('forwards approved requests and streaming bodies without protocol translati
 
   try {
     const result = await sendRequest(started.origin, {
-      path: '/v1/responses?mode=stream&access_token=query-secret',
+      path: '/v1/responses?mode=stream&cursor=next',
       method: 'POST',
       headers: {
         authorization: 'Bearer subscription-token',
         cookie: 'session=secret',
         'x-access-token': 'another-secret',
+        'x-api-key': 'x-api-secret',
+        'api-key': 'api-secret',
+        'anthropic-api-key': 'anthropic-secret',
+        'proxy-authorization': 'Basic proxy-secret',
+        'x-custom-token': 'custom-secret',
+        'x-goog-api-key': 'google-secret',
         'accept-encoding': 'gzip, br',
         connection: 'x-remove',
         'x-remove': 'hop-value',
@@ -59,12 +65,18 @@ test('forwards approved requests and streaming bodies without protocol translati
     assert.equal(result.headers['x-upstream'], 'preserved');
     assert.equal(result.headers['x-response-hop'], undefined);
     assert.equal(transport.requests.length, 1);
-    assert.equal(transport.requests[0].url, 'https://chatgpt.com/backend-api/codex/responses?mode=stream&access_token=query-secret');
+    assert.equal(transport.requests[0].url, 'https://chatgpt.com/backend-api/codex/responses?mode=stream&cursor=next');
     assert.equal(transport.requests[0].method, 'POST');
     assert.equal(transport.requests[0].body, '{"input":"hello"}');
     assert.equal(transport.requests[0].headers.authorization, 'Bearer subscription-token');
-    assert.equal(transport.requests[0].headers.cookie, 'session=secret');
-    assert.equal(transport.requests[0].headers['x-access-token'], 'another-secret');
+    assert.equal(transport.requests[0].headers.cookie, undefined);
+    assert.equal(transport.requests[0].headers['x-access-token'], undefined);
+    assert.equal(transport.requests[0].headers['x-api-key'], undefined);
+    assert.equal(transport.requests[0].headers['api-key'], undefined);
+    assert.equal(transport.requests[0].headers['anthropic-api-key'], undefined);
+    assert.equal(transport.requests[0].headers['proxy-authorization'], undefined);
+    assert.equal(transport.requests[0].headers['x-custom-token'], undefined);
+    assert.equal(transport.requests[0].headers['x-goog-api-key'], undefined);
     assert.equal(transport.requests[0].headers['x-runtime-identity'], 'codex-cli');
     assert.equal(transport.requests[0].headers['accept-encoding'], 'identity');
     assert.equal(transport.requests[0].headers.connection, undefined);
@@ -74,9 +86,17 @@ test('forwards approved requests and streaming bodies without protocol translati
     const requestStart = events.find((event) => event.type === 'request.start');
     assert.ok(requestStart?.type === 'request.start');
     assert.equal(headerValue(requestStart.headers, 'authorization'), 'Bearer subscription-token');
-    assert.equal(headerValue(requestStart.headers, 'cookie'), 'session=secret');
-    assert.equal(headerValue(requestStart.headers, 'x-access-token'), 'another-secret');
-    assert.equal(requestStart.path, '/v1/responses?mode=stream&access_token=query-secret');
+    assert.equal(headerValue(requestStart.headers, 'cookie'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'x-access-token'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'x-api-key'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'api-key'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'anthropic-api-key'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'proxy-authorization'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'x-custom-token'), undefined);
+    assert.equal(headerValue(requestStart.headers, 'x-goog-api-key'), undefined);
+    assert.ok(requestStart.sensitiveValues?.includes('session=secret'));
+    assert.ok(requestStart.sensitiveValues?.includes('another-secret'));
+    assert.equal(requestStart.path, '/v1/responses?mode=stream&cursor=next');
     assert.equal(headerValue(requestStart.headers, 'accept-encoding'), 'identity');
     assert.equal(requestStart.correlation.requestId, requestStart.requestId);
     assert.equal(
@@ -241,6 +261,65 @@ test('fails closed for disallowed routes, methods, and missing runtime auth', as
   }
 });
 
+test('delegated credential rejection is traced without contacting the upstream', async () => {
+  const transport = new FakeTransport();
+  const events: PlanGatewayEvent[] = [];
+  const started = await startPlanGatewayServer({
+    adapterId: 'codex',
+    adapterRegistry: createBuiltInPlanAdapterRegistry(),
+    port: 0,
+    transport,
+    eventSink: (event) => events.push(event),
+  });
+
+  try {
+    const result = await sendRequest(started.origin, {
+      path: '/v1/responses',
+      method: 'POST',
+      chunks: ['{}'],
+    });
+    assert.equal(result.status, 401);
+    assert.match(result.body, /PLAN_AUTH_REQUIRED/);
+    assert.equal(transport.requests.length, 0);
+    const requestStart = events.find((event) => event.type === 'request.start');
+    const requestError = events.find((event) => event.type === 'request.error');
+    assert.ok(requestStart?.type === 'request.start');
+    assert.ok(requestError?.type === 'request.error');
+    assert.equal(requestError.requestId, requestStart.requestId);
+    assert.equal(requestError.code, 'PLAN_AUTH_REQUIRED');
+    assert.equal(headerValue(requestStart.headers, 'authorization'), undefined);
+    assert.deepEqual(requestStart.sensitiveValues, []);
+  } finally {
+    await started.close();
+  }
+});
+
+test('rejects credential-shaped query parameters before contacting the upstream', async () => {
+  const transport = new FakeTransport();
+  const started = await startPlanGatewayServer({
+    adapterId: 'codex',
+    adapterRegistry: createBuiltInPlanAdapterRegistry(),
+    port: 0,
+    transport,
+  });
+
+  try {
+    for (const name of ['access_token', 'api_key', 'key', 'token', 'custom_token']) {
+      const result = await sendRequest(started.origin, {
+        path: `/v1/responses?mode=stream&${name}=query-secret`,
+        method: 'POST',
+        headers: { authorization: 'Bearer caller-token' },
+        chunks: ['{}'],
+      });
+      assert.equal(result.status, 400);
+      assert.match(result.body, /PLAN_QUERY_CREDENTIAL_NOT_ALLOWED/);
+    }
+    assert.equal(transport.requests.length, 0);
+  } finally {
+    await started.close();
+  }
+});
+
 test('relays redirects without following them to another upstream', async () => {
   const transport = new RedirectTransport();
   const started = await startPlanGatewayServer({
@@ -393,7 +472,6 @@ test('registry rejects non-HTTPS upstreams even with a custom transport', () => 
       wireProtocol: 'responses',
       allowedRoutes: [{ method: 'POST', path: '/responses' }],
       createRuntimeConfig: () => '',
-      validateRequest: () => undefined,
       transformForwardHeaders: (headers) => headers,
     }]),
     /HTTPS/,

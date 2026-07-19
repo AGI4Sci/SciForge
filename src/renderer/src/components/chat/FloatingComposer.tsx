@@ -149,6 +149,7 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   activeAgentRuntime?: AgentRuntimeId
+  runtimeLocked?: boolean
   composerReasoningEffort?: string
   onComposerModelChange: (modelId: string) => void
   onActiveAgentRuntimeChange?: (runtimeId: AgentRuntimeId) => void
@@ -738,6 +739,7 @@ export function FloatingComposer({
   composerPickList,
   composerModelGroups = EMPTY_MODEL_GROUPS,
   activeAgentRuntime,
+  runtimeLocked = false,
   composerReasoningEffort,
   onComposerModelChange,
   onActiveAgentRuntimeChange,
@@ -2741,6 +2743,7 @@ export function FloatingComposer({
                   composerPickList={composerPickList}
                   composerModelGroups={composerModelGroups}
                   activeAgentRuntime={activeAgentRuntime}
+                  runtimeLocked={runtimeLocked}
                   composerReasoningEffort={composerReasoningEffort}
                   canChangeModel={canChangeModel}
                   stretch={stretchModelPicker}

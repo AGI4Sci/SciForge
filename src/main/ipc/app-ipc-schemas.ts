@@ -146,6 +146,7 @@ const traceQueryFields = {
   runtimeId: optionalTrimmedString(MAX_ID_LENGTH),
   threadId: optionalTrimmedString(MAX_ID_LENGTH),
   turnId: optionalTrimmedString(MAX_ID_LENGTH),
+  parentRequestId: optionalTrimmedString(MAX_ID_LENGTH),
   from: optionalTrimmedString(64),
   to: optionalTrimmedString(64),
   order: z.enum(['asc', 'desc']).optional(),

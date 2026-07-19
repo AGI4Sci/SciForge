@@ -743,6 +743,7 @@ export function Workbench(): ReactElement {
     workspaceRoot,
     runtimeConnection,
     activeAgentRuntime,
+    modelAccessMode,
     setRoute,
     openSettings,
     openPlugins,
@@ -822,6 +823,7 @@ export function Workbench(): ReactElement {
       workspaceRoot: s.workspaceRoot,
       runtimeConnection: s.runtimeConnection,
       activeAgentRuntime: s.activeAgentRuntime,
+      modelAccessMode: s.modelAccessMode,
       setRoute: s.setRoute,
       openSettings: s.openSettings,
       openPlugins: s.openPlugins,
@@ -3480,6 +3482,7 @@ export function Workbench(): ReactElement {
                     composerPickList={composerPickList}
                     composerModelGroups={composerModelGroups}
                     activeAgentRuntime={activeAgentRuntime}
+                    runtimeLocked={modelAccessMode === 'coding-plan'}
                     composerReasoningEffort={
                       route === 'chat' ? composerReasoningEffort : undefined
                     }

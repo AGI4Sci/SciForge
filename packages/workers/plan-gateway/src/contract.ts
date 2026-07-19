@@ -1,4 +1,3 @@
-import type { IncomingMessage } from 'node:http';
 import type { TraceCorrelation } from '@sciforge/full-trace';
 
 export type CodingPlanRoute = Readonly<{
@@ -15,7 +14,6 @@ export interface CodingPlanAdapter {
   readonly allowedRoutes: readonly CodingPlanRoute[];
 
   createRuntimeConfig(localBaseUrl: string): string;
-  validateRequest(request: IncomingMessage): void;
   transformForwardHeaders(headers: Headers): Headers;
   inspectTraceRequest?(input: Readonly<{
     headers: Headers;
@@ -37,6 +35,8 @@ export type PlanGatewayEvent =
       method: string;
       path: string;
       headers: PlanGatewayHeaders;
+      /** In-process redaction inputs; never persisted as an event field. */
+      sensitiveValues?: readonly string[];
       correlation: Partial<TraceCorrelation> & Pick<TraceCorrelation, 'requestId'>;
       at: string;
     }>

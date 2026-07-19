@@ -597,6 +597,7 @@
   "composerModelRouterRouteHint": "This request goes through Model Router. Configure providers in Settings.",
   "composerRuntime": "Execution runtime",
   "composerRuntimeHint": "Chooses where the agent runs, not the upstream model chain.",
+  "composerRuntimeCodexPlanLocked": "Codex Plan is bound to the Codex runtime for this chat.",
   "composerRuntimeLocal": "local execution runtime",
   "composerRuntimeLocalShort": "Execution: local",
   "composerRuntimeCodex": "codex execution runtime",

@@ -4,18 +4,18 @@ import type { AppSettingsV1 } from '../shared/app-settings'
 
 const mocks = vi.hoisted(() => ({
   ensureModelRouterSidecar: vi.fn(),
-  stopModelRouterSidecar: vi.fn(),
   ensurePlanGatewaySidecar: vi.fn(),
-  stopPlanGatewaySidecar: vi.fn()
+  stopModelAccessGatewaySidecar: vi.fn()
 }))
 
 vi.mock('./model-router-sidecar', () => ({
-  ensureModelRouterSidecar: mocks.ensureModelRouterSidecar,
-  stopModelRouterSidecar: mocks.stopModelRouterSidecar
+  ensureModelRouterSidecar: mocks.ensureModelRouterSidecar
 }))
 vi.mock('./plan-gateway-sidecar', () => ({
-  ensurePlanGatewaySidecar: mocks.ensurePlanGatewaySidecar,
-  stopPlanGatewaySidecar: mocks.stopPlanGatewaySidecar
+  ensurePlanGatewaySidecar: mocks.ensurePlanGatewaySidecar
+}))
+vi.mock('./model-access-gateway-sidecar', () => ({
+  stopModelAccessGatewaySidecar: mocks.stopModelAccessGatewaySidecar
 }))
 
 import { synchronizeModelAccessSidecar } from './model-access-sidecars'
@@ -36,7 +36,6 @@ describe('model access sidecar selection', () => {
       isPackaged: true
     })
 
-    expect(mocks.stopModelRouterSidecar).toHaveBeenCalledTimes(1)
     expect(mocks.ensurePlanGatewaySidecar).toHaveBeenCalledWith(
       settings('coding-plan'),
       expect.objectContaining({
@@ -54,7 +53,6 @@ describe('model access sidecar selection', () => {
       appRoot: '/app'
     })
 
-    expect(mocks.stopPlanGatewaySidecar).toHaveBeenCalledTimes(1)
     expect(mocks.ensureModelRouterSidecar).toHaveBeenCalledTimes(1)
     expect(mocks.ensurePlanGatewaySidecar).not.toHaveBeenCalled()
   })
@@ -65,8 +63,9 @@ describe('model access sidecar selection', () => {
       appRoot: '/app'
     })
 
-    expect(mocks.stopPlanGatewaySidecar).toHaveBeenCalledTimes(1)
-    expect(mocks.stopModelRouterSidecar).toHaveBeenCalledTimes(1)
+    expect(mocks.stopModelAccessGatewaySidecar).toHaveBeenCalledWith(
+      expect.objectContaining({ userDataDir: '/data' })
+    )
     expect(mocks.ensureModelRouterSidecar).not.toHaveBeenCalled()
     expect(mocks.ensurePlanGatewaySidecar).not.toHaveBeenCalled()
   })

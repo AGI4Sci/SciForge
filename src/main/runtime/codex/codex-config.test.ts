@@ -1,4 +1,4 @@
-import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -18,7 +18,6 @@ import {
 } from '../../../shared/app-settings'
 import {
   CODEX_PLAN_GATEWAY_PROVIDER_ID,
-  codexAuthSourceHomes,
   codexRuntimeEnv,
   expandHome,
   prepareCodexAppServerLaunch,
@@ -68,16 +67,6 @@ function settings(codexHome: string): AppSettingsV1 {
 }
 
 describe('codex config launch helpers', () => {
-  it('falls back from the legacy SciForge Codex home to the standard Codex login home', () => {
-    expect(codexAuthSourceHomes('~/.sciforge/codex', '/Users/example')).toEqual([
-      '/Users/example/.sciforge/codex',
-      '/Users/example/.codex'
-    ])
-    expect(codexAuthSourceHomes('~/custom-codex', '/Users/example')).toEqual([
-      '/Users/example/custom-codex'
-    ])
-  })
-
   it('finds a Codex standalone install when a Finder launch omits the user bin directory', async () => {
     const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-command-'))
     const command = join(home, '.local', 'bin', 'codex')
@@ -529,11 +518,11 @@ describe('codex config launch helpers', () => {
     expect(persistedGlobalConfig).not.toContain(DEFAULT_MODEL_ROUTER_PROVIDER_ID)
   })
 
-  it('writes an authenticated Plan Gateway provider without an API-key environment variable', async () => {
+  it('does not import auth credentials from an external CODEX_HOME', async () => {
     const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
     const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
     await writeFile(join(externalCodexHome, 'config.toml'), 'model_provider = "external"\n')
-    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"existing"}\n', { mode: 0o600 })
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external-only"}\n', { mode: 0o600 })
 
     const launch = await prepareCodexAppServerLaunch({
       settings: {
@@ -564,9 +553,10 @@ describe('codex config launch helpers', () => {
     expect(config).not.toContain('model =')
     await expect(readFile(join(externalCodexHome, 'config.toml'), 'utf8'))
       .resolves.toBe('model_provider = "external"\n')
+    await expect(readFile(join(externalCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"external-only"}\n')
     await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
-      .resolves.toBe('{"auth":"existing"}\n')
-    expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+      .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
   it('does not overwrite an existing managed Codex login', async () => {
@@ -586,6 +576,38 @@ describe('codex config launch helpers', () => {
 
     await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
       .resolves.toBe('{"auth":"managed"}\n')
+    expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a managed Codex auth symlink', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external"}\n', { mode: 0o600 })
+    await symlink(join(externalCodexHome, 'auth.json'), join(managedCodexHome, 'auth.json'))
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })).rejects.toThrow('managed auth.json must not be a symbolic link')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a broadly accessible managed Codex auth file', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(managedCodexHome, 'auth.json'), '{"auth":"managed"}\n', { mode: 0o644 })
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })).rejects.toThrow('managed auth.json must not be group or world accessible')
   })
 
   it('fails closed when coding-plan mode has no local gateway or selects another adapter', async () => {

@@ -52,12 +52,9 @@ import {
   codingPlanCredentialStateForAdapter,
   getModelAccessStatus
 } from './model-access-status'
-import {
-  stopModelRouterSidecar
-} from './model-router-sidecar'
 import { synchronizeModelAccessSidecar } from './model-access-sidecars'
+import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
 import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
-import { stopPlanGatewaySidecar } from './plan-gateway-sidecar'
 import {
   managedLocalRuntimeAction,
   stopDisallowedAgentRuntimes
@@ -807,15 +804,16 @@ async function stopManagedRuntimes(): Promise<void> {
       paperRadarWorkerService = null
       await stopEvidenceDagSidecar()
       await stopProjectDagSidecar()
-      await stopModelRouterSidecar()
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
-      await stopPlanGatewaySidecar({
-        userDataDir: app.getPath('userData'),
-        log: (message) => logWarn('plan-gateway', message)
-      })
       await localRuntimeAdapter.stopAndWait()
+      // Drain model clients before terminating the shared access sidecar so an
+      // active request can finish and its tail trace can be persisted.
+      await stopModelAccessGatewaySidecar({
+        userDataDir: app.getPath('userData'),
+        log: (message) => logWarn('model-access-gateway', message)
+      })
       await capabilityRuntimeBridge?.close()
       capabilityRuntimeBridge = null
       setLocalRuntimeCapabilityBridge(null)

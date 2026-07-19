@@ -32,7 +32,10 @@ import {
   type TraceReadResult,
   type TraceRetentionResult,
   type TraceSummary,
-  type TraceSummaryQuery
+  type TraceSummaryQuery,
+  type TraceRequestSummary,
+  type TraceRequestSummaryQuery,
+  type TraceRequestSummaryScope
 } from './schema.js'
 import {
   sanitizeTraceText,
@@ -79,6 +82,7 @@ type MutableSummary = {
   startedAt: string
   endedAt: string
   completed: boolean
+  failed: boolean
   requestIds: Set<string>
   eventCount: number
   agentEventCount: number
@@ -91,6 +95,31 @@ type MutableSummary = {
     totalTokens: number
     hasValue: boolean
   }
+}
+
+type MutableRequestSummary = {
+  requestId: string
+  parentRequestId?: string
+  traceId: string
+  runtimeId?: string
+  threadId?: string
+  turnId?: string
+  sources: Set<string>
+  model?: string
+  protocol?: string
+  retry?: number
+  startedAt: string
+  endedAt: string
+  completed: boolean
+  failed: boolean
+  eventCount: number
+  errorCount: number
+  preview?: string
+  error?: string
+  usage?: TraceSummary['usage']
+  responseUsage?: TraceSummary['usage']
+  usageEventSeen: boolean
+  hasModelRequest: boolean
 }
 
 /**
@@ -172,6 +201,19 @@ export class LocalTraceStore {
     const { limit, order = 'desc', ...readQuery } = query
     const { events } = await this.read({ ...readQuery, order: 'asc' })
     const summaries = deriveSummaries(events)
+    summaries.sort((left, right) => (
+      order === 'asc'
+        ? left.startedAt.localeCompare(right.startedAt)
+        : right.startedAt.localeCompare(left.startedAt)
+    ))
+    return limit === undefined ? summaries : summaries.slice(0, validateLimit(limit))
+  }
+
+  /** Derives request-level cards from the same durable events as summaries(). */
+  async requestSummaries(query: TraceRequestSummaryQuery = {}): Promise<TraceRequestSummary[]> {
+    const { limit, order = 'desc', scope = 'all', ...readQuery } = query
+    const { events } = await this.read({ ...readQuery, order: 'asc' })
+    const summaries = deriveRequestSummaries(events, scope)
     summaries.sort((left, right) => (
       order === 'asc'
         ? left.startedAt.localeCompare(right.startedAt)
@@ -300,6 +342,7 @@ export class LocalTraceStore {
         (!query.threadId || event.threadId === query.threadId) &&
         (!query.turnId || event.turnId === query.turnId) &&
         (!query.requestId || event.requestId === query.requestId) &&
+        (!query.parentRequestId || event.parentRequestId === query.parentRequestId) &&
         (!kinds || kinds.has(event.kind)) &&
         (from === undefined || timestamp >= from) &&
         (to === undefined || timestamp <= to)
@@ -389,7 +432,132 @@ export class LocalTraceStore {
   }
 }
 
+export function deriveRequestSummaries(
+  events: readonly TraceEvent[],
+  scope: TraceRequestSummaryScope = 'all'
+): TraceRequestSummary[] {
+  const grouped = new Map<string, MutableRequestSummary>()
+  for (const event of [...events].sort(compareEvents)) {
+    const requestId = event.requestId
+    if (!requestId) continue
+    const payload = asRecord(event.payload)
+    const key = requestKey(event.traceId, requestId)
+    let summary = grouped.get(key)
+    if (!summary) {
+      summary = {
+        requestId,
+        parentRequestId: event.parentRequestId,
+        traceId: event.traceId,
+        runtimeId: event.runtimeId,
+        threadId: event.threadId,
+        turnId: event.turnId,
+        sources: new Set(),
+        startedAt: event.timestamp,
+        endedAt: event.timestamp,
+        completed: false,
+        failed: false,
+        eventCount: 0,
+        errorCount: 0,
+        usageEventSeen: false,
+        hasModelRequest: false
+      }
+      grouped.set(key, summary)
+    }
+    summary.parentRequestId ??= event.parentRequestId
+    summary.runtimeId ??= event.runtimeId
+    summary.threadId ??= event.threadId
+    summary.turnId ??= event.turnId
+    summary.sources.add(event.source)
+    summary.startedAt = earlier(summary.startedAt, event.timestamp)
+    summary.endedAt = later(summary.endedAt, event.timestamp)
+    summary.eventCount += 1
+
+    if (event.kind === 'model_request') {
+      summary.hasModelRequest = true
+      summary.model ??= stringValue(payload?.model) ?? stringValue(asRecord(payload?.body)?.model)
+      summary.protocol ??= stringValue(payload?.protocol)
+      summary.retry ??= numericValue(payload?.retry)
+      summary.preview ??= previewValue(payload?.body)
+      continue
+    }
+    if (event.kind === 'model_response_end') {
+      const status = numericValue(payload?.status)
+      if (status === undefined || (status >= 200 && status < 300)) {
+        summary.completed = true
+      } else {
+        summary.failed = true
+      }
+      summary.responseUsage = mergeUsage(
+        summary.responseUsage,
+        usageFromPayload(payload?.usage)
+      )
+      continue
+    }
+    if (event.kind === 'error') {
+      summary.errorCount += 1
+      summary.failed = true
+      summary.error = stringValue(payload?.message) ?? summary.error ?? 'Trace error'
+      continue
+    }
+    if (event.kind === 'usage') {
+      const usage = usageFromPayload(payload)
+      if (usage) {
+        summary.usageEventSeen = true
+        summary.usage = mergeUsage(summary.usage, usage)
+      }
+    }
+  }
+
+  const modelRequests = [...grouped.entries()].filter(([, summary]) => summary.hasModelRequest)
+  const modelRequestKeys = new Set(modelRequests.map(([key]) => key))
+  const childCounts = new Map<string, number>()
+  for (const [, summary] of modelRequests) {
+    if (summary.parentRequestId) {
+      const parentKey = requestKey(summary.traceId, summary.parentRequestId)
+      if (modelRequestKeys.has(parentKey)) {
+        childCounts.set(parentKey, (childCounts.get(parentKey) ?? 0) + 1)
+      }
+    }
+  }
+  const summaries = modelRequests
+    .map(([, summary]) => summary)
+    .filter((summary) => (
+      scope === 'all' ||
+      !summary.parentRequestId ||
+      !modelRequestKeys.has(requestKey(summary.traceId, summary.parentRequestId))
+    ))
+    .map<TraceRequestSummary>((summary) => ({
+      requestId: summary.requestId,
+      ...(summary.parentRequestId ? { parentRequestId: summary.parentRequestId } : {}),
+      traceId: summary.traceId,
+      ...(summary.runtimeId ? { runtimeId: summary.runtimeId } : {}),
+      ...(summary.threadId ? { threadId: summary.threadId } : {}),
+      ...(summary.turnId ? { turnId: summary.turnId } : {}),
+      sources: [...summary.sources].sort(),
+      ...(summary.model ? { model: summary.model } : {}),
+      ...(summary.protocol ? { protocol: summary.protocol } : {}),
+      ...(summary.retry !== undefined ? { retry: summary.retry } : {}),
+      startedAt: summary.startedAt,
+      endedAt: summary.endedAt,
+      durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
+      status: summary.failed ? 'error' : summary.completed ? 'completed' : 'active',
+      eventCount: summary.eventCount,
+      childRequestCount: childCounts.get(requestKey(summary.traceId, summary.requestId)) ?? 0,
+      errorCount: summary.errorCount,
+      ...(summary.preview ? { preview: summary.preview } : {}),
+      ...(summary.error ? { error: summary.error } : {}),
+      ...((summary.usageEventSeen ? summary.usage : summary.responseUsage)
+        ? { usage: summary.usageEventSeen ? summary.usage : summary.responseUsage }
+        : {})
+    }))
+  return summaries
+}
+
 export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
+  const requestSummaries = deriveRequestSummaries(events, 'all')
+  const requestsByKey = new Map(
+    requestSummaries.map((summary) => [requestKey(summary.traceId, summary.requestId), summary])
+  )
   const grouped = new Map<string, MutableSummary>()
   for (const event of [...events].sort(compareEvents)) {
     let summary = grouped.get(event.traceId)
@@ -403,6 +571,7 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
         startedAt: event.timestamp,
         endedAt: event.timestamp,
         completed: false,
+        failed: false,
         requestIds: new Set(),
         eventCount: 0,
         agentEventCount: 0,
@@ -420,25 +589,62 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
     summary.eventCount += 1
 
     const payload = asRecord(event.payload)
+    const request = event.requestId
+      ? requestsByKey.get(requestKey(event.traceId, event.requestId))
+      : undefined
+    const requestIsRoot = request
+      ? isRootRequest(request, requestsByKey)
+      : event.parentRequestId === undefined
     if (event.kind === 'model_request') {
-      summary.requestIds.add(event.requestId ?? event.eventId)
-      summary.model ??= stringValue(payload?.model) ?? stringValue(asRecord(payload?.body)?.model)
-      summary.preview ??= previewValue(payload?.body)
+      if (requestIsRoot) {
+        summary.requestIds.add(event.requestId ?? event.eventId)
+        summary.model ??= stringValue(payload?.model) ?? stringValue(asRecord(payload?.body)?.model)
+        summary.preview ??= previewValue(payload?.body)
+      }
     } else if (event.kind === 'model_response_end') {
-      summary.completed = true
+      if (requestIsRoot) {
+        const status = numericValue(payload?.status)
+        if (status === undefined || (status >= 200 && status < 300)) summary.completed = true
+        else summary.failed = true
+      }
     } else if (event.kind === 'agent_event') {
       summary.agentEventCount += 1
+      const agentPayload = asRecord(payload?.event)
+      const eventKind = stringValue(payload?.eventKind)?.toLowerCase()
+      if (eventKind === 'lifecycle') {
+        applyLifecycleState(summary, agentPayload)
+      } else if (eventKind === 'error') {
+        summary.failed = true
+        summary.error ??= stringValue(agentPayload?.message) ?? 'Agent error'
+      }
     } else if (event.kind === 'error') {
-      summary.errorCount += 1
-      summary.error = stringValue(payload?.message) ?? summary.error ?? 'Trace error'
+      if (requestIsRoot) {
+        summary.errorCount += 1
+        summary.failed = true
+        summary.error = stringValue(payload?.message) ?? summary.error ?? 'Trace error'
+      }
     } else if (event.kind === 'usage') {
-      addUsage(summary, payload)
+      // Request-scoped usage is folded in once below. Uncorrelated usage still
+      // belongs to the trajectory and is retained here.
+      if (!event.requestId || (request === undefined && !event.parentRequestId)) {
+        addUsage(summary, payload)
+      }
     } else if (event.kind === 'lifecycle') {
       const phase = stringValue(payload?.phase)?.toLowerCase()
-      if (phase && /^(completed|complete|ended|finished|stopped|cancelled)$/.test(phase)) {
-        summary.completed = true
-      }
+      applyLifecyclePhase(summary, phase)
     }
+  }
+
+  for (const request of requestSummaries) {
+    if (!isRootRequest(request, requestsByKey)) continue
+    const summary = grouped.get(request.traceId)
+    if (!summary) continue
+    if (request.status === 'completed') summary.completed = true
+    if (request.status === 'error') {
+      summary.failed = true
+      summary.error ??= request.error
+    }
+    addUsageValues(summary, request.usage)
   }
 
   return [...grouped.values()].map((summary) => ({
@@ -451,7 +657,11 @@ export function deriveSummaries(events: readonly TraceEvent[]): TraceSummary[] {
     startedAt: summary.startedAt,
     endedAt: summary.endedAt,
     durationMs: Math.max(0, Date.parse(summary.endedAt) - Date.parse(summary.startedAt)),
-    status: summary.errorCount > 0 ? 'error' : summary.completed ? 'completed' : 'active',
+    status: summary.errorCount > 0 || summary.failed
+      ? 'error'
+      : summary.completed
+        ? 'completed'
+        : 'active',
     requestCount: summary.requestIds.size,
     eventCount: summary.eventCount,
     agentEventCount: summary.agentEventCount,
@@ -670,6 +880,17 @@ function later(left: string, right: string): string {
   return left.localeCompare(right) >= 0 ? left : right
 }
 
+function requestKey(traceId: string, requestId: string): string {
+  return `${traceId.length}:${traceId}${requestId.length}:${requestId}`
+}
+
+function isRootRequest(
+  summary: Pick<TraceRequestSummary, 'traceId' | 'parentRequestId'>,
+  requestsByKey: ReadonlyMap<string, TraceRequestSummary>
+): boolean {
+  return !summary.parentRequestId || !requestsByKey.has(requestKey(summary.traceId, summary.parentRequestId))
+}
+
 function previewValue(value: unknown): string | undefined {
   if (value === undefined || value === null) return undefined
   const text = typeof value === 'string' ? value : JSON.stringify(value)
@@ -696,6 +917,83 @@ function addUsage(summary: MutableSummary, payload: Record<string, unknown> | un
     summary.usage.hasValue = true
   } else if (inputTokens !== undefined || outputTokens !== undefined) {
     summary.usage.totalTokens += (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+}
+
+function addUsageValues(summary: MutableSummary, usage: TraceSummary['usage']): void {
+  if (!usage) return
+  const inputTokens = numericValue(usage.inputTokens)
+  const outputTokens = numericValue(usage.outputTokens)
+  const totalTokens = numericValue(usage.totalTokens)
+  if (inputTokens !== undefined) {
+    summary.usage.inputTokens += inputTokens
+    summary.usage.hasValue = true
+  }
+  if (outputTokens !== undefined) {
+    summary.usage.outputTokens += outputTokens
+    summary.usage.hasValue = true
+  }
+  if (totalTokens !== undefined) {
+    summary.usage.totalTokens += totalTokens
+    summary.usage.hasValue = true
+  } else if (inputTokens !== undefined || outputTokens !== undefined) {
+    summary.usage.totalTokens += (inputTokens ?? 0) + (outputTokens ?? 0)
+  }
+}
+
+function usageFromPayload(value: unknown): TraceSummary['usage'] | undefined {
+  const payload = asRecord(value)
+  if (!payload) return undefined
+  const inputTokens = numericValue(payload.inputTokens ?? payload.input_tokens)
+  const outputTokens = numericValue(payload.outputTokens ?? payload.output_tokens)
+  const totalTokens = numericValue(payload.totalTokens ?? payload.total_tokens)
+  if (inputTokens === undefined && outputTokens === undefined && totalTokens === undefined) {
+    return undefined
+  }
+  return {
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(totalTokens !== undefined
+      ? { totalTokens }
+      : { totalTokens: (inputTokens ?? 0) + (outputTokens ?? 0) })
+  }
+}
+
+function mergeUsage(
+  left: TraceSummary['usage'],
+  right: TraceSummary['usage']
+): TraceSummary['usage'] | undefined {
+  if (!left) return right ? { ...right } : undefined
+  if (!right) return { ...left }
+  return {
+    ...((left.inputTokens !== undefined || right.inputTokens !== undefined)
+      ? { inputTokens: (left.inputTokens ?? 0) + (right.inputTokens ?? 0) }
+      : {}),
+    ...((left.outputTokens !== undefined || right.outputTokens !== undefined)
+      ? { outputTokens: (left.outputTokens ?? 0) + (right.outputTokens ?? 0) }
+      : {}),
+    ...((left.totalTokens !== undefined || right.totalTokens !== undefined)
+      ? { totalTokens: (left.totalTokens ?? 0) + (right.totalTokens ?? 0) }
+      : {})
+  }
+}
+
+function applyLifecycleState(summary: MutableSummary, event: Record<string, unknown> | undefined): void {
+  if (!event) return
+  const phase = stringValue(event.phase) ?? stringValue(event.state)
+  applyLifecyclePhase(summary, phase?.toLowerCase())
+  const message = stringValue(event.message)
+  if (message && summary.failed) summary.error ??= message
+}
+
+function applyLifecyclePhase(summary: MutableSummary, phase: string | undefined): void {
+  if (!phase) return
+  if (/^(completed|complete|ended|finished|stopped|cancelled|canceled|success|succeeded)$/.test(phase)) {
+    summary.completed = true
+    return
+  }
+  if (/^(error|failed|failure|aborted)$/.test(phase)) {
+    summary.failed = true
   }
 }
 
