@@ -95,6 +95,7 @@ jobs:
         run: npm ci
 
       - name: Decode Apple signing credentials
+        if: github.event_name != 'workflow_dispatch'
         env:
           MAC_CODESIGN_P12_BASE64: ${{ secrets.MAC_CODESIGN_P12_BASE64 }}
           APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
@@ -126,6 +127,7 @@ jobs:
           } >> "${GITHUB_ENV}"
 
       - name: Verify Apple signing credentials
+        if: github.event_name != 'workflow_dispatch'
         run: >
           npm run verify:apple -- --p12 "${CSC_LINK}"
           --p12-password "${CSC_KEY_PASSWORD}"
@@ -135,7 +137,12 @@ jobs:
           --check-notary
 
       - name: Build signed macOS packages
+        if: github.event_name != 'workflow_dispatch'
         run: npm run dist:mac:signed
+
+      - name: Build unsigned macOS packages for manual release
+        if: github.event_name == 'workflow_dispatch'
+        run: npm run dist:mac
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
