@@ -1,4 +1,9 @@
 import type { ModelClient, ModelRequest, ModelStreamChunk, ModelToolSpec } from '../../ports/model-client.js'
+import {
+  createRequestId,
+  deriveTraceId,
+  traceCorrelationHeaders
+} from '@sciforge/full-trace'
 import type { TurnItem } from '../../contracts/items.js'
 import { emptyUsageSnapshot, type UsageSnapshot } from '../../contracts/usage.js'
 import { estimateDeepseekCacheSavings, estimateDeepseekCost } from './deepseek-pricing.js'
@@ -168,7 +173,17 @@ export class ModelRouterModelClient implements ModelClient {
     const url = buildModelEndpointUrl(this.config.baseUrl, endpointFormat)
     const stream = request.stream ?? !this.config.nonStreaming
     const body = this.buildRequestBody(request, stream)
-    const headers = this.buildHeaders(stream, endpointFormat)
+    const headers = this.buildHeaders(stream, endpointFormat, traceCorrelationHeaders({
+      traceId: deriveTraceId({
+        runtimeId: 'sciforge',
+        threadId: request.threadId,
+        turnId: request.turnId
+      }),
+      runtimeId: 'sciforge',
+      threadId: request.threadId,
+      turnId: request.turnId,
+      requestId: createRequestId()
+    }))
     const result = await this.postChatCompletion(url, headers, body, request.abortSignal)
     if (result.kind === 'error') {
       yield { kind: 'error', message: result.message, ...(result.code ? { code: result.code } : {}) }
@@ -309,7 +324,11 @@ export class ModelRouterModelClient implements ModelClient {
     return result
   }
 
-  private buildHeaders(stream: boolean, endpointFormat: ModelEndpointFormat): Record<string, string> {
+  private buildHeaders(
+    stream: boolean,
+    endpointFormat: ModelEndpointFormat,
+    traceHeaders: Record<string, string>
+  ): Record<string, string> {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       Accept: stream ? 'text/event-stream' : 'application/json'
@@ -323,7 +342,7 @@ export class ModelRouterModelClient implements ModelClient {
         headers.Authorization = `Bearer ${this.config.apiKey}`
       }
     }
-    return { ...headers, ...(this.config.headers ?? {}) }
+    return { ...headers, ...(this.config.headers ?? {}), ...traceHeaders }
   }
 
   private async classifyHttpError(status: number, text: string): Promise<{ message: string; code: string }> {

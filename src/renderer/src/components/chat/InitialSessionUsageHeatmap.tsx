@@ -1,6 +1,15 @@
 import type { ReactElement } from 'react'
 import { useEffect, useMemo, useState } from 'react'
-import { AlertCircle, ChevronDown, ChevronUp, Loader2, RefreshCw, Sparkles } from 'lucide-react'
+import {
+  Activity,
+  AlertCircle,
+  ChevronDown,
+  ChevronUp,
+  Flame,
+  Loader2,
+  RefreshCw,
+  Sparkles
+} from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   getActiveAgentRuntime,
@@ -25,11 +34,6 @@ import {
 } from '../../hooks/use-model-usage'
 import { WhaleHeroStage } from './WhaleHeroStage'
 
-type CalendarCell = DailyUsageBucket | null
-type CalendarWeek = {
-  key: string
-  cells: CalendarCell[]
-}
 type UsageTotalsBucket = DailyUsageBucket & { days: number; activeDays: number }
 type UsageViewMode = 'populated' | 'loading' | 'empty' | 'error'
 type UsageRangeKey = 'all' | '90d' | '30d' | '7d'
@@ -70,32 +74,19 @@ const PENDING_DAILY_USAGE_STATE: DailyUsageState = {
 
 export const USAGE_HEATMAP_INTENSITY_CLASSES = [
   'border-ds-border-muted bg-ds-subtle',
-  'border-emerald-400 bg-emerald-500 dark:border-emerald-400/35 dark:bg-emerald-700',
-  'border-teal-400 bg-teal-500 dark:border-teal-300/40 dark:bg-teal-600',
-  'border-cyan-600 bg-cyan-600 dark:border-cyan-300/50 dark:bg-cyan-400',
-  'border-blue-700 bg-blue-700 dark:border-blue-300/60 dark:bg-blue-400'
+  'border-rose-300 bg-rose-300 dark:border-rose-300/55 dark:bg-rose-400',
+  'border-orange-400 bg-orange-400 dark:border-orange-300/60 dark:bg-orange-400',
+  'border-fuchsia-500 bg-fuchsia-500 dark:border-fuchsia-300/60 dark:bg-fuchsia-400',
+  'border-violet-700 bg-violet-700 dark:border-violet-300/70 dark:bg-violet-400'
 ]
 
 export const USAGE_HEATMAP_CONTRAST_COLORS = [
   { level: 0, light: '#f5f7fb', dark: '#2a2a2a' },
-  { level: 1, light: '#10b981', dark: '#047857' },
-  { level: 2, light: '#14b8a6', dark: '#0d9488' },
-  { level: 3, light: '#0891b2', dark: '#22d3ee' },
-  { level: 4, light: '#1d4ed8', dark: '#60a5fa' }
+  { level: 1, light: '#fda4af', dark: '#fb7185' },
+  { level: 2, light: '#fb923c', dark: '#fb923c' },
+  { level: 3, light: '#d946ef', dark: '#e879f9' },
+  { level: 4, light: '#6d28d9', dark: '#a78bfa' }
 ] as const
-
-function calendarWeeks(buckets: CalendarCell[]): CalendarWeek[] {
-  const weeks: CalendarWeek[] = []
-  for (let index = 0; index < buckets.length; index += 7) {
-    const weekCells = buckets.slice(index, index + 7)
-    while (weekCells.length < 7) weekCells.push(null)
-    weeks.push({
-      key: weekCells.find((cell) => cell)?.date ?? `week-${index / 7}`,
-      cells: weekCells
-    })
-  }
-  return weeks
-}
 
 export function usageHeatmapIntensityLevel(
   bucket: Pick<DailyUsageBucket, 'totalTokens' | 'turns'>,
@@ -255,59 +246,71 @@ function HeatmapGrid({
   onSelect: (bucket: DailyUsageBucket) => void
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
-  const weeks = useMemo(() => calendarWeeks(buckets), [buckets])
   const maxTokens = useMemo(() => Math.max(0, ...buckets.map((bucket) => bucket.totalTokens)), [buckets])
   const maxTurns = useMemo(() => Math.max(0, ...buckets.map((bucket) => bucket.turns)), [buckets])
-  const skeletonWeeks = Array.from({ length: Math.ceil(USAGE_HEATMAP_GRID_DAYS / 7) }, (_, week) =>
-    Array.from({ length: 7 }, (_, day) => week * 7 + day)
-  )
-  const weekCount = loading ? skeletonWeeks.length : Math.max(weeks.length, 1)
+  const skeletonDays = Array.from({ length: USAGE_HEATMAP_GRID_DAYS }, (_, day) => day)
+  const timelineDays = loading ? skeletonDays : buckets
+  const selectedSummary = selected
+    ? `${formatChartDate(selected.date, i18n.language)} · ${formatCompactNumber(selected.totalTokens)} ${t('usageHeatmapTokens')}`
+    : t('usageHeatmapGridHint')
 
   return (
-    <div className="w-full min-w-0">
-      <div className="max-w-full pb-1">
+    <div className="w-full min-w-0 rounded-[18px] border border-ds-border-muted bg-ds-card/70 px-4 py-4 dark:bg-white/[0.025]">
+      <div className="mb-4 flex min-w-0 flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+        <div className="min-w-0">
+          <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-violet-600 dark:text-violet-300">
+            {t('usageHeatmapGridLabel', { runtime: runtimeLabel })}
+          </p>
+          <p className="mt-1 truncate text-[12px] tabular-nums text-ds-muted" title={selectedSummary}>
+            {selectedSummary}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-end gap-1.5 text-[10px] font-medium text-ds-faint" aria-hidden>
+          <span>{t('usageHeatmapLess')}</span>
+          {USAGE_HEATMAP_INTENSITY_CLASSES.map((className, index) => (
+            <span
+              key={className}
+              className={`w-1.5 rounded-full border ${className}`}
+              style={{ height: `${8 + index * 4}px` }}
+            />
+          ))}
+          <span>{t('usageHeatmapMore')}</span>
+        </div>
+      </div>
+      <div className="max-w-full overflow-hidden pb-1">
         <div
-          className="grid w-full gap-1"
-          style={{ gridTemplateColumns: `repeat(${weekCount}, minmax(0, 1fr))` }}
+          className="grid h-[64px] w-full items-end gap-px border-b border-ds-border-muted/80 px-0.5"
+          style={{
+            gridTemplateColumns: `repeat(${Math.max(timelineDays.length, 1)}, minmax(1px, 1fr))`
+          }}
           aria-label={t('usageHeatmapGridLabel', { runtime: runtimeLabel })}
         >
           {loading
-            ? skeletonWeeks.map((week) => (
-                <span key={week[0]} className="grid grid-rows-7 gap-1">
-                  {week.map((cell) => (
-                    <span
-                      key={cell}
-                      className="aspect-square w-full animate-pulse rounded-[3px] border border-ds-border-muted bg-ds-subtle"
-                    />
-                  ))}
-                </span>
+            ? skeletonDays.map((day) => (
+                <span
+                  key={day}
+                  className="w-full animate-pulse rounded-t-full border border-ds-border-muted bg-ds-subtle"
+                  style={{ height: `${8 + (day % 5) * 7}px` }}
+                />
               ))
-            : weeks.map((week) => (
-                <span key={week.key} className="grid grid-rows-7 gap-1">
-                  {week.cells.map((bucket, index) =>
-                    bucket ? (
-                      <button
-                        key={bucket.date}
-                        type="button"
-                        title={dailySummary(bucket, t, i18n.language)}
-                        aria-label={dailySummary(bucket, t, i18n.language)}
-                        onMouseEnter={() => onSelect(bucket)}
-                        onFocus={() => onSelect(bucket)}
-                        onClick={() => onSelect(bucket)}
-                        className={`aspect-square w-full rounded-[3px] border transition focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-ds-bg ${USAGE_HEATMAP_INTENSITY_CLASSES[usageHeatmapIntensityLevel(bucket, maxTokens, maxTurns)]} ${
-                          selected?.date === bucket.date ? 'ring-2 ring-accent ring-offset-2 ring-offset-ds-bg' : ''
-                        }`}
-                      />
-                    ) : (
-                      <span
-                        key={`blank-${week.key}-${index}`}
-                        className="aspect-square w-full rounded-[3px] border border-ds-border-muted bg-ds-subtle"
-                        aria-hidden
-                      />
-                    )
-                  )}
-                </span>
-              ))}
+            : buckets.map((bucket) => {
+                const level = usageHeatmapIntensityLevel(bucket, maxTokens, maxTurns)
+                return (
+                  <button
+                    key={bucket.date}
+                    type="button"
+                    title={dailySummary(bucket, t, i18n.language)}
+                    aria-label={dailySummary(bucket, t, i18n.language)}
+                    onMouseEnter={() => onSelect(bucket)}
+                    onFocus={() => onSelect(bucket)}
+                    onClick={() => onSelect(bucket)}
+                    className={`w-full rounded-t-full border transition-[height,filter,opacity] hover:brightness-105 focus:outline-none focus:ring-2 focus:ring-violet-500 focus:ring-offset-1 focus:ring-offset-ds-bg ${USAGE_HEATMAP_INTENSITY_CLASSES[level]} ${
+                      selected?.date === bucket.date ? 'ring-2 ring-violet-500 ring-offset-1 ring-offset-ds-bg' : ''
+                    }`}
+                    style={{ height: `${8 + level * 11}px` }}
+                  />
+                )
+              })}
         </div>
       </div>
     </div>
@@ -414,13 +417,21 @@ function WarmupStatePanel({
   )
 }
 
-function Metric({ label, value }: { label: string; value: string }): ReactElement {
+function Metric({
+  label,
+  value,
+  className = ''
+}: {
+  label: string
+  value: string
+  className?: string
+}): ReactElement {
   return (
-    <span className="grid min-h-[52px] min-w-0 grid-rows-[auto_1fr] rounded-md bg-ds-subtle px-2.5 py-2">
-      <span className="min-w-0 truncate whitespace-nowrap text-[12px] leading-4 text-ds-faint" title={label}>
+    <span className={`flex min-h-[74px] min-w-0 flex-col justify-between px-4 py-3.5 ${className}`}>
+      <span className="min-w-0 truncate whitespace-nowrap text-[11px] font-medium uppercase tracking-[0.08em] text-ds-faint" title={label}>
         {label}
       </span>
-      <span className="mt-0.5 min-w-0 truncate text-[15px] font-semibold leading-5 tabular-nums text-ds-ink" title={value}>
+      <span className="mt-2 min-w-0 truncate text-[20px] font-semibold leading-6 tabular-nums tracking-[-0.02em] text-ds-ink" title={value}>
         {value}
       </span>
     </span>
@@ -733,7 +744,7 @@ function UsageHeroToggle({
   return (
     <button
       type="button"
-      className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-accent/20 bg-[radial-gradient(circle_at_34%_26%,rgba(91,128,255,0.20),transparent_46%),rgba(255,255,255,0.82)] text-accent shadow-[0_12px_28px_rgba(88,105,150,0.16)] backdrop-blur transition hover:-translate-y-0.5 hover:border-accent/35 hover:bg-white hover:text-ds-ink focus:outline-none focus:ring-2 focus:ring-accent/35 focus:ring-offset-2 focus:ring-offset-ds-bg dark:bg-white/[0.08] dark:shadow-[0_16px_34px_rgba(0,0,0,0.28)]"
+      className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px] border border-ds-border-muted bg-ds-card text-ds-muted transition hover:border-violet-400/60 hover:text-violet-600 focus:outline-none focus:ring-2 focus:ring-violet-500/40 focus:ring-offset-2 focus:ring-offset-ds-bg dark:hover:text-violet-300"
       onClick={onToggle}
       aria-label={label}
       title={label}
@@ -773,7 +784,7 @@ function UsageHeroSection({
 
 function CollapsedCalendarCard({ onExpand }: { onExpand: () => void }): ReactElement {
   return (
-    <div className="-mt-1 flex w-full min-w-0 justify-center">
+    <div className="flex w-full min-w-0 justify-center border-y border-ds-border-muted py-3">
       <UsageHeroToggle expanded={false} onToggle={onExpand} />
     </div>
   )
@@ -781,7 +792,7 @@ function CollapsedCalendarCard({ onExpand }: { onExpand: () => void }): ReactEle
 
 function UsagePanelCard({ children }: { children: ReactElement }): ReactElement {
   return (
-    <div className="w-full min-w-0 rounded-[28px] border border-ds-border-muted bg-ds-card/82 p-4 shadow-[0_18px_48px_rgba(86,103,136,0.08)] dark:bg-white/[0.045] sm:p-5">
+    <div className="w-full min-w-0 overflow-hidden border-y border-ds-border-muted bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0.34))] shadow-[0_22px_54px_rgba(55,48,107,0.08)] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0.018))]">
       {children}
     </div>
   )
@@ -889,20 +900,16 @@ export function InitialSessionUsageHeatmapView({
   const overviewMetrics = [
     { label: t('usageHeatmapSessions'), value: formatCompactNumber(totals.threadCount) },
     { label: t('usageHeatmapMessages'), value: formatCompactNumber(totals.turns) },
-    {
-      label: hasUnmeteredTokenBuckets ? t('usageHeatmapRecordedTokens') : t('usageHeatmapTotalTokens'),
-      value: tokenMetricValue
-    },
     { label: t('usageHeatmapActiveDays'), value: String(totals.activeDays) },
-    { label: t('usageHeatmapCurrentStreak'), value: t('usageHeatmapStreakDays', { count: streaks.current }) },
-    { label: t('usageHeatmapLongestStreak'), value: t('usageHeatmapStreakDays', { count: streaks.longest }) },
+    { label: t('usageHeatmapCache'), value: formatPercent(totals.cacheHitRate) }
+  ]
+  const economyMetrics = [
     { label: t('usageHeatmapCost'), value: formatCost(totals.costUsd, i18n.language, totals.costCny) },
     { label: t('usageHeatmapCacheSavings'), value: formatCost(totals.cacheSavingsUsd, i18n.language, totals.cacheSavingsCny) },
     {
       label: t('usageHeatmapContextSavings'),
       value: formatCost(totals.tokenEconomySavingsUsd, i18n.language, totals.tokenEconomySavingsCny)
-    },
-    { label: t('usageHeatmapCache'), value: formatPercent(totals.cacheHitRate) }
+    }
   ]
   const heroTitle =
     mode === 'populated'
@@ -914,51 +921,70 @@ export function InitialSessionUsageHeatmapView({
       : t(`usageHeatmapHeroSub.${mode}`, { runtime: runtimeLabel })
 
   return (
-    <div className="ds-initial-usage-heatmap ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-3 py-6 text-left sm:px-5 sm:py-8">
-      <div className="flex w-full max-w-[980px] min-w-0 flex-col gap-5">
-        <UsageHeroSection
-          title={heroTitle}
-          sub={heroSub}
-          showText={mode !== 'populated'}
-        />
+    <div className="ds-initial-usage-heatmap ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-3 py-5 text-left sm:px-5 sm:py-7">
+      <div className="flex w-full max-w-[900px] min-w-0 flex-col gap-5">
+        {mode !== 'populated' ? <UsageHeroSection title={heroTitle} sub={heroSub} /> : null}
         {collapsed ? (
           <CollapsedCalendarCard onExpand={() => setCollapsed(false)} />
         ) : (
           <UsagePanelCard>
             {mode === 'populated' ? (
-              <div className="mx-auto flex w-full max-w-[560px] min-w-0 flex-col gap-3">
-                <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                  <div className="inline-flex w-fit max-w-full rounded-lg bg-ds-subtle p-1 text-[12.5px] font-medium text-ds-muted">
-                    <button
-                      type="button"
-                      className={`min-h-7 rounded-md px-3 transition ${
-                        activeTab === 'overview' ? 'bg-ds-card text-ds-ink shadow-sm dark:bg-white/10' : 'hover:text-ds-ink'
-                      }`}
-                      aria-pressed={activeTab === 'overview'}
-                      onClick={() => setActiveTab('overview')}
-                    >
-                      {t('usageHeatmapTabOverview')}
-                    </button>
-                    <button
-                      type="button"
-                      className={`min-h-7 rounded-md px-3 transition ${
-                        activeTab === 'models' ? 'bg-ds-card text-ds-ink shadow-sm dark:bg-white/10' : 'hover:text-ds-ink'
-                      }`}
-                      title={t('usageHeatmapTabModels')}
-                      aria-pressed={activeTab === 'models'}
-                      onClick={() => setActiveTab('models')}
-                    >
-                      {t('usageHeatmapTabModels')}
-                    </button>
+              <section className="ds-usage-command-center min-w-0">
+                <header className="px-4 pt-5 sm:px-6 sm:pt-6">
+                  <div className="flex min-w-0 items-start gap-3 sm:gap-4">
+                    <span className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] bg-[linear-gradient(145deg,#7c3aed,#d946ef_58%,#f97316)] text-white shadow-[0_10px_26px_rgba(124,58,237,0.25)]">
+                      <Activity className="h-[18px] w-[18px]" strokeWidth={2} />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-violet-600 dark:text-violet-300">
+                        {t('usageHeatmapBadge', { runtime: runtimeLabel })}
+                      </p>
+                      <h1 className="mt-1 text-[22px] font-semibold leading-7 tracking-[-0.025em] text-ds-ink sm:text-[25px]">
+                        {heroTitle}
+                      </h1>
+                      <p className="mt-1.5 max-w-[660px] text-[12.5px] leading-5 text-ds-muted sm:text-[13px]">
+                        {heroSub}
+                      </p>
+                    </div>
+                    <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
                   </div>
-                  <div className="flex min-w-0 flex-wrap items-center gap-2 sm:justify-end">
-                    <div className="flex min-w-0 items-center gap-1 self-start rounded-lg bg-ds-subtle p-1 text-[12px] font-medium text-ds-muted sm:self-auto">
+                  <div className="mt-5 flex min-w-0 flex-col gap-3 border-t border-ds-border-muted pt-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex items-center gap-5 text-[12.5px] font-medium text-ds-muted">
+                      <button
+                        type="button"
+                        className={`relative min-h-8 transition after:absolute after:-bottom-3 after:left-0 after:right-0 after:h-0.5 after:rounded-full ${
+                          activeTab === 'overview'
+                            ? 'text-ds-ink after:bg-[linear-gradient(90deg,#7c3aed,#f97316)]'
+                            : 'after:bg-transparent hover:text-ds-ink'
+                        }`}
+                        aria-pressed={activeTab === 'overview'}
+                        onClick={() => setActiveTab('overview')}
+                      >
+                        {t('usageHeatmapTabOverview')}
+                      </button>
+                      <button
+                        type="button"
+                        className={`relative min-h-8 transition after:absolute after:-bottom-3 after:left-0 after:right-0 after:h-0.5 after:rounded-full ${
+                          activeTab === 'models'
+                            ? 'text-ds-ink after:bg-[linear-gradient(90deg,#7c3aed,#f97316)]'
+                            : 'after:bg-transparent hover:text-ds-ink'
+                        }`}
+                        title={t('usageHeatmapTabModels')}
+                        aria-pressed={activeTab === 'models'}
+                        onClick={() => setActiveTab('models')}
+                      >
+                        {t('usageHeatmapTabModels')}
+                      </button>
+                    </div>
+                    <div className="flex min-w-0 items-center gap-1 self-start rounded-full border border-ds-border-muted bg-ds-subtle/70 p-0.5 text-[11px] font-medium text-ds-muted sm:self-auto">
                       {USAGE_RANGE_KEYS.map((key) => (
                         <button
                           key={key}
                           type="button"
-                          className={`min-h-7 rounded-md px-2.5 transition ${
-                            rangeKey === key ? 'bg-ds-card text-ds-ink shadow-sm dark:bg-white/10' : 'hover:text-ds-ink'
+                          className={`min-h-7 rounded-full px-2.5 transition ${
+                            rangeKey === key
+                              ? 'bg-violet-600 text-white shadow-[0_4px_12px_rgba(124,58,237,0.22)] dark:bg-violet-500'
+                              : 'hover:text-ds-ink'
                           }`}
                           aria-pressed={rangeKey === key}
                           onClick={() => onRangeChange?.(key)}
@@ -967,15 +993,55 @@ export function InitialSessionUsageHeatmapView({
                         </button>
                       ))}
                     </div>
-                    <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
                   </div>
-                </div>
+                </header>
                 {activeTab === 'overview' ? (
-                  <>
-                    <div className="grid min-w-0 grid-cols-2 gap-1.5 sm:grid-cols-4">
-                      {overviewMetrics.map((metric) => (
-                        <Metric key={metric.label} label={metric.label} value={metric.value} />
-                      ))}
+                  <div className="grid min-w-0 gap-4 border-t border-ds-border-muted px-4 py-5 sm:px-6 sm:py-6">
+                    <div className="grid min-w-0 gap-4 md:grid-cols-[minmax(0,1.08fr)_minmax(300px,0.92fr)]">
+                      <div className="relative min-h-[176px] overflow-hidden rounded-[24px_8px_24px_8px] bg-[linear-gradient(135deg,#21123f_0%,#4c2784_58%,#7c3aed_100%)] p-5 text-white shadow-[0_18px_40px_rgba(70,35,130,0.22)]">
+                        <span className="pointer-events-none absolute -right-12 -top-16 h-44 w-44 rounded-full bg-orange-400/30 blur-2xl" aria-hidden />
+                        <span className="pointer-events-none absolute bottom-0 right-8 h-20 w-28 -skew-x-12 bg-fuchsia-400/15 blur-xl" aria-hidden />
+                        <div className="relative flex h-full min-w-0 flex-col">
+                          <p className="text-[10.5px] font-semibold uppercase tracking-[0.16em] text-violet-100/80">
+                            {hasUnmeteredTokenBuckets ? t('usageHeatmapRecordedTokens') : t('usageHeatmapTotalTokens')}
+                          </p>
+                          <p className="mt-2 truncate text-[38px] font-semibold leading-none tabular-nums tracking-[-0.045em] sm:text-[42px]" title={tokenMetricValue}>
+                            {tokenMetricValue}
+                          </p>
+                          <p className="mt-3 max-w-[420px] text-[11.5px] leading-5 text-violet-100/75">
+                            {overviewCaption}
+                          </p>
+                          <div className="mt-auto grid grid-cols-2 gap-4 border-t border-white/15 pt-3">
+                            <span className="min-w-0">
+                              <span className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.08em] text-violet-100/65">
+                                <Flame className="h-3 w-3" strokeWidth={1.9} />
+                                {t('usageHeatmapCurrentStreak')}
+                              </span>
+                              <span className="mt-1 block text-[17px] font-semibold tabular-nums">
+                                {t('usageHeatmapStreakDays', { count: streaks.current })}
+                              </span>
+                            </span>
+                            <span className="min-w-0 border-l border-white/15 pl-4">
+                              <span className="text-[10px] uppercase tracking-[0.08em] text-violet-100/65">
+                                {t('usageHeatmapLongestStreak')}
+                              </span>
+                              <span className="mt-1 block text-[17px] font-semibold tabular-nums">
+                                {t('usageHeatmapStreakDays', { count: streaks.longest })}
+                              </span>
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="grid min-w-0 grid-cols-2 overflow-hidden rounded-[18px] border border-ds-border-muted bg-ds-card/55">
+                        {overviewMetrics.map((metric, index) => (
+                          <Metric
+                            key={metric.label}
+                            label={metric.label}
+                            value={metric.value}
+                            className={`${index < 2 ? 'border-b border-ds-border-muted' : ''} ${index % 2 === 0 ? 'border-r border-ds-border-muted' : ''}`}
+                          />
+                        ))}
+                      </div>
                     </div>
                     <HeatmapGrid
                       buckets={heatmapBuckets}
@@ -984,21 +1050,35 @@ export function InitialSessionUsageHeatmapView({
                       selected={activeBucket}
                       onSelect={setActiveBucket}
                     />
-                    <p className="text-[11.5px] leading-5 text-ds-faint">
-                      {overviewCaption}
-                    </p>
-                  </>
+                    <div className="grid min-w-0 grid-cols-1 border-y border-ds-border-muted sm:grid-cols-3">
+                      {economyMetrics.map((metric, index) => (
+                        <span
+                          key={metric.label}
+                          className={`flex min-w-0 items-center justify-between gap-3 px-1 py-2.5 text-[11.5px] sm:block sm:px-4 sm:py-1 ${index > 0 ? 'border-t border-ds-border-muted sm:border-l sm:border-t-0' : ''}`}
+                        >
+                          <span className="truncate text-ds-faint">{metric.label}</span>
+                          <span className="mt-0.5 block truncate font-semibold tabular-nums text-ds-ink" title={metric.value}>
+                            {metric.value}
+                          </span>
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 ) : (
-                  <ModelUsagePanel
-                    state={modelState}
-                    fallbackModel={effectiveModelLabel}
-                    locale={i18n.language}
-                    initialActiveDayIndex={initialModelHoverIndex}
-                  />
+                  <div className="border-t border-ds-border-muted px-4 py-5 sm:px-6 sm:py-6">
+                    <div className="mx-auto max-w-[760px]">
+                      <ModelUsagePanel
+                        state={modelState}
+                        fallbackModel={effectiveModelLabel}
+                        locale={i18n.language}
+                        initialActiveDayIndex={initialModelHoverIndex}
+                      />
+                    </div>
+                  </div>
                 )}
-              </div>
+              </section>
             ) : (
-              <>
+              <div className="p-4 sm:p-5">
                 <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
                   <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
                     <button
@@ -1015,7 +1095,7 @@ export function InitialSessionUsageHeatmapView({
                   </div>
                 </div>
                 <WarmupStatePanel mode={mode} runtimeLabel={runtimeLabel} onRefresh={onRefresh} />
-              </>
+              </div>
             )}
           </UsagePanelCard>
         )}

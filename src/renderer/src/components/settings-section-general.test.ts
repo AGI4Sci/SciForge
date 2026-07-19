@@ -6,7 +6,6 @@ import {
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -18,6 +17,24 @@ import { GeneralSettingsSection } from './settings-section-general'
 
 const labels: Record<string, string> = {
   sectionGeneral: 'Basics',
+  modelAccessTitle: 'Model access',
+  modelAccessMode: 'How do you access models?',
+  modelAccessModeDesc: 'Choose one billing path.',
+  modelAccessApi: 'Model API',
+  modelAccessApiDesc: 'Use three fields.',
+  modelAccessCodingPlan: 'Coding Plan',
+  modelAccessCodingPlanDesc: 'Use official sign-in.',
+  modelAccessPlan: 'Coding Plan selection',
+  modelAccessPlanCodex: 'Codex Plan',
+  modelAccessPlanCodexDesc: 'Official sign-in.',
+  modelAccessPlanLoginBrowser: 'Sign in with ChatGPT',
+  modelAccessPlanLoginDevice: 'Use device code',
+  modelAccessRefreshStatus: 'Refresh status',
+  modelAccessPlanStatusIdle: 'Local plan path only.',
+  modelAccessCheck: 'Check setup',
+  modelAccessApiStatusIdle: 'Automatic connection.',
+  modelAccessAdvancedCapabilities: 'Advanced model capabilities',
+  modelAccessAdvancedCapabilitiesDesc: 'Optional image and scientific models',
   modelRouterModels: 'Model Router models',
   modelRouterRoleBaseUrl: 'Base URL',
   modelRouterRoleApiKey: 'API key',
@@ -33,7 +50,7 @@ const labels: Record<string, string> = {
   modelRouterImageGenerator: 'Image generation',
   modelRouterImageGeneratorDesc: 'Image model.',
   modelRouterImageGeneratorBaseUrlPlaceholder: 'https://api.example.com/v1',
-  modelRouterImageGeneratorModelPlaceholder: 'gpt-image-2',
+  modelRouterImageGeneratorModelPlaceholder: 'image-model',
   modelRouterScientificTranslator: 'Scientific modality translation',
   modelRouterScientificTranslatorDesc: 'Scientific model.',
   modelRouterScientificTranslatorBaseUrlPlaceholder: 'http://127.0.0.1:3898',
@@ -97,13 +114,13 @@ function t(key: string): string {
   return labels[key] ?? key
 }
 
-function buildSettings(): AppSettingsV1 {
+function buildSettings(mode: 'api' | 'coding-plan' = 'api'): AppSettingsV1 {
   return {
     version: 1,
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode, planAdapterId: mode === 'coding-plan' ? 'codex' : '' },
     modelRouter: defaultModelRouterSettings(),
     activeAgentRuntime: 'sciforge',
     agents: {
@@ -130,13 +147,12 @@ describe('GeneralSettingsSection', () => {
     vi.stubGlobal('window', {
       sciforge: {
         platform: 'linux',
-        openLogDir: vi.fn(),
-        openModelRouterConfigFile: vi.fn()
+        openLogDir: vi.fn()
       }
     })
   })
 
-  it('renders a Model Router config file button in basics', () => {
+  it('renders one primary model-access path and keeps optional capabilities advanced', () => {
     const html = renderToStaticMarkup(createElement(GeneralSettingsSection, {
       ctx: {
         t,
@@ -164,13 +180,17 @@ describe('GeneralSettingsSection', () => {
       }
     }))
 
-    expect(html).toContain('Model Router models')
-    expect(html).toContain('Text understanding and reasoning')
+    expect(html).toContain('Model access')
+    expect(html).toContain('How do you access models?')
+    expect(html).toContain('Model API')
+    expect(html).toContain('Coding Plan')
+    expect(html).toContain('Advanced model capabilities')
     expect(html).toContain('Image understanding')
     expect(html).toContain('Image generation')
     expect(html).toContain('Scientific modality translation')
-    expect(html).toContain('Model Router config file')
-    expect(html).toContain('Open Model Router config file')
+    expect(html).not.toContain('Model Router config file')
+    expect(html).not.toContain('Provider')
+    expect(html).not.toContain('Protocol')
     expect(html).not.toContain('Enable Evidence DAG')
   })
 
@@ -204,5 +224,41 @@ describe('GeneralSettingsSection', () => {
 
     expect(html.match(/type="password"/g)).toHaveLength(4)
     expect(html).not.toContain('type="text" autoComplete="off" placeholder="sk-..."')
+  })
+
+  it('does not expose API fields or advanced API members in Coding Plan mode', () => {
+    const html = renderToStaticMarkup(createElement(GeneralSettingsSection, {
+      ctx: {
+        t,
+        tCommon: t,
+        form: buildSettings('coding-plan'),
+        update: vi.fn(),
+        selectControlClass: 'select-control',
+        openOnboardingPreview: vi.fn(),
+        pickWorkspace: vi.fn(),
+        resetWorkspaceToDefault: vi.fn(),
+        workspacePickerError: null,
+        guiUpdateInfo: null,
+        checkingGuiUpdate: false,
+        downloadingGuiUpdate: false,
+        installingGuiUpdate: false,
+        guiUpdateDownloaded: false,
+        guiUpdateProgress: null,
+        guiUpdateError: null,
+        checkGuiUpdate: vi.fn(),
+        downloadGuiUpdate: vi.fn(),
+        installGuiUpdate: vi.fn(),
+        logPath: '/tmp/sciforge.log',
+        logDirOpenError: null,
+        setLogDirOpenError: vi.fn()
+      }
+    }))
+
+    expect(html).toContain('Codex Plan')
+    expect(html).toContain('Sign in with ChatGPT')
+    expect(html).not.toContain('Base URL')
+    expect(html).not.toContain('API key')
+    expect(html).not.toContain('Image understanding')
+    expect(html).not.toContain('Advanced model capabilities')
   })
 })

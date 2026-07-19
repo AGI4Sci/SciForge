@@ -106,18 +106,17 @@ export function FloatingComposerModelPicker({
       const normalized = id.trim()
       if (normalized) ordered.add(normalized)
     }
-    const current = composerModel.trim()
-    if (current) ordered.add(current)
     return [...ordered]
-  }, [composerModel, composerPickList])
+  }, [composerPickList])
   const providerMenuGroups = useMemo<ComposerModelMenuGroup[]>(() => {
+    const allowed = new Set(modelOptions)
     const seen = new Set<string>()
     const groups = composerModelGroups
       .map((group) => {
         const ids = group.modelIds
           .map((id) => id.trim())
           .filter((id) => {
-            if (!id || seen.has(id)) return false
+            if (!allowed.has(id) || seen.has(id)) return false
             seen.add(id)
             return true
           })
@@ -128,7 +127,7 @@ export function FloatingComposerModelPicker({
         }
       })
       .filter((group) => group.modelIds.length > 0)
-    const ungrouped = modelOptions.filter((id) => id !== 'auto' && !seen.has(id))
+    const ungrouped = modelOptions.filter((id) => !seen.has(id))
     if (ungrouped.length > 0) {
       groups.push({
         providerId: UNGROUPED_MODEL_PROVIDER_ID,
@@ -360,14 +359,6 @@ export function FloatingComposerModelPicker({
           {t('composerModel')}
         </MenuSectionTitle>
         <div className="pr-0.5">
-          <PickerRow
-            selected={!composerModel.trim() || composerModel.trim() === 'auto'}
-            title={t('autoLabel')}
-            onClick={() => {
-              onComposerModelChange('auto')
-              setMenuOpen(false)
-            }}
-          />
           {providerMenuGroups.map((group) => {
             const selectedModel = group.modelIds.includes(currentModel) ? currentModel : ''
             return (

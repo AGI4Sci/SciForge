@@ -1,5 +1,4 @@
 import type { ChatBlock, NormalizedThread } from '../agent/types'
-import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import {
   isAgentRuntimeActiveTurnState,
   normalizeAgentRuntimeTurnState
@@ -194,18 +193,9 @@ export function forgetCodeWorkspaceRoot(
 }
 
 export function mergeComposerPickList(upstreamOk: boolean, upstreamIds: string[]): string[] {
-  const ordered = new Set<string>()
-  ordered.add('auto')
-  for (const id of DEFAULT_COMPOSER_MODEL_IDS) {
-    if (id !== 'auto') ordered.add(id)
-  }
-  if (upstreamOk) {
-    for (const id of upstreamIds) {
-      if (id.trim()) ordered.add(id.trim())
-    }
-  }
-  const tail = [...ordered].filter((id) => id !== 'auto').sort((a, b) => a.localeCompare(b))
-  return ['auto', ...tail]
+  if (!upstreamOk) return []
+  return [...new Set(upstreamIds.map((id) => id.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
 }
 
 export function newRemoteChannel(

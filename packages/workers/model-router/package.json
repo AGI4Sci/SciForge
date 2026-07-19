@@ -19,20 +19,24 @@
   "exports": {
     ".": "./src/index.ts",
     "./cli": "./src/cli.ts",
+    "./full-trace": "./src/full-trace-recorder.ts",
     "./manifest": "./src/manifest.ts",
-    "./server": "./src/router.ts",
-    "./trace-audit": "./src/trace-audit.ts"
+    "./server": "./src/router.ts"
   },
   "files": [
     "src",
-    "tools",
     "package.json",
     "README.md"
   ],
   "scripts": {
+    "pretest": "npm --workspace @sciforge/full-trace run build",
+    "pretypecheck": "npm --workspace @sciforge/full-trace run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@sciforge/full-trace": "0.1.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

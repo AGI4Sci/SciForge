@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -28,7 +27,6 @@ function settings(activeAgentRuntime: AgentRuntimeId): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),

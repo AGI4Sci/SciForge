@@ -70,14 +70,35 @@ describe('preload agentRuntime bridge', () => {
     expect(setZoomFactor).toHaveBeenNthCalledWith(3, 1)
   })
 
-  it('exposes a bridge to open the local Model Router config file', async () => {
+  it('exposes one runtime-neutral model access status bridge', async () => {
     const api = exposedApi as {
-      openModelRouterConfigFile(): Promise<unknown>
+      getModelAccessStatus(): Promise<unknown>
     }
 
-    await api.openModelRouterConfigFile()
+    await api.getModelAccessStatus()
 
-    expect(invoke).toHaveBeenCalledWith('modelRouter:config:open')
+    expect(invoke).toHaveBeenCalledWith('modelAccess:status')
+  })
+
+  it('exposes durable full-trace read, export, and clear IPC', async () => {
+    const api = exposedApi as {
+      traces: {
+        read(query?: unknown): Promise<unknown>
+        summaries(query?: unknown): Promise<unknown>
+        export(traceIds?: readonly string[]): Promise<unknown>
+        clear(): Promise<unknown>
+      }
+    }
+
+    await api.traces.read({ threadId: 'thread-1', limit: 10 })
+    await api.traces.summaries({ runtimeId: 'codex', limit: 5 })
+    await api.traces.export(['trace-1'])
+    await api.traces.clear()
+
+    expect(invoke).toHaveBeenCalledWith('traces:read', { threadId: 'thread-1', limit: 10 })
+    expect(invoke).toHaveBeenCalledWith('traces:summaries', { runtimeId: 'codex', limit: 5 })
+    expect(invoke).toHaveBeenCalledWith('traces:export', { traceIds: ['trace-1'] })
+    expect(invoke).toHaveBeenCalledWith('traces:clear')
   })
 
   it('exposes Evidence DAG update IPC', async () => {
@@ -255,6 +276,20 @@ describe('preload agentRuntime bridge', () => {
       expiresAt: '2026-07-16T14:00:00.000Z'
     }
     invoke.mockImplementation(async (channel: string, payload?: unknown) => {
+      if (channel === 'capability:readiness') {
+        const request = payload as {
+          expectedContractVersion: number
+          requiredCapabilityIds: string[]
+        }
+        return {
+          contractVersion: request.expectedContractVersion,
+          status: 'ready',
+          registryFingerprint: 'a'.repeat(64),
+          availableCapabilityIds: request.requiredCapabilityIds,
+          missingCapabilityIds: [],
+          message: 'Capability broker is ready.'
+        }
+      }
       if (channel === 'capability:invoke') {
         const request = (payload as { request: { actionId: string } }).request
         const output = request.actionId === 'workspace-preview.list'

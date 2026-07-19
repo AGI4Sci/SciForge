@@ -1,5 +1,11 @@
 import { z } from 'zod'
 import {
+  REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH,
+  REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH,
+  REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH,
+  REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH,
+  REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH,
+  REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH,
   REMOTE_CHANNEL_MODEL_IDS,
   SCHEDULE_MODEL_IDS,
   SCHEDULE_REASONING_EFFORT_IDS,
@@ -124,6 +130,39 @@ const agentThreadIdsSchema = z.object({
   claude: z.string().max(MAX_ID_LENGTH).optional()
 }).strict()
 const agentRuntimeGovernanceProfileSchema = z.enum(['default', 'write', 'remote_guard'])
+const traceEventKindSchema = z.enum([
+  'model_request',
+  'model_response_headers',
+  'model_response_chunk',
+  'model_response_end',
+  'agent_event',
+  'usage',
+  'error',
+  'lifecycle'
+])
+const traceIdListSchema = z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional()
+const traceQueryFields = {
+  traceIds: traceIdListSchema,
+  runtimeId: optionalTrimmedString(MAX_ID_LENGTH),
+  threadId: optionalTrimmedString(MAX_ID_LENGTH),
+  turnId: optionalTrimmedString(MAX_ID_LENGTH),
+  from: optionalTrimmedString(64),
+  to: optionalTrimmedString(64),
+  order: z.enum(['asc', 'desc']).optional(),
+  limit: z.number().int().positive().max(10_000).optional()
+} as const
+
+export const traceReadPayloadSchema = z.object({
+  ...traceQueryFields,
+  requestId: optionalTrimmedString(MAX_ID_LENGTH),
+  kinds: z.array(traceEventKindSchema).max(8).optional()
+}).strict()
+
+export const traceSummariesPayloadSchema = z.object(traceQueryFields).strict()
+
+export const traceExportPayloadSchema = z.object({
+  traceIds: traceIdListSchema
+}).strict()
 const agentRuntimeFileReferenceSchema = z.object({
   path: trimmedString(MAX_PATH_LENGTH),
   relativePath: trimmedString(MAX_PATH_LENGTH),
@@ -474,31 +513,15 @@ export const researchCardArchivePayloadSchema = z.object({
   archived: z.boolean().optional()
 }).strict()
 
-const modelProviderPatchSchema = z.object({
-  apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-  baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
-  providers: z.array(z.object({
-    id: z.string().trim().min(1).max(64).optional(),
-    name: z.string().trim().min(1).max(80).optional(),
-    apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-    baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
-    models: z.array(z.string().trim().min(1).max(128)).max(200).optional()
-  }).strict()).max(50).optional()
+const modelAccessPatchSchema = z.object({
+  mode: z.enum(['api', 'coding-plan']).optional(),
+  planAdapterId: z.string().trim().max(128).optional()
 }).strict()
 
-const modelRouterMemberProviderPatchSchema = z.object({
-  provider: z.string().trim().min(1).max(80).optional(),
+const modelRouterMemberPatchSchema = z.object({
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-  model: z.string().trim().max(128).optional(),
-  maxSupplementRounds: z.number().int().min(0).max(3).optional()
-}).strict()
-
-const modelRouterScientificTranslatorPatchSchema = z.object({
-  baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
-  apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-  model: z.string().trim().max(128).optional(),
-  timeoutMs: z.number().int().min(1).max(3_600_000).optional()
+  model: z.string().trim().max(128).optional()
 }).strict()
 
 const modelRouterPatchSchema = z.object({
@@ -509,11 +532,11 @@ const modelRouterPatchSchema = z.object({
   runtimeApiKey: z.string().max(MAX_BODY_BYTES).optional(),
   profiles: z.object({
     default: z.object({
-      textReasoner: modelRouterMemberProviderPatchSchema.optional(),
-      imageGenerator: modelRouterMemberProviderPatchSchema.optional(),
+      textReasoner: modelRouterMemberPatchSchema.optional(),
+      imageGenerator: modelRouterMemberPatchSchema.optional(),
       translators: z.object({
-        vision: modelRouterMemberProviderPatchSchema.optional(),
-        scientific: modelRouterScientificTranslatorPatchSchema.optional()
+        vision: modelRouterMemberPatchSchema.optional(),
+        scientific: modelRouterMemberPatchSchema.optional()
       }).strict().optional()
     }).strict().optional()
   }).strict().optional()
@@ -537,7 +560,6 @@ const localRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,
   port: z.number().int().min(1).max(65_535).optional(),
   autoStart: z.boolean().optional(),
-  providerId: z.string().trim().max(64).optional(),
   runtimeToken: z.string().max(MAX_BODY_BYTES).optional(),
   dataDir: defaultPathSchema,
   model: z.string().trim().min(1).max(128).optional(),
@@ -793,6 +815,19 @@ const remoteChannelRecentMessagePatchSchema = z.object({
   receivedAt: z.string().max(128).optional()
 }).strict()
 
+const remoteChannelLastFailurePatchSchema = z.object({
+  provider: remoteChannelProviderSchema.optional(),
+  message: z.string().max(REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH).optional(),
+  failureKind: z.string().max(REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH).optional(),
+  failureTitle: z.string().max(REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH).optional(),
+  channelId: z.string().max(REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH).optional(),
+  chatId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
+  remoteThreadId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
+  threadId: z.string().max(REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH).optional(),
+  runtimeId: agentRuntimeIdSchema.optional(),
+  occurredAt: z.string().max(REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH).optional()
+}).strict()
+
 const remoteChannelConversationPatchSchema = z.object({
   id: z.string().max(MAX_ID_LENGTH).optional(),
   chatId: z.string().max(MAX_ID_LENGTH).optional(),
@@ -803,6 +838,7 @@ const remoteChannelConversationPatchSchema = z.object({
   runtimeId: agentRuntimeIdSchema.optional(),
   agentThreadIds: agentThreadIdsSchema.optional(),
   workspaceRoot: defaultPathSchema,
+  lastFailure: remoteChannelLastFailurePatchSchema.optional(),
   createdAt: z.string().max(128).optional(),
   updatedAt: z.string().max(128).optional()
 }).strict()
@@ -822,6 +858,7 @@ const remoteChannelPatchSchema = z.object({
   remoteSession: remoteChannelRemoteSessionPatchSchema.optional(),
   conversations: z.array(remoteChannelConversationPatchSchema).max(512).optional(),
   recentMessages: z.array(remoteChannelRecentMessagePatchSchema).max(2_000).optional(),
+  lastFailure: remoteChannelLastFailurePatchSchema.optional(),
   createdAt: z.string().max(128).optional(),
   updatedAt: z.string().max(128).optional()
 }).strict()
@@ -1473,7 +1510,7 @@ const settingsPatchObjectSchema = z.object({
   locale: localeSchema.optional(),
   theme: themeSchema.optional(),
   uiFontScale: uiFontScaleSchema.optional(),
-  provider: modelProviderPatchSchema.optional(),
+  modelAccess: modelAccessPatchSchema.optional(),
   modelRouter: modelRouterPatchSchema.optional(),
   runtimeGuards: runtimeGuardPatchSchema.optional(),
   evidenceDag: z.object({

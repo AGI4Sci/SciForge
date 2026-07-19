@@ -860,21 +860,6 @@ export class AgentRuntimeProvider implements AgentProvider {
     return this.auxiliary('runCodeNavigation', input)
   }
 
-  async listModelAuditRecords(
-    options?: Parameters<NonNullable<AgentProvider['listModelAuditRecords']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['listModelAuditRecords']>> {
-    const { runtimeId, threadId, ...payload } = options ?? {}
-    const selectedRuntimeId = runtimeId ?? (threadId ? await this.runtimeIdForThread(threadId) : undefined)
-    return this.auxiliary('listModelAuditRecords', {
-      ...payload,
-      ...(threadId ? { threadId } : {})
-    }, selectedRuntimeId)
-  }
-
-  clearModelAuditRecords(): ReturnType<NonNullable<AgentProvider['clearModelAuditRecords']>> {
-    return this.auxiliary('clearModelAuditRecords')
-  }
-
   getContextState(threadId: string): ReturnType<NonNullable<AgentProvider['getContextState']>> {
     return this.threadAuxiliary(threadId, 'getContextState')
   }

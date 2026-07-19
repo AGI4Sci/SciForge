@@ -106,7 +106,7 @@ import {
   getModelRouterSettings,
   type AgentRuntimeId,
   type AppSettingsV1,
-  type ModelRouterMemberProviderSettingsV1
+  type ModelRouterMemberSettingsV1
 } from '@shared/app-settings'
 import {
   useSpeechToTextSettings,
@@ -635,13 +635,13 @@ function shouldShowThreadContextState(state: AgentRuntimeContextState): boolean 
 }
 
 export function isImageGenerationConfigured(
-  settings: Pick<ModelRouterMemberProviderSettingsV1, 'apiKey' | 'baseUrl' | 'model'> | null | undefined
+  settings: Pick<ModelRouterMemberSettingsV1, 'apiKey' | 'baseUrl' | 'model'> | null | undefined
 ): boolean {
   return Boolean(settings?.apiKey.trim() && settings.baseUrl.trim() && settings.model.trim())
 }
 
-function useImageGenerationComposerSettings(): ModelRouterMemberProviderSettingsV1 | null {
-  const [imageGeneration, setImageGeneration] = useState<ModelRouterMemberProviderSettingsV1 | null>(null)
+function useImageGenerationComposerSettings(): ModelRouterMemberSettingsV1 | null {
+  const [imageGeneration, setImageGeneration] = useState<ModelRouterMemberSettingsV1 | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return

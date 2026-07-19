@@ -392,17 +392,17 @@ describe('dev browser bridge server', () => {
 
     const response = await postJson('/invoke', {
       channel: 'settings:set',
-      payload: { provider: { apiKey: 'provider-key' } }
+      payload: { modelAccess: { mode: 'coding-plan', planAdapterId: 'example-plan' } }
     })
 
     expect(response.status).toBe(200)
     expect(JSON.parse(response.body)).toEqual({
       ok: true,
-      payload: { ok: true, payload: { provider: { apiKey: 'provider-key' } } }
+      payload: { ok: true, payload: { modelAccess: { mode: 'coding-plan', planAdapterId: 'example-plan' } } }
     })
     expect(invoke).toHaveBeenCalledWith(
       'settings:set',
-      { provider: { apiKey: 'provider-key' } },
+      { modelAccess: { mode: 'coding-plan', planAdapterId: 'example-plan' } },
       expect.objectContaining({ id: expect.any(Number), send: expect.any(Function) })
     )
   })

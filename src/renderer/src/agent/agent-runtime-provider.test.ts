@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -29,7 +28,6 @@ function settings(activeAgentRuntime: AgentRuntimeId): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -1093,32 +1091,6 @@ describe('AgentRuntimeProvider', () => {
       if (input.operation === 'getContextState') {
         return { runtimeId: 'codex', threadId: input.payload?.threadId, rawHistoryItems: 0, effectiveHistoryItems: 0, updatedAt: 'now' }
       }
-      if (input.operation === 'listModelAuditRecords') {
-        return [{
-          id: 'audit-1',
-          runtimeId: 'codex',
-          threadId: input.payload?.threadId,
-          startedAt: '2026-06-20T00:00:00.000Z',
-          request: {
-            bodySummary: {
-              schema: 'agent-runtime.turnStart',
-              keys: ['text'],
-              textChars: 5,
-              attachmentCount: 0,
-              fileReferenceCount: 0,
-              inlineContextReferenceCount: 0,
-              modelRouterObjectReferenceCount: 0,
-              hasGuiPlan: false,
-              estimatedJsonChars: 10
-            }
-          },
-          streamOutput: { text: 'hello', reasoning: '', toolCalls: [] }
-        }]
-      }
-      if (input.operation === 'clearModelAuditRecords') {
-        if (input.payload?.fail === true) throw new Error('clear failed')
-        return true
-      }
       if (input.operation === 'listGitCheckpoints') {
         return [{
           id: 'checkpoint-1',
@@ -1253,13 +1225,6 @@ describe('AgentRuntimeProvider', () => {
       id: 'attachment-1',
       name: 'figure.png'
     })
-    await expect(provider.listModelAuditRecords({ threadId: 'codex-thread', limit: 5 })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'audit-1',
-        runtimeId: 'codex',
-        threadId: 'codex-thread'
-      })
-    ])
     await expect(provider.listGitCheckpoints?.({
       threadId: 'codex-thread',
       workspaceRoot: '/tmp/ws'
@@ -1279,7 +1244,6 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread'
     }))
-    await expect(provider.clearModelAuditRecords()).resolves.toBe(true)
     await expect(provider.runCodeNavigation?.({
       workspaceRoot: '/tmp/ws',
       operation: 'goToDefinition',
@@ -1339,14 +1303,6 @@ describe('AgentRuntimeProvider', () => {
     })
     expect(auxiliary).toHaveBeenCalledWith({
       runtimeId: 'codex',
-      operation: 'listModelAuditRecords',
-      payload: {
-        threadId: 'codex-thread',
-        limit: 5
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
       operation: 'listGitCheckpoints',
       payload: {
         threadId: 'codex-thread',
@@ -1361,11 +1317,6 @@ describe('AgentRuntimeProvider', () => {
         threadId: 'codex-thread',
         turnId: 'turn-1'
       }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
-      operation: 'clearModelAuditRecords',
-      payload: {}
     })
     expect(auxiliary).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -1385,26 +1336,6 @@ describe('AgentRuntimeProvider', () => {
         transcriptRef: { runtimeId: 'codex', childId: 'child-1', transcriptId: 'transcript-1' }
       }
     })
-  })
-
-  it('propagates model audit auxiliary failures through the provider', async () => {
-    vi.stubGlobal('window', {
-      sciforge: {
-        getSettings: vi.fn(async () => settings('codex')),
-        setSettings: vi.fn(),
-        agentRuntime: {
-          capabilities: vi.fn(async () => capabilities('codex')),
-          auxiliary: vi.fn(async (input: { operation: string }) => {
-            if (input.operation === 'clearModelAuditRecords') throw new Error('clear failed')
-            return []
-          })
-        },
-      }
-    })
-
-    const provider = new AgentRuntimeProvider()
-
-    await expect(provider.clearModelAuditRecords()).rejects.toThrow('clear failed')
   })
 
   it('forwards neutral turn model hints to Codex adapter calls', async () => {

@@ -1,0 +1,51 @@
+{
+  "name": "@sciforge/plan-gateway",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Loopback-only transparent gateway for login-backed coding plans.",
+  "sciforge": {
+    "lifecycleLayer": "workers",
+    "skillFacing": false,
+    "sideEffects": "network",
+    "publicContract": true,
+    "runtimeAdapter": true,
+    "mcpServer": false
+  },
+  "bin": {
+    "sciforge-plan-gateway": "./src/cli.ts"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./adapters/codex": "./src/adapters/codex.ts",
+    "./cli": "./src/cli.ts",
+    "./contract": "./src/contract.ts",
+    "./manifest": "./src/manifest.ts",
+    "./registry": "./src/registry.ts",
+    "./server": "./src/gateway.ts",
+    "./trace-sink": "./src/trace-sink.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
+    "pretest": "npm --workspace @sciforge/full-trace run build",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "pretypecheck": "npm --workspace @sciforge/full-trace run build",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sciforge/full-trace": "0.1.0",
+    "https-proxy-agent": "^9.1.0",
+    "proxy-from-env": "^2.1.0",
+    "socks-proxy-agent": "^10.1.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

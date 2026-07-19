@@ -11,6 +11,7 @@ import {
   deriveRemoteChannelThreadStatusKind,
   hydrateBlockModelLabels,
   isRemoteChannelThread,
+  mergeComposerPickList,
   newRemoteChannel,
   normalizeTurnModelMap,
   rememberTurnModel,
@@ -81,6 +82,13 @@ describe('chat-store remote-channel helpers', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('uses only the public models returned by the upstream model catalog', () => {
+    expect(mergeComposerPickList(false, ['sciforge-router'])).toEqual([])
+    expect(mergeComposerPickList(true, [' sciforge-router ', 'sciforge-router', ''])).toEqual([
+      'sciforge-router'
+    ])
   })
 
   it('compacts code workspace roots while excluding write, temporary, and remote-channel roots', () => {

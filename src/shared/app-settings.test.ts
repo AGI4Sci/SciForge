@@ -18,7 +18,6 @@ import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultSpeechToTextSettings,
   defaultRuntimeGuardSettings,
   defaultAgentCapabilitySettings,
@@ -42,14 +41,18 @@ import {
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
   getComputerUseSettings,
+  getModelAccessSettings,
   isComputerUseEnabledForRuntime,
   getAgentCapabilitySettings,
   isLocalRuntimeInsecure,
+  listModelRouterModelIds,
   mergeRemoteChannelSettings,
   normalizeRemoteExecutorSettings,
   remoteExecutorWorkspaceMatchesTrust,
   isRemoteExecutorTargetTrustedForWorkspace,
   normalizeAppSettings,
+  normalizeModelAccessSettings,
+  normalizeModelRouterSettings,
   normalizeRuntimeGuardSettings,
   parseRemoteChannelUserPromptForDisplay,
   normalizeScheduleSettings,
@@ -69,7 +72,6 @@ function settings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     activeAgentRuntime: 'sciforge',
     agents: {
@@ -1026,7 +1028,6 @@ describe('mergeLocalRuntimeSettings', () => {
     expect(next.port).toBe(9000)
     expect(next.tokenEconomyMode).toBe(true)
     expect(next.tokenEconomy.enabled).toBe(true)
-    expect(next.providerId).toBe(current.providerId)
   })
 
   it('drops legacy local runtime credential patches', () => {
@@ -1253,11 +1254,7 @@ describe('agent runtime settings', () => {
   it('does not require a local runtime API key when Codex is the active runtime', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
-      activeAgentRuntime: 'codex',
-      provider: {
-        ...defaultModelProviderSettings(),
-        apiKey: ''
-      }
+      activeAgentRuntime: 'codex'
     })
 
     expect(getActiveAgentApiKey(normalized)).toBe('')
@@ -1267,10 +1264,6 @@ describe('agent runtime settings', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       activeAgentRuntime: 'codex',
-      provider: {
-        ...defaultModelProviderSettings(),
-        apiKey: 'sk-codex-shared'
-      },
       modelRouter: {
         ...defaultModelRouterSettings(),
         runtimeApiKey: 'sk-router-runtime'
@@ -1310,8 +1303,24 @@ describe('agent runtime settings', () => {
     expect(modelRouter.baseUrl).toBe('http://localhost:49876/v1')
   })
 
-  it('defaults missing Model Router image generator models to gpt-image-2', () => {
-    expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('gpt-image-2')
+  it('normalizes an explicit generic model access mode and adapter id', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      modelAccess: {
+        mode: 'coding-plan',
+        planAdapterId: 'example-plan'
+      }
+    })
+
+    expect(getModelAccessSettings(normalized)).toEqual({
+      mode: 'coding-plan',
+      planAdapterId: 'example-plan'
+    })
+    expect(normalizeModelAccessSettings({ mode: 'invalid' as never })).toBeUndefined()
+  })
+
+  it('keeps an unconfigured Model Router image generator generic', () => {
+    expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('')
 
     const normalized = normalizeAppSettings({
       ...settings(),
@@ -1321,7 +1330,6 @@ describe('agent runtime settings', () => {
           default: {
             ...defaultModelRouterSettings().profiles.default,
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://image.example/v1',
               apiKey: 'image-key',
               model: ''
@@ -1331,7 +1339,7 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('gpt-image-2')
+    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('')
   })
 
   it('preserves an explicitly configured Model Router image generator model', () => {
@@ -1343,7 +1351,6 @@ describe('agent runtime settings', () => {
           default: {
             ...defaultModelRouterSettings().profiles.default,
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://legacy-image.example/v1',
               apiKey: 'legacy-image-key',
               model: 'legacy-image-model'
@@ -1356,7 +1363,7 @@ describe('agent runtime settings', () => {
     expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('legacy-image-model')
   })
 
-  it('preserves Model Router vision supplement rounds when configured', () => {
+  it('normalizes every Model Router member to the same three-field shape', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       modelRouter: {
@@ -1367,11 +1374,9 @@ describe('agent runtime settings', () => {
             imageGenerator: defaultModelRouterSettings().profiles.default.imageGenerator,
             translators: {
               vision: {
-                provider: 'openai-compatible',
                 baseUrl: 'https://vision.example/v1',
                 apiKey: 'vision-key',
-                model: 'vision-model',
-                maxSupplementRounds: 1.9
+                model: 'vision-model'
               },
               scientific: defaultModelRouterSettings().profiles.default.translators.scientific
             }
@@ -1380,7 +1385,34 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(normalized.modelRouter?.profiles.default.translators.vision.maxSupplementRounds).toBe(1)
+    expect(normalized.modelRouter?.profiles.default.translators.vision).toEqual({
+      baseUrl: 'https://vision.example/v1',
+      apiKey: 'vision-key',
+      model: 'vision-model'
+    })
+    expect(listModelRouterModelIds(normalized)).toEqual(['sciforge-router'])
+  })
+
+  it('does not preserve a legacy Model Router provider field', () => {
+    const normalized = normalizeModelRouterSettings({
+      profiles: {
+        default: {
+          textReasoner: {
+            provider: 'legacy-provider',
+            baseUrl: 'https://text.example/v1',
+            apiKey: 'text-key',
+            model: 'text-model'
+          } as never
+        }
+      }
+    })
+
+    expect(normalized.profiles.default.textReasoner).toEqual({
+      baseUrl: 'https://text.example/v1',
+      apiKey: 'text-key',
+      model: 'text-model'
+    })
+    expect(normalized.profiles.default.textReasoner).not.toHaveProperty('provider')
   })
 
   it('wraps codex runtime patches into the shared agents envelope', () => {
@@ -1460,7 +1492,20 @@ describe('agent runtime settings', () => {
 })
 
 describe('local runtime settings normalization', () => {
-  it('drops local runtime credential fields without mutating provider settings', () => {
+  it('drops the removed top-level provider credential chain', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      provider: {
+        apiKey: 'sk-legacy',
+        baseUrl: 'https://legacy.example/v1',
+        providers: []
+      }
+    } as unknown as AppSettingsV1)
+
+    expect(normalized).not.toHaveProperty('provider')
+  })
+
+  it('drops local runtime credential fields', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: {
@@ -1472,10 +1517,6 @@ describe('local runtime settings normalization', () => {
       }
     })
 
-    expect(normalized.provider).toEqual(expect.objectContaining({
-      apiKey: settings().provider.apiKey,
-      baseUrl: settings().provider.baseUrl
-    }))
     expect('apiKey' in normalized.agents.sciforge).toBe(false)
     expect('baseUrl' in normalized.agents.sciforge).toBe(false)
   })
@@ -1498,24 +1539,9 @@ describe('local runtime settings normalization', () => {
     }))
   })
 
-  it('preserves custom model providers without runtime credential migration', () => {
+  it('drops the removed local runtime provider selection', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
-      provider: {
-        apiKey: 'sk-default',
-        baseUrl: 'https://api.deepseek.com',
-        providers: [
-          ...defaultModelProviderSettings().providers,
-          {
-            id: 'custom-provider-2',
-            name: 'Custom Provider',
-            apiKey: 'sk-custom',
-            baseUrl: 'https://custom.example/v1',
-            endpointFormat: 'responses',
-            models: ['custom-model']
-          }
-        ]
-      },
       agents: {
         sciforge: {
           ...defaultLocalRuntimeSettings(),
@@ -1525,21 +1551,7 @@ describe('local runtime settings normalization', () => {
       }
     } as unknown as AppSettingsV1)
 
-    expect(normalized.provider.providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'custom-provider-2',
-          name: 'Custom Provider',
-          apiKey: 'sk-custom',
-          baseUrl: 'https://custom.example/v1',
-          models: ['custom-model']
-        })
-      ])
-    )
-    expect(
-      normalized.provider.providers.find((provider) => provider.id === 'custom-provider-2')
-    ).not.toHaveProperty('endpointFormat')
-    expect(normalized.agents.sciforge.providerId).toBe('custom-provider-2')
+    expect(normalized.agents.sciforge).not.toHaveProperty('providerId')
     expect(resolveLocalRuntimeSettings(normalized)).toEqual(
       expect.objectContaining({
         apiKey: '',
@@ -1837,15 +1849,13 @@ describe('claw runtime prompts', () => {
 })
 
 describe('write inline completion runtime config', () => {
-  it('uses the Model Router base URL instead of the General provider URL', () => {
+  it('uses the Model Router base URL', () => {
     const state = settings()
-    state.provider.baseUrl = 'https://general.example/v1'
     expect(resolveWriteInlineCompletionBaseUrl(state)).toBe('http://127.0.0.1:3892/v1')
   })
 
   it('drops legacy write-only baseUrl overrides from runtime-facing calls', () => {
     const state = settings()
-    state.provider.baseUrl = 'https://general.example/v1'
     state.write.inlineCompletion = {
       ...state.write.inlineCompletion,
       baseUrl: 'https://write-only.example/v1'
@@ -1873,8 +1883,6 @@ describe('write inline completion runtime config', () => {
 
   it('tolerates legacy write inline settings without new override fields', () => {
     const state = settings()
-    state.provider.apiKey = 'general-key'
-    state.provider.baseUrl = 'https://general.example/v1'
     state.modelRouter = {
       ...defaultModelRouterSettings(),
       ...state.modelRouter,

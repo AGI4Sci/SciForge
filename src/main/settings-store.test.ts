@@ -11,8 +11,8 @@ import {
   defaultCodexRuntimeSettings,
   getAgentCapabilitySettings,
   getClaudeRuntimeSettings,
+  getModelAccessSettings,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultSpeechToTextSettings,
   getCodexRuntimeSettings
 } from '../shared/app-settings'
@@ -39,6 +39,34 @@ describe('JsonSettingsStore', () => {
     })
     expect(loaded.speechToText).toEqual(defaultSpeechToTextSettings())
     expect(loaded.evidenceDag).toEqual({ enabled: false })
+    expect(getModelAccessSettings(loaded)).toBeUndefined()
+  })
+
+  it('keeps persisted settings without an access mode in setup-required state', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    await writeFile(
+      join(userDataDir, 'sciforge-settings.json'),
+      JSON.stringify({ version: 1 }),
+      'utf8'
+    )
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+
+    expect(getModelAccessSettings(loaded)).toBeUndefined()
+  })
+
+  it('persists an explicit model access selection', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const store = new JsonSettingsStore(userDataDir)
+
+    const selected = await store.patch({
+      modelAccess: { mode: 'coding-plan', planAdapterId: 'example-plan' }
+    })
+
+    expect(getModelAccessSettings(selected)).toEqual({
+      mode: 'coding-plan',
+      planAdapterId: 'example-plan'
+    })
   })
 
   it('persists the opt-in Evidence DAG feature switch', async () => {
@@ -212,7 +240,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.write.inlineCompletion.enabled).toBe(true)
     expect(loaded.write.inlineCompletion.retrievalEnabled).toBe(true)
     expect(loaded.write.inlineCompletion.longCompletionEnabled).toBe(true)
-    expect(loaded.provider.baseUrl).toBe('http://127.0.0.1:3892/v1')
+    expect(loaded.modelRouter?.baseUrl).toBe('http://127.0.0.1:3892/v1')
     expect(loaded.write.inlineCompletion.longMaxTokens).toBe(256)
     expect(await readFile(join(loaded.write.defaultWorkspaceRoot, 'welcome.md'), 'utf8')).toContain('Welcome to Write')
   })
@@ -240,11 +268,13 @@ describe('JsonSettingsStore', () => {
     const loaded = await store.load()
     const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as {
       modelRouter?: { runtimeApiKey?: string }
+      provider?: unknown
     }
 
     expect(loaded.modelRouter?.runtimeApiKey).toMatch(/^local-router-/)
     expect(loaded.modelRouter?.runtimeApiKey).not.toBe('sk-provider-member')
     expect(persisted.modelRouter?.runtimeApiKey).toBe(loaded.modelRouter?.runtimeApiKey)
+    expect(persisted.provider).toBeUndefined()
   })
 
   it('generates and persists schedule and workflow internal HTTP secrets on load', async () => {
@@ -399,7 +429,7 @@ describe('JsonSettingsStore', () => {
     expect(loaded.agents.sciforge.autoStart).toBe(false)
   })
 
-  it('drops stale local runtime credential fields without mutating provider settings', async () => {
+  it('drops stale local runtime credential fields', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
 
     await writeFile(
@@ -419,17 +449,13 @@ describe('JsonSettingsStore', () => {
     const store = new JsonSettingsStore(userDataDir)
     const loaded = await store.load()
 
-    expect(loaded.provider.apiKey).toBe('')
-    expect(loaded.provider.baseUrl).toBe('http://127.0.0.1:3892/v1')
-    expect(loaded.agents.sciforge.providerId).toBe('')
     expect('apiKey' in loaded.agents.sciforge).toBe(false)
     expect('baseUrl' in loaded.agents.sciforge).toBe(false)
   })
 
-  it('keeps custom model providers when migrated settings are reloaded', async () => {
+  it('drops removed provider credentials and provider selection', async () => {
     const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
     const settingsPath = join(userDataDir, 'sciforge-settings.json')
-    const provider = defaultModelProviderSettings()
 
     await writeFile(
       settingsPath,
@@ -440,7 +466,6 @@ describe('JsonSettingsStore', () => {
           apiKey: 'sk-default',
           baseUrl: 'https://api.deepseek.com',
           providers: [
-            ...provider.providers,
             {
               id: 'custom-provider-2',
               name: 'Custom Provider',
@@ -462,42 +487,14 @@ describe('JsonSettingsStore', () => {
       'utf8'
     )
 
-    const firstStore = new JsonSettingsStore(userDataDir)
-    const firstLoaded = await firstStore.load()
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    const persisted = await readFile(settingsPath, 'utf8')
 
-    expect(firstLoaded.provider.providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'custom-provider-2',
-          apiKey: 'sk-custom',
-          baseUrl: 'https://custom.example/v1',
-          models: ['custom-model']
-        })
-      ])
-    )
-    expect(
-      firstLoaded.provider.providers.find((provider) => provider.id === 'custom-provider-2')
-    ).not.toHaveProperty('endpointFormat')
-    expect(firstLoaded.agents.sciforge.providerId).toBe('custom-provider-2')
-    await firstStore.save(firstLoaded)
-
-    const secondStore = new JsonSettingsStore(userDataDir)
-    const secondLoaded = await secondStore.load()
-
-    expect(secondLoaded.provider.providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'custom-provider-2',
-          apiKey: 'sk-custom',
-          baseUrl: 'https://custom.example/v1',
-          models: ['custom-model']
-        })
-      ])
-    )
-    expect(
-      secondLoaded.provider.providers.find((provider) => provider.id === 'custom-provider-2')
-    ).not.toHaveProperty('endpointFormat')
-    expect(secondLoaded.agents.sciforge.providerId).toBe('custom-provider-2')
+    expect(loaded.agents.sciforge.model).toBe('custom-model')
+    expect(loaded.agents.sciforge).not.toHaveProperty('providerId')
+    expect(persisted).not.toContain('sk-default')
+    expect(persisted).not.toContain('sk-custom')
+    expect(JSON.parse(persisted)).not.toHaveProperty('provider')
   })
 
   it('loads settings from the legacy lowercase userData directory and writes them into the current path', async () => {
@@ -511,6 +508,7 @@ describe('JsonSettingsStore', () => {
       join(legacyUserDataDir, 'sciforge-settings.json'),
       JSON.stringify({
         version: 1,
+        locale: 'zh',
         provider: {
           apiKey: 'sk-legacy-provider'
         }
@@ -521,8 +519,8 @@ describe('JsonSettingsStore', () => {
     const store = new JsonSettingsStore(currentUserDataDir)
     const loaded = await store.load()
 
-    expect(loaded.provider.apiKey).toBe('sk-legacy-provider')
-    expect(await readFile(currentSettingsPath, 'utf8')).toContain('sk-legacy-provider')
+    expect(loaded.locale).toBe('zh')
+    expect(await readFile(currentSettingsPath, 'utf8')).not.toContain('sk-legacy-provider')
   })
 
   it('creates the configured code workspace on load', async () => {

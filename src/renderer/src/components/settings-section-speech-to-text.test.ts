@@ -7,7 +7,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultSpeechToTextSettings,
@@ -46,7 +45,6 @@ function buildSettings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     activeAgentRuntime: 'sciforge',
     agents: {
@@ -98,7 +96,7 @@ describe('SpeechToTextSettingsSection', () => {
     expect(html).not.toContain('Provider member')
   })
 
-  it('builds app-level speech settings patches without touching providers or agents', () => {
+  it('builds app-level speech settings patches without touching model access or agents', () => {
     const patch = speechToTextSettingsPatch(defaultSpeechToTextSettings(), {
       enabled: true,
       model: 'whisper-1'
@@ -113,7 +111,7 @@ describe('SpeechToTextSettingsSection', () => {
         timeoutMs: defaultSpeechToTextSettings().timeoutMs
       }
     })
-    expect(patch.provider).toBeUndefined()
+    expect(patch.modelAccess).toBeUndefined()
     expect(patch.modelRouter).toBeUndefined()
     expect(patch.agents).toBeUndefined()
   })

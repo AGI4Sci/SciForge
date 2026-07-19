@@ -10,8 +10,8 @@ const MARKER_KEY = '__sciforge_request_hygiene__';
 const OMITTED_SHELL_COMMAND =
   'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
 
-export function hygienizeChatProviderBody(body: Record<string, unknown>): Record<string, unknown> {
-  return hygienizeValue(body, { source: 'chat_request' }) as Record<string, unknown>;
+export function hygienizeModelRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  return hygienizeValue(body, { source: 'model_request' }) as Record<string, unknown>;
 }
 
 function hygienizeValue(value: unknown, context: HygieneContext): unknown {
@@ -30,11 +30,13 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (isStructuredImagePart(value)) return value;
 
   const role = stringField(value.role);
+  const recordType = stringField(value.type);
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
     out[key] = hygienizeValue(entry, {
       key,
       role,
+      recordType,
       source: sourceForRecordEntry(context, role, key),
     });
   }
@@ -91,14 +93,20 @@ function isShellHistoryPlaceholder(value: string): boolean {
 
 function hygienizeText(value: string, context: HygieneContext): string {
   const source = sourceForContext(context, context.source);
-  if (context.role === 'tool' && context.key === 'content' && value.length > MAX_TOOL_OUTPUT_CHARS) {
+  if (isToolOutputContext(context) && value.length > MAX_TOOL_OUTPUT_CHARS) {
     return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaceEncodedPayloads(value, 'tool_message.content')));
   }
   const replaced = replaceEncodedPayloads(value, source);
-  if (context.role === 'tool' && context.key === 'content' && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
+  if (isToolOutputContext(context) && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
     return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaced));
   }
   return replaced;
+}
+
+function isToolOutputContext(context: HygieneContext): boolean {
+  return (context.role === 'tool' && context.key === 'content')
+    || (context.recordType === 'function_call_output' && context.key === 'output')
+    || (context.recordType === 'tool_result' && context.key === 'content');
 }
 
 function replaceEncodedPayloads(value: string, source: string): string {
@@ -200,5 +208,6 @@ function stringField(value: unknown) {
 type HygieneContext = {
   key?: string;
   role?: string;
+  recordType?: string;
   source: string;
 };

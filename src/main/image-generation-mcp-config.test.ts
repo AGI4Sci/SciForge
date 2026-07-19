@@ -9,18 +9,17 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultRemoteChannelSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1,
   type ImageGenerationSettingsPatchV1,
-  type ModelRouterMemberProviderSettingsPatchV1
+  type ModelRouterMemberSettingsPatchV1
 } from '../shared/app-settings'
 
 function createSettings(
-  imageGenerator: ModelRouterMemberProviderSettingsPatchV1 = {},
+  imageGenerator: ModelRouterMemberSettingsPatchV1 = {},
   imageGeneration: ImageGenerationSettingsPatchV1 = {}
 ): AppSettingsV1 {
   const remoteChannel = defaultRemoteChannelSettings()
@@ -30,7 +29,6 @@ function createSettings(
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: {
       ...modelRouter,
       baseUrl: 'http://127.0.0.1:3892/v1',
@@ -94,7 +92,6 @@ const launch: ImageGenerationMcpLaunchConfig = {
 describe('image generation MCP config', () => {
   it('passes Model Router image endpoint settings through stdio MCP env', () => {
     const server = buildImageGenerationMcpServerConfig(launch, '/tmp/workspace', createSettings({
-      provider: 'openai-compatible',
       apiKey: 'image-key',
       baseUrl: 'http://image-provider.example/v1',
       model: 'qwen-image-2.0-pro'
@@ -125,20 +122,19 @@ describe('image generation MCP config', () => {
 
   it('requests a runtime restart when image worker launch env changes', () => {
     const configured = createSettings({
-      provider: 'openai-compatible',
       apiKey: 'old-key',
       baseUrl: 'http://127.0.0.1:3888/v1',
       model: 'qwen-image-2.0-pro'
     })
 
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings())).toBe(false)
-    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'gpt-image-2' }))).toBe(false)
+    expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({ model: 'image-model' }))).toBe(false)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationRunnerPath: '/tmp/runner' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { componentSegmentationModelPath: '/tmp/component-model.pt' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), createSettings({}, { fastSamRunnerPath: '/tmp/legacy-runner' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(createSettings(), configured)).toBe(true)
     expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'new-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)
     expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3999/v1', model: 'qwen-image-2.0-pro' }))).toBe(true)
-    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'gpt-image-2' }))).toBe(true)
+    expect(imageGenerationMcpSettingsChanged(configured, createSettings({ apiKey: 'old-key', baseUrl: 'http://127.0.0.1:3888/v1', model: 'other-image-model' }))).toBe(true)
   })
 })

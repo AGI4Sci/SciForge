@@ -1,10 +1,13 @@
-import { mkdir, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import { access, chmod, copyFile, mkdir, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
+  DEFAULT_CODEX_DATA_DIR,
   getCodexRuntimeSettings,
+  getModelAccessSettings,
   getModelRouterSettings,
   isModelRouterTextReasonerConfigured,
   resolveRuntimeModelRouterSettings,
@@ -31,6 +34,10 @@ import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
 import { internalSecretEnv } from '../../internal-http-secret'
 import {
+  CODEX_PLAN_PROVIDER_ID,
+  createCodexPlanRuntimeConfig
+} from '../../../../packages/workers/plan-gateway/src/adapters/codex'
+import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
   SCI_MODALITY_SERVICE_ENV_PREFIXES,
@@ -41,6 +48,7 @@ import {
 } from '../../upstream-provider-env'
 
 const RUNTIME_API_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY'
+export const CODEX_PLAN_GATEWAY_PROVIDER_ID = CODEX_PLAN_PROVIDER_ID
 const CODEX_MANAGED_DIRS = ['sessions', 'memories', 'logs'] as const
 const LEGACY_DIRECT_WORKER_ENV_PREFIXES = [
   ...DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -55,6 +63,11 @@ export type CodexAppServerLaunchConfig = {
   cwd: string
   env: NodeJS.ProcessEnv
   codexHome: string
+  accessMode: 'api' | 'coding-plan'
+}
+
+export type CodexPlanGatewayLaunchConfig = {
+  baseUrl: string
 }
 
 export async function prepareCodexAppServerLaunch(options: {
@@ -62,6 +75,7 @@ export async function prepareCodexAppServerLaunch(options: {
   workspace?: string
   env?: NodeJS.ProcessEnv
   managedCodexHome?: string
+  planGateway?: CodexPlanGatewayLaunchConfig
   scheduleMcpLaunch?: ScheduleMcpLaunchConfig
   researchMcpLaunch?: ResearchSearchMcpLaunchConfig
   workflowMcpLaunch?: WorkflowMcpLaunchConfig
@@ -77,22 +91,22 @@ export async function prepareCodexAppServerLaunch(options: {
   visualDocumentMcpLaunch?: VisualDocumentMcpLaunchConfig
 }): Promise<CodexAppServerLaunchConfig> {
   const runtime = getCodexRuntimeSettings(options.settings)
-  const command = runtime.command.trim()
-  if (!command) throw new Error('Codex command is required.')
+  const baseEnv = options.env ?? process.env
+  const command = await resolveCodexCommand(runtime.command, { env: baseEnv })
   const codexHome = expandHome(options.managedCodexHome || runtime.codexHome)
   if (!codexHome) throw new Error('Codex CODEX_HOME is required.')
-  const modelRouter = codexModelRouterConfig(options.settings)
+  const modelAccess = codexModelAccessConfig(options.settings, options.planGateway)
   const cwd = resolveCodexWorkspace(options.settings, options.workspace)
   if (!cwd) throw new Error('Codex workspace is required.')
-  await prepareManagedCodexHome(codexHome, modelRouter)
+  await prepareManagedCodexHome(codexHome, modelAccess, codexAuthSourceHomes(runtime.codexHome))
   return {
     command,
     args: ['app-server', '--listen', 'stdio://', ...codexAppServerExtraArgs(runtime.extraArgs)],
     cwd,
-    env: codexRuntimeEnv(
-      options.env ?? process.env,
+    env: prependCommandDirectoryToPath(codexRuntimeEnv(
+      baseEnv,
       codexHome,
-      modelRouter.apiKey,
+      modelAccess.mode === 'api' ? modelAccess.apiKey : undefined,
       {
         ...(options.scheduleMcpLaunch
           ? internalSecretEnv(GUI_SCHEDULE_INTERNAL_SECRET_ENV, options.settings.schedule.internal.secret)
@@ -101,9 +115,77 @@ export async function prepareCodexAppServerLaunch(options: {
           ? internalSecretEnv(GUI_WORKFLOW_INTERNAL_SECRET_ENV, options.settings.workflow.webhookSecret)
           : {})
       }
-    ),
-    codexHome
+    ), command),
+    codexHome,
+    accessMode: modelAccess.mode
   }
+}
+
+export async function resolveCodexCommand(
+  raw: string,
+  options: {
+    env?: NodeJS.ProcessEnv
+    homeDir?: string
+    platform?: NodeJS.Platform
+    isExecutable?: (path: string) => Promise<boolean>
+  } = {}
+): Promise<string> {
+  const command = raw.trim()
+  if (!command) throw new Error('Codex command is required.')
+  const homeDir = options.homeDir ?? homedir()
+  const expanded = expandHomeFrom(command, homeDir)
+  if (isAbsolute(expanded) || expanded.includes('/') || expanded.includes('\\')) return expanded
+
+  const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
+  const searchDirs = (env.PATH ?? '')
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+  if (platform === 'darwin') {
+    searchDirs.push(join(homeDir, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin')
+  } else if (platform !== 'win32') {
+    searchDirs.push(join(homeDir, '.local', 'bin'), '/usr/local/bin', '/usr/bin')
+  }
+
+  const isExecutable = options.isExecutable ?? executableFileExists
+  for (const directory of new Set(searchDirs)) {
+    const candidate = join(directory, command)
+    if (await isExecutable(candidate)) return candidate
+  }
+  return command
+}
+
+function prependCommandDirectoryToPath(env: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
+  if (!isAbsolute(command)) return env
+  const directory = dirname(command)
+  const pathEntries = (env.PATH ?? '').split(delimiter).filter(Boolean)
+  if (!pathEntries.includes(directory)) env.PATH = [directory, ...pathEntries].join(delimiter)
+  return env
+}
+
+async function executableFileExists(path: string): Promise<boolean> {
+  try {
+    await access(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function expandHomeFrom(raw: string, homeDir: string): string {
+  if (raw === '~') return homeDir
+  if (raw.startsWith('~/') || raw.startsWith('~\\')) return join(homeDir, raw.slice(2))
+  return raw
+}
+
+export function codexAuthSourceHomes(raw: string, homeDir: string = homedir()): string[] {
+  const value = raw.trim()
+  const configured = expandHomeFrom(value, homeDir)
+  if (value === DEFAULT_CODEX_DATA_DIR) {
+    return [configured, join(homeDir, '.codex')]
+  }
+  return configured ? [configured] : []
 }
 
 export function codexAppServerExtraArgs(args: readonly string[]): string[] {
@@ -146,6 +228,7 @@ export function codexRuntimeEnv(
       delete env[key]
     }
   }
+  delete env[RUNTIME_API_KEY_ENV]
   if (runtimeApiKey !== undefined) {
     env[RUNTIME_API_KEY_ENV] = runtimeApiKey
   }
@@ -157,9 +240,7 @@ export function codexRuntimeEnv(
 export function expandHome(raw: string): string {
   const value = raw.trim()
   if (!value) return ''
-  if (value === '~') return homedir()
-  if (value.startsWith('~/') || value.startsWith('~\\')) return join(homedir(), value.slice(2))
-  return value
+  return expandHomeFrom(value, homedir())
 }
 
 function appendNoProxyLoopbacks(value: string | undefined): string {
@@ -181,22 +262,69 @@ function isLegacyDirectWorkerEnv(key: string): boolean {
 
 async function prepareManagedCodexHome(
   codexHome: string,
-  modelRouter: CodexModelRouterConfig
+  modelAccess: CodexModelAccessConfig,
+  authSourceCodexHomes: readonly string[]
 ): Promise<void> {
   await mkdir(codexHome, { recursive: true })
   await Promise.all(
     CODEX_MANAGED_DIRS.map((dir) => mkdir(join(codexHome, dir), { recursive: true }))
   )
+  if (modelAccess.mode === 'coding-plan') {
+    await importExistingCodexAuth(codexHome, authSourceCodexHomes)
+  }
   await writeFile(
     join(codexHome, 'config.toml'),
-    codexConfigToml(modelRouter),
+    codexConfigToml(modelAccess),
     'utf8'
   )
 }
 
+async function importExistingCodexAuth(
+  managedCodexHome: string,
+  sourceCodexHomes: readonly string[]
+): Promise<void> {
+  const destination = join(managedCodexHome, 'auth.json')
+  for (const sourceCodexHome of sourceCodexHomes) {
+    if (!sourceCodexHome || sourceCodexHome === managedCodexHome) continue
+    try {
+      await copyFile(join(sourceCodexHome, 'auth.json'), destination, constants.COPYFILE_EXCL)
+      await chmod(destination, 0o600)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      if (code === 'ENOENT') continue
+      if (code === 'EEXIST') return
+      throw error
+    }
+  }
+}
+
 type CodexModelRouterConfig = {
+  mode: 'api'
   baseUrl: string
   apiKey: string
+}
+
+type CodexPlanGatewayConfig = {
+  mode: 'coding-plan'
+  baseUrl: string
+}
+
+type CodexModelAccessConfig = CodexModelRouterConfig | CodexPlanGatewayConfig
+
+function codexModelAccessConfig(
+  settings: AppSettingsV1,
+  planGateway: CodexPlanGatewayLaunchConfig | undefined
+): CodexModelAccessConfig {
+  const access = getModelAccessSettings(settings)
+  if (!access) throw new Error('Codex model access setup is required.')
+  if (access.mode === 'api') return codexModelRouterConfig(settings)
+  if (access.planAdapterId !== 'codex') {
+    throw new Error(`Codex runtime does not support coding plan adapter: ${access.planAdapterId || '(missing)'}.`)
+  }
+  const baseUrl = planGateway?.baseUrl.trim().replace(/\/+$/, '') ?? ''
+  if (!baseUrl) throw new Error('Codex Plan Gateway base URL is required in coding-plan mode.')
+  return { mode: 'coding-plan', baseUrl }
 }
 
 function codexModelRouterConfig(settings: AppSettingsV1): CodexModelRouterConfig {
@@ -220,12 +348,23 @@ function codexModelRouterConfig(settings: AppSettingsV1): CodexModelRouterConfig
     throw new Error(`Codex Model Router model must be ${DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS}.`)
   }
   return {
+    mode: 'api',
     baseUrl,
     apiKey: router.apiKey
   }
 }
 
-function codexConfigToml(modelRouter: CodexModelRouterConfig): string {
+function codexConfigToml(modelAccess: CodexModelAccessConfig): string {
+  if (modelAccess.mode === 'coding-plan') {
+    return [
+      'hide_agent_reasoning = false',
+      'show_raw_agent_reasoning = true',
+      'model_reasoning_summary = "detailed"',
+      'model_supports_reasoning_summaries = true',
+      '',
+      createCodexPlanRuntimeConfig(modelAccess.baseUrl)
+    ].join('\n')
+  }
   return [
     `model = "${tomlString(DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS)}"`,
     `model_provider = "${tomlString(DEFAULT_MODEL_ROUTER_PROVIDER_ID)}"`,
@@ -236,7 +375,7 @@ function codexConfigToml(modelRouter: CodexModelRouterConfig): string {
     '',
     `[model_providers.${DEFAULT_MODEL_ROUTER_PROVIDER_ID}]`,
     'name = "SciForge Model Router"',
-    `base_url = "${tomlString(modelRouter.baseUrl)}"`,
+    `base_url = "${tomlString(modelAccess.baseUrl)}"`,
     `env_key = "${RUNTIME_API_KEY_ENV}"`,
     'wire_api = "responses"',
     ''

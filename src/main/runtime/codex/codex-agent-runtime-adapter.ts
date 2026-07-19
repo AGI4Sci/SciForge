@@ -101,8 +101,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         workspace: input.workspace,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
-        fileReferences: input.fileReferences,
-        metadata: input.metadata
+        fileReferences: input.fileReferences
       })
       if (!result.ok) throw codexFailure(result)
       return {
@@ -188,6 +187,45 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
 
     async auxiliary(_context, input) {
       switch (input.operation) {
+        case 'getCodingPlanAccount': {
+          const payload = recordValue(input.payload)
+          const result = await service.getCodingPlanAccount({
+            refreshToken: payload.refreshToken === true
+          })
+          if (!result.ok) throw codexFailure(result)
+          return {
+            ...result,
+            authenticated: result.account?.type === 'chatgpt'
+          }
+        }
+        case 'startCodingPlanLogin': {
+          const payload = recordValue(input.payload)
+          const method = stringValue(payload.method)
+          if (method !== 'browser' && method !== 'device') {
+            throw new Error('startCodingPlanLogin requires payload.method browser or device.')
+          }
+          const result = await service.startCodingPlanLogin({ method })
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'waitForCodingPlanLogin': {
+          const payload = recordValue(input.payload)
+          const loginId = stringValue(payload.loginId)
+          if (!loginId) throw new Error('waitForCodingPlanLogin requires payload.loginId.')
+          const result = await service.waitForCodingPlanLogin(loginId)
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'logoutCodingPlanAccount': {
+          const result = await service.logoutCodingPlanAccount()
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'getCodingPlanRateLimits': {
+          const result = await service.getCodingPlanRateLimits()
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
         case 'getRuntimeInfo':
           return codexRuntimeInfo(serviceMcpState(service, _context.settings))
         case 'getToolDiagnostics':
@@ -1224,6 +1262,18 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
         text: delta.text,
         visibility: 'summary',
         source: 'runtime_summary'
+      })
+    } else if (delta.snapshot) {
+      const itemId = `codex-assistant-${event.turnId || event.seq || 'event'}-${index}`
+      mapped.push({
+        ...common,
+        kind: 'item_snapshot',
+        item: {
+          id: itemId,
+          kind: 'assistant_message',
+          text: delta.text,
+          ...(event.turnId ? { turnId: event.turnId } : {})
+        }
       })
     } else {
       mapped.push({

@@ -157,7 +157,14 @@ function createApi(): SciForgeApi {
     getSettings: () => invoke('settings:get'),
     setSettings: (partial) => invoke('settings:set', partial),
     onSettingsChanged,
+    getModelAccessStatus: () => invoke('modelAccess:status'),
     fetchUpstreamModels: () => invoke('upstream:models'),
+    traces: {
+      read: (query) => invoke('traces:read', query ?? {}),
+      summaries: (query) => invoke('traces:summaries', query ?? {}),
+      export: (traceIds) => invoke('traces:export', { traceIds }),
+      clear: () => invoke('traces:clear')
+    },
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
@@ -259,7 +266,6 @@ function createApi(): SciForgeApi {
     getRuntimeConfigFile: () => invoke('runtimeConfig:read'),
     setRuntimeConfigFile: (content) => invoke('runtimeConfig:write', content),
     openRuntimeConfigDir: () => invoke('runtimeConfig:open-dir'),
-    openModelRouterConfigFile: () => invoke('modelRouter:config:open'),
     getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
     switchGitBranch: (workspaceRoot, branch) =>
       invoke('git:switch-branch', { workspaceRoot, branch }),

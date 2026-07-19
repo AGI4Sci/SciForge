@@ -3,10 +3,15 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { Options as ClaudeAgentSdkOptions } from '@anthropic-ai/claude-agent-sdk'
 import {
+  deriveTraceId,
+  traceCorrelationHeaders
+} from '@sciforge/full-trace'
+import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   getClaudeRuntimeSettings,
   getModelRouterSettings,
   isModelRouterTextReasonerConfigured,
+  resolveModelAccessRuntimePolicy,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1,
   type ApprovalPolicy,
@@ -49,6 +54,8 @@ export type ClaudeCodeSdkLaunchConfig = {
 export async function prepareClaudeCodeSdkLaunch(options: {
   settings: AppSettingsV1
   text: string
+  threadId: string
+  turnId: string
   workspace?: string
   sessionId?: string
   reasoningEffort?: string
@@ -56,6 +63,11 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   managedConfigDir?: string
   managedMcp?: Omit<GuiMcpRegistryInput, 'settings'>
 }): Promise<ClaudeCodeSdkLaunchConfig> {
+  if (!resolveModelAccessRuntimePolicy(options.settings).claude) {
+    throw new Error(
+      'Claude Code requires API model access and must be the selected Agent runtime.'
+    )
+  }
   const runtime = getClaudeRuntimeSettings(options.settings)
   const command = runtime.command.trim()
   if (!command) throw new Error('Claude Code command is required.')
@@ -71,7 +83,9 @@ export async function prepareClaudeCodeSdkLaunch(options: {
     configDir,
     baseUrl: claudeCodeAnthropicBaseUrl(router.baseUrl),
     apiKey: router.apiKey,
-    model: cliModel
+    model: cliModel,
+    threadId: options.threadId,
+    turnId: options.turnId
   })
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
   const pathToClaudeCodeExecutable = command === 'claude' ? undefined : command
@@ -180,9 +194,12 @@ export function claudeCodeRuntimeEnv(
     baseUrl: string
     apiKey: string
     model: string
+    threadId: string
+    turnId: string
   }
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...baseEnv }
+  delete env.ANTHROPIC_CUSTOM_HEADERS
   for (const key of UPSTREAM_PROVIDER_SECRET_ENV_NAMES) {
     delete env[key]
   }
@@ -196,11 +213,35 @@ export function claudeCodeRuntimeEnv(
   env.ANTHROPIC_AUTH_TOKEN = runtime.apiKey
   env.ANTHROPIC_MODEL = runtime.model
   env.ANTHROPIC_SMALL_FAST_MODEL = runtime.model
+  env.ANTHROPIC_CUSTOM_HEADERS = formatClaudeCodeTraceHeaders({
+    runtimeId: 'claude',
+    threadId: runtime.threadId,
+    turnId: runtime.turnId
+  })
   env.CLAUDE_CONFIG_DIR = runtime.configDir
   env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1'
   env.NO_PROXY = appendNoProxyLoopbacks(env.NO_PROXY)
   env.no_proxy = appendNoProxyLoopbacks(env.no_proxy)
   return env
+}
+
+function formatClaudeCodeTraceHeaders(input: {
+  runtimeId: string
+  threadId: string
+  turnId: string
+}): string {
+  for (const [name, value] of Object.entries(input)) {
+    if (!value.trim() || /[\r\n]/.test(value)) {
+      throw new Error(`Claude Code ${name} must be a non-empty single-line value.`)
+    }
+  }
+  const correlation = {
+    ...input,
+    traceId: deriveTraceId(input)
+  }
+  return Object.entries(traceCorrelationHeaders(correlation))
+    .map(([name, value]) => `${name}: ${value}`)
+    .join('\n')
 }
 
 export function claudeCodeSdkExtraArgs(args: readonly string[]): NonNullable<ClaudeAgentSdkOptions['extraArgs']> {

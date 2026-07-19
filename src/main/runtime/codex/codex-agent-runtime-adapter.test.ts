@@ -2,6 +2,89 @@ import { describe, expect, it, vi } from 'vitest'
 import { createCodexAgentRuntimeAdapter } from './codex-agent-runtime-adapter'
 
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('bridges neutral coding-plan auxiliary operations to the Codex account lifecycle', async () => {
+    const service = {
+      getCodingPlanAccount: vi.fn(async () => ({
+        ok: true as const,
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
+        planType: 'plus',
+        requiresOpenaiAuth: true
+      })),
+      startCodingPlanLogin: vi.fn(async () => ({
+        ok: true as const,
+        method: 'browser' as const,
+        loginId: 'login-1',
+        authUrl: 'https://auth.example/login'
+      })),
+      waitForCodingPlanLogin: vi.fn(async () => ({
+        ok: true as const,
+        loginId: 'login-1',
+        success: true
+      })),
+      logoutCodingPlanAccount: vi.fn(async () => ({ ok: true as const })),
+      getCodingPlanRateLimits: vi.fn(async () => ({
+        ok: true as const,
+        rateLimits: { limitId: 'codex' },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const auxiliary = adapter.auxiliary!
+    const context = { settings: {} as never }
+
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'getCodingPlanAccount',
+      payload: { refreshToken: true }
+    })).resolves.toMatchObject({
+      authenticated: true,
+      account: { type: 'chatgpt', planType: 'plus' }
+    })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'browser' }
+    })).resolves.toMatchObject({ loginId: 'login-1' })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'waitForCodingPlanLogin',
+      payload: { loginId: 'login-1' }
+    })).resolves.toMatchObject({ success: true })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'getCodingPlanRateLimits'
+    })).resolves.toMatchObject({ rateLimits: { limitId: 'codex' } })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'logoutCodingPlanAccount'
+    })).resolves.toEqual({ ok: true })
+
+    expect(service.getCodingPlanAccount).toHaveBeenCalledWith({ refreshToken: true })
+    expect(service.startCodingPlanLogin).toHaveBeenCalledWith({ method: 'browser' })
+    expect(service.waitForCodingPlanLogin).toHaveBeenCalledWith('login-1')
+  })
+
+  it.each(['apiKey', 'amazonBedrock'] as const)(
+    'does not treat Codex %s credentials as Coding Plan authentication',
+    async (type) => {
+      const adapter = createCodexAgentRuntimeAdapter({
+        getCodingPlanAccount: vi.fn(async () => ({
+          ok: true as const,
+          account: { type },
+          planType: null,
+          requiresOpenaiAuth: true
+        }))
+      } as never)
+
+      await expect(adapter.auxiliary!({ settings: {} as never }, {
+        runtimeId: 'codex',
+        operation: 'getCodingPlanAccount',
+        payload: { refreshToken: true }
+      })).resolves.toMatchObject({ authenticated: false, account: { type } })
+    }
+  )
+
   it('reports shared research MCP capability when Codex managed config includes it', async () => {
     const adapter = createCodexAgentRuntimeAdapter({
       isResearchMcpConfigured: () => true
@@ -616,6 +699,46 @@ describe('createCodexAgentRuntimeAdapter', () => {
         itemId: 'user-1',
         text: 'expanded runtime prompt',
         displayText: 'short user prompt'
+      })
+    ])
+  })
+
+  it('maps completed Codex assistant snapshots to authoritative item snapshots', async () => {
+    const service = {
+      readStoredEvents: vi.fn(async () => [
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 1,
+          deltas: [{ kind: 'agent_message' as const, text: 'Hello' }]
+        },
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 2,
+          deltas: [{ kind: 'agent_message' as const, text: 'Hello.', snapshot: true }]
+        }
+      ])
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const events = []
+
+    for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
+      runtimeId: 'codex',
+      threadId: 'thread-1'
+    })) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({ kind: 'assistant_delta', text: 'Hello' }),
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        item: expect.objectContaining({
+          kind: 'assistant_message',
+          turnId: 'turn-1',
+          text: 'Hello.'
+        })
       })
     ])
   })

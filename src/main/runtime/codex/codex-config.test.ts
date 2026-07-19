@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -10,14 +10,20 @@ import {
   defaultLocalRuntimeSettings,
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
-import { codexRuntimeEnv, expandHome, prepareCodexAppServerLaunch } from './codex-config'
+import {
+  CODEX_PLAN_GATEWAY_PROVIDER_ID,
+  codexAuthSourceHomes,
+  codexRuntimeEnv,
+  expandHome,
+  prepareCodexAppServerLaunch,
+  resolveCodexCommand
+} from './codex-config'
 
 function settings(codexHome: string): AppSettingsV1 {
   const modelRouter = defaultModelRouterSettings()
@@ -25,7 +31,6 @@ function settings(codexHome: string): AppSettingsV1 {
   modelRouter.publicModelAlias = DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -37,7 +42,7 @@ function settings(codexHome: string): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'codex',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: {
@@ -63,6 +68,45 @@ function settings(codexHome: string): AppSettingsV1 {
 }
 
 describe('codex config launch helpers', () => {
+  it('falls back from the legacy SciForge Codex home to the standard Codex login home', () => {
+    expect(codexAuthSourceHomes('~/.sciforge/codex', '/Users/example')).toEqual([
+      '/Users/example/.sciforge/codex',
+      '/Users/example/.codex'
+    ])
+    expect(codexAuthSourceHomes('~/custom-codex', '/Users/example')).toEqual([
+      '/Users/example/custom-codex'
+    ])
+  })
+
+  it('finds a Codex standalone install when a Finder launch omits the user bin directory', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-command-'))
+    const command = join(home, '.local', 'bin', 'codex')
+    await mkdir(join(home, '.local', 'bin'), { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin'
+    })).resolves.toBe(command)
+  })
+
+  it('preserves an explicit Codex path and prefers the supplied PATH', async () => {
+    await expect(resolveCodexCommand('~/custom/codex', {
+      homeDir: '/Users/example',
+      platform: 'darwin',
+      isExecutable: async () => false
+    })).resolves.toBe('/Users/example/custom/codex')
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/custom/bin:/usr/bin' },
+      homeDir: '/Users/example',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/custom/bin/codex'
+    })).resolves.toBe('/custom/bin/codex')
+  })
+
   it('prepares app-server stdio launch config and creates CODEX_HOME', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
     const managedHome = join(codexHome, 'nested')
@@ -134,7 +178,10 @@ describe('codex config launch helpers', () => {
       }
     })
 
-    expect(launch.command).toBe('codex')
+    expect(launch.command).toMatch(/(?:^|\/)codex$/)
+    if (launch.command.includes('/')) {
+      expect(launch.env.PATH?.split(':')).toContain(join(launch.command, '..'))
+    }
     expect(launch.args).toEqual(['app-server', '--listen', 'stdio://'])
     expect(launch.cwd).toContain('project')
     expect(launch.env.CODEX_HOME).toBe(managedHome)
@@ -480,6 +527,83 @@ describe('codex config launch helpers', () => {
     const persistedGlobalConfig = await readFile(join(settingsCodexHome, 'config.toml'), 'utf8')
     expect(persistedGlobalConfig).toContain('api.openai.com')
     expect(persistedGlobalConfig).not.toContain(DEFAULT_MODEL_ROUTER_PROVIDER_ID)
+  })
+
+  it('writes an authenticated Plan Gateway provider without an API-key environment variable', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'config.toml'), 'model_provider = "external"\n')
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"existing"}\n', { mode: 0o600 })
+
+    const launch = await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' },
+      env: {
+        SCIFORGE_RUNTIME_API_KEY: 'stale-api-path-key',
+        OPENAI_API_KEY: 'stale-openai-key'
+      }
+    })
+
+    expect(launch.accessMode).toBe('coding-plan')
+    expect(launch.env.CODEX_HOME).toBe(managedCodexHome)
+    expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBeUndefined()
+    expect(launch.env.OPENAI_API_KEY).toBeUndefined()
+
+    const config = await readFile(join(managedCodexHome, 'config.toml'), 'utf8')
+    expect(config).toContain(`model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`)
+    expect(config).toContain(`[model_providers.${CODEX_PLAN_GATEWAY_PROVIDER_ID}]`)
+    expect(config).toContain('base_url = "http://127.0.0.1:47931/v1"')
+    expect(config).toContain('wire_api = "responses"')
+    expect(config).toContain('requires_openai_auth = true')
+    expect(config).toContain('supports_websockets = false')
+    expect(config).not.toContain('env_key')
+    expect(config).not.toContain('model =')
+    await expect(readFile(join(externalCodexHome, 'config.toml'), 'utf8'))
+      .resolves.toBe('model_provider = "external"\n')
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"existing"}\n')
+    expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+  })
+
+  it('does not overwrite an existing managed Codex login', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external"}\n')
+    await writeFile(join(managedCodexHome, 'auth.json'), '{"auth":"managed"}\n', { mode: 0o600 })
+
+    await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })
+
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"managed"}\n')
+  })
+
+  it('fails closed when coding-plan mode has no local gateway or selects another adapter', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      }
+    })).rejects.toThrow('Plan Gateway base URL is required')
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'other-plan' }
+      },
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' }
+    })).rejects.toThrow('does not support coding plan adapter')
   })
 
   it('rejects non-local Model Router URLs', async () => {

@@ -2,10 +2,10 @@ import {
   DEFAULT_MODEL_ROUTER_BASE_URL,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   type AppSettingsV1,
-  type ModelRouterMemberProviderSettingsPatchV1,
-  type ModelRouterMemberProviderSettingsV1,
-  type ModelRouterScientificTranslatorSettingsPatchV1,
-  type ModelRouterScientificTranslatorSettingsV1,
+  type ModelAccessSettingsPatchV1,
+  type ModelAccessSettingsV1,
+  type ModelRouterMemberSettingsPatchV1,
+  type ModelRouterMemberSettingsV1,
   type ModelRouterSettingsPatchV1,
   type ModelRouterSettingsV1
 } from './app-settings-types'
@@ -15,7 +15,31 @@ import {
   normalizeModelRouterBaseUrl
 } from './model-router-url'
 
-export const DEFAULT_MODEL_ROUTER_IMAGE_GENERATOR_MODEL = 'gpt-image-2'
+export function normalizeModelAccessSettings(
+  input: ModelAccessSettingsPatchV1 | undefined
+): ModelAccessSettingsV1 | undefined {
+  if (input?.mode !== 'api' && input?.mode !== 'coding-plan') return undefined
+  return {
+    mode: input.mode,
+    planAdapterId: optionalString(input?.planAdapterId)
+  }
+}
+
+export function getModelAccessSettings(settings: AppSettingsV1): ModelAccessSettingsV1 | undefined {
+  return normalizeModelAccessSettings(
+    (settings as { modelAccess?: ModelAccessSettingsPatchV1 }).modelAccess
+  )
+}
+
+export function mergeModelAccessSettings(
+  current: ModelAccessSettingsV1 | undefined,
+  patch: ModelAccessSettingsPatchV1 | undefined
+): ModelAccessSettingsV1 | undefined {
+  return normalizeModelAccessSettings({
+    ...current,
+    ...patch
+  })
+}
 
 export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
   return {
@@ -26,14 +50,11 @@ export function defaultModelRouterSettings(): ModelRouterSettingsV1 {
     runtimeApiKey: '',
     profiles: {
       default: {
-        textReasoner: defaultModelRouterMemberProvider('openai-compatible'),
-        imageGenerator: defaultModelRouterMemberProvider(
-          'openai-compatible',
-          DEFAULT_MODEL_ROUTER_IMAGE_GENERATOR_MODEL
-        ),
+        textReasoner: defaultModelRouterMember(),
+        imageGenerator: defaultModelRouterMember(),
         translators: {
-          vision: defaultModelRouterMemberProvider('qwen-compatible'),
-          scientific: defaultModelRouterScientificTranslator()
+          vision: defaultModelRouterMember(),
+          scientific: defaultModelRouterMember()
         }
       }
     }
@@ -54,20 +75,20 @@ export function normalizeModelRouterSettings(
     runtimeApiKey: optionalString(input?.runtimeApiKey),
     profiles: {
       default: {
-        textReasoner: normalizeModelRouterMemberProvider(
+        textReasoner: normalizeModelRouterMember(
           rawDefaultProfile?.textReasoner,
           defaultProfile.textReasoner
         ),
-        imageGenerator: normalizeModelRouterImageGenerator(
+        imageGenerator: normalizeModelRouterMember(
           rawDefaultProfile?.imageGenerator,
           defaultProfile.imageGenerator
         ),
         translators: {
-          vision: normalizeModelRouterMemberProvider(
+          vision: normalizeModelRouterMember(
             rawDefaultProfile?.translators?.vision,
             defaultProfile.translators.vision
           ),
-          scientific: normalizeModelRouterScientificTranslator(
+          scientific: normalizeModelRouterMember(
             rawDefaultProfile?.translators?.scientific,
             defaultProfile.translators.scientific
           )
@@ -155,63 +176,28 @@ export function isModelRouterTextReasonerConfigured(
   )
 }
 
-function defaultModelRouterMemberProvider(
-  provider: string,
-  model = ''
-): ModelRouterMemberProviderSettingsV1 {
+export function listModelRouterModelIds(settings: AppSettingsV1): string[] {
+  const router = getModelRouterSettings(settings)
+  const publicAlias = router.publicModelAlias.trim()
+  return publicAlias ? [publicAlias] : []
+}
+
+function defaultModelRouterMember(model = ''): ModelRouterMemberSettingsV1 {
   return {
-    provider,
     baseUrl: '',
     apiKey: '',
     model
   }
 }
 
-function normalizeModelRouterImageGenerator(
-  input: ModelRouterMemberProviderSettingsPatchV1 | undefined,
-  defaults: ModelRouterMemberProviderSettingsV1
-): ModelRouterMemberProviderSettingsV1 {
-  const normalized = normalizeModelRouterMemberProvider(input, defaults)
-  return {
-    ...normalized,
-    // Keep existing explicit provider-model overrides compatible, while making
-    // gpt-image-2 the canonical model for new and partially migrated settings.
-    model: nonEmptyString(input?.model, defaults.model)
-  }
-}
-
-function defaultModelRouterScientificTranslator(): ModelRouterScientificTranslatorSettingsV1 {
-  return {
-    baseUrl: '',
-    apiKey: '',
-    model: ''
-  }
-}
-
-function normalizeModelRouterMemberProvider(
-  input: ModelRouterMemberProviderSettingsPatchV1 | undefined,
-  defaults: ModelRouterMemberProviderSettingsV1
-): ModelRouterMemberProviderSettingsV1 {
-  const maxSupplementRounds = optionalNonNegativeInteger(input?.maxSupplementRounds)
-  return {
-    provider: nonEmptyString(input?.provider, defaults.provider),
-    baseUrl: optionalString(input?.baseUrl),
-    apiKey: optionalString(input?.apiKey),
-    model: optionalString(input?.model),
-    ...(maxSupplementRounds === undefined ? {} : { maxSupplementRounds })
-  }
-}
-
-function normalizeModelRouterScientificTranslator(
-  input: ModelRouterScientificTranslatorSettingsPatchV1 | undefined,
-  defaults: ModelRouterScientificTranslatorSettingsV1
-): ModelRouterScientificTranslatorSettingsV1 {
-  const timeoutMs = optionalPositiveInteger(input?.timeoutMs)
+function normalizeModelRouterMember(
+  input: ModelRouterMemberSettingsPatchV1 | undefined,
+  defaults: ModelRouterMemberSettingsV1
+): ModelRouterMemberSettingsV1 {
   return {
     baseUrl: optionalString(input?.baseUrl) || defaults.baseUrl,
     apiKey: optionalString(input?.apiKey),
-    model: optionalString(input?.model) || defaults.model,
-    ...(timeoutMs === undefined ? {} : { timeoutMs })
+    model: optionalString(input?.model) || defaults.model
   }
 }
 
@@ -225,15 +211,4 @@ function nonEmptyString(value: unknown, fallback: string): string {
 
 function optionalString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
-}
-
-function optionalNonNegativeInteger(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
-  return Math.max(0, Math.floor(value))
-}
-
-function optionalPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined
-  const normalized = Math.floor(value)
-  return normalized > 0 ? normalized : undefined
 }

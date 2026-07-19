@@ -125,16 +125,17 @@ describe('InitialSessionUsageHeatmap', () => {
   it('renders populated usage with accessible day summaries without starter actions', () => {
     const html = render(state({ usage: usage(), loaded: true }))
 
-    expect(html).toContain('ds-runtime-wake-stage')
+    expect(html).toContain('ds-usage-command-center')
+    expect(html).not.toContain('ds-runtime-wake-stage')
     expect(html).toContain('Overview')
     expect(html).toContain('Models')
     expect(html).toContain('All')
     expect(html).toContain('90d')
-    expect(html).toContain('Daily SciForge Runtime usage calendar')
+    expect(html).toContain('Daily SciForge Runtime activity pulse')
     expect(html).toContain('Sessions')
     expect(html).toContain('Messages')
     expect(html).toContain('Current streak')
-    expect(html).toContain('Collapse calendar')
+    expect(html).toContain('Collapse panel')
     expect(html).toContain('2026-05-01')
     expect(html).toContain('10.0k')
     expect(html).toContain('You&#x27;ve used 11.2k tokens across 2 active days.')
@@ -148,8 +149,8 @@ describe('InitialSessionUsageHeatmap', () => {
       modelLabel: 'gpt-5-codex'
     })
 
-    expect(populatedHtml).toContain('Daily Codex usage calendar')
-    expect(populatedHtml).not.toContain('Daily SciForge Runtime usage calendar')
+    expect(populatedHtml).toContain('Daily Codex activity pulse')
+    expect(populatedHtml).not.toContain('Daily SciForge Runtime activity pulse')
 
     const emptyHtml = render(state({ usage: usage([bucket('2026-05-01', 0, 0)]), loaded: true }), {
       runtimeLabel: 'Codex'
@@ -251,8 +252,8 @@ describe('InitialSessionUsageHeatmap', () => {
     const loadingHtml = render(state({ loading: true }))
     expect(loadingHtml).toContain('Preparing your usage calendar')
     expect(loadingHtml).toContain('Checking history')
-    expect(loadingHtml).toContain('Collapse calendar')
-    expect(loadingHtml).not.toContain('Daily SciForge Runtime usage calendar')
+    expect(loadingHtml).toContain('Collapse panel')
+    expect(loadingHtml).not.toContain('Daily SciForge Runtime activity pulse')
     expect(loadingHtml).not.toContain('Explain this project&#x27;s structure')
 
     const emptyHtml = render(state({ usage: usage([bucket('2026-05-01', 0, 0)]), loaded: true }))
@@ -267,14 +268,13 @@ describe('InitialSessionUsageHeatmap', () => {
     expect(errorHtml).not.toContain('Explain this project&#x27;s structure')
   })
 
-  it('renders the whale hero with a collapsed calendar card', () => {
+  it('renders a compact trigger when the populated panel is collapsed', () => {
     const html = render(state({ usage: usage(), loaded: true }), { initialCollapsed: true })
 
-    expect(html).toContain('Expand calendar')
-    expect(html).toContain('ds-runtime-wake-stage')
-    expect(html).toContain('ds-work-logo')
+    expect(html).toContain('Expand panel')
+    expect(html).not.toContain('ds-runtime-wake-stage')
     expect(html).not.toContain('Keep the canvas clear')
-    expect(html).not.toContain('Daily SciForge Runtime usage calendar')
+    expect(html).not.toContain('Daily SciForge Runtime activity pulse')
   })
 
   it('uses turns as the intensity fallback when token totals are unavailable', () => {

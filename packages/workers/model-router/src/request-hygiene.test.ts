@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { hygienizeChatProviderBody } from './request-hygiene';
+import { hygienizeModelRequestBody } from './request-hygiene';
 
 const HISTORY_ONLY_SHELL_ARGUMENT =
   'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
@@ -59,7 +59,7 @@ function toolCallBody(args: Record<string, unknown>): Record<string, unknown> {
 }
 
 function hygienizedArguments(body: Record<string, unknown>): Record<string, unknown> {
-  const hygienized = hygienizeChatProviderBody(body);
+  const hygienized = hygienizeModelRequestBody(body);
   const messages = hygienized.messages as Array<Record<string, unknown>>;
   const toolCalls = messages[0]?.tool_calls as Array<Record<string, unknown>>;
   const fn = toolCalls[0]?.function as Record<string, unknown>;

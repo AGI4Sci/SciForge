@@ -15,6 +15,14 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type {
+  TraceClearResult,
+  TraceExportResult,
+  TraceReadQuery,
+  TraceReadResult,
+  TraceSummary,
+  TraceSummaryQuery
+} from '@sciforge/full-trace'
+import type {
   AnchoredCommentCaptureRequest,
   AnchoredCommentCaptureResult,
   AnchoredCommentThread,
@@ -441,9 +449,6 @@ export type ScientificSkillsStatusResult =
       }
     }
   | { ok: false; message: string }
-export type ModelRouterConfigOpenResult =
-  | { ok: true; path: string }
-  | { ok: false; path: string; message: string }
 export type TurnCompleteNotificationPayload = {
   threadId?: string
   title: string
@@ -477,6 +482,32 @@ export type ModelProviderModelGroup = {
   providerId: string
   label: string
   modelIds: string[]
+}
+export type ModelAccessCredentialState =
+  | 'missing'
+  | 'configured'
+  | 'authenticated'
+  | 'unauthenticated'
+  | 'rejected'
+  | 'unknown'
+export type ModelAccessWireProtocol = 'responses' | 'chat-completions' | 'anthropic-messages'
+export type ModelAccessProtocolState =
+  | 'cached'
+  | 'selected'
+  | 'pending-first-request'
+  | 'unknown'
+  | 'not-applicable'
+export type ModelAccessStatus = {
+  setupRequired: boolean
+  mode: 'api' | 'coding-plan' | null
+  service: 'model-router' | 'plan-gateway' | null
+  health: 'healthy' | 'not_configured' | 'unavailable' | 'error'
+  adapterId: string | null
+  credentialState: ModelAccessCredentialState
+  protocol: ModelAccessWireProtocol | null
+  protocolState: ModelAccessProtocolState
+  traceCaptureReady: boolean
+  action: string
 }
 export type ComputerUsePermissionKind = 'accessibility' | 'screenRecording'
 export type ComputerUsePermissionState = 'granted' | 'denied' | 'unknown'
@@ -1062,6 +1093,10 @@ export type CapabilityBoundBiologyRoomApplyResult = Omit<BiologyRoomApplyResult,
   manifest: CapabilityBoundBiologyRoomManifest
 }
 
+export type FullTraceExportDialogResult =
+  | { canceled: true }
+  | ({ canceled: false } & TraceExportResult)
+
 export type SciForgeApi = {
   platform: string
   /**
@@ -1072,7 +1107,14 @@ export type SciForgeApi = {
   getSettings: () => Promise<AppSettingsV1>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   onSettingsChanged: (handler: (settings: AppSettingsV1) => void) => () => void
+  getModelAccessStatus: () => Promise<ModelAccessStatus>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
+  traces: {
+    read: (query?: TraceReadQuery) => Promise<TraceReadResult>
+    summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
+    export: (traceIds?: readonly string[]) => Promise<FullTraceExportDialogResult>
+    clear: () => Promise<TraceClearResult>
+  }
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
@@ -1189,7 +1231,6 @@ export type SciForgeApi = {
   getRuntimeConfigFile: () => Promise<RuntimeConfigFileResult>
   setRuntimeConfigFile: (content: string) => Promise<RuntimeConfigSaveResult>
   openRuntimeConfigDir: () => Promise<PathOpenResult>
-  openModelRouterConfigFile: () => Promise<ModelRouterConfigOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>

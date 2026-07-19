@@ -1,11 +1,10 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -15,16 +14,19 @@ import {
 import { checkModelRouterHealth, isModelRouterServiceHealthy } from './model-router-health'
 
 function settings(): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.runtimeApiKey = 'local-runtime-router-key'
+  modelRouter.profiles.default.textReasoner = {
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'provider-api-key',
+    model: 'configured-model'
+  }
   return {
     version: 1,
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
-    modelRouter: {
-      ...defaultModelRouterSettings(),
-      runtimeApiKey: 'local-runtime-router-key'
-    },
+    modelRouter,
     activeAgentRuntime: 'sciforge',
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -64,14 +66,21 @@ describe('checkModelRouterHealth', () => {
     const result = await checkModelRouterHealth(settings(), {
       fetchImpl: async (url) => {
         calls.push(String(url))
-        return Response.json({ ok: true, upstream: { ok: true } })
+        return Response.json({
+          ok: true,
+          protocol: 'responses',
+          traceCapture: 'ready',
+          upstream: { ok: true }
+        })
       }
     })
 
     expect(result).toEqual({
       ok: true,
       status: 'healthy',
-      message: 'Model Router is healthy'
+      message: 'Model Router is healthy',
+      protocol: 'responses',
+      traceCaptureReady: true
     })
     expect(calls).toEqual(['http://127.0.0.1:3892/healthz'])
   })
@@ -94,6 +103,26 @@ describe('checkModelRouterHealth', () => {
       ok: false,
       status: 'not_configured'
     })
+  })
+
+  it('reports setup required without probing when the generic API member is incomplete', async () => {
+    const current = settings()
+    current.modelRouter!.profiles.default.textReasoner = {
+      baseUrl: 'https://models.example/v1',
+      apiKey: '',
+      model: 'configured-model'
+    }
+    const fetchImpl = vi.fn()
+
+    const result = await checkModelRouterHealth(current, { fetchImpl })
+
+    expect(result).toMatchObject({
+      ok: false,
+      status: 'not_configured',
+      protocol: null,
+      traceCaptureReady: false
+    })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('maps healthz provider auth failures without leaking secrets', async () => {

@@ -162,6 +162,21 @@ const labels: Record<string, string> = {
   localRuntimeDiagnosticsMcpServers: 'MCP servers',
   localRuntimeDiagnosticsSkills: 'Discovered Skills',
   localRuntimeDiagnosticsAttachments: 'Attachments',
+  traceRecords: 'Full model and Agent traces',
+  traceRecordsDesc: 'Durable local traces with secrets removed',
+  traceCount: '{{count}} recent trace(s)',
+  traceExportAll: 'Export all',
+  traceExportOne: 'Export this trace',
+  traceClear: 'Clear traces',
+  traceEmpty: 'No durable traces',
+  traceNoPreview: 'No preview',
+  traceUnknownRuntime: 'Model access',
+  traceEventCount: '{{count}} event(s)',
+  traceRequestCount: '{{count}} request(s)',
+  traceTokens: '{{count}} tokens',
+  traceStatus_active: 'active',
+  traceStatus_completed: 'completed',
+  traceStatus_error: 'error',
   localRuntimeMemoryRecords: 'Memory records',
   localRuntimeMemoryRecordsDesc: 'Memory records description',
   localRuntimeMemoryEmpty: 'No memories',
@@ -388,6 +403,9 @@ function baseCtx(): Record<string, unknown> {
     runtimeDiagnosticsBusy: false,
     runtimeDiagnosticsNotice: null,
     refreshLocalRuntimeDiagnostics: asyncNoop,
+    traceSummaries: [],
+    exportTraces: asyncNoop,
+    clearTraces: asyncNoop,
     disableMemoryRecord: asyncNoop,
     deleteMemoryRecord: asyncNoop,
     pickConnectPhoneWorkspace: asyncNoop,
@@ -679,6 +697,43 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
     expect(html).toContain('Hybrid storage')
     expect(html).toContain('<option value="file"')
     expect(html).toContain('Pure JSONL file storage')
+  })
+
+  it('renders durable trace summaries with export and clear controls', () => {
+    const ctx = {
+      ...baseCtx(),
+      traceSummaries: [{
+        traceId: 'trace-1',
+        runtimeId: 'codex',
+        threadId: 'thread-1',
+        turnId: 'turn-1',
+        sources: ['agent-runtime', 'model-router'],
+        model: 'coding-model',
+        startedAt: '2026-07-19T00:00:00.000Z',
+        endedAt: '2026-07-19T00:00:01.000Z',
+        durationMs: 1_000,
+        status: 'completed',
+        requestCount: 2,
+        eventCount: 12,
+        agentEventCount: 6,
+        errorCount: 0,
+        preview: 'Completed the requested edit.',
+        usage: { totalTokens: 128 }
+      }]
+    }
+
+    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
+
+    expect(html).toContain('Full model and Agent traces')
+    expect(html).toContain('Durable local traces with secrets removed')
+    expect(html).toContain('Export all')
+    expect(html).toContain('Clear traces')
+    expect(html).toContain('codex · coding-model')
+    expect(html).toContain('thread-1')
+    expect(html).toContain('turn-1')
+    expect(html).toContain('Completed the requested edit.')
+    expect(html).not.toContain('Model request audit')
+    expect(html).not.toContain('memory only')
   })
 
   it('shows public router alias compaction thresholds from the built-in model profile', () => {

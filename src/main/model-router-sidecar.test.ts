@@ -12,7 +12,6 @@ import {
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -22,10 +21,8 @@ import {
 import {
   buildModelRouterSidecarLaunch,
   ensureModelRouterSidecar,
-  ensureModelRouterConfigFile,
   modelRouterConfigPath,
-  syncModelRouterConfigFileFromSettings,
-  syncModelRouterSettingsFromConfigFile
+  syncModelRouterConfigFileFromSettings
 } from './model-router-sidecar'
 
 function settings(): AppSettingsV1 {
@@ -34,7 +31,10 @@ function settings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
+    modelAccess: {
+      mode: 'api',
+      planAdapterId: ''
+    },
     modelRouter: {
       ...defaultModelRouterSettings(),
       baseUrl: 'http://127.0.0.1:4567/v1',
@@ -43,30 +43,25 @@ function settings(): AppSettingsV1 {
       profiles: {
         default: {
           textReasoner: {
-            provider: 'openai-compatible',
             baseUrl: 'https://text-provider.example/v1',
             apiKey: 'text-secret',
             model: 'text-model'
           },
           imageGenerator: {
-            provider: 'openai-compatible',
             baseUrl: 'https://image.example/v1',
             apiKey: 'image-secret',
             model: 'image-model'
           },
           translators: {
             vision: {
-              provider: 'qwen-compatible',
               baseUrl: 'https://vision-provider.example/v1',
               apiKey: 'vision-secret',
-              model: 'vision-model',
-              maxSupplementRounds: 1
+              model: 'vision-model'
             },
             scientific: {
               baseUrl: 'http://127.0.0.1:3898',
               apiKey: 'sci-modality-token',
-              model: 'sci-modality',
-              timeoutMs: 12345
+              model: 'sci-modality'
             }
           }
         }
@@ -92,6 +87,37 @@ function settings(): AppSettingsV1 {
 }
 
 describe('buildModelRouterSidecarLaunch', () => {
+  it('requires an explicit model access mode', () => {
+    const current = settings()
+    delete current.modelAccess
+
+    expect(buildModelRouterSidecarLaunch(current, {
+      userDataDir: '/tmp/sciforge-user-data',
+      env: {},
+      npmCommand: 'npm'
+    })).toEqual({
+      ok: false,
+      reason: 'Model access mode must be configured before starting Model Router.'
+    })
+  })
+
+  it('does not start the API sidecar while coding-plan access is selected', () => {
+    const current = settings()
+    current.modelAccess = {
+      mode: 'coding-plan',
+      planAdapterId: 'example-plan'
+    }
+
+    expect(buildModelRouterSidecarLaunch(current, {
+      userDataDir: '/tmp/sciforge-user-data',
+      env: {},
+      npmCommand: 'npm'
+    })).toEqual({
+      ok: false,
+      reason: 'Model Router is unavailable while coding-plan access is selected.'
+    })
+  })
+
   it('builds a dev workspace launch without writing provider secrets into config', () => {
     const result = buildModelRouterSidecarLaunch(settings(), {
       userDataDir: '/tmp/sciforge-user-data',
@@ -129,6 +155,7 @@ describe('buildModelRouterSidecarLaunch', () => {
         SCIFORGE_IMAGE_BASE_URL: 'https://direct-image-provider.example/v1',
         SCIFORGE_IMAGE_MODEL: 'outer-image-model',
         SCIFORGE_IMAGE_ALLOW_PLACEHOLDER: '1',
+        SCIFORGE_MODEL_ROUTER_USER_DATA_DIR: '/tmp/stale-user-data',
         SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'stale-image-router-key',
         KUN_MODEL_ROUTER_API_KEY: 'old-router-key',
         KUN_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4888/v1',
@@ -173,6 +200,7 @@ describe('buildModelRouterSidecarLaunch', () => {
       '--quiet'
     ])
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY).toBe('local-runtime-key')
+    expect(result.launch.env.SCIFORGE_MODEL_ROUTER_USER_DATA_DIR).toBe('/tmp/sciforge-user-data')
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_TEXT_API_KEY).toBe('text-secret')
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_VISION_API_KEY).toBe('vision-secret')
     expect(result.launch.env.OPENAI_API_KEY).toBeUndefined()
@@ -231,32 +259,56 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_VISION_API_KEY).toBe('vision-secret')
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY).toBe('image-secret')
     expect(result.launch.config?.profiles.default.textReasoner).toEqual({
-      provider: 'openai-compatible',
       baseUrl: 'https://text-provider.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY',
       model: 'text-model'
     })
+    expect(JSON.stringify(result.launch.config)).not.toContain('"provider"')
     expect(JSON.stringify(result.launch.config)).not.toContain('text-secret')
     expect(JSON.stringify(result.launch.config)).not.toContain('vision-secret')
     expect(result.launch.config?.profiles.default.translators.vision).toEqual({
-      provider: 'qwen-compatible',
       baseUrl: 'https://vision-provider.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_VISION_API_KEY',
-      model: 'vision-model',
-      maxSupplementRounds: 1
+      model: 'vision-model'
     })
     expect(result.launch.config?.profiles.default.translators.scientific).toEqual({
       baseUrl: 'http://127.0.0.1:3898',
       tokenEnv: 'SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN',
-      model: 'sci-modality',
-      timeoutMs: 12345
+      model: 'sci-modality'
     })
+  })
+
+  it('builds a packaged launch from the unpacked app entry without system npm', () => {
+    const result = buildModelRouterSidecarLaunch(settings(), {
+      userDataDir: '/tmp/sciforge-user-data',
+      resourcesPath: '/Applications/SciForge.app/Contents/Resources',
+      execPath: '/opt/SciForge',
+      isPackaged: true,
+      npmCommand: 'must-not-be-used',
+      env: {}
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.launch.command).toBe('/opt/SciForge')
+    expect(result.launch.cwd).toBe(
+      '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked'
+    )
+    expect(result.launch.args).toEqual([
+      '/Applications/SciForge.app/Contents/Resources/app.asar.unpacked/out/main/model-router-sidecar-node-entry.js',
+      '--host', '127.0.0.1', '--port', '4567',
+      '--config', '/tmp/sciforge-user-data/model-router/config.json',
+      '--workspace-root', '/tmp/workspace', '--quiet'
+    ])
+    expect(result.launch.env.ELECTRON_RUN_AS_NODE).toBe('1')
+    expect(result.launch.env.SCIFORGE_MODEL_ROUTER_USER_DATA_DIR).toBe(
+      '/tmp/sciforge-user-data'
+    )
   })
 
   it('maps the Model Router image role into the managed sidecar config', () => {
     const current = settings()
     current.modelRouter!.profiles.default.imageGenerator = {
-      provider: 'openai-compatible',
       apiKey: 'image-secret',
       baseUrl: 'https://image.example/v1',
       model: 'image-model'
@@ -276,7 +328,6 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.env.SCIFORGE_IMAGE_API_KEY).toBeUndefined()
     expect(result.launch.env.SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY).toBe('image-secret')
     expect(result.launch.config?.profiles.default.imageGenerator).toEqual({
-      provider: 'openai-compatible',
       baseUrl: 'https://image.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY',
       model: 'image-model'
@@ -284,10 +335,9 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(JSON.stringify(result.launch.config)).not.toContain('image-secret')
   })
 
-  it('uses gpt-image-2 as the internal image provider model when settings omit it', () => {
+  it('does not configure a partial image member', () => {
     const current = settings()
     current.modelRouter!.profiles.default.imageGenerator = {
-      provider: 'openai-compatible',
       apiKey: 'image-secret',
       baseUrl: 'https://image.example/v1',
       model: ''
@@ -302,10 +352,8 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.ok).toBe(true)
     if (!result.ok) return
     expect(result.launch.config?.publicModelAlias).toBe('sciforge-router')
-    expect(result.launch.config?.profiles.default.imageGenerator).toMatchObject({
-      apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY',
-      model: 'gpt-image-2'
-    })
+    expect(result.launch.env.SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY).toBeUndefined()
+    expect(result.launch.config?.profiles.default.imageGenerator).toBeUndefined()
   })
 
   it('fails closed when the text reasoner member is incomplete in UI settings', () => {
@@ -329,7 +377,6 @@ describe('buildModelRouterSidecarLaunch', () => {
   it('does not use the local config file as a launch bypass for incomplete UI settings', () => {
     const current = settings()
     current.modelRouter!.profiles.default.textReasoner = {
-      provider: 'openai-compatible',
       baseUrl: '',
       apiKey: '',
       model: ''
@@ -344,37 +391,6 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect(result.reason).toBe('Model Router text reasoner Base URL, API key, and model name are required.')
-  })
-
-  it('writes the current local Model Router config template and repairs stale files', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-config-'))
-    try {
-      const current = settings()
-      current.modelRouter!.profiles.default.textReasoner = {
-        provider: 'openai-compatible',
-        baseUrl: '',
-        apiKey: '',
-        model: ''
-      }
-
-      const created = await ensureModelRouterConfigFile(current, { userDataDir })
-      const content = await readFile(created.path, 'utf8')
-
-      expect(created.created).toBe(true)
-      expect(created.path).toBe(modelRouterConfigPath(userDataDir))
-      expect(content).toContain('"publicModelAlias": "sciforge-router"')
-      expect(content).toContain('"baseUrl": ""')
-      expect(content).toContain('"apiKeyEnv": "SCIFORGE_MODEL_ROUTER_TEXT_API_KEY"')
-      expect(content).toContain('"model": ""')
-
-      await writeFile(created.path, '', 'utf8')
-      const repaired = await ensureModelRouterConfigFile(current, { userDataDir })
-      const afterSecondEnsure = await readFile(created.path, 'utf8')
-      expect(repaired.created).toBe(false)
-      expect(afterSecondEnsure).toBe(content)
-    } finally {
-      await rm(userDataDir, { recursive: true, force: true })
-    }
   })
 
   it('syncs GUI Model Router roles into the local config file', async () => {
@@ -394,82 +410,6 @@ describe('buildModelRouterSidecarLaunch', () => {
       expect(JSON.stringify(parsed)).not.toContain('text-secret')
       expect(JSON.stringify(parsed)).not.toContain('image-secret')
       expect(JSON.stringify(parsed)).not.toContain('sci-modality-token')
-    } finally {
-      await rm(userDataDir, { recursive: true, force: true })
-    }
-  })
-
-  it('syncs the local config file back into GUI Model Router settings without dropping secrets', async () => {
-    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-router-config-sync-to-settings-'))
-    try {
-      await mkdir(join(userDataDir, 'model-router'), { recursive: true })
-      await writeFile(modelRouterConfigPath(userDataDir), `${JSON.stringify({
-        defaultProfile: 'default',
-        publicModelAlias: 'router-from-file',
-        runtimeApiKeyEnv: 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY',
-        profiles: {
-          default: {
-            traceRoot: '/tmp/traces',
-            textReasoner: {
-              provider: 'file-text-provider',
-              baseUrl: 'https://file-text.example/v1',
-              apiKeyEnv: 'TEXT_KEY',
-              model: 'file-text-model'
-            },
-            imageGenerator: {
-              provider: 'file-image-provider',
-              baseUrl: 'https://file-image.example/v1',
-              apiKeyEnv: 'IMAGE_KEY',
-              model: 'file-image-model'
-            },
-            translators: {
-              vision: {
-                provider: 'file-vision-provider',
-                baseUrl: 'https://file-vision.example/v1',
-                apiKeyEnv: 'VISION_KEY',
-                model: 'file-vision-model',
-                maxSupplementRounds: 2
-              },
-              scientific: {
-                baseUrl: 'http://127.0.0.1:3999',
-                tokenEnv: 'SCI_KEY',
-                model: 'file-scientific-model',
-                timeoutMs: 2222
-              }
-            }
-          }
-        }
-      }, null, 2)}\n`, 'utf8')
-
-      const synced = await syncModelRouterSettingsFromConfigFile(settings(), { userDataDir })
-      const profile = synced.modelRouter!.profiles.default
-
-      expect(synced.modelRouter!.publicModelAlias).toBe('router-from-file')
-      expect(profile.textReasoner).toMatchObject({
-        provider: 'file-text-provider',
-        baseUrl: 'https://file-text.example/v1',
-        apiKey: 'text-secret',
-        model: 'file-text-model'
-      })
-      expect(profile.imageGenerator).toMatchObject({
-        provider: 'file-image-provider',
-        baseUrl: 'https://file-image.example/v1',
-        apiKey: 'image-secret',
-        model: 'file-image-model'
-      })
-      expect(profile.translators.vision).toMatchObject({
-        provider: 'file-vision-provider',
-        baseUrl: 'https://file-vision.example/v1',
-        apiKey: 'vision-secret',
-        model: 'file-vision-model',
-        maxSupplementRounds: 2
-      })
-      expect(profile.translators.scientific).toMatchObject({
-        baseUrl: 'http://127.0.0.1:3999',
-        apiKey: 'sci-modality-token',
-        model: 'file-scientific-model',
-        timeoutMs: 2222
-      })
     } finally {
       await rm(userDataDir, { recursive: true, force: true })
     }
@@ -557,7 +497,6 @@ describe('buildModelRouterSidecarLaunch', () => {
     const current = settings()
     current.modelRouter!.baseUrl = 'http://127.0.0.1:45990/v1'
     current.modelRouter!.profiles.default.textReasoner = {
-      provider: 'openai-compatible',
       baseUrl: 'https://fresh-text-provider.example/v1',
       apiKey: 'fresh-text-secret',
       model: 'fresh-text-model'

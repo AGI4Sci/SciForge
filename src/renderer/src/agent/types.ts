@@ -22,7 +22,6 @@ import type {
   AgentRuntimeGitCheckpoint,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeMemoryRecord,
-  AgentRuntimeModelAuditRecord,
   AgentRuntimePhase,
   AgentRuntimeReadChildTranscriptInput,
   AgentRuntimeReadChildTranscriptResponse,
@@ -625,12 +624,6 @@ export interface AgentProvider {
   runCodeNavigation?(
     input: AgentRuntimeCodeNavigationInput
   ): Promise<AgentRuntimeResult<AgentRuntimeCodeNavigationOutput>>
-  listModelAuditRecords?(options?: {
-    runtimeId?: AgentRuntimeId
-    threadId?: string
-    limit?: number
-  }): Promise<AgentRuntimeModelAuditRecord[]>
-  clearModelAuditRecords?(): Promise<boolean>
   getContextState?(threadId: string): Promise<AgentRuntimeContextState>
   listThreadChildren?(threadId: string, options?: {
     turnId?: string

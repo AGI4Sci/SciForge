@@ -8,7 +8,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -29,7 +28,6 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
   const modelRouter = defaultModelRouterSettings()
   modelRouter.runtimeApiKey = 'sk-router'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -39,7 +37,6 @@ function createSettings(patch: Partial<AppSettingsV1['write']['inlineCompletion'
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
 	    agents: {
 	      sciforge: defaultLocalRuntimeSettings()
 	    },
@@ -234,7 +231,7 @@ describe('requestWriteInlineCompletion', () => {
     })
   })
 
-  it('ignores General/local runtime/legacy write direct-provider settings in favor of the router settings', async () => {
+  it('ignores local runtime and legacy write overrides in favor of router settings', async () => {
     const fetchMock = vi.fn(async () =>
       new Response(JSON.stringify({ output_text: ' fallback text' }), {
         status: 200,
@@ -244,7 +241,6 @@ describe('requestWriteInlineCompletion', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const settings = createSettings()
-    settings.provider.baseUrl = 'https://general.example/v1'
     settings.agents.sciforge.model = 'deepseek-chat'
     settings.write.inlineCompletion = {
       ...settings.write.inlineCompletion,
@@ -275,7 +271,6 @@ describe('requestWriteInlineCompletion', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     const settings = createSettings()
-    settings.provider.baseUrl = 'https://general.example/v1'
     settings.agents.sciforge.model = 'deepseek-chat'
     settings.modelRouter!.publicModelAlias = 'custom-router-alias'
 

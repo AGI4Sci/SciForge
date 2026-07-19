@@ -249,6 +249,78 @@ describe('createCodexAppServerClient', () => {
     ])
   })
 
+  it('exposes the Codex-managed ChatGPT account lifecycle without handling tokens', async () => {
+    const { client, fake } = createHarness()
+
+    client.start()
+
+    const account = client.readAccount({ refreshToken: true })
+    fake.emitStdout({
+      id: 1,
+      result: {
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
+        requiresOpenaiAuth: true
+      }
+    })
+    await expect(account).resolves.toMatchObject({
+      account: { type: 'chatgpt', planType: 'plus' },
+      requiresOpenaiAuth: true
+    })
+
+    const browserLogin = client.startAccountLogin({ type: 'chatgpt' })
+    fake.emitStdout({
+      id: 2,
+      result: { type: 'chatgpt', loginId: 'login-browser', authUrl: 'https://auth.example/login' }
+    })
+    await expect(browserLogin).resolves.toMatchObject({ loginId: 'login-browser' })
+
+    const deviceLogin = client.startAccountLogin({ type: 'chatgptDeviceCode' })
+    fake.emitStdout({
+      id: 3,
+      result: {
+        type: 'chatgptDeviceCode',
+        loginId: 'login-device',
+        verificationUrl: 'https://auth.example/device',
+        userCode: 'ABCD-EFGH'
+      }
+    })
+    await expect(deviceLogin).resolves.toMatchObject({ loginId: 'login-device' })
+
+    const rateLimits = client.readAccountRateLimits()
+    fake.emitStdout({
+      id: 4,
+      result: {
+        rateLimits: {
+          limitId: 'codex',
+          limitName: 'Codex',
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: null,
+          credits: null,
+          individualLimit: null,
+          planType: 'plus',
+          rateLimitReachedType: null
+        },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      }
+    })
+    await expect(rateLimits).resolves.toMatchObject({
+      rateLimits: { limitId: 'codex', planType: 'plus' }
+    })
+
+    const logout = client.logoutAccount()
+    fake.emitStdout({ id: 5, result: {} })
+    await expect(logout).resolves.toEqual({})
+
+    expect(fake.writtenMessages()).toEqual([
+      { id: 1, method: 'account/read', params: { refreshToken: true } },
+      { id: 2, method: 'account/login/start', params: { type: 'chatgpt' } },
+      { id: 3, method: 'account/login/start', params: { type: 'chatgptDeviceCode' } },
+      { id: 4, method: 'account/rateLimits/read' },
+      { id: 5, method: 'account/logout' }
+    ])
+  })
+
   it('publishes stdout notifications and invalid JSON warnings to subscribers', async () => {
     const { client, fake } = createHarness()
     const iterator = client.subscribe()[Symbol.asyncIterator]()

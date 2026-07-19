@@ -5,12 +5,20 @@ import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   getAgentCapabilitySettings,
   getCodexRuntimeSettings,
+  getModelAccessSettings,
+  resolveModelAccessRuntimePolicy,
+  resolveRuntimeModelRouterSettings,
   type AppSettingsV1,
   type ApprovalPolicy,
   type SandboxMode
 } from '../../../shared/app-settings'
 import type {
   CodexChatBlock,
+  CodexCodingPlanAccountResult,
+  CodexCodingPlanLoginCompletionResult,
+  CodexCodingPlanLoginMethod,
+  CodexCodingPlanLoginStartResult,
+  CodexCodingPlanRateLimitsResult,
   CodexConnectResult,
   CodexEventPayload,
   CodexNormalizedThread,
@@ -40,6 +48,10 @@ import type {
 import {
   CODEX_MAIN_IPC_CHANNELS,
   createCodexAppServerClient,
+  type CodexAppServerAccount,
+  type CodexAppServerAccountLoginCompletedNotification,
+  type CodexAppServerAccountRateLimitsUpdatedNotification,
+  type CodexAppServerAccountUpdatedNotification,
   type CodexAppServerInputItem,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions,
@@ -61,7 +73,12 @@ import { normalizeCodexEvent, type CodexEventNormalizeContext } from './app-serv
 import { CodexEventStore, type CodexStoredEvent } from './codex-event-store'
 import { CodexThreadStore, type CodexStoredThread, type CodexThreadStoreUpsertInput } from './codex-thread-store'
 import { CodexUsageStore } from './codex-usage-store'
-import { prepareCodexAppServerLaunch, resolveCodexWorkspace } from './codex-config'
+import {
+  CODEX_PLAN_GATEWAY_PROVIDER_ID,
+  prepareCodexAppServerLaunch,
+  resolveCodexWorkspace,
+  type CodexPlanGatewayLaunchConfig
+} from './codex-config'
 import {
   GUI_RESEARCH_MCP_SERVER_NAME,
   type ResearchSearchMcpLaunchConfig
@@ -120,6 +137,8 @@ import type {
 } from '../../../../packages/workers/multi-agent/src'
 import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
 
+class CodexCodingPlanLoginInProgressError extends Error {}
+
 export type CodexRuntimeEventSink = {
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.event, payload: CodexEventPayload): void
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.error, payload: { message: string; detail?: unknown }): void
@@ -132,6 +151,7 @@ export type CodexRuntimeServiceOptions = {
   appVersion?: string
   storageRoot?: string
   managedCodexHome?: string
+  planGateway?: CodexPlanGatewayLaunchConfig
   scheduleMcpLaunch?: ScheduleMcpLaunchConfig
   researchMcpLaunch?: ResearchSearchMcpLaunchConfig
   workflowMcpLaunch?: WorkflowMcpLaunchConfig
@@ -161,15 +181,18 @@ type CodexTurnTiming = {
 type CodexPendingTurnRecovery = {
   threadId: string
   text: string
-  displayText?: string
   workspace: string
-  model: string
+  model?: string
   reasoningEffort?: string
-  metadata?: Record<string, unknown>
   fileReferences?: CodexTurnStartPayload['fileReferences']
   runtime: ReturnType<typeof getCodexRuntimeSettings>
   recoveryAttempted: boolean
 }
+
+type CodexCodingPlanLoginCompletion = Extract<
+  CodexCodingPlanLoginCompletionResult,
+  { ok: true }
+>
 
 type CodexRuntimeStatusInput = {
   threadId: string
@@ -268,6 +291,7 @@ export class CodexRuntimeService {
   private clientPromise: Promise<CodexAppServerJsonRpcClient> | null = null
   private clientConnected = false
   private clientInfo: unknown = null
+  private clientModelAccessKey: string | null = null
   private subscription: Promise<void> | null = null
   private readonly threadStore: CodexThreadStore | null
   private readonly eventStore: CodexEventStore | null
@@ -295,6 +319,15 @@ export class CodexRuntimeService {
     request: CodexAppServerPendingRequest
     resolve: (allowed: boolean) => void
   }>()
+  private codingPlanAccount: Extract<CodexCodingPlanAccountResult, { ok: true }> | null = null
+  private codingPlanRateLimits: Extract<CodexCodingPlanRateLimitsResult, { ok: true }> | null = null
+  private readonly codingPlanLoginCompletions = new Map<string, CodexCodingPlanLoginCompletion>()
+  private readonly codingPlanLoginWaiters = new Map<
+    string,
+    Set<(completion: CodexCodingPlanLoginCompletion) => void>
+  >()
+  private codingPlanLoginStartsInFlight = 0
+  private readonly activeCodingPlanLoginIds = new Set<string>()
 
   constructor(private readonly options: CodexRuntimeServiceOptions) {
     this.threadStore = options.storageRoot ? new CodexThreadStore({ rootDir: options.storageRoot }) : null
@@ -307,7 +340,121 @@ export class CodexRuntimeService {
       const { info } = await this.ensureConnectedClient()
       return { ok: true, info: asRecord(info) ?? {} }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
+      return failure(error)
+    }
+  }
+
+  async synchronizeModelAccess(): Promise<void> {
+    const settings = await this.options.settings()
+    const nextKey = codexModelAccessKey(settings, this.options.planGateway)
+    if ((this.client || this.clientPromise) && this.clientModelAccessKey !== nextKey) {
+      if (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) return
+      if (this.clientPromise) await this.clientPromise.catch(() => undefined)
+      await this.stop('service_shutdown')
+    }
+  }
+
+  async getCodingPlanAccount(
+    options: { refreshToken?: boolean } = {}
+  ): Promise<CodexCodingPlanAccountResult> {
+    try {
+      const { client } = await this.ensureCodingPlanAccountClient()
+      const response = await client.readAccount({ refreshToken: options.refreshToken === true })
+      const result: Extract<CodexCodingPlanAccountResult, { ok: true }> = {
+        ok: true,
+        account: response.account,
+        planType: response.account?.type === 'chatgpt' ? response.account.planType : null,
+        requiresOpenaiAuth: response.requiresOpenaiAuth
+      }
+      this.codingPlanAccount = result
+      return result
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  async startCodingPlanLogin(input: {
+    method: CodexCodingPlanLoginMethod
+  }): Promise<CodexCodingPlanLoginStartResult> {
+    this.codingPlanLoginStartsInFlight += 1
+    try {
+      const { client } = await this.ensureCodingPlanAccountClient()
+      const response = await client.startAccountLogin(
+        input.method === 'device' ? { type: 'chatgptDeviceCode' } : { type: 'chatgpt' }
+      )
+      this.activeCodingPlanLoginIds.add(response.loginId)
+      if (response.type === 'chatgpt') {
+        return {
+          ok: true,
+          method: 'browser',
+          loginId: response.loginId,
+          authUrl: response.authUrl
+        }
+      }
+      return {
+        ok: true,
+        method: 'device',
+        loginId: response.loginId,
+        verificationUrl: response.verificationUrl,
+        userCode: response.userCode
+      }
+    } catch (error) {
+      return failure(error)
+    } finally {
+      this.codingPlanLoginStartsInFlight -= 1
+    }
+  }
+
+  async waitForCodingPlanLogin(
+    loginId: string,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<CodexCodingPlanLoginCompletionResult> {
+    const normalizedLoginId = loginId.trim()
+    if (!normalizedLoginId) return failure(new Error('Codex coding-plan login id is required.'))
+    const completed = this.codingPlanLoginCompletions.get(normalizedLoginId)
+    if (completed) return completed
+    if (options.signal?.aborted) return failure(new Error('Codex coding-plan login wait was aborted.'))
+    return new Promise<CodexCodingPlanLoginCompletionResult>((resolve) => {
+      const complete = (result: CodexCodingPlanLoginCompletion): void => {
+        options.signal?.removeEventListener('abort', abort)
+        resolve(result)
+      }
+      const abort = (): void => {
+        const waiters = this.codingPlanLoginWaiters.get(normalizedLoginId)
+        waiters?.delete(complete)
+        if (waiters?.size === 0) this.codingPlanLoginWaiters.delete(normalizedLoginId)
+        resolve(failure(new Error('Codex coding-plan login wait was aborted.')))
+      }
+      const waiters = this.codingPlanLoginWaiters.get(normalizedLoginId) ?? new Set()
+      waiters.add(complete)
+      this.codingPlanLoginWaiters.set(normalizedLoginId, waiters)
+      options.signal?.addEventListener('abort', abort, { once: true })
+    })
+  }
+
+  async logoutCodingPlanAccount(): Promise<CodexTurnMutationResult> {
+    try {
+      const { client } = await this.ensureCodingPlanAccountClient()
+      await client.logoutAccount()
+      this.clearCodingPlanAccountState('Codex coding-plan account logged out.')
+      return { ok: true }
+    } catch (error) {
+      return failure(error)
+    }
+  }
+
+  async getCodingPlanRateLimits(): Promise<CodexCodingPlanRateLimitsResult> {
+    try {
+      const { client } = await this.ensureCodingPlanAccountClient()
+      const response = await client.readAccountRateLimits()
+      const result: Extract<CodexCodingPlanRateLimitsResult, { ok: true }> = {
+        ok: true,
+        ...response
+      }
+      this.codingPlanRateLimits = result
+      return result
+    } catch (error) {
       return failure(error)
     }
   }
@@ -354,7 +501,7 @@ export class CodexRuntimeService {
           threads: filterThreadList(stored.map(storedThreadToNormalizedThread), options)
         }
       }
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       if (stored.length > 0) {
         return { ok: true, threads: filterThreadList(stored.map(storedThreadToNormalizedThread), options) }
       }
@@ -381,7 +528,7 @@ export class CodexRuntimeService {
           message: 'Initializing Codex app-server'
         }, { persist: false })
       }
-      const { client } = await this.ensureConnectedClient(settings)
+      const { client } = await this.ensureModelUseClient(settings)
       if (coldStart) {
         await this.emitRuntimeStatus({
           threadId: startupStatusThreadId,
@@ -397,7 +544,7 @@ export class CodexRuntimeService {
           multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(settings)),
           dynamicTools
         }),
-        ...codexModelRouterThreadParams(settings),
+        ...codexModelAccessThreadParams(settings),
         serviceName: 'SciForge',
         ephemeral: false,
         ...(payload.relation ? { relation: payload.relation } : {}),
@@ -452,7 +599,7 @@ export class CodexRuntimeService {
             }
       }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -481,14 +628,14 @@ export class CodexRuntimeService {
         return { ok: true, detail: emptyThreadDetail() }
       }
       if (isEmptyStoredThread(storedThread, storedDetail)) {
-        if (this.activeTurns.size === 0) await this.discardClientAfterFailure()
+        if (this.activeTurns.size === 0) await this.discardClientAfterFailure(error)
         return { ok: true, detail: emptyThreadDetail() }
       }
       if (this.activeTurns.size > 0) {
         if (storedDetail) return { ok: true, detail: storedDetail }
         return failure(error)
       }
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       if (storedDetail) {
         return { ok: true, detail: await this.readStoredDetail(guiThreadId, { repairStale: true }) ?? storedDetail }
       }
@@ -591,7 +738,7 @@ export class CodexRuntimeService {
       return { ok: true }
     } catch (error) {
       if (this.activeTurns.size > 0) return failure(error)
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -628,7 +775,7 @@ export class CodexRuntimeService {
       }
       return { ok: true }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -638,7 +785,8 @@ export class CodexRuntimeService {
       const startedAtMs = Date.now()
       const settings = await this.options.settings()
       const runtime = getCodexRuntimeSettings(settings)
-      const routerModel = codexModelRouterModel(settings)
+      const modelAccess = codexModelAccessThreadParams(settings)
+      const runtimeModel = modelAccess.model
       let storedThread = await this.findStoredThread(payload.threadId)
       const workspace = resolveCodexWorkspace(settings, payload.workspace || storedThread?.workspace)
       const modelText = payload.text
@@ -663,7 +811,7 @@ export class CodexRuntimeService {
           message: 'Initializing Codex app-server'
         })
       }
-      const { client } = await this.ensureConnectedClient(settings)
+      const { client } = await this.ensureModelUseClient(settings)
       if (coldStart) {
         await this.emitRuntimeStatus({
           threadId: payload.threadId,
@@ -676,12 +824,11 @@ export class CodexRuntimeService {
       try {
         response = await client.startTurn(turnStartParams({
           threadId: codexThreadId,
+          guiThreadId: payload.threadId,
           text: modelText,
-          displayText: modelDisplayText,
           workspace,
-          model: routerModel,
+          model: runtimeModel,
           reasoningEffort: payload.reasoningEffort,
-          metadata: payload.metadata,
           fileReferences: payload.fileReferences,
           runtime
         }))
@@ -699,12 +846,11 @@ export class CodexRuntimeService {
         codexThreadId = replacement.codexThreadId
         response = await client.startTurn(turnStartParams({
           threadId: codexThreadId,
+          guiThreadId: payload.threadId,
           text: modelText,
-          displayText: modelDisplayText,
           workspace,
-          model: routerModel,
+          model: runtimeModel,
           reasoningEffort: payload.reasoningEffort,
-          metadata: payload.metadata,
           fileReferences: payload.fileReferences,
           runtime
         }))
@@ -712,15 +858,13 @@ export class CodexRuntimeService {
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const turnId = stringValue(turn.id) || ''
       this.recordActiveTurn(payload.threadId, turnId, startedAtMs)
-      this.recordTurnModelHint(payload.threadId, turnId, routerModel)
+      this.recordTurnModelHint(payload.threadId, turnId, runtimeModel)
       this.recordTurnRecovery(payload.threadId, turnId, {
         threadId: payload.threadId,
         text: modelText,
-        displayText: modelDisplayText,
         workspace,
-        model: routerModel,
+        model: runtimeModel,
         reasoningEffort: payload.reasoningEffort,
-        metadata: payload.metadata,
         fileReferences: payload.fileReferences,
         runtime,
         recoveryAttempted: false
@@ -754,7 +898,7 @@ export class CodexRuntimeService {
         userMessageItemId
       }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -775,7 +919,7 @@ export class CodexRuntimeService {
       if (options.discard) await this.stop('user_stop')
       return { ok: true }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -793,7 +937,7 @@ export class CodexRuntimeService {
       })
       return { ok: true }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -815,7 +959,7 @@ export class CodexRuntimeService {
       })
       return { ok: true }
     } catch (error) {
-      await this.discardClientAfterFailure()
+      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -899,6 +1043,7 @@ export class CodexRuntimeService {
     this.clientPromise = null
     this.clientConnected = false
     this.clientInfo = null
+    this.clientModelAccessKey = null
     this.subscription = null
     this.activeTurns.clear()
     this.turnTimings.clear()
@@ -908,13 +1053,15 @@ export class CodexRuntimeService {
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
     this.cancelWorkspacePatchApprovals()
+    this.clearCodingPlanAccountState('Codex runtime stopped before login completed.')
     this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
     await dynamicMcpBridge?.close(reason)
     if (client) await client.stop()
   }
 
-  private async discardClientAfterFailure(): Promise<void> {
+  private async discardClientAfterFailure(error?: unknown): Promise<void> {
+    if (error instanceof CodexCodingPlanLoginInProgressError) return
     const client = this.client
     const dynamicMcpBridge = this.dynamicMcpBridge
     await this.finalizeActiveTurnsBeforeTeardown({
@@ -927,6 +1074,7 @@ export class CodexRuntimeService {
     this.clientPromise = null
     this.clientConnected = false
     this.clientInfo = null
+    this.clientModelAccessKey = null
     this.subscription = null
     this.activeTurns.clear()
     this.turnTimings.clear()
@@ -936,6 +1084,7 @@ export class CodexRuntimeService {
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
     this.cancelWorkspacePatchApprovals()
+    this.clearCodingPlanAccountState('Codex runtime disconnected before login completed.')
     this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
     await dynamicMcpBridge?.close('runtime_disconnected').catch(() => undefined)
@@ -973,14 +1122,31 @@ export class CodexRuntimeService {
     }
   }
 
-  private async ensureClient(settings?: AppSettingsV1): Promise<CodexAppServerJsonRpcClient> {
-    if (this.client) return this.client
-    if (this.clientPromise) return this.clientPromise
+  private async ensureClient(
+    settings?: AppSettingsV1,
+    access: 'runtime' | 'account' = 'runtime'
+  ): Promise<CodexAppServerJsonRpcClient> {
+    const current = settings ?? await this.options.settings()
+    const nextAccessKey = codexModelAccessKey(current, this.options.planGateway)
+    if (this.client && this.clientModelAccessKey === nextAccessKey) return this.client
+    if (this.clientPromise && this.clientModelAccessKey === nextAccessKey) return this.clientPromise
+    if (this.clientPromise) await this.clientPromise.catch(() => undefined)
+    if (this.client && this.clientModelAccessKey !== nextAccessKey) {
+      if (
+        (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) &&
+        access === 'runtime'
+      ) {
+        throw new CodexCodingPlanLoginInProgressError(
+          'Codex ChatGPT sign-in is still in progress. Complete or retry sign-in before starting the runtime.'
+        )
+      }
+      await this.stop('service_shutdown')
+    }
     const promise = (async () => {
-      const current = settings ?? await this.options.settings()
       const launch = await prepareCodexAppServerLaunch({
         settings: current,
         managedCodexHome: this.options.managedCodexHome,
+        planGateway: this.options.planGateway,
         scheduleMcpLaunch: this.options.scheduleMcpLaunch,
         researchMcpLaunch: this.options.researchMcpLaunch,
         workflowMcpLaunch: this.options.workflowMcpLaunch,
@@ -1024,10 +1190,12 @@ export class CodexRuntimeService {
         }
       })
       this.client = client
+      this.clientModelAccessKey = nextAccessKey
       this.subscription = this.forwardEvents(client)
       void this.subscription.catch(() => undefined)
       return client
     })()
+    this.clientModelAccessKey = nextAccessKey
     this.clientPromise = promise
     try {
       return await promise
@@ -1036,16 +1204,59 @@ export class CodexRuntimeService {
     }
   }
 
-  private async ensureConnectedClient(settings?: AppSettingsV1): Promise<{
+  private async ensureConnectedClient(
+    settings?: AppSettingsV1,
+    access: 'runtime' | 'account' = 'runtime'
+  ): Promise<{
     client: CodexAppServerJsonRpcClient
     info: unknown
   }> {
-    const client = await this.ensureClient(settings)
+    const current = settings ?? await this.options.settings()
+    if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
+      throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
+    }
+    const client = await this.ensureClient(current, access)
     if (this.clientConnected) return { client, info: this.clientInfo ?? {} }
     const info = await client.connect()
     this.clientConnected = true
     this.clientInfo = info
     return { client, info }
+  }
+
+  private async ensureModelUseClient(settings: AppSettingsV1): Promise<{
+    client: CodexAppServerJsonRpcClient
+    info: unknown
+  }> {
+    const connected = await this.ensureConnectedClient(settings)
+    const access = getModelAccessSettings(settings)
+    if (!access) throw new Error('Codex model access setup is required.')
+    if (access.mode === 'api') return connected
+    if (this.codingPlanAccount?.account?.type === 'chatgpt') return connected
+    const response = await connected.client.readAccount()
+    const planType = response.account?.type === 'chatgpt' ? response.account.planType : null
+    this.codingPlanAccount = {
+      ok: true,
+      account: response.account,
+      planType,
+      requiresOpenaiAuth: response.requiresOpenaiAuth
+    }
+    if (response.account?.type !== 'chatgpt') {
+      throw new Error(
+        'Codex coding-plan mode requires a ChatGPT account authenticated in the SciForge-managed Codex home.'
+      )
+    }
+    return connected
+  }
+
+  private async ensureCodingPlanAccountClient(): Promise<{
+    client: CodexAppServerJsonRpcClient
+    info: unknown
+  }> {
+    const settings = await this.options.settings()
+    return this.ensureConnectedClient({
+      ...settings,
+      modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+    }, 'account')
   }
 
   isClientWarm(): boolean {
@@ -1494,7 +1705,7 @@ export class CodexRuntimeService {
 
   private async runCodexMultiAgentChild(input: MultiAgentExecutorInput): Promise<MultiAgentExecutorResult> {
     const settings = await this.options.settings()
-    const { client } = await this.ensureConnectedClient(settings)
+    const { client } = await this.ensureModelUseClient(settings)
     const workspace = resolveCodexWorkspace(settings, input.workspace)
     const dynamicTools = await this.codexDynamicTools(settings, { includeMultiAgent: false })
     const threadResponse = await client.startThread({
@@ -1503,7 +1714,7 @@ export class CodexRuntimeService {
         multiAgentConfigured: false,
         dynamicTools
       }),
-      ...codexModelRouterThreadParams(settings),
+      ...codexModelAccessThreadParams(settings),
       serviceName: 'SciForge',
       ephemeral: false,
       threadSource: 'subagent',
@@ -1542,18 +1753,20 @@ export class CodexRuntimeService {
     const subscriber = this.addEventSubscriber(childGuiThreadId)
     const startedAtMs = Date.now()
     try {
+      const modelAccess = codexModelAccessThreadParams(settings)
       const turnResponse = await client.startTurn(turnStartParams({
         threadId: childCodexThreadId,
+        guiThreadId: childGuiThreadId,
         text: input.prompt,
         workspace,
-        model: codexModelRouterModel(settings),
+        model: modelAccess.model,
         runtime: getCodexRuntimeSettings(settings)
       }))
       const turn = asRecord(asRecord(turnResponse)?.turn) ?? {}
       const childTurnId = stringValue(turn.id) || ''
       if (!childTurnId) throw new Error('Codex child turn did not return a turn id.')
       this.recordActiveTurn(childGuiThreadId, childTurnId, startedAtMs)
-      this.recordTurnModelHint(childGuiThreadId, childTurnId, codexModelRouterModel(settings))
+      this.recordTurnModelHint(childGuiThreadId, childTurnId, modelAccess.model)
       await input.appendTranscript({
         id: `${input.childId}-thread-start`,
         kind: 'event',
@@ -1654,9 +1867,118 @@ export class CodexRuntimeService {
     return isCodexChildThreadSource(storedThread?.threadSource)
   }
 
+  private async handleCodingPlanNotification(
+    payload: unknown,
+    client: CodexAppServerJsonRpcClient
+  ): Promise<boolean> {
+    const notification = asRecord(payload)
+    const method = stringValue(notification?.method)
+    const params = asRecord(notification?.params)
+    if (method === 'account/login/completed') {
+      const completed = params as CodexAppServerAccountLoginCompletedNotification | null
+      const loginId = stringValue(completed?.loginId).trim()
+      if (!loginId) return true
+      let account: CodexAppServerAccount | null | undefined
+      let planType: Extract<CodexCodingPlanAccountResult, { ok: true }>['planType'] | undefined
+      if (completed?.success === true) {
+        try {
+          const response = await client.readAccount()
+          account = response.account
+          planType = response.account?.type === 'chatgpt' ? response.account.planType : null
+          this.codingPlanAccount = {
+            ok: true,
+            account,
+            planType,
+            requiresOpenaiAuth: response.requiresOpenaiAuth
+          }
+        } catch {
+          // Completion remains authoritative even when the follow-up account refresh fails.
+        }
+      }
+      this.completeCodingPlanLogin({
+        ok: true,
+        loginId,
+        success: completed?.success === true,
+        ...(completed?.error ? { error: completed.error } : {}),
+        ...(account !== undefined ? { account } : {}),
+        ...(planType !== undefined ? { planType } : {})
+      })
+      return true
+    }
+    if (method === 'account/updated') {
+      const updated = params as CodexAppServerAccountUpdatedNotification | null
+      if (!updated?.authMode) {
+        this.codingPlanAccount = {
+          ok: true,
+          account: null,
+          planType: null,
+          requiresOpenaiAuth: this.codingPlanAccount?.requiresOpenaiAuth ?? true
+        }
+      } else if (this.codingPlanAccount?.account?.type === 'chatgpt' && updated.planType) {
+        this.codingPlanAccount = {
+          ...this.codingPlanAccount,
+          account: { ...this.codingPlanAccount.account, planType: updated.planType },
+          planType: updated.planType
+        }
+      }
+      return true
+    }
+    if (method === 'account/rateLimits/updated') {
+      const updated = params as CodexAppServerAccountRateLimitsUpdatedNotification | null
+      if (updated?.rateLimits && this.codingPlanRateLimits) {
+        const limitId = updated.rateLimits.limitId
+        this.codingPlanRateLimits = {
+          ...this.codingPlanRateLimits,
+          rateLimits: updated.rateLimits,
+          ...(limitId && this.codingPlanRateLimits.rateLimitsByLimitId
+            ? {
+                rateLimitsByLimitId: {
+                  ...this.codingPlanRateLimits.rateLimitsByLimitId,
+                  [limitId]: updated.rateLimits
+                }
+              }
+            : {})
+        }
+      }
+      return true
+    }
+    return false
+  }
+
+  private completeCodingPlanLogin(completion: CodexCodingPlanLoginCompletion): void {
+    this.activeCodingPlanLoginIds.delete(completion.loginId)
+    this.codingPlanLoginCompletions.set(completion.loginId, completion)
+    while (this.codingPlanLoginCompletions.size > 16) {
+      const oldest = this.codingPlanLoginCompletions.keys().next().value
+      if (oldest === undefined) break
+      this.codingPlanLoginCompletions.delete(oldest)
+    }
+    const waiters = this.codingPlanLoginWaiters.get(completion.loginId)
+    this.codingPlanLoginWaiters.delete(completion.loginId)
+    for (const resolve of waiters ?? []) resolve(completion)
+  }
+
+  private clearCodingPlanAccountState(message: string): void {
+    this.codingPlanAccount = null
+    this.codingPlanRateLimits = null
+    this.activeCodingPlanLoginIds.clear()
+    this.codingPlanLoginCompletions.clear()
+    for (const [loginId, waiters] of this.codingPlanLoginWaiters) {
+      const completion: CodexCodingPlanLoginCompletion = {
+        ok: true,
+        loginId,
+        success: false,
+        error: message
+      }
+      for (const resolve of waiters) resolve(completion)
+    }
+    this.codingPlanLoginWaiters.clear()
+  }
+
   private async forwardEvents(client: CodexAppServerJsonRpcClient): Promise<void> {
     for await (const event of client.subscribe()) {
       if (event.type === 'event') {
+        if (await this.handleCodingPlanNotification(event.payload, client)) continue
         const normalized = this.normalizeClientEvent(event.payload)
         const deduped = normalized ? this.dedupeModelDeltas(normalized) : null
         if (deduped) {
@@ -1903,6 +2225,7 @@ export class CodexRuntimeService {
     if (!recovery || recovery.recoveryAttempted) return false
 
     const settings = await this.options.settings()
+    if (getModelAccessSettings(settings)?.mode !== 'api') return false
     const storedThread = await this.findStoredThread(event.threadId)
     this.pendingTurnRecoveries.set(key, { ...recovery, recoveryAttempted: true })
     this.clearTurnTracking(event.threadId, turnId)
@@ -1925,12 +2248,11 @@ export class CodexRuntimeService {
       })
       const response = await client.startTurn(turnStartParams({
         threadId: replacement.codexThreadId,
+        guiThreadId: event.threadId,
         text: recovery.text,
-        displayText: recovery.displayText,
         workspace: recovery.workspace,
         model: recovery.model,
         reasoningEffort: recovery.reasoningEffort,
-        metadata: recovery.metadata,
         fileReferences: recovery.fileReferences,
         runtime: recovery.runtime
       }))
@@ -2261,7 +2583,7 @@ export class CodexRuntimeService {
         multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(input.settings)),
         dynamicTools
       }),
-      ...codexModelRouterThreadParams(input.settings),
+      ...codexModelAccessThreadParams(input.settings),
       serviceName: 'SciForge',
       ephemeral: false
     })
@@ -2480,7 +2802,7 @@ export class CodexRuntimeService {
       severity: 'error'
     })
     await this.interruptTimedOutTurn(threadId, turnId)
-    await this.discardClientAfterFailure()
+    if (this.activeTurns.size === 0) await this.discardClientAfterFailure()
   }
 
   private async interruptTimedOutTurn(threadId: string, turnId: string): Promise<void> {
@@ -2688,17 +3010,7 @@ function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
     }
     if (event.deltas) {
       for (const [index, delta] of event.deltas.entries()) {
-        blocks.push({
-          kind: delta.kind === 'agent_reasoning' ? 'reasoning' : 'assistant',
-          id: `${delta.kind}-${item.seq}-${index}`,
-          createdAt: item.createdAt,
-          ...(turnId ? { turnId } : {}),
-          text: delta.text,
-          ...(delta.kind === 'agent_reasoning'
-            ? { meta: { reasoning: { visibility: 'summary', source: 'runtime_summary' } } }
-            : {}),
-          ...(delta.kind === 'agent_message' && delta.snapshot ? { snapshot: true } : {})
-        })
+        appendStoredModelDelta(blocks, item, turnId, delta, index)
       }
     }
     if (event.tool) {
@@ -2733,6 +3045,55 @@ function storedEventsToBlocks(events: CodexStoredEvent[]): CodexChatBlock[] {
     }
   }
   return dedupeThreadBlocks(blocks)
+}
+
+function appendStoredModelDelta(
+  blocks: CodexChatBlock[],
+  item: CodexStoredEvent,
+  turnId: string,
+  delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
+  index: number
+): void {
+  if (!delta.text) return
+  const previous = blocks.at(-1)
+  const sameTurn = previous?.turnId === (turnId || undefined)
+
+  if (delta.kind === 'agent_reasoning') {
+    if (previous?.kind === 'reasoning' && sameTurn) {
+      blocks[blocks.length - 1] = { ...previous, text: previous.text + delta.text }
+      return
+    }
+    blocks.push({
+      kind: 'reasoning',
+      id: `${delta.kind}-${item.seq}-${index}`,
+      createdAt: item.createdAt,
+      ...(turnId ? { turnId } : {}),
+      text: delta.text,
+      meta: { reasoning: { visibility: 'summary', source: 'runtime_summary' } }
+    })
+    return
+  }
+
+  if (previous?.kind === 'assistant' && sameTurn) {
+    if (delta.snapshot) {
+      if (previous.snapshot && canonicalModelText(previous.text) === canonicalModelText(delta.text)) return
+      blocks[blocks.length - 1] = { ...previous, text: delta.text, snapshot: true }
+      return
+    }
+    if (!previous.snapshot) {
+      blocks[blocks.length - 1] = { ...previous, text: previous.text + delta.text }
+      return
+    }
+  }
+
+  blocks.push({
+    kind: 'assistant',
+    id: `${delta.kind}-${item.seq}-${index}`,
+    createdAt: item.createdAt,
+    ...(turnId ? { turnId } : {}),
+    text: delta.text,
+    ...(delta.snapshot ? { snapshot: true } : {})
+  })
 }
 
 function dedupeThreadBlocks(blocks: CodexChatBlock[]): CodexChatBlock[] {
@@ -3062,41 +3423,56 @@ function failedDynamicToolCall(
   }
 }
 
-function codexModelRouterThreadParams(
+function codexModelAccessThreadParams(
   settings: AppSettingsV1
-): Pick<CodexAppServerThreadStartParams, 'model' | 'modelProvider'> {
+): { model?: string; modelProvider: string } {
+  const access = getModelAccessSettings(settings)
+  if (!access) throw new Error('Codex model access setup is required.')
+  if (access.mode === 'coding-plan') {
+    if (access.planAdapterId !== 'codex') {
+      throw new Error(`Codex runtime does not support coding plan adapter: ${access.planAdapterId || '(missing)'}.`)
+    }
+    return { modelProvider: CODEX_PLAN_GATEWAY_PROVIDER_ID }
+  }
   return {
-    model: codexModelRouterModel(settings),
+    model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
     modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
   }
 }
 
-function codexModelRouterModel(settings: AppSettingsV1): string {
-  void settings
-  return DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+function codexModelAccessKey(
+  settings: AppSettingsV1,
+  planGateway: CodexPlanGatewayLaunchConfig | undefined
+): string {
+  const access = getModelAccessSettings(settings)
+  if (!access) return 'setup-required'
+  if (access.mode === 'coding-plan') {
+    return `coding-plan\u0000${access.planAdapterId}\u0000${planGateway?.baseUrl.trim() ?? ''}`
+  }
+  const router = resolveRuntimeModelRouterSettings(settings)
+  const credentialHash = createHash('sha256').update(router.apiKey).digest('hex')
+  return `api\u0000${router.baseUrl}\u0000${router.model}\u0000${credentialHash}`
 }
 
 function turnStartParams(input: {
   threadId: string
+  guiThreadId: string
   text: string
-  displayText?: string
   workspace: string
   model?: string
   reasoningEffort?: string
-  metadata?: Record<string, unknown>
   fileReferences?: CodexTurnStartPayload['fileReferences']
   runtime: ReturnType<typeof getCodexRuntimeSettings>
 }): Parameters<CodexAppServerJsonRpcClient['startTurn']>[0] {
   return {
     threadId: input.threadId,
+    responsesapiClientMetadata: {
+      runtime_id: 'codex',
+      gui_thread_id: input.guiThreadId
+    },
     input: [textInput(input.text), ...modelObjectInputs(input.fileReferences)],
     cwd: input.workspace,
-    ...(input.displayText?.trim() && input.displayText.trim() !== input.text.trim()
-      ? { displayText: input.displayText.trim() }
-      : {}),
     ...(input.model ? { model: input.model } : {}),
-    ...(input.metadata ? { metadata: input.metadata } : {}),
-    modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID,
     approvalPolicy: mapApprovalPolicy(input.runtime.approvalPolicy, input.runtime.sandboxMode),
     sandboxPolicy: mapTurnSandboxMode(input.runtime.sandboxMode, input.workspace),
     ...codexAppServerTurnReasoningParams({ reasoningEffort: input.reasoningEffort })

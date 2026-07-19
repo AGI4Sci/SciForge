@@ -4,6 +4,7 @@ import {
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   type AgentRuntimeAuxiliaryOperation
 } from '../../shared/agent-runtime-contract'
+import { normalizeAppSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import {
   agentRuntimeApprovalResolvePayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
@@ -40,6 +41,9 @@ import {
   settingsPatchSchema,
   shellOpenExternalUrlSchema,
   speechTranscriptionPayloadSchema,
+  traceExportPayloadSchema,
+  traceReadPayloadSchema,
+  traceSummariesPayloadSchema,
   visualDocumentInsertArtifactPayloadSchema,
   visualDocumentSaveAnnotationsPayloadSchema,
   skillListPayloadSchema,
@@ -60,6 +64,30 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts bounded protocol-neutral full-trace queries', () => {
+    expect(traceReadPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: ' thread-1 ',
+      kinds: ['model_request', 'agent_event'],
+      order: 'desc',
+      limit: 20
+    })).toEqual({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      kinds: ['model_request', 'agent_event'],
+      order: 'desc',
+      limit: 20
+    })
+    expect(traceSummariesPayloadSchema.parse({ traceIds: [' trace-1 '], limit: 5 })).toEqual({
+      traceIds: ['trace-1'],
+      limit: 5
+    })
+    expect(traceExportPayloadSchema.parse({ traceIds: ['trace-1'] })).toEqual({
+      traceIds: ['trace-1']
+    })
+    expect(() => traceReadPayloadSchema.parse({ kinds: ['openai-chat'] })).toThrow()
+  })
+
   it('accepts side-thread metadata when starting a PDF annotation thread', () => {
     expect(agentRuntimeStartThreadPayloadSchema.parse({
       runtimeId: 'codex',
@@ -514,6 +542,16 @@ describe('app-ipc-schemas', () => {
   it('accepts shared host-service auxiliary operations', () => {
     expect(agentRuntimeAuxiliaryPayloadSchema.parse({
       runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'device' }
+    })).toEqual({
+      runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'device' }
+    })
+
+    expect(agentRuntimeAuxiliaryPayloadSchema.parse({
+      runtimeId: 'codex',
       operation: 'runCodeNavigation',
       payload: {
         workspaceRoot: ' /tmp/workspace ',
@@ -585,7 +623,7 @@ describe('app-ipc-schemas', () => {
     }
   })
 
-  it('requires top-level runtime ids only for thread-bound auxiliary operations', () => {
+  it('requires top-level runtime ids for runtime-bound auxiliary operations', () => {
     const runtimeIdRequired = new Set<AgentRuntimeAuxiliaryOperation>(
       AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
     )
@@ -608,6 +646,16 @@ describe('app-ipc-schemas', () => {
         operation,
         payload: { threadId: 'thread-1' }
       })).toMatchObject({ runtimeId: 'codex', operation })
+    }
+
+    for (const operation of [
+      'getCodingPlanAccount',
+      'startCodingPlanLogin',
+      'waitForCodingPlanLogin',
+      'logoutCodingPlanAccount',
+      'getCodingPlanRateLimits'
+    ] as const) {
+      expect(() => agentRuntimeAuxiliaryPayloadSchema.parse({ operation, payload: {} }), operation).toThrow()
     }
 
     for (const operation of AGENT_RUNTIME_AUXILIARY_OPERATIONS.filter((item) => !runtimeIdRequired.has(item))) {
@@ -710,11 +758,14 @@ describe('app-ipc-schemas', () => {
           maxChildRuns: 4
         }
       },
+      modelAccess: {
+        mode: 'api',
+        planAdapterId: ''
+      },
       modelRouter: {
         profiles: {
           default: {
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://api.example.test/v1',
               apiKey: 'image-key',
               model: 'image-model'
@@ -812,6 +863,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.evidenceDag).toEqual({ enabled: true })
     expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(3)
     expect(payload.agentCapabilities?.subagents?.maxChildRuns).toBe(4)
+    expect(payload.modelAccess).toEqual({ mode: 'api', planAdapterId: '' })
     expect(payload.agents?.codex?.codexHome).toBe('/tmp/codex-home')
     expect(payload.agents?.claude?.configDir).toBe('/tmp/claude-code')
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
@@ -819,6 +871,90 @@ describe('app-ipc-schemas', () => {
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
     expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
     expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
+  })
+
+  it('accepts normalized full settings snapshots with persisted remote-channel failures', () => {
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const failure = {
+      provider: 'zulip' as const,
+      message: 'Runtime offline',
+      failureKind: 'runtime_unavailable',
+      failureTitle: 'Runtime unavailable',
+      channelId: 'channel-1',
+      chatId: 'chat-1',
+      remoteThreadId: 'remote-thread-1',
+      threadId: 'thread-1',
+      runtimeId: 'codex' as const,
+      occurredAt: '2026-07-19T00:00:00.000Z'
+    }
+    const normalized = normalizeAppSettings({
+      ...base,
+      remoteChannel: {
+        ...base.remoteChannel,
+        enabled: true,
+        channels: [{
+          id: 'zulip-1',
+          provider: 'zulip',
+          label: 'Zulip',
+          enabled: true,
+          model: 'auto',
+          workspaceRoot: '/tmp/workspace',
+          lastFailure: failure,
+          conversations: [{
+            id: 'conversation-1',
+            chatId: 'chat-1',
+            remoteThreadId: 'remote-thread-1',
+            latestMessageId: 'message-1',
+            senderId: 'sender-1',
+            senderName: 'User',
+            agentThreadIds: { codex: 'thread-1' },
+            workspaceRoot: '/tmp/workspace',
+            lastFailure: failure,
+            createdAt: '2026-07-19T00:00:00.000Z',
+            updatedAt: '2026-07-19T00:00:00.000Z'
+          }],
+          createdAt: '2026-07-19T00:00:00.000Z',
+          updatedAt: '2026-07-19T00:00:00.000Z'
+        }]
+      }
+    } as AppSettingsV1)
+
+    const payload = settingsPatchSchema.parse(normalized)
+    expect(payload.remoteChannel?.channels?.[0]?.lastFailure).toEqual(failure)
+    expect(payload.remoteChannel?.channels?.[0]?.conversations?.[0]?.lastFailure).toEqual(failure)
+  })
+
+  it('keeps persisted remote-channel failure payloads strict', () => {
+    expect(() => settingsPatchSchema.parse({
+      remoteChannel: {
+        channels: [{
+          lastFailure: {
+            provider: 'zulip',
+            message: 'Runtime offline',
+            occurredAt: '2026-07-19T00:00:00.000Z',
+            unexpected: true
+          }
+        }]
+      }
+    })).toThrow(/Unrecognized key/)
+  })
+
+  it('rejects legacy Model Router member fields', () => {
+    for (const member of [
+      { provider: 'legacy-provider' },
+      { maxSupplementRounds: 1 },
+      { timeoutMs: 60_000 }
+    ]) {
+      expect(() => settingsPatchSchema.parse({
+        modelRouter: {
+          profiles: {
+            default: {
+              textReasoner: member
+            }
+          }
+        }
+      })).toThrow(/Unrecognized key/)
+    }
   })
 
   it('accepts workflow AI-agent runtime ownership in settings patches', () => {
@@ -836,7 +972,6 @@ describe('app-ipc-schemas', () => {
               prompt: 'Run the workflow task.',
               workspaceRoot: '/tmp/workspace',
               runtimeId: 'sciforge',
-              providerId: '',
               model: '',
               reasoningEffort: 'high',
               mode: 'agent'
@@ -859,7 +994,8 @@ describe('app-ipc-schemas', () => {
         agents: {
           sciforge: {
             apiKey: 'sk-local',
-            baseUrl: 'https://local-runtime.example/v1'
+            baseUrl: 'https://local-runtime.example/v1',
+            providerId: 'legacy-provider'
           }
         }
       })
@@ -1057,22 +1193,13 @@ describe('app-ipc-schemas', () => {
     }).agents?.sciforge?.port).toBe(9001)
   })
 
-  it('accepts partial provider profiles in settings patches', () => {
-    const payload = settingsPatchSchema.parse({
+  it('rejects the removed direct-provider settings chain', () => {
+    expect(() => settingsPatchSchema.parse({
       provider: {
-        apiKey: 'sk-updated',
-        providers: [{
-          id: 'deepseek',
-          apiKey: 'sk-updated'
-        }]
+        apiKey: 'sk-legacy',
+        baseUrl: 'https://legacy.example/v1'
       }
-    })
-
-    expect(payload.provider?.apiKey).toBe('sk-updated')
-    expect(payload.provider?.providers?.[0]).toEqual({
-      id: 'deepseek',
-      apiKey: 'sk-updated'
-    })
+    })).toThrow(/Unrecognized key/)
   })
 
   it('rejects endpoint format patches in settings API payloads', () => {

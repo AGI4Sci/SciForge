@@ -9,11 +9,18 @@ import {
   makeUserItem
 } from '../src/domain/item.js'
 import type { ModelRequest, ModelStreamChunk } from '../src/ports/model-client.js'
+import {
+  deriveTraceId,
+  TRACE_CORRELATION_HEADERS
+} from '@sciforge/full-trace'
 
-function buildRequest(abortSignal: AbortSignal): ModelRequest {
+function buildRequest(
+  abortSignal: AbortSignal,
+  ids: { threadId?: string; turnId?: string } = {}
+): ModelRequest {
   return {
-    threadId: 'thr_1',
-    turnId: 'turn_1',
+    threadId: ids.threadId ?? 'thr_1',
+    turnId: ids.turnId ?? 'turn_1',
     model: 'deepseek-chat',
     systemPrompt: 'You are a helpful assistant.',
     prefix: [],
@@ -50,6 +57,73 @@ function sseStream(payloads: Array<Record<string, unknown> | '[DONE]'>): Readabl
 }
 
 describe('ModelRouterModelClient', () => {
+  it('keeps concurrent turns isolated with stable turn-scoped trace headers', async () => {
+    const sentHeaders: Headers[] = []
+    let releaseFetches: (() => void) | undefined
+    const fetchGate = new Promise<void>((resolve) => {
+      releaseFetches = resolve
+    })
+    const fetchImpl: typeof fetch = async (_url, init) => {
+      sentHeaders.push(new Headers(init?.headers))
+      if (sentHeaders.length === 2) releaseFetches?.()
+      await fetchGate
+      return new Response(JSON.stringify({
+        id: `response-${sentHeaders.length}`,
+        model: 'sciforge-router',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }]
+      }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    const client = new ModelRouterModelClient({
+      baseUrl: 'http://127.0.0.1:3892/v1',
+      apiKey: 'local-router-key',
+      model: 'sciforge-router',
+      headers: {
+        [TRACE_CORRELATION_HEADERS.traceId]: 'caller-must-not-override-correlation'
+      },
+      fetchImpl,
+      nonStreaming: true
+    })
+    const requests = [
+      buildRequest(new AbortController().signal, { threadId: 'thread-a', turnId: 'turn-a' }),
+      buildRequest(new AbortController().signal, { threadId: 'thread-b', turnId: 'turn-b' })
+    ]
+
+    await Promise.all(requests.map(async (request) => {
+      for await (const _chunk of client.stream(request)) {
+        // drain
+      }
+    }))
+
+    expect(sentHeaders).toHaveLength(2)
+    const correlations = sentHeaders.map((headers) => ({
+      runtimeId: headers.get(TRACE_CORRELATION_HEADERS.runtimeId),
+      threadId: headers.get(TRACE_CORRELATION_HEADERS.threadId),
+      turnId: headers.get(TRACE_CORRELATION_HEADERS.turnId),
+      traceId: headers.get(TRACE_CORRELATION_HEADERS.traceId),
+      requestId: headers.get(TRACE_CORRELATION_HEADERS.requestId)
+    }))
+    expect(correlations).toEqual([
+      {
+        runtimeId: 'sciforge',
+        threadId: 'thread-a',
+        turnId: 'turn-a',
+        traceId: deriveTraceId({ runtimeId: 'sciforge', threadId: 'thread-a', turnId: 'turn-a' }),
+        requestId: expect.stringMatching(/^request_[a-f0-9]{32}$/)
+      },
+      {
+        runtimeId: 'sciforge',
+        threadId: 'thread-b',
+        turnId: 'turn-b',
+        traceId: deriveTraceId({ runtimeId: 'sciforge', threadId: 'thread-b', turnId: 'turn-b' }),
+        requestId: expect.stringMatching(/^request_[a-f0-9]{32}$/)
+      }
+    ])
+    expect(correlations[0]?.requestId).not.toBe(correlations[1]?.requestId)
+  })
+
   it('always sends the configured Model Router alias over request model metadata', async () => {
     const response = {
       id: 'r2',
@@ -1845,6 +1919,7 @@ describe('ModelRouterModelClient', () => {
 
   it('retries without stream usage options when a provider rejects them', async () => {
     const sentBodies: Array<Record<string, unknown>> = []
+    const sentHeaders: Headers[] = []
     const encoder = new TextEncoder()
     const retryBody = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -1860,6 +1935,7 @@ describe('ModelRouterModelClient', () => {
     })
     const fetchImpl: typeof fetch = async (_url, init) => {
       sentBodies.push(JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>)
+      sentHeaders.push(new Headers(init?.headers))
       if (sentBodies.length === 1) {
         return new Response('unknown field stream_options.include_usage', { status: 400 })
       }
@@ -1884,6 +1960,9 @@ describe('ModelRouterModelClient', () => {
     expect(sentBodies).toHaveLength(2)
     expect(sentBodies[0]).toHaveProperty('stream_options')
     expect(sentBodies[1]).not.toHaveProperty('stream_options')
+    for (const name of Object.values(TRACE_CORRELATION_HEADERS)) {
+      expect(sentHeaders[1]?.get(name)).toBe(sentHeaders[0]?.get(name))
+    }
     expect(text).toBe('retried')
     expect(usage && usage.kind === 'usage' ? usage.usage.totalTokens : 0).toBe(7)
   })

@@ -443,8 +443,8 @@
   "emptyHeroSub": "Pick a task, or just type your question",
   "emptyHeroSubNoWorkspace": "Pick a local working directory first, then start your first thread.",
   "usageHeatmapBadge": "{{runtime}} usage",
-  "usageHeatmapTitle": "Your recent {{runtime}} rhythm",
-  "usageHeatmapSub": "Start from the work pattern you have already built. Each day is colored by {{runtime}} token usage, with turns, cost, threads, and cache detail available from the cells.",
+  "usageHeatmapTitle": "{{runtime}} activity pulse",
+  "usageHeatmapSub": "A compact view of sessions, messages, and tokens. The pulse strip below shows daily intensity; hover any day for details.",
   "usageHeatmapTabOverview": "Overview",
   "usageHeatmapTabModels": "Models",
   "usageHeatmapRange": {
@@ -453,7 +453,8 @@
     "30d": "30d",
     "7d": "7d"
   },
-  "usageHeatmapGridLabel": "Daily {{runtime}} usage calendar",
+  "usageHeatmapGridLabel": "Daily {{runtime}} activity pulse",
+  "usageHeatmapGridHint": "Hover any day to inspect its usage",
   "usageHeatmapLess": "Less",
   "usageHeatmapMore": "More",
   "usageHeatmapLoading": "Loading recent usage…",
@@ -486,8 +487,8 @@
     "empty": "Send a request and finish a turn; the first active day will appear here automatically.",
     "error": "The usage endpoint did not respond, so the calendar is paused for now. New chats still work."
   },
-  "usageHeatmapCollapse": "Collapse calendar",
-  "usageHeatmapExpand": "Expand calendar",
+  "usageHeatmapCollapse": "Collapse panel",
+  "usageHeatmapExpand": "Expand panel",
   "usageHeatmapCollapsedTitle": "Keep the canvas clear",
   "usageHeatmapCollapsedSub": "The usage calendar is folded away for now. Expand it any time to check your recent agent rhythm.",
   "usageHeatmapRefresh": "Refresh",

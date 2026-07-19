@@ -27,6 +27,7 @@ import {
   filterAgentRuntimeThreadChildren
 } from '../../../shared/agent-runtime-contract'
 import {
+  resolveModelAccessRuntimePolicy,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
@@ -170,6 +171,7 @@ export class ClaudeCodeRuntimeService {
   async connect(): Promise<ClaudeCodeConnectResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const runtime = settings.agents.claude
       const command = runtime?.command?.trim() || 'claude'
       return { ok: true, info: { command, sdk: '@anthropic-ai/claude-agent-sdk' } }
@@ -207,6 +209,7 @@ export class ClaudeCodeRuntimeService {
   }): Promise<ClaudeCodeThreadStartResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const workspace = resolveClaudeWorkspace(settings, payload.workspace)
       const model = resolveRuntimeModelRouterSettings(settings).model
       const thread = await this.threadStore.upsert({
@@ -265,6 +268,7 @@ export class ClaudeCodeRuntimeService {
   }): Promise<ClaudeCodeTurnStartResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const existingThread = await this.threadStore.get(payload.threadId)
       const workspace = resolveClaudeWorkspace(settings, payload.workspace || existingThread?.workspace)
       const turnId = `claude-turn-${randomUUID()}`
@@ -273,6 +277,8 @@ export class ClaudeCodeRuntimeService {
       const launch = await prepareClaudeCodeSdkLaunch({
         settings,
         text: payload.text,
+        threadId: payload.threadId,
+        turnId,
         workspace,
         sessionId: existingThread?.claudeSessionId,
         reasoningEffort: payload.reasoningEffort,
@@ -1584,6 +1590,14 @@ export class ClaudeCodeRuntimeService {
       subscriber.wake?.()
     }
     return stored
+  }
+}
+
+function requireClaudeRuntimeSelected(settings: AppSettingsV1): void {
+  if (!resolveModelAccessRuntimePolicy(settings).claude) {
+    throw new Error(
+      'Claude Code requires API model access and must be the selected Agent runtime.'
+    )
   }
 }
 

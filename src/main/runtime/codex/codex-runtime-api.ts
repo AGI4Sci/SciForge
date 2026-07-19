@@ -7,6 +7,11 @@ import type {
   AgentRuntimeThreadGoalStatus,
   AgentRuntimeUsage
 } from '../../../shared/agent-runtime-contract'
+import type {
+  CodexAppServerAccount,
+  CodexAppServerGetAccountRateLimitsResponse,
+  CodexAppServerPlanType
+} from './app-server/protocol'
 
 export type CodexJsonObject = Record<string, unknown>
 
@@ -133,6 +138,40 @@ export type CodexConnectResult =
   | CodexRuntimeOk<{ info: CodexJsonObject }>
   | CodexRuntimeFailure
 
+export type CodexCodingPlanAccountResult =
+  | CodexRuntimeOk<{
+    account: CodexAppServerAccount | null
+    planType: CodexAppServerPlanType | null
+    requiresOpenaiAuth: boolean
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanLoginMethod = 'browser' | 'device'
+
+export type CodexCodingPlanLoginStartResult =
+  | CodexRuntimeOk<{
+    method: CodexCodingPlanLoginMethod
+    loginId: string
+    authUrl?: string
+    verificationUrl?: string
+    userCode?: string
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanLoginCompletionResult =
+  | CodexRuntimeOk<{
+    loginId: string
+    success: boolean
+    error?: string
+    account?: CodexAppServerAccount | null
+    planType?: CodexAppServerPlanType | null
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanRateLimitsResult =
+  | CodexRuntimeOk<CodexAppServerGetAccountRateLimitsResponse>
+  | CodexRuntimeFailure
+
 export type CodexThreadListResult =
   | CodexRuntimeOk<{ threads: CodexNormalizedThread[] }>
   | CodexRuntimeFailure
@@ -177,7 +216,6 @@ export type CodexTurnStartPayload = {
   workspace?: string
   model?: string
   reasoningEffort?: string
-  metadata?: Record<string, unknown>
   fileReferences?: AgentRuntimeFileReference[]
 }
 

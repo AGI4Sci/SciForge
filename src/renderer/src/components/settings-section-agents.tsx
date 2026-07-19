@@ -32,11 +32,13 @@ import type {
   ComputerUseStatusView
 } from '@shared/sciforge-api'
 import type { GuiUpdateChannel } from '@shared/gui-update'
+import type { TraceSummary } from '@sciforge/full-trace'
 import type { SkillRootId } from '../lib/skill-root-preference'
 import {
   Ban,
   Check,
   ChevronDown,
+  Download,
   FileText,
   FolderOpen,
   Loader2,
@@ -376,7 +378,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     memoryEditingId,
     memoryEditingContent,
     setMemoryEditingContent,
-    modelAuditRecords,
+    traceSummaries,
     gitCheckpoints,
     gitCheckpointPreviewId,
     gitCheckpointPreview,
@@ -385,7 +387,8 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     runtimeDiagnosticsBusy,
     runtimeDiagnosticsNotice,
     refreshLocalRuntimeDiagnostics,
-    clearModelAuditRecords,
+    exportTraces,
+    clearTraces,
     previewGitCheckpoint,
     restoreGitCheckpoint,
     createMemoryRecord,
@@ -397,6 +400,7 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
     splitSettingsList,
     listSettingsText
   } = ctx
+  const durableTraceSummaries = (traceSummaries ?? []) as TraceSummary[]
   const mcpSearch = localRuntime.mcpSearch ?? {
     enabled: false,
     mode: 'auto',
@@ -1471,48 +1475,75 @@ export function AgentsSettingsSection({ ctx }: { ctx: Record<string, any> }): Re
                     }
                   />
                   <SettingRow
-                    title={t('modelAuditRecords')}
-                    description={t('modelAuditRecordsDesc')}
+                    title={t('traceRecords')}
+                    description={t('traceRecordsDesc')}
                     wideControl
                     control={
                       <div className="flex flex-col gap-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="text-[12.5px] text-ds-muted">
-                            {t('modelAuditCount', { count: modelAuditRecords?.length ?? 0 })}
+                            {t('traceCount', { count: durableTraceSummaries.length })}
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => void clearModelAuditRecords?.()}
-                            disabled={runtimeDiagnosticsBusy || !modelAuditRecords?.length}
-                            className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
-                            {t('modelAuditClear')}
-                          </button>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => void exportTraces?.()}
+                              disabled={runtimeDiagnosticsBusy || durableTraceSummaries.length === 0}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+                              {t('traceExportAll')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void clearTraces?.()}
+                              disabled={runtimeDiagnosticsBusy || durableTraceSummaries.length === 0}
+                              className="inline-flex items-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[12.5px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" strokeWidth={1.75} />
+                              {t('traceClear')}
+                            </button>
+                          </div>
                         </div>
-                        {!modelAuditRecords?.length ? (
+                        {durableTraceSummaries.length === 0 ? (
                           <div className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-3 text-[13px] text-ds-faint">
-                            {t('modelAuditEmpty')}
+                            {t('traceEmpty')}
                           </div>
                         ) : (
-                          modelAuditRecords.slice(0, 5).map((record: any) => (
-                            <div key={record.id} className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
+                          durableTraceSummaries.slice(0, 5).map((trace) => (
+                            <div key={trace.traceId} className="rounded-xl border border-ds-border-muted bg-ds-main/40 px-3 py-2">
                               <div className="flex min-w-0 items-start justify-between gap-3">
                                 <div className="min-w-0">
                                   <div className="truncate text-[13px] font-semibold text-ds-ink">
-                                    {record.runtimeId}
-                                    {record.model ? ` · ${record.model}` : ''}
+                                    {trace.runtimeId || t('traceUnknownRuntime')}
+                                    {trace.model ? ` · ${trace.model}` : ''}
                                   </div>
                                   <div className="mt-1 flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
-                                    <span className="font-mono">{record.threadId}</span>
-                                    {record.turnId ? <span className="font-mono">{record.turnId}</span> : null}
-                                    {typeof record.durationMs === 'number' ? <span>{record.durationMs}ms</span> : null}
-                                    {record.streamOutput?.stopReason ? <span>{record.streamOutput.stopReason}</span> : null}
+                                    <span>{t(`traceStatus_${trace.status}`)}</span>
+                                    {trace.threadId ? <span className="font-mono">{trace.threadId}</span> : null}
+                                    {trace.turnId ? <span className="font-mono">{trace.turnId}</span> : null}
+                                    <span>{trace.durationMs}ms</span>
+                                    <span>{t('traceEventCount', { count: trace.eventCount })}</span>
+                                    <span>{t('traceRequestCount', { count: trace.requestCount })}</span>
                                   </div>
                                   <div className="mt-1 line-clamp-2 text-[12px] text-ds-muted">
-                                    {record.streamOutput?.error || record.streamOutput?.text || t('modelAuditNoOutput')}
+                                    {trace.error || trace.preview || t('traceNoPreview')}
                                   </div>
+                                  {trace.usage?.totalTokens !== undefined ? (
+                                    <div className="mt-1 text-[11px] text-ds-faint">
+                                      {t('traceTokens', { count: formatCompactNumber(trace.usage.totalTokens) })}
+                                    </div>
+                                  ) : null}
                                 </div>
+                                <button
+                                  type="button"
+                                  onClick={() => void exportTraces?.([trace.traceId])}
+                                  disabled={runtimeDiagnosticsBusy}
+                                  className="shrink-0 rounded-lg border border-ds-border bg-ds-card p-2 text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-50"
+                                  title={t('traceExportOne')}
+                                >
+                                  <Download className="h-3.5 w-3.5" strokeWidth={1.75} />
+                                </button>
                               </div>
                             </div>
                           ))

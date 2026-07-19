@@ -4,6 +4,15 @@ import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
+import type {
+  TraceClearResult,
+  TraceExportOptions,
+  TraceExportResult,
+  TraceReadQuery,
+  TraceReadResult,
+  TraceSummary,
+  TraceSummaryQuery
+} from '@sciforge/full-trace'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import {
   isEvidenceDagEnabled,
@@ -23,7 +32,7 @@ import type {
   ConnectPhoneRuntimeStatus,
   DagPanelStatus,
   DesktopCommand,
-  ModelRouterConfigOpenResult,
+  ModelAccessStatus,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
   UpstreamModelsResult,
@@ -113,6 +122,9 @@ import {
   researchCardCreatePayloadSchema,
   researchCardListPayloadSchema,
   researchCardUpdatePayloadSchema,
+  traceExportPayloadSchema,
+  traceReadPayloadSchema,
+  traceSummariesPayloadSchema,
   visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishPayloadSchema,
   rootPathSchema,
@@ -368,6 +380,13 @@ type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
   getMainWindow: () => BrowserWindow | null
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
+  getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
+  traces?: {
+    read: (query?: TraceReadQuery) => Promise<TraceReadResult>
+    summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
+    export: (options: TraceExportOptions) => Promise<TraceExportResult>
+    clear: () => Promise<TraceClearResult>
+  }
   agentRuntime?: {
     connect: (runtimeId?: AgentRuntimeId) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeId) => Promise<AgentRuntimeCapabilities>
@@ -417,7 +436,6 @@ type RegisterAppIpcHandlersOptions = {
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
   pollWeixinInstall: (deviceCode: string, weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallPollResult>
   resolveRuntimeConfigPath: () => string
-  openModelRouterConfigFile: (settings: AppSettingsV1) => Promise<ModelRouterConfigOpenResult>
   getPaperRadarService?: () => PaperRadarWorkerService | null
   researchCards?: ResearchCardService
   onRuntimeMcpConfigWritten?: (path: string, content: string) => Promise<void> | void
@@ -1302,6 +1320,8 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     store,
     getMainWindow,
     applySettingsPatch,
+    getModelAccessStatus,
+    traces,
     agentRuntime,
     fetchUpstreamModels,
     getRemoteChannelRuntime,
@@ -1315,7 +1335,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     startWeixinInstallQrcode,
     pollWeixinInstall,
     resolveRuntimeConfigPath,
-    openModelRouterConfigFile,
     onRuntimeMcpConfigWritten,
     showTurnCompleteNotification,
     getAppVersion,
@@ -1357,6 +1376,10 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const assertEvidenceDagEnabled = async (): Promise<void> => {
     if (!await evidenceDagEnabled()) throw new Error(evidenceDagDisabledMessage)
   }
+  const requireTraceStore = (): NonNullable<RegisterAppIpcHandlersOptions['traces']> => {
+    if (!traces) throw new Error('Full trace storage is not initialized.')
+    return traces
+  }
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
@@ -1388,6 +1411,33 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       })
     }
   }
+
+  handleInvoke('traces:read', async (_, payload: unknown) =>
+    requireTraceStore().read(parseIpcPayload('traces:read', traceReadPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('traces:summaries', async (_, payload: unknown) =>
+    requireTraceStore().summaries(parseIpcPayload('traces:summaries', traceSummariesPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('traces:export', async (_, payload: unknown) => {
+    const request = parseIpcPayload('traces:export', traceExportPayloadSchema, payload ?? {})
+    const date = new Date().toISOString().slice(0, 10)
+    const saveOptions = {
+      title: 'Export SciForge full traces',
+      defaultPath: `sciforge-trace-${date}.jsonl`,
+      filters: [{ name: 'SciForge Full Trace', extensions: ['jsonl'] }]
+    }
+    const mainWindow = getMainWindow()
+    const selection = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, saveOptions)
+      : await dialog.showSaveDialog(saveOptions)
+    if (selection.canceled || !selection.filePath) return { canceled: true as const }
+    const result = await requireTraceStore().export({
+      destination: selection.filePath,
+      ...(request.traceIds?.length ? { traceIds: request.traceIds } : {})
+    })
+    return { canceled: false as const, ...result }
+  })
+  handleInvoke('traces:clear', async () => requireTraceStore().clear())
 
   const saveVisualStyleProfileHandler = saveVisualStyleProfileOverride ?? (async (
     request: VisualStyleSaveProfileRequest
@@ -1509,6 +1559,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }
 
   handleInvoke('settings:get', async () => store.load())
+  handleInvoke('modelAccess:status', async () => getModelAccessStatus(await store.load()))
   handleInvoke('settings:set', async (_, partial: unknown) =>
     applySettingsPatch(
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
@@ -2708,11 +2759,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         message: error instanceof Error ? error.message : String(error)
       }
     }
-  })
-
-  handleInvoke('modelRouter:config:open', async () => {
-    const settings = await store.load()
-    return openModelRouterConfigFile(settings)
   })
 
   handleInvoke('git:branches', async (_, workspaceRoot: unknown) =>

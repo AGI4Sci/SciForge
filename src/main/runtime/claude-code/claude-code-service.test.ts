@@ -6,6 +6,7 @@ import type {
   Query as ClaudeAgentSdkQuery,
   SDKMessage
 } from '@anthropic-ai/claude-agent-sdk'
+import { deriveTraceId } from '@sciforge/full-trace'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
@@ -14,7 +15,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -44,7 +44,6 @@ function configuredModelRouterSettings() {
   modelRouter.publicModelAlias = 'sciforge-router'
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -59,7 +58,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'claude',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: defaultCodexRuntimeSettings(),
@@ -277,6 +276,63 @@ afterEach(() => {
 })
 
 describe('ClaudeCodeRuntimeService', () => {
+  it('does not connect or create turns outside selected API mode', async () => {
+    const planSettings = settings()
+    planSettings.activeAgentRuntime = 'codex'
+    planSettings.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
+    const { sdk, calls } = fakeSdk(() => [])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => planSettings,
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({ ok: false })
+    await expect(service.startThread({ workspace: '/tmp/workspace' }))
+      .resolves.toMatchObject({ ok: false })
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'must not run' }))
+      .resolves.toMatchObject({ ok: false })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('scopes Model Router correlation headers to the exact Claude turn', async () => {
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-trace'),
+      result('done', 'claude-session-trace')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-trace-thread',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'trace this turn',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+
+    expect(calls).toHaveLength(1)
+    const customHeaders = calls[0]?.options?.env?.ANTHROPIC_CUSTOM_HEADERS
+    expect(customHeaders).toBe([
+      `x-sciforge-trace-id: ${deriveTraceId({
+        runtimeId: 'claude',
+        threadId: thread.thread.id,
+        turnId: turn.turnId
+      })}`,
+      'x-sciforge-runtime-id: claude',
+      `x-sciforge-thread-id: ${thread.thread.id}`,
+      `x-sciforge-turn-id: ${turn.turnId}`
+    ].join('\n'))
+    expect(customHeaders).not.toContain('x-sciforge-request-id')
+  })
+
   it('connects through the Claude Agent SDK wrapper without launching a probe process', async () => {
     const { sdk, calls } = fakeSdk(() => [])
     const service = new ClaudeCodeRuntimeService({

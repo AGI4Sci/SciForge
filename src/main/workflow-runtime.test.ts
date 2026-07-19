@@ -10,7 +10,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -130,7 +129,6 @@ function settingsWith(workflows: WorkflowV1[], port: number, secret = 'workflow-
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: {
       ...defaultModelRouterSettings(),
       runtimeApiKey: 'local-runtime-router-key'

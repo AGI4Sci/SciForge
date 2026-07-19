@@ -9,6 +9,8 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/main/index.ts'),
+          'model-router-sidecar-node-entry': resolve('src/main/model-router-sidecar-node-entry.ts'),
+          'plan-gateway-sidecar-node-entry': resolve('src/main/plan-gateway-sidecar-node-entry.ts'),
           'schedule-mcp-node-entry': resolve('src/main/schedule-mcp-node-entry.ts'),
           'research-search-mcp-node-entry': resolve('src/main/research-search-mcp-node-entry.ts'),
           'workflow-mcp-node-entry': resolve('src/main/workflow-mcp-node-entry.ts'),

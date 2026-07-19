@@ -13,6 +13,11 @@ import {
   visibleServerRequestFailureMessage
 } from './server-requests'
 import type {
+  CodexAppServerGetAccountParams,
+  CodexAppServerGetAccountRateLimitsResponse,
+  CodexAppServerGetAccountResponse,
+  CodexAppServerLoginAccountParams,
+  CodexAppServerLoginAccountResponse,
   CodexAppServerClientInfo,
   CodexAppServerInitializeParams,
   CodexAppServerJsonRpcNotification,
@@ -33,13 +38,24 @@ import type {
   SpawnCodexAppServerProcess
 } from './protocol'
 export type {
+  CodexAppServerAccount,
+  CodexAppServerAccountLoginCompletedNotification,
+  CodexAppServerAccountRateLimitsUpdatedNotification,
+  CodexAppServerAccountUpdatedNotification,
   CodexAppServerApprovalPolicy,
   CodexAppServerClientInfo,
   CodexAppServerInitializeParams,
+  CodexAppServerGetAccountParams,
+  CodexAppServerGetAccountRateLimitsResponse,
+  CodexAppServerGetAccountResponse,
   CodexAppServerInputItem,
   CodexAppServerJsonRpcNotification,
   CodexAppServerJsonRpcRequest,
   CodexAppServerJsonRpcResponse,
+  CodexAppServerLoginAccountParams,
+  CodexAppServerLoginAccountResponse,
+  CodexAppServerPlanType,
+  CodexAppServerRateLimitSnapshot,
   CodexAppServerProcess,
   CodexAppServerRequestId,
   CodexAppServerServerRequestHandler,
@@ -278,6 +294,30 @@ export class CodexAppServerJsonRpcClient {
     abortSignal?: AbortSignal
   ): Promise<unknown> {
     return this.request('turn/steer', params, abortSignal)
+  }
+
+  readAccount(
+    params: CodexAppServerGetAccountParams = {},
+    abortSignal?: AbortSignal
+  ): Promise<CodexAppServerGetAccountResponse> {
+    return this.request('account/read', params, abortSignal)
+  }
+
+  startAccountLogin(
+    params: CodexAppServerLoginAccountParams,
+    abortSignal?: AbortSignal
+  ): Promise<CodexAppServerLoginAccountResponse> {
+    return this.request('account/login/start', params, abortSignal)
+  }
+
+  logoutAccount(abortSignal?: AbortSignal): Promise<Record<string, never>> {
+    return this.request('account/logout', undefined, abortSignal)
+  }
+
+  readAccountRateLimits(
+    abortSignal?: AbortSignal
+  ): Promise<CodexAppServerGetAccountRateLimitsResponse> {
+    return this.request('account/rateLimits/read', undefined, abortSignal)
   }
 
   pendingServerRequests(): CodexAppServerPendingRequest[] {

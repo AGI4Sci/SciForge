@@ -1,33 +1,48 @@
 # SciForge Model Router
 
-Standalone provider-compatible `/v1/responses` facade for SciForge multimodal routing.
+Standalone protocol-negotiating model gateway for SciForge multimodal routing. Its public API accepts OpenAI Responses, OpenAI Chat Completions, and Anthropic Messages requests.
 
-The router is a deterministic orchestrator. It selects registered profile roles, translates visual and scientific inputs into text observations, runs a bounded supplement loop, and writes refs-first trace bundles under the configured Model Router trace data root. It does not plan tasks, choose capabilities for agents, execute desktop actions, or silently fall back to unregistered providers.
+The router is a deterministic orchestrator. It selects registered profile roles, translates visual and scientific inputs into text observations, and runs a bounded supplement loop. Client requests and actual upstream attempts are recorded in the shared append-only Full Trace store. It does not plan tasks, choose capabilities for agents, execute desktop actions, or silently fall back to unregistered providers.
 
 ## Run
 
 ```bash
-npm run model-router:start -- --port 3892 --workspace-root /path/to/workspace
+npm run model-router:start -- --port 3892 --config /path/to/router.config.json --user-data-dir /path/to/app-data --workspace-root /path/to/workspace
 ```
 
-The default environment-driven profile uses role-oriented settings:
+The required config file uses role-oriented settings. Credentials remain environment references inside that file:
 
 ```bash
-export SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS=sciforge-router
-export SCIFORGE_TEXT_BASE_URL=https://text-provider.example/v1
-export SCIFORGE_TEXT_MODEL=private-text-model
-export SCIFORGE_TEXT_API_KEY=...
-export SCIFORGE_VISION_BASE_URL=https://vision-provider.example/v1
-export SCIFORGE_VISION_MODEL=private-vision-model
-export SCIFORGE_VISION_API_KEY=...
-export SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT=/var/tmp/sciforge-model-router
+{
+  "defaultProfile": "default",
+  "publicModelAlias": "sciforge-router",
+  "profiles": {
+    "default": {
+      "textReasoner": {
+        "baseUrl": "https://provider.example/v1",
+        "apiKeyEnv": "SCIFORGE_MODEL_ROUTER_TEXT_API_KEY",
+        "model": "provider-model"
+      },
+      "translators": {}
+    }
+  }
+}
 ```
 
-Optional translator workers are attached only through Model Router-owned environment:
+Each upstream role needs only a base URL, model name, and API key. There is no provider or wire-protocol setting. The router prefers the protocol used by the incoming request, then safely negotiates Responses, Chat Completions, or Anthropic Messages and caches the working protocol by normalized base URL and model. It retries another protocol only after a definitive endpoint or request-schema rejection; authentication, quota, rate-limit, timeout, ambiguous server, and ordinary validation failures are returned without retrying a potentially billable request. A 2xx response whose body or terminal stream frame does not match the selected wire schema is also terminal and is never resubmitted through another protocol.
+
+When a Responses request negotiates to Anthropic Messages, reasoning effort maps to enabled thinking with a budget bounded by the output-token limit. Invalid constraints fail explicitly. Native Anthropic thinking controls, including adaptive controls, remain native on Messages requests and fail explicitly when another protocol cannot represent them. Response finish reasons, stop reasons, and stop sequences are retained through the canonical response and mapped only where the client protocol can represent them.
+
+Streaming compatibility endpoints currently preserve protocol-correct SSE ordering but buffer the routed upstream result before emitting the completed stream. This keeps the bounded orchestration path unified, but it does not provide progressive token latency. Byte-transparent Plan Gateway traffic is a separate runtime path and is not subject to this router buffering behavior.
+
+Optional translator workers are attached through the same config and credential-reference pattern:
 
 ```bash
-export SCIFORGE_SCIMODALITY_SERVICE_URL=http://127.0.0.1:3898
-export SCIFORGE_SCIMODALITY_SERVICE_TOKEN=...
+"scientific": {
+  "baseUrl": "http://127.0.0.1:3898",
+  "tokenEnv": "SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN",
+  "model": "scientific-translator"
+}
 ```
 
 Do not configure app runtimes to call these workers or provider APIs directly. If a translator
@@ -41,7 +56,7 @@ return `scientific_modality_unsupported` without sending raw contents to either 
 Ambiguous `.fasta` and `.fa` uploads are classified locally and conservatively: only a clearly
 protein sequence is translated, while DNA/RNA or nucleotide-ambiguous content fails closed.
 
-`SCIFORGE_MODEL_ROUTER_CONFIG=/path/to/router.config.json` can provide the same `ModelRouterConfig` shape exported by `src/router.ts`. Relative profile `traceRoot` values resolve under `SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT` or the platform state-data default, never under the workspace. Public UI and audits should show only the router alias/profile/role readiness; provider URLs, API keys, and raw model slugs remain private router configuration.
+`--config` is the single configuration entry and accepts the `ModelRouterConfig` shape exported by `src/router.ts`. Full request and response events are written through the shared trace store under `--user-data-dir` (or its launcher-provided user-data environment); the router does not maintain a second summary or per-profile trace directory. Public UI should show only the router alias/profile/role readiness; upstream URLs, API keys, and raw model slugs remain private router configuration.
 
 ## Capability discovery
 
@@ -83,17 +98,3 @@ Profiles may narrow the router defaults with a public capability registration:
 Feature availability is the intersection of this registration, the profile's registered roles,
 and current credential readiness. If no size list is registered, `sizes.mode` is
 `provider-defined`; clients should omit `size` and use the provider default instead of guessing.
-
-## Trace Audit
-
-Trace bundles are refs-first evidence. They should contain role aliases, hashes, public router alias/profile, bounded call status, and sanitized summaries only. After a live or staging provider run, scan the trace root before using it as release evidence:
-
-```bash
-npm --workspace @sciforge/model-router exec -- node --import tsx tools/model-router-trace-audit.ts \
-  --trace-root "$SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT/traces" \
-  --known-secret-env SCIFORGE_TEXT_API_KEY \
-  --known-secret-env SCIFORGE_VISION_API_KEY \
-  --out docs/test-artifacts/model-router-live-trace-audit/report.json
-```
-
-The report stores finding kinds, file refs, JSON paths, and hashes only. It must not echo matching secret values.

@@ -1,5 +1,5 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray, webContents, type WebContents } from 'electron'
-import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, shell, Tray, webContents, type WebContents } from 'electron'
+import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +18,7 @@ import {
   applyLocalRuntimePatch,
   agentRuntimeSettingsEnvelope,
   getLocalRuntimeSettings,
-  getActiveAgentRuntime,
+  getModelAccessSettings,
   isEvidenceDagEnabled,
   mergeConnectPhoneSettings,
   mergeLocalRuntimeSettings,
@@ -27,7 +27,6 @@ import {
   mergeAgentCapabilitySettings,
   mergeComputerUseSettings,
   mergeModelRouterSettings,
-  mergeModelProviderSettings,
   mergeScheduleSettings,
   mergeWorkflowSettings,
   mergeSpeechToTextSettings,
@@ -37,6 +36,8 @@ import {
   normalizeKeyboardShortcuts,
   resolveRuntimeModelRouterSettings,
   resolveLocalRuntimeSettings,
+  modelAccessRuntimePolicyChanged,
+  resolveModelAccessRuntimePolicy,
   type AgentRuntimeId,
   type AppBehaviorConfigV1,
   type AppSettingsPatch,
@@ -48,13 +49,19 @@ import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/
 import { fetchUpstreamModelIds } from './upstream-models'
 import { decideDevPreviewPopup } from './dev-preview-popup-policy'
 import {
-  ensureModelRouterConfigFile,
-  ensureModelRouterSidecar,
-  modelRouterConfigPath,
-  stopModelRouterSidecar,
-  syncModelRouterConfigFileFromSettings,
-  syncModelRouterSettingsFromConfigFile
+  codingPlanCredentialStateForAdapter,
+  getModelAccessStatus
+} from './model-access-status'
+import {
+  stopModelRouterSidecar
 } from './model-router-sidecar'
+import { synchronizeModelAccessSidecar } from './model-access-sidecars'
+import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
+import { stopPlanGatewaySidecar } from './plan-gateway-sidecar'
+import {
+  managedLocalRuntimeAction,
+  stopDisallowedAgentRuntimes
+} from './model-access-runtime-lifecycle'
 import {
   ensureEvidenceDagSidecar,
   stopEvidenceDagSidecar
@@ -88,7 +95,9 @@ import {
 } from './runtime/claude-code'
 import { waitForRuntimeTurnsIdle } from './runtime/managed-runtime-idle'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
-import { ModelRequestAuditRecorder } from './services/model-request-audit-service'
+import { LocalTraceStore } from '@sciforge/full-trace'
+import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-service'
+import { CurrentTraceSensitiveSettings } from './trace-sensitive-settings'
 import { RuntimeContextStateService } from './services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from './services/runtime-context-ledger-service'
 import { GitCheckpointService } from './services/git-checkpoint-service'
@@ -237,6 +246,29 @@ function resolveLogDirectory(): string {
   return join(app.getPath('userData'), 'logs')
 }
 
+async function synchronizeSelectedModelAccessSidecar(
+  settings: AppSettingsV1,
+  failureMessage: string
+): Promise<void> {
+  await synchronizeModelAccessSidecar(settings, {
+    userDataDir: app.getPath('userData'),
+    appRoot: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    execPath: process.execPath,
+    isPackaged: app.isPackaged,
+    resolveProxy: (url) => session.defaultSession.resolveProxy(url),
+    logModelRouter: (message) => logWarn('model-router', message),
+    logPlanGateway: (message) => logWarn('plan-gateway', message)
+  }).catch((error) => {
+    const source = getModelAccessSettings(settings)?.mode === 'coding-plan'
+      ? 'plan-gateway'
+      : 'model-router'
+    logWarn(source, failureMessage, {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
+}
+
 function resolvePreloadPath(): string {
   const cjsPath = join(__dirname, '../preload/index.cjs')
   if (existsSync(cjsPath)) return cjsPath
@@ -373,8 +405,14 @@ function runtimeFailure(code: string, message: string, status = 0, details?: unk
   }
 }
 
-function resolveConfiguredApiKey(settings: AppSettingsV1): string {
+function resolveModelRouterApiKey(settings: AppSettingsV1): string {
+  if (getModelAccessSettings(settings)?.mode !== 'api') return ''
   return resolveRuntimeModelRouterSettings(settings).apiKey
+}
+
+function resolveLocalRuntimeApiKey(settings: AppSettingsV1): string {
+  if (!resolveModelAccessRuntimePolicy(settings).sciforge) return ''
+  return resolveModelRouterApiKey(settings)
 }
 
 function runtimeJsonError(code: string, message: string): Error {
@@ -421,10 +459,6 @@ let isQuitting = false
 let devBrowserBridgeServer: DevBrowserBridgeServer | null = null
 let codexRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
 let codexRuntimePrewarmPromise: Promise<void> | null = null
-let modelRouterConfigWatcher: FSWatcher | null = null
-let modelRouterConfigWatchTimer: ReturnType<typeof setTimeout> | null = null
-let modelRouterConfigWatchSuppressUntil = 0
-let modelRouterConfigFileSyncPromise: Promise<void> | null = null
 let remoteChannelActiveThreadContext: {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -614,57 +648,6 @@ function codexRuntimeEventKind(payload: unknown): string | undefined {
   return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined
 }
 
-function suppressModelRouterConfigFileWatch(durationMs = 1_000): void {
-  modelRouterConfigWatchSuppressUntil = Date.now() + durationMs
-}
-
-function stopModelRouterConfigWatcher(): void {
-  if (modelRouterConfigWatchTimer) {
-    clearTimeout(modelRouterConfigWatchTimer)
-    modelRouterConfigWatchTimer = null
-  }
-  try {
-    modelRouterConfigWatcher?.close()
-  } catch (error) {
-    logWarn('model-router', 'Failed to close Model Router config watcher.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  }
-  modelRouterConfigWatcher = null
-}
-
-function startModelRouterConfigWatcher(
-  userDataDir: string,
-  onExternalChange: () => void
-): void {
-  stopModelRouterConfigWatcher()
-  const configPath = modelRouterConfigPath(userDataDir)
-  const configDir = dirname(configPath)
-  try {
-    modelRouterConfigWatcher = watch(configDir, (_event, filename) => {
-      const changed = typeof filename === 'string' ? filename : ''
-      if (changed && changed !== 'config.json') return
-      if (Date.now() < modelRouterConfigWatchSuppressUntil) return
-      if (modelRouterConfigWatchTimer) clearTimeout(modelRouterConfigWatchTimer)
-      modelRouterConfigWatchTimer = setTimeout(() => {
-        modelRouterConfigWatchTimer = null
-        if (Date.now() < modelRouterConfigWatchSuppressUntil) return
-        onExternalChange()
-      }, 250)
-    })
-  } catch (error) {
-    logWarn('model-router', 'Failed to start Model Router config watcher.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-    return
-  }
-  modelRouterConfigWatcher.on('error', (error) => {
-    logWarn('model-router', 'Model Router config watcher failed.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-}
-
 function getCodexRuntime(): CodexRuntimeService {
   if (codexRuntime) return codexRuntime
   if (!capabilityAgentTools) {
@@ -679,6 +662,7 @@ function getCodexRuntime(): CodexRuntimeService {
     managedCodexHome: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-codex', 'codex-home')
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
+    planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
     scheduleMcpLaunch: getScheduleMcpLaunchConfig(),
     researchMcpLaunch: getResearchSearchMcpLaunchConfig(),
     workflowMcpLaunch: getWorkflowMcpLaunchConfig(),
@@ -736,7 +720,7 @@ function getPaperRadarWorkerService(): PaperRadarWorkerService {
 }
 
 function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' | 'settings-switch'): void {
-  if (getActiveAgentRuntime(settings) !== 'codex') return
+  if (!resolveModelAccessRuntimePolicy(settings).codex) return
   if (codexRuntimePrewarmTimer) {
     clearTimeout(codexRuntimePrewarmTimer)
     codexRuntimePrewarmTimer = null
@@ -744,9 +728,11 @@ function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' 
   codexRuntimePrewarmTimer = setTimeout(() => {
     codexRuntimePrewarmTimer = null
     const runtime = getCodexRuntime()
-    if (runtime.isClientWarm() || codexRuntimePrewarmPromise) return
-    const task = runtime.connect()
-      .then((result) => {
+    if (codexRuntimePrewarmPromise) return
+    const task = runtime.synchronizeModelAccess()
+      .then(async () => {
+        if (runtime.isClientWarm()) return
+        const result = await runtime.connect()
         if (!result.ok) {
           logWarn('codex-runtime', 'Failed to prewarm Codex app-server.', {
             reason,
@@ -770,6 +756,34 @@ function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' 
   }, reason === 'startup' ? 1500 : 100)
 }
 
+function cancelCodexRuntimePrewarm(): void {
+  if (!codexRuntimePrewarmTimer) return
+  clearTimeout(codexRuntimePrewarmTimer)
+  codexRuntimePrewarmTimer = null
+}
+
+async function reconcileSelectedAgentRuntime(settings: AppSettingsV1): Promise<void> {
+  await stopDisallowedAgentRuntimes(settings, {
+    stopSciforge: async () => {
+      stopRuntimeWatchdog()
+      if (!localRuntimeAdapter.isChildRunning()) return
+      await localRuntimeAdapter.stopAndWait()
+      publishRuntimeStatus({
+        state: 'stopped',
+        source: 'model-access-switch',
+        message: 'SciForge Runtime was stopped because it is not the selected API runtime.'
+      })
+    },
+    stopClaude: async () => {
+      await claudeCodeRuntime?.stop()
+    },
+    stopCodex: async () => {
+      cancelCodexRuntimePrewarm()
+      await codexRuntime?.stop()
+    }
+  })
+}
+
 async function stopManagedRuntimesForQuit(): Promise<void> {
   if (managedRuntimesStoppedForQuit) return
   await stopManagedRuntimes()
@@ -780,10 +794,7 @@ async function stopManagedRuntimes(): Promise<void> {
   if (!managedRuntimesStopPromise) {
     managedRuntimesStopPromise = (async () => {
       stopRuntimeWatchdog()
-      if (codexRuntimePrewarmTimer) {
-        clearTimeout(codexRuntimePrewarmTimer)
-        codexRuntimePrewarmTimer = null
-      }
+      cancelCodexRuntimePrewarm()
       workflowRuntime?.stop()
       scheduleRuntime?.stop()
       discordBotRuntime?.stop()
@@ -800,6 +811,10 @@ async function stopManagedRuntimes(): Promise<void> {
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
+      await stopPlanGatewaySidecar({
+        userDataDir: app.getPath('userData'),
+        log: (message) => logWarn('plan-gateway', message)
+      })
       await localRuntimeAdapter.stopAndWait()
       await capabilityRuntimeBridge?.close()
       capabilityRuntimeBridge = null
@@ -1163,7 +1178,7 @@ async function superviseLocalRuntimeCrash(info: LocalRuntimeUnexpectedExitInfo):
   try {
     const settings = await store.load()
     const runtime = getLocalRuntimeSettings(settings)
-    if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) {
+    if (!resolveLocalRuntimeApiKey(settings) || !runtime.autoStart) {
       publishRuntimeStatus({
         state: 'stopped',
         source: 'supervisor',
@@ -1257,6 +1272,16 @@ async function runtimeWatchdogTick(): Promise<void> {
   runtimeWatchdogTickInFlight = true
   try {
     const settings = await store.load()
+    if (!resolveModelAccessRuntimePolicy(settings).sciforge) {
+      stopRuntimeWatchdog()
+      await localRuntimeAdapter.stopAndWait()
+      publishRuntimeStatus({
+        state: 'stopped',
+        source: 'watchdog',
+        message: 'SciForge Runtime was stopped because it is no longer the selected API runtime.'
+      })
+      return
+    }
     const healthy = await waitForLocalRuntimeHealth(settings, 5_000)
     if (healthy) {
       runtimeWatchdogFailures = 0
@@ -1302,14 +1327,14 @@ async function runtimeWatchdogTick(): Promise<void> {
   }
 }
 
-function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): void {
+function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): Promise<void> {
   // Always update the prev/next anchor so a later task diffs against
   // the settings that were actually applied last, not against the
   // original `prev` captured when this call was queued.
   const anchor = lastAppliedSettings ?? prev
   lastAppliedSettings = next
   const startupConfigChanged = runtimeStartupConfigChanged(anchor, next)
-  if (!startupConfigChanged) return
+  if (!startupConfigChanged) return Promise.resolve()
 
   const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
   const task = previousTask
@@ -1330,9 +1355,10 @@ function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): vo
     })
 
   runtimeSettingsApplyPromise = task
+  return task
 }
 
-function queueRuntimeMcpConfigApply(settings: AppSettingsV1): void {
+function queueRuntimeMcpConfigApply(settings: AppSettingsV1): Promise<void> {
   lastAppliedSettings = settings
 
   const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
@@ -1354,6 +1380,7 @@ function queueRuntimeMcpConfigApply(settings: AppSettingsV1): void {
     })
 
   runtimeSettingsApplyPromise = task
+  return task
 }
 
 async function waitForQueuedRuntimeSettingsApply(): Promise<void> {
@@ -1369,7 +1396,10 @@ async function waitForQueuedRuntimeSettingsApply(): Promise<void> {
  * would re-throw the old error.
  */
 function runtimeFingerprint(settings: AppSettingsV1): string {
-  return stableSettingsStringify(resolveLocalRuntimeSettings(settings))
+  return stableSettingsStringify({
+    runtime: resolveLocalRuntimeSettings(settings),
+    access: resolveModelAccessRuntimePolicy(settings)
+  })
 }
 
 async function ensureRuntime(settings: AppSettingsV1): Promise<void> {
@@ -1481,7 +1511,13 @@ async function resolveManagedLocalRuntimeLaunchSettings(
 async function ensureLocalRuntime(settings: AppSettingsV1): Promise<void> {
   settings = applyManagedLocalRuntimePortOverride(settings)
   const runtime = getLocalRuntimeSettings(settings)
-  const hasApiKey = Boolean(resolveConfiguredApiKey(settings))
+  if (!resolveModelAccessRuntimePolicy(settings).sciforge) {
+    throw runtimeJsonError(
+      'runtime_unavailable',
+      'SciForge Runtime requires API model access and must be the selected Agent runtime.'
+    )
+  }
+  const hasApiKey = Boolean(resolveLocalRuntimeApiKey(settings))
 
   const healthy = await waitForLocalRuntimeHealth(settings, 2_000)
   if (healthy) {
@@ -1546,7 +1582,7 @@ async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
   await waitForQueuedRuntimeSettingsApply()
   const runtime = getLocalRuntimeSettings(settings)
 
-  if (!resolveConfiguredApiKey(settings)) {
+  if (!resolveLocalRuntimeApiKey(settings)) {
     throw runtimeJsonError(
       'missing_api_key',
       'Model Router runtime API key is required before the GUI can start SciForge Runtime.'
@@ -1684,6 +1720,7 @@ function canonicalSettingsValue(value: unknown): unknown {
 
 function runtimeStartupConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
   return (
+    modelAccessRuntimePolicyChanged(prev, next) ||
     localRuntimeConfigChanged(prev, next) ||
     scheduleMcpSettingsChanged(prev, next) ||
     imageGenerationMcpSettingsChanged(prev, next)
@@ -1694,23 +1731,29 @@ async function restartManagedRuntimeForSettingsChange(
   prev: AppSettingsV1,
   next: AppSettingsV1
 ): Promise<void> {
-  if (!runtimeStartupConfigChanged(prev, next)) return
-
-  const runtime = resolveLocalRuntimeSettings(next)
+  const configurationChanged = runtimeStartupConfigChanged(prev, next)
+  if (!configurationChanged) return
   const adapter = localRuntimeAdapter
   const wasRunning = adapter.isChildRunning()
-
-  if (!wasRunning) return
-  await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
-  await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(next) || !runtime.autoStart) {
+  const action = managedLocalRuntimeAction(next, {
+    running: wasRunning,
+    configurationChanged,
+    hasApiKey: Boolean(resolveModelRouterApiKey(next))
+  })
+  if (action === 'none') return
+  if (action === 'stop') {
+    stopRuntimeWatchdog()
+    await adapter.stopAndWait()
     publishRuntimeStatus({
       state: 'stopped',
       source: 'settings-apply',
-      message: 'SciForge Runtime was stopped because the new settings have no API key or auto-start is disabled.'
+      message: 'SciForge Runtime was stopped because API access or the SciForge Agent runtime is no longer selected.'
     })
     return
   }
+
+  await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
+  await adapter.stopAndWait()
 
   publishRuntimeStatus({ state: 'restarting', source: 'settings-apply' })
   try {
@@ -1734,14 +1777,27 @@ async function restartManagedRuntimeForSettingsChange(
 }
 
 async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1): Promise<void> {
-  const runtime = resolveLocalRuntimeSettings(settings)
   const adapter = localRuntimeAdapter
   const wasRunning = adapter.isChildRunning()
+  const action = managedLocalRuntimeAction(settings, {
+    running: wasRunning,
+    configurationChanged: true,
+    hasApiKey: Boolean(resolveModelRouterApiKey(settings))
+  })
+  if (action === 'none') return
+  if (action === 'stop') {
+    stopRuntimeWatchdog()
+    await adapter.stopAndWait()
+    publishRuntimeStatus({
+      state: 'stopped',
+      source: 'mcp-config',
+      message: 'SciForge Runtime remained stopped because API access or the SciForge Agent runtime is not selected.'
+    })
+    return
+  }
 
-  if (!wasRunning) return
   await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
   await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) return
 
   publishRuntimeStatus({ state: 'restarting', source: 'mcp-config' })
   try {
@@ -1803,18 +1859,7 @@ app.whenReady().then(async () => {
 
   store = new JsonSettingsStore(app.getPath('userData'))
   traceStartup('settings load:start')
-  let initial = await store.load()
-  initial = await syncModelRouterSettingsFromConfigFile(initial, {
-    userDataDir: app.getPath('userData')
-  }).then(async (synced) => {
-    if (JSON.stringify(synced.modelRouter) === JSON.stringify(initial.modelRouter)) return initial
-    return store.patch({ modelRouter: synced.modelRouter })
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to sync Model Router settings from config file during startup.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-    return initial
-  })
+  const initial = await store.load()
   traceStartup('settings load:done')
   setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
@@ -1840,22 +1885,18 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
-  await syncModelRouterConfigFileFromSettings(initial, {
-    userDataDir: app.getPath('userData')
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to write Model Router config file during startup.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
+  const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
+  const fullTraceStore = new LocalTraceStore({
+    userDataDirectory: app.getPath('userData'),
+    sensitiveValues: traceSensitiveSettings.values
   })
-  void ensureModelRouterSidecar(initial, {
-    userDataDir: app.getPath('userData'),
-    appRoot: app.getAppPath(),
-    log: (message) => logWarn('model-router', message)
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to auto-start Model Router.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
+  await fullTraceStore.initialize()
+  const agentTraceRecorder = new AgentRuntimeTraceRecorder(fullTraceStore)
+  traceStartup('full trace store initialized')
+  await synchronizeSelectedModelAccessSidecar(
+    initial,
+    'Failed to start the selected model access service.'
+  )
   if (isEvidenceDagEnabled(initial)) {
     void ensureEvidenceDagSidecar(initial, {
       userDataDir: app.getPath('userData'),
@@ -1868,7 +1909,6 @@ app.whenReady().then(async () => {
     })
   }
   codeNavigationService = new LspCodeNavigationService()
-  const modelAuditRecorder = new ModelRequestAuditRecorder()
   const contextStateService = new RuntimeContextStateService()
   const contextLedgerService = new RuntimeContextLedgerService(app.getPath('userData'))
   const gitCheckpointService = new GitCheckpointService(app.getPath('userData'))
@@ -1960,7 +2000,7 @@ app.whenReady().then(async () => {
     ],
     services: {
       codeNavigation: codeNavigationService,
-      modelAudit: modelAuditRecorder,
+      trace: agentTraceRecorder,
       contextState: contextStateService,
       contextLedger: contextLedgerService,
       gitCheckpoints: gitCheckpointService,
@@ -2180,7 +2220,6 @@ app.whenReady().then(async () => {
     const prev = await store.load()
     const {
       agents: agentsPatch,
-      provider: providerPatch,
       modelRouter: modelRouterPatch,
       agentCapabilities: agentCapabilitiesPatch,
       computerUse: computerUsePatch,
@@ -2195,7 +2234,6 @@ app.whenReady().then(async () => {
         agentsPatch?.claude
       ),
       ...restPatch,
-      provider: mergeModelProviderSettings(prev.provider, providerPatch),
       modelRouter: mergeModelRouterSettings(prev.modelRouter, modelRouterPatch),
       agentCapabilities: mergeAgentCapabilitySettings(prev.agentCapabilities, agentCapabilitiesPatch),
       computerUse: mergeComputerUseSettings(prev.computerUse, computerUsePatch),
@@ -2224,6 +2262,7 @@ app.whenReady().then(async () => {
       configureLogger({ enabled: next.log.enabled, retentionDays: next.log.retentionDays })
     }
     const saved = await store.patch(partial)
+    traceSensitiveSettings.update(saved)
     emitSettingsChanged(saved)
     await syncScheduleMcpConfig(saved, getScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[schedule-mcp] failed to sync config after settings change:', error)
@@ -2234,8 +2273,11 @@ app.whenReady().then(async () => {
     if (prev.guiUpdate.channel !== saved.guiUpdate.channel && guiUpdaterModulePromise) {
       void guiUpdaterModulePromise.then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
     }
-    queueRuntimeSettingsApply(prev, saved)
-    scheduleCodexRuntimePrewarm(saved, 'settings-switch')
+    const runtimePolicyChanged = modelAccessRuntimePolicyChanged(prev, saved)
+    if (runtimePolicyChanged) {
+      await reconcileSelectedAgentRuntime(saved)
+    }
+    await queueRuntimeSettingsApply(prev, saved)
     if (isEvidenceDagEnabled(prev) !== isEvidenceDagEnabled(saved)) {
       await syncEvidenceDagUpdateQueue(isEvidenceDagEnabled(saved))
       if (isEvidenceDagEnabled(saved)) {
@@ -2248,26 +2290,19 @@ app.whenReady().then(async () => {
         evidenceArtifactLifecycle?.stop()
       }
     }
-    if (partial.modelRouter) {
-      suppressModelRouterConfigFileWatch()
-      await syncModelRouterConfigFileFromSettings(saved, {
-        userDataDir: app.getPath('userData')
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to sync Model Router config file after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      suppressModelRouterConfigFileWatch()
-      void ensureModelRouterSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('model-router', message)
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to auto-start Model Router after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
+    if (partial.modelRouter || partial.modelAccess) {
+      await synchronizeSelectedModelAccessSidecar(
+        saved,
+        'Failed to switch the selected model access service after settings change.'
+      )
     }
+    if (
+      resolveModelAccessRuntimePolicy(saved).codex &&
+      (runtimePolicyChanged || Boolean(partial.modelRouter))
+    ) {
+      await getCodexRuntime().synchronizeModelAccess()
+    }
+    scheduleCodexRuntimePrewarm(saved, 'settings-switch')
     if (partial.evidenceDag && !isEvidenceDagEnabled(saved)) {
       await Promise.all([
         stopEvidenceDagSidecar(),
@@ -2297,105 +2332,8 @@ app.whenReady().then(async () => {
 
   const fetchModels = async () => {
     const settings = await store.load()
-    const key = resolveConfiguredApiKey(settings)
-    return fetchUpstreamModelIds(settings, key)
+    return fetchUpstreamModelIds(settings)
   }
-
-  const openModelRouterConfigFile = async (settings: AppSettingsV1) => {
-    let path = join(app.getPath('userData'), 'model-router', 'config.json')
-    try {
-      const syncedSettings = await syncModelRouterSettingsFromConfigFile(settings, {
-        userDataDir: app.getPath('userData')
-      })
-      let effectiveSettings = settings
-      if (JSON.stringify(syncedSettings.modelRouter) !== JSON.stringify(settings.modelRouter)) {
-        const prev = await store.load()
-        effectiveSettings = await store.patch({ modelRouter: syncedSettings.modelRouter })
-        emitSettingsChanged(effectiveSettings)
-        queueRuntimeSettingsApply(prev, effectiveSettings)
-        scheduleCodexRuntimePrewarm(effectiveSettings, 'settings-switch')
-        void ensureModelRouterSidecar(effectiveSettings, {
-          userDataDir: app.getPath('userData'),
-          appRoot: app.getAppPath(),
-          log: (message) => logWarn('model-router', message)
-        }).catch((error) => {
-          logWarn('model-router', 'Failed to auto-start Model Router after config file open.', {
-            message: error instanceof Error ? error.message : String(error)
-          })
-        })
-      }
-      suppressModelRouterConfigFileWatch()
-      const ensured = await ensureModelRouterConfigFile(effectiveSettings, {
-        userDataDir: app.getPath('userData')
-      })
-      suppressModelRouterConfigFileWatch()
-      path = ensured.path
-      const message = await shell.openPath(path)
-      if (message) {
-        return { ok: false as const, path, message }
-      }
-      return { ok: true as const, path }
-    } catch (error) {
-      return {
-        ok: false as const,
-        path,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  }
-
-  const applyExternalModelRouterConfigFileChange = (): void => {
-    if (modelRouterConfigFileSyncPromise) return
-    const task = (async () => {
-      const prev = await store.load()
-      const synced = await syncModelRouterSettingsFromConfigFile(prev, {
-        userDataDir: app.getPath('userData')
-      })
-      if (JSON.stringify(synced.modelRouter) === JSON.stringify(prev.modelRouter)) return
-
-      const saved = await store.patch({ modelRouter: synced.modelRouter })
-      emitSettingsChanged(saved)
-      queueRuntimeSettingsApply(prev, saved)
-      scheduleCodexRuntimePrewarm(saved, 'settings-switch')
-      void ensureModelRouterSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('model-router', message)
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to auto-start Model Router after config file change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      if (isEvidenceDagEnabled(saved)) {
-        void ensureEvidenceDagSidecar(saved, {
-          userDataDir: app.getPath('userData'),
-          appRoot: app.getAppPath(),
-          log: (message) => logWarn('evidence-dag', message)
-        }).catch((error) => {
-          logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after config file change.', {
-            message: error instanceof Error ? error.message : String(error)
-          })
-        })
-      }
-      scheduleRuntime?.sync(saved)
-      workflowRuntime?.sync(saved)
-      remoteChannelRuntime?.sync(saved)
-      discordBotRuntime?.sync(saved)
-      zulipBotRuntime?.sync(saved)
-      syncWeixinBridgeRuntime(saved)
-    })().catch((error) => {
-      logWarn('model-router', 'Failed to sync Model Router settings from config file change.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }).finally(() => {
-      if (modelRouterConfigFileSyncPromise === task) {
-        modelRouterConfigFileSyncPromise = null
-      }
-    })
-    modelRouterConfigFileSyncPromise = task
-  }
-
-  startModelRouterConfigWatcher(app.getPath('userData'), applyExternalModelRouterConfigFileChange)
 
   installCapabilityResourceContentProtocol(protocol, {
     describe: (access) => capabilityBroker.describeResourceContent({
@@ -2410,10 +2348,20 @@ app.whenReady().then(async () => {
     }, access.resource, range)
   })
 
+  const readModelAccessStatus = (settings: AppSettingsV1) => getModelAccessStatus(settings, {
+    getCodingPlanCredentialStateImpl: async (_current, adapterId) =>
+      codingPlanCredentialStateForAdapter(
+        adapterId,
+        (input) => agentRuntimeHost.auxiliary(input)
+      )
+  })
+
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     getMainWindow: () => mainWindow,
     applySettingsPatch,
+    getModelAccessStatus: readModelAccessStatus,
+    traces: fullTraceStore,
     agentRuntime: agentRuntimeHost,
     fetchUpstreamModels: fetchModels,
     getRemoteChannelRuntime: () => remoteChannelRuntime,
@@ -2435,12 +2383,11 @@ app.whenReady().then(async () => {
     startWeixinInstallQrcode,
     pollWeixinInstall,
     resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
-    openModelRouterConfigFile,
     getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
     onRuntimeMcpConfigWritten: async () => {
       const settings = await store.load()
-      queueRuntimeMcpConfigApply(settings)
+      await queueRuntimeMcpConfigApply(settings)
     },
     showTurnCompleteNotification,
     getAppVersion: () => app.getVersion(),
@@ -2510,7 +2457,7 @@ app.whenReady().then(async () => {
     console.warn('[sciforge] prune logs:', err)
   })
 
-  if (resolveConfiguredApiKey(initial)) {
+  if (resolveLocalRuntimeApiKey(initial)) {
     setTimeout(() => {
       void localRuntimeAdapter.resolveExecutable(initial).catch((err) => {
         console.warn('[sciforge] prewarm local runtime binary:', err)
@@ -2543,7 +2490,6 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
-  stopModelRouterConfigWatcher()
   const server = devBrowserBridgeServer
   devBrowserBridgeServer = null
   void server?.close().catch((error) => {

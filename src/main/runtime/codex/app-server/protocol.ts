@@ -136,9 +136,9 @@ export type CodexAppServerThreadDeleteParams = {
 export type CodexAppServerTurnStartParams = {
   threadId: string
   input?: CodexAppServerInputItem[]
+  responsesapiClientMetadata?: Record<string, string> | null
   cwd?: string
   model?: string
-  modelProvider?: string
   approvalPolicy?: CodexAppServerApprovalPolicy
   sandboxPolicy?: CodexAppServerTurnSandboxPolicy
   [key: string]: unknown
@@ -155,4 +155,87 @@ export type CodexAppServerTurnSteerParams = {
   expectedTurnId: string
   input: CodexAppServerInputItem[]
   [key: string]: unknown
+}
+
+export type CodexAppServerPlanType =
+  | 'free'
+  | 'go'
+  | 'plus'
+  | 'pro'
+  | 'prolite'
+  | 'team'
+  | 'self_serve_business_usage_based'
+  | 'business'
+  | 'enterprise_cbp_usage_based'
+  | 'enterprise'
+  | 'edu'
+  | 'unknown'
+
+export type CodexAppServerAccount =
+  | { type: 'apiKey' }
+  | { type: 'chatgpt'; email: string; planType: CodexAppServerPlanType }
+  | { type: 'amazonBedrock' }
+
+export type CodexAppServerGetAccountParams = {
+  refreshToken?: boolean
+}
+
+export type CodexAppServerGetAccountResponse = {
+  account: CodexAppServerAccount | null
+  requiresOpenaiAuth: boolean
+}
+
+export type CodexAppServerLoginAccountParams =
+  | { type: 'chatgpt'; codexStreamlinedLogin?: boolean }
+  | { type: 'chatgptDeviceCode' }
+
+export type CodexAppServerLoginAccountResponse =
+  | { type: 'chatgpt'; loginId: string; authUrl: string }
+  | {
+    type: 'chatgptDeviceCode'
+    loginId: string
+    verificationUrl: string
+    userCode: string
+  }
+
+export type CodexAppServerAccountLoginCompletedNotification = {
+  loginId: string | null
+  success: boolean
+  error: string | null
+}
+
+export type CodexAppServerAccountUpdatedNotification = {
+  authMode: string | null
+  planType: CodexAppServerPlanType | null
+}
+
+export type CodexAppServerRateLimitWindow = {
+  usedPercent: number
+  windowDurationMins: number | null
+  resetsAt: number | null
+}
+
+export type CodexAppServerRateLimitSnapshot = {
+  limitId: string | null
+  limitName: string | null
+  primary: CodexAppServerRateLimitWindow | null
+  secondary: CodexAppServerRateLimitWindow | null
+  credits: {
+    hasCredits: boolean
+    unlimited: boolean
+    balance: string | null
+  } | null
+  individualLimit: Record<string, unknown> | null
+  planType: CodexAppServerPlanType | null
+  rateLimitReachedType: string | null
+}
+
+export type CodexAppServerGetAccountRateLimitsResponse = {
+  rateLimits: CodexAppServerRateLimitSnapshot
+  rateLimitsByLimitId: Record<string, CodexAppServerRateLimitSnapshot> | null
+  rateLimitResetCredits: { availableCount: number | string | bigint } | null
+}
+
+export type CodexAppServerAccountRateLimitsUpdatedNotification = {
+  rateLimits: CodexAppServerRateLimitSnapshot
 }

@@ -1,5 +1,6 @@
 import {
   chmodSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -7,6 +8,7 @@ import {
   statSync,
   writeFileSync
 } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -20,6 +22,7 @@ type BuilderFileSet = {
 
 type RuntimeEntry = {
   id: string
+  packageIds: string[]
   requiredPathsExport: string
   requiredPaths: string[]
   mcpNodeEntryPaths?: string[]
@@ -27,9 +30,11 @@ type RuntimeEntry = {
 
 type ReleaseWorkerManifest = {
   BUNDLED_FILE_FILTER: string[]
-  PACKAGE_DEFINITIONS: Record<string, { dir: string }>
+  BUILT_RUNTIME_UNPACK_GLOBS: string[]
+  PACKAGE_DEFINITIONS: Record<string, { dir: string; bundleTo?: string; filter?: string[] }>
   workspacePackageDirs: string[]
   bundledPackageDirs: string[]
+  bundledPackageTargets: string[]
   nonBundledPackageDirs: string[]
   runtimeEntries: RuntimeEntry[]
   mcpNodeEntryRequiredPaths: string[]
@@ -62,6 +67,7 @@ const releaseWorkerManifest = require(
   '../../scripts/release-worker-manifest.cjs'
 ) as ReleaseWorkerManifest
 const rootPackage = require('../../package.json') as RootPackageJson
+const projectRoot = dirname(require.resolve('../../package.json'))
 
 const tempRoots: string[] = []
 
@@ -201,7 +207,8 @@ describe('electron-builder local runtime packaging', () => {
       '**/kun/package*.json',
       '**/kun/node_modules/**/*',
       '**/node_modules/better-sqlite3/**/*',
-      '**/node_modules/node-pty/**/*'
+      '**/node_modules/node-pty/**/*',
+      '**/node_modules/proxy-from-env/**/*'
     ]))
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/node_modules/node-bin-darwin-*/*',
@@ -218,27 +225,14 @@ describe('electron-builder local runtime packaging', () => {
   it('derives release worker file sets and unpack globs from the shared manifest', () => {
     const fileSets = bundledDirectoryFileSets()
 
-    expect(releaseWorkerManifest.createBundledFileSets()).toEqual(
-      releaseWorkerManifest.bundledPackageDirs.map((packageDir) => ({
-        from: packageDir,
-        to: packageDir,
-        filter: releaseWorkerManifest.BUNDLED_FILE_FILTER
-      }))
-    )
+    expect(fileSets).toEqual(releaseWorkerManifest.createBundledFileSets())
     expect(fileSets.map((entry) => entry.from)).toEqual(releaseWorkerManifest.bundledPackageDirs)
     expect(builderConfig.asarUnpack).toEqual(expect.arrayContaining(
       releaseWorkerManifest.createAsarUnpackGlobs()
     ))
-
-    for (const packageDir of releaseWorkerManifest.bundledPackageDirs) {
-      const fileSet = fileSets.find((entry) => entry.from === packageDir)
-
-      expect(fileSet).toMatchObject({
-        from: packageDir,
-        to: packageDir
-      })
-      expect(fileSet?.filter).toEqual(releaseWorkerManifest.BUNDLED_FILE_FILTER)
-    }
+    expect(releaseWorkerManifest.BUILT_RUNTIME_UNPACK_GLOBS).toEqual(['**/out/main/**/*'])
+    expect(builderConfig.asarUnpack).toContain('**/out/main/**/*')
+    expect(fileSets.map((entry) => entry.to)).toEqual(releaseWorkerManifest.bundledPackageTargets)
   })
 
   it('keeps pending release-strategy packages out of bundled app content', () => {
@@ -380,13 +374,83 @@ describe('electron-builder local runtime packaging', () => {
 
     expect(modelRouter?.requiredPaths).toEqual(expect.arrayContaining([
       'packages/workers/model-router/package.json',
+      'packages/workers/model-router/src/full-trace-recorder.ts',
       'packages/workers/model-router/src/cli.ts',
       'packages/workers/model-router/src/manifest.ts',
-      'packages/workers/model-router/tools/model-router-trace-audit.ts'
+      'packages/workers/model-router/src/trace-correlation.ts',
+      'packages/workers/model-router/src/trace-correlation/codex.ts',
+      'packages/workers/model-router/src/upstream-drivers.ts',
+      'out/main/model-router-sidecar-node-entry.js'
     ]))
+    expect(modelRouter?.packageIds).toEqual(['modelRouter', 'fullTrace'])
     expect(modelRouter?.requiredPaths).not.toEqual(expect.arrayContaining([
       'packages/workers/sci-modality-router/package.json'
     ]))
+  })
+
+  it('bundles Plan Gateway as its own release runtime', () => {
+    const planGateway = releaseWorkerManifest.runtimeEntries.find((entry) => entry.id === 'plan-gateway')
+
+    expect(planGateway?.requiredPaths).toEqual(expect.arrayContaining([
+      'packages/workers/plan-gateway/package.json',
+      'packages/workers/plan-gateway/src/cli.ts',
+      'packages/workers/plan-gateway/src/gateway.ts',
+      'packages/workers/plan-gateway/src/adapters/codex.ts',
+      'packages/workers/plan-gateway/src/manifest.ts',
+      'packages/workers/plan-gateway/src/trace-sink.ts',
+      'node_modules/proxy-from-env/package.json',
+      'out/main/plan-gateway-sidecar-node-entry.js'
+    ]))
+    expect(planGateway?.packageIds).toEqual(['planGateway', 'fullTrace'])
+    expect(releaseWorkerManifest.bundledPackageDirs).toContain('packages/workers/plan-gateway')
+  })
+
+  it('keeps packaged local-runtime workspace links resolvable', () => {
+    expect(releaseWorkerManifest.createBundledFileSets()).toEqual(expect.arrayContaining([
+      {
+        from: 'packages/execution-governance',
+        to: 'packages/execution-governance',
+        filter: ['package.json', 'dist/*.js']
+      },
+      {
+        from: 'packages/full-trace',
+        to: 'packages/full-trace',
+        filter: ['package.json', 'dist/*.js']
+      }
+    ]))
+  })
+
+  it('installs the built Full Trace package at the workers runtime resolution path', () => {
+    const fullTrace = releaseWorkerManifest.runtimeEntries.find((entry) => entry.id === 'full-trace')
+    const fullTraceFileSet = releaseWorkerManifest.createBundledFileSets()
+      .find((entry) => entry.from === 'packages/full-trace')
+
+    expect(fullTraceFileSet).toEqual({
+      from: 'packages/full-trace',
+      to: 'node_modules/@sciforge/full-trace',
+      filter: ['package.json', 'dist/*.js']
+    })
+    expect(fullTrace?.requiredPaths).toEqual([
+      'node_modules/@sciforge/full-trace/package.json',
+      'node_modules/@sciforge/full-trace/dist/index.js',
+      'node_modules/@sciforge/full-trace/dist/redaction.js',
+      'node_modules/@sciforge/full-trace/dist/schema.js',
+      'node_modules/@sciforge/full-trace/dist/store.js'
+    ])
+
+    const packagedRoot = tempRoot()
+    const installedPackage = join(packagedRoot, 'node_modules/@sciforge/full-trace')
+    mkdirSync(installedPackage, { recursive: true })
+    cpSync(join(projectRoot, 'packages/full-trace/package.json'), join(installedPackage, 'package.json'))
+    cpSync(join(projectRoot, 'packages/full-trace/dist'), join(installedPackage, 'dist'), {
+      recursive: true
+    })
+
+    expect(execFileSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      'const trace = await import("@sciforge/full-trace"); process.stdout.write(typeof trace.LocalTraceStore);'
+    ], { cwd: packagedRoot, encoding: 'utf8' })).toBe('function')
   })
 
   it('validates built MCP node entries before release artifacts are created', () => {
@@ -496,11 +560,15 @@ describe('root package workspace contracts', () => {
     expect(rootPackage.workspaces).not.toContain('kun')
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')
     expect(rootPackage.scripts).toMatchObject({
+      'build:full-trace': 'npm --workspace @sciforge/full-trace run build',
       'build:local-runtime': 'node ./scripts/local-runtime-package.cjs build',
       'rebuild:electron-native': 'node ./scripts/local-runtime-package.cjs rebuild-electron-native',
       'verify:electron-native': 'node ./scripts/local-runtime-package.cjs verify-electron-native',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
+      'plan-gateway:start': 'npm --workspace @sciforge/plan-gateway run start',
+      'plan-gateway:test': 'npm --workspace @sciforge/plan-gateway run test',
+      'plan-gateway:typecheck': 'npm --workspace @sciforge/plan-gateway run typecheck',
       'paper-radar:start': 'npm --workspace @sciforge/paper-radar run start',
       'paper-radar:test': 'npm --workspace @sciforge/paper-radar run test',
       'paper-radar:typecheck': 'npm --workspace @sciforge/paper-radar run typecheck'

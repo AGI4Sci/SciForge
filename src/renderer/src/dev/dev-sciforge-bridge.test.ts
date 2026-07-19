@@ -423,12 +423,32 @@ describe('dev sciforge browser bridge', () => {
     installWindow()
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const body = init?.body
-        ? JSON.parse(String(init.body)) as { channel?: string; payload?: { request?: { actionId?: string } } }
+        ? JSON.parse(String(init.body)) as {
+            channel?: string
+            payload?: {
+              expectedContractVersion?: number
+              requiredCapabilityIds?: string[]
+              request?: { actionId?: string }
+            }
+          }
         : {}
       const resource = {
         token: 'cap_abcdefghijklmnopqrstuvwxyz',
         semanticRevision: 'revision-1',
         expiresAt: '2026-07-16T14:00:00.000Z'
+      }
+      if (body.channel === 'capability:readiness') {
+        return new Response(JSON.stringify({
+          ok: true,
+          payload: {
+            contractVersion: body.payload?.expectedContractVersion ?? 1,
+            status: 'ready',
+            registryFingerprint: 'a'.repeat(64),
+            availableCapabilityIds: body.payload?.requiredCapabilityIds ?? [],
+            missingCapabilityIds: [],
+            message: 'Capability broker is ready.'
+          }
+        }))
       }
       if (body.channel === 'capability:observe') {
         return new Response(JSON.stringify({

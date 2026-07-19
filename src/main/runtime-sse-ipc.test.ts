@@ -5,7 +5,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -20,7 +19,6 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'sciforge',
-    provider: defaultModelProviderSettings(),
     agents: {
       sciforge: {
         ...defaultLocalRuntimeSettings(),

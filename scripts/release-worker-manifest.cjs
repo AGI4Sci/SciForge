@@ -2,10 +2,36 @@ const BUNDLED_FILE_FILTER = [
   '**/*',
   '**/.*'
 ]
+const BUILT_RUNTIME_UNPACK_GLOBS = ['**/out/main/**/*']
 
 const PACKAGE_DEFINITIONS = {
+  fullTrace: {
+    dir: 'packages/full-trace',
+    bundleTo: 'node_modules/@sciforge/full-trace',
+    filter: [
+      'package.json',
+      'dist/*.js'
+    ]
+  },
+  localRuntimeExecutionGovernance: {
+    dir: 'packages/execution-governance',
+    filter: [
+      'package.json',
+      'dist/*.js'
+    ]
+  },
+  localRuntimeFullTrace: {
+    dir: 'packages/full-trace',
+    filter: [
+      'package.json',
+      'dist/*.js'
+    ]
+  },
   modelRouter: {
     dir: 'packages/workers/model-router'
+  },
+  planGateway: {
+    dir: 'packages/workers/plan-gateway'
   },
   schedule: {
     dir: 'packages/workers/schedule'
@@ -64,7 +90,9 @@ const PACKAGE_DEFINITIONS = {
 }
 
 const WORKSPACE_PACKAGE_IDS = [
+  'fullTrace',
   'modelRouter',
+  'planGateway',
   'schedule',
   'search',
   'workflow',
@@ -85,7 +113,11 @@ const WORKSPACE_PACKAGE_IDS = [
 ]
 
 const BUNDLED_PACKAGE_IDS = [
+  'fullTrace',
+  'localRuntimeExecutionGovernance',
+  'localRuntimeFullTrace',
   'modelRouter',
+  'planGateway',
   'schedule',
   'search',
   'workflow',
@@ -122,19 +154,81 @@ function packagePaths(packageId, relativePaths) {
   return relativePaths.map((relativePath) => `${dir}/${relativePath}`)
 }
 
+function packageBundleDir(packageId) {
+  const definition = PACKAGE_DEFINITIONS[packageId]
+  if (!definition) {
+    throw new Error(`Unknown release package id: ${packageId}`)
+  }
+  return definition.bundleTo || definition.dir
+}
+
+function bundledPackagePaths(packageId, relativePaths) {
+  const dir = packageBundleDir(packageId)
+  return relativePaths.map((relativePath) => `${dir}/${relativePath}`)
+}
+
 const RUNTIME_ENTRIES = [
+  {
+    id: 'full-trace',
+    label: 'Full Trace',
+    packageIds: ['fullTrace'],
+    requiredPathsExport: 'FULL_TRACE_RUNTIME_REQUIRED_PATHS',
+    requiredPaths: bundledPackagePaths('fullTrace', [
+      'package.json',
+      'dist/index.js',
+      'dist/redaction.js',
+      'dist/schema.js',
+      'dist/store.js'
+    ])
+  },
   {
     id: 'model-router',
     label: 'Model Router',
-    packageIds: ['modelRouter'],
+    packageIds: ['modelRouter', 'fullTrace'],
     requiredPathsExport: 'MODEL_ROUTER_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: packagePaths('modelRouter', [
-      'package.json',
-      'src/cli.ts',
-      'src/router.ts',
-      'src/manifest.ts',
-      'tools/model-router-trace-audit.ts'
-    ])
+    requiredPaths: [
+      ...packagePaths('modelRouter', [
+        'package.json',
+        'src/cli-options.ts',
+        'src/cli.ts',
+        'src/full-trace-recorder.ts',
+        'src/http-body.ts',
+        'src/index.ts',
+        'src/router.ts',
+        'src/manifest.ts',
+        'src/request-hygiene.ts',
+        'src/response-compat.ts',
+        'src/trace-correlation.ts',
+        'src/trace-correlation/codex.ts',
+        'src/trace-redaction.ts',
+        'src/upstream-drivers.ts'
+      ]),
+      'out/main/model-router-sidecar-node-entry.js'
+    ]
+  },
+  {
+    id: 'plan-gateway',
+    label: 'Plan Gateway',
+    packageIds: ['planGateway', 'fullTrace'],
+    requiredPathsExport: 'PLAN_GATEWAY_RUNTIME_REQUIRED_PATHS',
+    requiredPaths: [
+      ...packagePaths('planGateway', [
+        'package.json',
+        'src/adapters/index.ts',
+        'src/cli-options.ts',
+        'src/cli.ts',
+        'src/gateway.ts',
+        'src/contract.ts',
+        'src/index.ts',
+        'src/registry.ts',
+        'src/network-policy.ts',
+        'src/adapters/codex.ts',
+        'src/manifest.ts',
+        'src/trace-sink.ts'
+      ]),
+      'node_modules/proxy-from-env/package.json',
+      'out/main/plan-gateway-sidecar-node-entry.js'
+    ]
   },
   {
     id: 'search',
@@ -362,33 +456,40 @@ const RUNTIME_ENTRIES = [
 
 const workspacePackageDirs = WORKSPACE_PACKAGE_IDS.map(packageDir)
 const bundledPackageDirs = BUNDLED_PACKAGE_IDS.map(packageDir)
+const bundledPackageTargets = BUNDLED_PACKAGE_IDS.map(packageBundleDir)
 const nonBundledPackageDirs = NON_BUNDLED_PACKAGE_IDS.map(packageDir)
 const mcpNodeEntryRequiredPaths = RUNTIME_ENTRIES.flatMap((entry) => entry.mcpNodeEntryPaths || [])
 const runtimeRequiredPathExports = Object.fromEntries(
   RUNTIME_ENTRIES.map((entry) => [entry.requiredPathsExport, entry.requiredPaths])
 )
 
-function createBundledFileSet(packageDirectory) {
+function createBundledFileSet(packageId) {
+  const definition = PACKAGE_DEFINITIONS[packageId]
   return {
-    from: packageDirectory,
-    to: packageDirectory,
-    filter: [...BUNDLED_FILE_FILTER]
+    from: packageDir(packageId),
+    to: packageBundleDir(packageId),
+    filter: [...(definition.filter || BUNDLED_FILE_FILTER)]
   }
 }
 
 function createBundledFileSets() {
-  return bundledPackageDirs.map(createBundledFileSet)
+  return BUNDLED_PACKAGE_IDS.map(createBundledFileSet)
 }
 
 function createAsarUnpackGlobs() {
-  return bundledPackageDirs.map((packageDirectory) => `**/${packageDirectory}/**/*`)
+  return [
+    ...BUILT_RUNTIME_UNPACK_GLOBS,
+    ...bundledPackageTargets.map((packageDirectory) => `**/${packageDirectory}/**/*`)
+  ]
 }
 
 module.exports = {
   BUNDLED_FILE_FILTER,
+  BUILT_RUNTIME_UNPACK_GLOBS,
   PACKAGE_DEFINITIONS,
   workspacePackageDirs,
   bundledPackageDirs,
+  bundledPackageTargets,
   nonBundledPackageDirs,
   runtimeEntries: RUNTIME_ENTRIES,
   mcpNodeEntryRequiredPaths,

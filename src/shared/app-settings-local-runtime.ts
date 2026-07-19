@@ -3,6 +3,7 @@ import {
   DEFAULT_LOCAL_RUNTIME_DATA_DIR,
   DEFAULT_LOCAL_RUNTIME_MODEL,
   DEFAULT_LOCAL_RUNTIME_PORT,
+  DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   DEFAULT_SANDBOX_MODE,
   type AppSettingsV1,
   type LocalRuntimeContextCompactionSettingsV1,
@@ -14,15 +15,14 @@ import {
   type RuntimeGuardSettingsV1,
   type LocalRuntimeSettingsPatchV1,
   type LocalRuntimeSettingsV1,
+  type ResolvedLocalRuntimeSettingsV1,
   type AgentRuntimeSettingsEnvelopePatchV1,
   type AgentRuntimeSettingsEnvelopeV1,
   type LocalRuntimeStorageSettingsV1,
   type LocalRuntimeTokenEconomySettingsPatchV1,
   type LocalRuntimeTokenEconomySettingsV1
 } from './app-settings-types'
-import {
-  resolveLocalRuntimeSettings
-} from './app-settings-provider'
+import { resolveRuntimeModelRouterSettings } from './app-settings-model-router'
 import {
   defaultCodexRuntimeSettings,
   mergeCodexRuntimeSettings
@@ -43,7 +43,6 @@ export function defaultLocalRuntimeSettings(
     binaryPath: '',
     port,
     autoStart: true,
-    providerId: '',
     runtimeToken: '',
     dataDir: DEFAULT_LOCAL_RUNTIME_DATA_DIR,
     model: DEFAULT_LOCAL_RUNTIME_MODEL,
@@ -310,7 +309,6 @@ function supportedLocalRuntimePatch(
   if (typeof source.binaryPath === 'string') next.binaryPath = source.binaryPath
   if (typeof source.port === 'number') next.port = source.port
   if (typeof source.autoStart === 'boolean') next.autoStart = source.autoStart
-  if (typeof source.providerId === 'string') next.providerId = source.providerId
   if (typeof source.runtimeToken === 'string') next.runtimeToken = source.runtimeToken
   if (typeof source.dataDir === 'string') next.dataDir = source.dataDir
   if (typeof source.model === 'string') next.model = source.model
@@ -544,6 +542,17 @@ export function isLocalRuntimeInsecure(runtime: Pick<LocalRuntimeSettingsV1, 'in
 
 export function getActiveAgentApiKey(settings: AppSettingsV1): string {
   return resolveLocalRuntimeSettings(settings).apiKey?.trim() ?? ''
+}
+
+export function resolveLocalRuntimeSettings(settings: AppSettingsV1): ResolvedLocalRuntimeSettingsV1 {
+  const runtime = getLocalRuntimeSettings(settings)
+  const router = resolveRuntimeModelRouterSettings(settings)
+  return {
+    ...runtime,
+    apiKey: router.apiKey,
+    baseUrl: router.baseUrl,
+    model: router.model || DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+  }
 }
 
 export function mergeAgentRuntimeSettings(

@@ -183,7 +183,7 @@ export type CapabilityState = {
 
 export type AgentRuntimeCapabilityId =
   | 'codeNavigation.lsp'
-  | 'modelAudit.runtimeRequests'
+  | 'fullTrace.agentEvents'
   | 'context.state'
   | 'context.ledger'
   | 'context.handoff'
@@ -228,99 +228,6 @@ export type AgentRuntimeCodeNavigationOutput = {
   filePath?: string
   result: unknown
   degraded?: boolean
-}
-
-export type AgentRuntimeModelAuditToolCall = {
-  callId?: string
-  toolName: string
-  arguments?: unknown
-  result?: unknown
-  status?: 'running' | 'success' | 'error'
-  phase?: AgentRuntimeToolExecutionPhase
-  factSource?: AgentRuntimeToolFactSource
-  evidenceStrength?: AgentRuntimeToolEvidenceStrength
-  attempt?: number
-  resultDigest?: string
-  errorCode?: string
-}
-
-export type AgentRuntimeModelAuditRequestBodySummary = {
-  schema: 'agent-runtime.turnStart'
-  keys: string[]
-  textChars: number
-  displayTextChars?: number
-  attachmentCount: number
-  fileReferenceCount: number
-  inlineContextReferenceCount: number
-  modelRouterObjectReferenceCount: number
-  hasGuiPlan: boolean
-  estimatedJsonChars: number
-}
-
-export type AgentRuntimeModelAuditModelRouterBodySummary = {
-  schema: 'model-router.responses.runtime'
-  keys: string[]
-  inputTextChars: number
-  displayTextChars?: number
-  metadataKeys: string[]
-  attachmentCount: number
-  fileReferenceCount: number
-  inlineContextReferenceCount: number
-  modelRouterObjectReferenceCount: number
-  hasGuiPlan: boolean
-  estimatedJsonChars: number
-}
-
-export type AgentRuntimeModelAuditModelRouterSummary = {
-  providerAlias: 'model-router'
-  modelAlias: string
-  requestUrl: string
-  endpointRoute: 'responses'
-  requestBodySummary: AgentRuntimeModelAuditModelRouterBodySummary
-}
-
-export type AgentRuntimeModelAuditRequestSummary = {
-  text?: string
-  displayText?: string
-  workspace?: string
-  mode?: string
-  model?: string
-  reasoningEffort?: string
-  attachmentIds?: string[]
-  fileReferences?: Array<{
-    relativePath: string
-    name: string
-    kind?: AgentRuntimeWorkspaceReferenceKind
-    mimeType?: string
-    delivery?: AgentRuntimeFileReference['delivery']
-    modelRouterObject?: boolean
-  }>
-  bodySummary: AgentRuntimeModelAuditRequestBodySummary
-}
-
-export type AgentRuntimeModelAuditRecord = {
-  id: string
-  runtimeId: AgentRuntimeId
-  threadId: string
-  turnId?: string
-  provider?: string
-  model?: string
-  modelRouterUrl?: string
-  providerAlias?: string
-  modelAlias?: string
-  modelRouter?: AgentRuntimeModelAuditModelRouterSummary
-  startedAt: string
-  finishedAt?: string
-  durationMs?: number
-  request: AgentRuntimeModelAuditRequestSummary
-  streamOutput: {
-    text: string
-    reasoning: string
-    toolCalls: AgentRuntimeModelAuditToolCall[]
-    usage?: AgentRuntimeUsage
-    stopReason?: string
-    error?: string
-  }
 }
 
 export type AgentRuntimeContextState = {
@@ -889,14 +796,17 @@ export function directAgentRuntimeChildrenForThread(
 }
 
 export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
+  'getCodingPlanAccount',
+  'startCodingPlanLogin',
+  'waitForCodingPlanLogin',
+  'logoutCodingPlanAccount',
+  'getCodingPlanRateLimits',
   'reviewThread',
   'listThreadChildren',
   'readChildTranscript',
   'getRuntimeInfo',
   'getToolDiagnostics',
   'runCodeNavigation',
-  'listModelAuditRecords',
-  'clearModelAuditRecords',
   'getContextState',
   'getRuntimeContextLedger',
   'recordRuntimeContextLedger',
@@ -932,6 +842,11 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
 export type AgentRuntimeAuxiliaryOperation = typeof AGENT_RUNTIME_AUXILIARY_OPERATIONS[number]
 
 export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
+  'getCodingPlanAccount',
+  'startCodingPlanLogin',
+  'waitForCodingPlanLogin',
+  'logoutCodingPlanAccount',
+  'getCodingPlanRateLimits',
   'reviewThread',
   'listThreadChildren',
   'readChildTranscript',
@@ -1307,7 +1222,7 @@ export type AgentRuntimeCapabilities = {
     diagnostics: CapabilityState
   }
   observability?: {
-    modelAudit: CapabilityState & { capacity?: number; inMemory?: boolean }
+    fullTrace: CapabilityState & { durable: boolean }
   }
   context?: {
     state: CapabilityState
@@ -1432,7 +1347,7 @@ export function createDefaultAgentRuntimeCapabilities(input: {
       diagnostics: unsupported()
     },
     observability: {
-      modelAudit: { ...unsupported(), capacity: 0, inMemory: true }
+      fullTrace: { ...unsupported(), durable: true }
     },
     context: {
       state: unsupported(),

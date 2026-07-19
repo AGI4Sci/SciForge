@@ -4,13 +4,17 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
 import {
+  sanitizeTraceTextChunks,
+  type TraceEvent,
+  type TraceEventInput
+} from '@sciforge/full-trace'
+import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -23,7 +27,6 @@ import type {
   AgentRuntimeEvent,
   AgentRuntimeGitCheckpoint,
   AgentRuntimeId,
-  AgentRuntimeModelAuditRecord,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
   AgentRuntimeThread,
@@ -41,7 +44,7 @@ import { createAgentRuntimeHost } from './host'
 import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
 import { createLocalRuntimeAgentRuntimeAdapter } from '../local-runtime-agent-runtime-adapter'
-import { ModelRequestAuditRecorder } from '../../services/model-request-audit-service'
+import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from '../../services/runtime-context-ledger-service'
 import { SharedMemoryService } from '../../services/shared-memory-service'
@@ -64,7 +67,6 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -83,6 +85,21 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
+  }
+}
+
+function fakeTraceRecorder(): {
+  recorder: AgentRuntimeTraceRecorder
+  append: ReturnType<typeof vi.fn<(input: TraceEventInput<'agent_event'>) => Promise<TraceEvent>>>
+} {
+  const append = vi.fn(async (input: TraceEventInput<'agent_event'>) => input as unknown as TraceEvent)
+  return {
+    recorder: new AgentRuntimeTraceRecorder({
+      append,
+      appendMany: async (inputs) => Promise.all(inputs.map((input) => append(input))),
+      sanitizeTextChunks: (chunks) => sanitizeTraceTextChunks(chunks)
+    }),
+    append
   }
 }
 
@@ -320,6 +337,44 @@ describe('AgentRuntimeHost', () => {
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       { runtimeId: 'sciforge', threadId: 'local-thread', relation: 'primary' }
     )
+  })
+
+  it('returns an empty list when the active runtime is healthy and an inactive runtime is unavailable', async () => {
+    const thread = {
+      id: 'unused-thread',
+      runtimeId: 'codex' as const,
+      title: 'Unused',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const local = fakeAdapter('sciforge', { ...thread, runtimeId: 'sciforge' })
+    const codex = fakeAdapter('codex', thread)
+    vi.mocked(local.listThreads).mockRejectedValue(new Error('inactive local runtime unavailable'))
+    vi.mocked(codex.listThreads).mockResolvedValue([])
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [local, codex]
+    })
+
+    await expect(host.listThreads()).resolves.toEqual([])
+  })
+
+  it('surfaces the active runtime failure when every runtime returns no threads', async () => {
+    const thread = {
+      id: 'unused-thread',
+      runtimeId: 'codex' as const,
+      title: 'Unused',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const local = fakeAdapter('sciforge', { ...thread, runtimeId: 'sciforge' })
+    const codex = fakeAdapter('codex', thread)
+    vi.mocked(local.listThreads).mockResolvedValue([])
+    vi.mocked(codex.listThreads).mockRejectedValue(new Error('active codex runtime unavailable'))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [local, codex]
+    })
+
+    await expect(host.listThreads()).rejects.toThrow('active codex runtime unavailable')
   })
 
   it('requires explicit runtime ids for thread, turn, and event operations', async () => {
@@ -971,20 +1026,19 @@ describe('AgentRuntimeHost', () => {
     const adapterAuxiliary = vi.fn(async () => ({ adapter: true }))
     adapter.auxiliary = adapterAuxiliary
     const contextState = new RuntimeContextStateService()
-    const modelAudit = new ModelRequestAuditRecorder()
-    vi.spyOn(modelAudit, 'snapshot')
+    const { recorder: trace } = fakeTraceRecorder()
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [adapter],
       services: {
         contextState,
-        modelAudit
+        trace
       }
     })
 
     await expect(host.capabilities('codex')).resolves.toMatchObject({
       observability: {
-        modelAudit: { available: true, inMemory: true }
+        fullTrace: { available: true, durable: true }
       },
       context: {
         state: { available: true }
@@ -1002,16 +1056,9 @@ describe('AgentRuntimeHost', () => {
     })
     expect(adapterAuxiliary).not.toHaveBeenCalled()
 
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'listModelAuditRecords',
-      payload: {}
-    })).resolves.toEqual([])
-    expect(modelAudit.snapshot).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: undefined,
-      limit: undefined
-    })
+    expect((await host.capabilities('codex')).capabilityDescriptors).toContainEqual(
+      expect.objectContaining({ id: 'fullTrace.agentEvents', available: true })
+    )
   })
 
   it('exposes context ledger and handoff through the shared host contract', async () => {
@@ -1191,11 +1238,10 @@ describe('AgentRuntimeHost', () => {
       id: 'directive-source-task',
       text: 'Preserve the source task requirements across runtime handoff.'
     })
-    const modelAudit = new ModelRequestAuditRecorder()
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [codex, claude],
-      services: { contextLedger, modelAudit }
+      services: { contextLedger }
     })
 
     await host.auxiliary({
@@ -1271,7 +1317,7 @@ describe('AgentRuntimeHost', () => {
     expect(startTurnInput?.text).toContain('wet-lab closed-loop agents and experiment protocol automation')
     expect(startTurnInput?.text).toContain('Current user request:\nPlease continue from here')
     expect(startTurnInput?.metadata).toMatchObject({
-      schemaVersion: 'sciforge.model-router.request-audit.v1',
+      schemaVersion: 'sciforge.trace.correlation.v1',
       route: 'model-router.responses',
       source: 'agent-runtime-host',
       operation: 'runtime_handoff',
@@ -1282,19 +1328,6 @@ describe('AgentRuntimeHost', () => {
       targetRuntimeId: 'claude',
       targetThreadId: 'claude-handoff-thread',
       packetDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
-    })
-    const auditRecords = modelAudit.snapshot({ runtimeId: 'claude', threadId: 'claude-handoff-thread' })
-    expect(auditRecords[0]).toMatchObject({
-      modelRouter: {
-        requestBodySummary: {
-          metadataKeys: expect.arrayContaining(['metadata', 'runtimeId', 'threadId', 'workspace'])
-        }
-      },
-      request: {
-        bodySummary: {
-          keys: expect.arrayContaining(['metadata', 'text'])
-        }
-      }
     })
     expect(claude.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -1322,7 +1355,7 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
-  it('records turn audit output from the neutral event stream without changing yielded events', async () => {
+  it('records durable normalized Agent events without changing yielded events', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -1346,48 +1379,11 @@ describe('AgentRuntimeHost', () => {
         state: 'completed'
       } satisfies AgentRuntimeEvent
     })
-    const modelAudit = new ModelRequestAuditRecorder()
+    const { recorder: trace, append } = fakeTraceRecorder()
     const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...settings('codex'),
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'http://127.0.0.1:4545/v1',
-          publicModelAlias: 'public-router-alias',
-          runtimeApiKey: 'runtime-secret',
-          profiles: {
-            default: {
-              textReasoner: {
-                provider: 'private-provider',
-                baseUrl: 'https://private-provider.example/v1',
-                apiKey: 'private-provider-secret',
-                model: 'private-provider-model'
-              },
-              imageGenerator: {
-                provider: 'private-image',
-                baseUrl: 'https://private-image.example/v1',
-                apiKey: 'private-image-secret',
-                model: 'private-image-model'
-              },
-              translators: {
-                vision: {
-                  provider: 'private-vision',
-                  baseUrl: 'https://private-vision.example/v1',
-                  apiKey: 'private-vision-secret',
-                  model: 'private-vision-model'
-                },
-                scientific: {
-                  baseUrl: 'http://127.0.0.1:3898',
-                  apiKey: 'private-scientific-secret',
-                  model: 'private-scientific-model'
-                }
-              }
-            }
-          }
-        }
-      }),
+      settings: async () => settings('codex'),
       adapters: [adapter],
-      services: { modelAudit }
+      services: { trace }
     })
 
     await host.startTurn({
@@ -1405,44 +1401,168 @@ describe('AgentRuntimeHost', () => {
     }
 
     expect(events.map((event) => event.kind)).toEqual(['assistant_delta', 'turn_lifecycle'])
-    expect(modelAudit.snapshot()[0]).toMatchObject({
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'agent-runtime',
+      kind: 'agent_event',
       runtimeId: 'codex',
       threadId: 'codex-thread',
       turnId: 'codex-turn',
-      provider: 'model-router',
-      model: 'public-router-alias',
-      modelRouterUrl: 'http://127.0.0.1:4545/v1',
-      providerAlias: 'model-router',
-      modelAlias: 'public-router-alias',
-      modelRouter: {
-        providerAlias: 'model-router',
-        modelAlias: 'public-router-alias',
-        requestUrl: 'http://127.0.0.1:4545/v1/responses',
-        endpointRoute: 'responses',
-        requestBodySummary: {
-          schema: 'model-router.responses.runtime',
-          keys: ['input', 'metadata'],
-          inputTextChars: 'Say hello'.length,
-          metadataKeys: ['runtimeId', 'threadId', 'workspace'],
-          attachmentCount: 0,
-          fileReferenceCount: 0,
-          hasGuiPlan: false
-        }
-      },
-      streamOutput: {
-        text: 'hello',
-        stopReason: 'completed'
+      payload: {
+        eventKind: 'assistant',
+        event: expect.objectContaining({ kind: 'assistant_delta', text: 'hello' })
       }
-    })
-    const serialized = JSON.stringify(modelAudit.snapshot()[0])
-    expect(serialized).not.toContain('runtime-secret')
-    expect(serialized).not.toContain('private-provider')
-    expect(serialized).not.toContain('private-provider.example')
-    expect(serialized).not.toContain('private-provider-model')
-    expect(serialized).not.toContain('private-provider-secret')
+    }))
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      payload: {
+        eventKind: 'lifecycle',
+        event: expect.objectContaining({ kind: 'turn_lifecycle', state: 'completed' })
+      }
+    }))
   })
 
-  it('audits SciForge, Codex, and Claude turns through shared auxiliary list and clear operations', async () => {
+  it('captures a turn when no renderer subscribes to runtime events', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'assistant-1',
+        text: 'background capture'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Capture this without a renderer.'
+    })
+
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps durable capture on one authoritative writer across renderer subscriptions', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'assistant-1',
+        seq: 1,
+        text: 'one event'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        seq: 2,
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const observeEvent = vi.spyOn(trace, 'observeEvent')
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+    await host.startTurn({ runtimeId: 'codex', threadId: 'codex-thread', text: 'Observe twice.' })
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+
+    const consume = async (): Promise<void> => {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId: 'codex-thread'
+      })) {
+        // Consume the complete bounded test stream.
+      }
+    }
+    await Promise.all([consume(), consume()])
+
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(observeEvent).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not replay historical turns into a newly started turn trace', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'historical-turn',
+        itemId: 'historical-assistant',
+        text: 'old output'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'current-assistant',
+        text: 'current output'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+
+    await host.startTurn({ runtimeId: 'codex', threadId: 'codex-thread', text: 'New turn.' })
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+
+    expect(append).not.toHaveBeenCalledWith(expect.objectContaining({ turnId: 'historical-turn' }))
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: 'codex-turn',
+      payload: expect.objectContaining({
+        event: expect.objectContaining({ text: 'current output' })
+      })
+    }))
+  })
+
+  it('captures SciForge, Codex, and Claude events through the same durable trace recorder', async () => {
     for (const runtimeId of ['sciforge', 'codex', 'claude'] as const) {
       const adapter = fakeAdapter(runtimeId, {
         id: `${runtimeId}-thread`,
@@ -1497,27 +1617,14 @@ describe('AgentRuntimeHost', () => {
           state: 'completed'
         } satisfies AgentRuntimeEvent
       })
-      const modelAudit = new ModelRequestAuditRecorder()
+      const { recorder: trace, append } = fakeTraceRecorder()
       const host = createAgentRuntimeHost({
-        settings: async () => ({
-          ...settings(runtimeId),
-          modelRouter: {
-            ...defaultModelRouterSettings(),
-            baseUrl: 'http://127.0.0.1:4545/v1',
-            publicModelAlias: 'public-router-alias',
-            runtimeApiKey: 'runtime-secret'
-          }
-        }),
+        settings: async () => settings(runtimeId),
         adapters: [adapter],
-        services: { modelAudit }
+        services: { trace }
       })
 
       const requestText = `Read /Users/alice/private-${runtimeId} using token=runtime-secret`
-      const guardedRequestText = withExecutionIntegrityRequirement({
-        runtimeId,
-        threadId: `${runtimeId}-thread`,
-        text: requestText
-      }).text
       await host.startTurn({
         runtimeId,
         threadId: `${runtimeId}-thread`,
@@ -1536,86 +1643,18 @@ describe('AgentRuntimeHost', () => {
       expect(visibleAssistant).toMatchObject({
         text: `visible output from /Users/alice/private-${runtimeId} with token=runtime-secret`
       })
-      const records = await host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: { runtimeId, threadId: `${runtimeId}-thread` }
-      }) as AgentRuntimeModelAuditRecord[]
-      expect(records).toHaveLength(1)
-      expect(records[0]).toMatchObject({
+      expect(append).toHaveBeenCalledTimes(4)
+      expect(append.mock.calls.map(([event]) => event.payload.eventKind).sort()).toEqual([
+        'assistant',
+        'lifecycle',
+        'tool',
+        'usage'
+      ])
+      expect(append).toHaveBeenCalledWith(expect.objectContaining({
         runtimeId,
         threadId: `${runtimeId}-thread`,
-        turnId: `${runtimeId}-turn`,
-          provider: 'model-router',
-          model: 'public-router-alias',
-          modelRouterUrl: 'http://127.0.0.1:4545/v1',
-          providerAlias: 'model-router',
-          modelAlias: 'public-router-alias',
-          modelRouter: {
-            providerAlias: 'model-router',
-            modelAlias: 'public-router-alias',
-            requestUrl: 'http://127.0.0.1:4545/v1/responses',
-            endpointRoute: 'responses',
-            requestBodySummary: {
-              schema: 'model-router.responses.runtime',
-              inputTextChars: guardedRequestText.length,
-              attachmentCount: 0,
-              fileReferenceCount: 0,
-              hasGuiPlan: false
-            }
-          },
-          request: {
-            bodySummary: {
-              schema: 'agent-runtime.turnStart',
-            textChars: guardedRequestText.length,
-            attachmentCount: 0,
-            fileReferenceCount: 0,
-            hasGuiPlan: false
-          }
-        },
-        streamOutput: {
-          text: expect.stringContaining('[path]'),
-          toolCalls: [
-            expect.objectContaining({
-              callId: `${runtimeId}-call`,
-              toolName: 'read_file',
-              status: 'success',
-              arguments: expect.objectContaining({
-                Authorization: '[redacted]'
-              })
-            })
-          ],
-          usage: {
-            inputTokens: 11,
-            outputTokens: 7,
-            totalTokens: 18
-          },
-          stopReason: 'completed'
-        }
-      })
-      expect(records[0]?.durationMs).toEqual(expect.any(Number))
-      expect(JSON.stringify(records[0])).not.toContain('/Users/alice')
-      expect(JSON.stringify(records[0])).not.toContain('runtime-secret')
-
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: {
-          runtimeId: runtimeId === 'codex' ? 'claude' : 'codex',
-          threadId: `${runtimeId}-thread`
-        }
-      })).rejects.toThrow(/payload\.runtimeId must match the top-level runtimeId/)
-
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'clearModelAuditRecords',
-        payload: {}
-      })).resolves.toBe(true)
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: { runtimeId }
-      })).resolves.toEqual([])
+        turnId: `${runtimeId}-turn`
+      }))
     }
   })
 
@@ -1820,7 +1859,7 @@ describe('AgentRuntimeHost', () => {
       model: 'router-summary-model',
       max_tokens: 321,
       metadata: {
-        schemaVersion: 'sciforge.model-router.request-audit.v1',
+        schemaVersion: 'sciforge.trace.correlation.v1',
         route: 'model-router.responses',
         source: 'agent-runtime-host',
         operation: 'context_compaction_summary',

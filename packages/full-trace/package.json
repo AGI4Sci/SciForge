@@ -1,0 +1,28 @@
+{
+  "name": "@sciforge/full-trace",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Secret-safe durable full model and agent tracing for SciForge.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2"
+  }
+}

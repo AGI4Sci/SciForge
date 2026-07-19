@@ -75,7 +75,14 @@ const api = {
     ipcRenderer.on('settings:changed', wrapped)
     return () => ipcRenderer.removeListener('settings:changed', wrapped)
   },
+  getModelAccessStatus: () => ipcRenderer.invoke('modelAccess:status'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
+  traces: {
+    read: (query) => ipcRenderer.invoke('traces:read', query ?? {}),
+    summaries: (query) => ipcRenderer.invoke('traces:summaries', query ?? {}),
+    export: (traceIds) => ipcRenderer.invoke('traces:export', { traceIds }),
+    clear: () => ipcRenderer.invoke('traces:clear')
+  },
   getConnectPhoneStatus,
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
@@ -192,8 +199,6 @@ const api = {
     ipcRenderer.invoke('runtimeConfig:write', content),
   openRuntimeConfigDir: () =>
     ipcRenderer.invoke('runtimeConfig:open-dir'),
-  openModelRouterConfigFile: () =>
-    ipcRenderer.invoke('modelRouter:config:open'),
   getGitBranches: (workspaceRoot) =>
     ipcRenderer.invoke('git:branches', workspaceRoot),
   switchGitBranch: (workspaceRoot, branch) =>

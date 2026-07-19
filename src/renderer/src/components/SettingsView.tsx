@@ -11,14 +11,15 @@ import {
   getClaudeRuntimeSettings,
   getCodexRuntimeSettings,
   getLocalRuntimeSettings,
+  getModelAccessSettings,
   getModelRouterSettings,
   isLocalRuntimeInsecure,
   type AppSettingsV1,
 } from '@shared/app-settings'
 import type {
-  AgentRuntimeGitCheckpoint,
-  AgentRuntimeModelAuditRecord
+  AgentRuntimeGitCheckpoint
 } from '@shared/agent-runtime-contract'
+import type { TraceSummary } from '@sciforge/full-trace'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { getProvider } from '../agent/registry'
 import type {
@@ -147,7 +148,7 @@ export function SettingsView(): ReactElement {
   const [memoryDraftScope, setMemoryDraftScope] = useState<'user' | 'workspace' | 'project'>('workspace')
   const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
   const [memoryEditingContent, setMemoryEditingContent] = useState('')
-  const [modelAuditRecords, setModelAuditRecords] = useState<AgentRuntimeModelAuditRecord[]>([])
+  const [traceSummaries, setTraceSummaries] = useState<TraceSummary[]>([])
   const [gitCheckpoints, setGitCheckpoints] = useState<AgentRuntimeGitCheckpoint[]>([])
   const [gitCheckpointPreviewId, setGitCheckpointPreviewId] = useState<string | null>(null)
   const [gitCheckpointPreview, setGitCheckpointPreview] = useState('')
@@ -232,8 +233,14 @@ export function SettingsView(): ReactElement {
   useEffect(() => {
     if (!form || initializedCategory.current) return
     initializedCategory.current = true
+    const access = getModelAccessSettings(form)
     const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
-    if (!textReasoner.apiKey.trim() || !textReasoner.baseUrl.trim() || !textReasoner.model.trim()) {
+    const accessConfigured = access?.mode === 'coding-plan'
+      ? Boolean(access.planAdapterId.trim())
+      : access?.mode === 'api'
+        ? Boolean(textReasoner.apiKey.trim() && textReasoner.baseUrl.trim() && textReasoner.model.trim())
+        : false
+    if (!accessConfigured) {
       setCategory('general')
     }
   }, [form])
@@ -419,6 +426,7 @@ export function SettingsView(): ReactElement {
     setRuntimeDiagnosticsBusy(true)
     setRuntimeDiagnosticsNotice(null)
     try {
+      setTraceSummaries(await window.sciforge.traces.summaries({ limit: 20 }))
       const loaded = await loadLocalRuntimeDiagnostics(provider, {
         workspace: normalizeWorkspaceRoot(formWorkspaceRoot),
         memoryScope: memoryScopeFilter === 'all' ? undefined : memoryScopeFilter,
@@ -427,9 +435,6 @@ export function SettingsView(): ReactElement {
       if (loaded.runtimeInfo !== undefined) setRuntimeInfo(loaded.runtimeInfo)
       if (loaded.toolDiagnostics !== undefined) setToolDiagnostics(loaded.toolDiagnostics)
       if (loaded.memoryRecords !== undefined) setMemoryRecords(loaded.memoryRecords)
-      if (typeof provider.listModelAuditRecords === 'function') {
-        setModelAuditRecords(await provider.listModelAuditRecords({ limit: 20 }))
-      }
       if (typeof provider.listGitCheckpoints === 'function') {
         setGitCheckpoints(await provider.listGitCheckpoints({
           workspaceRoot: normalizeWorkspaceRoot(formWorkspaceRoot)
@@ -451,21 +456,42 @@ export function SettingsView(): ReactElement {
     }
   }, [formWorkspaceRoot, memoryQuery, memoryScopeFilter])
 
-  const clearModelAuditRecords = async (): Promise<void> => {
-    const provider = getProvider()
-    if (typeof provider.clearModelAuditRecords !== 'function') return
+  const exportTraces = async (traceIds?: readonly string[]): Promise<void> => {
+    setRuntimeDiagnosticsBusy(true)
     try {
-      await provider.clearModelAuditRecords()
-      setModelAuditRecords([])
+      const result = await window.sciforge.traces.export(traceIds)
+      if (result.canceled) return
       setRuntimeDiagnosticsNotice({
         tone: 'success',
-        message: t('modelAuditCleared')
+        message: t('traceExported', { count: result.traceCount, path: result.destination })
       })
     } catch (error) {
       setRuntimeDiagnosticsNotice({
         tone: 'error',
         message: error instanceof Error ? error.message : String(error)
       })
+    } finally {
+      setRuntimeDiagnosticsBusy(false)
+    }
+  }
+
+  const clearTraces = async (): Promise<void> => {
+    if (!window.confirm(t('traceClearConfirm'))) return
+    setRuntimeDiagnosticsBusy(true)
+    try {
+      const result = await window.sciforge.traces.clear()
+      setTraceSummaries([])
+      setRuntimeDiagnosticsNotice({
+        tone: 'success',
+        message: t('traceCleared', { count: result.deletedEvents })
+      })
+    } catch (error) {
+      setRuntimeDiagnosticsNotice({
+        tone: 'error',
+        message: error instanceof Error ? error.message : String(error)
+      })
+    } finally {
+      setRuntimeDiagnosticsBusy(false)
     }
   }
 
@@ -685,12 +711,17 @@ export function SettingsView(): ReactElement {
   const localRuntime = getLocalRuntimeSettings(form)
   const codex = getCodexRuntimeSettings(form)
   const claude = getClaudeRuntimeSettings(form)
+  const modelAccess = getModelAccessSettings(form)
   const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
-  const textReasonerConfigured = Boolean(
-    textReasoner.apiKey.trim() &&
-    textReasoner.baseUrl.trim() &&
-    textReasoner.model.trim()
-  )
+  const modelAccessConfigured = modelAccess?.mode === 'coding-plan'
+    ? Boolean(modelAccess.planAdapterId.trim())
+    : modelAccess?.mode === 'api'
+      ? Boolean(
+        textReasoner.apiKey.trim() &&
+        textReasoner.baseUrl.trim() &&
+        textReasoner.model.trim()
+      )
+      : false
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
@@ -767,6 +798,7 @@ export function SettingsView(): ReactElement {
     codex,
     claude,
     update,
+    saveStatus,
     updateLocalRuntime,
     updateCodex,
     updateClaude,
@@ -827,7 +859,7 @@ export function SettingsView(): ReactElement {
     memoryEditingId,
     memoryEditingContent,
     setMemoryEditingContent,
-    modelAuditRecords,
+    traceSummaries,
     gitCheckpoints,
     gitCheckpointPreviewId,
     gitCheckpointPreview,
@@ -836,7 +868,8 @@ export function SettingsView(): ReactElement {
     runtimeDiagnosticsBusy,
     runtimeDiagnosticsNotice,
     refreshLocalRuntimeDiagnostics,
-    clearModelAuditRecords,
+    exportTraces,
+    clearTraces,
     previewGitCheckpoint,
     restoreGitCheckpoint,
     createMemoryRecord,
@@ -858,11 +891,11 @@ export function SettingsView(): ReactElement {
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
         <div className="mx-auto max-w-3xl">
-          {!textReasonerConfigured ? (
+          {!modelAccessConfigured ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
-              <div className="text-[15px] font-semibold">{t('apiKeyRequiredTitle')}</div>
+              <div className="text-[15px] font-semibold">{t('modelAccessRequiredTitle')}</div>
               <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
-                {t('apiKeyRequiredBody')}
+                {t('modelAccessRequiredBody')}
               </p>
             </div>
           ) : null}
@@ -874,7 +907,7 @@ export function SettingsView(): ReactElement {
             </div>
             <span
               title={saveStatus === 'error' && saveError ? saveError : undefined}
-              className={`shrink-0 rounded-full px-3 py-1 text-[12px] font-medium ${
+              className={`max-w-md shrink-0 rounded-full px-3 py-1 text-right text-[12px] font-medium leading-5 ${
                 portError
                   ? 'bg-amber-500/15 text-amber-700 dark:text-amber-200'
                   : saveStatus === 'saved'
@@ -891,7 +924,9 @@ export function SettingsView(): ReactElement {
                   : saveStatus === 'saved'
                     ? t('applied')
                     : saveStatus === 'error'
-                      ? t('applyFailed')
+                      ? saveError
+                        ? t('applyFailedWithReason', { message: saveError })
+                        : t('applyFailed')
                       : t('autoApplyHint')}
             </span>
           </div>

@@ -80,7 +80,7 @@ import {
 import { evidenceDagThreadId } from '../../../../packages/workers/evidence-dag/desktop/contract'
 import { AgentRuntimeContextCompactor } from './context-compactor'
 import type { LspCodeNavigationService } from '../../services/lsp-code-navigation-service'
-import type { ModelRequestAuditRecorder } from '../../services/model-request-audit-service'
+import type { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import type { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import type { GitCheckpointService } from '../../services/git-checkpoint-service'
 import type { SharedMemoryService } from '../../services/shared-memory-service'
@@ -100,7 +100,7 @@ export type AgentRuntimeHostSettingsProvider = () => AppSettingsV1 | Promise<App
 
 export type AgentRuntimeHostServices = {
   codeNavigation?: LspCodeNavigationService
-  modelAudit?: ModelRequestAuditRecorder
+  trace?: AgentRuntimeTraceRecorder
   contextState?: RuntimeContextStateService
   gitCheckpoints?: GitCheckpointService
   memory?: SharedMemoryService
@@ -161,6 +161,7 @@ export class AgentRuntimeHost {
   private readonly turnGovernanceProfiles = new Map<string, AgentRuntimeGovernanceProfile>()
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly postTurnCheckpoints = new Set<string>()
+  private readonly traceCaptureTasks = new Map<string, Promise<void>>()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
 
@@ -190,15 +191,21 @@ export class AgentRuntimeHost {
 
     const settings = await this.options.settings()
     const context = { settings }
+    const adapters = [...this.adapters.values()]
     const results = await Promise.allSettled(
-      [...this.adapters.values()].map(async (adapter) =>
+      adapters.map(async (adapter) =>
         this.withSharedGoalsOnThreads(adapter.id, await adapter.listThreads(context, input))
       )
     )
     const threads = results.flatMap((result) => result.status === 'fulfilled' ? result.value : [])
     if (threads.length === 0) {
-      const failed = results.find((result) => result.status === 'rejected')
-      if (failed?.status === 'rejected') throw failed.reason
+      // An unavailable inactive runtime must not make a fresh installation look
+      // offline merely because the selected runtime has no threads yet. Only
+      // surface the selected runtime's failure; an empty successful response
+      // from it is a valid thread list.
+      const activeRuntimeId = getActiveAgentRuntime(settings)
+      const activeResult = results[adapters.findIndex((adapter) => adapter.id === activeRuntimeId)]
+      if (activeResult?.status === 'rejected') throw activeResult.reason
     }
     return mergedRuntimeThreads(threads, getActiveAgentRuntime(settings), input.limit)
   }
@@ -265,38 +272,47 @@ export class AgentRuntimeHost {
     const integrityGuardedInput = withExecutionIntegrityRequirement(visuallyGuardedInput)
     const turnInput = await this.withCanonicalVisibleState(adapter.id, integrityGuardedInput)
     this.createPreTurnCheckpoint(adapter.id, context, turnInput)
-    const modelRouter = resolveRuntimeModelRouterSettings(context.settings)
-    const modelAlias = modelRouter.model
-    const auditId = this.options.services?.modelAudit?.start({
-      runtimeId: adapter.id,
-      threadId: input.threadId,
-      provider: 'model-router',
-      model: modelAlias,
-      modelRouterUrl: modelRouter.baseUrl,
-      providerAlias: 'model-router',
-      modelAlias,
-      modelRouter: {
-        requestUrl: buildModelRouterResponsesUrl(modelRouter.baseUrl),
-        endpointRoute: 'responses'
-      },
-      request: turnInput
-    })
-    try {
-      const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
-      if (auditId) {
-        this.options.services?.modelAudit?.attachTurn(
-          auditId,
-          adapter.id,
-          handle.threadId || input.threadId,
-          handle.turnId
-        )
+    const handle = await this.enqueueThreadTurnStart(adapter, context, turnInput)
+    this.rememberTurnWorkspace(adapter.id, turnInput, handle)
+    this.startTurnTraceCapture(adapter, context, handle)
+    return handle
+  }
+
+  private startTurnTraceCapture(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    handle: AgentRuntimeTurnHandle
+  ): void {
+    const trace = this.options.services?.trace
+    if (!trace) return
+    const key = turnGovernanceKey(adapter.id, handle.threadId, handle.turnId)
+    if (this.traceCaptureTasks.has(key)) return
+    const controller = new AbortController()
+    const capture = (async () => {
+      for await (const event of adapter.subscribeEvents(context, {
+        runtimeId: adapter.id,
+        threadId: handle.threadId,
+        sinceSeq: 0,
+        signal: controller.signal
+      })) {
+        if (event.turnId !== handle.turnId) continue
+        await trace.observeEvent(adapter.id, event)
+        if (
+          event.kind === 'turn_lifecycle' &&
+          event.turnId === handle.turnId &&
+          isAgentRuntimeTerminalTurnState(event.state)
+        ) {
+          return
+        }
       }
-      this.rememberTurnWorkspace(adapter.id, turnInput, handle)
-      return handle
-    } catch (error) {
-      if (auditId) this.options.services?.modelAudit?.fail(auditId, error)
-      throw error
-    }
+    })()
+      .catch(() => undefined)
+      .finally(async () => {
+        await trace.flushTurn(adapter.id, handle.threadId, handle.turnId).catch(() => undefined)
+        controller.abort()
+        this.traceCaptureTasks.delete(key)
+      })
+    this.traceCaptureTasks.set(key, capture)
   }
 
   async interruptTurn(input: AgentRuntimeTurnTargetInput): Promise<void> {
@@ -407,7 +423,6 @@ export class AgentRuntimeHost {
           detail: integrityObservation.violation.detail
         }).catch(() => null)
       }
-      this.options.services?.modelAudit?.observeEvent(event)
       this.options.services?.contextState?.observeEvent(event)
       await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
       this.observeThreadTurnLifecycle(adapter.id, event)
@@ -618,18 +633,6 @@ export class AgentRuntimeHost {
           })
         }
       }
-      case 'listModelAuditRecords':
-        assertPayloadRuntimeIdMatchesOwner(payload, 'runtimeId', runtimeId)
-        return {
-          handled: true,
-          value: this.options.services?.modelAudit?.snapshot({
-            runtimeId,
-            threadId: optionalString(payload.threadId),
-            limit: numberValue(payload.limit)
-          }) ?? []
-        }
-      case 'clearModelAuditRecords':
-        return { handled: true, value: this.options.services?.modelAudit?.clear() ?? false }
       case 'getContextState': {
         const service = this.options.services?.contextState
         if (!service) return { handled: false }
@@ -1088,13 +1091,14 @@ export class AgentRuntimeHost {
         errorCodes: ['language_server_missing', 'invalid_position', 'unsupported_language']
       })
     }
-    if (services.modelAudit) {
+    if (services.trace) {
       addDescriptor({
-        id: 'modelAudit.runtimeRequests',
+        id: 'fullTrace.agentEvents',
         channel: 'host_service',
         available: true,
-        inputSchema: 'AgentRuntimeAuxiliaryInput',
-        outputSchema: 'AgentRuntimeModelAuditRecord[]'
+        readonly: false,
+        inputSchema: 'AgentRuntimeEvent',
+        outputSchema: 'TraceEvent<agent_event>'
       })
     }
     if (services.contextState) {
@@ -1222,9 +1226,9 @@ export class AgentRuntimeHost {
       },
       observability: {
         ...capabilities.observability,
-        modelAudit: services.modelAudit
-          ? { available: true, capacity: 50, inMemory: true }
-          : capabilities.observability?.modelAudit ?? { available: false, reason: 'unsupported' }
+        fullTrace: services.trace
+          ? { available: true, durable: true }
+          : capabilities.observability?.fullTrace ?? { available: false, reason: 'unsupported', durable: true }
       },
       context: {
         ...capabilities.context,
@@ -2087,7 +2091,7 @@ function modelRouterAuditMetadata(input: {
   sourceDigest?: string
 }): Record<string, unknown> {
   return compactRecord({
-    schemaVersion: 'sciforge.model-router.request-audit.v1',
+    schemaVersion: 'sciforge.trace.correlation.v1',
     route: 'model-router.responses',
     source: 'agent-runtime-host',
     operation: input.operation,

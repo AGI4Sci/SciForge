@@ -12,7 +12,6 @@ import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultRemoteExecutorSettings,
   defaultRuntimeGuardSettings,
   defaultScheduleSettings,
@@ -36,7 +35,6 @@ function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -51,7 +49,6 @@ function createSettings(binaryPath: string, port = 8899): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: configuredModelRouterSettings(),
     agents: {
       sciforge: {

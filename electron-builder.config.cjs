@@ -85,6 +85,7 @@ module.exports = {
     ...releaseWorkerManifest.createAsarUnpackGlobs(),
     '**/node_modules/better-sqlite3/**/*',
     '**/node_modules/node-pty/**/*',
+    '**/node_modules/proxy-from-env/**/*',
     '**/node_modules/bindings/**/*',
     '**/node_modules/file-uri-to-path/**/*'
   ],

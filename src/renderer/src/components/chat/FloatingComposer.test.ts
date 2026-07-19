@@ -600,17 +600,17 @@ describe('FloatingComposer image generation helpers', () => {
     expect(isImageGenerationConfigured({
       apiKey: '',
       baseUrl: 'https://image.example/v1',
-      model: 'gpt-image-2'
+      model: 'image-model'
     })).toBe(false)
     expect(isImageGenerationConfigured({
       apiKey: 'sk-image',
       baseUrl: '',
-      model: 'gpt-image-2'
+      model: 'image-model'
     })).toBe(false)
     expect(isImageGenerationConfigured({
       apiKey: 'sk-image',
       baseUrl: 'https://image.example/v1',
-      model: 'gpt-image-2'
+      model: 'image-model'
     })).toBe(true)
   })
 

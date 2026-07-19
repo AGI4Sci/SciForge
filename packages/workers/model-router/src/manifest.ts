@@ -39,7 +39,7 @@ export const MODEL_ROUTER_WORKER_CAPABILITIES = [
   'image_generation',
   'vision_translation',
   'scientific_translation',
-  'refs_first_trace',
+  'full_trace',
 ] as const;
 
 export type ModelRouterWorkerTransport = typeof MODEL_ROUTER_WORKER_TRANSPORT;
@@ -79,7 +79,7 @@ export const modelRouterManifest: ToolWorkerManifest = {
   protocolVersion: 'sciforge.tools.v1',
   workerId: 'sciforge.model-router',
   workerVersion: MODEL_ROUTER_WORKER_VERSION,
-  description: 'Provider-compatible SciForge /v1/responses, /v1/messages, /v1/images/generations, and /v1/images/edits facade for text reasoning, image generation/editing, and refs-first visual/scientific translation.',
+  description: 'Provider-compatible SciForge /v1/responses, /v1/messages, /v1/images/generations, and /v1/images/edits facade with unified full request tracing.',
   capabilities: [...MODEL_ROUTER_WORKER_CAPABILITIES],
   providers: [
     {
@@ -165,7 +165,6 @@ export const modelRouterManifest: ToolWorkerManifest = {
       },
       outputSchema: {
         output_text: { type: 'string', required: true },
-        traceRef: { type: 'string', required: true },
       },
       sideEffects: ['network', 'filesystem'],
       timeoutMs: 120000,

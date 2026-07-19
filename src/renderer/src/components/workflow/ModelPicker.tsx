@@ -1,17 +1,22 @@
 import { useId, useMemo, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
-import type { ModelProviderProfileV1 } from '@shared/app-settings'
 
 const FIELD =
   'w-full rounded-lg border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-not-allowed disabled:opacity-60'
 
+export type ModelPickerGroup = {
+  id: string
+  name: string
+  models: string[]
+}
+
 type Props = {
-  providers: ModelProviderProfileV1[]
+  providers: ModelPickerGroup[]
   providerId: string
   model: string
   onChange: (next: { providerId: string; model: string }) => void
-  providerFilter?: (provider: ModelProviderProfileV1) => boolean
-  modelsOf?: (provider: ModelProviderProfileV1) => string[]
+  providerFilter?: (provider: ModelPickerGroup) => boolean
+  modelsOf?: (provider: ModelPickerGroup) => string[]
   modelLabel?: string
   emptyHint?: string
 }

@@ -443,8 +443,8 @@
   "emptyHeroSub": "选择一个任务，或直接输入你的问题",
   "emptyHeroSubNoWorkspace": "先选择一个本地工作目录，然后再开始第一轮会话。",
   "usageHeatmapBadge": "{{runtime}} 用量",
-  "usageHeatmapTitle": "最近的 {{runtime}} 节奏",
-  "usageHeatmapSub": "从你已经积累的使用节奏开始。每天按 {{runtime}} token 用量着色，单元格里可以查看回合、费用、会话数和缓存命中情况。",
+  "usageHeatmapTitle": "{{runtime}} 使用脉冲",
+  "usageHeatmapSub": "把会话、消息和 Token 汇总成一张轻量仪表盘；下方脉冲带按天展示活跃强度，悬停即可查看明细。",
   "usageHeatmapTabOverview": "概览",
   "usageHeatmapTabModels": "模型",
   "usageHeatmapRange": {
@@ -453,7 +453,8 @@
     "30d": "30天",
     "7d": "7天"
   },
-  "usageHeatmapGridLabel": "每日 {{runtime}} 用量日历",
+  "usageHeatmapGridLabel": "{{runtime}} 每日活跃脉冲",
+  "usageHeatmapGridHint": "悬停任意一天查看用量明细",
   "usageHeatmapLess": "少",
   "usageHeatmapMore": "多",
   "usageHeatmapLoading": "正在加载最近用量…",
@@ -486,8 +487,8 @@
     "empty": "发送一个请求并完成一轮回复后，第一个活跃日会自动出现在这里。",
     "error": "用量接口这次没有响应，所以日历暂时暂停。新的会话仍然可以正常开始。"
   },
-  "usageHeatmapCollapse": "收起日历",
-  "usageHeatmapExpand": "展开日历",
+  "usageHeatmapCollapse": "收起面板",
+  "usageHeatmapExpand": "展开面板",
   "usageHeatmapCollapsedTitle": "先把画布留给对话",
   "usageHeatmapCollapsedSub": "用量日历先折叠起来，想看最近的智能体节奏时，随时再展开就好。",
   "usageHeatmapRefresh": "刷新",

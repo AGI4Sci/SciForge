@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { deriveTraceId } from '@sciforge/full-trace'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultClaudeRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -39,7 +39,6 @@ function settings(): AppSettingsV1 {
   modelRouter.publicModelAlias = 'sciforge-router'
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -51,7 +50,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'claude',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       claude: {
@@ -78,6 +77,27 @@ function settings(): AppSettingsV1 {
 }
 
 describe('claude-code config launch helpers', () => {
+  it('rejects Coding Plan and non-selected API access without a fallback', async () => {
+    const codingPlan = settings()
+    codingPlan.activeAgentRuntime = 'codex'
+    codingPlan.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
+    await expect(prepareClaudeCodeSdkLaunch({
+      settings: codingPlan,
+      text: 'hello',
+      threadId: 'thread-plan',
+      turnId: 'turn-plan'
+    })).rejects.toThrow(/requires API model access/)
+
+    const codexApi = settings()
+    codexApi.activeAgentRuntime = 'codex'
+    await expect(prepareClaudeCodeSdkLaunch({
+      settings: codexApi,
+      text: 'hello',
+      threadId: 'thread-api',
+      turnId: 'turn-api'
+    })).rejects.toThrow(/selected Agent runtime/)
+  })
+
   it('forces Claude Code traffic through the Model Router env', () => {
     const env = claudeCodeRuntimeEnv({
       OPENAI_API_KEY: 'sk-openai',
@@ -103,6 +123,7 @@ describe('claude-code config launch helpers', () => {
       ANTHROPIC_AUTH_TOKEN: 'anthropic-token',
       ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
       ANTHROPIC_MODEL: 'opus',
+      ANTHROPIC_CUSTOM_HEADERS: 'authorization: inherited-secret\nx-inherited: conflict',
       MODEL_PROVIDER: 'anthropic',
       KUN_BASE_URL: 'https://old-runtime-provider.example/v1',
       SCIFORGE_IMAGE_API_KEY: 'outer-image-key',
@@ -124,7 +145,9 @@ describe('claude-code config launch helpers', () => {
       configDir: '/tmp/claude-config',
       baseUrl: 'http://127.0.0.1:49876/v1',
       apiKey: 'local-runtime-router-key',
-      model: 'sonnet'
+      model: 'sonnet',
+      threadId: 'thread-env',
+      turnId: 'turn-env'
     })
 
     expect(env.OPENAI_API_KEY).toBeUndefined()
@@ -167,6 +190,12 @@ describe('claude-code config launch helpers', () => {
     expect(env.ANTHROPIC_API_KEY).toBe('local-runtime-router-key')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('local-runtime-router-key')
     expect(env.ANTHROPIC_MODEL).toBe('sonnet')
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe([
+      `x-sciforge-trace-id: ${deriveTraceId({ runtimeId: 'claude', threadId: 'thread-env', turnId: 'turn-env' })}`,
+      'x-sciforge-runtime-id: claude',
+      'x-sciforge-thread-id: thread-env',
+      'x-sciforge-turn-id: turn-env'
+    ].join('\n'))
     expect(env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-config')
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1')
   })
@@ -184,6 +213,8 @@ describe('claude-code config launch helpers', () => {
         }
       },
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       sessionId: 'session-1',
       managedConfigDir: '/tmp/claude-managed'
@@ -215,6 +246,8 @@ describe('claude-code config launch helpers', () => {
     const launch = await prepareClaudeCodeSdkLaunch({
       settings: settings(),
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
       managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
@@ -242,6 +275,8 @@ describe('claude-code config launch helpers', () => {
     const launch = await prepareClaudeCodeSdkLaunch({
       settings: settings(),
       text: 'Beautify a paper figure.',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
       managedMcp: {
@@ -275,6 +310,8 @@ describe('claude-code config launch helpers', () => {
     await expect(prepareClaudeCodeSdkLaunch({
       settings: current,
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed'
     })).rejects.toThrow('text reasoner')
@@ -295,6 +332,8 @@ describe('claude-code config launch helpers', () => {
         }
       },
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
       managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
@@ -318,6 +357,8 @@ describe('claude-code config launch helpers', () => {
         }
       },
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
       managedMcp: { computerUseMcp: { launch: computerUseLaunch } }

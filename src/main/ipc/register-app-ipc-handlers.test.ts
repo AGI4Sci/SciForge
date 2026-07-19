@@ -12,7 +12,6 @@ import {
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -22,13 +21,14 @@ import {
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const queueRoots: string[] = []
+const { showSaveDialog } = vi.hoisted(() => ({ showSaveDialog: vi.fn() }))
 
 vi.mock('electron', () => ({
   app: {
     getFileIcon: vi.fn(async () => ({ isEmpty: () => false })),
     quit: vi.fn()
   },
-  dialog: {},
+  dialog: { showSaveDialog },
   shell: {
     openExternal: vi.fn(async () => undefined)
   },
@@ -65,7 +65,6 @@ function settings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings()
     },
@@ -91,6 +90,18 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     store: { load: vi.fn(async () => settings()) } as never,
     getMainWindow: () => null,
     applySettingsPatch,
+    getModelAccessStatus: vi.fn(async () => ({
+      setupRequired: false,
+      mode: 'api' as const,
+      service: 'model-router' as const,
+      health: 'healthy' as const,
+      adapterId: null,
+      credentialState: 'configured' as const,
+      protocol: null,
+      protocolState: 'pending-first-request' as const,
+      traceCaptureReady: true,
+      action: 'The wire protocol will be confirmed by the first real request.'
+    })),
     fetchUpstreamModels: vi.fn() as never,
     getRemoteChannelRuntime: () => null,
     getScheduleRuntime: () => null,
@@ -99,7 +110,6 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     startWeixinInstallQrcode: vi.fn() as never,
     pollWeixinInstall: vi.fn() as never,
     resolveRuntimeConfigPath: () => '/tmp/sciforge-runtime.json',
-    openModelRouterConfigFile: vi.fn(async () => ({ ok: true as const, path: '/tmp/model-router/config.json' })),
     showTurnCompleteNotification: vi.fn() as never,
     getAppVersion: () => '0.1.0',
     readGuiUpdateState: vi.fn() as never,
@@ -443,6 +453,94 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.has('drawio:local-url')).toBe(false)
   })
 
+  it('returns one runtime-neutral model access status', async () => {
+    const getModelAccessStatus = vi.fn(async () => ({
+      setupRequired: false,
+      mode: 'coding-plan' as const,
+      service: 'plan-gateway' as const,
+      health: 'healthy' as const,
+      adapterId: 'codex',
+      credentialState: 'authenticated' as const,
+      protocol: 'responses' as const,
+      protocolState: 'selected' as const,
+      traceCaptureReady: true,
+      action: 'Coding Plan access and trace capture are ready.'
+    }))
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ getModelAccessStatus }))
+
+    await expect(handlers.get('modelAccess:status')?.({})).resolves.toEqual({
+      setupRequired: false,
+      mode: 'coding-plan',
+      service: 'plan-gateway',
+      health: 'healthy',
+      adapterId: 'codex',
+      credentialState: 'authenticated',
+      protocol: 'responses',
+      protocolState: 'selected',
+      traceCaptureReady: true,
+      action: 'Coding Plan access and trace capture are ready.'
+    })
+    expect(getModelAccessStatus).toHaveBeenCalledWith(expect.objectContaining({ version: 1 }))
+  })
+
+  it('validates durable trace queries and exports through an explicit save destination', async () => {
+    const traces = {
+      read: vi.fn(async () => ({ events: [], total: 0, corruptLines: 0 })),
+      summaries: vi.fn(async () => [{
+        traceId: 'trace-1',
+        sources: ['agent-runtime'],
+        startedAt: '2026-07-19T00:00:00.000Z',
+        endedAt: '2026-07-19T00:00:01.000Z',
+        durationMs: 1_000,
+        status: 'completed',
+        requestCount: 1,
+        eventCount: 4,
+        agentEventCount: 2,
+        errorCount: 0
+      }]),
+      export: vi.fn(async ({ destination }: { destination: string }) => ({
+        destination,
+        exportedAt: '2026-07-19T00:00:02.000Z',
+        eventCount: 4,
+        traceCount: 1
+      })),
+      clear: vi.fn(async () => ({ deletedFiles: 1, deletedEvents: 4 }))
+    }
+    showSaveDialog.mockResolvedValue({
+      canceled: false,
+      filePath: '/tmp/sciforge-trace.jsonl'
+    })
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({ traces: traces as never }))
+
+    await expect(handlers.get('traces:summaries')?.({}, {
+      runtimeId: 'codex',
+      limit: 20
+    })).resolves.toEqual([expect.objectContaining({ traceId: 'trace-1' })])
+    expect(traces.summaries).toHaveBeenCalledWith({ runtimeId: 'codex', limit: 20 })
+
+    await expect(handlers.get('traces:export')?.({}, {
+      traceIds: ['trace-1']
+    })).resolves.toMatchObject({
+      canceled: false,
+      destination: '/tmp/sciforge-trace.jsonl',
+      traceCount: 1
+    })
+    expect(traces.export).toHaveBeenCalledWith({
+      destination: '/tmp/sciforge-trace.jsonl',
+      traceIds: ['trace-1']
+    })
+
+    await expect(handlers.get('traces:clear')?.({})).resolves.toEqual({
+      deletedFiles: 1,
+      deletedEvents: 4
+    })
+    await expect(handlers.get('traces:read')?.({}, {
+      kinds: ['not-a-trace-kind']
+    })).rejects.toThrow(/payload for traces:read/i)
+  })
+
   it('returns a paused Evidence view and rejects updates when Evidence DAG is disabled', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     const disabled = { ...settings(), evidenceDag: { enabled: false } }
@@ -530,6 +628,47 @@ describe('registerAppIpcHandlers', () => {
     await expect(
       handler?.({}, { agents: { sciforge: { mysteryFlag: true } } })
     ).rejects.toThrow(/Invalid payload for settings:set/)
+    expect(applySettingsPatch).not.toHaveBeenCalled()
+  })
+
+  it('does not echo API credentials when a settings payload is rejected', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const applySettingsPatch = vi.fn(async () => settings())
+
+    registerAppIpcHandlers(registerOptions({ applySettingsPatch }))
+
+    const apiKey = 'sk-sensitive-settings-key-1234567890'
+    let failure: unknown
+    try {
+      await handlers.get('settings:set')?.({}, {
+        modelRouter: {
+          profiles: {
+            default: {
+              textReasoner: {
+                baseUrl: 'https://api.example.test/v1',
+                apiKey,
+                model: 'model-1'
+              }
+            }
+          }
+        },
+        remoteChannel: {
+          channels: [{
+            lastFailure: {
+              provider: 'zulip',
+              message: 'Runtime offline',
+              occurredAt: '2026-07-19T00:00:00.000Z',
+              unexpected: true
+            }
+          }]
+        }
+      })
+    } catch (error) {
+      failure = error
+    }
+
+    expect(String(failure)).toContain('Invalid payload for settings:set')
+    expect(String(failure)).not.toContain(apiKey)
     expect(applySettingsPatch).not.toHaveBeenCalled()
   })
 
@@ -2470,28 +2609,6 @@ describe('registerAppIpcHandlers', () => {
     } finally {
       rmSync(tempRoot, { recursive: true, force: true })
     }
-  })
-
-  it('opens the local Model Router config file through the injected handler', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const openModelRouterConfigFile = vi.fn(async () => ({
-      ok: true as const,
-      path: '/tmp/sciforge/model-router/config.json'
-    }))
-    const current = settings()
-    const store = { load: vi.fn(async () => current) }
-
-    registerAppIpcHandlers(registerOptions({
-      store: store as never,
-      openModelRouterConfigFile
-    }))
-
-    await expect(handlers.get('modelRouter:config:open')?.({}, undefined)).resolves.toEqual({
-      ok: true,
-      path: '/tmp/sciforge/model-router/config.json'
-    })
-    expect(store.load).toHaveBeenCalled()
-    expect(openModelRouterConfigFile).toHaveBeenCalledWith(current)
   })
 
   it('rejects invalid MCP config JSON before writing or applying it', async () => {
