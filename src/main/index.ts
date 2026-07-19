@@ -2,6 +2,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, p
 import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
 import { fileURLToPath } from 'node:url'
 import {
   JsonSettingsStore,
@@ -659,6 +660,7 @@ function getCodexRuntime(): CodexRuntimeService {
     managedCodexHome: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-codex', 'codex-home')
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
+    standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
     scheduleMcpLaunch: getScheduleMcpLaunchConfig(),
     researchMcpLaunch: getResearchSearchMcpLaunchConfig(),

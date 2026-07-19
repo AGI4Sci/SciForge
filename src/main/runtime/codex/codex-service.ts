@@ -151,6 +151,7 @@ export type CodexRuntimeServiceOptions = {
   appVersion?: string
   storageRoot?: string
   managedCodexHome?: string
+  standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
   scheduleMcpLaunch?: ScheduleMcpLaunchConfig
   researchMcpLaunch?: ResearchSearchMcpLaunchConfig
@@ -1146,6 +1147,7 @@ export class CodexRuntimeService {
       const launch = await prepareCodexAppServerLaunch({
         settings: current,
         managedCodexHome: this.options.managedCodexHome,
+        standardCodexAuthPath: this.options.standardCodexAuthPath,
         planGateway: this.options.planGateway,
         scheduleMcpLaunch: this.options.scheduleMcpLaunch,
         researchMcpLaunch: this.options.researchMcpLaunch,

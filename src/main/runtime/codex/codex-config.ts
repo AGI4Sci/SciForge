@@ -74,6 +74,7 @@ export async function prepareCodexAppServerLaunch(options: {
   workspace?: string
   env?: NodeJS.ProcessEnv
   managedCodexHome?: string
+  standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
   scheduleMcpLaunch?: ScheduleMcpLaunchConfig
   researchMcpLaunch?: ResearchSearchMcpLaunchConfig
@@ -97,7 +98,7 @@ export async function prepareCodexAppServerLaunch(options: {
   const modelAccess = codexModelAccessConfig(options.settings, options.planGateway)
   const cwd = resolveCodexWorkspace(options.settings, options.workspace)
   if (!cwd) throw new Error('Codex workspace is required.')
-  await prepareManagedCodexHome(codexHome, modelAccess)
+  await prepareManagedCodexHome(codexHome, modelAccess, options.standardCodexAuthPath)
   return {
     command,
     args: ['app-server', '--listen', 'stdio://', ...codexAppServerExtraArgs(runtime.extraArgs)],
@@ -330,7 +331,8 @@ function isLegacyDirectWorkerEnv(key: string): boolean {
 
 async function prepareManagedCodexHome(
   codexHome: string,
-  modelAccess: CodexModelAccessConfig
+  modelAccess: CodexModelAccessConfig,
+  standardCodexAuthPath?: string
 ): Promise<void> {
   await mkdir(codexHome, { recursive: true })
   await assertManagedCodexHome(codexHome)
@@ -338,7 +340,7 @@ async function prepareManagedCodexHome(
     CODEX_MANAGED_DIRS.map((dir) => mkdir(join(codexHome, dir), { recursive: true }))
   )
   if (modelAccess.mode === 'coding-plan') {
-    await importStandardCodexAuth(codexHome)
+    await importStandardCodexAuth(codexHome, standardCodexAuthPath)
     await assertManagedCodexAuth(codexHome)
   }
   await writeFile(
@@ -348,8 +350,8 @@ async function prepareManagedCodexHome(
   )
 }
 
-async function importStandardCodexAuth(codexHome: string): Promise<void> {
-  if (process.platform !== 'win32') return
+async function importStandardCodexAuth(codexHome: string, source?: string): Promise<void> {
+  if (!source) return
   const target = join(codexHome, 'auth.json')
   try {
     await lstat(target)
@@ -358,7 +360,6 @@ async function importStandardCodexAuth(codexHome: string): Promise<void> {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
   }
 
-  const source = join(homedir(), '.codex', 'auth.json')
   let sourceInfo
   try {
     sourceInfo = await lstat(source)

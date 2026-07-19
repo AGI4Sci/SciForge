@@ -600,6 +600,30 @@ describe('codex config launch helpers', () => {
       .rejects.toMatchObject({ code: 'ENOENT' })
   })
 
+  it('imports explicitly trusted standard Codex auth without overwriting runtime config', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    const standardCodexHome = await mkdtemp(join(tmpdir(), 'standard-codex-home-'))
+    const standardAuthPath = join(standardCodexHome, 'auth.json')
+    await writeFile(standardAuthPath, '{"auth":"standard-login"}\n', { mode: 0o600 })
+
+    await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      standardCodexAuthPath: standardAuthPath,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })
+
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"standard-login"}\n')
+    if (process.platform !== 'win32') {
+      expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+    }
+  })
+
   it('does not overwrite an existing managed Codex login', async () => {
     const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
     const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
