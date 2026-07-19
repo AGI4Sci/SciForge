@@ -27,6 +27,7 @@ concurrency:
 
 env:
   NODE_VERSION: '22'
+  NODE_OPTIONS: '--max-old-space-size=6144'
   RELEASE_CHANNEL: stable
   RELEASE_ARTIFACT_PREFIX: SciForge
 

@@ -546,7 +546,10 @@ async function checkGovernance({ architectureOnly = false } = {}) {
         `Missing ${relativePath(GENERATED_REFERENCE_PATH)}. Run \`npm run capability:generate\` and commit the result.`
       )
     }
-    if (actual && actual !== expected) {
+    // Git may check out the generated Markdown with CRLF on Windows. Compare
+    // the semantic text across platforms while preserving the repository's
+    // canonical LF output when the reference is regenerated.
+    if (actual && actual.replace(/\r\n/g, '\n') !== expected.replace(/\r\n/g, '\n')) {
       failures.push(
         `${relativePath(GENERATED_REFERENCE_PATH)} differs from the authoritative registry. ` +
           'Run `npm run capability:generate` and commit the result.'
