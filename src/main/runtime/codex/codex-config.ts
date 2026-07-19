@@ -1,5 +1,5 @@
 import { constants } from 'node:fs'
-import { access, lstat, mkdir, writeFile } from 'node:fs/promises'
+import { access, chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import {
@@ -168,7 +168,67 @@ export async function resolveCodexCommand(
       if (await isExecutable(candidate)) return candidate
     }
   }
+  if (platform === 'win32') {
+    const packaged = await resolvePackagedWindowsCodex(command, env, homeDir, isExecutable)
+    if (packaged) return packaged
+  }
   return command
+}
+
+async function resolvePackagedWindowsCodex(
+  command: string,
+  env: NodeJS.ProcessEnv,
+  homeDir: string,
+  isExecutable: (path: string) => Promise<boolean>
+): Promise<string | null> {
+  if (!/^codex(?:\.exe)?$/i.test(command)) return null
+  const programRoots = new Set([
+    env.ProgramFiles,
+    env.ProgramW6432,
+    process.env.ProgramFiles,
+    process.env.ProgramW6432
+  ].filter((value): value is string => Boolean(value?.trim())))
+
+  for (const programRoot of programRoots) {
+    const windowsApps = join(programRoot, 'WindowsApps')
+    let packages: string[]
+    try {
+      packages = (await readdir(windowsApps, { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && /^OpenAI\.Codex_/i.test(entry.name))
+        .map((entry) => entry.name)
+        .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
+    } catch {
+      continue
+    }
+    for (const packageName of packages) {
+      const source = join(windowsApps, packageName, 'app', 'resources', 'codex.exe')
+      if (!(await isExecutable(source))) continue
+      return materializePackagedWindowsCodex(source, homeDir)
+    }
+  }
+  return null
+}
+
+async function materializePackagedWindowsCodex(source: string, homeDir: string): Promise<string> {
+  const runtimeDir = join(homeDir, '.sciforge', 'codex-runtime')
+  const target = join(runtimeDir, 'codex.exe')
+  await mkdir(runtimeDir, { recursive: true })
+  try {
+    const [sourceInfo, targetInfo] = await Promise.all([stat(source), stat(target)])
+    if (sourceInfo.size === targetInfo.size && targetInfo.mtimeMs >= sourceInfo.mtimeMs) return target
+  } catch {
+    // Missing or stale target: refresh it below.
+  }
+
+  const temporary = join(runtimeDir, `codex-${process.pid}-${Date.now()}.tmp`)
+  try {
+    await copyFile(source, temporary)
+    await rm(target, { force: true })
+    await rename(temporary, target)
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined)
+  }
+  return target
 }
 
 function prependCommandDirectoryToPath(env: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
@@ -278,6 +338,7 @@ async function prepareManagedCodexHome(
     CODEX_MANAGED_DIRS.map((dir) => mkdir(join(codexHome, dir), { recursive: true }))
   )
   if (modelAccess.mode === 'coding-plan') {
+    await importStandardCodexAuth(codexHome)
     await assertManagedCodexAuth(codexHome)
   }
   await writeFile(
@@ -285,6 +346,36 @@ async function prepareManagedCodexHome(
     codexConfigToml(modelAccess),
     'utf8'
   )
+}
+
+async function importStandardCodexAuth(codexHome: string): Promise<void> {
+  if (process.platform !== 'win32') return
+  const target = join(codexHome, 'auth.json')
+  try {
+    await lstat(target)
+    return
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+  }
+
+  const source = join(homedir(), '.codex', 'auth.json')
+  let sourceInfo
+  try {
+    sourceInfo = await lstat(source)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return
+    throw error
+  }
+  if (!sourceInfo.isFile() || sourceInfo.isSymbolicLink()) return
+
+  const temporary = join(codexHome, `auth-${process.pid}-${Date.now()}.tmp`)
+  try {
+    await copyFile(source, temporary)
+    if (process.platform !== 'win32') await chmod(temporary, 0o600)
+    await rename(temporary, target)
+  } finally {
+    await rm(temporary, { force: true }).catch(() => undefined)
+  }
 }
 
 async function assertManagedCodexHome(codexHome: string): Promise<void> {

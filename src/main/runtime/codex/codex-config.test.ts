@@ -98,6 +98,30 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(command)
   })
 
+  it('materializes the runtime bundled with the Windows Codex app', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-msix-'))
+    const programFiles = join(home, 'Program Files')
+    const source = join(
+      programFiles,
+      'WindowsApps',
+      'OpenAI.Codex_26.715.4045.0_x64__test',
+      'app',
+      'resources',
+      'codex.exe'
+    )
+    await mkdir(join(source, '..'), { recursive: true })
+    await writeFile(source, 'packaged-codex-runtime', 'utf8')
+
+    const resolved = await resolveCodexCommand('codex', {
+      env: { Path: 'C:\\Windows\\System32', ProgramFiles: programFiles },
+      homeDir: home,
+      platform: 'win32'
+    })
+
+    expect(resolved).toBe(join(home, '.sciforge', 'codex-runtime', 'codex.exe'))
+    await expect(readFile(resolved, 'utf8')).resolves.toBe('packaged-codex-runtime')
+  })
+
   it('preserves an explicit Codex path and prefers the supplied PATH', async () => {
     await expect(resolveCodexCommand('~/custom/codex', {
       homeDir: '/Users/example',
