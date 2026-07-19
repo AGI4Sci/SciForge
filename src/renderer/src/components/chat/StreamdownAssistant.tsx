@@ -1,10 +1,11 @@
 import type { ComponentPropsWithRef, MouseEvent, ReactElement } from 'react'
 import { Streamdown, type AnimateOptions, type StreamdownProps } from 'streamdown'
 import remarkGfm from 'remark-gfm'
-import { harden } from 'rehype-harden'
+import remarkMath from 'remark-math'
+import rehypeKatex from 'rehype-katex'
 import 'streamdown/styles.css'
+import { normalizeMarkdownMathDelimiters } from '@shared/write-markdown-math'
 import {
-  FILE_REFERENCE_SCHEMES,
   isFileReferenceHref,
   parseFileReferenceHref,
   rehypeFileReferences
@@ -31,18 +32,12 @@ const STREAMING_ANIMATED: AnimateOptions = {
   animation: 'fadeIn'
 }
 
-export const STREAMDOWN_HARDEN_OPTIONS = {
-  defaultOrigin: 'https://sciforge.local',
-  allowedLinkPrefixes: ['http:', 'https:', 'mailto:', ...FILE_REFERENCE_SCHEMES]
-}
-
 const rehypePlugins = [
   rehypeFileReferences,
-  [
-    harden,
-    STREAMDOWN_HARDEN_OPTIONS
-  ]
+  rehypeKatex
 ] satisfies StreamdownProps['rehypePlugins']
+
+const remarkPlugins = [remarkMath, remarkGfm] satisfies StreamdownProps['remarkPlugins']
 
 const components = {
   code: StreamdownCode,
@@ -176,6 +171,7 @@ type Props = {
 export function StreamdownAssistant({ text, streaming, className }: Props): ReactElement {
   const animated = streaming && shouldAnimateStreamingText(text) ? STREAMING_ANIMATED : false
   const isAnimating = animated !== false
+  const normalizedText = normalizeMarkdownMathDelimiters(text)
 
   return (
     <Streamdown
@@ -184,12 +180,12 @@ export function StreamdownAssistant({ text, streaming, className }: Props): Reac
       parseIncompleteMarkdown={streaming}
       isAnimating={isAnimating}
       animated={animated}
-      remarkPlugins={[remarkGfm]}
+      remarkPlugins={remarkPlugins}
       rehypePlugins={rehypePlugins}
       controls={STREAMDOWN_CONTROLS}
       components={components}
     >
-      {text}
+      {normalizedText}
     </Streamdown>
   )
 }

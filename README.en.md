@@ -6,14 +6,16 @@
 
 [简体中文](./README.md) | English
 
-> SciForge is a local AI workbench for scientific research and complex engineering. It brings code, papers, scientific data, figures, writing, automation, evidence graphs, and multi-runtime agents into one desktop environment, with text, vision, and scientific multimodal capabilities governed by a unified Model Router.
+> **Let agents do more. Keep humans in command.** SciForge is the human-in-the-loop intervention panel and research-state/evidence capture layer for scientific work. As agents get stronger, the panel gets thinner—but human intent, judgment, and accountability remain.
 
-[Website](https://sciforge.ai) | [Download](https://sciforge.ai)
+[Website](https://sciforge.ai) | [Download](https://github.com/AGI4Sci/SciForge/releases) | [Paper](./paper/sciforge-report.pdf) | [Usage Wiki](./docs/wiki/README.md)
 
-[![GitHub release](https://img.shields.io/github/v/release/XingYu-Zhong/SciForge?label=github)](https://github.com/XingYu-Zhong/SciForge/releases)
-[![License](https://img.shields.io/github/license/XingYu-Zhong/SciForge)](./LICENSE)
+[![GitHub release](https://img.shields.io/github/v/release/AGI4Sci/SciForge?label=github)](https://github.com/AGI4Sci/SciForge/releases)
+[![License](https://img.shields.io/github/license/AGI4Sci/SciForge)](./LICENSE)
 
-SciForge is a local desktop workbench for researchers, developers, and teams working on long-lived scientific or engineering tasks. It uses SciForge Runtime by default and lets users explicitly choose Codex app-server as a local agent runtime, turning the terminal agent experience into an easier, longer-lived app: choose a workspace, start a task, watch reasoning and tool calls stream in, review file changes, and approve sensitive actions when needed.
+SciForge is a local desktop control plane for long-lived scientific and engineering work. It uses SciForge Runtime, Codex app-server, or Claude Code CLI as selectable execution partners: the runtime reads workspaces, calls tools, runs experiments, and produces artifacts; SciForge brings researchers in for goal-setting, evidence review, comparison, risk handling, and release decisions.
+
+SciForge does not replace Codex or Claude Code, and it is not a new foundation model. It adds scientific-object routing, research context, evidence/provenance capture, artifact review, and governed intervention around mature runtimes.
 
 The goal is not to ship another chat wrapper. SciForge is meant to be an auditable research-agent operating surface: model calls go through Model Router, agents work on real workspaces, research objects stay attached to evidence and artifacts, and long-running tasks can move from exploration to implementation to review. SciForge Runtime's high-token-ROI loop keeps the same context budget focused on requirements, code, decisions, and results instead of repeated prefixes, giant tool catalogs, or runaway output.
 
@@ -24,6 +26,19 @@ The goal is not to ship another chat wrapper. SciForge is meant to be an auditab
     <img src="src/asset/img/codemode.png" width="680" alt="SciForge Code mode illustration">
   </a>
 </p>
+
+## Research showcases
+
+The paper records eight prototype workflows with public audit repositories. Four flagship examples:
+
+| Showcase | What it demonstrates | Public artifacts |
+| --- | --- | --- |
+| **Agentic research sprint** | 132 stages and 199+ commits for PI-controlled meiosis gene discovery. | [scenario-01-research-sprint](https://github.com/AGI4Sci/scenario-01-research-sprint) |
+| **AI-guided protein design** | ProteinMPNN design with Boltz-2 / ESMFold structural checks. | [sciforge-de-novo-protein-demo](https://github.com/kaiwinYao1/sciforge-de-novo-protein-demo) |
+| **AI-guided molecular design** | 135 filtered candidates and 36 docking evaluations with SAR traceability. | [molclaw](https://github.com/AGI4Sci/molclaw) |
+| **Genome-to-BGC discovery** | antiSMASH, MIBiG, and BiG-SCAPE evidence cards over 430 BGC regions. | [scenario-bgc-genome-discovery](https://github.com/wenne-kwj/scenario-bgc-genome-discovery) |
+
+See the [paper](./paper/sciforge-report.pdf) for all eight cases and interface examples. These are research prototypes and reproducible traces—not claims of completed experimental validation or a replacement for scientific judgment.
 
 ## Why SciForge Runtime Delivers High Token ROI
 
@@ -252,7 +267,7 @@ approval. The old GUI-managed `@sciforge/computer-use` primitive MCP path has be
 
 ### Download a Pre-built Package
 
-Download the latest build from [GitHub Releases](https://github.com/XingYu-Zhong/SciForge/releases):
+Download the latest build from [GitHub Releases](https://github.com/AGI4Sci/SciForge/releases):
 
 | Platform | Package |
 | --- | --- |
@@ -267,7 +282,7 @@ On first launch, configure the local Model Router runtime key, public model alia
 For contributors and local development:
 
 ```bash
-git clone https://github.com/XingYu-Zhong/SciForge.git
+git clone https://github.com/AGI4Sci/SciForge.git
 cd SciForge
 npm install
 npm run dev
@@ -381,7 +396,7 @@ SciForge Runtime data lives under `~/.sciforge/runtime` or the configured SciFor
 
 ## Updates
 
-- For regular users: check GUI updates in Settings or download the latest installer from [GitHub Releases](https://github.com/XingYu-Zhong/SciForge/releases).
+- For regular users: check GUI updates in Settings or download the latest installer from [GitHub Releases](https://github.com/AGI4Sci/SciForge/releases).
 
 ## Contributing
 
@@ -417,6 +432,8 @@ For the full development workflow, see [DEVELOPMENT.md](./docs/DEVELOPMENT.md).
 
 | Doc | Contents |
 | --- | --- |
+| [Usage Wiki](docs/wiki/README.md) | Installation, runtime selection, scientific workflows, intervention, data boundaries, and troubleshooting |
+| [SciForge paper](paper/sciforge-report.pdf) | System positioning, architecture, interface captures, and eight research showcases |
 | [docs/agent-runtime-contract.md](docs/agent-runtime-contract.md) | Neutral AgentRuntime contract, events, and capabilities shared by SciForge Runtime and Codex |
 | [docs/local-runtime-architecture.en.md](docs/local-runtime-architecture.en.md) | SciForge Runtime architecture, GUI boundaries, HTTP/SSE contract, and legacy agent retirement notes |
 | [docs/local-runtime-cache-optimization.en.md](docs/local-runtime-cache-optimization.en.md) | SciForge Runtime cache optimization, token economy, MCP search, tool-output compaction, and usage savings |
@@ -442,8 +459,8 @@ We are also grateful to:
 - **[DeepSeek](https://github.com/deepseek-ai)**: for the models and API.
 - Everyone who contributes issues, ideas, code, and documentation to SciForge.
 
-<a href="https://github.com/XingYu-Zhong/SciForge/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=XingYu-Zhong/SciForge" />
+<a href="https://github.com/AGI4Sci/SciForge/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=AGI4Sci/SciForge" />
 </a>
 
 ## License

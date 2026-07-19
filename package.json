@@ -202,7 +202,6 @@
     "react-dom": "^19.0.0",
     "react-i18next": "^15.7.4",
     "react-markdown": "^10.1.0",
-    "rehype-harden": "^1.1.8",
     "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",

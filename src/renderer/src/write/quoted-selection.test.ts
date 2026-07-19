@@ -1,9 +1,10 @@
+import { createElement } from 'react'
+import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
-import { harden } from 'rehype-harden'
 import {
   resolveWriteMarkdownResource,
   resolveWriteMarkdownResourcePath,
-  writeMarkdownHardenOptions
+  WriteMarkdownPreview
 } from '../components/write/WriteMarkdownPreview'
 import {
   WRITE_QUOTE_ORIGINAL_END,
@@ -418,13 +419,15 @@ describe('write quoted selections', () => {
 })
 
 describe('write markdown preview resources', () => {
-  it('uses a rehype-harden config that can initialize without crashing preview', () => {
-    expect(() => harden(writeMarkdownHardenOptions)).not.toThrow()
-    expect(writeMarkdownHardenOptions.allowedLinkPrefixes).not.toContain('*')
-    expect(writeMarkdownHardenOptions.allowedLinkPrefixes).toEqual(
-      expect.arrayContaining(['http:', 'https:', 'mailto:', 'sciforge-file:', 'deepseek-file:'])
-    )
-    expect(writeMarkdownHardenOptions.allowedImagePrefixes).toEqual(['http:', 'https:', 'data:', 'blob:'])
+  it('preserves complete external links without blocked placeholders', () => {
+    const html = renderToStaticMarkup(createElement(WriteMarkdownPreview, {
+      content: '[Agent-R1](https://github.com/AgentR1/Agent-R1)',
+      isMarkdown: true
+    }))
+
+    expect(html).toContain('href="https://github.com/AgentR1/Agent-R1"')
+    expect(html).not.toContain('[blocked]')
+    expect(html).not.toContain('Blocked URL:')
   })
 
   it('resolves relative image paths for workspace IPC instead of file URLs', () => {
