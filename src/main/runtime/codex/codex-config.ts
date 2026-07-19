@@ -137,20 +137,36 @@ export async function resolveCodexCommand(
 
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
-  const searchDirs = (env.PATH ?? '')
+  const pathValue = env.PATH ?? env.Path ?? env.path ?? ''
+  const searchDirs = pathValue
     .split(delimiter)
     .map((entry) => entry.trim())
     .filter(Boolean)
   if (platform === 'darwin') {
     searchDirs.push(join(homeDir, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin')
-  } else if (platform !== 'win32') {
+  } else if (platform === 'win32') {
+    // GUI apps launched from Explorer do not always inherit the same PATH as
+    // an interactive shell. Cover the standard npm and standalone locations.
+    const appData = options.env?.APPDATA ?? process.env.APPDATA
+    const localAppData = options.env?.LOCALAPPDATA ?? process.env.LOCALAPPDATA
+    if (appData) searchDirs.push(join(appData, 'npm'))
+    if (localAppData) {
+      searchDirs.push(join(localAppData, 'Programs'), join(localAppData, 'Microsoft', 'WinGet', 'Packages'))
+    }
+    searchDirs.push(join(homeDir, '.local', 'bin'), join(homeDir, '.cargo', 'bin'))
+  } else {
     searchDirs.push(join(homeDir, '.local', 'bin'), '/usr/local/bin', '/usr/bin')
   }
 
-  const isExecutable = options.isExecutable ?? executableFileExists
+  const isExecutable = options.isExecutable ?? ((path: string) => executableFileExists(path, platform))
   for (const directory of new Set(searchDirs)) {
-    const candidate = join(directory, command)
-    if (await isExecutable(candidate)) return candidate
+    const names = platform === 'win32'
+      ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+      : [command]
+    for (const name of names) {
+      const candidate = join(directory, name)
+      if (await isExecutable(candidate)) return candidate
+    }
   }
   return command
 }
@@ -158,14 +174,16 @@ export async function resolveCodexCommand(
 function prependCommandDirectoryToPath(env: NodeJS.ProcessEnv, command: string): NodeJS.ProcessEnv {
   if (!isAbsolute(command)) return env
   const directory = dirname(command)
-  const pathEntries = (env.PATH ?? '').split(delimiter).filter(Boolean)
-  if (!pathEntries.includes(directory)) env.PATH = [directory, ...pathEntries].join(delimiter)
+  const pathKey = env.PATH !== undefined ? 'PATH' : env.Path !== undefined ? 'Path' : 'PATH'
+  const pathEntries = (env[pathKey] ?? '').split(delimiter).filter(Boolean)
+  if (!pathEntries.includes(directory)) env[pathKey] = [directory, ...pathEntries].join(delimiter)
   return env
 }
 
-async function executableFileExists(path: string): Promise<boolean> {
+async function executableFileExists(path: string, platform: NodeJS.Platform): Promise<boolean> {
   try {
-    await access(path, constants.X_OK)
+    // Windows does not expose POSIX executable bits; existence is sufficient.
+    await access(path, platform === 'win32' ? constants.F_OK : constants.X_OK)
     return true
   } catch {
     return false

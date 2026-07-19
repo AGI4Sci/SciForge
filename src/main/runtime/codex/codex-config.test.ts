@@ -81,6 +81,23 @@ describe('codex config launch helpers', () => {
     })).resolves.toBe(command)
   })
 
+  it('finds the Windows cmd shim when Explorer provides Path instead of PATH', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-'))
+    const npmBin = join(home, 'AppData', 'Roaming', 'npm')
+    const command = join(npmBin, 'codex.cmd')
+    await mkdir(npmBin, { recursive: true })
+    await writeFile(command, '@echo off\r\n', 'utf8')
+
+    await expect(resolveCodexCommand('codex', {
+      env: {
+        Path: 'C:\\Windows\\System32',
+        APPDATA: join(home, 'AppData', 'Roaming')
+      },
+      homeDir: home,
+      platform: 'win32'
+    })).resolves.toBe(command)
+  })
+
   it('preserves an explicit Codex path and prefers the supplied PATH', async () => {
     await expect(resolveCodexCommand('~/custom/codex', {
       homeDir: '/Users/example',

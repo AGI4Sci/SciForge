@@ -567,7 +567,12 @@ function spawnCodexAppServerProcess(
     windowsHide?: boolean
   }
 ): CodexAppServerProcess {
-  return spawn(command, args, options) as unknown as CodexAppServerProcess
+  return spawn(command, args, {
+    ...options,
+    // npm installs expose Codex as codex.cmd on Windows. Node cannot execute
+    // cmd/bat shims directly without the Windows command processor.
+    shell: process.platform === 'win32' && /\.(?:cmd|bat)$/i.test(command)
+  }) as unknown as CodexAppServerProcess
 }
 
 function terminateCodexProcessTree(
