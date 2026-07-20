@@ -2986,7 +2986,7 @@ test('responses tool outputs are preserved through canonical upstream routing', 
     assert.equal(body.output_text, '工具输出时间是 Mon Jun 15 17:01:38 CST 2026。');
     const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
     assert.deepEqual(providerInput.map((item) => item.type ?? item.role), ['user', 'function_call', 'function_call_output']);
-    assert.equal(providerInput[1]?.reasoning_content, 'Need to run date before answering.');
+    assert.equal(providerInput[1]?.reasoning_content, undefined);
     assert.equal(providerInput[2]?.output, 'Mon Jun 15 17:01:38 CST 2026\n');
   } finally {
     await server.close();
@@ -3433,14 +3433,14 @@ test('responses tool outputs restore cached function calls stripped by app-serve
     assert.equal(second.status, 200);
     assert.equal(
       (calls[1]?.body.input as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
-      'Need to run date before answering.'
+      undefined
     );
   } finally {
     await server.close();
   }
 });
 
-test('responses assistant text history preserves reasoning_content for thinking providers', async () => {
+test('responses assistant text history removes chat-only reasoning_content', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-assistant-reasoning-history-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -3484,7 +3484,7 @@ test('responses assistant text history preserves reasoning_content for thinking 
     assert.equal(response.status, 200);
     assert.equal(
       (calls[0]?.body.input as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
-      'Need to clarify reproduction scope before planning.'
+      undefined
     );
   } finally {
     await server.close();

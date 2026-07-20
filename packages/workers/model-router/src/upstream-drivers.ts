@@ -10,6 +10,11 @@ import {
   type JsonObject,
   type ResponsesRequest,
 } from './response-compat';
+import {
+  normalizeProviderChatCompletionsBody,
+  normalizeProviderResponsesRequest,
+  resolveProviderCompatibility,
+} from './provider-compat';
 import { hygienizeModelRequestBody } from './request-hygiene';
 
 export type UpstreamWireProtocol = 'responses' | 'chat-completions' | 'anthropic-messages';
@@ -122,7 +127,12 @@ export class UpstreamProtocolNegotiator {
   }): Promise<CanonicalUpstreamResult> {
     const cacheKey = routeCacheKey(options.baseUrl, options.model);
     const cached = this.#cache.get(cacheKey);
-    const candidates = candidateProtocols(options.preferredProtocol, cached);
+    const compatibility = resolveProviderCompatibility(options.baseUrl, options.model);
+    const candidates = candidateProtocols(
+      options.preferredProtocol,
+      cached,
+      compatibility.allowedProtocols as readonly UpstreamWireProtocol[],
+    );
     let lastDefinitiveError: UpstreamRequestError | undefined;
     let lastCapabilityError: UpstreamCapabilityError | undefined;
 
@@ -207,7 +217,13 @@ export class UpstreamProtocolNegotiator {
       const latencyMs = Date.now() - startedAt;
       if (!response.ok) {
         const responseBody = await response.text().catch(() => '');
-        const definitiveRejection = isDefinitiveProtocolRejection(response.status, responseBody);
+        const definitiveRejection = (
+          isDefinitiveProtocolRejection(response.status, responseBody)
+          || (
+            protocol !== compatibility.preferredProtocol
+            && isUnsupportedModelRejection(responseBody)
+          )
+        );
         const error = new UpstreamRequestError({
           code: `upstream_http_${response.status}`,
           message: `Upstream returned HTTP ${response.status}.`,
@@ -249,9 +265,15 @@ export class UpstreamProtocolNegotiator {
           protocol,
           url: prepared.url,
           latencyMs,
-          status: 'failed',
+          status: responseError.definitiveRejection ? 'rejected' : 'failed',
+          httpStatus: response.status,
           errorCode: responseError.code,
         });
+        if (responseError.definitiveRejection) {
+          lastDefinitiveError = responseError;
+          if (cached === protocol) this.#cache.delete(cacheKey);
+          continue;
+        }
         throw responseError;
       }
 
@@ -310,8 +332,9 @@ export async function captureUpstreamResponse(
 }
 
 export function isDefinitiveProtocolRejection(status: number, responseBody: string): boolean {
-  if (status === 404 || status === 405 || status === 415) return true;
+  if (status === 405 || status === 415) return true;
   const normalized = protocolErrorText(responseBody);
+  if (status === 404 && !normalized) return true;
   if (!normalized) return false;
   if (/\b(?:auth(?:entication|orization)?|api[ _-]?key|credential|quota|billing|rate[ _-]?limit|too many requests|timeout|temporar(?:y|ily))\b/i.test(normalized)) {
     return false;
@@ -320,12 +343,20 @@ export function isDefinitiveProtocolRejection(status: number, responseBody: stri
     return /\bconvert[ _-]?request[ _-]?failed\b/i.test(normalized)
       && /\b(?:not[ _-]?implemented|unsupported)\b/i.test(normalized);
   }
-  if (status !== 400 && status !== 422) return false;
+  if (status === 404) {
+    // FastAPI, Nginx, and many gateways return only "Not Found" for an
+    // unknown route. Replaying that request through another wire protocol is
+    // safe because the model was never invoked. A missing model/deployment is
+    // a resource error instead and must remain terminal.
+    return !isMissingModelResourceRejection(normalized);
+  }
+  if (status !== 400 && status !== 404 && status !== 422) return false;
   return (
     /\b(?:unknown|unsupported|unrecognized|invalid)\b.{0,48}\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b/i.test(normalized)
     || /\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b.{0,48}\b(?:unknown|unsupported|unrecognized|invalid|not found)\b/i.test(normalized)
     || /\b(?:unknown|unsupported|unrecognized|invalid)[ _-](?:endpoint|route|protocol|schema)\b/i.test(normalized)
     || /\b(?:messages|input)\b.{0,32}\b(?:is required|required field|must be provided)\b/i.test(normalized)
+    || /\bcannot\s+(?:post|get)\b.{0,128}\/(?:v\d+\/)?(?:responses|chat\/completions|messages)\b/i.test(normalized)
   );
 }
 
@@ -335,6 +366,7 @@ export function buildUpstreamEndpointUrl(baseUrl: string, path: string): string 
   if (normalized.toLowerCase().endsWith(`/${path}`)) return normalized;
   const withoutEndpoint = stripKnownEndpointPath(normalized);
   const lastSegment = lastUrlPathSegment(withoutEndpoint).toLowerCase();
+  if (lastSegment === 'openai') return appendUrlPath(withoutEndpoint, path);
   if (lastSegment === 'beta') {
     return appendUrlPath(removeLastUrlPathSegment(withoutEndpoint), `v1/${path}`);
   }
@@ -345,13 +377,23 @@ export function buildUpstreamEndpointUrl(baseUrl: string, path: string): string 
 const responsesDriver: UpstreamDriver = {
   protocol: 'responses',
   prepare(options) {
-    assertResponsesCapabilities(options.request);
-    const body = responsesRequestBody(options.request, options.model);
+    const profile = resolveProviderCompatibility(options.baseUrl, options.model);
+    let request: ResponsesRequest;
+    try {
+      request = normalizeProviderResponsesRequest(options.request, profile);
+    } catch (error) {
+      throw providerNormalizationCapabilityError(error);
+    }
+    assertResponsesCapabilities(request);
+    const body = responsesRequestBody(request, options.model);
     return {
       url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
       headers: bearerHeaders(options.apiKey),
       body,
-      parse: (response) => parseResponsesResponse(response),
+      parse: (response) => parseResponsesResponse(
+        response,
+        profile.preferredProtocol !== 'responses',
+      ),
     };
   },
 };
@@ -360,10 +402,19 @@ const chatCompletionsDriver: UpstreamDriver = {
   protocol: 'chat-completions',
   prepare(options) {
     assertChatCapabilities(options.request);
-    const body = responsesToChatCompletions({
-      ...options.request,
-      model: options.model,
-    }, { defaultModel: options.model });
+    const profile = resolveProviderCompatibility(options.baseUrl, options.model);
+    let body: JsonObject;
+    try {
+      body = normalizeProviderChatCompletionsBody(
+        responsesToChatCompletions({
+          ...options.request,
+          model: options.model,
+        }, { defaultModel: options.model }),
+        profile,
+      );
+    } catch (error) {
+      throw providerNormalizationCapabilityError(error);
+    }
     if (options.request.stream === true) body.stream = true;
     const aliases = options.toolNameAliases ?? chatToolNameAliasesFromResponsesTools(options.request.tools);
     return {
@@ -378,6 +429,11 @@ const chatCompletionsDriver: UpstreamDriver = {
     };
   },
 };
+
+function providerNormalizationCapabilityError(error: unknown): Error {
+  if (error instanceof RangeError) return new UpstreamCapabilityError(error.message);
+  return error instanceof Error ? error : new Error(String(error));
+}
 
 const anthropicMessagesDriver: UpstreamDriver = {
   protocol: 'anthropic-messages',
@@ -419,9 +475,14 @@ const DRIVERS: Record<UpstreamWireProtocol, UpstreamDriver> = {
 function candidateProtocols(
   preferred: UpstreamWireProtocol,
   cached: UpstreamWireProtocol | undefined,
+  allowed: readonly UpstreamWireProtocol[] = STABLE_PROTOCOL_ORDER,
 ): UpstreamWireProtocol[] {
-  const ordered = [preferred, ...STABLE_PROTOCOL_ORDER.filter((value) => value !== preferred)];
-  return cached ? [cached, ...ordered.filter((value) => value !== cached)] : ordered;
+  const allowedSet = new Set(allowed);
+  const ordered = [preferred, ...STABLE_PROTOCOL_ORDER.filter((value) => value !== preferred)]
+    .filter((value) => allowedSet.has(value));
+  return cached && allowedSet.has(cached)
+    ? [cached, ...ordered.filter((value) => value !== cached)]
+    : ordered;
 }
 
 function routeCacheKey(baseUrl: string, model: string): string {
@@ -485,28 +546,128 @@ function assertAnthropicCapabilities(request: ResponsesRequest): void {
   }
 }
 
-async function parseResponsesResponse(response: Response): Promise<JsonObject> {
+async function parseResponsesResponse(
+  response: Response,
+  allowUnsupportedModelFallback = false,
+): Promise<JsonObject> {
   if (isEventStream(response)) {
     const events = parseSse(await response.text());
     let completed: JsonObject | undefined;
+    let explicitError: JsonObject | undefined;
+    let sawModelOutput = false;
+    let sawAmbiguousData = false;
     for (const event of events) {
       const payload = parseJsonObject(event.data);
-      if (!payload) continue;
+      if (!payload) {
+        if (event.data !== '[DONE]') sawAmbiguousData = true;
+        continue;
+      }
+      const outputEvent = isResponsesModelOutputEvent(payload, event.event);
+      const errorEvent = isExplicitStreamErrorPayload(payload, event.event);
+      if (outputEvent) sawModelOutput = true;
+      if (errorEvent) explicitError = payload as JsonObject;
       const responseValue = isRecord(payload.response) ? payload.response as JsonObject : undefined;
-      if (event.event === 'response.completed' || payload.type === 'response.completed') {
+      const completedEvent = event.event === 'response.completed' || payload.type === 'response.completed';
+      if (completedEvent) {
         completed = responseValue;
+      }
+      if (!outputEvent && !errorEvent && !completedEvent && !isResponsesHousekeepingEvent(payload, event.event)) {
+        sawAmbiguousData = true;
       }
     }
     if (completed) {
       assertResponsesResponseSchema(completed);
       return completed;
     }
+    if (explicitError) {
+      const responseBody = JSON.stringify(explicitError);
+      throw new UpstreamRequestError({
+        code: 'upstream_error_payload',
+        message: 'Responses stream returned an explicit error before producing model output.',
+        status: 502,
+        upstreamStatus: response.status,
+        definitiveRejection: !sawModelOutput
+          && !sawAmbiguousData
+          && (
+            isDefinitiveProtocolRejection(400, responseBody)
+            || (allowUnsupportedModelFallback && isUnsupportedModelRejection(responseBody))
+          ),
+      });
+    }
     throw invalidResponse('Responses stream did not contain a completed response.');
   }
   const payload = await readJsonObject(response);
+  if (isExplicitStreamErrorPayload(payload, undefined)) {
+    const responseBody = JSON.stringify(payload);
+    const sawModelOutput = isResponsesModelOutputEvent(payload, undefined);
+    throw new UpstreamRequestError({
+      code: 'upstream_error_payload',
+      message: 'Responses returned an explicit error payload before producing model output.',
+      status: 502,
+      upstreamStatus: response.status,
+      definitiveRejection: !sawModelOutput
+        && (
+          isDefinitiveProtocolRejection(400, responseBody)
+          || (allowUnsupportedModelFallback && isUnsupportedModelRejection(responseBody))
+        ),
+    });
+  }
   assertNoErrorPayload(payload);
   assertResponsesResponseSchema(payload);
   return payload;
+}
+
+function isExplicitStreamErrorPayload(payload: Record<string, unknown>, event: string | undefined): boolean {
+  if (payload.error !== undefined || event === 'error' || payload.type === 'error' || payload.type === 'response.failed') {
+    return true;
+  }
+  return typeof payload.code === 'string'
+    && payload.code.trim().length > 0
+    && typeof payload.message === 'string'
+    && payload.message.trim().length > 0;
+}
+
+function isResponsesModelOutputEvent(payload: Record<string, unknown>, event: string | undefined): boolean {
+  const eventType = event || (typeof payload.type === 'string' ? payload.type : '');
+  if (/^response\.(?:output_|content_part\.|function_call_arguments\.|reasoning_|refusal\.|image_generation_call\.|code_interpreter_call\.|file_search_call\.|web_search_call\.|mcp_)/u.test(eventType)) {
+    return true;
+  }
+  const response = isRecord(payload.response) ? payload.response : undefined;
+  if (Array.isArray(response?.output) && response.output.length > 0) return true;
+  const usage = isRecord(response?.usage)
+    ? response.usage
+    : isRecord(payload.usage) ? payload.usage : undefined;
+  return numericField(usage, 'output_tokens') > 0
+    || numericField(usage, 'completion_tokens') > 0;
+}
+
+function isResponsesHousekeepingEvent(payload: Record<string, unknown>, event: string | undefined): boolean {
+  const eventType = event || (typeof payload.type === 'string' ? payload.type : '');
+  return eventType === 'response.created'
+    || eventType === 'response.in_progress'
+    || eventType === 'response.queued';
+}
+
+function isUnsupportedModelRejection(responseBody: string): boolean {
+  const normalized = protocolErrorText(responseBody);
+  if (!normalized) return false;
+  if (/\b(?:auth(?:entication|orization)?|api[ _-]?key|credential|quota|billing|rate[ _-]?limit|too many requests|timeout|temporar(?:y|ily))\b/i.test(normalized)) {
+    return false;
+  }
+  return /\bunsupported\b.{0,32}\bmodel\b|\bmodel\b.{0,32}\bunsupported\b/i.test(normalized);
+}
+
+function isMissingModelResourceRejection(normalized: string): boolean {
+  return (
+    /\b(?:model|deployment|engine)[ _-]?(?:not[ _-]?found|missing|unknown)\b/i.test(normalized)
+    || /\b(?:model|deployment|engine)\b.{0,48}\b(?:not found|does not exist|is unavailable|unknown)\b/i.test(normalized)
+    || /\b(?:not found|does not exist|unknown)\b.{0,48}\b(?:model|deployment|engine)\b/i.test(normalized)
+  );
+}
+
+function numericField(value: Record<string, unknown> | undefined, key: string): number {
+  const field = value?.[key];
+  return typeof field === 'number' && Number.isFinite(field) ? field : 0;
 }
 
 async function parseChatCompletionsResponse(response: Response): Promise<JsonObject> {
@@ -742,7 +903,10 @@ function protocolErrorText(body: string): string {
   try {
     const value = JSON.parse(trimmed) as unknown;
     if (!isRecord(value)) return trimmed.slice(0, 2_000);
-    const error = isRecord(value.error) ? value.error : value;
+    const response = isRecord(value.response) ? value.response : undefined;
+    const error = isRecord(value.error)
+      ? value.error
+      : isRecord(response?.error) ? response.error : value;
     return [error.code, error.type, error.message, error.detail]
       .filter((item): item is string => typeof item === 'string')
       .join(' ')

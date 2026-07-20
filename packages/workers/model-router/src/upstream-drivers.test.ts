@@ -4,10 +4,21 @@ import { test } from 'node:test';
 import {
   UpstreamProtocolNegotiator,
   UpstreamRequestError,
+  buildUpstreamEndpointUrl,
   isDefinitiveProtocolRejection,
   type UpstreamWireProtocol,
   type UpstreamTraceAttemptStart,
 } from './upstream-drivers';
+
+test('keeps Google OpenAI-compatibility roots instead of injecting another v1 segment', () => {
+  assert.equal(
+    buildUpstreamEndpointUrl(
+      'https://generativelanguage.googleapis.com/v1beta/openai/',
+      'chat/completions',
+    ),
+    'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+  );
+});
 
 const request = {
   model: 'configured-model',
@@ -134,6 +145,430 @@ test('falls back when an upstream wraps an unimplemented request conversion in H
     'https://models.example/v1/chat/completions',
     'https://models.example/v1/chat/completions',
   ]);
+});
+
+test('falls back from an explicit 2xx Responses SSE error and caches Chat Completions', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const fetchImpl = captureFetch(calls, [
+    sse([[undefined, {
+      code: 'InvalidParameter',
+      message: "Unsupported model: 'glm-5.2' for the Responses endpoint.",
+    }]]),
+    chatResult('glm-chat-fallback'),
+    chatResult('glm-chat-cached'),
+  ]);
+
+  const first = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'glm-5.2',
+    fetchImpl,
+    preferredProtocol: 'responses',
+  });
+  const second = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'glm-5.2',
+    fetchImpl,
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(first.protocol, 'chat-completions');
+  assert.equal(second.protocol, 'chat-completions');
+  assert.deepEqual(calls.map((call) => call.url), [
+    'https://models.example/v1/responses',
+    'https://models.example/v1/chat/completions',
+    'https://models.example/v1/chat/completions',
+  ]);
+});
+
+test('never replays an explicit 2xx stream error after model output or for protected failures', async (context) => {
+  const cases: Array<{
+    name: string;
+    stream: () => Response;
+  }> = [
+    {
+      name: 'unsupported model after output delta',
+      stream: () => sse([
+        ['response.output_text.delta', { type: 'response.output_text.delta', delta: 'billable partial output' }],
+        ['error', { type: 'error', code: 'InvalidParameter', message: 'Unsupported model for Responses.' }],
+      ]),
+    },
+    {
+      name: 'unsupported model after function arguments delta',
+      stream: () => sse([
+        ['response.function_call_arguments.delta', {
+          type: 'response.function_call_arguments.delta',
+          delta: '{"path":"billable',
+        }],
+        ['error', { type: 'error', code: 'InvalidParameter', message: 'Unsupported model for Responses.' }],
+      ]),
+    },
+    {
+      name: 'unsupported model after malformed stream data',
+      stream: () => new Response([
+        'event: response.output_text.delta',
+        'data: {malformed-billable-output',
+        '',
+        'event: error',
+        `data: ${JSON.stringify({
+          type: 'error',
+          code: 'InvalidParameter',
+          message: 'Unsupported model for Responses.',
+        })}`,
+        '',
+      ].join('\n'), {
+        headers: { 'content-type': 'text/event-stream' },
+      }),
+    },
+    {
+      name: 'unsupported model with partial output in response.failed',
+      stream: () => sse([['response.failed', {
+        type: 'response.failed',
+        response: {
+          output: [{ type: 'message', role: 'assistant', content: [] }],
+          error: { code: 'InvalidParameter', message: 'Unsupported model for Responses.' },
+        },
+      }]]),
+    },
+    {
+      name: 'authentication failure before output',
+      stream: () => sse([['error', {
+        type: 'error',
+        code: 'authentication_error',
+        message: 'Unsupported model because the API key is invalid.',
+      }]]),
+    },
+    {
+      name: 'quota failure before output',
+      stream: () => sse([['response.failed', {
+        type: 'response.failed',
+        response: {
+          output: [],
+          error: { code: 'quota_exceeded', message: 'Unsupported model because quota is exhausted.' },
+        },
+      }]]),
+    },
+    {
+      name: 'usage proves output was generated',
+      stream: () => sse([['response.failed', {
+        type: 'response.failed',
+        response: {
+          output: [],
+          usage: { output_tokens: 4 },
+          error: { code: 'InvalidParameter', message: 'Unsupported model for Responses.' },
+        },
+      }]]),
+    },
+  ];
+
+  for (const entry of cases) {
+    await context.test(entry.name, async () => {
+      let calls = 0;
+      const negotiator = new UpstreamProtocolNegotiator();
+      await assert.rejects(
+        negotiator.request({
+          request,
+          baseUrl: `https://${entry.name.replace(/\s+/gu, '-')}.example/v1`,
+          apiKey: 'secret',
+          model: 'configured-model',
+          fetchImpl: async () => {
+            calls += 1;
+            assert.equal(calls, 1, 'must not replay a potentially billable or protected failure');
+            return entry.stream();
+          },
+          preferredProtocol: 'responses',
+        }),
+        (error: unknown) => error instanceof UpstreamRequestError
+          && error.code === 'upstream_error_payload'
+          && error.definitiveRejection === false,
+      );
+      assert.equal(calls, 1);
+    });
+  }
+});
+
+test('falls back for a standard nested response.failed rejection only before output', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const result = await negotiator.request({
+    request,
+    baseUrl: 'https://nested-response-error.example/v1',
+    apiKey: 'secret',
+    model: 'glm-5.2',
+    fetchImpl: captureFetch(calls, [
+      sse([['response.failed', {
+        type: 'response.failed',
+        response: {
+          output: [],
+          error: { code: 'unsupported_endpoint', message: 'The Responses endpoint is unsupported.' },
+        },
+      }]]),
+      chatResult('nested-error-fallback'),
+    ]),
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(result.protocol, 'chat-completions');
+  assert.deepEqual(calls.map((call) => call.url), [
+    'https://nested-response-error.example/v1/responses',
+    'https://nested-response-error.example/v1/chat/completions',
+  ]);
+});
+
+test('accepts a completed Responses event after a provisional stream error without replaying', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const result = await negotiator.request({
+    request,
+    baseUrl: 'https://event-order.example/v1',
+    apiKey: 'secret',
+    model: 'glm-5.2',
+    fetchImpl: captureFetch(calls, [sse([
+      ['error', {
+        type: 'error',
+        code: 'unsupported_endpoint',
+        message: 'A provisional endpoint error.',
+      }],
+      ['response.completed', {
+        type: 'response.completed',
+        response: {
+          id: 'resp_after_error',
+          object: 'response',
+          status: 'completed',
+          output: [],
+          usage: { input_tokens: 2, output_tokens: 0, total_tokens: 2 },
+        },
+      }],
+    ])]),
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(result.protocol, 'responses');
+  assert.equal(calls.length, 1);
+});
+
+test('handles explicit non-streaming 2xx Responses errors with the same replay guard', async () => {
+  const fallbackCalls: CapturedCall[] = [];
+  const fallback = await new UpstreamProtocolNegotiator().request({
+    request,
+    baseUrl: 'https://json-error.example/v1',
+    apiKey: 'secret',
+    model: 'glm-5.2',
+    fetchImpl: captureFetch(fallbackCalls, [
+      Response.json({
+        type: 'response.failed',
+        response: {
+          output: [],
+          error: { code: 'unsupported_endpoint', message: 'Responses endpoint is unsupported.' },
+        },
+      }),
+      chatResult('json-error-fallback'),
+    ]),
+    preferredProtocol: 'responses',
+  });
+  assert.equal(fallback.protocol, 'chat-completions');
+  assert.equal(fallbackCalls.length, 2);
+
+  let guardedCalls = 0;
+  await assert.rejects(
+    new UpstreamProtocolNegotiator().request({
+      request,
+      baseUrl: 'https://json-output-error.example/v1',
+      apiKey: 'secret',
+      model: 'glm-5.2',
+      fetchImpl: async () => {
+        guardedCalls += 1;
+        return Response.json({
+          type: 'response.failed',
+          response: {
+            output: [{ type: 'message', role: 'assistant', content: [] }],
+            error: { code: 'unsupported_endpoint', message: 'Responses endpoint is unsupported.' },
+          },
+        });
+      },
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => error instanceof UpstreamRequestError
+      && error.code === 'upstream_error_payload'
+      && error.definitiveRejection === false,
+  );
+  assert.equal(guardedCalls, 1);
+});
+
+test('does not reinterpret a generic unsupported model error as a protocol rejection', async () => {
+  let calls = 0;
+  const negotiator = new UpstreamProtocolNegotiator();
+  await assert.rejects(
+    negotiator.request({
+      request,
+      baseUrl: 'https://model-typo.example/v1',
+      apiKey: 'secret',
+      model: 'configured-model',
+      fetchImpl: async () => {
+        calls += 1;
+        return sse([[undefined, {
+          code: 'model_not_found',
+          message: 'Unsupported model: configured-model.',
+        }]]);
+      },
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => error instanceof UpstreamRequestError
+      && error.code === 'upstream_error_payload'
+      && error.definitiveRejection === false,
+  );
+  assert.equal(calls, 1);
+});
+
+test('known OpenAI-compatible providers never probe Anthropic Messages', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  await assert.rejects(
+    negotiator.request({
+      request,
+      baseUrl: 'https://models.example/v1',
+      apiKey: 'secret',
+      model: 'gpt-5.6',
+      fetchImpl: captureFetch(calls, [
+        Response.json({ error: { code: 'unsupported_endpoint', message: 'Responses endpoint is unsupported.' } }, { status: 404 }),
+        Response.json({ error: { code: 'unsupported_endpoint', message: 'Chat endpoint is unsupported.' } }, { status: 404 }),
+      ]),
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => error instanceof UpstreamRequestError
+      && error.code === 'upstream_protocol_unsupported',
+  );
+  assert.deepEqual(calls.map((call) => call.url), [
+    'https://models.example/v1/responses',
+    'https://models.example/v1/chat/completions',
+  ]);
+});
+
+test('uses max_completion_tokens when GPT Responses capability fallback selects Chat', async () => {
+  const calls: CapturedCall[] = [];
+  const result = await new UpstreamProtocolNegotiator().request({
+    request: { ...request, stop: ['END'] },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'gpt-5.6',
+    fetchImpl: captureFetch(calls, [chatResult('gpt-chat-capability-fallback')]),
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(result.protocol, 'chat-completions');
+  assert.equal(calls.length, 1);
+  assert.match(calls[0]?.url ?? '', /\/chat\/completions$/u);
+  assert.equal(calls[0]?.body.max_tokens, undefined);
+  assert.equal(calls[0]?.body.max_completion_tokens, 128);
+});
+
+test('normalizes provider-specific request history and Kimi tool schemas', async () => {
+  const responsesCalls: CapturedCall[] = [];
+  const responsesNegotiator = new UpstreamProtocolNegotiator();
+  await responsesNegotiator.request({
+    request: {
+      ...request,
+      input: [{
+        role: 'assistant',
+        content: [{ type: 'output_text', text: 'prior answer' }],
+        reasoning_content: 'chat-only reasoning',
+      }],
+      reasoning_effort: 'high',
+    },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'gpt-5.6',
+    fetchImpl: captureFetch(responsesCalls, [responsesResult('gpt-normalized')]),
+    preferredProtocol: 'responses',
+  });
+
+  const responsesInput = responsesCalls[0]?.body.input as Array<Record<string, unknown>>;
+  assert.equal(responsesInput[0]?.reasoning_content, undefined);
+  assert.deepEqual(responsesCalls[0]?.body.reasoning, { effort: 'high' });
+  assert.equal(responsesCalls[0]?.body.reasoning_effort, undefined);
+
+  const kimiCalls: CapturedCall[] = [];
+  const kimiNegotiator = new UpstreamProtocolNegotiator();
+  const adversarialParameters = JSON.parse(JSON.stringify({
+    type: 'object',
+    properties: {
+      __proto_placeholder__: {
+        anyOf: [{ type: 'string' }, { type: 'null' }],
+      },
+      constructor: {
+        allOf: [{ type: 'string' }, { not: { const: 'blocked' } }],
+      },
+      prototype: {
+        oneOf: [{ const: 'alpha' }, { const: 'beta' }],
+      },
+      safe: { type: 'string' },
+      '': { type: 'string' },
+    },
+    required: [
+      ...Array.from({ length: 80 }, (_, index) => `unknown_${index}`),
+      '__proto__',
+      'constructor',
+      'prototype',
+      'safe',
+      '',
+    ],
+  }).replace('__proto_placeholder__', '__proto__')) as Record<string, unknown>;
+  await kimiNegotiator.request({
+    request: {
+      ...request,
+      input: [{
+        role: 'assistant',
+        content: '',
+        reasoning_content: 'provider reasoning state',
+      }],
+      tools: [{
+        type: 'function',
+        name: 'apply_patch',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', pattern: '^(?!.*\\.\\.).+$' },
+            patch: { type: 'string' },
+          },
+          required: ['path', 'patch'],
+        },
+      }, {
+        type: 'function',
+        name: 'schema_probe',
+        parameters: adversarialParameters,
+      }],
+    },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'kimi-k3',
+    fetchImpl: captureFetch(kimiCalls, [chatResult('kimi-normalized')]),
+    preferredProtocol: 'chat-completions',
+  });
+
+  const messages = kimiCalls[0]?.body.messages as Array<Record<string, unknown>>;
+  const tools = kimiCalls[0]?.body.tools as Array<Record<string, unknown>>;
+  const fn = tools[0]?.function as Record<string, unknown>;
+  const parameters = fn.parameters as Record<string, unknown>;
+  const properties = parameters.properties as Record<string, Record<string, unknown>>;
+  assert.equal(messages[0]?.reasoning_content, 'provider reasoning state');
+  assert.deepEqual(parameters.required, ['path', 'patch']);
+  assert.deepEqual(Object.keys(properties), ['path', 'patch']);
+  assert.equal(properties.path?.pattern, undefined);
+  assert.equal(kimiCalls[0]?.body.max_tokens, undefined);
+  assert.equal(kimiCalls[0]?.body.max_completion_tokens, 128);
+
+  const probe = tools[1]?.function as Record<string, unknown>;
+  const probeParameters = probe.parameters as Record<string, unknown>;
+  const probeProperties = probeParameters.properties as Record<string, Record<string, unknown>>;
+  assert.equal(Object.hasOwn(probeProperties, '__proto__'), true);
+  assert.deepEqual(probeParameters.required, ['__proto__', 'constructor', 'prototype', 'safe', '']);
+  assert.equal(Array.isArray(probeProperties.__proto__?.anyOf), true);
+  assert.equal(Array.isArray(probeProperties.constructor?.allOf), true);
+  assert.equal(Array.isArray(probeProperties.prototype?.oneOf), true);
 });
 
 test('observes every actual fallback attempt with prepared request and raw response bytes', async () => {
@@ -269,6 +704,12 @@ test('never resubmits a prompt after auth, quota, rate-limit, timeout, 5xx, or a
 test('classifies only endpoint and request-shape errors as definitive 400/422 rejections', () => {
   assert.equal(isDefinitiveProtocolRejection(400, '{"error":{"message":"unsupported request schema"}}'), true);
   assert.equal(isDefinitiveProtocolRejection(422, '{"error":{"message":"messages is required"}}'), true);
+  assert.equal(isDefinitiveProtocolRejection(400, '{"code":"InvalidParameter","message":"Unsupported model: glm-5.2"}'), false);
+  assert.equal(isDefinitiveProtocolRejection(404, '{"error":{"code":"model_not_found","message":"Model not found"}}'), false);
+  assert.equal(isDefinitiveProtocolRejection(404, '{"error":{"code":"endpoint_not_found","message":"Responses endpoint not found"}}'), true);
+  assert.equal(isDefinitiveProtocolRejection(404, '{"detail":"Not Found"}'), true);
+  assert.equal(isDefinitiveProtocolRejection(404, '404 page not found'), true);
+  assert.equal(isDefinitiveProtocolRejection(404, '{"error":{"message":"Deployment does not exist"}}'), false);
   assert.equal(isDefinitiveProtocolRejection(400, '{"error":{"message":"invalid parameter temperature"}}'), false);
   assert.equal(isDefinitiveProtocolRejection(400, '{"error":{"message":"quota exhausted"}}'), false);
   assert.equal(isDefinitiveProtocolRejection(500, 'unsupported endpoint'), false);
@@ -281,6 +722,76 @@ test('classifies only endpoint and request-shape errors as definitive 400/422 re
   assert.equal(isDefinitiveProtocolRejection(500, JSON.stringify({
     error: { message: 'not implemented', code: 'internal_error' },
   })), false);
+});
+
+test('falls back for a generic route 404 but never replays a missing-model 404', async () => {
+  const routeCalls: CapturedCall[] = [];
+  const routeResult = await new UpstreamProtocolNegotiator().request({
+    request,
+    baseUrl: 'https://generic-404.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    fetchImpl: captureFetch(routeCalls, [
+      Response.json({ detail: 'Not Found' }, { status: 404 }),
+      chatResult('generic-404-fallback'),
+    ]),
+    preferredProtocol: 'responses',
+  });
+  assert.equal(routeResult.protocol, 'chat-completions');
+  assert.equal(routeCalls.length, 2);
+
+  let modelCalls = 0;
+  await assert.rejects(
+    new UpstreamProtocolNegotiator().request({
+      request,
+      baseUrl: 'https://model-404.example/v1',
+      apiKey: 'secret',
+      model: 'configured-model',
+      fetchImpl: async () => {
+        modelCalls += 1;
+        return Response.json({
+          error: { code: 'model_not_found', message: 'Model configured-model not found.' },
+        }, { status: 404 });
+      },
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => error instanceof UpstreamRequestError
+      && error.code === 'upstream_http_404'
+      && error.definitiveRejection === false,
+  );
+  assert.equal(modelCalls, 1);
+});
+
+test('fails closed on over-complex tool schemas instead of silently weakening them', async () => {
+  let nested: Record<string, unknown> = { type: 'string' };
+  for (let depth = 0; depth < 40; depth += 1) {
+    nested = { type: 'array', items: nested };
+  }
+  let calls = 0;
+
+  await assert.rejects(
+    new UpstreamProtocolNegotiator().request({
+      request: {
+        ...request,
+        tools: [{
+          type: 'function',
+          name: 'deep_probe',
+          parameters: nested,
+        }],
+      },
+      baseUrl: 'https://models.example/v1',
+      apiKey: 'secret',
+      model: 'gpt-5.6',
+      fetchImpl: async () => {
+        calls += 1;
+        return responsesResult('must-not-send');
+      },
+      preferredProtocol: 'responses',
+    }),
+    (error: unknown) => error instanceof UpstreamRequestError
+      && error.code === 'upstream_protocol_capability_unsupported',
+  );
+  assert.equal(calls, 0);
 });
 
 test('Anthropic Messages driver preserves tools, tool results, usage, and stop reason', async () => {

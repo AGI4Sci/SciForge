@@ -42,6 +42,34 @@ test('request hygiene does not rewrite ordinary short commands that mention mark
   assert.equal(args.cmd, command);
 });
 
+test('request hygiene preserves prototype-shaped JSON data properties without pollution', () => {
+  const body = JSON.parse(`{
+    "tools": [{
+      "type": "function",
+      "name": "probe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "__proto__": { "type": "string" },
+          "constructor": { "type": "string" },
+          "prototype": { "type": "string" }
+        },
+        "required": ["__proto__", "constructor", "prototype"]
+      }
+    }]
+  }`) as Record<string, unknown>;
+
+  const hygienized = hygienizeModelRequestBody(body);
+  const tools = hygienized.tools as Array<Record<string, unknown>>;
+  const parameters = tools[0]?.parameters as Record<string, unknown>;
+  const properties = parameters.properties as Record<string, unknown>;
+
+  assert.equal(Object.hasOwn(properties, '__proto__'), true);
+  assert.deepEqual(Object.keys(properties), ['__proto__', 'constructor', 'prototype']);
+  assert.deepEqual(parameters.required, ['__proto__', 'constructor', 'prototype']);
+  assert.equal((Object.prototype as Record<string, unknown>).polluted, undefined);
+});
+
 function toolCallBody(args: Record<string, unknown>): Record<string, unknown> {
   return {
     messages: [{

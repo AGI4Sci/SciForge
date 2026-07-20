@@ -48,6 +48,11 @@ const PROVIDER_TOOL_SCHEMA_KEYS = new Set([
   'required',
   'additionalProperties',
   'items',
+  'anyOf',
+  'oneOf',
+  'allOf',
+  'not',
+  'const',
   'enum',
   'minimum',
   'maximum',
@@ -941,52 +946,86 @@ function providerSafeChatToolParameters(value: unknown): JsonObject {
     const properties = isRecord(sanitized.properties) ? sanitized.properties : {};
     return compactJsonObject({ ...sanitized, type: 'object', properties });
   }
+  if (sanitized === false) {
+    throw new RangeError('Provider tool parameters cannot be represented by an always-false root schema.');
+  }
   return { type: 'object', properties: {} };
 }
 
 function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | undefined {
-  if (depth > PROVIDER_TOOL_SCHEMA_MAX_DEPTH) return {};
+  if (depth > PROVIDER_TOOL_SCHEMA_MAX_DEPTH) {
+    throw new RangeError(`Provider tool JSON Schema exceeds the maximum depth of ${PROVIDER_TOOL_SCHEMA_MAX_DEPTH}.`);
+  }
+  if (typeof value === 'boolean') return value;
   if (!isRecord(value)) return undefined;
   const out: Record<string, JsonValue> = {};
+  let requestedRequired: string[] | undefined;
   for (const [key, raw] of Object.entries(value)) {
     if (key.startsWith('$') || !PROVIDER_TOOL_SCHEMA_KEYS.has(key)) continue;
     switch (key) {
       case 'properties': {
         const properties = isRecord(raw) ? raw : undefined;
         if (!properties) break;
-        const entries = Object.entries(properties).slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES);
+        const entries = Object.entries(properties);
+        if (entries.length > PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES) {
+          throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES} properties.`);
+        }
         out.properties = Object.fromEntries(entries.map(([name, schema]) => [
-          boundedProviderToolString(name),
+          name,
           sanitizeProviderToolSchema(schema, depth + 1) ?? {},
         ]));
         break;
       }
       case 'items': {
         if (Array.isArray(raw)) {
+          if (raw.length > PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES) {
+            throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES} tuple items.`);
+          }
           out.items = raw
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
             .map((item) => sanitizeProviderToolSchema(item, depth + 1) ?? {});
-        } else if (isRecord(raw)) {
+        } else if (isRecord(raw) || typeof raw === 'boolean') {
           out.items = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
         }
         break;
       }
+      case 'anyOf':
+      case 'oneOf':
+      case 'allOf': {
+        if (Array.isArray(raw)) {
+          if (raw.length > PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES) {
+            throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES} ${key} branches.`);
+          }
+          out[key] = raw
+            .map((item) => sanitizeProviderToolSchema(item, depth + 1) ?? {});
+        }
+        break;
+      }
+      case 'not': {
+        if (isRecord(raw) || typeof raw === 'boolean') {
+          out.not = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
+        }
+        break;
+      }
+      case 'const': {
+        const constant = jsonValue(raw);
+        if (constant !== undefined) out.const = constant;
+        break;
+      }
       case 'required': {
-        const required = Array.isArray(raw)
+        requestedRequired = Array.isArray(raw)
           ? raw
-            .filter((item): item is string => typeof item === 'string' && item.length > 0)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map(boundedProviderToolString)
+            .filter((item): item is string => typeof item === 'string')
           : [];
-        if (required.length) out.required = [...new Set(required)];
         break;
       }
       case 'enum': {
         if (Array.isArray(raw)) {
+          if (raw.length > PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES) {
+            throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES} enum values.`);
+          }
           out.enum = raw
-            .filter(isJsonPrimitive)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES)
-            .map((item) => typeof item === 'string' ? boundedProviderToolString(item) : item);
+            .map(jsonValue)
+            .filter((item): item is JsonValue => item !== undefined);
         }
         break;
       }
@@ -1011,7 +1050,7 @@ function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | 
       }
       case 'pattern':
       case 'format': {
-        if (typeof raw === 'string' && raw.trim()) out[key] = boundedProviderToolString(raw);
+        if (typeof raw === 'string' && raw.trim()) out[key] = raw;
         break;
       }
       case 'nullable': {
@@ -1025,6 +1064,14 @@ function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | 
     }
   }
   if (isRecord(out.properties) && !out.type) out.type = 'object';
+  if (requestedRequired?.length && isRecord(out.properties)) {
+    const propertyNames = new Set(Object.keys(out.properties));
+    const required = [...new Set(requestedRequired.filter((name) => propertyNames.has(name)))];
+    if (required.length > PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES) {
+      throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES} required properties.`);
+    }
+    if (required.length) out.required = required;
+  }
   return out;
 }
 
@@ -1234,7 +1281,14 @@ function compactJsonObject(values: Record<string, unknown>): JsonObject {
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(values)) {
     const normalized = jsonValue(value);
-    if (normalized !== undefined) out[key] = normalized;
+    if (normalized !== undefined) {
+      Object.defineProperty(out, key, {
+        configurable: true,
+        enumerable: true,
+        value: normalized,
+        writable: true,
+      });
+    }
   }
   return out;
 }

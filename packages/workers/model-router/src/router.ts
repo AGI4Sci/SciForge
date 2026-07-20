@@ -38,6 +38,7 @@ import {
   type UpstreamAttempt,
   type UpstreamWireProtocol,
 } from './upstream-drivers';
+import { preferredProviderProtocol } from './provider-compat';
 
 export interface ModelRouterProviderConfig {
   baseUrl: string;
@@ -1685,13 +1686,9 @@ function preferredResponsesProtocol(
   incoming: IncomingMessage,
 ): UpstreamWireProtocol {
   const profileId = requestedProfileId(isRecord(request) ? request : {}, incoming, config);
-  const model = config.profiles[profileId]?.textReasoner.model ?? '';
-  // DeepSeek-compatible gateways commonly expose a partial /responses route that
-  // returns HTTP 200 without a terminal response.completed event. Prefer their
-  // broadly supported Chat Completions wire so a request is never replayed after
-  // an ambiguous 2xx response.
-  return /(?:^|[/_.-])deepseek(?:[/_.-]|$)/i.test(model)
-    ? 'chat-completions'
+  const provider = config.profiles[profileId]?.textReasoner;
+  return provider
+    ? preferredProviderProtocol(provider.baseUrl, provider.model)
     : 'responses';
 }
 
