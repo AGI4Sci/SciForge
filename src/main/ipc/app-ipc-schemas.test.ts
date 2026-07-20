@@ -122,6 +122,7 @@ describe('app-ipc-schemas', () => {
       model: ' deepseek-v4-pro ',
       reasoningEffort: ' medium ',
       governanceProfile: 'remote_guard',
+      visibleContextOwnerThreadId: ' parent-thread ',
       fileReferences: [{
         path: ' /tmp/workspace/docs/spec.pdf ',
         relativePath: ' docs/spec.pdf ',
@@ -142,6 +143,7 @@ describe('app-ipc-schemas', () => {
       model: 'deepseek-v4-pro',
       reasoningEffort: 'medium',
       governanceProfile: 'remote_guard',
+      visibleContextOwnerThreadId: 'parent-thread',
       fileReferences: [{
         path: '/tmp/workspace/docs/spec.pdf',
         relativePath: 'docs/spec.pdf',

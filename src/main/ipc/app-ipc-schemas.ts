@@ -221,6 +221,7 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   remoteTargetId: z.string().trim().max(MAX_ID_LENGTH).optional(),
   governanceProfile: agentRuntimeGovernanceProfileSchema.optional(),
   displayText: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH).optional(),
+  visibleContextOwnerThreadId: optionalTrimmedString(MAX_ID_LENGTH),
   guiPlan: z.object({
     operation: z.enum(['draft', 'refine']),
     workspaceRoot: trimmedString(MAX_PATH_LENGTH),

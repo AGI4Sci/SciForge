@@ -2101,7 +2101,12 @@ describe('registerAppIpcHandlers', () => {
       limit: 20
     })
     await expect(
-      handlers.get('agentRuntime:startTurn')?.({}, { runtimeId: 'codex', threadId: 'thread-1', text: ' hello ' })
+      handlers.get('agentRuntime:startTurn')?.({}, {
+        runtimeId: 'codex',
+        threadId: 'side-thread-1',
+        text: ' hello ',
+        visibleContextOwnerThreadId: ' parent-thread-1 '
+      })
     ).resolves.toEqual({ threadId: 'thread-1', turnId: 'turn-1' })
     await expect(
       handlers.get('agentRuntime:interruptTurn')?.({}, {
@@ -2215,8 +2220,9 @@ describe('registerAppIpcHandlers', () => {
     expect(agentRuntime.capabilities).toHaveBeenCalledWith('codex')
     expect(agentRuntime.startTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
-      threadId: 'thread-1',
-      text: 'hello'
+      threadId: 'side-thread-1',
+      text: 'hello',
+      visibleContextOwnerThreadId: 'parent-thread-1'
     })
     expect(agentRuntime.interruptTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
