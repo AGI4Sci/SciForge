@@ -3062,7 +3062,7 @@ test('responses request hygiene folds pasted image data and giant tool outputs b
   }
 });
 
-test('responses adjacent tool calls are forwarded as one assistant message', async () => {
+test('responses preserve adjacent parallel function calls', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-adjacent-tool-calls-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -3363,24 +3363,67 @@ test('responses tool transcript removes bridge items between tool calls and outp
   }
 });
 
-test('responses tool outputs restore cached function calls stripped by app-server clients', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-reasoning-cache-'));
+test('responses follow-ups replay encrypted continuation state and the complete parallel tool turn', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-response-continuation-'));
+  const encryptedContent = 'AbCd0123_+'.repeat(80);
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testResponsesExtensionConfig(),
+    config,
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
-      chatCompletion('text-tool-call-with-reasoning', '', [{
-        id: 'call_date_cached',
-        type: 'function',
-        function: {
-          name: 'local_shell',
-          arguments: '{"cmd":"date"}',
-        },
-      }], { reasoning_content: 'Need to run date before answering.' }),
-      chatCompletion('text-tool-output-final', '工具输出时间是 Mon Jun 15 17:01:38 CST 2026。'),
+      Response.json({
+        id: 'resp_upstream_tool_turn',
+        object: 'response',
+        status: 'completed',
+        output: [
+          {
+            id: 'rs_parallel_tools',
+            type: 'reasoning',
+            encrypted_content: encryptedContent,
+            summary: [{ type: 'summary_text', text: 'Need both tool results.' }],
+          },
+          {
+            id: 'cmp_parallel_tools',
+            type: 'compaction',
+            encrypted_content: encryptedContent,
+          },
+          {
+            id: 'fc_parallel_a',
+            type: 'function_call',
+            call_id: 'call_parallel_a',
+            name: 'local_shell',
+            arguments: '{"cmd":"pwd"}',
+          },
+          {
+            id: 'fc_parallel_b',
+            type: 'function_call',
+            call_id: 'call_parallel_b',
+            name: 'local_shell',
+            arguments: '{"cmd":"git status --short"}',
+          },
+        ],
+        output_text: '',
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      }),
+      Response.json({
+        id: 'resp_upstream_final',
+        object: 'response',
+        status: 'completed',
+        output: [{
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Both tools finished.' }],
+        }],
+        output_text: 'Both tools finished.',
+        usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+      }),
     ]),
   });
 
@@ -3390,7 +3433,7 @@ test('responses tool outputs restore cached function calls stripped by app-serve
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         model: 'sciforge-router',
-        input: 'Run date and answer.',
+        input: 'Run both tools and answer.',
         tools: [{
           type: 'function',
           name: 'local_shell',
@@ -3401,24 +3444,37 @@ test('responses tool outputs restore cached function calls stripped by app-serve
     });
 
     assert.equal(first.status, 200);
-    const firstBody = await first.json() as { output?: Array<Record<string, unknown>> };
-    const firstFunctionCall = firstBody.output?.find((item) => item.type === 'function_call');
-    assert.equal(firstFunctionCall?.reasoning_content, 'Need to run date before answering.');
+    const firstBody = await first.json() as { id?: string; output?: Array<Record<string, unknown>> };
+    assert.match(String(firstBody.id), /^resp_/u);
+    assert.notEqual(firstBody.id, 'resp_upstream_tool_turn');
+    assert.equal(firstBody.output?.find((item) => item.type === 'reasoning')?.encrypted_content, encryptedContent);
 
     const second = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         model: 'sciforge-router',
+        previous_response_id: firstBody.id,
         input: [
           {
             role: 'user',
-            content: [{ type: 'input_text', text: 'Run date and answer.' }],
+            content: [{ type: 'input_text', text: 'Run both tools and answer.' }],
+          },
+          {
+            type: 'function_call',
+            call_id: 'call_parallel_a',
+            name: 'local_shell',
+            arguments: '{"cmd":"pwd"}',
           },
           {
             type: 'function_call_output',
-            call_id: 'call_date_cached',
-            output: 'Mon Jun 15 17:01:38 CST 2026\n',
+            call_id: 'call_parallel_a',
+            output: '/tmp/workspace\n',
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_parallel_b',
+            output: ' M package.json\n',
           },
         ],
         tools: [{
@@ -3431,9 +3487,22 @@ test('responses tool outputs restore cached function calls stripped by app-serve
     });
 
     assert.equal(second.status, 200);
-    assert.equal(
-      (calls[1]?.body.input as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
-      'Need to run date before answering.'
+    assert.equal(calls[1]?.body.previous_response_id, undefined);
+    const providerInput = calls[1]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), [
+      'user',
+      'reasoning',
+      'compaction',
+      'function_call',
+      'function_call',
+      'function_call_output',
+      'function_call_output',
+    ]);
+    assert.equal(providerInput[1]?.encrypted_content, encryptedContent);
+    assert.equal(providerInput[2]?.encrypted_content, encryptedContent);
+    assert.deepEqual(
+      providerInput.filter((item) => item.type === 'function_call').map((item) => item.call_id),
+      ['call_parallel_a', 'call_parallel_b'],
     );
   } finally {
     await server.close();

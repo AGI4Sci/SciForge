@@ -442,7 +442,10 @@ function responsesInputToMessages(
     const pendingToolCalls: JsonObject[] = [];
     const pendingReasoning: string[] = [];
     const flushPendingToolCalls = (): void => {
-      if (pendingToolCalls.length === 0) return;
+      if (pendingToolCalls.length === 0) {
+        pendingReasoning.length = 0;
+        return;
+      }
       messages.push(compactJsonObject({
         role: 'assistant',
         content: null,
@@ -453,6 +456,11 @@ function responsesInputToMessages(
       pendingReasoning.length = 0;
     };
     for (const item of input) {
+      if (isResponsesContinuationStateItem(item)) {
+        const reasoning = responseInputReasoningText(item);
+        if (reasoning) pendingReasoning.push(reasoning);
+        continue;
+      }
       if (isRecord(item) && item.type === 'function_call') {
         const toolCall = responseInputFunctionCallToChatToolCall(item, aliasByOriginal);
         if (toolCall) {
@@ -469,6 +477,18 @@ function responsesInputToMessages(
   }
   if (messages.length === 0) messages.push({ role: 'user', content: '' });
   return messages;
+}
+
+function isResponsesContinuationStateItem(item: unknown): item is JsonObject {
+  return isRecord(item) && (item.type === 'reasoning' || item.type === 'compaction');
+}
+
+function responseInputReasoningText(item: JsonObject): string {
+  if (item.type !== 'reasoning' || !Array.isArray(item.summary)) return '';
+  return item.summary
+    .map((part) => isRecord(part) ? stringValue(part.text) : '')
+    .filter(Boolean)
+    .join('\n');
 }
 
 function anthropicSystemToText(system: unknown): string | undefined {

@@ -8,6 +8,7 @@ import {
   resolveProviderCompatibility,
 } from './provider-compat';
 import {
+  responsesToAnthropicMessages,
   responsesToChatCompletions,
   type JsonObject,
   type ResponsesRequest,
@@ -46,6 +47,36 @@ test('provider compatibility is capability-driven and independent of provider id
     () => resolveProviderCompatibility({ providerFamily: 'example' } as never),
     /unknown compatibility setting/u,
   );
+});
+
+test('non-Responses conversion ignores opaque continuation items without adding empty messages', () => {
+  const encryptedContent = 'opaque-encrypted-continuation-state';
+  const request: ResponsesRequest = {
+    model: 'neutral-model',
+    input: [
+      { role: 'user', content: [{ type: 'input_text', text: 'Inspect.' }] },
+      {
+        id: 'rs_1',
+        type: 'reasoning',
+        encrypted_content: encryptedContent,
+        summary: [{ type: 'summary_text', text: 'Need the tool.' }],
+      },
+      { id: 'cmp_1', type: 'compaction', encrypted_content: encryptedContent },
+      { type: 'function_call', call_id: 'call_1', name: 'inspect', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+    ],
+  };
+
+  const chat = responsesToChatCompletions(request);
+  const chatMessages = chat.messages as JsonObject[];
+  assert.deepEqual(chatMessages.map((message) => message.role), ['user', 'assistant', 'tool']);
+  assert.equal(chatMessages[1]?.reasoning_content, 'Need the tool.');
+  assert.doesNotMatch(JSON.stringify(chat), new RegExp(encryptedContent, 'u'));
+
+  const anthropic = responsesToAnthropicMessages(request);
+  const anthropicMessages = anthropic.messages as JsonObject[];
+  assert.deepEqual(anthropicMessages.map((message) => message.role), ['user', 'assistant', 'user']);
+  assert.doesNotMatch(JSON.stringify(anthropic), new RegExp(encryptedContent, 'u'));
 });
 
 test('Responses normalization removes only explicitly incompatible chat extension fields', () => {

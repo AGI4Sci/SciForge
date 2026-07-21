@@ -16,6 +16,7 @@ export function hygienizeModelRequestBody(body: Record<string, unknown>): Record
 
 function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (typeof value === 'string') {
+    if (isOpaqueResponsesContinuationState(context)) return value;
     if (context.key === 'arguments') return hygienizeToolArguments(value, sourceForContext(context, 'tool_call.arguments'));
     return hygienizeText(value, context);
   }
@@ -30,7 +31,7 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (isStructuredImagePart(value)) return value;
 
   const role = stringField(value.role);
-  const recordType = stringField(value.type);
+  const recordType = stringField(value.type) || context.recordType;
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
     const hygienized = hygienizeValue(entry, {
@@ -47,6 +48,11 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
     });
   }
   return out;
+}
+
+function isOpaqueResponsesContinuationState(context: HygieneContext): boolean {
+  return context.key === 'encrypted_content'
+    && (context.recordType === 'reasoning' || context.recordType === 'compaction');
 }
 
 function hygienizeToolArguments(value: string, source: string): string {

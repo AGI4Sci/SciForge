@@ -269,7 +269,8 @@ type RoutedResponse = {
   terminalDetails?: JsonObject;
 };
 
-type ToolCallCache = Map<string, JsonObject>;
+type ResponseContinuationBlock = readonly JsonObject[];
+type ResponseContinuationCache = Map<string, ResponseContinuationBlock>;
 
 type TextControl =
   | { type: 'final_answer'; content: string }
@@ -277,7 +278,7 @@ type TextControl =
 
 const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES;
 const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = MODEL_ROUTER_MAX_REQUEST_BYTES;
-const MAX_TOOL_CALL_CACHE_ENTRIES = 512;
+const MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES = 512;
 const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
 const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
 const modelRouterInFlightRequests = new WeakMap<Server, Set<Promise<void>>>();
@@ -323,7 +324,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   // Caches scientific-file expert translations by resolved modality + file-content sha. An agentic
   // turn is several router requests; the upload rides along on each, so the expert should run once.
   const scientificTranslationCache = new Map<string, ScientificEvidence>();
-  const toolCallCache: ToolCallCache = new Map();
+  const responseContinuationCache: ResponseContinuationCache = new Map();
   const upstreamNegotiator = new UpstreamProtocolNegotiator();
   let recentRouterError: RecentProviderError | null = null;
   const backgroundControllers = new Set<AbortController>();
@@ -468,7 +469,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               request,
               visionTranslationCache,
               scientificTranslationCache,
-              toolCallCache,
+              responseContinuationCache,
               responseId,
               providerSignal,
               recordProviderError,
@@ -486,7 +487,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
           upstreamNegotiator,
@@ -511,7 +512,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
           upstreamNegotiator,
@@ -580,7 +581,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
               request,
               visionTranslationCache,
               scientificTranslationCache,
-              toolCallCache,
+              responseContinuationCache,
               responseId,
               providerSignal,
               recordProviderError,
@@ -598,7 +599,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
           upstreamNegotiator,
@@ -1366,7 +1367,7 @@ async function routeResponsesRequest(
     request: IncomingMessage;
     visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
     scientificTranslationCache: Map<string, ScientificEvidence>;
-    toolCallCache: ToolCallCache;
+    responseContinuationCache: ResponseContinuationCache;
     upstreamNegotiator: UpstreamProtocolNegotiator;
     preferredProtocol: UpstreamWireProtocol;
     traceSession?: ModelRouterTraceSession;
@@ -1402,14 +1403,22 @@ async function routeResponsesRequest(
   const usage = emptyResponseUsage();
   const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
   const hasAssistantReasoningInput = responseInputHasAssistantReasoning(request.input);
+  const previousResponseId = stringField(request.previous_response_id);
+  const requestWithoutContinuationHandle = { ...request };
+  delete requestWithoutContinuationHandle.previous_response_id;
   const requestWithSafeTextInput = typeof request.input === 'string'
-    ? { ...request, input: extracted.userText }
-    : request;
+    ? { ...requestWithoutContinuationHandle, input: extracted.userText }
+    : requestWithoutContinuationHandle;
   const requestForTextReasoner = hasToolTranscriptInput
     ? {
       ...requestWithSafeTextInput,
       input: repairResponseToolTranscriptInput(
-        hydrateFunctionCallTranscript(request.input, context.toolCallCache),
+        restoreResponseContinuation(
+          request.input,
+          previousResponseId
+            ? context.responseContinuationCache.get(previousResponseId)
+            : undefined,
+        ),
       ),
     }
     : requestWithSafeTextInput;
@@ -1666,7 +1675,7 @@ async function routeResponsesRequest(
   if (outputText && !outputItems.some((item) => item.type !== 'reasoning')) {
     outputItems = [...outputItems, messageOutputItem(outputText)];
   }
-  rememberFunctionCalls(context.toolCallCache, outputItems);
+  rememberResponseContinuation(context.responseContinuationCache, responseId, outputItems);
 
   return {
     responseId,
@@ -3114,69 +3123,86 @@ function responseInputHasAssistantReasoning(input: unknown): boolean {
   });
 }
 
-function hydrateFunctionCallTranscript(input: unknown, cache: ToolCallCache): unknown {
-  if (!Array.isArray(input)) return input;
-  let changed = false;
-  const seenFunctionCallIds = new Set<string>();
-  const hydrated: unknown[] = [];
-  for (const item of input) {
-    if (!isRecord(item)) {
-      hydrated.push(item);
-      continue;
-    }
+function restoreResponseContinuation(
+  input: unknown,
+  continuation: ResponseContinuationBlock | undefined,
+): unknown {
+  if (!Array.isArray(input) || !continuation?.length) return input;
+  const callIds = new Set(
+    continuation
+      .filter((item) => item.type === 'function_call')
+      .map(responseToolTranscriptCallId)
+      .filter(Boolean),
+  );
+  if (callIds.size === 0) return input;
+  const stateItemKeys = new Set(
+    continuation
+      .filter(isResponseContinuationStateItem)
+      .map(responseContinuationStateItemKey),
+  );
+  const insertionIndex = input.findIndex((item) => (
+    isRecord(item) && responseContinuationReferencesItem(item, callIds, stateItemKeys)
+  ));
+  if (insertionIndex < 0) return input;
 
-    if (item.type === 'function_call') {
-      const callId = stringField(item.call_id) ?? stringField(item.id);
-      if (callId) seenFunctionCallIds.add(callId);
-      const cached = callId ? cache.get(callId) : undefined;
-      if (cached && !stringField(item.reasoning_content) && stringField(cached.reasoning_content)) {
-        changed = true;
-        hydrated.push({
-          ...item,
-          reasoning_content: cached.reasoning_content,
-        });
-      } else {
-        hydrated.push(item);
-      }
-      continue;
-    }
-
-    if (item.type === 'function_call_output') {
-      const callId = stringField(item.call_id) ?? stringField(item.id);
-      const cached = callId ? cache.get(callId) : undefined;
-      if (callId && cached && !seenFunctionCallIds.has(callId)) {
-        changed = true;
-        hydrated.push({ ...cached });
-        seenFunctionCallIds.add(callId);
-      }
-    }
-
-    hydrated.push(item);
+  const restored: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (index === insertionIndex) restored.push(...continuation.map((item) => ({ ...item })));
+    const item = input[index];
+    if (isRecord(item) && isReplayedResponseContinuationItem(item, callIds, stateItemKeys)) continue;
+    restored.push(item);
   }
-  return changed ? hydrated : input;
+  return restored;
+}
+
+function responseContinuationReferencesItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call' || item.type === 'function_call_output') {
+    return callIds.has(responseToolTranscriptCallId(item));
+  }
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function isReplayedResponseContinuationItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call') return callIds.has(responseToolTranscriptCallId(item));
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function responseContinuationStateItemKey(item: Record<string, unknown>): string {
+  const type = stringField(item.type);
+  const id = stringField(item.id);
+  if (id) return `${type}:${id}`;
+  return `${type}:${createHash('sha256').update(JSON.stringify(item)).digest('hex')}`;
 }
 
 function repairResponseToolTranscriptInput(input: unknown): unknown {
   if (!Array.isArray(input)) return input;
   let changed = false;
   const repaired: unknown[] = [];
-  let pendingCalls: JsonObject[] = [];
-  let pendingOutputs: JsonObject[] = [];
+  let pendingItems: JsonObject[] = [];
   let pendingCallIds = new Set<string>();
   let pendingOutputIds = new Set<string>();
 
   const resetPending = (markChanged: boolean): void => {
-    if (markChanged && (pendingCalls.length > 0 || pendingOutputs.length > 0)) changed = true;
-    pendingCalls = [];
-    pendingOutputs = [];
+    if (markChanged && pendingItems.length > 0) changed = true;
+    pendingItems = [];
     pendingCallIds = new Set<string>();
     pendingOutputIds = new Set<string>();
   };
 
   const flushPendingIfComplete = (): boolean => {
-    if (pendingCalls.length === 0) return true;
+    if (pendingCallIds.size === 0) return true;
     if (pendingOutputIds.size !== pendingCallIds.size) return false;
-    repaired.push(...pendingCalls, ...pendingOutputs);
+    repaired.push(...pendingItems);
     resetPending(false);
     return true;
   };
@@ -3194,14 +3220,14 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
         changed = true;
         continue;
       }
-      if (pendingOutputs.length > 0) {
+      if (pendingOutputIds.size > 0) {
         if (!flushPendingIfComplete()) resetPending(true);
       }
       if (pendingCallIds.has(callId)) {
         changed = true;
         continue;
       }
-      pendingCalls.push(item as JsonObject);
+      pendingItems.push(item as JsonObject);
       pendingCallIds.add(callId);
       continue;
     }
@@ -3212,13 +3238,18 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
         changed = true;
         continue;
       }
-      pendingOutputs.push(item as JsonObject);
+      pendingItems.push(item as JsonObject);
       pendingOutputIds.add(callId);
       if (pendingOutputIds.size === pendingCallIds.size) flushPendingIfComplete();
       continue;
     }
 
-    if (pendingCalls.length > 0 && isResponseToolTranscriptBridgeItem(item)) {
+    if (pendingCallIds.size > 0 && isResponseContinuationStateItem(item)) {
+      pendingItems.push(item as JsonObject);
+      continue;
+    }
+
+    if (pendingCallIds.size > 0 && isResponseToolTranscriptBridgeItem(item)) {
       changed = true;
       continue;
     }
@@ -3238,7 +3269,6 @@ function responseToolTranscriptCallId(item: Record<string, unknown>): string {
 function isResponseToolTranscriptBridgeItem(item: Record<string, unknown>): boolean {
   const type = stringField(item.type);
   if (
-    type === 'reasoning' ||
     type === 'assistant_reasoning' ||
     type === 'approval' ||
     type === 'user_input' ||
@@ -3258,15 +3288,22 @@ function responseMessageRole(item: Record<string, unknown>): string {
   return '';
 }
 
-function rememberFunctionCalls(cache: ToolCallCache, outputItems: JsonObject[]): void {
-  for (const item of outputItems) {
-    if (item.type !== 'function_call') continue;
-    const callId = stringField(item.call_id) ?? stringField(item.id);
-    if (!callId) continue;
-    cache.delete(callId);
-    cache.set(callId, { ...item });
-  }
-  while (cache.size > MAX_TOOL_CALL_CACHE_ENTRIES) {
+function isResponseContinuationStateItem(item: Record<string, unknown>): boolean {
+  return item.type === 'reasoning' || item.type === 'compaction';
+}
+
+function rememberResponseContinuation(
+  cache: ResponseContinuationCache,
+  responseId: string,
+  outputItems: JsonObject[],
+): void {
+  const continuation = outputItems
+    .filter((item) => item.type === 'function_call' || isResponseContinuationStateItem(item))
+    .map((item) => ({ ...item }));
+  if (!continuation.some((item) => item.type === 'function_call')) return;
+  cache.delete(responseId);
+  cache.set(responseId, continuation);
+  while (cache.size > MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (typeof oldest !== 'string') break;
     cache.delete(oldest);

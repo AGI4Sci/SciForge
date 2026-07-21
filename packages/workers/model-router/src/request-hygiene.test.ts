@@ -52,6 +52,22 @@ test('request hygiene preserves prototype-shaped JSON keys without prototype mut
   assert.equal((Object.prototype as Record<string, unknown>).polluted, undefined);
 });
 
+test('request hygiene preserves opaque state only for native Responses continuation items', () => {
+  const encryptedContent = 'AbCd0123_+'.repeat(80);
+  const hygienized = hygienizeModelRequestBody({
+    input: [
+      { type: 'reasoning', encrypted_content: encryptedContent },
+      { type: 'compaction', encrypted_content: encryptedContent },
+      { type: 'message', encrypted_content: encryptedContent },
+    ],
+  });
+  const input = hygienized.input as Array<Record<string, unknown>>;
+
+  assert.equal(input[0]?.encrypted_content, encryptedContent);
+  assert.equal(input[1]?.encrypted_content, encryptedContent);
+  assert.match(String(input[2]?.encrypted_content), /reason=encoded_payload/u);
+});
+
 function toolCallBody(args: Record<string, unknown>): Record<string, unknown> {
   return {
     messages: [{
