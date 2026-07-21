@@ -458,40 +458,8 @@
   "usageHeatmapLess": "少",
   "usageHeatmapMore": "多",
   "usageHeatmapLoading": "正在加载最近用量…",
-  "usageHeatmapEmptyTitle": "还没有 {{runtime}} 用量",
-  "usageHeatmapEmptySub": "发送第一条 {{runtime}} 请求后，这个日历会开始记录你的使用情况。",
-  "usageHeatmapErrorTitle": "暂时无法读取用量",
-  "usageHeatmapErrorSub": "你仍然可以从下面的提示开始新会话。",
-  "usageHeatmapHeroTitle": {
-    "loading": "正在准备用量日历",
-    "empty": "开始你的智能体节奏",
-    "error": "先开始会话，稍后同步用量"
-  },
-  "usageHeatmapHeroSub": {
-    "loading": "{{runtime}} 正在检查最近活动。日历准备好之前，下面的提示仍然可以直接使用。",
-    "empty": "完成第一轮 {{runtime}} 对话后，这里会自动变成按天累计的用量日历。",
-    "error": "当前还读不到用量历史，但工作区已经可以开始新的会话。"
-  },
-  "usageHeatmapWarmupBadge": {
-    "loading": "检查历史中",
-    "empty": "{{runtime}} 用量",
-    "error": "用量延迟"
-  },
-  "usageHeatmapWarmupTitle": {
-    "loading": "正在寻找最近活动",
-    "empty": "还没有记录到用量",
-    "error": "用量稍后可以重试"
-  },
-  "usageHeatmapWarmupSub": {
-    "loading": "通常在 {{runtime}} 完成响应后很快就会出现；现在也可以先选择下面的提示。",
-    "empty": "发送一个请求并完成一轮回复后，第一个活跃日会自动出现在这里。",
-    "error": "用量接口这次没有响应，所以日历暂时暂停。新的会话仍然可以正常开始。"
-  },
   "usageHeatmapCollapse": "收起面板",
   "usageHeatmapExpand": "展开面板",
-  "usageHeatmapCollapsedTitle": "先把画布留给对话",
-  "usageHeatmapCollapsedSub": "用量日历先折叠起来，想看最近的智能体节奏时，随时再展开就好。",
-  "usageHeatmapRefresh": "刷新",
   "usageHeatmapSessions": "会话",
   "usageHeatmapMessages": "消息",
   "usageHeatmapCurrentModel": "当前模型",

@@ -2,17 +2,12 @@ import type { ReactElement } from 'react'
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
-  AlertCircle,
   ChevronDown,
   ChevronUp,
-  Flame,
-  Loader2,
-  RefreshCw,
-  Sparkles
+  Flame
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
-  getActiveAgentRuntime,
   getClaudeRuntimeSettings,
   getCodexRuntimeSettings,
   type AgentRuntimeId,
@@ -32,19 +27,10 @@ import {
   type ModelUsageState,
   useModelUsageState
 } from '../../hooks/use-model-usage'
-import { WhaleHeroStage } from './WhaleHeroStage'
 
 type UsageTotalsBucket = DailyUsageBucket & { days: number; activeDays: number }
-type UsageViewMode = 'populated' | 'loading' | 'empty' | 'error'
 type UsageRangeKey = 'all' | '90d' | '30d' | '7d'
 type UsageTabKey = 'overview' | 'models'
-type UsageRuntimeMeta = {
-  runtimeId: AgentRuntimeId
-  runtimeLabel: string
-  modelLabel: string
-}
-
-const USAGE_HEATMAP_PREVIEW_CELLS = 14 * 7
 const USAGE_HEATMAP_GRID_DAYS = 26 * 7
 const USAGE_RANGE_DAYS: Record<UsageRangeKey, number> = {
   all: 365,
@@ -60,17 +46,7 @@ const MODEL_USAGE_BREAKDOWN_COLORS = {
   output: '#245fd7'
 } as const
 const EMPTY_DAILY_USAGE_BUCKETS: DailyUsageBucket[] = []
-const DEFAULT_USAGE_RUNTIME_META: UsageRuntimeMeta = {
-  runtimeId: 'codex',
-  runtimeLabel: 'Codex',
-  modelLabel: ''
-}
-const PENDING_DAILY_USAGE_STATE: DailyUsageState = {
-  usage: null,
-  loading: true,
-  loaded: false,
-  error: null
-}
+const DEFAULT_USAGE_RUNTIME_LABEL = 'Codex'
 
 export const USAGE_HEATMAP_INTENSITY_CLASSES = [
   'border-ds-border-muted bg-ds-subtle',
@@ -199,35 +175,16 @@ function dailySummary(
   })
 }
 
-function usageHasActivity(state: DailyUsageState): boolean {
-  const usage = state.usage
-  if (!usage) return false
-  return usage.totals.activeDays > 0 || usage.buckets.some((bucket) => bucket.totalTokens > 0 || bucket.turns > 0)
-}
-
-function usageViewMode(state: DailyUsageState): UsageViewMode {
-  if (usageHasActivity(state)) return 'populated'
-  if (state.loading) return 'loading'
-  if (state.error) return 'error'
-  return 'empty'
-}
-
 export function usageRuntimeLabel(runtimeId: AgentRuntimeId): string {
   if (runtimeId === 'claude') return 'Claude Code'
   return runtimeId === 'codex' ? 'Codex' : 'SciForge Runtime (Unavailable)'
 }
 
-function usageRuntimeMetaFromSettings(settings: AppSettingsV1): UsageRuntimeMeta {
-  const runtimeId = getActiveAgentRuntime(settings)
-  const runtimeLabel = usageRuntimeLabel(runtimeId)
+function usageModelLabelFromSettings(settings: AppSettingsV1, runtimeId: AgentRuntimeId): string {
   const configuredModel = runtimeId === 'claude'
     ? getClaudeRuntimeSettings(settings).model
     : getCodexRuntimeSettings(settings).model
-  return {
-    runtimeId,
-    runtimeLabel,
-    modelLabel: configuredModel.trim() || runtimeLabel
-  }
+  return configuredModel.trim() || usageRuntimeLabel(runtimeId)
 }
 
 function HeatmapGrid({
@@ -310,106 +267,6 @@ function HeatmapGrid({
                 )
               })}
         </div>
-      </div>
-    </div>
-  )
-}
-
-function PreviewCalendar({ mode }: { mode: Exclude<UsageViewMode, 'populated'> }): ReactElement {
-  const weeks = Array.from({ length: Math.ceil(USAGE_HEATMAP_PREVIEW_CELLS / 7) }, (_, week) =>
-    Array.from({ length: 7 }, (_, day) => week * 7 + day)
-  )
-  const activePattern = new Set([6, 12, 20, 24, 29, 33, 42, 57, 63, 78, 91])
-  const strongPattern = new Set([24, 63, 91])
-  return (
-    <div className="mx-auto min-w-0 max-w-full" aria-hidden>
-      <div className="max-w-full overflow-x-auto pb-1 [scrollbar-width:thin]">
-        <div className="flex w-max gap-1">
-          {weeks.map((week) => (
-            <span key={week[0]} className="grid grid-rows-7 gap-1">
-              {week.map((cell) => {
-                const patterned = activePattern.has(cell)
-                const strong = strongPattern.has(cell)
-                const className =
-                  mode === 'loading'
-                    ? 'animate-pulse border-ds-border-muted bg-ds-subtle'
-                    : patterned
-                      ? strong
-                        ? 'border-accent/35 bg-accent/35 dark:border-accent/45 dark:bg-accent/30'
-                        : 'border-accent/18 bg-accent/16 dark:border-accent/25 dark:bg-accent/16'
-                      : 'border-ds-border-muted bg-ds-subtle/70'
-                return <span key={cell} className={`h-[13px] w-[13px] rounded-[3px] border ${className}`} />
-              })}
-            </span>
-          ))}
-        </div>
-      </div>
-      <div className="mt-2 flex items-center justify-end gap-2 text-[10.5px] font-medium tracking-[0] text-ds-faint">
-        <span className={mode === 'loading' ? 'animate-pulse' : ''}>--</span>
-        <div className="flex items-center gap-1">
-          {USAGE_HEATMAP_INTENSITY_CLASSES.map((className, index) => (
-            <span
-              key={className}
-              className={`h-2.5 w-2.5 rounded-[3px] border ${index === 0 ? className : 'border-ds-border-muted bg-ds-subtle'} ${
-                mode === 'loading' ? 'animate-pulse' : ''
-              }`}
-            />
-          ))}
-        </div>
-        <span className={mode === 'loading' ? 'animate-pulse' : ''}>--</span>
-      </div>
-    </div>
-  )
-}
-
-function WarmupStatePanel({
-  mode,
-  runtimeLabel,
-  onRefresh
-}: {
-  mode: Exclude<UsageViewMode, 'populated'>
-  runtimeLabel: string
-  onRefresh?: () => void
-}): ReactElement {
-  const { t, i18n } = useTranslation('common')
-  const icon =
-    mode === 'loading' ? (
-      <Loader2 className="h-4 w-4 animate-spin" strokeWidth={1.9} />
-    ) : mode === 'error' ? (
-      <AlertCircle className="h-4 w-4" strokeWidth={1.9} />
-    ) : (
-      <Sparkles className="h-4 w-4" strokeWidth={1.9} />
-    )
-  return (
-    <div className="flex flex-col gap-5 border-t border-ds-border-muted pt-5 md:flex-row md:flex-wrap md:items-start md:justify-center md:gap-x-10 md:gap-y-5">
-      <PreviewCalendar mode={mode} />
-      <div className="w-full min-w-0 border-t border-ds-border-muted pt-5 sm:max-w-[310px] md:w-[310px] md:shrink-0 md:border-l md:border-t-0 md:pl-5 md:pt-0">
-        <div
-          className={`mb-3 inline-flex items-center gap-2 rounded-lg border px-3 py-1.5 text-[12px] font-semibold ${
-            mode === 'error'
-              ? 'border-amber-300/35 bg-amber-50/70 text-amber-900 dark:border-amber-300/20 dark:bg-amber-300/10 dark:text-amber-100'
-              : 'border-accent/15 bg-accent/8 text-accent'
-          }`}
-        >
-          {icon}
-          <span>{t(`usageHeatmapWarmupBadge.${mode}`, { runtime: runtimeLabel })}</span>
-        </div>
-        <h2 className="text-[18px] font-semibold leading-7 tracking-[0] text-ds-ink">
-          {t(`usageHeatmapWarmupTitle.${mode}`, { runtime: runtimeLabel })}
-        </h2>
-        <p className="mt-2 text-[13.5px] leading-6 text-ds-muted">
-          {t(`usageHeatmapWarmupSub.${mode}`, { runtime: runtimeLabel })}
-        </p>
-        {mode === 'error' ? (
-          <button
-            type="button"
-            className="mt-4 inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-ds-border-muted bg-ds-subtle px-3 py-1.5 text-[12.5px] font-medium text-ds-muted transition hover:text-ds-ink"
-            onClick={onRefresh}
-          >
-            <RefreshCw className="h-3.5 w-3.5" strokeWidth={1.8} />
-            <span>{t('usageHeatmapRefresh')}</span>
-          </button>
-        ) : null}
       </div>
     </div>
   )
@@ -752,34 +609,6 @@ function UsageHeroToggle({
   )
 }
 
-function UsageHeroSection({
-  title,
-  sub,
-  showText = true
-}: {
-  title: string
-  sub: string
-  showText?: boolean
-}): ReactElement {
-  return (
-    <div className="flex w-full min-w-0 flex-col items-center text-center">
-      <div>
-        <WhaleHeroStage />
-      </div>
-      {showText ? (
-        <>
-          <h1 className="max-w-[620px] text-[28px] font-semibold leading-tight tracking-[0] text-ds-ink sm:text-[32px]">
-            {title}
-          </h1>
-          <p className="mt-3 max-w-[680px] text-[14.5px] leading-7 text-ds-muted">
-            {sub}
-          </p>
-        </>
-      ) : null}
-    </div>
-  )
-}
-
 function CollapsedCalendarCard({ onExpand }: { onExpand: () => void }): ReactElement {
   return (
     <div className="flex w-full min-w-0 justify-center border-y border-ds-border-muted py-3">
@@ -796,46 +625,43 @@ function UsagePanelCard({ children }: { children: ReactElement }): ReactElement 
   )
 }
 
-export function InitialSessionUsageHeatmap(): ReactElement {
-  const [refreshKey, setRefreshKey] = useState(0)
+export function InitialSessionUsageHeatmap({ runtimeId }: { runtimeId: AgentRuntimeId }): ReactElement {
+  return <RuntimeUsageHeatmap key={runtimeId} runtimeId={runtimeId} />
+}
+
+function RuntimeUsageHeatmap({ runtimeId }: { runtimeId: AgentRuntimeId }): ReactElement {
   const [rangeKey, setRangeKey] = useState<UsageRangeKey>('all')
-  const [runtimeMeta, setRuntimeMeta] = useState<UsageRuntimeMeta | null>(null)
-  const runtimeId = runtimeMeta?.runtimeId
-  const state = useDailyUsageState(Boolean(runtimeId), refreshKey, USAGE_RANGE_DAYS.all, runtimeId)
-  const modelState = useModelUsageState(Boolean(runtimeId), `${refreshKey}:${rangeKey}`, USAGE_RANGE_DAYS[rangeKey], runtimeId)
+  const runtimeLabel = usageRuntimeLabel(runtimeId)
+  const [modelLabel, setModelLabel] = useState(runtimeLabel)
+  const state = useDailyUsageState(true, runtimeId, USAGE_RANGE_DAYS.all, runtimeId)
+  const modelState = useModelUsageState(true, rangeKey, USAGE_RANGE_DAYS[rangeKey], runtimeId)
 
   useEffect(() => {
     let cancelled = false
     if (typeof window === 'undefined' || typeof window.sciforge?.getSettings !== 'function') {
-      setRuntimeMeta(DEFAULT_USAGE_RUNTIME_META)
+      setModelLabel(runtimeLabel)
       return
     }
     void window.sciforge.getSettings()
       .then((settings) => {
-        if (!cancelled) setRuntimeMeta(usageRuntimeMetaFromSettings(settings))
+        if (!cancelled) setModelLabel(usageModelLabelFromSettings(settings, runtimeId))
       })
       .catch(() => {
-        if (!cancelled) setRuntimeMeta(DEFAULT_USAGE_RUNTIME_META)
+        if (!cancelled) setModelLabel(runtimeLabel)
       })
     return () => {
       cancelled = true
     }
-  }, [refreshKey])
-
-  const handleRefresh = (): void => {
-    setRuntimeMeta(null)
-    setRefreshKey((value) => value + 1)
-  }
+  }, [runtimeId, runtimeLabel])
 
   return (
     <InitialSessionUsageHeatmapView
-      state={runtimeMeta ? state : PENDING_DAILY_USAGE_STATE}
+      state={state}
       modelState={modelState}
       rangeKey={rangeKey}
-      runtimeLabel={runtimeMeta?.runtimeLabel ?? DEFAULT_USAGE_RUNTIME_META.runtimeLabel}
-      modelLabel={runtimeMeta?.modelLabel ?? DEFAULT_USAGE_RUNTIME_META.modelLabel}
+      runtimeLabel={runtimeLabel}
+      modelLabel={modelLabel}
       onRangeChange={setRangeKey}
-      onRefresh={handleRefresh}
     />
   )
 }
@@ -847,10 +673,9 @@ export function InitialSessionUsageHeatmapView({
   initialCollapsed = false,
   initialActiveTab = 'overview',
   initialModelHoverIndex = null,
-  runtimeLabel = DEFAULT_USAGE_RUNTIME_META.runtimeLabel,
-  modelLabel = DEFAULT_USAGE_RUNTIME_META.modelLabel,
-  onRangeChange,
-  onRefresh
+  runtimeLabel = DEFAULT_USAGE_RUNTIME_LABEL,
+  modelLabel = '',
+  onRangeChange
 }: {
   state: DailyUsageState
   modelState?: ModelUsageState
@@ -861,7 +686,6 @@ export function InitialSessionUsageHeatmapView({
   runtimeLabel?: string
   modelLabel?: string
   onRangeChange?: (rangeKey: UsageRangeKey) => void
-  onRefresh?: () => void
 }): ReactElement {
   const { t, i18n } = useTranslation('common')
   const [activeBucket, setActiveBucket] = useState<DailyUsageBucket | null>(null)
@@ -873,7 +697,6 @@ export function InitialSessionUsageHeatmapView({
   const metricBuckets = useMemo(() => usageRangeBuckets(buckets, rangeKey), [buckets, rangeKey])
   const heatmapBuckets = useMemo(() => buckets.slice(-USAGE_HEATMAP_GRID_DAYS), [buckets])
   const totals = useMemo(() => usageTotalsFromBuckets(metricBuckets), [metricBuckets])
-  const mode = usageViewMode(state)
   const streaks = useMemo(() => usageStreaks(metricBuckets), [metricBuckets])
   const hasUnmeteredTokenBuckets = useMemo(
     () => metricBuckets.some((bucket) => bucket.turns > 0 && bucket.totalTokens <= 0),
@@ -909,25 +732,17 @@ export function InitialSessionUsageHeatmapView({
       value: formatCost(totals.tokenEconomySavingsUsd, i18n.language, totals.tokenEconomySavingsCny)
     }
   ]
-  const heroTitle =
-    mode === 'populated'
-      ? t('usageHeatmapTitle', { runtime: runtimeLabel })
-      : t(`usageHeatmapHeroTitle.${mode}`, { runtime: runtimeLabel })
-  const heroSub =
-    mode === 'populated'
-      ? t('usageHeatmapSub', { runtime: runtimeLabel })
-      : t(`usageHeatmapHeroSub.${mode}`, { runtime: runtimeLabel })
+  const heroTitle = t('usageHeatmapTitle', { runtime: runtimeLabel })
+  const heroSub = t('usageHeatmapSub', { runtime: runtimeLabel })
 
   return (
     <div className="ds-initial-usage-heatmap ds-no-drag mx-auto flex min-h-[min(620px,calc(100dvh-220px))] w-full items-center justify-center px-3 py-5 text-left sm:px-5 sm:py-7">
       <div className="flex w-full max-w-[900px] min-w-0 flex-col gap-5">
-        {mode !== 'populated' ? <UsageHeroSection title={heroTitle} sub={heroSub} /> : null}
         {collapsed ? (
           <CollapsedCalendarCard onExpand={() => setCollapsed(false)} />
         ) : (
           <UsagePanelCard>
-            {mode === 'populated' ? (
-              <section className="ds-usage-command-center min-w-0">
+            <section className="ds-usage-command-center min-w-0">
                 <header className="px-4 pt-5 sm:px-6 sm:pt-6">
                   <div className="flex min-w-0 items-start gap-3 sm:gap-4">
                     <span className="mt-0.5 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-[13px] bg-[linear-gradient(145deg,#7c3aed,#d946ef_58%,#f97316)] text-white shadow-[0_10px_26px_rgba(124,58,237,0.25)]">
@@ -1074,27 +889,7 @@ export function InitialSessionUsageHeatmapView({
                     </div>
                   </div>
                 )}
-              </section>
-            ) : (
-              <div className="p-4 sm:p-5">
-                <div className="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-                  <div className="flex w-full shrink-0 flex-col gap-2 sm:w-auto sm:flex-row">
-                    <button
-                      type="button"
-                      className="inline-flex min-h-9 w-full shrink-0 items-center justify-center gap-2 rounded-lg border border-ds-border-muted bg-ds-subtle px-3 py-1.5 text-[12.5px] font-medium text-ds-muted transition hover:text-ds-ink disabled:opacity-60 sm:w-auto"
-                      onClick={onRefresh}
-                      disabled={state.loading}
-                      title={t('usageHeatmapRefresh')}
-                    >
-                      <RefreshCw className={`h-3.5 w-3.5 ${state.loading ? 'animate-spin' : ''}`} strokeWidth={1.8} />
-                      <span>{t('usageHeatmapRefresh')}</span>
-                    </button>
-                    <UsageHeroToggle expanded onToggle={() => setCollapsed(true)} />
-                  </div>
-                </div>
-                <WarmupStatePanel mode={mode} runtimeLabel={runtimeLabel} onRefresh={onRefresh} />
-              </div>
-            )}
+            </section>
           </UsagePanelCard>
         )}
       </div>

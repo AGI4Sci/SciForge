@@ -458,40 +458,8 @@
   "usageHeatmapLess": "Less",
   "usageHeatmapMore": "More",
   "usageHeatmapLoading": "Loading recent usage…",
-  "usageHeatmapEmptyTitle": "No {{runtime}} usage yet",
-  "usageHeatmapEmptySub": "Send your first {{runtime}} request and this calendar will start filling in.",
-  "usageHeatmapErrorTitle": "Usage is temporarily unavailable",
-  "usageHeatmapErrorSub": "You can still start a new conversation from the prompts below.",
-  "usageHeatmapHeroTitle": {
-    "loading": "Preparing your usage calendar",
-    "empty": "Start your agent rhythm",
-    "error": "Start now, sync usage later"
-  },
-  "usageHeatmapHeroSub": {
-    "loading": "{{runtime}} is checking recent activity. The starter prompts stay ready while the calendar warms up.",
-    "empty": "Once your first {{runtime}} turn completes, this space will turn into a daily usage calendar.",
-    "error": "Usage history is not available yet, but the workspace is ready for a new conversation."
-  },
-  "usageHeatmapWarmupBadge": {
-    "loading": "Checking history",
-    "empty": "{{runtime}} usage",
-    "error": "Usage delayed"
-  },
-  "usageHeatmapWarmupTitle": {
-    "loading": "Looking for recent activity",
-    "empty": "No usage has been recorded yet",
-    "error": "Usage can be retried later"
-  },
-  "usageHeatmapWarmupSub": {
-    "loading": "This usually resolves quickly after {{runtime}} answers. You can still pick a prompt below.",
-    "empty": "Send a request and finish a turn; the first active day will appear here automatically.",
-    "error": "The usage endpoint did not respond, so the calendar is paused for now. New chats still work."
-  },
   "usageHeatmapCollapse": "Collapse panel",
   "usageHeatmapExpand": "Expand panel",
-  "usageHeatmapCollapsedTitle": "Keep the canvas clear",
-  "usageHeatmapCollapsedSub": "The usage calendar is folded away for now. Expand it any time to check your recent agent rhythm.",
-  "usageHeatmapRefresh": "Refresh",
   "usageHeatmapSessions": "Sessions",
   "usageHeatmapMessages": "Messages",
   "usageHeatmapCurrentModel": "Current model",

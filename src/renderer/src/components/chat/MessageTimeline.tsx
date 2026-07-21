@@ -218,6 +218,7 @@ function MessageTimelineComponent({
     chooseWorkspace,
     remoteChannels,
     activeRemoteChannel,
+    activeAgentRuntime,
     busy,
     currentTurnUserId,
     turnStartedAtByUserId,
@@ -339,6 +340,7 @@ function MessageTimelineComponent({
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
             runtimeError={runtimeError}
+            runtimeId={activeAgentRuntime}
             activeRemoteChannel={activeRemoteChannel}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}

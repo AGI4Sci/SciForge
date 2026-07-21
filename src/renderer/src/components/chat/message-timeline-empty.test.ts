@@ -21,6 +21,7 @@ function renderOfflineHero(runtimeError: string | null = null): string {
       ready: false,
       hasWorkspace: true,
       runtimeError,
+      runtimeId: 'codex',
       activeRemoteChannel: null,
       onPickWorkspace: () => undefined,
       onRetry: () => undefined,

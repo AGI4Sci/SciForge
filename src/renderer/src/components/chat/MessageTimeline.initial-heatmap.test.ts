@@ -9,6 +9,7 @@ function renderHero(options: {
   ready?: boolean
   hasWorkspace?: boolean
   runtimeError?: string | null
+  runtimeId?: 'codex' | 'claude'
 } = {}): string {
   return renderToStaticMarkup(
     createElement(MessageTimelineEmptyHero, {
@@ -16,6 +17,7 @@ function renderHero(options: {
       ready: options.ready ?? true,
       hasWorkspace: options.hasWorkspace ?? true,
       runtimeError: options.runtimeError ?? null,
+      runtimeId: options.runtimeId ?? 'codex',
       activeRemoteChannel: null,
       onPickWorkspace: () => undefined,
       onRetry: () => undefined,
@@ -30,12 +32,22 @@ describe('MessageTimeline initial heatmap empty hero routing', () => {
     await i18n.changeLanguage('en')
   })
 
-  it('shows the local runtime heatmap for eligible initial chat states', () => {
+  it('shows the unified usage panel for eligible initial chat states', () => {
     const html = renderHero()
 
     expect(html).toContain('ds-initial-usage-heatmap')
-    expect(html).toContain('Preparing your usage calendar')
+    expect(html).toContain('ds-usage-command-center')
+    expect(html).toContain('Codex activity pulse')
+    expect(html).not.toContain('Preparing your usage calendar')
     expect(html).not.toContain('Start a new conversation')
+  })
+
+  it('uses the same panel with the active Claude runtime label', () => {
+    const html = renderHero({ runtimeId: 'claude' })
+
+    expect(html).toContain('ds-usage-command-center')
+    expect(html).toContain('Claude Code activity pulse')
+    expect(html).not.toContain('Codex activity pulse')
   })
 
   it('keeps offline, missing-workspace, and remote-channel empty states gated away from the heatmap', () => {
