@@ -165,7 +165,8 @@ const CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTOR_INPUTS: RendererWorkspac
       capabilities: capabilities({
         edit: true,
         structuredSelection: true,
-        export: ['markdown']
+        annotations: true,
+        export: ['markdown', 'sidecar']
       })
     })
   },

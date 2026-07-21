@@ -5,22 +5,19 @@ import {
 import type {
   PdfAnnotationSidecar
 } from '@shared/pdf-annotations'
-import type {
-  WritePdfSelection
-} from '../components/write/WritePdfViewer'
+import type { DocumentAnnotationSelection } from './document-annotation-types'
 import {
   createAnnotationBodyUpdateOperation,
   createAnnotationThreadDeleteOperation,
   createAnnotationThreadStatusOperation,
-  createDocxAnnotationOverlaysFromSidecar,
-  createDocxWorkspacePreviewAnnotationOperation,
+  createDocumentAnnotationNavigationRequest,
+  createDocumentWorkspacePreviewAnnotationOperation,
   createPdfAnnotationOverlaysFromSidecar,
-  createPdfWorkspacePreviewAnnotationOperation,
-  firstPdfAnnotationThreadRect,
+  createTextAnnotationOverlaysFromSidecar,
   workspacePreviewAnnotationKindForAction
 } from './document-annotation-operations'
 
-function createSelection(overrides: Partial<WritePdfSelection> = {}): WritePdfSelection {
+function createSelection(overrides: Partial<DocumentAnnotationSelection> = {}): DocumentAnnotationSelection {
   return {
     text: ' Kinase activity ',
     ranges: [{
@@ -101,6 +98,14 @@ function createSidecar(): PdfAnnotationSidecar {
       textHash: 'hash',
       contextBefore: 'Alpha',
       contextAfter: 'Beta',
+      textRange: {
+        start: 6,
+        end: 21,
+        startLine: 1,
+        startColumn: 7,
+        endLine: 1,
+        endColumn: 22
+      },
       pdfFingerprint: fingerprint,
       createdAt: '2026-07-08T00:00:00.000Z',
       updatedAt: '2026-07-08T00:00:00.000Z'
@@ -131,7 +136,8 @@ function createSidecar(): PdfAnnotationSidecar {
 
 describe('document annotation workspace operations', () => {
   it('creates strict annotation.upsert operations from PDF selections', () => {
-    const operation = createPdfWorkspacePreviewAnnotationOperation({
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'pdf',
       path: '/workspace/lab/paper.pdf',
       action: 'highlight',
       selection: createSelection(),
@@ -173,16 +179,20 @@ describe('document annotation workspace operations', () => {
   })
 
   it('creates DOCX question annotations with quote context and translation body', () => {
-    const operation = createDocxWorkspacePreviewAnnotationOperation({
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'docx',
       path: '/workspace/lab/report.docx',
       action: 'translation',
       selection: createSelection({
         text: 'beta cells',
+        sourceKind: 'docx',
+        contextBefore: 'Alpha ',
+        contextAfter: ' gamma',
         pageStart: 1,
         pageEnd: 1,
         rects: [],
         metadata: {
-          sourceKind: 'pdf',
+          sourceKind: 'docx',
           filePath: '/workspace/lab/report.docx',
           sourceTitle: 'report.docx',
           mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -192,7 +202,6 @@ describe('document annotation workspace operations', () => {
           rects: []
         }
       }),
-      documentText: 'Alpha beta cells gamma',
       translationBody: 'Translate this document selection.',
       createId: (prefix) => `${prefix}-id`
     })
@@ -227,17 +236,85 @@ describe('document annotation workspace operations', () => {
     })
   })
 
+  it('creates Markdown annotations through the same text-document operation path', () => {
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'markdown',
+      path: '/workspace/lab/notes.md',
+      action: 'comment',
+      selection: createSelection({
+        text: 'beta cells',
+        sourceKind: 'markdown',
+        contextBefore: 'Alpha ',
+        contextAfter: ' gamma',
+        ranges: [{
+          from: 6,
+          to: 16,
+          startLine: 1,
+          startColumn: 7,
+          endLine: 1,
+          endColumn: 17,
+          text: 'beta cells',
+          charCount: 10
+        }],
+        metadata: {
+          sourceKind: 'markdown',
+          filePath: '/workspace/lab/notes.md',
+          sourceTitle: 'notes.md',
+          mimeType: 'text/markdown',
+          rects: []
+        }
+      }),
+      createId: (prefix) => `${prefix}-id`
+    })
+
+    expect(workspacePreviewEditOperationSchema.parse(operation)).toEqual(operation)
+    expect(operation).toMatchObject({
+      kind: 'annotation.upsert',
+      annotationId: 'markdown-ann-id',
+      target: {
+        documentKind: 'markdown',
+        threadId: 'markdown-thread-id',
+        anchor: {
+          id: 'markdown-anchor-id',
+          quote: 'beta cells',
+          contextBefore: 'Alpha',
+          contextAfter: 'gamma',
+          textRange: {
+            start: 6,
+            end: 16,
+            startLine: 1,
+            startColumn: 7,
+            endLine: 1,
+            endColumn: 17
+          }
+        }
+      }
+    })
+  })
+
   it('does not create write operations for copy actions or empty DOCX selections', () => {
     expect(workspacePreviewAnnotationKindForAction('copy')).toBeNull()
-    expect(createPdfWorkspacePreviewAnnotationOperation({
+    expect(createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'pdf',
       path: '/workspace/lab/paper.pdf',
       action: 'copy',
       selection: createSelection()
     })).toBeNull()
-    expect(createDocxWorkspacePreviewAnnotationOperation({
+    expect(createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'docx',
       path: '/workspace/lab/report.docx',
       action: 'highlight',
-      selection: createSelection({ text: '' })
+      selection: createSelection({
+        text: '',
+        sourceKind: 'docx',
+        metadata: {
+          sourceKind: 'docx',
+          filePath: '/workspace/lab/report.docx',
+          sourceTitle: 'report.docx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          rects: []
+        }
+      })
     })).toBeNull()
   })
 
@@ -251,23 +328,46 @@ describe('document annotation workspace operations', () => {
       status: 'open',
       label: 'Claim check'
     }])
-    expect(createDocxAnnotationOverlaysFromSidecar(sidecar)).toEqual([{
+    expect(createTextAnnotationOverlaysFromSidecar(sidecar)).toEqual([{
       id: 'thread-1',
       kind: 'comment',
       quote: 'Kinase activity',
-      status: 'open'
+      contextBefore: 'Alpha',
+      contextAfter: 'Beta',
+      textRange: {
+        start: 6,
+        end: 21,
+        startLine: 1,
+        startColumn: 7,
+        endLine: 1,
+        endColumn: 22
+      },
+      status: 'open',
+      label: 'Claim check'
     }])
     expect(createPdfAnnotationOverlaysFromSidecar(sidecar, {
       displayMode: 'current',
       activeThreadId: 'missing'
     })).toEqual([])
-    expect(firstPdfAnnotationThreadRect(sidecar, 'thread-1')).toEqual({
-      page: 2,
-      x: 0.1,
-      y: 0.2,
-      width: 0.3,
-      height: 0.04
+    const navigationRequest = createDocumentAnnotationNavigationRequest(sidecar, 'thread-1', 'locate-1')
+    expect(navigationRequest).toEqual({
+      requestId: 'locate-1',
+      threadId: 'thread-1',
+      quote: 'Kinase activity',
+      contextBefore: 'Alpha',
+      contextAfter: 'Beta',
+      textRange: {
+        start: 6,
+        end: 21,
+        startLine: 1,
+        startColumn: 7,
+        endLine: 1,
+        endColumn: 22
+      },
+      pageRect: { page: 2, x: 0.1, y: 0.2, width: 0.3, height: 0.04 }
     })
+    expect(createDocumentAnnotationNavigationRequest(sidecar, 'thread-1', 'locate-2')?.pageRect)
+      .not.toBe(navigationRequest?.pageRect)
 
     expect(workspacePreviewEditOperationSchema.parse(createAnnotationThreadStatusOperation({
       path: '/workspace/lab/paper.pdf',

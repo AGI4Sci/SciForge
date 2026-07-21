@@ -208,7 +208,6 @@ const MUTATING_TOOL_NAMES = new Set([
   'edit',
   'edit_diff',
   'apply_patch',
-  'gui_workspace_apply_patch',
   'delete',
   'move'
 ])

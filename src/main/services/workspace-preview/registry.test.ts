@@ -143,7 +143,8 @@ describe('WorkspacePreviewRegistry', () => {
   it('does not declare conversion exports that the generic host cannot fulfill', () => {
     const manifests = new Map(defaultWorkspacePreviewManifests().map((manifest) => [manifest.id, manifest]))
 
-    expect(manifests.get('markdown')?.capabilities.export).toEqual(['markdown'])
+    expect(manifests.get('markdown')?.capabilities.annotations).toBe(true)
+    expect(manifests.get('markdown')?.capabilities.export).toEqual(['markdown', 'sidecar'])
     expect(manifests.get('markdown')?.capabilities.export).not.toContain('html')
     expect(manifests.get('pdf')?.capabilities.export).toEqual(['pdf', 'sidecar', 'annotated-pdf'])
     expect(manifests.get('tabular')?.capabilities.export).toEqual(['csv', 'tsv'])

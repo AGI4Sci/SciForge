@@ -14,26 +14,6 @@ import {
   type AppSettingsV1
 } from '../../../shared/app-settings'
 import {
-  GUI_SCHEDULE_INTERNAL_SECRET_ENV,
-  type ScheduleMcpLaunchConfig
-} from '../../schedule-mcp-config'
-import type { ResearchSearchMcpLaunchConfig } from '../../research-search-mcp-config'
-import {
-  GUI_WORKFLOW_INTERNAL_SECRET_ENV,
-  type WorkflowMcpLaunchConfig
-} from '../../workflow-mcp-config'
-import type { WorkspaceIntelMcpLaunchConfig } from '../../workspace-intel-mcp-config'
-import type { PaperRadarMcpLaunchConfig } from '../../paper-radar-mcp-config'
-import type { WriteAssistMcpLaunchConfig } from '../../write-assist-mcp-config'
-import type { RuntimeInspectorMcpLaunchConfig } from '../../runtime-inspector-mcp-config'
-import type { ScientificSkillsMcpLaunchConfig } from '../../scientific-skills-mcp-config'
-import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plotting-mcp-config'
-import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
-import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
-import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
-import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
-import { internalSecretEnv } from '../../internal-http-secret'
-import {
   CODEX_PLAN_PROVIDER_ID,
   createCodexPlanRuntimeConfig
 } from '../../../../packages/workers/plan-gateway/src/adapters/codex'
@@ -77,19 +57,6 @@ export async function prepareCodexAppServerLaunch(options: {
   managedCodexHome?: string
   standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
-  scheduleMcpLaunch?: ScheduleMcpLaunchConfig
-  researchMcpLaunch?: ResearchSearchMcpLaunchConfig
-  workflowMcpLaunch?: WorkflowMcpLaunchConfig
-  workspaceIntelMcpLaunch?: WorkspaceIntelMcpLaunchConfig
-  paperRadarMcpLaunch?: PaperRadarMcpLaunchConfig
-  writeAssistMcpLaunch?: WriteAssistMcpLaunchConfig
-  runtimeInspectorMcpLaunch?: RuntimeInspectorMcpLaunchConfig
-  scientificSkillsMcpLaunch?: ScientificSkillsMcpLaunchConfig
-  scientificPlottingMcpLaunch?: ScientificPlottingMcpLaunchConfig
-  bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
-  imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
-  pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
-  visualDocumentMcpLaunch?: VisualDocumentMcpLaunchConfig
 }): Promise<CodexAppServerLaunchConfig> {
   const runtime = getCodexRuntimeSettings(options.settings)
   const baseEnv = options.env ?? process.env
@@ -107,15 +74,7 @@ export async function prepareCodexAppServerLaunch(options: {
     env: prependCommandDirectoryToPath(codexRuntimeEnv(
       baseEnv,
       codexHome,
-      modelAccess.mode === 'api' ? modelAccess.apiKey : undefined,
-      {
-        ...(options.scheduleMcpLaunch
-          ? internalSecretEnv(GUI_SCHEDULE_INTERNAL_SECRET_ENV, options.settings.schedule.internal.secret)
-          : {}),
-        ...(options.workflowMcpLaunch
-          ? internalSecretEnv(GUI_WORKFLOW_INTERNAL_SECRET_ENV, options.settings.workflow.webhookSecret)
-          : {})
-      }
+      modelAccess.mode === 'api' ? modelAccess.apiKey : undefined
     ), command),
     codexHome,
     accessMode: modelAccess.mode

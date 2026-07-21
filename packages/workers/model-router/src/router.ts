@@ -1088,6 +1088,7 @@ async function routeImageProviderRequest(options: {
   const startedAt = Date.now();
   const traceAttempt = context.traceSession?.startUpstreamAttempt({
     protocol: providerRequest.protocol,
+    phase: 'request',
     method: 'POST',
     url: providerRequest.url,
     headers: providerRequest.headers,
@@ -1422,7 +1423,7 @@ async function routeResponsesRequest(
       ),
     }
     : requestWithSafeTextInput;
-  const textReasonerRequestOptions = chatRequestOptionsFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model);
+  const textReasonerRequestOptions = textReasonerOptionsFromResponsesRequest(requestForTextReasoner);
   const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
   const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
@@ -2320,6 +2321,7 @@ async function translateScientificModalityObservation(
     const startedAt = Date.now();
     const traceAttempt = traceSession?.startUpstreamAttempt({
       protocol: 'scientific-translation',
+      phase: 'request',
       method: 'POST',
       url: requestUrl,
       headers: requestHeaders,
@@ -2954,7 +2956,7 @@ function recordUpstreamAttempt(
 ): void {
   options.calls.push({
     role: options.role,
-    phase: options.phase,
+    phase: attempt.phase === 'probe' ? 'protocol-probe' : options.phase,
     status: attempt.status === 'ok' ? 'ok' : 'failed',
     roleAlias: roleAliasForCall(options.role),
     providerBindingSha256: providerBindingHash(options.provider),
@@ -3065,21 +3067,14 @@ function isProviderAuthStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
-function chatRequestOptionsFromResponsesRequest(request: Record<string, unknown>, defaultModel: string): Record<string, unknown> {
-  const chatRequest = responsesToChatCompletions({
-    ...request,
-    model: defaultModel,
-    input: '',
-  }, { defaultModel });
+function textReasonerOptionsFromResponsesRequest(request: Record<string, unknown>): Record<string, unknown> {
+  const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
   return Object.fromEntries(Object.entries({
-    tools: chatRequest.tools,
-    tool_choice: chatRequest.tool_choice,
-    temperature: chatRequest.temperature,
-    top_p: chatRequest.top_p,
-    max_tokens: chatRequest.max_tokens,
-    parallel_tool_calls: chatRequest.parallel_tool_calls,
-    metadata: chatRequest.metadata,
-    reasoning_effort: chatRequest.reasoning_effort,
+    temperature: request.temperature,
+    top_p: request.top_p,
+    max_tokens: request.max_output_tokens ?? request.max_tokens,
+    metadata: request.metadata,
+    reasoning_effort: stringField(request.reasoning_effort) ?? stringField(reasoning?.effort),
   }).filter(([, value]) => value !== undefined));
 }
 

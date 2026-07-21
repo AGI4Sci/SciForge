@@ -347,6 +347,47 @@ describe('workspace preview contract', () => {
       }
     })
     expect(workspacePreviewEditOperationSchema.parse({
+      kind: 'annotation.upsert',
+      path: 'notes.md',
+      annotationId: 'a-markdown',
+      annotationKind: 'comment',
+      body: 'Clarify this section.',
+      target: {
+        documentKind: 'markdown',
+        threadId: 'thread-markdown',
+        anchor: {
+          id: 'anchor-markdown',
+          kind: 'text',
+          quote: 'important section',
+          contextBefore: 'Before',
+          contextAfter: 'After',
+          textRange: {
+            start: 120,
+            end: 137,
+            startLine: 8,
+            startColumn: 3,
+            endLine: 8,
+            endColumn: 20
+          }
+        }
+      }
+    })).toMatchObject({
+      kind: 'annotation.upsert',
+      target: {
+        documentKind: 'markdown',
+        anchor: {
+          textRange: {
+            start: 120,
+            end: 137,
+            startLine: 8,
+            startColumn: 3,
+            endLine: 8,
+            endColumn: 20
+          }
+        }
+      }
+    })
+    expect(workspacePreviewEditOperationSchema.parse({
       kind: 'annotation.thread.update',
       path: 'paper.pdf',
       threadId: 'thread-a',

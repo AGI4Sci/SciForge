@@ -244,4 +244,52 @@ describe('DocumentAnnotationPanelController', () => {
     expect(context.host.listAnnotations).toHaveBeenCalledTimes(1)
     expect(context.host.listAnnotations).toHaveBeenCalledWith('session-pdf')
   })
+
+  it('uses the same controller-owned text binding for Markdown annotations', async () => {
+    const observation = createObservation()
+    observation.file.path = '/workspace/lab/notes.md'
+    observation.file.mimeType = 'text/markdown'
+    observation.view.pluginId = 'markdown'
+    observation.view.title = 'notes.md'
+    const context = createContext(observation)
+    let renderInput: DocumentAnnotationPanelRenderInput | null = null
+    const operation: WorkspacePreviewEditOperation = {
+      kind: 'annotation.upsert',
+      path: observation.file.path,
+      annotationId: 'markdown-ann-1',
+      annotationKind: 'comment',
+      body: '',
+      target: {
+        documentKind: 'markdown',
+        threadId: 'markdown-thread-1',
+        anchor: {
+          id: 'markdown-anchor-1',
+          kind: 'text',
+          quote: 'Kinase activity',
+          textRange: { start: 0, end: 15 }
+        }
+      }
+    }
+
+    renderToStaticMarkup(createElement(DocumentAnnotationPanelController, {
+      context,
+      observation,
+      documentKind: 'markdown',
+      renderDocument: (input) => {
+        renderInput = input
+        return createElement('div')
+      }
+    }))
+
+    const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
+    if (!capturedInput) throw new Error('Document render input was not captured.')
+    await capturedInput.text.onApplyEdit(operation)
+
+    expect(context.host.updateAnnotation).toHaveBeenCalledWith({
+      annotationId: 'markdown-ann-1',
+      annotationKind: 'comment',
+      body: '',
+      target: operation.target
+    })
+  })
 })

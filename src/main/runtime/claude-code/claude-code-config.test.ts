@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import { delimiter, dirname } from 'node:path'
 import { deriveTraceId } from '@sciforge/full-trace'
 import {
@@ -21,19 +21,6 @@ import {
   prepareClaudeCodeSdkLaunch,
   resolveClaudeCodeExecutable
 } from './claude-code-config'
-
-const computerUseLaunch = {
-  appPath: '/tmp/sciforge-app',
-  execPath: '/tmp/electron',
-  isPackaged: false
-}
-
-const originalCuaServiceUrl = process.env.SCIFORGE_CUA_SERVICE_URL
-
-afterEach(() => {
-  if (originalCuaServiceUrl === undefined) delete process.env.SCIFORGE_CUA_SERVICE_URL
-  else process.env.SCIFORGE_CUA_SERVICE_URL = originalCuaServiceUrl
-})
 
 function settings(): AppSettingsV1 {
   const modelRouter = defaultModelRouterSettings()
@@ -353,68 +340,6 @@ describe('claude-code config launch helpers', () => {
     expect(launch.env.PATH?.split(delimiter)[0]).toBe(dirname(process.execPath))
   })
 
-  it('injects the managed computer-use MCP server into SDK options when configured', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: settings(),
-      text: 'hello',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toMatchObject({
-      gui_owl_computer_use: {
-        type: 'stdio',
-        command: '/tmp/electron',
-        args: [
-          '/tmp/sciforge-app/out/main/computer-use-mcp-node-entry.js',
-          '--gui-owl-computer-use-mcp-server'
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
-        },
-        alwaysLoad: true
-      }
-    })
-    expect(launch.sdkOptions.mcpServers).not.toHaveProperty('gui_computer_use')
-  })
-
-  it('injects scientific visual tools and the shared route policy into Claude tasks', async () => {
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: settings(),
-      text: 'Beautify a paper figure.',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: {
-        scientificPlottingMcp: { launch: computerUseLaunch },
-        imageGenerationMcp: { launch: computerUseLaunch }
-      }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toHaveProperty('scientific_plotting')
-    expect(launch.sdkOptions.mcpServers).toHaveProperty('image_generation')
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      type: 'preset',
-      preset: 'claude_code',
-      append: expect.stringContaining('call `visual_generate` first')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('When `visual_generate` returns `needs_context`')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('Choose route `code`')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
-    })
-  })
-
   it('rejects launch options when the text reasoner is incomplete', async () => {
     const current = settings()
     current.modelRouter!.profiles.default.textReasoner.baseUrl = ''
@@ -427,56 +352,6 @@ describe('claude-code config launch helpers', () => {
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed'
     })).rejects.toThrow('text reasoner')
-  })
-
-  it('does not inject the shared computer-use MCP server when computer use is disabled', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: {
-        ...settings(),
-        computerUse: {
-          enabled: false,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: true
-          }
-        }
-      },
-      text: 'hello',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toBeUndefined()
-  })
-
-  it('does not inject the shared computer-use MCP server when Claude runtime access is disabled', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: {
-        ...settings(),
-        computerUse: {
-          enabled: true,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: false
-          }
-        }
-      },
-      text: 'hello',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toBeUndefined()
   })
 
   it('uses Claude CLI model aliases instead of the router public alias', () => {

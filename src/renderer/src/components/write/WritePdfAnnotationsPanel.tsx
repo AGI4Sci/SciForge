@@ -46,6 +46,7 @@ import {
   type PdfAnnotationThreadSort,
   type PdfAnnotationThreadSummary
 } from '../../write/pdf-annotations'
+import type { DocumentKind } from '../../workspace-preview/document-annotation-types'
 import { CopyTextButton } from '../CopyTextButton'
 
 export type WritePdfAnnotationDisplayMode = 'hidden' | 'current' | 'all'
@@ -69,7 +70,7 @@ export type WritePdfQuestionAssistantReply = {
 
 export type WritePdfAnnotationsPanelProps = {
   sidecar: PdfAnnotationSidecar | null
-  documentKind?: 'pdf' | 'docx'
+  documentKind?: DocumentKind
   selectedThreadId?: string | null
   annotationDisplayMode?: WritePdfAnnotationDisplayMode
   initialKind?: PdfAnnotationKind | 'all'
@@ -89,6 +90,7 @@ export type WritePdfAnnotationsPanelProps = {
   pdfReviewNotice?: { tone: 'success' | 'error'; message: string } | null
   notice?: { tone: 'success' | 'error'; message: string } | null
   onSelectThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
+  onLocateThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onHoverThread?: (threadId: string | null, summary?: PdfAnnotationThreadSummary) => void
   onAnnotationDisplayModeChange?: (mode: WritePdfAnnotationDisplayMode) => void
   onResolveThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
@@ -308,6 +310,7 @@ export function WritePdfAnnotationsPanel({
   pdfReviewNotice = null,
   notice = null,
   onSelectThread,
+  onLocateThread,
   onHoverThread,
   onAnnotationDisplayModeChange,
   onResolveThread,
@@ -941,6 +944,16 @@ export function WritePdfAnnotationsPanel({
                     </button>
 
                     <div className="flex shrink-0 flex-col gap-1">
+                      <button
+                        type="button"
+                        onClick={() => onLocateThread?.(summary.thread.id, summary)}
+                        disabled={!onLocateThread}
+                        className="flex h-7 w-7 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+                        aria-label={t('writePdfAnnotationsLocate', { defaultValue: 'Locate in document' })}
+                        title={t('writePdfAnnotationsLocate', { defaultValue: 'Locate in document' })}
+                      >
+                        <LocateFixed className="h-4 w-4" strokeWidth={1.9} />
+                      </button>
                       <button
                         type="button"
                         onClick={() => {

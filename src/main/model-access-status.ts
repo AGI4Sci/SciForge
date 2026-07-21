@@ -60,11 +60,11 @@ export async function getModelAccessStatus(
       adapterId: null,
       credentialState,
       protocol: result.protocol ?? selectedProtocol,
-      protocolState: result.protocol
-        ? 'cached'
-        : selectedProtocol ? 'selected' : 'pending-first-request',
+      protocolState: selectedProtocol
+        ? 'selected'
+        : result.protocol ? 'cached' : 'pending-first-request',
       traceCaptureReady: result.traceCaptureReady,
-      action: modelRouterActionableMessage(result)
+      action: modelRouterActionableMessage(result, selectedProtocol)
     }
   }
 
@@ -160,12 +160,16 @@ function modelRouterServiceHealth(result: ModelRouterHealthResult): ModelAccessS
   return 'error'
 }
 
-function modelRouterActionableMessage(result: ModelRouterHealthResult): string {
+function modelRouterActionableMessage(
+  result: ModelRouterHealthResult,
+  selectedProtocol: string | null
+): string {
   if (result.ok) {
     if (!result.traceCaptureReady) return 'Restart SciForge to enable durable trace capture.'
-    return result.protocol
-      ? 'Model Router and trace capture are ready.'
-      : 'Model Router and trace capture are ready. The wire protocol will be confirmed by the first real request.'
+    if (result.protocol) return 'Model Router and trace capture are ready.'
+    return selectedProtocol
+      ? 'Model Router and trace capture are ready. Requests will use the explicitly selected wire protocol without probing.'
+      : 'Model Router and trace capture are ready. Automatic mode will probe and cache the wire protocol before the first real request.'
   }
   switch (result.status) {
     case 'not_configured':

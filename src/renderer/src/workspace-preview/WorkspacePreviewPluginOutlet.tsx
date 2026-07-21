@@ -2,6 +2,7 @@ import {
   useCallback,
   type ReactElement
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation,
@@ -62,6 +63,7 @@ import type {
 import type {
   WorkspacePreviewPresentationStateChangeHandler
 } from './presentation-state'
+import { createDocumentWorkspacePreviewAnnotationOperation } from './document-annotation-operations'
 
 export type WorkspacePreviewPluginOutletRouteReason =
   | 'deferred-non-life-science'
@@ -150,11 +152,25 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         observation.file.mimeType === 'text/markdown' ||
         observation.file.mimeType === 'text/x-markdown'
       )),
-    render: ({ context, observation, applyEdit }) => (
-      <MarkdownWorkspaceViewerHost
+    render: ({ context, observation, annotationQuestionBridge }) => (
+      <DocumentAnnotationPanelController
         context={context}
         observation={observation}
-        applyEdit={applyEdit}
+        documentKind="markdown"
+        questionBridge={annotationQuestionBridge}
+        className="h-full min-h-0"
+        renderDocument={({ text }) => (
+          <MarkdownWorkspaceViewerHost
+            context={context}
+            observation={observation}
+            applyEdit={text.onApplyEdit}
+            annotationOverlays={text.annotationOverlays}
+            activeAnnotationId={text.activeAnnotationId}
+            navigationRequest={text.navigationRequest}
+            onAnnotationSelect={text.onAnnotationSelect}
+            onOpenAnnotations={text.onOpenAnnotations}
+          />
+        )}
       />
     )
   },
@@ -256,15 +272,16 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
         documentKind="docx"
         questionBridge={annotationQuestionBridge}
         className="h-full min-h-0"
-        renderDocument={({ docx }) => (
+        renderDocument={({ text }) => (
           <DocxWorkspaceViewer
             observation={observation}
             className="h-full min-h-0"
-            onApplyEdit={docx.onApplyEdit}
-            annotationOverlays={docx.annotationOverlays}
-            activeAnnotationId={docx.activeAnnotationId}
-            onAnnotationSelect={docx.onAnnotationSelect}
-            onOpenAnnotations={docx.onOpenAnnotations}
+            onApplyEdit={text.onApplyEdit}
+            annotationOverlays={text.annotationOverlays}
+            activeAnnotationId={text.activeAnnotationId}
+            navigationRequest={text.navigationRequest}
+            onAnnotationSelect={text.onAnnotationSelect}
+            onOpenAnnotations={text.onOpenAnnotations}
           />
         )}
       />
@@ -362,12 +379,23 @@ export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePrevi
 function MarkdownWorkspaceViewerHost({
   context,
   observation,
-  applyEdit
+  applyEdit,
+  annotationOverlays,
+  activeAnnotationId,
+  navigationRequest,
+  onAnnotationSelect,
+  onOpenAnnotations
 }: {
   context: WorkspacePreviewPanelShellContext
   observation: WorkspaceObservation | null
-  applyEdit: MarkdownWorkspaceViewerApplyEditHandler
+  applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
+  annotationOverlays: NonNullable<MarkdownWorkspaceViewerProps['annotationOverlays']>
+  activeAnnotationId: string | null
+  navigationRequest: MarkdownWorkspaceViewerProps['navigationRequest']
+  onAnnotationSelect: NonNullable<MarkdownWorkspaceViewerProps['onAnnotationSelect']>
+  onOpenAnnotations: NonNullable<MarkdownWorkspaceViewerProps['onOpenAnnotations']>
 }): ReactElement {
+  const { t } = useTranslation('common')
   const host = context.host
   const sessionId = context.state.session?.id
   const loadWorkspaceImage = useCallback<NonNullable<MarkdownWorkspaceViewerProps['loadWorkspaceImage']>>(async ({ path }) => {
@@ -386,13 +414,34 @@ function MarkdownWorkspaceViewerHost({
       dataUrl: payload.dataUrl
     }
   }, [host, sessionId])
+  const applyMarkdownEdit = useCallback<MarkdownWorkspaceViewerApplyEditHandler>(async (operation) => {
+    await applyEdit(operation)
+  }, [applyEdit])
+  const applyAnnotation = useCallback<NonNullable<MarkdownWorkspaceViewerProps['onAnnotationAction']>>((action, selection) => {
+    const path = observation?.file.path
+    if (!path) return
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'markdown',
+      path,
+      action,
+      selection,
+      translationBody: t('writeDocxAnnotationTranslatePrompt')
+    })
+    if (operation) void applyEdit(operation)
+  }, [applyEdit, observation?.file.path, t])
 
   return (
     <MarkdownWorkspaceViewer
       observation={observation}
       className="h-full min-h-0"
-      onApplyEdit={applyEdit}
+      onApplyEdit={applyMarkdownEdit}
       loadWorkspaceImage={loadWorkspaceImage}
+      annotationOverlays={annotationOverlays}
+      activeAnnotationId={activeAnnotationId}
+      navigationRequest={navigationRequest}
+      onAnnotationAction={applyAnnotation}
+      onAnnotationSelect={onAnnotationSelect}
+      onOpenAnnotations={onOpenAnnotations}
     />
   )
 }

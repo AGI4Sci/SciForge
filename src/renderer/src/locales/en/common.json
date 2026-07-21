@@ -1256,6 +1256,7 @@
   "writePdfAnnotationsNoMatches": "No annotations match these filters.",
   "writeDocxAnnotationsNoMatches": "No document annotations match these filters.",
   "writePdfAnnotationsSelect": "Select annotation thread",
+  "writePdfAnnotationsLocate": "Locate in document",
   "writePdfAnnotationsResolve": "Resolve thread",
   "writePdfAnnotationsResolved": "Thread resolved",
   "writePdfAnnotationsDelete": "Delete thread",

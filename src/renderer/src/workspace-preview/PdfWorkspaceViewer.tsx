@@ -21,7 +21,7 @@ import { rightPanelContextStateKey } from '../components/right-panel-context-sta
 import { useRightPanelSessionId } from '../components/right-panel-session-scope'
 import type { WorkspacePreviewAssetTransportClient } from './host'
 import {
-  createPdfWorkspacePreviewAnnotationOperation
+  createDocumentWorkspacePreviewAnnotationOperation
 } from './document-annotation-operations'
 import type {
   WritePdfAnnotationAction,
@@ -376,7 +376,6 @@ export function PdfWorkspaceViewer({
   const initialAnchorStateRef = useRef<{
     documentKey: string
     page: number
-    rect?: WritePdfSelectionPageRect
   } | null>(null)
   if (initialAnchorStateRef.current?.documentKey !== documentRevisionKey) {
     const initialDocumentAnchor = observation?.selection?.kind === 'document'
@@ -385,27 +384,16 @@ export function PdfWorkspaceViewer({
     const observedRect = initialDocumentAnchor?.rects?.[0]
     initialAnchorStateRef.current = {
       documentKey: documentRevisionKey,
-      page: initialDocumentAnchor?.page ?? observedRect?.page ?? 1,
-      ...(observedRect
-        ? {
-            rect: {
-              page: observedRect.page,
-              x: observedRect.x,
-              y: observedRect.y,
-              width: observedRect.width,
-              height: observedRect.height
-            }
-          }
-        : {})
+      page: initialDocumentAnchor?.page ?? observedRect?.page ?? 1
     }
   }
-  const initialAnchorRect = initialAnchorStateRef.current.rect
   const initialPage = initialAnchorStateRef.current.page
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
   const observationPath = observation?.file.path
   const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {
     if (!observationPath || !onApplyEdit) return
-    const operation = createPdfWorkspacePreviewAnnotationOperation({
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'pdf',
       path: observationPath,
       action,
       selection,
@@ -458,7 +446,7 @@ export function PdfWorkspaceViewer({
               annotationOverlays={annotationOverlays}
               activeAnnotationId={activeAnnotationId}
               annotationsOpen={annotationsOpen}
-              jumpToRect={jumpToRect ?? initialAnchorRect ?? null}
+              jumpToRect={jumpToRect}
               onSelectionChange={onSelectionChange}
               onAnnotationSelect={onAnnotationSelect}
               onOpenAnnotations={onOpenAnnotations}

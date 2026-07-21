@@ -30,7 +30,6 @@ import type {
   CodexAppServerPendingRequestRegistryOptions
 } from './app-server/request-registry'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
-import type { CodexDynamicMcpClient } from './codex-dynamic-mcp-tools'
 import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
 import {
   CAPABILITY_AGENT_TOOL_NAMES,
@@ -1471,10 +1470,16 @@ describe('CodexRuntimeService storage fallback', () => {
     vi.mocked(client.readThread).mockRejectedValue(
       new Error('thread codex-thread-1 is not materialized yet; includeTurns is unavailable while the turn is starting')
     )
+    const abortTurn = vi.fn(() => 1)
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       sink: { send: vi.fn() },
       storageRoot,
+      capabilityAgentTools: {
+        tools: () => [],
+        call: vi.fn(async () => ({ tool: 'unused', value: null })),
+        abortTurn
+      },
       createClient: () => client
     })
 
@@ -1503,6 +1508,11 @@ describe('CodexRuntimeService storage fallback', () => {
       threadId: 'codex-thread-1',
       turnId: 'turn-1'
     })
+    expect(abortTurn).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'gui-thread-1',
+      turnId: 'turn-1'
+    }, 'user_stop')
   })
 
   it('replays stored normalized events without starting app-server JSON-RPC', async () => {
@@ -1949,141 +1959,15 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
   })
 
-  it('advertises managed MCP tools as Codex dynamic tools and routes their calls', async () => {
-    const client = controllableClient()
-    const sink = { send: vi.fn() }
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'search-ok' }],
-      structuredContent: { resultCount: 1 }
-    }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'research.search',
-          description: 'Search research papers.',
-          inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink,
-      managedMcpServers: [{ id: 'research', command: '/bin/research-mcp' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({ title: 'MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
-
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([{
-        type: 'function',
-        name: 'research_search',
-        description: 'Search research papers.',
-        inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
-      }]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'delegate_task' })
-      ]),
-      developerInstructions: expect.stringContaining('delegate_task')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('stream to a `.part` file')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('explicitly asks to use the system proxy')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('call `visual_generate` first')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('When `visual_generate` returns `needs_context`')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('Choose route `code`')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
-    }))
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      callId: 'call-research-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'research_search',
-      arguments: { query: 'agentic RL' }
-    })).resolves.toEqual({
-      contentItems: [
-        { type: 'inputText', text: 'search-ok' },
-        { type: 'inputText', text: 'structuredContent:\n{\n  "resultCount": 1\n}' }
-      ],
-      success: true
-    })
-    expect(callTool).toHaveBeenCalledWith(
-      { name: 'research.search', arguments: { query: 'agentic RL' } },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
-    )
-    const executionFacts = sink.send.mock.calls
-      .map((call) => call[1]?.event?.tool)
-      .filter((tool) => tool?.meta?.callId === 'call-research-1')
-    expect(executionFacts).toEqual([
-      expect.objectContaining({
-        itemId: 'call-research-1',
-        status: 'running',
-        meta: expect.objectContaining({
-          callId: 'call-research-1',
-          toolName: 'research_search',
-          phase: 'dispatched',
-          factSource: 'runtime_lifecycle',
-          evidenceStrength: 'runtime_lifecycle'
-        })
-      }),
-      expect.objectContaining({
-        itemId: 'call-research-1',
-        status: 'success',
-        meta: expect.objectContaining({
-          callId: 'call-research-1',
-          toolName: 'research_search',
-          phase: 'succeeded',
-          factSource: 'executor_result',
-          evidenceStrength: 'executor_receipt',
-          success: true
-        })
-      })
-    ])
-  })
-
   it('advertises fixed capability tools and routes them first with trusted thread workspace context', async () => {
     const storageRoot = await tempRoot()
     const client = controllableClient()
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const duplicateMcpCall = vi.fn(async () => ({ content: [{ type: 'text', text: 'wrong-route' }] }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: CAPABILITY_AGENT_TOOL_NAMES.discover,
-          description: 'Conflicting external capability tool.',
-          inputSchema: { type: 'object', properties: {} }
-        }]
-      })),
-      callTool: duplicateMcpCall,
-      close: vi.fn(async () => undefined)
-    }
     const broker = new CapabilityBroker(new CapabilityRegistry())
     const discover = vi.spyOn(broker, 'discover')
     const resolveCaller = vi.fn((toolContext: {
       requestId: string | number
+      runtimeId?: string
       threadId?: string
       workspaceId?: string
     }) => ({
@@ -2098,8 +1982,6 @@ describe('CodexRuntimeService compatibility operations', () => {
       sink: { send: vi.fn() },
       storageRoot,
       capabilityAgentTools,
-      managedMcpServers: [{ id: 'conflicting-capability', command: '/bin/conflicting-mcp' }],
-      mcpClientFactory: async () => mcpClient,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
         return client
@@ -2135,6 +2017,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
     expect(resolveCaller).toHaveBeenCalledWith({
       requestId: 'capability-request-1',
+      runtimeId: 'codex',
       callId: 'capability-call-1',
       threadId: 'thread-1',
       turnId: 'turn-1',
@@ -2145,77 +2028,7 @@ describe('CodexRuntimeService compatibility operations', () => {
       callerId: 'thread-1',
       workspaceId: '/tmp/capability-workspace',
       approvals: []
-    }, {})
-    expect(duplicateMcpCall).not.toHaveBeenCalled()
-  })
-
-  it('publishes structured dynamic MCP failures as governance receipts', async () => {
-    const client = controllableClient()
-    const sink = { send: vi.fn() }
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'surface.inspect',
-          description: 'Inspect a surface resource.',
-          inputSchema: { type: 'object', properties: { resourceRef: { type: 'string' } } }
-        }]
-      })),
-      callTool: vi.fn(async () => ({
-        isError: true,
-        structuredContent: {
-          error: {
-            code: 'unknown_resource_ref',
-            failureClass: 'stale_resource',
-            retryable: true
-          },
-          resourceRef: 'res_surface_12345678901234567890'
-        }
-      })),
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink,
-      managedMcpServers: [{ id: 'surface', command: '/bin/surface-mcp' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-    await service.startThread({ title: 'Governed surface' })
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'surface-request-1',
-      callId: 'surface-call-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'surface_inspect',
-      arguments: { resourceRef: 'res_surface_12345678901234567890' }
-    })).resolves.toMatchObject({
-      success: false,
-      errorCode: 'unknown_resource_ref',
-      failureClass: 'stale_resource',
-      retryable: true
-    })
-
-    const terminal = sink.send.mock.calls
-      .map((call) => call[1]?.event?.tool)
-      .find((tool) => tool?.meta?.callId === 'surface-call-1' && tool.status === 'error')
-    expect(terminal).toEqual(expect.objectContaining({
-      detail: expect.stringContaining('unknown_resource_ref'),
-      meta: expect.objectContaining({
-        arguments: { resourceRef: 'res_surface_12345678901234567890' },
-        errorCode: 'unknown_resource_ref',
-        failureClass: 'stale_resource',
-        retryable: true,
-        resourceIdentity: 'res_surface_12345678901234567890',
-        structuredContent: expect.objectContaining({
-          error: expect.objectContaining({ code: 'unknown_resource_ref' })
-        })
-      })
-    }))
+    }, {}, { context: expect.objectContaining({ runtimeId: 'codex', threadId: 'thread-1' }) })
   })
 
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
@@ -2431,498 +2244,6 @@ describe('CodexRuntimeService compatibility operations', () => {
       success: false
     })
     expect(client.startThread).not.toHaveBeenCalled()
-  })
-
-  it('injects the thread workspace into workspace-intel dynamic MCP calls', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const seenServers: unknown[] = []
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'read-ok' }]
-    }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_workspace_read',
-          description: 'Read workspace file.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string' },
-              workspaceRoot: { type: 'string' }
-            }
-          }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/settings-workspace'
-      }),
-      sink: { send: vi.fn() },
-      storageRoot,
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return mcpClient
-      },
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({
-      title: 'Workspace intel thread',
-      workspace: '/tmp/awesome-ai-scientist'
-    })).resolves.toMatchObject({
-      ok: true
-    })
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_workspace_intel',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workspace-intel-mcp-node-entry.js',
-          '--gui-workspace-intel-mcp-server',
-          '--include-global-skills'
-        ]
-      })
-    ])
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'docs/research/single_cell/smoke_test_plan.md' }
-    })).resolves.toMatchObject({
-      contentItems: [{ type: 'inputText', text: 'read-ok' }],
-      success: true
-    })
-    expect(callTool).toHaveBeenCalledWith(
-      {
-        name: 'gui_workspace_read',
-        arguments: {
-          path: 'docs/research/single_cell/smoke_test_plan.md',
-          workspaceRoot: '/tmp/awesome-ai-scientist'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
-  })
-
-  it('advertises the workspace patch tool, requests approval in workspace mode, and auto-applies in full access', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    const workspaceRoot = join(storageRoot, 'workspace')
-    await mkdir(workspaceRoot, { recursive: true })
-    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_workspace_read',
-          description: 'Read workspace file.',
-          inputSchema: {
-            type: 'object',
-            properties: { path: { type: 'string' }, workspaceRoot: { type: 'string' } },
-            required: ['path']
-          }
-        }]
-      })),
-      callTool: vi.fn(async ({ arguments: args }) => ({
-        content: [{ type: 'text', text: 'read-ok' }],
-        structuredContent: {
-          ok: true,
-          kind: 'text',
-          workspaceRoot: args.workspaceRoot,
-          relativePath: args.path,
-          content: await readFile(join(String(args.workspaceRoot), String(args.path)), 'utf8'),
-          truncated: false
-        }
-      })),
-      close: vi.fn(async () => undefined)
-    }
-    let serviceSettings = { ...settings(), workspaceRoot }
-    const service = new CodexRuntimeService({
-      settings: async () => serviceSettings,
-      sink: { send: vi.fn() },
-      storageRoot,
-      managedMcpServers: [{ id: 'gui_workspace_intel', command: '/bin/workspace-intel' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({ threadId: 'gui-thread', workspace: workspaceRoot })).resolves.toMatchObject({ ok: true })
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([expect.objectContaining({
-        name: 'gui_workspace_apply_patch',
-        inputSchema: {
-          type: 'object',
-          properties: { path: expect.any(Object), patch: expect.any(Object) },
-          required: ['path', 'patch'],
-          additionalProperties: false
-        }
-      })]),
-      developerInstructions: expect.stringContaining('instead of Python')
-    }))
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'read-before-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'notes.txt' }
-    })).resolves.toMatchObject({ success: true })
-
-    const patchResult = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'patch-request',
-      callId: 'patch-call',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: {
-        path: 'notes.txt',
-        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta\n+beta edited\n gamma\n*** End Patch'
-      }
-    })
-    await vi.waitFor(() => expect(service.pendingServerRequests()).toEqual([
-      expect.objectContaining({ kind: 'approval', method: 'item/fileChange/requestApproval' })
-    ]))
-    const approvalId = service.pendingServerRequests()[0]!.requestId
-    await expect(service.resolveApproval({ requestId: approvalId, decision: 'allowed' })).resolves.toEqual({ ok: true })
-    await expect(patchResult).resolves.toMatchObject({
-      success: true,
-      stateChanged: true,
-      structuredContent: { ok: true, applied: true }
-    })
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'read-before-external-change',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'notes.txt' }
-    })).resolves.toMatchObject({ success: true })
-    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nchanged elsewhere\ngamma\n', 'utf8')
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'patch-after-external-change',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta stale patch' }
-    })).resolves.toMatchObject({
-      success: false,
-      errorCode: 'patch_target_changed',
-      failureClass: 'stale_resource',
-      retryable: true,
-      stateChanged: false
-    })
-    expect(service.pendingServerRequests()).toEqual([])
-    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nbeta edited\ngamma\n', 'utf8')
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'patch-without-reread',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta twice' }
-    })).resolves.toMatchObject({
-      success: false,
-      contentItems: [expect.objectContaining({ text: expect.stringContaining('read-before-edit guard') })],
-      errorCode: 'patch_read_required',
-      failureClass: 'precondition_failed',
-      retryable: true,
-      stateChanged: false
-    })
-
-    await pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'read-before-denied-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'notes.txt' }
-    })
-    const deniedPatch = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'denied-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+must not be written' }
-    })
-    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
-    await service.resolveApproval({
-      requestId: service.pendingServerRequests()[0]!.requestId,
-      decision: 'denied'
-    })
-    await expect(deniedPatch).resolves.toMatchObject({
-      success: false,
-      errorCode: 'patch_user_denied',
-      failureClass: 'permission_denied',
-      retryable: false,
-      stateChanged: false
-    })
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
-
-    serviceSettings = {
-      ...serviceSettings,
-      agents: {
-        ...serviceSettings.agents,
-        codex: {
-          ...defaultCodexRuntimeSettings(),
-          ...serviceSettings.agents.codex,
-          sandboxMode: 'danger-full-access',
-          approvalPolicy: 'on-request'
-        }
-      }
-    }
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'full-access-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: {
-        path: 'notes.txt',
-        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta edited\n+beta full access\n gamma\n*** End Patch'
-      }
-    })).resolves.toMatchObject({ success: true, stateChanged: true })
-    expect(service.pendingServerRequests()).toEqual([])
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta full access\ngamma\n')
-  })
-
-  it('aborts active dynamic MCP worker requests when a Codex turn is interrupted', async () => {
-    const client = controllableClient()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const started = deferred<void>()
-    const callTool: CodexDynamicMcpClient['callTool'] = vi.fn((_input, options) => {
-      started.resolve()
-      return new Promise((_, reject) => {
-        options?.signal?.addEventListener('abort', () => {
-          reject(options.signal?.reason ?? new Error('aborted'))
-        }, { once: true })
-      })
-    })
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'slow_tool',
-          description: 'Slow worker request.',
-          inputSchema: { type: 'object', properties: {} }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      managedMcpServers: [{ id: 'research', command: '/bin/research-mcp' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startTurn({ threadId: 'thread-1', text: 'run slow tool' })).resolves.toMatchObject({
-      ok: true,
-      turnId: 'turn-1'
-    })
-    const pendingTool = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'slow_tool',
-      arguments: {}
-    })
-    await started.promise
-
-    await expect(service.interruptTurn('thread-1', 'turn-1')).resolves.toEqual({ ok: true })
-    await expect(pendingTool).resolves.toMatchObject({ success: false })
-    expect(client.interruptTurn).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1' })
-  })
-
-  it('advertises the shared schedule MCP server as Codex dynamic tools', async () => {
-    const client = controllableClient()
-    const codexHome = await tempRoot()
-    const seenServers: Array<{ id: string; command: string; args?: string[]; env?: Record<string, string> }> = []
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_schedule_list',
-          description: 'List schedule tasks.',
-          inputSchema: { type: 'object', properties: {} }
-        }]
-      })),
-      callTool: vi.fn(async () => ({
-        content: [{ type: 'text', text: 'schedule-ok' }]
-      })),
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        schedule: {
-          ...defaultScheduleSettings(),
-          internal: { port: 9797, secret: 'schedule-secret' }
-        }
-      }),
-      sink: { send: vi.fn() },
-      managedCodexHome: codexHome,
-      scheduleMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return mcpClient
-      },
-      createClient: () => client
-    })
-
-    await expect(service.startThread({ title: 'Schedule MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
-
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_schedule',
-        command: '/tmp/sciforge-test-app/SciForge',
-        args: [
-          '/tmp/sciforge-test-app/out/main/schedule-mcp-node-entry.js',
-          '--gui-schedule-mcp-server',
-          '--base-url',
-          'http://127.0.0.1:9797'
-        ],
-        env: expect.objectContaining({
-          ELECTRON_RUN_AS_NODE: '1',
-          GUI_SCHEDULE_INTERNAL_SECRET: 'schedule-secret'
-        })
-      })
-    ])
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_schedule]')
-    expect(config).not.toContain('schedule-mcp-node-entry')
-    expect(config).not.toContain('schedule-secret')
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([{
-        type: 'function',
-        name: 'gui_schedule_list',
-        description: 'List schedule tasks.',
-        inputSchema: { type: 'object', properties: {} }
-      }]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
-  })
-
-  it('advertises shared workflow and workspace intel MCP servers as Codex dynamic tools', async () => {
-    const client = controllableClient()
-    const codexHome = await tempRoot()
-    const seenServers: Array<{
-      id: string
-      command: string
-      args?: string[]
-      enabledTools?: string[]
-      env?: Record<string, string>
-    }> = []
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/codex-workspace',
-        workflow: {
-          ...defaultWorkflowSettings(),
-          enabled: true,
-          webhookPort: 9898,
-          webhookSecret: 'workflow-secret'
-        }
-      }),
-      sink: { send: vi.fn() },
-      managedCodexHome: codexHome,
-      workflowMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return {
-          listTools: vi.fn(async () => ({
-            tools: server.id === 'gui_workflow'
-              ? [{
-                  name: 'gui_workflow_list',
-                  description: 'List callable workflows.',
-                  inputSchema: { type: 'object', properties: {} }
-                }]
-              : [{
-                  name: 'gui_workspace_reference_preview',
-                  description: 'Preview a bounded workspace reference.',
-                  inputSchema: { type: 'object', properties: { path: { type: 'string' } } }
-                }]
-          })),
-          callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
-          close: vi.fn(async () => undefined)
-        }
-      },
-      createClient: () => client
-    })
-
-    await expect(service.startThread({ title: 'Workflow workspace MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
-
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_workflow',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workflow-mcp-node-entry.js',
-          '--gui-workflow-mcp-server',
-          '--base-url',
-          'http://127.0.0.1:9898'
-        ],
-        env: expect.objectContaining({
-          ELECTRON_RUN_AS_NODE: '1',
-          GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
-        }),
-        enabledTools: expect.arrayContaining(['gui_workflow_list', 'gui_workflow_run'])
-      }),
-      expect.objectContaining({
-        id: 'gui_workspace_intel',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workspace-intel-mcp-node-entry.js',
-          '--gui-workspace-intel-mcp-server',
-          '--include-global-skills'
-        ],
-        enabledTools: expect.arrayContaining(['gui_workspace_list', 'gui_workspace_reference_preview'])
-      })
-    ])
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_workflow]')
-    expect(config).not.toContain('[mcp_servers.gui_workspace_intel]')
-    expect(config).not.toContain('workflow-secret')
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'gui_workflow_list' }),
-        expect.objectContaining({ name: 'gui_workspace_reference_preview' })
-      ]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
   })
 
   it('forces Codex thread starts through the managed Model Router provider', async () => {

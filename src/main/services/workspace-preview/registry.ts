@@ -38,7 +38,8 @@ export const FIRST_PARTY_DOCUMENT_WORKSPACE_PREVIEW_MANIFESTS: readonly Workspac
       edit: true,
       inspect: true,
       structuredSelection: true,
-      export: ['markdown']
+      annotations: true,
+      export: ['markdown', 'sidecar']
     }
   },
   {

@@ -220,7 +220,7 @@ function workspacePreviewOperations(
   canExport: boolean,
   audience: 'ui' | 'agent' | 'system'
 ): string[] {
-  const annotationDocument = /\.(?:pdf|docx)$/iu.test(observation.file.path)
+  const annotationDocument = /\.(?:pdf|docx|md|mdx|markdown)$/iu.test(observation.file.path)
   const annotationOperations = canAnnotate && annotationDocument
     ? [
         APP_CAPABILITY_IDS.workspacePreviewAnnotationsList,

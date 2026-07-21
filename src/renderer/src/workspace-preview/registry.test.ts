@@ -47,7 +47,8 @@ describe('renderer workspace preview registry', () => {
   it('keeps renderer manifest exports aligned with source-copy support', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
-    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['markdown'])
+    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.annotations).toBe(true)
+    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['markdown', 'sidecar'])
     expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).not.toContain('html')
     expect(registry.get(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual([
       'pdf',

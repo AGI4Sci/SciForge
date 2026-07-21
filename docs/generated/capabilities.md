@@ -1886,6 +1886,46 @@ Creates or updates an annotation through the canonical document annotation provi
                 },
                 "maxItems": 800,
                 "type": "array"
+              },
+              "textRange": {
+                "additionalProperties": false,
+                "properties": {
+                  "end": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "endColumn": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "endLine": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "start": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "startColumn": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "startLine": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "type": "object"
               }
             },
             "required": [
@@ -1924,7 +1964,8 @@ Creates or updates an annotation through the canonical document annotation provi
           "documentKind": {
             "enum": [
               "pdf",
-              "docx"
+              "docx",
+              "markdown"
             ],
             "type": "string"
           },

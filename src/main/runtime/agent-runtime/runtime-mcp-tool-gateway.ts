@@ -2,8 +2,15 @@ import { createHash } from 'node:crypto'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { mainPerformanceMonitor } from '../../performance-monitor'
+import type {
+  RuntimeToolCallRequest,
+  RuntimeToolCallResponse,
+  RuntimeToolDefinition,
+  RuntimeToolOutputContentItem,
+  RuntimeToolReleaseReason
+} from './runtime-tool-contract'
 
-export type CodexDynamicMcpServerConfig = {
+export type RuntimeMcpServerConfig = {
   id: string
   command: string
   args?: string[]
@@ -13,51 +20,21 @@ export type CodexDynamicMcpServerConfig = {
   disabled?: boolean
 }
 
-export type CodexAppServerDynamicToolFunctionSpec = {
-  type: 'function'
-  namespace?: string
-  name: string
-  description: string
-  inputSchema: unknown
-  deferLoading?: boolean
-}
-export type CodexAppServerDynamicToolSpec = CodexAppServerDynamicToolFunctionSpec
-
-export type CodexAppServerDynamicToolCallRequest = {
-  requestId: string | number
-  threadId?: string
-  turnId?: string
-  callId?: string
-  namespace?: string
-  tool: string
-  arguments: unknown
-}
-
-export type CodexAppServerDynamicToolCallOutputContentItem =
-  | { type: 'inputText'; text: string }
-  | { type: 'inputImage'; imageUrl: string }
-
-export type CodexAppServerDynamicToolCallResponse = {
-  contentItems: CodexAppServerDynamicToolCallOutputContentItem[]
-  success: boolean
-  structuredContent?: unknown
-  errorCode?: string
-  failureClass?: string
-  retryable?: boolean
-  resourceIdentity?: string
-  evidenceDelta?: boolean
-  stateChanged?: boolean
-}
-
 export type McpToolDescriptor = {
   name: string
   title?: string
   description?: string
   inputSchema?: unknown
-  annotations?: { title?: string }
+  annotations?: {
+    title?: string
+    readOnlyHint?: boolean
+    destructiveHint?: boolean
+    idempotentHint?: boolean
+    openWorldHint?: boolean
+  }
 }
 
-export type CodexDynamicMcpClient = {
+export type RuntimeMcpClient = {
   listTools(options?: {
     cursor?: string
     signal?: AbortSignal
@@ -70,102 +47,113 @@ export type CodexDynamicMcpClient = {
   close(): Promise<void>
 }
 
-export type CodexDynamicMcpToolBridgeOptions = {
-  servers: readonly CodexDynamicMcpServerConfig[]
-  clientFactory?: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
+export type RuntimeMcpToolGatewayOptions = {
+  servers: readonly RuntimeMcpServerConfig[]
+  clientFactory?: (server: RuntimeMcpServerConfig) => Promise<RuntimeMcpClient>
 }
 
-export type CodexDynamicMcpReleaseReason =
-  | 'user_stop'
-  | 'service_shutdown'
-  | 'runtime_disconnected'
-  | 'unknown'
-  | (string & {})
-
-export type CodexDynamicMcpLifecycleEvent = {
+export type RuntimeMcpLifecycleEvent = {
   at: string
   event: 'request_aborted' | 'server_closed' | 'tool_unavailable'
   serverId: string
   namespace: string
-  reason: CodexDynamicMcpReleaseReason
+  reason: RuntimeToolReleaseReason
   requestId?: string
   threadId?: string
   turnId?: string
   toolName?: string
   activeRequestCount?: number
-  diagnosticCode?: CodexDynamicMcpSchemaDiagnosticCode
+  diagnosticCode?: RuntimeMcpSchemaDiagnosticCode
 }
 
-export type CodexDynamicMcpSchemaDiagnosticCode =
+export type RuntimeMcpSchemaDiagnosticCode =
   | 'schema_root_not_object'
   | 'schema_properties_not_object'
   | 'schema_property_not_object'
   | 'schema_items_not_object'
   | 'schema_additional_properties_invalid'
-  | 'schema_too_deep'
   | 'schema_too_complex'
   | 'provider_schema_invalid'
 
-export type CodexDynamicMcpToolUnavailableDiagnostic = {
+export type RuntimeMcpToolUnavailableDiagnostic = {
   at: string
   event: 'tool_unavailable'
   serverId: string
   namespace: string
   reason: 'invalid_input_schema'
   toolName: string
-  diagnosticCode: CodexDynamicMcpSchemaDiagnosticCode
+  diagnosticCode: RuntimeMcpSchemaDiagnosticCode
 }
 
 type CatalogTool = McpToolDescriptor & {
   originalName: string
-  dynamicName: string
-  flatName?: string
-  providerSafeInputSchema: Record<string, unknown>
+  catalogName: string
+  catalogInputSchema: Record<string, unknown>
 }
 
 type ActiveMcpRequest = {
   controller: AbortController
   requestId?: string
+  runtimeId?: string
   threadId?: string
   turnId?: string
   toolName?: string
 }
 
 type ServerState = {
-  config: CodexDynamicMcpServerConfig
+  config: RuntimeMcpServerConfig
   namespace: string
-  client?: CodexDynamicMcpClient
-  clientPromise?: Promise<CodexDynamicMcpClient>
+  client?: RuntimeMcpClient
+  clientPromise?: Promise<RuntimeMcpClient>
   catalog?: CatalogTool[]
   catalogPromise?: Promise<CatalogTool[]>
   activeRequests: Set<ActiveMcpRequest>
-  lifecycleEvents: CodexDynamicMcpLifecycleEvent[]
-  unavailableToolDiagnostics: Map<string, CodexDynamicMcpToolUnavailableDiagnostic>
+  lifecycleEvents: RuntimeMcpLifecycleEvent[]
+  unavailableToolDiagnostics: Map<string, RuntimeMcpToolUnavailableDiagnostic>
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000
 const MAX_LIFECYCLE_EVENTS_PER_SERVER = 50
 const MAX_UNAVAILABLE_TOOL_DIAGNOSTICS_PER_SERVER = 50
+const MAX_CATALOG_PAGES_PER_SERVER = 100
+const MAX_CATALOG_TOOLS_PER_SERVER = 2_000
 
-export function createCodexDynamicMcpToolBridge(
-  options: CodexDynamicMcpToolBridgeOptions
-): CodexDynamicMcpToolBridge {
-  return new CodexDynamicMcpToolBridge(options)
+class RuntimeMcpInvocationError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+    readonly metadata: Pick<RuntimeToolCallResponse, 'failureClass' | 'retryable'> = {}
+  ) {
+    super(message)
+    this.name = 'RuntimeMcpInvocationError'
+  }
 }
 
-export class CodexDynamicMcpToolBridge {
-  private readonly states: ServerState[]
-  private readonly statesByNamespace = new Map<string, ServerState>()
-  private readonly clientFactory: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
-  private closedReason: CodexDynamicMcpReleaseReason | null = null
+export function createRuntimeMcpToolGateway(
+  options: RuntimeMcpToolGatewayOptions
+): RuntimeMcpToolGateway {
+  return new RuntimeMcpToolGateway(options)
+}
 
-  constructor(options: CodexDynamicMcpToolBridgeOptions) {
-    this.clientFactory = options.clientFactory ?? createSdkMcpClient
+export class RuntimeMcpToolGateway {
+  private states: ServerState[] = []
+  private readonly statesByNamespace = new Map<string, ServerState>()
+  private readonly clientFactory: (server: RuntimeMcpServerConfig) => Promise<RuntimeMcpClient>
+  private closedReason: RuntimeToolReleaseReason | null = null
+  private serverConfigSignature = ''
+
+  constructor(options: RuntimeMcpToolGatewayOptions) {
+    this.clientFactory = options.clientFactory ?? createRuntimeMcpClient
+    this.installServerStates(options.servers)
+  }
+
+  private installServerStates(servers: readonly RuntimeMcpServerConfig[]): void {
     const usedNamespaces = new Set<string>()
-    this.states = options.servers
+    this.statesByNamespace.clear()
+    this.states = servers
       .filter((server) => !server.disabled && server.id.trim() && server.command.trim())
       .map((server) => {
-        const namespace = uniqueDynamicName(`mcp_${slug(server.id)}`, server.id, usedNamespaces, 64)
+        const namespace = uniqueToolName(`mcp_${slug(server.id)}`, server.id, usedNamespaces, 64)
         const state: ServerState = {
           config: {
             ...server,
@@ -175,102 +163,139 @@ export class CodexDynamicMcpToolBridge {
           namespace,
           activeRequests: new Set<ActiveMcpRequest>(),
           lifecycleEvents: [],
-          unavailableToolDiagnostics: new Map<string, CodexDynamicMcpToolUnavailableDiagnostic>()
+          unavailableToolDiagnostics: new Map<string, RuntimeMcpToolUnavailableDiagnostic>()
         }
         this.statesByNamespace.set(namespace, state)
         return state
       })
+    this.serverConfigSignature = serverConfigsSignature(this.states.map((state) => state.config))
   }
 
   hasConfiguredServers(): boolean {
     return this.states.length > 0
   }
 
-  lifecycleEvents(): CodexDynamicMcpLifecycleEvent[] {
+  lifecycleEvents(): RuntimeMcpLifecycleEvent[] {
     return this.states.flatMap((state) => state.lifecycleEvents)
   }
 
-  toolUnavailableDiagnostics(): CodexDynamicMcpToolUnavailableDiagnostic[] {
+  toolUnavailableDiagnostics(): RuntimeMcpToolUnavailableDiagnostic[] {
     return this.states.flatMap((state) => [...state.unavailableToolDiagnostics.values()])
   }
 
   abortRequestsForTurn(
-    threadId: string,
-    turnId: string,
-    reason: CodexDynamicMcpReleaseReason = 'user_stop'
+    identity: { runtimeId: string; threadId: string; turnId: string },
+    reason: RuntimeToolReleaseReason = 'user_stop'
   ): number {
     let aborted = 0
     for (const state of this.states) {
       aborted += this.abortStateRequests(state, reason, (request) => {
-        if (request.turnId && request.turnId === turnId) return true
-        return Boolean(request.threadId && request.threadId === threadId)
+        return request.runtimeId === identity.runtimeId
+          && request.threadId === identity.threadId
+          && request.turnId === identity.turnId
       })
     }
     return aborted
   }
 
-  async dynamicTools(): Promise<CodexAppServerDynamicToolSpec[]> {
+  async tools(query?: string): Promise<RuntimeToolDefinition[]> {
     const startedAt = mainPerformanceMonitor.now()
-    mainPerformanceMonitor.count('main.codex.dynamicMcp.tools')
+    mainPerformanceMonitor.count('main.runtime.mcp.tools')
     if (this.closedReason) return []
     try {
-      const entries = await this.availableCatalogEntries()
-      assignFlatToolNames(entries)
-      return entries.map(({ tool }) => ({
+      // Explicit discovery is allowed to pay the one-time catalog cost. A
+      // server-name prefilter is not semantically complete and caused valid
+      // description/title matches to disappear.
+      const entries = await this.availableCatalogEntries(this.states)
+      return entries.map(({ state, tool }) => ({
         type: 'function',
-        name: tool.flatName ?? tool.dynamicName,
+        namespace: state.namespace,
+        providerId: state.config.id,
+        providerToolName: tool.originalName,
+        name: tool.catalogName,
         description: tool.description || tool.title || `MCP tool ${tool.originalName}`,
-        inputSchema: tool.providerSafeInputSchema
+        inputSchema: tool.catalogInputSchema,
+        ...(tool.annotations ? { annotations: tool.annotations } : {})
       }))
     } finally {
-      mainPerformanceMonitor.sample('main.codex.dynamicMcp.tools.duration', mainPerformanceMonitor.now() - startedAt, {
+      mainPerformanceMonitor.sample('main.runtime.mcp.tools.duration', mainPerformanceMonitor.now() - startedAt, {
         servers: this.states.length
       })
     }
   }
 
+  async sync(servers: readonly RuntimeMcpServerConfig[]): Promise<boolean> {
+    if (this.closedReason) return false
+    const nextSignature = serverConfigsSignature(servers
+      .filter((server) => !server.disabled && server.id.trim() && server.command.trim())
+      .map(normalizedServerConfig))
+    if (nextSignature === this.serverConfigSignature) return false
+
+    const previous = this.states
+    for (const state of previous) this.abortStateRequests(state, 'settings_changed')
+    this.installServerStates(servers)
+    await Promise.all(previous.map(async (state) => {
+      const client = state.client ?? await state.clientPromise?.catch(() => undefined)
+      await client?.close().catch(() => undefined)
+    }))
+    return true
+  }
+
   async callTool(
-    request: CodexAppServerDynamicToolCallRequest,
+    request: RuntimeToolCallRequest,
     options: { signal?: AbortSignal } = {}
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+  ): Promise<RuntimeToolCallResponse> {
     const startedAt = mainPerformanceMonitor.now()
-    mainPerformanceMonitor.count('main.codex.dynamicMcp.call')
+    mainPerformanceMonitor.count('main.runtime.mcp.call')
     let resolved: { state: ServerState; tool: CatalogTool } | null = null
     let retriedClosedConnection = false
     try {
       for (;;) {
         try {
           if (this.closedReason) {
-            return failedDynamicToolResponse(`MCP dynamic tool bridge is closed: ${this.closedReason}.`)
+            return failedRuntimeToolResponse(`MCP tool gateway is closed: ${this.closedReason}.`)
           }
           resolved = await this.resolveTool(request)
           if (!resolved) {
             const name = request.namespace ? `${request.namespace}.${request.tool}` : request.tool
-            return failedDynamicToolResponse(`No configured MCP dynamic tool matched ${name}.`)
+            return failedRuntimeToolResponse(`No configured MCP tool matched ${name}.`)
           }
           return await this.invokeResolvedTool(resolved, request, options)
         } catch (error) {
-          if (!retriedClosedConnection && isClosedMcpConnectionError(error) && !options.signal?.aborted) {
+          if (
+            !retriedClosedConnection
+            && isClosedMcpConnectionError(error)
+            && !options.signal?.aborted
+            && (!resolved || toolCallMayRetry(resolved.tool))
+          ) {
             retriedClosedConnection = true
             await this.resetClosedConnection(resolved?.state)
             resolved = null
             continue
           }
           const name = resolved?.tool.originalName ?? (request.namespace ? `${request.namespace}.${request.tool}` : request.tool)
-          return failedDynamicToolResponse(
-            `MCP tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
-          )
+          const message = error instanceof Error ? error.message : String(error)
+          return error instanceof RuntimeMcpInvocationError
+            ? failedRuntimeToolResponse(`MCP tool ${name} failed: ${message}`, {
+                errorCode: error.code,
+                ...error.metadata
+              })
+            : failedRuntimeToolResponse(`MCP tool ${name} failed: ${message}`, {
+                errorCode: options.signal?.aborted ? 'aborted' : 'mcp_tool_failed',
+                failureClass: options.signal?.aborted ? 'aborted' : 'upstream_error',
+                retryable: !options.signal?.aborted
+              })
         }
       }
     } finally {
-      mainPerformanceMonitor.sample('main.codex.dynamicMcp.call.duration', mainPerformanceMonitor.now() - startedAt, {
+      mainPerformanceMonitor.sample('main.runtime.mcp.call.duration', mainPerformanceMonitor.now() - startedAt, {
         namespace: request.namespace,
         tool: request.tool
       })
     }
   }
 
-  async close(reason: CodexDynamicMcpReleaseReason = 'service_shutdown'): Promise<void> {
+  async close(reason: RuntimeToolReleaseReason = 'service_shutdown'): Promise<void> {
     this.closedReason = reason
     for (const state of this.states) {
       this.abortStateRequests(state, reason)
@@ -290,14 +315,14 @@ export class CodexDynamicMcpToolBridge {
   }
 
   private async resolveTool(
-    request: CodexAppServerDynamicToolCallRequest
+    request: RuntimeToolCallRequest
   ): Promise<{ state: ServerState; tool: CatalogTool } | null> {
     const normalized = normalizeToolRequestName(request)
     if (normalized.namespace) {
       const state = this.statesByNamespace.get(normalized.namespace)
       if (!state) return null
       const catalog = await this.catalogFor(state)
-      const tool = catalog.find((candidate) => candidate.dynamicName === normalized.tool || candidate.flatName === normalized.tool)
+      const tool = catalog.find((candidate) => candidate.catalogName === normalized.tool)
       return tool ? { state, tool } : null
     }
 
@@ -311,11 +336,11 @@ export class CodexDynamicMcpToolBridge {
       } catch (error) {
         firstCatalogError ??= error
         // Unqualified tool lookup should not let one optional MCP server block
-        // unrelated dynamic tools from later servers.
+        // unrelated runtime tools from later servers.
         continue
       }
       loadedCatalogCount += 1
-      const tool = catalog.find((candidate) => dynamicToolCallNames(candidate).has(normalized.tool))
+      const tool = catalog.find((candidate) => candidate.catalogName === normalized.tool)
       if (tool) matches.push({ state, tool })
     }
     if (loadedCatalogCount === 0 && firstCatalogError) throw firstCatalogError
@@ -324,19 +349,17 @@ export class CodexDynamicMcpToolBridge {
 
   private async invokeResolvedTool(
     resolved: { state: ServerState; tool: CatalogTool },
-    request: CodexAppServerDynamicToolCallRequest,
+    request: RuntimeToolCallRequest,
     options: { signal?: AbortSignal }
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+  ): Promise<RuntimeToolCallResponse> {
     const { state, tool } = resolved
-    const callArguments = schemaSafeToolArguments(
-      mcpToolArgumentsForRequest(state, tool, request),
-      tool.inputSchema
-    )
+    const callArguments = mcpToolArgumentsForRequest(request)
     const client = await this.clientFor(state)
     const result = await this.withTrackedRequest(
       state,
       {
         requestId: String(request.requestId),
+        runtimeId: request.runtimeId,
         threadId: request.threadId,
         turnId: request.turnId,
         toolName: tool.originalName
@@ -347,15 +370,17 @@ export class CodexDynamicMcpToolBridge {
         { signal, timeout: state.config.timeoutMs }
       )
     )
-    return dynamicToolResponseFromMcpResult(result)
+    return runtimeToolResponseFromMcpResult(result)
   }
 
-  private async availableCatalogEntries(): Promise<Array<{ state: ServerState; tool: CatalogTool }>> {
-    const listed = await Promise.all(this.states.map(async (state) => {
+  private async availableCatalogEntries(
+    states: readonly ServerState[] = this.states
+  ): Promise<Array<{ state: ServerState; tool: CatalogTool }>> {
+    const listed = await Promise.all(states.map(async (state) => {
       try {
         return { state, catalog: await this.catalogFor(state) }
       } catch {
-        // A failed optional MCP server should not prevent the Codex thread from starting.
+        // A failed optional MCP server should not prevent a runtime turn from starting.
         return null
       }
     }))
@@ -390,12 +415,18 @@ export class CodexDynamicMcpToolBridge {
 
   private async loadCatalog(state: ServerState): Promise<CatalogTool[]> {
     const startedAt = mainPerformanceMonitor.now()
-    mainPerformanceMonitor.count('main.codex.dynamicMcp.catalog.load')
+    mainPerformanceMonitor.count('main.runtime.mcp.catalog.load')
     const client = await this.clientFor(state)
     const tools: McpToolDescriptor[] = []
     let cursor: string | undefined
+    let pageCount = 0
+    const seenCursors = new Set<string>()
     try {
       do {
+        pageCount += 1
+        if (pageCount > MAX_CATALOG_PAGES_PER_SERVER) {
+          throw new Error(`MCP catalog exceeded ${MAX_CATALOG_PAGES_PER_SERVER} pages.`)
+        }
         const listed = await this.withTrackedRequest(
           state,
           { toolName: 'tools/list' },
@@ -403,7 +434,14 @@ export class CodexDynamicMcpToolBridge {
           (signal) => client.listTools({ cursor, signal, timeout: state.config.timeoutMs })
         )
         tools.push(...listed.tools)
+        if (tools.length > MAX_CATALOG_TOOLS_PER_SERVER) {
+          throw new Error(`MCP catalog exceeded ${MAX_CATALOG_TOOLS_PER_SERVER} tools.`)
+        }
         cursor = listed.nextCursor
+        if (cursor) {
+          if (seenCursors.has(cursor)) throw new Error('MCP catalog returned a repeated cursor.')
+          seenCursors.add(cursor)
+        }
       } while (cursor)
 
       const enabled = new Set((state.config.enabledTools ?? []).filter(Boolean))
@@ -412,28 +450,28 @@ export class CodexDynamicMcpToolBridge {
         .filter((tool) => !enabled.size || enabled.has(tool.name))
         .filter((tool) => tool.name.trim().length > 0)
         .flatMap((tool) => {
-          const providerSchema = providerSafeToolInputSchemaResult(tool.inputSchema)
-          if (!providerSchema.ok) {
-            this.recordUnavailableTool(state, tool.name, providerSchema.code)
+          const catalogSchema = catalogToolInputSchemaResult(tool.inputSchema)
+          if (!catalogSchema.ok) {
+            this.recordUnavailableTool(state, tool.name, catalogSchema.code)
             return []
           }
           return [{
             ...tool,
             originalName: tool.name,
-            dynamicName: uniqueDynamicName(slug(tool.name), tool.name, usedNames, 128),
-            providerSafeInputSchema: providerSchema.schema
+            catalogName: uniqueToolName(slug(tool.name), tool.name, usedNames, 128),
+            catalogInputSchema: catalogSchema.schema
           }]
         })
     } finally {
-      mainPerformanceMonitor.sample('main.codex.dynamicMcp.catalog.load.duration', mainPerformanceMonitor.now() - startedAt, {
+      mainPerformanceMonitor.sample('main.runtime.mcp.catalog.load.duration', mainPerformanceMonitor.now() - startedAt, {
         serverId: state.config.id,
         tools: tools.length
       })
     }
   }
 
-  private async clientFor(state: ServerState): Promise<CodexDynamicMcpClient> {
-    if (this.closedReason) throw new Error(`MCP dynamic tool bridge is closed: ${this.closedReason}.`)
+  private async clientFor(state: ServerState): Promise<RuntimeMcpClient> {
+    if (this.closedReason) throw new Error(`MCP tool gateway is closed: ${this.closedReason}.`)
     if (state.client) return state.client
     if (!state.clientPromise) {
       state.clientPromise = this.clientFactory(state.config).then((client) => {
@@ -482,7 +520,7 @@ export class CodexDynamicMcpToolBridge {
 
   private abortStateRequests(
     state: ServerState,
-    reason: CodexDynamicMcpReleaseReason,
+    reason: RuntimeToolReleaseReason,
     matches: (request: ActiveMcpRequest) => boolean = () => true
   ): number {
     let aborted = 0
@@ -505,7 +543,7 @@ export class CodexDynamicMcpToolBridge {
 
   private recordLifecycleEvent(
     state: ServerState,
-    event: Omit<CodexDynamicMcpLifecycleEvent, 'at' | 'serverId' | 'namespace'>
+    event: Omit<RuntimeMcpLifecycleEvent, 'at' | 'serverId' | 'namespace'>
   ): void {
     state.lifecycleEvents.push({
       at: new Date().toISOString(),
@@ -521,16 +559,16 @@ export class CodexDynamicMcpToolBridge {
   private recordUnavailableTool(
     state: ServerState,
     toolName: string,
-    diagnosticCode: CodexDynamicMcpSchemaDiagnosticCode
+    diagnosticCode: RuntimeMcpSchemaDiagnosticCode
   ): void {
     const boundedToolName = safeDiagnosticIdentifier(toolName, 128, 'unknown_tool')
     const key = `${boundedToolName}:${diagnosticCode}`
     if (state.unavailableToolDiagnostics.has(key)) return
-    mainPerformanceMonitor.count('main.codex.dynamicMcp.toolUnavailable', 1, {
+    mainPerformanceMonitor.count('main.runtime.mcp.toolUnavailable', 1, {
       serverId: safeDiagnosticIdentifier(state.config.id, 64, state.namespace),
       diagnosticCode
     })
-    const diagnostic: CodexDynamicMcpToolUnavailableDiagnostic = {
+    const diagnostic: RuntimeMcpToolUnavailableDiagnostic = {
       at: new Date().toISOString(),
       event: 'tool_unavailable',
       serverId: safeDiagnosticIdentifier(state.config.id, 64, state.namespace),
@@ -562,10 +600,30 @@ function safeDiagnosticIdentifier(value: string, maxLength: number, fallback: st
   return (normalized || fallback).slice(0, maxLength)
 }
 
-async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<CodexDynamicMcpClient> {
+function normalizedServerConfig(server: RuntimeMcpServerConfig): RuntimeMcpServerConfig {
+  return {
+    ...server,
+    args: server.args ?? [],
+    timeoutMs: server.timeoutMs ?? DEFAULT_TIMEOUT_MS
+  }
+}
+
+function serverConfigsSignature(servers: readonly RuntimeMcpServerConfig[]): string {
+  const canonical = servers.map((server) => ({
+    ...normalizedServerConfig(server),
+    env: Object.fromEntries(Object.entries(server.env ?? {}).sort(([left], [right]) => left.localeCompare(right)))
+  }))
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex')
+}
+
+function toolCallMayRetry(tool: CatalogTool): boolean {
+  return tool.annotations?.readOnlyHint === true || tool.annotations?.idempotentHint === true
+}
+
+async function createRuntimeMcpClient(server: RuntimeMcpServerConfig): Promise<RuntimeMcpClient> {
   const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.codex.dynamicMcp.client.connect')
-  const client = new Client({ name: `sciforge-codex-${server.id}`, version: '0.1.0' })
+  mainPerformanceMonitor.count('main.runtime.mcp.client.connect')
+  const client = new Client({ name: `sciforge-runtime-${server.id}`, version: '0.1.0' })
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args ?? [],
@@ -588,7 +646,7 @@ async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<
   } catch (error) {
     throw withStderr(error)
   } finally {
-    mainPerformanceMonitor.sample('main.codex.dynamicMcp.client.connect.duration', mainPerformanceMonitor.now() - startedAt, {
+    mainPerformanceMonitor.sample('main.runtime.mcp.client.connect.duration', mainPerformanceMonitor.now() - startedAt, {
       serverId: server.id
     })
   }
@@ -609,9 +667,9 @@ async function createSdkMcpClient(server: CodexDynamicMcpServerConfig): Promise<
   }
 }
 
-export function dynamicToolResponseFromMcpResult(
+export function runtimeToolResponseFromMcpResult(
   result: unknown
-): CodexAppServerDynamicToolCallResponse {
+): RuntimeToolCallResponse {
   const record = asRecord(result)
   const structuredContent = record?.structuredContent
   const structuredRecord = asRecord(structuredContent)
@@ -634,9 +692,9 @@ export function dynamicToolResponseFromMcpResult(
     booleanValue(structuredRecord?.stateChanged) ??
     booleanValue(record?.changed)
   const success = record?.isError !== true && !structuredError && !errorCode
-  const contentItems: CodexAppServerDynamicToolCallOutputContentItem[] = []
+  const contentItems: RuntimeToolOutputContentItem[] = []
   for (const item of arrayValue(record?.content)) {
-    contentItems.push(...dynamicContentItemsFromMcpContent(item))
+    contentItems.push(...runtimeContentItemsFromMcpContent(item))
   }
   if (record && structuredContent !== undefined) {
     contentItems.push({
@@ -653,7 +711,7 @@ export function dynamicToolResponseFromMcpResult(
   return {
     contentItems,
     success,
-    ...(structuredContent !== undefined && !success ? { structuredContent } : {}),
+    ...(structuredContent !== undefined ? { structuredContent } : {}),
     ...(errorCode ? { errorCode } : {}),
     ...(failureClass ? { failureClass } : {}),
     ...(retryable !== undefined ? { retryable } : {}),
@@ -663,9 +721,9 @@ export function dynamicToolResponseFromMcpResult(
   }
 }
 
-function dynamicContentItemsFromMcpContent(
+function runtimeContentItemsFromMcpContent(
   item: unknown
-): CodexAppServerDynamicToolCallOutputContentItem[] {
+): RuntimeToolOutputContentItem[] {
   const record = asRecord(item)
   if (!record) return [{ type: 'inputText', text: jsonText(item) }]
   const type = stringValue(record.type)
@@ -685,10 +743,14 @@ function imageDataUrl(record: Record<string, unknown>): string {
   return `data:${mimeType};base64,${data}`
 }
 
-function failedDynamicToolResponse(message: string): CodexAppServerDynamicToolCallResponse {
+function failedRuntimeToolResponse(
+  message: string,
+  metadata: Pick<RuntimeToolCallResponse, 'errorCode' | 'failureClass' | 'retryable'> = {}
+): RuntimeToolCallResponse {
   return {
     contentItems: [{ type: 'inputText', text: message }],
-    success: false
+    success: false,
+    ...metadata
   }
 }
 
@@ -696,101 +758,27 @@ function booleanValue(value: unknown): boolean | undefined {
   return typeof value === 'boolean' ? value : undefined
 }
 
-function recordArguments(value: unknown): Record<string, unknown> {
+function recordArguments(value: unknown): Record<string, unknown> | null {
   const record = asRecord(value)
   if (record) return record
-  if (typeof value !== 'string' || !value.trim()) return {}
+  if (typeof value !== 'string' || !value.trim()) return null
   try {
-    return asRecord(JSON.parse(value) as unknown) ?? {}
+    return asRecord(JSON.parse(value) as unknown)
   } catch {
-    return {}
+    return null
   }
 }
 
 function mcpToolArgumentsForRequest(
-  state: ServerState,
-  tool: CatalogTool,
-  request: CodexAppServerDynamicToolCallRequest
+  request: RuntimeToolCallRequest
 ): Record<string, unknown> {
-  void state
-  void tool
-  return recordArguments(request.arguments)
-}
-
-function schemaSafeToolArguments(
-  args: Record<string, unknown>,
-  schema: unknown
-): Record<string, unknown> {
-  const repaired = repairJsonValueForSchema(args, schema)
-  return asRecord(repaired) ?? args
-}
-
-function repairJsonValueForSchema(value: unknown, schema: unknown): unknown {
-  const record = asRecord(schema)
-  if (!record) return value
-  const types = schemaTypes(record.type)
-  if (types.includes('object') || asRecord(record.properties)) {
-    const source = asRecord(value)
-    if (!source) return value
-    const properties = asRecord(record.properties)
-    if (!properties) return value
-    const out: Record<string, unknown> = { ...source }
-    for (const [key, propertySchema] of Object.entries(properties)) {
-      if (!Object.prototype.hasOwnProperty.call(out, key)) continue
-      out[key] = repairJsonValueForSchema(out[key], propertySchema)
-    }
-    return out
-  }
-  if (types.includes('array')) {
-    const source = arrayValue(value)
-    if (!Array.isArray(value)) return value
-    const maxItems = finiteNumber(record.maxItems)
-    const bounded = maxItems === undefined ? source : source.slice(0, Math.max(0, Math.floor(maxItems)))
-    if (record.items === undefined) return bounded
-    return bounded.map((item) => repairJsonValueForSchema(item, record.items))
-  }
-  if (types.includes('number') || types.includes('integer')) {
-    return repairNumberValueForSchema(value, record, types.includes('integer'))
-  }
-  return value
-}
-
-function repairNumberValueForSchema(
-  value: unknown,
-  schema: Record<string, unknown>,
-  integer: boolean
-): unknown {
-  let number = typeof value === 'number' ? value : numericStringValue(value)
-  if (!Number.isFinite(number)) return value
-  const minimum = finiteNumber(schema.minimum)
-  const maximum = finiteNumber(schema.maximum)
-  const exclusiveMinimum = finiteNumber(schema.exclusiveMinimum)
-  const exclusiveMaximum = finiteNumber(schema.exclusiveMaximum)
-  if (minimum !== undefined) number = Math.max(number, minimum)
-  if (maximum !== undefined) number = Math.min(number, maximum)
-  if (exclusiveMinimum !== undefined && number <= exclusiveMinimum) {
-    number = integer ? Math.floor(exclusiveMinimum + 1) : Number.EPSILON + exclusiveMinimum
-  }
-  if (exclusiveMaximum !== undefined && number >= exclusiveMaximum) {
-    number = integer ? Math.ceil(exclusiveMaximum - 1) : exclusiveMaximum - Number.EPSILON
-  }
-  if (integer) number = Math.trunc(number)
-  return number
-}
-
-function schemaTypes(value: unknown): string[] {
-  if (typeof value === 'string') return [value]
-  return arrayValue(value).filter((entry): entry is string => typeof entry === 'string')
-}
-
-function numericStringValue(value: unknown): number {
-  if (typeof value !== 'string' || !value.trim()) return Number.NaN
-  const parsed = Number(value)
-  return Number.isFinite(parsed) ? parsed : Number.NaN
-}
-
-function finiteNumber(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+  const parsed = recordArguments(request.arguments)
+  if (!parsed) throw new RuntimeMcpInvocationError(
+    'invalid_arguments',
+    'MCP tool arguments must be a JSON object.',
+    { failureClass: 'invalid_arguments', retryable: true }
+  )
+  return parsed
 }
 
 function linkAbortSignal(signal: AbortSignal | undefined, controller: AbortController): () => void {
@@ -804,7 +792,7 @@ function linkAbortSignal(signal: AbortSignal | undefined, controller: AbortContr
   return () => signal.removeEventListener('abort', abort)
 }
 
-function mcpAbortError(reason: CodexDynamicMcpReleaseReason): Error {
+function mcpAbortError(reason: RuntimeToolReleaseReason): Error {
   return new Error(`MCP worker request aborted: ${reason}`)
 }
 
@@ -814,7 +802,7 @@ function isClosedMcpConnectionError(error: unknown): boolean {
     || /\b(closed|ended|terminated)\b.*\b(connection|transport|stdio|stream|socket)\b/i.test(message)
 }
 
-function normalizeToolRequestName(request: CodexAppServerDynamicToolCallRequest): {
+function normalizeToolRequestName(request: RuntimeToolCallRequest): {
   namespace?: string
   tool: string
 } {
@@ -827,29 +815,7 @@ function normalizeToolRequestName(request: CodexAppServerDynamicToolCallRequest)
   }
 }
 
-function assignFlatToolNames(entries: Array<{ state: ServerState; tool: CatalogTool }>): void {
-  const counts = new Map<string, number>()
-  for (const { tool } of entries) {
-    counts.set(tool.dynamicName, (counts.get(tool.dynamicName) ?? 0) + 1)
-  }
-
-  const used = new Set<string>()
-  for (const { state, tool } of entries) {
-    const baseName = counts.get(tool.dynamicName) === 1
-      ? tool.dynamicName
-      : `${state.namespace}_${tool.dynamicName}`
-    tool.flatName = uniqueDynamicName(baseName, `${state.namespace}.${tool.originalName}`, used, 128)
-  }
-}
-
-function dynamicToolCallNames(tool: CatalogTool): Set<string> {
-  return new Set([
-    tool.flatName,
-    tool.dynamicName
-  ].filter((name): name is string => Boolean(name)))
-}
-
-function uniqueDynamicName(
+function uniqueToolName(
   rawBase: string,
   original: string,
   used: Set<string>,
@@ -908,20 +874,14 @@ function stringValue(value: unknown): string {
   return typeof value === 'string' ? value : ''
 }
 
-type ProviderSafeToolInputSchemaResult =
+type CatalogToolInputSchemaResult =
   | { ok: true; schema: Record<string, unknown> }
-  | { ok: false; code: CodexDynamicMcpSchemaDiagnosticCode }
+  | { ok: false; code: RuntimeMcpSchemaDiagnosticCode }
 
-function providerSafeToolInputSchemaResult(value: unknown): ProviderSafeToolInputSchemaResult {
+function catalogToolInputSchemaResult(value: unknown): CatalogToolInputSchemaResult {
   const sourceIssue = validateInputSchemaStructure(value)
   if (sourceIssue) return { ok: false, code: sourceIssue }
-  const sanitized = sanitizeJsonSchemaRecord(value)
-  const schema = {
-    properties: {},
-    ...sanitized,
-    type: 'object',
-    ...(asRecord(sanitized.properties) ? { properties: sanitized.properties } : {})
-  }
+  const schema = compactCatalogSchema(value)
   const providerIssue = validateInputSchemaStructure(schema, { requireRoot: true })
   return providerIssue
     ? { ok: false, code: 'provider_schema_invalid' }
@@ -931,131 +891,83 @@ function providerSafeToolInputSchemaResult(value: unknown): ProviderSafeToolInpu
 function validateInputSchemaStructure(
   value: unknown,
   options: { requireRoot?: boolean } = {}
-): CodexDynamicMcpSchemaDiagnosticCode | null {
+): RuntimeMcpSchemaDiagnosticCode | null {
   // MCP descriptors historically omitted inputSchema for no-argument tools.
   // Preserve that compatibility by advertising an empty object schema.
   if (value === undefined && !options.requireRoot) return null
   const root = asRecord(value)
   if (!root) return 'schema_root_not_object'
   if (root.type !== undefined && root.type !== 'object') return 'schema_root_not_object'
-  const budget = { nodes: 0 }
-  return validateSchemaNode(root, budget, 0)
+  return validateSchemaNodes(root)
 }
 
-function validateSchemaNode(
-  schema: Record<string, unknown>,
-  budget: { nodes: number },
-  depth: number
-): CodexDynamicMcpSchemaDiagnosticCode | null {
-  if (depth > 32) return 'schema_too_deep'
-  budget.nodes += 1
-  if (budget.nodes > 10_000) return 'schema_too_complex'
+function validateSchemaNodes(root: Record<string, unknown>): RuntimeMcpSchemaDiagnosticCode | null {
+  const pending = [root]
+  const seen = new Set<Record<string, unknown>>()
+  while (pending.length > 0) {
+    const schema = pending.pop()!
+    if (seen.has(schema)) return 'provider_schema_invalid'
+    seen.add(schema)
+    if (seen.size > 10_000) return 'schema_too_complex'
 
-  if (schema.properties !== undefined) {
-    const properties = asRecord(schema.properties)
-    if (!properties) return 'schema_properties_not_object'
-    for (const property of Object.values(properties)) {
-      const propertySchema = asRecord(property)
-      if (!propertySchema) return 'schema_property_not_object'
-      const issue = validateSchemaNode(propertySchema, budget, depth + 1)
-      if (issue) return issue
+    if (schema.properties !== undefined) {
+      const properties = asRecord(schema.properties)
+      if (!properties) return 'schema_properties_not_object'
+      for (const property of Object.values(properties)) {
+        const propertySchema = asRecord(property)
+        if (!propertySchema) return 'schema_property_not_object'
+        pending.push(propertySchema)
+      }
     }
-  }
-  if (schema.items !== undefined) {
-    const items = asRecord(schema.items)
-    if (!items) return 'schema_items_not_object'
-    const issue = validateSchemaNode(items, budget, depth + 1)
-    if (issue) return issue
-  }
-  if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') {
-    const additional = asRecord(schema.additionalProperties)
-    if (!additional) return 'schema_additional_properties_invalid'
-    const issue = validateSchemaNode(additional, budget, depth + 1)
-    if (issue) return issue
+    if (schema.items !== undefined) {
+      const items = asRecord(schema.items)
+      if (!items) return 'schema_items_not_object'
+      pending.push(items)
+    }
+    if (schema.additionalProperties !== undefined && typeof schema.additionalProperties !== 'boolean') {
+      const additional = asRecord(schema.additionalProperties)
+      if (!additional) return 'schema_additional_properties_invalid'
+      pending.push(additional)
+    }
   }
   return null
 }
 
-const SAFE_JSON_SCHEMA_KEYS = new Set([
-  'type',
-  'description',
-  'properties',
-  'required',
-  'additionalProperties',
-  'items',
-  'enum',
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'minLength',
-  'maxLength',
-  'minItems',
-  'maxItems',
-  'pattern',
-  'format',
-  'nullable'
-])
-
-function sanitizeJsonSchemaRecord(value: unknown): Record<string, unknown> {
-  const record = asRecord(value)
-  if (!record) return {}
-  const out: Record<string, unknown> = {}
-  for (const [key, raw] of Object.entries(record)) {
-    if (key.startsWith('$') || !SAFE_JSON_SCHEMA_KEYS.has(key)) continue
-    switch (key) {
-      case 'properties': {
-        const properties = asRecord(raw)
-        if (!properties) break
-        out.properties = Object.fromEntries(
-          Object.entries(properties).map(([name, property]) => [name, sanitizeJsonSchemaRecord(property)])
-        )
-        break
-      }
-      case 'items': {
-        if (Array.isArray(raw)) {
-          out.items = raw.map((item) => sanitizeJsonSchemaRecord(item))
-        } else if (asRecord(raw)) {
-          out.items = sanitizeJsonSchemaRecord(raw)
-        }
-        break
-      }
-      case 'required': {
-        const required = arrayValue(raw).filter((item): item is string => typeof item === 'string' && item.length > 0)
-        if (required.length) out.required = [...new Set(required)]
-        break
-      }
-      case 'enum': {
-        if (Array.isArray(raw)) out.enum = raw.filter(isJsonPrimitive)
-        break
-      }
-      case 'additionalProperties': {
-        if (typeof raw === 'boolean') {
-          out.additionalProperties = raw
-        } else if (asRecord(raw)) {
-          out.additionalProperties = sanitizeJsonSchemaRecord(raw)
-        }
-        break
-      }
-      case 'type':
-      case 'description':
-      case 'pattern':
-      case 'format': {
-        if (typeof raw === 'string' && raw.length > 0) out[key] = raw
-        break
-      }
-      case 'nullable': {
-        if (typeof raw === 'boolean') out.nullable = raw
-        break
-      }
-      default: {
-        if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw
-        break
-      }
-    }
+function compactCatalogSchema(value: unknown): Record<string, unknown> {
+  const root = asRecord(value) ?? {}
+  const properties = asRecord(root.properties) ?? {}
+  const compactProperties = Object.fromEntries(Object.entries(properties).map(([name, property]) => [
+    name,
+    compactCatalogProperty(asRecord(property) ?? {})
+  ]))
+  const required = arrayValue(root.required)
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+  return {
+    type: 'object',
+    properties: compactProperties,
+    ...(required.length ? { required: [...new Set(required)] } : {})
   }
-  if (asRecord(out.properties) && !out.type) out.type = 'object'
-  return out
+}
+
+function compactCatalogProperty(schema: Record<string, unknown>): Record<string, unknown> {
+  const type = typeof schema.type === 'string'
+    ? schema.type
+    : asRecord(schema.properties)
+      ? 'object'
+      : schema.items !== undefined
+        ? 'array'
+        : undefined
+  const description = typeof schema.description === 'string'
+    ? schema.description.slice(0, 1_000)
+    : undefined
+  const enumValues = Array.isArray(schema.enum)
+    ? schema.enum.filter(isJsonPrimitive).slice(0, 64)
+    : []
+  return {
+    ...(type ? { type } : {}),
+    ...(description ? { description } : {}),
+    ...(enumValues.length ? { enum: enumValues } : {})
+  }
 }
 
 function isJsonPrimitive(value: unknown): value is string | number | boolean | null {

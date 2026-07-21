@@ -23,6 +23,7 @@ export type UpstreamWireProtocol = 'responses' | 'chat-completions' | 'anthropic
 
 export type UpstreamAttempt = {
   protocol: UpstreamWireProtocol;
+  phase: 'probe' | 'request';
   url: string;
   latencyMs: number;
   status: 'ok' | 'rejected' | 'failed' | 'incompatible';
@@ -37,6 +38,7 @@ export type CanonicalUpstreamResult = {
 
 export type UpstreamTraceAttemptStart = {
   protocol: string;
+  phase: 'probe' | 'request';
   method: 'GET' | 'POST';
   url: string;
   headers: Record<string, string>;
@@ -115,6 +117,7 @@ class UpstreamCapabilityError extends Error {
 
 export class UpstreamProtocolNegotiator {
   readonly #cache = new Map<string, UpstreamWireProtocol>();
+  readonly #probes = new Map<string, Promise<UpstreamWireProtocol>>();
 
   cachedProtocol(
     baseUrl: string,
@@ -126,6 +129,7 @@ export class UpstreamProtocolNegotiator {
 
   clear(): void {
     this.#cache.clear();
+    this.#probes.clear();
   }
 
   async request(options: DriverRequest & {
@@ -133,7 +137,7 @@ export class UpstreamProtocolNegotiator {
     onAttempt?: (attempt: UpstreamAttempt) => void;
   }): Promise<CanonicalUpstreamResult> {
     const cacheKey = routeCacheKey(options.baseUrl, options.model, options.compatibility);
-    const cached = this.#cache.get(cacheKey);
+    let cached = this.#cache.get(cacheKey);
     const compatibility = resolveProviderCompatibility(
       options.compatibility,
       options.preferredProtocol,
@@ -143,10 +147,22 @@ export class UpstreamProtocolNegotiator {
       cached,
       compatibility.allowedProtocols as readonly UpstreamWireProtocol[],
     );
+    if (!cached && compatibility.probeBeforeUse && candidates.length > 1) {
+      cached = await this.#probe({
+        ...options,
+        cacheKey,
+        candidates,
+      });
+    }
+    const requestCandidates = candidateProtocols(
+      compatibility.preferredProtocol,
+      cached,
+      compatibility.allowedProtocols as readonly UpstreamWireProtocol[],
+    );
     let lastDefinitiveError: UpstreamRequestError | undefined;
     let lastCapabilityError: UpstreamCapabilityError | undefined;
 
-    for (const [retry, protocol] of candidates.entries()) {
+    for (const [retry, protocol] of requestCandidates.entries()) {
       const driver = DRIVERS[protocol];
       let prepared: PreparedRequest;
       try {
@@ -159,6 +175,7 @@ export class UpstreamProtocolNegotiator {
         lastCapabilityError = error;
         options.onAttempt?.({
           protocol,
+          phase: 'request',
           url: buildUpstreamEndpointUrl(options.baseUrl, protocolPath(protocol)),
           latencyMs: 0,
           status: 'incompatible',
@@ -171,6 +188,7 @@ export class UpstreamProtocolNegotiator {
       const startedAt = Date.now();
       const traceObserver = options.traceAttempt?.({
         protocol,
+        phase: 'request',
         method: 'POST',
         url: prepared.url,
         headers: prepared.headers,
@@ -192,6 +210,7 @@ export class UpstreamProtocolNegotiator {
         traceObserver?.end?.({ durationMs: latencyMs });
         options.onAttempt?.({
           protocol,
+          phase: 'request',
           url: prepared.url,
           latencyMs,
           status: 'failed',
@@ -215,6 +234,7 @@ export class UpstreamProtocolNegotiator {
         traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
         options.onAttempt?.({
           protocol,
+          phase: 'request',
           url: prepared.url,
           latencyMs,
           status: 'failed',
@@ -227,7 +247,7 @@ export class UpstreamProtocolNegotiator {
       const latencyMs = Date.now() - startedAt;
       if (!response.ok) {
         const responseBody = await response.text().catch(() => '');
-        const definitiveRejection = isDefinitiveProtocolRejection(response.status);
+        const definitiveRejection = isDefinitiveProtocolRejection(response.status, responseBody);
         const error = new UpstreamRequestError({
           code: `upstream_http_${response.status}`,
           message: `Upstream returned HTTP ${response.status}.`,
@@ -240,6 +260,7 @@ export class UpstreamProtocolNegotiator {
         traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
         options.onAttempt?.({
           protocol,
+          phase: 'request',
           url: prepared.url,
           latencyMs,
           status: definitiveRejection ? 'rejected' : 'failed',
@@ -267,6 +288,7 @@ export class UpstreamProtocolNegotiator {
         traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
         options.onAttempt?.({
           protocol,
+          phase: 'request',
           url: prepared.url,
           latencyMs,
           status: responseError.definitiveRejection ? 'rejected' : 'failed',
@@ -283,6 +305,7 @@ export class UpstreamProtocolNegotiator {
 
       options.onAttempt?.({
         protocol,
+        phase: 'request',
         url: prepared.url,
         latencyMs,
         status: 'ok',
@@ -309,6 +332,190 @@ export class UpstreamProtocolNegotiator {
       status: 422,
     });
   }
+
+  async #probe(options: DriverRequest & {
+    cacheKey: string;
+    candidates: readonly UpstreamWireProtocol[];
+    onAttempt?: (attempt: UpstreamAttempt) => void;
+  }): Promise<UpstreamWireProtocol> {
+    const existing = this.#probes.get(options.cacheKey);
+    if (existing) return existing;
+    const probe = this.#runProbe(options);
+    this.#probes.set(options.cacheKey, probe);
+    try {
+      return await probe;
+    } finally {
+      if (this.#probes.get(options.cacheKey) === probe) this.#probes.delete(options.cacheKey);
+    }
+  }
+
+  async #runProbe(options: DriverRequest & {
+    cacheKey: string;
+    candidates: readonly UpstreamWireProtocol[];
+    onAttempt?: (attempt: UpstreamAttempt) => void;
+  }): Promise<UpstreamWireProtocol> {
+    let lastRejection: UpstreamRequestError | undefined;
+    for (const [retry, protocol] of options.candidates.entries()) {
+      const prepared = prepareProtocolProbe(options, protocol);
+      const startedAt = Date.now();
+      const traceObserver = options.traceAttempt?.({
+        protocol,
+        phase: 'probe',
+        method: 'POST',
+        url: prepared.url,
+        headers: prepared.headers,
+        body: prepared.body,
+        retry,
+      });
+      let response: Response;
+      try {
+        response = await options.fetchImpl(prepared.url, {
+          method: 'POST',
+          headers: prepared.headers,
+          body: JSON.stringify(prepared.body),
+          signal: options.signal,
+        });
+      } catch (error) {
+        const latencyMs = Date.now() - startedAt;
+        const requestError = requestException(error);
+        traceObserver?.error?.(requestError);
+        traceObserver?.end?.({ durationMs: latencyMs });
+        options.onAttempt?.({
+          protocol,
+          phase: 'probe',
+          url: prepared.url,
+          latencyMs,
+          status: 'failed',
+          errorCode: requestError.code,
+        });
+        throw requestError;
+      }
+
+      traceObserver?.responseHeaders?.(
+        response.status,
+        Object.fromEntries(response.headers.entries()),
+      );
+      try {
+        response = await captureUpstreamResponse(response, (index, chunk) => {
+          traceObserver?.responseChunk?.(index, chunk);
+        });
+      } catch (error) {
+        const latencyMs = Date.now() - startedAt;
+        const requestError = requestException(error);
+        traceObserver?.error?.(requestError);
+        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+        options.onAttempt?.({
+          protocol,
+          phase: 'probe',
+          url: prepared.url,
+          latencyMs,
+          status: 'failed',
+          httpStatus: response.status,
+          errorCode: requestError.code,
+        });
+        throw requestError;
+      }
+      const latencyMs = Date.now() - startedAt;
+      const responseBody = await response.text().catch(() => '');
+      if (probeResponseConfirmsProtocol(response.status, responseBody)) {
+        traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+        options.onAttempt?.({
+          protocol,
+          phase: 'probe',
+          url: prepared.url,
+          latencyMs,
+          status: 'ok',
+          httpStatus: response.status,
+        });
+        this.#cache.set(options.cacheKey, protocol);
+        return protocol;
+      }
+
+      const definitiveRejection = isDefinitiveProtocolRejection(response.status, responseBody);
+      const error = new UpstreamRequestError({
+        code: `upstream_http_${response.status}`,
+        message: `Upstream returned HTTP ${response.status}.`,
+        status: response.status,
+        upstreamStatus: response.status,
+        responseBody,
+        definitiveRejection,
+      });
+      traceObserver?.error?.(error);
+      traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
+      options.onAttempt?.({
+        protocol,
+        phase: 'probe',
+        url: prepared.url,
+        latencyMs,
+        status: definitiveRejection ? 'rejected' : 'failed',
+        httpStatus: response.status,
+        errorCode: error.code,
+      });
+      if (!definitiveRejection) throw error;
+      lastRejection = error;
+    }
+    throw new UpstreamRequestError({
+      code: 'upstream_protocol_unsupported',
+      message: 'Protocol probing found no supported upstream model API.',
+      status: 502,
+      upstreamStatus: lastRejection?.upstreamStatus,
+      responseBody: lastRejection?.responseBody,
+      definitiveRejection: true,
+    });
+  }
+}
+
+function prepareProtocolProbe(
+  options: Pick<DriverRequest, 'baseUrl' | 'apiKey' | 'model'>,
+  protocol: UpstreamWireProtocol,
+): Omit<PreparedRequest, 'parse'> {
+  const prompt = 'SciForge protocol capability probe. Do not generate output.';
+  if (protocol === 'responses') {
+    return {
+      url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
+      headers: bearerHeaders(options.apiKey),
+      body: {
+        model: options.model,
+        input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
+        max_output_tokens: 0,
+        stream: false,
+      },
+    };
+  }
+  if (protocol === 'chat-completions') {
+    return {
+      url: buildUpstreamEndpointUrl(options.baseUrl, 'chat/completions'),
+      headers: bearerHeaders(options.apiKey),
+      body: {
+        model: options.model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: 0,
+        stream: false,
+      },
+    };
+  }
+  return {
+    url: buildUpstreamEndpointUrl(options.baseUrl, 'messages'),
+    headers: {
+      'content-type': 'application/json',
+      'x-api-key': options.apiKey,
+      'anthropic-version': '2023-06-01',
+    },
+    body: {
+      model: options.model,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 0,
+      stream: false,
+    },
+  };
+}
+
+function probeResponseConfirmsProtocol(status: number, responseBody: string): boolean {
+  if (status >= 200 && status <= 299) return true;
+  if (status !== 400 && status !== 422) return false;
+  const normalized = protocolErrorText(responseBody);
+  if (isAuthenticationOrOperationalError(normalized)) return false;
+  return !isDefinitiveProtocolRejection(status, responseBody);
 }
 
 export async function captureUpstreamResponse(
@@ -337,8 +544,22 @@ export async function captureUpstreamResponse(
 
 export function isDefinitiveProtocolRejection(
   status: number,
+  responseBody = '',
 ): boolean {
-  return status === 404 || status === 405 || status === 415;
+  if (status === 404 || status === 405 || status === 415) return true;
+  const normalized = protocolErrorText(responseBody);
+  if (!normalized || isAuthenticationOrOperationalError(normalized)) return false;
+  if (status >= 500 && status <= 599) {
+    return /\bconvert[ _-]?request[ _-]?failed\b/iu.test(normalized)
+      && /\b(?:not[ _-]?implemented|unsupported)\b/iu.test(normalized);
+  }
+  if (status !== 400 && status !== 422) return false;
+  return (
+    /\b(?:unknown|unsupported|unrecognized|invalid)\b.{0,48}\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b/iu.test(normalized)
+    || /\b(?:endpoint|route|path|protocol|media[ _-]?type|request[ _-]?(?:format|schema))\b.{0,48}\b(?:unknown|unsupported|unrecognized|invalid|not found)\b/iu.test(normalized)
+    || /\b(?:unknown|unsupported|unrecognized|invalid)[ _-](?:endpoint|route|protocol|schema)\b/iu.test(normalized)
+    || /\b(?:messages|input)\b.{0,32}\b(?:is required|required field|must be provided)\b/iu.test(normalized)
+  );
 }
 
 export function buildUpstreamEndpointUrl(baseUrl: string, path: string): string {
@@ -871,6 +1092,26 @@ function protocolPath(protocol: UpstreamWireProtocol): string {
   if (protocol === 'responses') return 'responses';
   if (protocol === 'chat-completions') return 'chat/completions';
   return 'messages';
+}
+
+function protocolErrorText(body: string): string {
+  const trimmed = body.trim();
+  if (!trimmed) return '';
+  try {
+    const value = JSON.parse(trimmed) as unknown;
+    if (!isRecord(value)) return trimmed.slice(0, 2_000);
+    const error = isRecord(value.error) ? value.error : value;
+    return [error.code, error.type, error.message, error.detail]
+      .filter((item): item is string => typeof item === 'string')
+      .join(' ')
+      .slice(0, 2_000);
+  } catch {
+    return trimmed.slice(0, 2_000);
+  }
+}
+
+function isAuthenticationOrOperationalError(value: string): boolean {
+  return /\b(?:auth(?:entication|orization)?|api[ _-]?key|credential|quota|billing|rate[ _-]?limit|too many requests|timeout|timed out|temporar(?:y|ily))\b/iu.test(value);
 }
 
 function stripKnownEndpointPath(baseUrl: string): string {

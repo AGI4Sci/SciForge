@@ -18,6 +18,7 @@ import {
   type CapabilityResourceChangeEvent,
   type CapabilityResourceHandle
 } from '../../shared/capability-broker'
+import type { AgentRuntimeToolTurnIdentity } from '../runtime/agent-runtime/agent-tool-surface'
 
 export const CAPABILITY_AGENT_TOOL_NAMES = Object.freeze({
   discover: 'sciforge_discover',
@@ -38,7 +39,7 @@ export type CapabilityAgentToolDefinition = Readonly<{
 export type CapabilityAgentToolRequestContext = Readonly<{
   requestId: string | number
   /** Internal runtime provenance; never included in model-visible schemas. */
-  runtimeId?: 'codex' | 'sciforge' | 'claude'
+  runtimeId: string
   threadId?: string
   turnId?: string
   callId?: string
@@ -124,7 +125,8 @@ export type CapabilityAgentToolResult =
 export type CapabilityAgentBroker = Readonly<{
   discover: (
     caller: CapabilityCallerContext,
-    query?: CapabilityDiscoveryQuery
+    query?: CapabilityDiscoveryQuery,
+    options?: { context?: CapabilityAgentToolRequestContext }
   ) => CapabilityDescriptor[] | Promise<CapabilityDescriptor[]>
   observe: (
     caller: CapabilityCallerContext,
@@ -137,12 +139,13 @@ export type CapabilityAgentBroker = Readonly<{
   invoke: (
     caller: CapabilityCallerContext,
     request: CapabilityInvocationRequest,
-    options?: { signal?: AbortSignal }
+    options?: { signal?: AbortSignal; context?: CapabilityAgentToolRequestContext }
   ) => CapabilityInvocationResult | Promise<CapabilityInvocationResult>
   listEvents: (
     caller: CapabilityCallerContext,
     query?: CapabilityEventQuery
   ) => CapabilityResourceChangeEvent[] | Promise<CapabilityResourceChangeEvent[]>
+  abortTurn?: (identity: AgentRuntimeToolTurnIdentity, reason?: string) => number
 }>
 
 export type CapabilityAgentToolSurfaceOptions = Readonly<{
@@ -162,7 +165,7 @@ type CallerCache = {
 const toolDefinitions = Object.freeze([
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.discover,
-    'Discover current SciForge operations. Results use opaque operation and schema references; request one operation with includeSchema=true for its compact input shape.',
+    'Discover current SciForge operations. Use text with a broad capability name to search deferred managed tools, or tag managed-mcp to list them. Results use opaque references; request one operation with includeSchema=true for its compact input shape.',
     agentDiscoverRequestSchema
   ),
   defineTool(
@@ -196,6 +199,10 @@ export class CapabilityAgentToolSurface {
     return toolDefinitions
   }
 
+  abortTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'user_stop'): number {
+    return this.#broker.abortTurn?.(identity, reason) ?? 0
+  }
+
   async call(request: CapabilityAgentToolCall, options: { signal?: AbortSignal } = {}): Promise<CapabilityAgentToolResult> {
     const caller = capabilityCallerContextSchema.parse(await this.#resolveCaller(request.context))
     if (caller.audience !== 'agent') {
@@ -222,7 +229,7 @@ export class CapabilityAgentToolSurface {
           ...(parsed.resourceKind ? { resourceKind: parsed.resourceKind } : {}),
           ...(parsed.effects ? { effects: parsed.effects } : {}),
           ...(parsed.tags ? { tags: parsed.tags } : {})
-        })
+        }, { context: request.context })
         return {
           tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
           value: descriptors.map((descriptor) => this.#agentOperation(cache, descriptor, false))
@@ -246,7 +253,7 @@ export class CapabilityAgentToolSurface {
             : {}),
           ...(invocationId ? { invocationId } : {}),
           input: parsed.input
-        }, options)
+        }, { ...options, context: request.context })
         let result: CapabilityInvocationResult
         try {
           result = await invoke(handle)
@@ -343,7 +350,10 @@ export class CapabilityAgentToolSurface {
 
   #operationRef(cache: CallerCache, descriptor: CapabilityDescriptor): string {
     const existing = cache.operationRefsById.get(descriptor.id)
-    if (existing) return existing
+    if (existing) {
+      cache.operationsByRef.set(existing, descriptor)
+      return existing
+    }
     const ref = opaqueId('op')
     cache.operationRefsById.set(descriptor.id, ref)
     cache.operationsByRef.set(ref, descriptor)
@@ -483,8 +493,8 @@ export function capabilityAgentCallerId(
   context: Pick<CapabilityAgentToolRequestContext, 'requestId' | 'runtimeId' | 'threadId'>
 ): string {
   return context.threadId
-    ? `${context.runtimeId ?? 'codex'}:${context.threadId}`
-    : `${context.runtimeId ?? 'codex'}-request:${context.requestId}`
+    ? `${context.runtimeId}:${context.threadId}`
+    : `${context.runtimeId}-request:${context.requestId}`
 }
 
 function isExpiredResourceHandleError(error: unknown): boolean {

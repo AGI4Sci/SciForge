@@ -6,6 +6,7 @@ export type ProviderSchemaPatternPolicy = 'preserve' | 'reject';
 export type ProviderCompatibilityConfig = {
   preferredProtocol?: ProviderWireProtocol;
   allowedProtocols?: ProviderWireProtocol[];
+  probeBeforeUse?: boolean;
   preserveResponsesReasoningContent?: boolean;
   preserveChatReasoningContent?: boolean;
   chatMaxTokensField?: 'max_tokens' | 'max_completion_tokens';
@@ -15,13 +16,13 @@ export type ProviderCompatibilityConfig = {
 export type ProviderCompatibilityProfile = {
   preferredProtocol: ProviderWireProtocol;
   allowedProtocols: readonly ProviderWireProtocol[];
+  probeBeforeUse: boolean;
   preserveResponsesReasoningContent: boolean;
   preserveChatReasoningContent: boolean;
   chatMaxTokensField: 'max_tokens' | 'max_completion_tokens';
   schemaPatternPolicy: ProviderSchemaPatternPolicy;
 };
 
-const PROVIDER_SCHEMA_MAX_DEPTH = 16;
 const PROVIDER_SCHEMA_MAX_NODES = 5_000;
 const PROVIDER_SCHEMA_MAX_PROPERTIES = 256;
 const PROVIDER_SCHEMA_MAX_BRANCHES = 128;
@@ -37,6 +38,7 @@ const PROTOCOLS: readonly ProviderWireProtocol[] = [
 const PROVIDER_COMPATIBILITY_KEYS = new Set<string>([
   'preferredProtocol',
   'allowedProtocols',
+  'probeBeforeUse',
   'preserveResponsesReasoningContent',
   'preserveChatReasoningContent',
   'chatMaxTokensField',
@@ -95,6 +97,12 @@ export function providerCompatibilityConfigurationIssue(
     }
   }
   if (
+    value.probeBeforeUse !== undefined
+    && typeof value.probeBeforeUse !== 'boolean'
+  ) {
+    return 'probeBeforeUse must be a boolean';
+  }
+  if (
     value.chatMaxTokensField !== undefined
     && value.chatMaxTokensField !== 'max_tokens'
     && value.chatMaxTokensField !== 'max_completion_tokens'
@@ -137,6 +145,7 @@ export function resolveProviderCompatibility(
   return {
     preferredProtocol: preferred,
     allowedProtocols: allowed,
+    probeBeforeUse: configured?.probeBeforeUse ?? false,
     preserveResponsesReasoningContent: configured?.preserveResponsesReasoningContent ?? false,
     preserveChatReasoningContent: configured?.preserveChatReasoningContent ?? true,
     chatMaxTokensField: configured?.chatMaxTokensField ?? 'max_tokens',
@@ -217,62 +226,105 @@ export function normalizeProviderJsonSchema(
   schema: unknown,
   patternPolicy: ProviderSchemaPatternPolicy = 'preserve',
 ): JsonValue | undefined {
-  return normalizeProviderJsonSchemaAtDepth(
-    schema,
-    patternPolicy,
-    0,
-    { nodes: 0, seen: new WeakSet<object>() },
-  );
+  const budget: TraversalBudget = { nodes: 0, seen: new WeakSet<object>() };
+  let normalized: JsonValue | undefined;
+  const tasks: SchemaTraversalTask[] = [{
+    mode: 'schema',
+    value: schema,
+    assign: (value) => {
+      normalized = value;
+    },
+  }];
+
+  while (tasks.length > 0) {
+    const task = tasks.pop() as SchemaTraversalTask;
+    if (task.mode === 'literal') {
+      visitSchemaLiteral(task.value, task.assign, tasks, budget);
+      continue;
+    }
+    if (task.mode === 'schema-array') {
+      visitSchemaArray(task.value as unknown[], task.assign, tasks, budget);
+      continue;
+    }
+    if (task.mode === 'schema-map') {
+      visitSchemaMap(
+        task.value as Record<string, unknown>,
+        Boolean(task.patternKeys),
+        task.assign,
+        tasks,
+        budget,
+        patternPolicy,
+      );
+      continue;
+    }
+    if (task.mode === 'mixed-schema-map') {
+      visitMixedSchemaMap(task.value as Record<string, unknown>, task.assign, tasks, budget);
+      continue;
+    }
+    visitSchema(task.value, task.assign, tasks, budget, patternPolicy);
+  }
+  return normalized;
 }
 
-function normalizeProviderJsonSchemaAtDepth(
-  schema: unknown,
-  patternPolicy: ProviderSchemaPatternPolicy,
-  depth: number,
-  budget: TraversalBudget,
-): JsonValue | undefined {
-  assertSchemaDepth(depth);
-  if (Array.isArray(schema)) {
-    enterTraversalNode(schema, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
-    if (schema.length > PROVIDER_SCHEMA_MAX_BRANCHES) {
-      throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_SCHEMA_MAX_BRANCHES} array entries.`);
-    }
-    return schema.map((item) => normalizeProviderJsonSchemaAtDepth(item, patternPolicy, depth + 1, budget) ?? null);
-  }
-  if (!isRecord(schema)) return jsonValue(schema);
-  enterTraversalNode(schema, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
+type SchemaTraversalMode = 'schema' | 'schema-map' | 'mixed-schema-map' | 'schema-array' | 'literal';
 
-  const normalized: Record<string, JsonValue> = {};
+type SchemaTraversalTask = {
+  mode: SchemaTraversalMode;
+  value: unknown;
+  patternKeys?: boolean;
+  assign: (value: JsonValue | undefined) => void;
+};
+
+function visitSchema(
+  schema: unknown,
+  assign: SchemaTraversalTask['assign'],
+  tasks: SchemaTraversalTask[],
+  budget: TraversalBudget,
+  patternPolicy: ProviderSchemaPatternPolicy,
+): void {
+  if (Array.isArray(schema)) {
+    visitSchemaArray(schema, assign, tasks, budget);
+    return;
+  }
+  if (!isRecord(schema)) {
+    visitSchemaLiteral(schema, assign, tasks, budget);
+    return;
+  }
+  enterTraversalNode(schema, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
+  const result: Record<string, JsonValue> = {};
+  assign(result);
+  const childTasks: SchemaTraversalTask[] = [];
   for (const [key, value] of Object.entries(schema)) {
     assertSchemaKey(key);
     if (key === 'required') {
-      defineJsonProperty(normalized, key, normalizeRequired(value));
+      defineJsonProperty(result, key, normalizeRequired(value));
       continue;
     }
     if (key === 'pattern' && typeof value === 'string') {
       assertProviderPattern(value, patternPolicy);
     }
-    let entry: JsonValue | undefined;
+    let mode: SchemaTraversalMode = 'literal';
+    let patternKeys = false;
     if (SCHEMA_MAP_KEYWORDS.has(key) && isRecord(value)) {
-      entry = normalizeSchemaMap(value, patternPolicy, depth + 1, budget, key === 'patternProperties');
+      mode = 'schema-map';
+      patternKeys = key === 'patternProperties';
     } else if (SCHEMA_MIXED_MAP_KEYWORDS.has(key) && isRecord(value)) {
-      entry = normalizeMixedSchemaMap(value, patternPolicy, depth + 1, budget);
+      mode = 'mixed-schema-map';
     } else if (SCHEMA_ARRAY_KEYWORDS.has(key) && Array.isArray(value)) {
-      entry = normalizeSchemaArray(value, patternPolicy, depth + 1, budget);
+      mode = 'schema-array';
     } else if (SCHEMA_SINGLE_KEYWORDS.has(key)) {
-      if (key === 'items' && Array.isArray(value)) {
-        entry = normalizeSchemaArray(value, patternPolicy, depth + 1, budget);
-      } else if (typeof value === 'boolean' || isRecord(value)) {
-        entry = normalizeProviderJsonSchemaAtDepth(value, patternPolicy, depth + 1, budget);
-      } else {
-        entry = cloneSchemaLiteral(value, depth + 1, budget);
-      }
-    } else {
-      entry = cloneSchemaLiteral(value, depth + 1, budget);
+      if (key === 'items' && Array.isArray(value)) mode = 'schema-array';
+      else if (typeof value === 'boolean' || isRecord(value)) mode = 'schema';
     }
-    if (entry !== undefined) defineJsonProperty(normalized, key, entry);
+    reserveNormalizedProperty(result, key);
+    childTasks.push({
+      mode,
+      value,
+      patternKeys,
+      assign: normalizedValue => assignNormalizedProperty(result, key, normalizedValue),
+    });
   }
-  return normalized;
+  pushTraversalTasks(tasks, childTasks);
 }
 
 function normalizeRequired(value: unknown): JsonValue[] {
@@ -287,91 +339,155 @@ function normalizeRequired(value: unknown): JsonValue[] {
   return required;
 }
 
-function normalizeSchemaMap(
+function visitSchemaMap(
   value: Record<string, unknown>,
-  patternPolicy: ProviderSchemaPatternPolicy,
-  depth: number,
+  patternKeys: boolean,
+  assign: SchemaTraversalTask['assign'],
+  tasks: SchemaTraversalTask[],
   budget: TraversalBudget,
-  patternKeys = false,
-): JsonObject {
-  assertSchemaDepth(depth);
+  patternPolicy: ProviderSchemaPatternPolicy,
+): void {
   const entries = Object.entries(value);
   if (entries.length > PROVIDER_SCHEMA_MAX_PROPERTIES) {
     throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_SCHEMA_MAX_PROPERTIES} properties.`);
   }
   enterTraversalNode(value, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
-  const normalized: Record<string, JsonValue> = {};
+  const result: Record<string, JsonValue> = {};
+  assign(result);
+  const childTasks: SchemaTraversalTask[] = [];
   for (const [key, schema] of entries) {
     assertSchemaKey(key);
     if (patternKeys) assertProviderPattern(key, patternPolicy);
-    const entry = normalizeProviderJsonSchemaAtDepth(schema, patternPolicy, depth + 1, budget);
-    if (entry !== undefined) defineJsonProperty(normalized, key, entry);
+    reserveNormalizedProperty(result, key);
+    childTasks.push({
+      mode: 'schema',
+      value: schema,
+      assign: normalizedValue => assignNormalizedProperty(result, key, normalizedValue),
+    });
   }
-  return normalized;
+  pushTraversalTasks(tasks, childTasks);
 }
 
-function normalizeMixedSchemaMap(
+function visitMixedSchemaMap(
   value: Record<string, unknown>,
-  patternPolicy: ProviderSchemaPatternPolicy,
-  depth: number,
+  assign: SchemaTraversalTask['assign'],
+  tasks: SchemaTraversalTask[],
   budget: TraversalBudget,
-): JsonObject {
-  assertSchemaDepth(depth);
+): void {
   const entries = Object.entries(value);
   if (entries.length > PROVIDER_SCHEMA_MAX_PROPERTIES) {
     throw new RangeError('Provider tool JSON Schema contains too many dependency entries.');
   }
   enterTraversalNode(value, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
-  const normalized: Record<string, JsonValue> = {};
+  const result: Record<string, JsonValue> = {};
+  assign(result);
+  const childTasks: SchemaTraversalTask[] = [];
   for (const [key, dependency] of entries) {
     assertSchemaKey(key);
-    const entry = isRecord(dependency) || typeof dependency === 'boolean'
-      ? normalizeProviderJsonSchemaAtDepth(dependency, patternPolicy, depth + 1, budget)
-      : cloneSchemaLiteral(dependency, depth + 1, budget);
-    if (entry !== undefined) defineJsonProperty(normalized, key, entry);
+    reserveNormalizedProperty(result, key);
+    childTasks.push({
+      mode: isRecord(dependency) || typeof dependency === 'boolean' ? 'schema' : 'literal',
+      value: dependency,
+      assign: normalizedValue => assignNormalizedProperty(result, key, normalizedValue),
+    });
   }
-  return normalized;
+  pushTraversalTasks(tasks, childTasks);
 }
 
-function normalizeSchemaArray(
+function visitSchemaArray(
   value: unknown[],
-  patternPolicy: ProviderSchemaPatternPolicy,
-  depth: number,
+  assign: SchemaTraversalTask['assign'],
+  tasks: SchemaTraversalTask[],
   budget: TraversalBudget,
-): JsonValue[] {
-  assertSchemaDepth(depth);
+): void {
   if (value.length > PROVIDER_SCHEMA_MAX_BRANCHES) {
     throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_SCHEMA_MAX_BRANCHES} branches.`);
   }
   enterTraversalNode(value, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
-  return value.map((schema) => normalizeProviderJsonSchemaAtDepth(schema, patternPolicy, depth + 1, budget) ?? null);
+  const result: JsonValue[] = new Array(value.length).fill(null);
+  assign(result);
+  const childTasks = value.map<SchemaTraversalTask>((schema, index) => ({
+    mode: 'schema',
+    value: schema,
+    assign: normalizedValue => {
+      result[index] = normalizedValue ?? null;
+    },
+  }));
+  pushTraversalTasks(tasks, childTasks);
 }
 
-function cloneSchemaLiteral(value: unknown, depth: number, budget: TraversalBudget): JsonValue | undefined {
-  assertSchemaDepth(depth);
+function visitSchemaLiteral(
+  value: unknown,
+  assign: SchemaTraversalTask['assign'],
+  tasks: SchemaTraversalTask[],
+  budget: TraversalBudget,
+): void {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) throw new RangeError('Provider tool JSON Schema must contain only finite numbers.');
-    return value;
+    assign(value);
+    return;
   }
   if (value === null || typeof value === 'boolean' || typeof value === 'string') {
-    return value;
+    assign(value);
+    return;
   }
   if (Array.isArray(value)) {
     enterTraversalNode(value, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
     if (value.length > PROVIDER_SCHEMA_MAX_ENUM_VALUES) {
       throw new RangeError(`Provider tool JSON Schema exceeds ${PROVIDER_SCHEMA_MAX_ENUM_VALUES} literal values.`);
     }
-    return value.map((entry) => cloneSchemaLiteral(entry, depth + 1, budget) ?? null);
+    const result: JsonValue[] = new Array(value.length).fill(null);
+    assign(result);
+    const childTasks = value.map<SchemaTraversalTask>((entry, index) => ({
+      mode: 'literal',
+      value: entry,
+      assign: normalizedValue => {
+        result[index] = normalizedValue ?? null;
+      },
+    }));
+    pushTraversalTasks(tasks, childTasks);
+    return;
   }
-  if (!isRecord(value)) return undefined;
+  if (!isRecord(value)) {
+    assign(undefined);
+    return;
+  }
   enterTraversalNode(value, budget, PROVIDER_SCHEMA_MAX_NODES, 'Provider tool JSON Schema');
-  const normalized: Record<string, JsonValue> = {};
+  const result: Record<string, JsonValue> = {};
+  assign(result);
+  const childTasks: SchemaTraversalTask[] = [];
   for (const [key, entry] of Object.entries(value)) {
     assertSchemaKey(key);
-    const json = cloneSchemaLiteral(entry, depth + 1, budget);
-    if (json !== undefined) defineJsonProperty(normalized, key, json);
+    reserveNormalizedProperty(result, key);
+    childTasks.push({
+      mode: 'literal',
+      value: entry,
+      assign: normalizedValue => assignNormalizedProperty(result, key, normalizedValue),
+    });
   }
-  return normalized;
+  pushTraversalTasks(tasks, childTasks);
+}
+
+function pushTraversalTasks(tasks: SchemaTraversalTask[], children: SchemaTraversalTask[]): void {
+  for (let index = children.length - 1; index >= 0; index -= 1) {
+    tasks.push(children[index] as SchemaTraversalTask);
+  }
+}
+
+function reserveNormalizedProperty(target: Record<string, JsonValue>, key: string): void {
+  defineJsonProperty(target, key, null);
+}
+
+function assignNormalizedProperty(
+  target: Record<string, JsonValue>,
+  key: string,
+  value: JsonValue | undefined,
+): void {
+  if (value === undefined) {
+    delete target[key];
+    return;
+  }
+  defineJsonProperty(target, key, value);
 }
 
 function normalizeToolDefinition(tool: unknown, patternPolicy: ProviderSchemaPatternPolicy): JsonValue {
@@ -437,12 +553,6 @@ function assertProviderPattern(
     new RegExp(pattern, 'u');
   } catch {
     throw new RangeError('Provider tool JSON Schema contains an invalid pattern.');
-  }
-}
-
-function assertSchemaDepth(depth: number): void {
-  if (depth > PROVIDER_SCHEMA_MAX_DEPTH) {
-    throw new RangeError(`Provider tool JSON Schema exceeds the maximum depth of ${PROVIDER_SCHEMA_MAX_DEPTH}.`);
   }
 }
 

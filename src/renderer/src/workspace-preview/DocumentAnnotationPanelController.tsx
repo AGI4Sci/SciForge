@@ -33,9 +33,6 @@ import type {
   WritePdfAnnotationOverlay
 } from '../components/write/WritePdfViewer'
 import type {
-  WriteDocxAnnotationOverlay
-} from '../components/write/WriteDocxViewer'
-import type {
   PdfAnnotationThreadSummary
 } from '../write/pdf-annotations'
 import type {
@@ -45,10 +42,15 @@ import {
   createAnnotationBodyUpdateOperation,
   createAnnotationThreadDeleteOperation,
   createAnnotationThreadStatusOperation,
-  createDocxAnnotationOverlaysFromSidecar,
+  createDocumentAnnotationNavigationRequest,
   createPdfAnnotationOverlaysFromSidecar,
-  firstPdfAnnotationThreadRect
+  createTextAnnotationOverlaysFromSidecar
 } from './document-annotation-operations'
+import type {
+  DocumentKind,
+  DocumentNavigationRequest,
+  DocumentTextAnnotationOverlay
+} from './document-annotation-types'
 
 const ANNOTATION_LIST_OPERATION_ID = 'workspace-preview.annotations.list'
 const ANNOTATION_IMPORT_OPERATION_ID = 'workspace-preview.annotations.import'
@@ -67,9 +69,10 @@ export type DocumentAnnotationPanelRenderInput = {
     onOpenAnnotations: (selection: WritePdfSelection | null) => void
     onToggleAnnotations: () => void
   }
-  docx: {
-    annotationOverlays: WriteDocxAnnotationOverlay[]
+  text: {
+    annotationOverlays: DocumentTextAnnotationOverlay[]
     activeAnnotationId: string | null
+    navigationRequest: DocumentNavigationRequest | null
     onApplyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
     onAnnotationSelect: (threadId: string) => void
     onOpenAnnotations: () => void
@@ -118,7 +121,7 @@ export type DocumentAnnotationQuestionBridge = {
 export type DocumentAnnotationPanelControllerProps = {
   context: WorkspacePreviewPanelShellContext
   observation?: WorkspaceObservation | null
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   className?: string
   questionBridge?: DocumentAnnotationQuestionBridge
   renderDocument: (input: DocumentAnnotationPanelRenderInput) => ReactElement
@@ -136,10 +139,8 @@ export function DocumentAnnotationPanelController({
   const [sidecar, setSidecar] = useState<PdfAnnotationSidecar | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
-  const [jumpRequest, setJumpRequest] = useState<{
-    threadId: string
-    rect: WritePdfSelectionPageRect
-  } | null>(null)
+  const [navigationRequest, setNavigationRequest] = useState<DocumentNavigationRequest | null>(null)
+  const navigationSequenceRef = useRef(0)
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
   const [displayMode, setDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
   const [loadingSidecar, setLoadingSidecar] = useState(false)
@@ -205,7 +206,7 @@ export function DocumentAnnotationPanelController({
   useEffect(() => {
     setSidecar(null)
     setSelectedThreadId(null)
-    setJumpRequest(null)
+    setNavigationRequest(null)
     setHoveredThreadId(null)
     setPdfReviewSelection(null)
     setPdfReviewNotice(null)
@@ -219,11 +220,11 @@ export function DocumentAnnotationPanelController({
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const docxAnnotationOverlays = useMemo(() => createDocxAnnotationOverlaysFromSidecar(sidecar, {
+  const textAnnotationOverlays = useMemo(() => createTextAnnotationOverlaysFromSidecar(sidecar, {
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const jumpToRect = jumpRequest?.rect ?? null
+  const jumpToRect = navigationRequest?.pageRect ?? null
 
   const clearPdfReviewNotice = useCallback((): void => {
     setPdfReviewNotice(null)
@@ -253,8 +254,18 @@ export function DocumentAnnotationPanelController({
 
   const selectThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
-    const rect = firstPdfAnnotationThreadRect(sidecar, threadId)
-    setJumpRequest(rect ? { threadId, rect: { ...rect } } : null)
+    setNavigationRequest(null)
+    setPanelOpen(true)
+  }, [])
+
+  const locateThread = useCallback((threadId: string): void => {
+    setSelectedThreadId(threadId)
+    navigationSequenceRef.current += 1
+    setNavigationRequest(createDocumentAnnotationNavigationRequest(
+      sidecar,
+      threadId,
+      `document-locate-${navigationSequenceRef.current}`
+    ))
     setPanelOpen(true)
   }, [sidecar])
 
@@ -303,6 +314,7 @@ export function DocumentAnnotationPanelController({
       const threadId = annotationThreadIdFromOperation(operation)
       if (threadId && options.revealThread) {
         setSelectedThreadId(threadId)
+        setNavigationRequest(null)
         setPanelOpen(true)
       }
       if (sidecarLoaded) setAnnotationNotice(null)
@@ -373,7 +385,7 @@ export function DocumentAnnotationPanelController({
         intent: options?.intent,
         previousDiscussion: existingSide || !summary.thread.sourceMessageId ? '' : previousDiscussionForAnnotationThread(summary)
       })
-      const title = `${documentKind === 'docx' ? 'DOCX' : 'PDF'}: ${clipInlineText(trimmed, 48)}`
+      const title = `${documentKind === 'pdf' ? 'PDF' : documentKind === 'docx' ? 'DOCX' : 'Markdown'}: ${clipInlineText(trimmed, 48)}`
       const sideThreadId = existingSide
         ? existingSide.threadId
         : await questionBridge.spawnSideConversation(prompt, {
@@ -471,7 +483,7 @@ export function DocumentAnnotationPanelController({
     if (!path) return
     void applyAnnotationOperation(createAnnotationThreadDeleteOperation({ path, threadId }))
     setSelectedThreadId((current) => current === threadId ? null : current)
-    setJumpRequest((current) => current?.threadId === threadId ? null : current)
+    setNavigationRequest((current) => current?.threadId === threadId ? null : current)
     setHoveredThreadId((current) => current === threadId ? null : current)
   }, [applyAnnotationOperation, path])
 
@@ -517,6 +529,7 @@ export function DocumentAnnotationPanelController({
         setSidecar(nextSidecar)
         const firstReviewThread = nextSidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
         setSelectedThreadId(firstReviewThread?.id ?? selectedThreadId)
+        setNavigationRequest(null)
       }
       await context.host.observe(sessionId)
       setDisplayMode('all')
@@ -555,6 +568,7 @@ export function DocumentAnnotationPanelController({
       if (nextSidecar) setSidecar(nextSidecar)
       await context.host.observe(sessionId)
       setSelectedThreadId(threadId)
+      setNavigationRequest(null)
       setPanelOpen(true)
       setPdfReviewNotice({ tone: 'success', message: 'SciForge added improvement advice to the selected comment.' })
     } catch (error) {
@@ -619,15 +633,16 @@ export function DocumentAnnotationPanelController({
             jumpToRect,
             onApplyEdit: applyPreviewOperation,
             onSelectionChange: rememberPdfReviewSelection,
-            onAnnotationSelect: selectThread,
+            onAnnotationSelect: locateThread,
             onOpenAnnotations: openPanel,
             onToggleAnnotations: togglePanel
           },
-          docx: {
-            annotationOverlays: docxAnnotationOverlays,
+          text: {
+            annotationOverlays: textAnnotationOverlays,
             activeAnnotationId: activeThreadId,
+            navigationRequest,
             onApplyEdit: applyPreviewOperation,
-            onAnnotationSelect: selectThread,
+            onAnnotationSelect: locateThread,
             onOpenAnnotations: openPanel
           },
           sidecar,
@@ -646,6 +661,7 @@ export function DocumentAnnotationPanelController({
           className="w-[360px] shrink-0"
           onAnnotationDisplayModeChange={setDisplayMode}
           onSelectThread={selectThread}
+          onLocateThread={locateThread}
           onHoverThread={(threadId) => setHoveredThreadId(threadId)}
           onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}
           onReopenThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => reopenThread(threadId)}
@@ -765,12 +781,16 @@ function buildAnnotationQuestionPrompt(input: {
   summary: PdfAnnotationThreadSummary
   documentPath: string
   workspaceRoot: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   intent?: 'question' | 'translate'
   previousDiscussion?: string
 }): string {
-  const documentLabel = input.documentKind === 'docx' ? 'DOCX document' : 'PDF'
-  const pageRange = pageRangeText(input.summary)
+  const documentLabel = input.documentKind === 'pdf'
+    ? 'PDF'
+    : input.documentKind === 'docx'
+      ? 'DOCX document'
+      : 'Markdown document'
+  const pageRange = input.documentKind === 'pdf' ? pageRangeText(input.summary) : ''
   const quote = input.summary.anchors
     .map((anchor) => anchor.quote.trim())
     .filter(Boolean)
@@ -796,7 +816,7 @@ function buildAnnotationQuestionPrompt(input: {
 
 function createQuestionAnnotationUpsertOperation(input: {
   path: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   summary: PdfAnnotationThreadSummary
   annotation: PdfAnnotation | undefined
   body: string
@@ -833,7 +853,7 @@ function createQuestionAnnotationUpsertOperation(input: {
 
 function createTurnPersistenceOperation(input: {
   path: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   sidecar: PdfAnnotationSidecar
   threadId: string
   sideThreadId: string
@@ -897,6 +917,7 @@ function annotationAnchorTarget(anchor: PdfAnchor): NonNullable<Extract<Workspac
     quote: anchor.quote,
     contextBefore: anchor.contextBefore,
     contextAfter: anchor.contextAfter,
+    ...(anchor.textRange ? { textRange: anchor.textRange } : {}),
     pageStart: anchor.pageStart,
     pageEnd: anchor.pageEnd,
     rects: anchor.rects

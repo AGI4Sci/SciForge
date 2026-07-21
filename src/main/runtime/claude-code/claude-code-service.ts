@@ -38,7 +38,8 @@ import {
 import {
   isComputerUseMcpConfigured,
 } from '../../computer-use-mcp-config'
-import type { GuiMcpRegistryInput } from '../../gui-mcp-registry'
+import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
+import { createClaudeCodeAgentToolTransport } from './claude-code-agent-tool-transport'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
   ClaudeCodeEventStore,
@@ -59,7 +60,7 @@ export type ClaudeCodeRuntimeServiceOptions = {
   settings: () => Promise<AppSettingsV1>
   storageRoot: string
   managedConfigDir?: string
-  managedMcp?: Omit<GuiMcpRegistryInput, 'settings'>
+  agentTools?: AgentRuntimeToolSurface
   claudeAgentSdk?: ClaudeAgentSdk
 }
 
@@ -161,11 +162,7 @@ export class ClaudeCodeRuntimeService {
   }
 
   isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    return Boolean(
-      settings &&
-      this.options.managedMcp?.computerUseMcp &&
-      isComputerUseMcpConfigured(settings, 'claude')
-    )
+    return isComputerUseMcpConfigured(settings, 'claude')
   }
 
   async connect(): Promise<ClaudeCodeConnectResult> {
@@ -282,8 +279,7 @@ export class ClaudeCodeRuntimeService {
         workspace,
         sessionId: existingThread?.claudeSessionId,
         reasoningEffort: payload.reasoningEffort,
-        managedConfigDir: this.options.managedConfigDir,
-        managedMcp: this.options.managedMcp
+        managedConfigDir: this.options.managedConfigDir
       })
       const storedThread = await this.threadStore.upsert({
         guiThreadId: payload.threadId,
@@ -322,10 +318,25 @@ export class ClaudeCodeRuntimeService {
         }
       })
       const abortController = new AbortController()
+      const agentToolServer = this.options.agentTools
+        ? createClaudeCodeAgentToolTransport({
+            surface: this.options.agentTools,
+            context: {
+              runtimeId: 'claude',
+              threadId: payload.threadId,
+              turnId,
+              workspaceId: workspace,
+              requestId: turnId
+            }
+          })
+        : undefined
       const query = this.sdk.query({
         prompt: launch.prompt,
         options: {
           ...launch.sdkOptions,
+          ...(agentToolServer
+            ? { mcpServers: { sciforge_runtime_tools: agentToolServer } }
+            : {}),
           abortController,
           forwardSubagentText: true,
           agentProgressSummaries: true,
@@ -361,6 +372,7 @@ export class ClaudeCodeRuntimeService {
     try {
       const active = this.activeTurns.get(threadId)
       if (!active || active.turnId !== turnId) return { ok: true }
+      this.options.agentTools?.abortTurn?.({ runtimeId: 'claude', threadId, turnId }, 'user_stop')
       active.abortController.abort()
       active.query.close?.()
       await this.completeTurn(threadId, turnId, 'aborted', 'Claude Code turn interrupted.')

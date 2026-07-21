@@ -361,12 +361,12 @@ describe('app capability registry', () => {
       ok: true as const,
       observation: {
         schemaVersion: 1 as const,
-        file: { path: '/workspace/paper.pdf', workspaceRoot: '/workspace' },
+        file: { path: '/workspace/paper.md', workspaceRoot: '/workspace' },
         view: {
           pluginId: 'markdown',
           modality: 'document' as const,
           mode: 'preview' as const,
-          title: 'paper.pdf'
+          title: 'paper.md'
         },
         actions: ['html.previewUrl']
       }
@@ -398,6 +398,12 @@ describe('app capability registry', () => {
     const uiOperations = (await broker.observe(ui, { resource: handle })).operations.map(({ id }) => id)
     expect(uiOperations).toEqual(expect.arrayContaining([
       APP_CAPABILITY_IDS.workspacePreviewInvokeAction,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsList,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsUpdate,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsResolve,
+      APP_CAPABILITY_IDS.workspacePreviewAnnotationsDelete
+    ]))
+    expect(uiOperations).not.toEqual(expect.arrayContaining([
       APP_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
       APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate,
       APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewImprove

@@ -1470,7 +1470,7 @@ export class WorkspacePreviewHost {
 
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Annotation sidecar write-back is currently implemented for PDF and DOCX files only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar write-back.' }
     }
     if (operation.target?.documentKind && operation.target.documentKind !== documentKind) {
       return {
@@ -1579,7 +1579,7 @@ export class WorkspacePreviewHost {
 
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Annotation sidecar write-back is currently implemented for PDF and DOCX files only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar write-back.' }
     }
 
     const loaded = await loadPdfAnnotationSidecar({
@@ -1814,7 +1814,7 @@ export class WorkspacePreviewHost {
   ): Promise<WorkspacePreviewExportResult> {
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Sidecar export is currently implemented for PDF and DOCX previews only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar export.' }
     }
 
     const exported = await exportPdfAnnotationSidecarPackage({
@@ -2536,7 +2536,7 @@ function formatAnnotationThreadPreview(status: PdfAnnotationThreadStatus, title:
   return [status, title].filter((part) => part.trim()).join(' | ')
 }
 
-type AnnotationDocumentKind = 'pdf' | 'docx'
+type AnnotationDocumentKind = 'pdf' | 'docx' | 'markdown'
 type AnnotationUpsertTarget = NonNullable<WorkspacePreviewAnnotationUpsertOperation['target']>
 type AnnotationUpsertAnchorTarget = NonNullable<AnnotationUpsertTarget['anchor']>
 type AnnotationUpsertThreadTarget = NonNullable<AnnotationUpsertTarget['thread']>
@@ -2546,6 +2546,7 @@ function annotationDocumentKindForPath(path: string): AnnotationDocumentKind | n
   const extension = extensionFromPreviewPath(path)
   if (extension === '.pdf') return 'pdf'
   if (extension === '.docx') return 'docx'
+  if (extension === '.md' || extension === '.mdx' || extension === '.markdown') return 'markdown'
   return null
 }
 
@@ -2575,7 +2576,7 @@ function updatePdfAnnotationThreadSidecar(input: {
   beforeTitle: string
 } {
   const existing = input.sidecar.threads.find((thread) => thread.id === input.operation.threadId)
-  if (!existing) throw new Error(`PDF annotation thread not found: ${input.operation.threadId}.`)
+  if (!existing) throw new Error(`Document annotation thread not found: ${input.operation.threadId}.`)
 
   const threads = input.sidecar.threads.map((thread) => {
     if (thread.id !== existing.id) return thread
@@ -2607,7 +2608,7 @@ function deletePdfAnnotationThreadSidecar(input: {
   anchorCount: number
 } {
   const existing = input.sidecar.threads.find((thread) => thread.id === input.operation.threadId)
-  if (!existing) throw new Error(`PDF annotation thread not found: ${input.operation.threadId}.`)
+  if (!existing) throw new Error(`Document annotation thread not found: ${input.operation.threadId}.`)
 
   const deletedAnnotationIds = new Set([
     ...existing.annotationIds,
@@ -2745,7 +2746,7 @@ function updateExistingPdfAnnotationSidecar(input: {
     }, target?.thread)
   })
   if (!foundThread) {
-    throw new Error(`PDF annotation thread not found: ${input.existingAnnotation.threadId}.`)
+    throw new Error(`Document annotation thread not found: ${input.existingAnnotation.threadId}.`)
   }
 
   return {
@@ -2764,8 +2765,8 @@ function upsertPdfAnnotationAnchor(input: {
   const existing = input.sidecar.anchors.find((anchor) => anchor.id === input.target.id)
   const rects = input.target.rects ?? existing?.rects ?? []
   const quote = input.target.quote ?? existing?.quote ?? ''
-  if (!existing && input.documentKind === 'docx' && !quote.trim()) {
-    throw new Error('DOCX annotation targets require a non-empty anchor quote.')
+  if (!existing && input.documentKind !== 'pdf' && !quote.trim()) {
+    throw new Error('Text document annotation targets require a non-empty anchor quote.')
   }
   if (!existing && input.documentKind === 'pdf' && rects.length === 0 && !quote.trim() && input.target.pageStart == null) {
     throw new Error('PDF annotation targets require rects, a quote, or a pageStart.')
@@ -2779,6 +2780,7 @@ function upsertPdfAnnotationAnchor(input: {
     quote,
     contextBefore: input.target.contextBefore ?? existing?.contextBefore ?? '',
     contextAfter: input.target.contextAfter ?? existing?.contextAfter ?? '',
+    textRange: input.target.textRange ?? existing?.textRange,
     pdfFingerprint: input.sidecar.pdfFingerprint,
     createdAt,
     updatedAt: input.now

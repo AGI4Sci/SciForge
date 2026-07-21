@@ -95,7 +95,56 @@ test('falls back only after a definitive rejection and reuses the successful dri
   assert.equal((calls[1]?.body.tools as Array<Record<string, unknown>>)[0]?.type, 'function');
 });
 
-test('does not replay requests after ambiguous server failures', async () => {
+test('probes protocols before the first automatic request and caches the supported route', async () => {
+  const calls: CapturedCall[] = [];
+  const negotiator = new UpstreamProtocolNegotiator();
+  const fetchImpl = captureFetch(calls, [
+    Response.json({
+      error: {
+        message: 'not implemented',
+        type: 'new_api_error',
+        code: 'convert_request_failed',
+      },
+    }, { status: 500 }),
+    Response.json({ error: { message: 'max_tokens must be greater than zero' } }, { status: 400 }),
+    chatResult('chat-first'),
+    chatResult('chat-cached'),
+  ]);
+
+  const first = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    compatibility: { probeBeforeUse: true },
+    fetchImpl,
+    preferredProtocol: 'responses',
+  });
+  const second = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    compatibility: { probeBeforeUse: true },
+    fetchImpl,
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(first.protocol, 'chat-completions');
+  assert.equal(second.protocol, 'chat-completions');
+  assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+    '/v1/responses',
+    '/v1/chat/completions',
+    '/v1/chat/completions',
+    '/v1/chat/completions',
+  ]);
+  assert.equal(calls[0]?.body.max_output_tokens, 0);
+  assert.equal(calls[1]?.body.max_tokens, 0);
+  assert.equal(calls[2]?.body.max_tokens, 128);
+  assert.doesNotMatch(JSON.stringify(calls.slice(0, 2).map((call) => call.body)), /hello/u);
+});
+
+test('falls back after a structured conversion failure before model output', async () => {
   const calls: CapturedCall[] = [];
   const negotiator = new UpstreamProtocolNegotiator();
   const conversionFailure = Response.json({
@@ -105,20 +154,18 @@ test('does not replay requests after ambiguous server failures', async () => {
       code: 'convert_request_failed',
     },
   }, { status: 500 });
-  await assert.rejects(
-    negotiator.request({
-      request,
-      baseUrl: 'https://models.example/v1',
-      apiKey: 'secret',
-      model: 'configured-model',
-      fetchImpl: captureFetch(calls, [conversionFailure]),
-      preferredProtocol: 'responses',
-    }),
-    (error: unknown) => error instanceof UpstreamRequestError
-      && error.code === 'upstream_http_500',
-  );
+  const result = await negotiator.request({
+    request,
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'configured-model',
+    fetchImpl: captureFetch(calls, [conversionFailure, chatResult('fallback')]),
+    preferredProtocol: 'responses',
+  });
+  assert.equal(result.protocol, 'chat-completions');
   assert.deepEqual(calls.map((call) => call.url), [
     'https://models.example/v1/responses',
+    'https://models.example/v1/chat/completions',
   ]);
 });
 
@@ -252,13 +299,25 @@ test('never resubmits a prompt after auth, quota, rate-limit, timeout, 5xx, or a
   }
 });
 
-test('classifies fallback only from protocol-level HTTP status', () => {
+test('classifies protocol rejection from status and structured conversion errors', () => {
   assert.equal(isDefinitiveProtocolRejection(404), true);
   assert.equal(isDefinitiveProtocolRejection(405), true);
   assert.equal(isDefinitiveProtocolRejection(415), true);
   assert.equal(isDefinitiveProtocolRejection(400), false);
   assert.equal(isDefinitiveProtocolRejection(422), false);
   assert.equal(isDefinitiveProtocolRejection(500), false);
+  assert.equal(isDefinitiveProtocolRejection(500, JSON.stringify({
+    error: {
+      code: 'convert_request_failed',
+      message: 'not implemented',
+    },
+  })), true);
+  assert.equal(isDefinitiveProtocolRejection(500, JSON.stringify({
+    error: {
+      code: 'provider_failure',
+      message: 'temporary failure',
+    },
+  })), false);
 });
 
 test('preserves versioned API roots when appending protocol paths', () => {
@@ -468,6 +527,41 @@ test('Chat preparation preserves allOf-root required constraints in the transmit
   const fn = tools[0]?.function as Record<string, unknown>;
   const parameters = fn.parameters as Record<string, unknown>;
   assert.deepEqual(parameters.required, ['query']);
+});
+
+test('Chat preparation accepts deeply nested schemas within the structural resource budget', async () => {
+  let nested: Record<string, unknown> = { type: 'string' };
+  for (let depth = 0; depth < 64; depth += 1) {
+    nested = { type: 'array', items: nested };
+  }
+  const calls: CapturedCall[] = [];
+  await new UpstreamProtocolNegotiator().request({
+    request: {
+      ...request,
+      tools: [{
+        type: 'function',
+        name: 'render',
+        parameters: {
+          type: 'object',
+          properties: { plan: nested },
+        },
+      }],
+    },
+    baseUrl: 'https://models.example/v1',
+    apiKey: 'secret',
+    model: 'neutral-model',
+    compatibility: {
+      preferredProtocol: 'chat-completions',
+      allowedProtocols: ['chat-completions'],
+    },
+    fetchImpl: captureFetch(calls, [chatResult('done')]),
+    preferredProtocol: 'responses',
+  });
+
+  assert.equal(calls.length, 1);
+  const tools = calls[0]?.body.tools as Array<Record<string, unknown>>;
+  const fn = tools[0]?.function as Record<string, unknown>;
+  assert.equal((fn.parameters as Record<string, unknown>).type, 'object');
 });
 
 test('Anthropic Messages driver preserves tools, tool results, usage, and stop reason', async () => {

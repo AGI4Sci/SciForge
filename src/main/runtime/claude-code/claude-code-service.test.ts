@@ -32,12 +32,6 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
-const computerUseLaunch = {
-  appPath: '/tmp/sciforge-app',
-  execPath: '/tmp/electron',
-  isPackaged: false
-}
-
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
@@ -836,8 +830,7 @@ describe('ClaudeCodeRuntimeService', () => {
     ]))
   })
 
-  it('injects the managed computer-use MCP server into Claude SDK turns when configured', async () => {
-    vi.stubEnv('SCIFORGE_CUA_SERVICE_URL', 'http://127.0.0.1:3900')
+  it('injects only the shared runtime tool surface into Claude SDK turns', async () => {
     const { sdk, calls } = fakeSdk(() => [
       init('claude-session-computer-use'),
       result('Done.', 'claude-session-computer-use')
@@ -846,7 +839,15 @@ describe('ClaudeCodeRuntimeService', () => {
       settings: async () => settings(),
       storageRoot: await serviceRoot(),
       managedConfigDir: '/tmp/sciforge-claude-config',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } },
+      agentTools: {
+        tools: () => [{
+          type: 'function',
+          name: 'sciforge_discover',
+          description: 'Discover operations.',
+          inputSchema: { type: 'object', properties: {} }
+        }],
+        call: async () => ({ tool: 'sciforge_discover', value: [] })
+      },
       claudeAgentSdk: sdk
     })
 
@@ -860,21 +861,11 @@ describe('ClaudeCodeRuntimeService', () => {
     if (!turn.ok) throw new Error(turn.message)
 
     expect(calls[0]?.options?.mcpServers).toMatchObject({
-      gui_owl_computer_use: {
-        type: 'stdio',
-        command: '/tmp/electron',
-        args: [
-          '/tmp/sciforge-app/out/main/computer-use-mcp-node-entry.js',
-          '--gui-owl-computer-use-mcp-server'
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
-        },
-        alwaysLoad: true
+      sciforge_runtime_tools: {
+        type: 'sdk'
       }
     })
-    expect(calls[0]?.options?.mcpServers).not.toHaveProperty('gui_computer_use')
+    expect(Object.keys(calls[0]?.options?.mcpServers ?? {})).toEqual(['sciforge_runtime_tools'])
   })
 
   it('maps Task and Workflow tool output and reads canonical child transcripts', async () => {

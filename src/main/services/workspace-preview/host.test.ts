@@ -1948,6 +1948,150 @@ describe('WorkspacePreviewHost', () => {
     })
   })
 
+  it.each(['.md', '.mdx', '.markdown'])(
+    'supports canonical Markdown annotation CRUD for %s files',
+    async (extension) => {
+      const relativePath = `notes${extension}`
+      const source = '# Notes\n\nBefore important section after.\n'
+      await writeFile(join(workspaceRoot, relativePath), source, 'utf8')
+      const host = new WorkspacePreviewHost({
+        createSessionId: () => `session-markdown-annotation-${extension.slice(1)}`
+      })
+      const opened = await host.open({
+        workspaceRoot,
+        path: relativePath,
+        now: '2026-07-08T00:00:00.000Z'
+      })
+      expect(opened).toMatchObject({
+        ok: true,
+        session: { pluginId: 'markdown' },
+        manifest: {
+          capabilities: {
+            annotations: true,
+            export: ['markdown', 'sidecar']
+          }
+        }
+      })
+      if (!opened.ok) return
+
+      const created = await host.updateAnnotation(opened.session.id, {
+        annotationId: `markdown-ann-${extension.slice(1)}`,
+        annotationKind: 'comment',
+        body: 'Clarify this section.',
+        target: {
+          documentKind: 'markdown',
+          threadId: `markdown-thread-${extension.slice(1)}`,
+          anchor: {
+            id: `markdown-anchor-${extension.slice(1)}`,
+            kind: 'text',
+            quote: 'important section',
+            contextBefore: 'Before',
+            contextAfter: 'after',
+            textRange: {
+              start: 16,
+              end: 33
+            }
+          },
+          thread: { title: 'Important section' }
+        }
+      }, '2026-07-08T00:01:00.000Z')
+      expect(created).toMatchObject({
+        ok: true,
+        operationKind: 'annotation.upsert',
+        audit: { pluginId: 'markdown', effect: 'sidecar-write' }
+      })
+
+      const updated = await host.updateAnnotation(opened.session.id, {
+        annotationId: `markdown-ann-${extension.slice(1)}`,
+        annotationKind: 'comment',
+        body: 'Clarify this section.',
+        target: {
+          documentKind: 'markdown',
+          threadId: `markdown-thread-${extension.slice(1)}`,
+          anchor: {
+            id: `markdown-anchor-${extension.slice(1)}`,
+            textRange: {
+              start: 16,
+              end: 33,
+              startLine: 3,
+              startColumn: 8,
+              endLine: 3,
+              endColumn: 25
+            }
+          }
+        }
+      }, '2026-07-08T00:01:30.000Z')
+      expect(updated).toMatchObject({ ok: true, operationKind: 'annotation.upsert' })
+
+      const listed = await host.listAnnotations(opened.session.id)
+      expect(listed).toMatchObject({
+        ok: true,
+        sidecar: {
+          anchors: [{
+            quote: 'important section',
+            rects: [],
+            textRange: {
+              start: 16,
+              end: 33,
+              startLine: 3,
+              startColumn: 8,
+              endLine: 3,
+              endColumn: 25
+            }
+          }],
+          annotations: [{ body: 'Clarify this section.' }],
+          threads: [{ status: 'open' }]
+        }
+      })
+
+      const resolved = await host.resolveAnnotation(opened.session.id, {
+        threadId: `markdown-thread-${extension.slice(1)}`,
+        resolved: true
+      }, '2026-07-08T00:02:00.000Z')
+      expect(resolved).toMatchObject({ ok: true, operationKind: 'annotation.thread.update' })
+
+      const exported = await host.exportPreview(opened.session.id, {
+        kind: 'workspace-file',
+        format: 'sidecar'
+      }, '2026-07-08T00:03:00.000Z')
+      expect(exported).toMatchObject({
+        ok: true,
+        audit: { pluginId: 'markdown', format: 'sidecar', effect: 'sidecar-package' }
+      })
+      if (exported.ok) {
+        const zip = await JSZip.loadAsync(await readFile(exported.path))
+        expect(zip.file(relativePath)).not.toBeNull()
+        const annotationsJson = await zip.file('annotations.json')?.async('string')
+        expect(annotationsJson).toContain('"textRange"')
+      }
+
+      await expect(host.importAnnotations(opened.session.id, {
+        packageBase64: Buffer.from('not-used').toString('base64')
+      })).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining('PDF')
+      })
+      await expect(host.generateAnnotationReview(opened.session.id, {
+        maxComments: 1,
+        prompt: 'Review this document.'
+      })).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining('PDF')
+      })
+
+      const deleted = await host.deleteAnnotation(opened.session.id, {
+        threadId: `markdown-thread-${extension.slice(1)}`,
+        pruneOrphanAnchors: true
+      }, '2026-07-08T00:04:00.000Z')
+      expect(deleted).toMatchObject({ ok: true, operationKind: 'annotation.thread.delete' })
+      await expect(host.listAnnotations(opened.session.id)).resolves.toMatchObject({
+        ok: true,
+        sidecar: { anchors: [], annotations: [], threads: [] }
+      })
+      await expect(readFile(join(workspaceRoot, relativePath), 'utf8')).resolves.toBe(source)
+    }
+  )
+
   it('applies CSV cell edits through the tabular plugin with safe write-back', async () => {
     await writeFile(join(workspaceRoot, 'samples.csv'), 'sample,count,note\ns1,2,old\ns2,3,ok\n', 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-csv-edit' })

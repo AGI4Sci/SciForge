@@ -90,6 +90,8 @@ describe('getModelAccessStatus', () => {
 
     expect(status.protocol).toBe('chat-completions')
     expect(status.protocolState).toBe('selected')
+    expect(status.action).toContain('explicitly selected')
+    expect(status.action).not.toContain('probe and cache')
   })
 
   it('keeps incomplete API fields setup-required without probing a stale Router', async () => {
@@ -142,7 +144,7 @@ describe('getModelAccessStatus', () => {
     expect(JSON.stringify(status)).not.toContain('127.0.0.1')
   })
 
-  it('reports that API protocol negotiation waits for the first real request', async () => {
+  it('reports that automatic API protocol negotiation probes before the first real request', async () => {
     const status = await getModelAccessStatus(
       settings({ mode: 'api', planAdapterId: '' }),
       {
@@ -164,6 +166,7 @@ describe('getModelAccessStatus', () => {
       traceCaptureReady: true
     })
     expect(status.action).toContain('first real request')
+    expect(status.action).toContain('probe and cache')
     expect(status.action).not.toMatch(/upstream.*connected|connection.*verified/i)
   })
 

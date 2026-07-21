@@ -1,8 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import {
-  buildClaudeCodeManagedGuiMcpServers,
-  buildCodexManagedGuiMcpServers
-} from './gui-mcp-registry'
+import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
@@ -86,40 +83,30 @@ describe('GUI MCP runtime registry', () => {
     else process.env.SCIFORGE_CUA_SERVICE_TOKEN = originalCuaServiceToken
   })
 
-  it('builds the managed computer-use MCP server for Codex and Claude', () => {
+  it('builds one runtime-neutral managed computer-use MCP server', () => {
     process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
     process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'test-token'
     const settings = createSettings()
 
-    const codex = buildCodexManagedGuiMcpServers({
+    const servers = buildManagedGuiMcpServers({
       settings,
       computerUseMcp: { settings, launch }
     })
-    expect(codex).toEqual([
+    expect(servers).toEqual([
       expect.objectContaining({
         id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
         args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
-        enabledTools: [COMPUTER_USE_MCP_TOOL_NAME]
+        enabledTools: [COMPUTER_USE_MCP_TOOL_NAME],
+        env: {
+          ELECTRON_RUN_AS_NODE: '1',
+          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
+          SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
+        }
       })
     ])
-
-    const claude = buildClaudeCodeManagedGuiMcpServers({
-      settings,
-      computerUseMcp: { settings, launch }
-    })
-    expect(claude[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toMatchObject({
-      type: 'stdio',
-      args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
-        SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
-      },
-      alwaysLoad: true
-    })
   })
 
-  it('builds Codex dynamic MCP server configs with contract-derived tools and local secrets', () => {
+  it('builds managed MCP server configs with contract-derived tools and local secrets', () => {
     const settings = createSettings()
     settings.modelRouter = {
       ...defaultModelRouterSettings(),
@@ -127,7 +114,7 @@ describe('GUI MCP runtime registry', () => {
       runtimeApiKey: 'router-runtime-test-key',
       publicModelAlias: 'router-vision-model'
     }
-    const servers = buildCodexManagedGuiMcpServers({
+    const servers = buildManagedGuiMcpServers({
       settings,
       scheduleMcp: { settings, launch },
       workflowMcp: { settings, launch },
@@ -163,17 +150,6 @@ describe('GUI MCP runtime registry', () => {
         SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
       }
     })
-    expect(buildClaudeCodeManagedGuiMcpServers({
-      settings,
-      workspaceIntelMcp: { settings, launch }
-    }).gui_workspace_intel).toMatchObject({
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4567/v1',
-        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
-        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
-      }
-    })
     expect(servers.find((server) => server.id === 'remote_executor')).toMatchObject({
       env: { ELECTRON_RUN_AS_NODE: '1' },
       args: expect.arrayContaining(['--gui-remote-executor-mcp-server']),
@@ -183,7 +159,7 @@ describe('GUI MCP runtime registry', () => {
 
   it('passes the workspace root to artifact worker MCP launch args', () => {
     const settings = createSettings()
-    const codex = buildCodexManagedGuiMcpServers({
+    const servers = buildManagedGuiMcpServers({
       settings,
       scientificSkillsMcp: { launch },
       scientificPlottingMcp: { launch },
@@ -193,19 +169,19 @@ describe('GUI MCP runtime registry', () => {
     })
 
     for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
-      expect(codex.find((server) => server.id === id)?.args).toEqual(
+      expect(servers.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
     }
 
-    expect(codex.find((server) => server.id === 'image_generation')?.enabledTools).toEqual(
+    expect(servers.find((server) => server.id === 'image_generation')?.enabledTools).toEqual(
       expect.arrayContaining([
         'visual_generate'
       ])
     )
-    const scientificPlottingTools = codex.find((server) => server.id === 'scientific_plotting')?.enabledTools
+    const scientificPlottingTools = servers.find((server) => server.id === 'scientific_plotting')?.enabledTools
     expect(scientificPlottingTools).not.toContain('visual_generate')
-    expect(codex.find((server) => server.id === 'visual_document')).toMatchObject({
+    expect(servers.find((server) => server.id === 'visual_document')).toMatchObject({
       args: expect.arrayContaining(['--sciforge-visual-document-mcp-server']),
       enabledTools: expect.arrayContaining([
         'sciforge_visual_document_save_annotations',
@@ -214,19 +190,15 @@ describe('GUI MCP runtime registry', () => {
     })
   })
 
-  it('does not build a Claude Code MCP config without computer-use launch input', () => {
-    const servers = buildClaudeCodeManagedGuiMcpServers()
+  it('returns no managed servers without launch input', () => {
+    const servers = buildManagedGuiMcpServers({})
 
-    expect(servers).toEqual({})
+    expect(servers).toEqual([])
   })
 
-  it('keeps retired MCP servers out of generated Codex and Claude configs', () => {
+  it('keeps retired MCP servers out of the shared registry', () => {
     for (const id of ['gui_computer_use', 'gui_research_memory', 'sciforge_canvas']) {
-      const codex = buildCodexManagedGuiMcpServers({}).find((server) => server.id === id)
-      const claude = buildClaudeCodeManagedGuiMcpServers()[id]
-
-      expect(codex).toBeUndefined()
-      expect(claude).toBeUndefined()
+      expect(buildManagedGuiMcpServers({}).find((server) => server.id === id)).toBeUndefined()
     }
   })
 })

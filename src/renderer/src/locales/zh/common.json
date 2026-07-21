@@ -1256,6 +1256,7 @@
   "writePdfAnnotationsNoMatches": "没有符合筛选条件的批注。",
   "writeDocxAnnotationsNoMatches": "没有符合筛选条件的文档批注。",
   "writePdfAnnotationsSelect": "选择批注线程",
+  "writePdfAnnotationsLocate": "在文档中定位",
   "writePdfAnnotationsResolve": "标记为已解决",
   "writePdfAnnotationsResolved": "线程已解决",
   "writePdfAnnotationsDelete": "删除线程",

@@ -327,6 +327,7 @@ class ModelRouterUpstreamTraceAttempt implements UpstreamTraceAttemptObserver {
       timestamp: this.startedAt,
       payload: {
         protocol: this.input.protocol,
+        phase: this.input.phase,
         method: this.input.method,
         path: sanitizeTraceText(this.input.url, sanitization),
         headers: sanitizeTraceHeaders(this.input.headers, sanitization),

@@ -25,6 +25,7 @@ const labels: Record<string, string> = {
   modelAccessStatusUnconfigured: 'Not configured.',
   modelAccessCheck: 'Check setup',
   modelAccessApiStatusIdle: 'Automatic connection details.',
+  modelAccessApiStatusIdleExplicit: 'Explicit connection details.',
   modelAccessPlan: 'Coding Plan selection',
   modelAccessPlanCodex: 'Codex Plan',
   modelAccessPlanCodexDesc: 'Official account sign-in.',
@@ -104,6 +105,19 @@ describe('ModelAccessSettings', () => {
     expect(html).toContain('Auto-negotiate')
     expect(html).toContain('Model access status')
     expect(html).not.toContain('Provider')
+  })
+
+  it('describes explicit protocol routing without claiming automatic probing', () => {
+    const form = settings('api')
+    form.modelRouter!.profiles.default.textReasoner.protocol = 'chat-completions'
+    const html = renderToStaticMarkup(createElement(ModelAccessSettings, {
+      form,
+      update: vi.fn(),
+      t
+    }))
+
+    expect(html).toContain('Explicit connection details.')
+    expect(html).not.toContain('Automatic connection details.')
   })
 
   it('shows official plan sign-in without rendering API fields', () => {

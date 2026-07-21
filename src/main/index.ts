@@ -68,6 +68,12 @@ import {
 } from './paper-radar-paths'
 import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
+  createRuntimeMcpToolGateway,
+  type RuntimeMcpToolGateway
+} from './runtime/agent-runtime/runtime-mcp-tool-gateway'
+import type { RuntimeToolDefinition } from './runtime/agent-runtime/runtime-tool-contract'
+import { createRuntimeCapabilityBroker } from './runtime/agent-runtime/runtime-capability-broker'
+import {
   configureEvidenceDagUpdateQueue,
   evidenceDagQueuePath,
   syncEvidenceDagUpdateQueue
@@ -138,7 +144,12 @@ import {
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
-import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
+import {
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  isComputerUseMcpConfigured,
+  type ComputerUseMcpLaunchConfig
+} from './computer-use-mcp-config'
+import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
@@ -363,6 +374,35 @@ function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
   }
 }
 
+function managedGuiMcpServers(settings: AppSettingsV1) {
+  return buildManagedGuiMcpServers({
+    settings,
+    scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
+    researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
+    workflowMcp: { settings, launch: getWorkflowMcpLaunchConfig() },
+    workspaceIntelMcp: { settings, launch: getWorkspaceIntelMcpLaunchConfig() },
+    paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
+    writeAssistMcp: { settings, launch: getWriteAssistMcpLaunchConfig() },
+    runtimeInspectorMcp: { settings, launch: getRuntimeInspectorMcpLaunchConfig() },
+    scientificSkillsMcp: { settings, launch: getScientificSkillsMcpLaunchConfig() },
+    scientificPlottingMcp: { settings, launch: getScientificPlottingMcpLaunchConfig() },
+    bgcDiscoveryMcp: { settings, launch: getBgcDiscoveryMcpLaunchConfig() },
+    imageGenerationMcp: { settings, launch: getImageGenerationMcpLaunchConfig() },
+    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
+    visualDocumentMcp: { settings, launch: getVisualDocumentMcpLaunchConfig() },
+    computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
+  })
+}
+
+async function runtimeMayUseManagedTool(
+  runtimeId: string,
+  tool: RuntimeToolDefinition
+): Promise<boolean> {
+  if (tool.providerId !== GUI_COMPUTER_USE_MCP_SERVER_NAME) return true
+  if (runtimeId !== 'codex' && runtimeId !== 'claude') return false
+  return isComputerUseMcpConfigured(await store.load(), runtimeId)
+}
+
 traceStartup('main module evaluated')
 
 // 在最早的阶段把 app 名称、AppUserModelId 都设好。
@@ -388,6 +428,7 @@ let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
@@ -605,20 +646,6 @@ function getCodexRuntime(): CodexRuntimeService {
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
     standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
-    scheduleMcpLaunch: getScheduleMcpLaunchConfig(),
-    researchMcpLaunch: getResearchSearchMcpLaunchConfig(),
-    workflowMcpLaunch: getWorkflowMcpLaunchConfig(),
-    workspaceIntelMcpLaunch: getWorkspaceIntelMcpLaunchConfig(),
-    paperRadarMcpLaunch: getPaperRadarMcpLaunchConfig(),
-    writeAssistMcpLaunch: getWriteAssistMcpLaunchConfig(),
-    runtimeInspectorMcpLaunch: getRuntimeInspectorMcpLaunchConfig(),
-    scientificSkillsMcpLaunch: getScientificSkillsMcpLaunchConfig(),
-    scientificPlottingMcpLaunch: getScientificPlottingMcpLaunchConfig(),
-    bgcDiscoveryMcpLaunch: getBgcDiscoveryMcpLaunchConfig(),
-    imageGenerationMcpLaunch: getImageGenerationMcpLaunchConfig(),
-    pptMasterMcpLaunch: getPptMasterMcpLaunchConfig(),
-    visualDocumentMcpLaunch: getVisualDocumentMcpLaunchConfig(),
-    computerUseMcpLaunch: getComputerUseMcpLaunchConfig(),
     capabilityAgentTools
   })
   return codexRuntime
@@ -626,28 +653,16 @@ function getCodexRuntime(): CodexRuntimeService {
 
 function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
   if (claudeCodeRuntime) return claudeCodeRuntime
+  if (!capabilityAgentTools) {
+    throw new Error('Capability agent tools must be registered before the Claude runtime starts.')
+  }
   claudeCodeRuntime = new ClaudeCodeRuntimeService({
     settings: async () => store.load(),
     storageRoot: join(app.getPath('userData'), 'claude-code-runtime'),
     managedConfigDir: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-claude-code', 'config')
       : join(process.cwd(), '.claude-code-runtime', 'config'),
-    managedMcp: {
-      scheduleMcp: { launch: getScheduleMcpLaunchConfig() },
-      researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
-      workflowMcp: { launch: getWorkflowMcpLaunchConfig() },
-      workspaceIntelMcp: { launch: getWorkspaceIntelMcpLaunchConfig() },
-      paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
-      writeAssistMcp: { launch: getWriteAssistMcpLaunchConfig() },
-      runtimeInspectorMcp: { launch: getRuntimeInspectorMcpLaunchConfig() },
-      scientificSkillsMcp: { launch: getScientificSkillsMcpLaunchConfig() },
-      scientificPlottingMcp: { launch: getScientificPlottingMcpLaunchConfig() },
-      bgcDiscoveryMcp: { launch: getBgcDiscoveryMcpLaunchConfig() },
-      imageGenerationMcp: { launch: getImageGenerationMcpLaunchConfig() },
-      pptMasterMcp: { launch: getPptMasterMcpLaunchConfig() },
-      visualDocumentMcp: { launch: getVisualDocumentMcpLaunchConfig() },
-      computerUseMcp: { launch: getComputerUseMcpLaunchConfig() }
-    }
+    agentTools: capabilityAgentTools
   })
   return claudeCodeRuntime
 }
@@ -741,6 +756,8 @@ async function stopManagedRuntimes(): Promise<void> {
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
+      await runtimeMcpToolGateway?.close('service_shutdown')
+      runtimeMcpToolGateway = null
       // Drain model clients before terminating the shared access sidecar so an
       // active request can finish and its tail trace can be persisted.
       await stopModelAccessGatewaySidecar({
@@ -1165,8 +1182,16 @@ app.whenReady().then(async () => {
       })
     }
   }))
-  capabilityAgentTools = createCapabilityAgentToolSurface({
+  runtimeMcpToolGateway = createRuntimeMcpToolGateway({
+    servers: managedGuiMcpServers(initial)
+  })
+  const runtimeCapabilityBroker = createRuntimeCapabilityBroker({
     broker: capabilityBroker,
+    managedTools: runtimeMcpToolGateway,
+    isToolAvailable: (context, tool) => runtimeMayUseManagedTool(context.runtimeId, tool)
+  })
+  capabilityAgentTools = createCapabilityAgentToolSurface({
+    broker: runtimeCapabilityBroker,
     resolveCaller: (context) => ({
       audience: 'agent',
       callerId: capabilityAgentCallerId(context),
@@ -1448,6 +1473,7 @@ app.whenReady().then(async () => {
     }
     const saved = await store.patch(partial)
     traceSensitiveSettings.update(saved)
+    await runtimeMcpToolGateway?.sync(managedGuiMcpServers(saved))
     emitSettingsChanged(saved)
     await syncScheduleMcpConfig(saved, getScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[schedule-mcp] failed to sync config after settings change:', error)
@@ -1649,10 +1675,10 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  void stopManagedRuntimes().catch((error) => {
-    console.warn('[sciforge] failed to stop managed runtimes:', error)
-  })
   if (process.platform !== 'darwin') {
+    void stopManagedRuntimes().catch((error) => {
+      console.warn('[sciforge] failed to stop managed runtimes:', error)
+    })
     app.quit()
   }
 })

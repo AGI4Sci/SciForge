@@ -20,11 +20,6 @@ import {
   type SandboxMode
 } from '../../../shared/app-settings'
 import {
-  buildClaudeCodeManagedGuiMcpServers,
-  type GuiMcpRegistryInput
-} from '../../gui-mcp-registry'
-import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
-import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
   SCI_MODALITY_SERVICE_ENV_PREFIXES,
@@ -71,7 +66,6 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   reasoningEffort?: string
   env?: NodeJS.ProcessEnv
   managedConfigDir?: string
-  managedMcp?: Omit<GuiMcpRegistryInput, 'settings'>
 }): Promise<ClaudeCodeSdkLaunchConfig> {
   if (!resolveModelAccessRuntimePolicy(options.settings).claude) {
     throw new Error(
@@ -102,7 +96,6 @@ export async function prepareClaudeCodeSdkLaunch(options: {
     turnId: options.turnId
   }), pathToClaudeCodeExecutable)
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
-  const mcpServers = claudeCodeMcpServers(options.settings, options.managedMcp)
   const reasoningOptions = claudeCodeReasoningOptions(options.reasoningEffort)
   const sdkOptions: ClaudeAgentSdkOptions = {
     cwd,
@@ -113,16 +106,6 @@ export async function prepareClaudeCodeSdkLaunch(options: {
     ...(permissionMode === 'bypassPermissions' ? { allowDangerouslySkipPermissions: true } : {}),
     ...(options.sessionId ? { resume: options.sessionId } : {}),
     ...(pathToClaudeCodeExecutable ? { pathToClaudeCodeExecutable } : {}),
-    ...(Object.keys(mcpServers).length > 0 ? { mcpServers } : {}),
-    ...(hasScientificVisualMcpServers(mcpServers)
-      ? {
-          systemPrompt: {
-            type: 'preset' as const,
-            preset: 'claude_code' as const,
-            append: SCIENTIFIC_VISUAL_RUNTIME_POLICY
-          }
-        }
-      : {}),
     ...(Object.keys(extraArgs).length > 0 ? { extraArgs } : {})
   }
   return {
@@ -202,23 +185,6 @@ export async function resolveClaudeCodeExecutable(
     `Claude Code executable "${command}" was not found. ` +
     'Use the default "claude" for the SDK-bundled executable, or configure an absolute path.'
   )
-}
-
-function hasScientificVisualMcpServers(
-  servers: NonNullable<ClaudeAgentSdkOptions['mcpServers']>
-): boolean {
-  return Object.prototype.hasOwnProperty.call(servers, 'scientific_plotting')
-    && Object.prototype.hasOwnProperty.call(servers, 'image_generation')
-}
-
-function claudeCodeMcpServers(
-  settings: AppSettingsV1,
-  managedMcp: Omit<GuiMcpRegistryInput, 'settings'> = {}
-): NonNullable<ClaudeAgentSdkOptions['mcpServers']> {
-  return buildClaudeCodeManagedGuiMcpServers({
-    settings,
-    ...managedMcp
-  })
 }
 
 function claudeCodeReasoningOptions(

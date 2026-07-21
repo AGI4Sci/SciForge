@@ -3,9 +3,9 @@ import type {
   CodexAppServerRequestId
 } from './protocol'
 import type {
-  CodexAppServerDynamicToolCallRequest,
-  CodexAppServerDynamicToolCallResponse
-} from '../codex-dynamic-mcp-tools'
+  RuntimeToolCallRequest,
+  RuntimeToolCallResponse
+} from '../../agent-runtime/runtime-tool-contract'
 
 export type CodexAppServerPendingRequestKind = 'approval' | 'user_input'
 
@@ -61,8 +61,8 @@ export type CodexAppServerPendingRequestRegistryOptions = {
   onPendingRequest?: (request: CodexAppServerPendingRequest) => void
   onUnknownRequest?: (request: CodexAppServerUnknownRequestNotice) => void
   onToolCallRequest?: (
-    request: CodexAppServerDynamicToolCallRequest
-  ) => CodexAppServerDynamicToolCallResponse | Promise<CodexAppServerDynamicToolCallResponse>
+    request: RuntimeToolCallRequest
+  ) => RuntimeToolCallResponse | Promise<RuntimeToolCallResponse>
 }
 
 type PendingEntry = {
@@ -233,7 +233,7 @@ function toPendingRequest(request: CodexAppServerJsonRpcRequest): CodexAppServer
 
 function toDynamicToolCallRequest(
   request: CodexAppServerJsonRpcRequest
-): CodexAppServerDynamicToolCallRequest | null {
+): RuntimeToolCallRequest | null {
   if (request.method !== 'item/tool/call') return null
   const params = asRecord(request.params) ?? {}
   const tool = stringValue(params.tool)

@@ -3623,6 +3623,47 @@ test('responses tool outputs expose provider 400 bodies without retry-side reque
   }
 });
 
+test('invalid tool schemas return a structured capability error instead of a router 500', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-invalid-tool-schema-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, []),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Use the tool if appropriate.',
+        tools: [{
+          type: 'function',
+          name: 'invalid_tool',
+          parameters: [{ type: 'string' }],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 422);
+    const body = await response.json() as { error?: { code?: string; message?: string } };
+    assert.equal(body.error?.code, 'upstream_protocol_capability_unsupported');
+    assert.match(body.error?.message ?? '', /JSON Schema object or boolean/u);
+    assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
 test('responses routing preserves supported Codex tool declarations for the upstream protocol', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-codex-tools-'));
   const calls: CapturedFetch[] = [];

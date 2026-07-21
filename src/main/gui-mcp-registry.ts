@@ -208,7 +208,7 @@ export type GuiMcpRegistryInput = {
   }
 }
 
-export function buildCodexManagedGuiMcpServers(
+export function buildManagedGuiMcpServers(
   input: GuiMcpRegistryInput,
   existingServers: readonly GuiMcpRuntimeServerConfig[] = []
 ): GuiMcpRuntimeServerConfig[] {
@@ -216,45 +216,14 @@ export function buildCodexManagedGuiMcpServers(
   for (const server of existingServers) {
     servers.set(server.id, server)
   }
-  for (const server of managedRuntimeServerConfigs(input, 'codex')) {
+  for (const server of managedRuntimeServerConfigs(input)) {
     if (!servers.has(server.id)) servers.set(server.id, server)
   }
   return [...servers.values()]
 }
 
-export function buildClaudeCodeManagedGuiMcpServers(input: GuiMcpRegistryInput = {}): Record<string, {
-  type: 'stdio'
-  command: string
-  args: string[]
-  env: Record<string, string>
-  timeout: number
-  alwaysLoad: true
-}> {
-  const servers: Record<string, {
-    type: 'stdio'
-    command: string
-    args: string[]
-    env: Record<string, string>
-    timeout: number
-    alwaysLoad: true
-  }> = {}
-  for (const server of managedRuntimeServerConfigs(input, 'claude')) {
-    if (!server.command || !server.args || !server.env || !server.timeoutMs) continue
-    servers[server.id] = {
-      type: 'stdio',
-      command: server.command,
-      args: server.args,
-      env: server.env,
-      timeout: server.timeoutMs,
-      alwaysLoad: true
-    }
-  }
-  return servers
-}
-
 function managedRuntimeServerConfigs(
-  input: GuiMcpRegistryInput,
-  runtime: 'codex' | 'claude'
+  input: GuiMcpRegistryInput
 ): GuiMcpRuntimeServerConfig[] {
   const servers: GuiMcpRuntimeServerConfig[] = []
   const settings = input.settings
@@ -426,7 +395,14 @@ function managedRuntimeServerConfigs(
     })
   }
   const computerUseSettings = input.computerUseMcp?.settings ?? settings
-  if (input.computerUseMcp && computerUseSettings && isComputerUseMcpConfigured(computerUseSettings, runtime)) {
+  if (
+    input.computerUseMcp
+    && computerUseSettings
+    && (
+      isComputerUseMcpConfigured(computerUseSettings, 'codex')
+      || isComputerUseMcpConfigured(computerUseSettings, 'claude')
+    )
+  ) {
     servers.push({
       id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
       command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),

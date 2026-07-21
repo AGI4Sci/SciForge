@@ -79,55 +79,22 @@ import {
   resolveCodexWorkspace,
   type CodexPlanGatewayLaunchConfig
 } from './codex-config'
-import {
-  GUI_RESEARCH_MCP_SERVER_NAME,
-  type ResearchSearchMcpLaunchConfig
-} from '../../research-search-mcp-config'
-import type { ScheduleMcpLaunchConfig } from '../../schedule-mcp-config'
-import type { WorkflowMcpLaunchConfig } from '../../workflow-mcp-config'
-import type { WorkspaceIntelMcpLaunchConfig } from '../../workspace-intel-mcp-config'
-import type { PaperRadarMcpLaunchConfig } from '../../paper-radar-mcp-config'
-import type { WriteAssistMcpLaunchConfig } from '../../write-assist-mcp-config'
-import type { RuntimeInspectorMcpLaunchConfig } from '../../runtime-inspector-mcp-config'
-import type { ScientificSkillsMcpLaunchConfig } from '../../scientific-skills-mcp-config'
-import type { ScientificPlottingMcpLaunchConfig } from '../../scientific-plotting-mcp-config'
-import type { BgcDiscoveryMcpLaunchConfig } from '../../bgc-discovery-mcp-config'
-import type { ImageGenerationMcpLaunchConfig } from '../../image-generation-mcp-config'
-import type { PptMasterMcpLaunchConfig } from '../../ppt-master-mcp-config'
-import type { VisualDocumentMcpLaunchConfig } from '../../visual-document-mcp-config'
-import type { CapabilityAgentToolSurface } from '../../capabilities/agent-tools'
+import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
-  isComputerUseMcpConfigured,
-  type ComputerUseMcpLaunchConfig
+  isComputerUseMcpConfigured
 } from '../../computer-use-mcp-config'
-import { buildCodexManagedGuiMcpServers } from '../../gui-mcp-registry'
 import {
-  WorkspaceIntelToolNames,
-  type WorkspaceIntelToolName
-} from '../../../../packages/workers/workspace-intel/src/contract'
-import {
-  createCodexDynamicMcpToolBridge,
-  type CodexAppServerDynamicToolCallRequest,
-  type CodexAppServerDynamicToolCallResponse,
-  type CodexAppServerDynamicToolSpec,
-  type CodexDynamicMcpClient,
-  type CodexDynamicMcpReleaseReason,
-  type CodexDynamicMcpServerConfig,
-  type CodexDynamicMcpToolBridge,
-  type CodexDynamicMcpToolUnavailableDiagnostic
-} from './codex-dynamic-mcp-tools'
+  type RuntimeToolCallRequest,
+  type RuntimeToolCallResponse,
+  type RuntimeToolDefinition,
+  type RuntimeToolReleaseReason
+} from '../agent-runtime/runtime-tool-contract'
 import {
   codexChildFromMultiAgentRecord,
   createCodexMultiAgentToolBridge,
   type CodexMultiAgentToolBridge
 } from './codex-multi-agent-tools'
-import {
-  canonicalWorkspaceFileKey,
-  CODEX_WORKSPACE_APPLY_PATCH_TOOL_NAME,
-  CodexWorkspacePatchTool,
-  workspaceFileSnapshot
-} from './codex-workspace-patch-tool'
 import type {
   MultiAgentExecutorInput,
   MultiAgentExecutorResult,
@@ -135,7 +102,6 @@ import type {
   MultiAgentTranscriptEntry,
   MultiAgentUsage
 } from '../../../../packages/workers/multi-agent/src'
-import { SCIENTIFIC_VISUAL_RUNTIME_POLICY } from '../scientific-visual-policy'
 
 class CodexCodingPlanLoginInProgressError extends Error {}
 
@@ -153,23 +119,7 @@ export type CodexRuntimeServiceOptions = {
   managedCodexHome?: string
   standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
-  scheduleMcpLaunch?: ScheduleMcpLaunchConfig
-  researchMcpLaunch?: ResearchSearchMcpLaunchConfig
-  workflowMcpLaunch?: WorkflowMcpLaunchConfig
-  workspaceIntelMcpLaunch?: WorkspaceIntelMcpLaunchConfig
-  paperRadarMcpLaunch?: PaperRadarMcpLaunchConfig
-  writeAssistMcpLaunch?: WriteAssistMcpLaunchConfig
-  runtimeInspectorMcpLaunch?: RuntimeInspectorMcpLaunchConfig
-  scientificSkillsMcpLaunch?: ScientificSkillsMcpLaunchConfig
-  scientificPlottingMcpLaunch?: ScientificPlottingMcpLaunchConfig
-  bgcDiscoveryMcpLaunch?: BgcDiscoveryMcpLaunchConfig
-  imageGenerationMcpLaunch?: ImageGenerationMcpLaunchConfig
-  pptMasterMcpLaunch?: PptMasterMcpLaunchConfig
-  visualDocumentMcpLaunch?: VisualDocumentMcpLaunchConfig
-  computerUseMcpLaunch?: ComputerUseMcpLaunchConfig
-  managedMcpServers?: readonly CodexDynamicMcpServerConfig[]
-  mcpClientFactory?: (server: CodexDynamicMcpServerConfig) => Promise<CodexDynamicMcpClient>
-  capabilityAgentTools?: CapabilityAgentToolSurface
+  capabilityAgentTools?: AgentRuntimeToolSurface
   createClient?: (options: CodexAppServerJsonRpcClientOptions) => CodexAppServerJsonRpcClient
 }
 
@@ -237,35 +187,11 @@ const INTERRUPT_TIMED_OUT_TURN_MS = 5_000
 const CODEX_PENDING_TOOL_COMPLETION_GRACE_MS = 5_000
 const CODEX_TURN_DISCONNECTED_MESSAGE = 'Codex runtime disconnected before this turn completed. The stuck turn was closed so you can retry.'
 const CODEX_TURN_STOPPED_MESSAGE = 'Codex runtime stopped before this turn completed. The stuck turn was closed so you can retry.'
-const CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES = [
-  'For bulk file downloads or long network transfers through command execution, make progress observable and bounded: stream to a `.part` file, print per-file progress/status, use connect/overall/low-speed timeouts and retries, validate expected file type/size, then atomically rename into place.',
-  'When the user explicitly asks to use the system proxy for command-based network work, inspect the current system proxy settings first, such as `scutil --proxy` on macOS, and pass the appropriate `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, and `NO_PROXY` values only to those network commands.',
-  'Do not use ad hoc download scripts that buffer an entire response before writing the destination file, such as Python urllib `response.read()` followed by one write; this can leave 0-byte files and an apparently running command with no progress.'
-]
-const CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS = [
-  'SciForge may configure specialized MCP tools for this runtime.',
-  'When an advertised specialized MCP tool directly matches the user request, use that tool before falling back to generic shell, curl, wget, ad hoc scripts, or direct scraping.',
-  SCIENTIFIC_VISUAL_RUNTIME_POLICY,
-  'When a request refers to any current, open, selected, visible, or deictic resource, observe the turn-bound canonical resourceRef supplied in the request context. If none was supplied, use `sciforge_discover` to invoke `surface.current`, then observe its resourceRef before acting.',
-  'A canonical current resource is authoritative. Renderer age is layout freshness only and does not expire semantic resources. Never replace a broker resource with path guessing, generic workspace reads, legacy GUI tools, direct application-state/sidecar reads, or shell access.',
-  'For semantic visual inspection, invoke the discovered surface inspection operation with the observed resourceRef and an opaque targetRef when appropriate. For workspace PNG, JPEG, or WebP files, discover and invoke the artifact inspection operation. Do not pass coordinates, component ids, revisions, invocation ids, or resource handles.',
-  'Use command execution only when no advertised specialized tool fits and the request is not about a current visible resource, or when the user explicitly asks for a command-based check.',
-  'For explicit computer_use, mouse, keyboard, browser, or GUI-control requests, continue through the computer_use tool actions instead of shell/open/osascript/screencapture/pbpaste fallbacks unless the user explicitly permits that fallback.',
-  ...CODEX_COMMAND_DOWNLOAD_INSTRUCTION_LINES
-].join('\n')
 const CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS = [
   'SciForge provides `delegate_task` for bounded child-agent work.',
   'Use it when parallel investigation or independent implementation subtasks materially help the user request.',
   'Give each child a concise label and a self-contained prompt; do not use it for trivial work or as a substitute for doing the main task.',
   'Treat the tool result as the child agent answer, the same way you would read an assistant response.'
-].join('\n')
-const CODEX_WORKSPACE_PATCH_DEVELOPER_INSTRUCTIONS = [
-  'SciForge provides `gui_workspace_apply_patch` for safe in-process edits of one existing workspace file.',
-  'Before calling it, read the same file in the current turn with `gui_workspace_read` so the patch is based on fresh bytes.',
-  'Use `gui_workspace_apply_patch` instead of Python, shell redirection, sed, perl, or whole-file rewrite scripts when a bounded text patch is sufficient.',
-  'The patch tool requires explicit user approval and rejects add, delete, rename, multi-file, context-free, and ambiguous-context patches.',
-  'When several files must change, call the patch tool separately for each file; multiple hunks for one file are supported.',
-  'If a patch reports patch_context_mismatch or patch_target_changed, re-read that file and retry with a smaller hunk copied from the exact current text. Do not switch to a whole-file shell rewrite.'
 ].join('\n')
 const CODEX_THREAD_FALLBACK_TITLE = 'Codex thread'
 const MAX_CODEX_THREAD_TITLE_LENGTH = 80
@@ -297,8 +223,6 @@ export class CodexRuntimeService {
   private readonly threadStore: CodexThreadStore | null
   private readonly eventStore: CodexEventStore | null
   private readonly usageStore: CodexUsageStore | null
-  private dynamicMcpBridge: CodexDynamicMcpToolBridge | null = null
-  private readonly workspacePatchTool = new CodexWorkspacePatchTool()
   private multiAgentBridge: CodexMultiAgentToolBridge | null = null
   private readonly multiAgentChildThreadIds = new Set<string>()
   private usageBackfillPromise: Promise<void> | null = null
@@ -315,11 +239,6 @@ export class CodexRuntimeService {
   private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
-  private readonly workspaceReadKeys = new Map<string, string>()
-  private readonly pendingWorkspacePatchApprovals = new Map<string, {
-    request: CodexAppServerPendingRequest
-    resolve: (allowed: boolean) => void
-  }>()
   private codingPlanAccount: Extract<CodexCodingPlanAccountResult, { ok: true }> | null = null
   private codingPlanRateLimits: Extract<CodexCodingPlanRateLimitsResult, { ok: true }> | null = null
   private readonly codingPlanLoginCompletions = new Map<string, CodexCodingPlanLoginCompletion>()
@@ -541,7 +460,6 @@ export class CodexRuntimeService {
       const dynamicTools = await this.codexDynamicTools(settings)
       const response = await client.startThread({
         ...baseThreadParams(settings, workspace, {
-          specializedMcpConfigured: this.hasDynamicMcpServersConfigured(),
           multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(settings)),
           dynamicTools
         }),
@@ -914,7 +832,7 @@ export class CodexRuntimeService {
       if (invalidTarget) return invalidTarget
       const codexThreadId = await this.codexThreadIdFor(threadId)
       const { client } = await this.ensureConnectedClient()
-      this.dynamicMcpBridge?.abortRequestsForTurn(threadId, turnId, 'user_stop')
+      this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, 'user_stop')
       this.multiAgentBridge?.abortRequestsForTurn(threadId, turnId)
       await client.interruptTurn({ threadId: codexThreadId, turnId })
       if (options.discard) await this.stop('user_stop')
@@ -994,23 +912,13 @@ export class CodexRuntimeService {
   }
 
   pendingServerRequests(): CodexAppServerPendingRequest[] {
-    const clientPending = typeof this.client?.pendingServerRequests === 'function'
+    return typeof this.client?.pendingServerRequests === 'function'
       ? this.client.pendingServerRequests()
       : []
-    return [
-      ...clientPending,
-      ...[...this.pendingWorkspacePatchApprovals.values()].map((entry) => entry.request)
-    ]
   }
 
   async resolveApproval(input: CodexAppServerResolveApprovalInput): Promise<CodexTurnMutationResult> {
     try {
-      const local = this.pendingWorkspacePatchApprovals.get(String(input.requestId))
-      if (local) {
-        this.pendingWorkspacePatchApprovals.delete(String(input.requestId))
-        local.resolve(input.decision === 'allowed' || input.decision === 'allowed_for_session')
-        return { ok: true }
-      }
       if (!this.client) throw new Error('No Codex app-server request is pending.')
       this.client.resolveApproval(input)
       return { ok: true }
@@ -1029,9 +937,11 @@ export class CodexRuntimeService {
     }
   }
 
-  async stop(reason: CodexDynamicMcpReleaseReason = 'service_shutdown'): Promise<void> {
+  async stop(reason: RuntimeToolReleaseReason = 'service_shutdown'): Promise<void> {
     const client = this.client
-    const dynamicMcpBridge = this.dynamicMcpBridge
+    for (const [threadId, turnId] of this.activeTurns) {
+      this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, reason)
+    }
     await this.finalizeActiveTurnsBeforeTeardown({
       code: reason === 'user_stop' ? 'aborted' : 'runtime_stopped',
       message: reason === 'user_stop'
@@ -1040,7 +950,6 @@ export class CodexRuntimeService {
       details: { reason }
     })
     this.client = null
-    this.dynamicMcpBridge = null
     this.clientPromise = null
     this.clientConnected = false
     this.clientInfo = null
@@ -1053,25 +962,20 @@ export class CodexRuntimeService {
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
-    this.cancelWorkspacePatchApprovals()
     this.clearCodingPlanAccountState('Codex runtime stopped before login completed.')
-    this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
-    await dynamicMcpBridge?.close(reason)
     if (client) await client.stop()
   }
 
   private async discardClientAfterFailure(error?: unknown): Promise<void> {
     if (error instanceof CodexCodingPlanLoginInProgressError) return
     const client = this.client
-    const dynamicMcpBridge = this.dynamicMcpBridge
     await this.finalizeActiveTurnsBeforeTeardown({
       code: 'runtime_disconnected',
       message: CODEX_TURN_DISCONNECTED_MESSAGE,
       details: { reason: 'runtime_disconnected' }
     })
     this.client = null
-    this.dynamicMcpBridge = null
     this.clientPromise = null
     this.clientConnected = false
     this.clientInfo = null
@@ -1084,11 +988,8 @@ export class CodexRuntimeService {
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
-    this.cancelWorkspacePatchApprovals()
     this.clearCodingPlanAccountState('Codex runtime disconnected before login completed.')
-    this.workspaceReadKeys.clear()
     this.closeAllEventSubscribers()
-    await dynamicMcpBridge?.close('runtime_disconnected').catch(() => undefined)
     if (!client) return
     try {
       await client.stop()
@@ -1148,24 +1049,7 @@ export class CodexRuntimeService {
         settings: current,
         managedCodexHome: this.options.managedCodexHome,
         standardCodexAuthPath: this.options.standardCodexAuthPath,
-        planGateway: this.options.planGateway,
-        scheduleMcpLaunch: this.options.scheduleMcpLaunch,
-        researchMcpLaunch: this.options.researchMcpLaunch,
-        workflowMcpLaunch: this.options.workflowMcpLaunch,
-        workspaceIntelMcpLaunch: this.options.workspaceIntelMcpLaunch,
-        paperRadarMcpLaunch: this.options.paperRadarMcpLaunch,
-        writeAssistMcpLaunch: this.options.writeAssistMcpLaunch,
-        runtimeInspectorMcpLaunch: this.options.runtimeInspectorMcpLaunch,
-        scientificSkillsMcpLaunch: this.options.scientificSkillsMcpLaunch,
-        scientificPlottingMcpLaunch: this.options.scientificPlottingMcpLaunch,
-        bgcDiscoveryMcpLaunch: this.options.bgcDiscoveryMcpLaunch,
-        imageGenerationMcpLaunch: this.options.imageGenerationMcpLaunch,
-        pptMasterMcpLaunch: this.options.pptMasterMcpLaunch,
-        visualDocumentMcpLaunch: this.options.visualDocumentMcpLaunch
-      })
-      this.dynamicMcpBridge = createCodexDynamicMcpToolBridge({
-        servers: codexDynamicMcpServers(this.options, current),
-        ...(this.options.mcpClientFactory ? { clientFactory: this.options.mcpClientFactory } : {})
+        planGateway: this.options.planGateway
       })
       this.ensureCodexMultiAgentBridge(current)
       const createClient = this.options.createClient ?? createCodexAppServerClient
@@ -1266,50 +1150,32 @@ export class CodexRuntimeService {
   }
 
   isResearchMcpConfigured(): boolean {
-    return Boolean(
-      this.options.researchMcpLaunch ||
-      this.options.scientificSkillsMcpLaunch ||
-      this.options.scientificPlottingMcpLaunch ||
-      this.options.bgcDiscoveryMcpLaunch ||
-      this.options.imageGenerationMcpLaunch ||
-      this.options.pptMasterMcpLaunch ||
-      this.options.visualDocumentMcpLaunch ||
-      (this.options.managedMcpServers ?? []).some((server) => server.id === GUI_RESEARCH_MCP_SERVER_NAME)
-    )
+    return Boolean(this.options.capabilityAgentTools)
   }
 
   isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    return Boolean(
-      (settings && this.options.computerUseMcpLaunch && isComputerUseMcpConfigured(settings, 'codex')) ||
-      (this.options.managedMcpServers ?? []).some((server) => server.id === GUI_COMPUTER_USE_MCP_SERVER_NAME)
-    )
+    return Boolean(this.options.capabilityAgentTools && isComputerUseMcpConfigured(settings, 'codex'))
   }
 
   isMcpConfigured(): boolean {
-    return this.hasDynamicMcpServersConfigured()
+    return Boolean(this.options.capabilityAgentTools)
   }
 
-  dynamicMcpToolDiagnostics(): CodexDynamicMcpToolUnavailableDiagnostic[] {
-    return this.dynamicMcpBridge?.toolUnavailableDiagnostics() ?? []
-  }
-
-  private hasDynamicMcpServersConfigured(): boolean {
-    return this.dynamicMcpBridge?.hasConfiguredServers() ?? codexDynamicMcpServers(this.options).length > 0
+  dynamicMcpToolDiagnostics(): [] {
+    return []
   }
 
   private async codexDynamicTools(
     settings?: AppSettingsV1,
     options: { includeMultiAgent?: boolean } = {}
-  ): Promise<CodexAppServerDynamicToolSpec[]> {
+  ): Promise<RuntimeToolDefinition[]> {
     const current = settings ?? await this.options.settings()
     const includeMultiAgent = options.includeMultiAgent !== false
     const capabilityTools = this.options.capabilityAgentTools?.tools() ?? []
     const reservedNames = new Set<string>(capabilityTools.map((tool) => tool.name))
-    const otherTools = [
-      ...this.workspacePatchTool.dynamicTools(),
-      ...(includeMultiAgent ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? [] : []),
-      ...(await this.dynamicMcpBridge?.dynamicTools() ?? [])
-    ].filter((tool) => !reservedNames.has(tool.name))
+    const otherTools = (includeMultiAgent
+      ? this.ensureCodexMultiAgentBridge(current)?.dynamicTools() ?? []
+      : []).filter((tool) => !reservedNames.has(tool.name))
     return [
       ...capabilityTools.map((tool) => ({
         type: tool.type,
@@ -1322,12 +1188,12 @@ export class CodexRuntimeService {
   }
 
   private async handleDynamicToolCall(
-    request: CodexAppServerDynamicToolCallRequest
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+    request: RuntimeToolCallRequest
+  ): Promise<RuntimeToolCallResponse> {
     const settings = await this.options.settings()
     const contextualRequest = await this.requestWithGuiThreadContext(request)
     await this.publishDynamicToolExecutionFact(contextualRequest, 'dispatched')
-    let response: CodexAppServerDynamicToolCallResponse
+    let response: RuntimeToolCallResponse
     try {
       response = await this.executeDynamicToolCall(contextualRequest, settings)
     } catch (error) {
@@ -1335,7 +1201,7 @@ export class CodexRuntimeService {
       response = {
         contentItems: [{
           type: 'inputText',
-          text: `MCP dynamic tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
+          text: `Runtime tool ${name} failed: ${error instanceof Error ? error.message : String(error)}`
         }],
         success: false,
         ...dynamicToolErrorMetadata(error)
@@ -1350,14 +1216,11 @@ export class CodexRuntimeService {
   }
 
   private async executeDynamicToolCall(
-    contextualRequest: CodexAppServerDynamicToolCallRequest,
+    contextualRequest: RuntimeToolCallRequest,
     settings: AppSettingsV1
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+  ): Promise<RuntimeToolCallResponse> {
     if (this.canHandleCapabilityAgentTool(contextualRequest)) {
       return this.handleCapabilityAgentToolCall(contextualRequest, settings)
-    }
-    if (this.workspacePatchTool.canHandle(contextualRequest)) {
-      return this.handleWorkspacePatchToolCall(contextualRequest, settings)
     }
     const multiAgentBridge = this.ensureCodexMultiAgentBridge(settings)
     if (multiAgentBridge?.canHandle(contextualRequest)) {
@@ -1369,30 +1232,18 @@ export class CodexRuntimeService {
       }
       return multiAgentBridge.callTool(contextualRequest)
     }
-    const bridge = this.dynamicMcpBridge
-    if (!bridge) {
-      return {
-        contentItems: [{ type: 'inputText', text: 'No MCP dynamic tool bridge is configured.' }],
-        success: false
-      }
-    }
-    const workspaceRequest = await this.requestWithThreadWorkspace(contextualRequest)
-    const response = await bridge.callTool(workspaceRequest)
-    if (response.success && workspaceIntelToolNameForRequest(workspaceRequest) === 'gui_workspace_read') {
-      await this.rememberWorkspaceRead(workspaceRequest)
-    }
-    return response
+    return failedDynamicToolCall(`Unknown runtime tool: ${contextualRequest.tool}`)
   }
 
-  private canHandleCapabilityAgentTool(request: CodexAppServerDynamicToolCallRequest): boolean {
+  private canHandleCapabilityAgentTool(request: RuntimeToolCallRequest): boolean {
     if (request.namespace || !this.options.capabilityAgentTools) return false
     return this.options.capabilityAgentTools.tools().some((tool) => tool.name === request.tool)
   }
 
   private async handleCapabilityAgentToolCall(
-    request: CodexAppServerDynamicToolCallRequest,
+    request: RuntimeToolCallRequest,
     settings: AppSettingsV1
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+  ): Promise<RuntimeToolCallResponse> {
     const surface = this.options.capabilityAgentTools
     if (!surface) return failedDynamicToolCall('The SciForge capability agent surface is not configured.')
     const threadId = stringValue(request.threadId).trim()
@@ -1404,6 +1255,7 @@ export class CodexRuntimeService {
       arguments: request.arguments,
       context: {
         requestId: request.requestId,
+        runtimeId: 'codex',
         threadId,
         workspaceId,
         ...(request.turnId ? { turnId: request.turnId } : {}),
@@ -1425,9 +1277,9 @@ export class CodexRuntimeService {
   }
 
   private async publishDynamicToolExecutionFact(
-    request: CodexAppServerDynamicToolCallRequest,
+    request: RuntimeToolCallRequest,
     phase: 'dispatched' | 'succeeded' | 'failed',
-    response?: CodexAppServerDynamicToolCallResponse
+    response?: RuntimeToolCallResponse
   ): Promise<void> {
     const threadId = stringValue(request.threadId).trim()
     const turnId = stringValue(request.turnId).trim()
@@ -1478,197 +1330,9 @@ export class CodexRuntimeService {
     }
   }
 
-  private async requestWithThreadWorkspace(
-    request: CodexAppServerDynamicToolCallRequest
-  ): Promise<CodexAppServerDynamicToolCallRequest> {
-    const toolName = workspaceIntelToolNameForRequest(request)
-    if (!toolName || !WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS.has(toolName)) return request
-    const args = dynamicToolArgumentsRecord(request.arguments)
-    if (!args) return request
-
-    const threadId = stringValue(request.threadId).trim()
-    const storedThread = threadId ? await this.findStoredThread(threadId) : null
-    const settings = await this.options.settings()
-    const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
-
-    return {
-      ...request,
-      arguments: {
-        ...args,
-        workspaceRoot
-      }
-    }
-  }
-
-  private async rememberWorkspaceRead(request: CodexAppServerDynamicToolCallRequest): Promise<void> {
-    const threadId = stringValue(request.threadId).trim()
-    const turnId = stringValue(request.turnId).trim()
-    const args = dynamicToolArgumentsRecord(request.arguments)
-    const workspaceRoot = stringValue(args?.workspaceRoot).trim()
-    const path = stringValue(args?.path).trim()
-    if (!threadId || !turnId || !workspaceRoot || !path) return
-    try {
-      const snapshot = await workspaceFileSnapshot({ workspaceRoot, path })
-      this.workspaceReadKeys.set(
-        workspaceReadKey(threadId, turnId, snapshot.canonicalPath),
-        snapshot.sha256
-      )
-      while (this.workspaceReadKeys.size > 1_024) {
-        const oldest = this.workspaceReadKeys.keys().next().value
-        if (oldest === undefined) break
-        this.workspaceReadKeys.delete(oldest)
-      }
-    } catch {
-      // Only a successful canonical read can satisfy read-before-edit.
-    }
-  }
-
-  private async handleWorkspacePatchToolCall(
-    request: CodexAppServerDynamicToolCallRequest,
-    settings: AppSettingsV1
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
-    const threadId = stringValue(request.threadId).trim()
-    const turnId = stringValue(request.turnId).trim()
-    if (!threadId || !turnId) {
-      return failedDynamicToolCall('gui_workspace_apply_patch requires threadId and turnId.', {
-        errorCode: 'patch_missing_call_context',
-        failureClass: 'invalid_arguments',
-        retryable: false,
-        evidenceDelta: true,
-        stateChanged: false
-      })
-    }
-    const args = dynamicToolArgumentsRecord(request.arguments)
-    const path = stringValue(args?.path).trim()
-    const patch = stringValue(args?.patch)
-    if (!path || !patch.trim()) {
-      return failedDynamicToolCall('gui_workspace_apply_patch requires path and patch.', {
-        errorCode: !path ? 'patch_missing_path' : 'patch_missing_content',
-        failureClass: 'invalid_arguments',
-        retryable: true,
-        evidenceDelta: true,
-        stateChanged: false
-      })
-    }
-    const runtime = getCodexRuntimeSettings(settings)
-    if (runtime.sandboxMode === 'read-only') {
-      return failedDynamicToolCall('gui_workspace_apply_patch is blocked by the read-only sandbox.', {
-        errorCode: 'patch_permission_denied',
-        failureClass: 'permission_denied',
-        retryable: false,
-        evidenceDelta: true,
-        stateChanged: false
-      })
-    }
-    const storedThread = await this.findStoredThread(threadId)
-    const workspaceRoot = resolveCodexWorkspace(settings, storedThread?.workspace)
-    let canonicalPath: string
-    try {
-      canonicalPath = await canonicalWorkspaceFileKey({ workspaceRoot, path })
-    } catch (error) {
-      return failedDynamicToolCall(error instanceof Error ? error.message : String(error), {
-        ...dynamicToolErrorMetadata(error),
-        evidenceDelta: true,
-        stateChanged: false
-      })
-    }
-    const readKey = workspaceReadKey(threadId, turnId, canonicalPath)
-    const readSha256 = this.workspaceReadKeys.get(readKey)
-    if (!readSha256) {
-      return failedDynamicToolCall(
-        `read-before-edit guard blocked ${path}; call gui_workspace_read for this file in the current turn before applying a patch.`,
-        {
-          errorCode: 'patch_read_required',
-          failureClass: 'precondition_failed',
-          retryable: true,
-          resourceIdentity: canonicalPath,
-          evidenceDelta: true,
-          stateChanged: false
-        }
-      )
-    }
-    let currentSnapshot: Awaited<ReturnType<typeof workspaceFileSnapshot>>
-    try {
-      currentSnapshot = await workspaceFileSnapshot({ workspaceRoot, path })
-    } catch (error) {
-      this.workspaceReadKeys.delete(readKey)
-      return failedDynamicToolCall(error instanceof Error ? error.message : String(error), {
-        ...dynamicToolErrorMetadata(error),
-        evidenceDelta: true,
-        stateChanged: false
-      })
-    }
-    if (currentSnapshot.sha256 !== readSha256) {
-      this.workspaceReadKeys.delete(readKey)
-      return failedDynamicToolCall(
-        `target changed after gui_workspace_read for ${path}; read the file again before rebuilding the patch.`,
-        {
-          errorCode: 'patch_target_changed',
-          failureClass: 'stale_resource',
-          retryable: true,
-          resourceIdentity: currentSnapshot.canonicalPath,
-          evidenceDelta: true,
-          stateChanged: false
-        }
-      )
-    }
-    const approvalIsAutomatic =
-      runtime.sandboxMode === 'danger-full-access' || runtime.approvalPolicy === 'never'
-    if (!approvalIsAutomatic) {
-      const approved = await this.requestWorkspacePatchApproval(request, path)
-      if (!approved) {
-        return failedDynamicToolCall(`User denied the patch for ${path}.`, {
-          errorCode: 'patch_user_denied',
-          failureClass: 'permission_denied',
-          retryable: false,
-          resourceIdentity: canonicalPath,
-          evidenceDelta: true,
-          stateChanged: false
-        })
-      }
-    }
-    const response = await this.workspacePatchTool.apply({ workspaceRoot, path, patch })
-    if (response.success || response.errorCode === 'patch_target_changed') {
-      this.workspaceReadKeys.delete(readKey)
-    }
-    return response
-  }
-
-  private async requestWorkspacePatchApproval(
-    request: CodexAppServerDynamicToolCallRequest,
-    path: string
-  ): Promise<boolean> {
-    const approvalId = workspacePatchApprovalId(request)
-    if (this.pendingWorkspacePatchApprovals.has(approvalId)) return false
-    let resolveApproval!: (allowed: boolean) => void
-    const decision = new Promise<boolean>((resolve) => { resolveApproval = resolve })
-    const pending: CodexAppServerPendingRequest = {
-      requestId: approvalId,
-      method: 'item/fileChange/requestApproval',
-      kind: 'approval',
-      threadId: request.threadId,
-      turnId: request.turnId,
-      itemId: request.callId || approvalId,
-      summary: `Apply a bounded patch to ${path}`,
-      params: { toolName: CODEX_WORKSPACE_APPLY_PATCH_TOOL_NAME }
-    }
-    this.pendingWorkspacePatchApprovals.set(approvalId, { request: pending, resolve: resolveApproval })
-    try {
-      await this.publishPendingServerRequest(pending)
-      return await decision
-    } finally {
-      this.pendingWorkspacePatchApprovals.delete(approvalId)
-    }
-  }
-
-  private cancelWorkspacePatchApprovals(): void {
-    for (const entry of this.pendingWorkspacePatchApprovals.values()) entry.resolve(false)
-    this.pendingWorkspacePatchApprovals.clear()
-  }
-
   private async requestWithGuiThreadContext(
-    request: CodexAppServerDynamicToolCallRequest
-  ): Promise<CodexAppServerDynamicToolCallRequest> {
+    request: RuntimeToolCallRequest
+  ): Promise<RuntimeToolCallRequest> {
     const threadId = stringValue(request.threadId).trim()
     if (!threadId) return request
     const storedThread = await this.findStoredThread(threadId)
@@ -1712,7 +1376,6 @@ export class CodexRuntimeService {
     const dynamicTools = await this.codexDynamicTools(settings, { includeMultiAgent: false })
     const threadResponse = await client.startThread({
       ...baseThreadParams(settings, workspace, {
-        specializedMcpConfigured: this.hasDynamicMcpServersConfigured(),
         multiAgentConfigured: false,
         dynamicTools
       }),
@@ -2581,7 +2244,6 @@ export class CodexRuntimeService {
     const dynamicTools = await this.codexDynamicTools(input.settings)
     const response = await input.client.startThread({
       ...baseThreadParams(input.settings, input.workspace, {
-        specializedMcpConfigured: this.hasDynamicMcpServersConfigured(),
         multiAgentConfigured: Boolean(this.ensureCodexMultiAgentBridge(input.settings)),
         dynamicTools
       }),
@@ -3306,64 +2968,12 @@ function isTerminalThreadStatus(status: string | undefined): boolean {
     status === 'interrupted'
 }
 
-function codexDynamicMcpServers(
-  options: CodexRuntimeServiceOptions,
-  settings?: AppSettingsV1
-): CodexDynamicMcpServerConfig[] {
-  return buildCodexManagedGuiMcpServers({
-    settings,
-    scheduleMcp: options.scheduleMcpLaunch && settings
-      ? { settings, launch: options.scheduleMcpLaunch }
-      : undefined,
-    researchMcp: options.researchMcpLaunch
-      ? { launch: options.researchMcpLaunch }
-      : undefined,
-    workflowMcp: options.workflowMcpLaunch && settings
-      ? { settings, launch: options.workflowMcpLaunch }
-      : undefined,
-    workspaceIntelMcp: options.workspaceIntelMcpLaunch && settings
-      ? { settings, launch: options.workspaceIntelMcpLaunch }
-      : undefined,
-    paperRadarMcp: options.paperRadarMcpLaunch
-      ? { launch: options.paperRadarMcpLaunch }
-      : undefined,
-    writeAssistMcp: options.writeAssistMcpLaunch && settings
-      ? { settings, launch: options.writeAssistMcpLaunch }
-      : undefined,
-    runtimeInspectorMcp: options.runtimeInspectorMcpLaunch && settings
-      ? { settings, launch: options.runtimeInspectorMcpLaunch }
-      : undefined,
-    scientificSkillsMcp: options.scientificSkillsMcpLaunch && settings
-      ? { settings, launch: options.scientificSkillsMcpLaunch }
-      : undefined,
-    scientificPlottingMcp: options.scientificPlottingMcpLaunch && settings
-      ? { settings, launch: options.scientificPlottingMcpLaunch }
-      : undefined,
-    bgcDiscoveryMcp: options.bgcDiscoveryMcpLaunch && settings
-      ? { settings, launch: options.bgcDiscoveryMcpLaunch }
-      : undefined,
-    imageGenerationMcp: options.imageGenerationMcpLaunch && settings
-      ? { settings, launch: options.imageGenerationMcpLaunch }
-      : undefined,
-    pptMasterMcp: options.pptMasterMcpLaunch && settings
-      ? { settings, launch: options.pptMasterMcpLaunch }
-      : undefined,
-    visualDocumentMcp: options.visualDocumentMcpLaunch && settings
-      ? { settings, launch: options.visualDocumentMcpLaunch }
-      : undefined,
-    computerUseMcp: options.computerUseMcpLaunch && settings
-      ? { settings, launch: options.computerUseMcpLaunch }
-      : undefined
-  }, options.managedMcpServers)
-}
-
 function baseThreadParams(
   settings: AppSettingsV1,
   workspace?: string,
   dynamicMcp: {
-    specializedMcpConfigured?: boolean
     multiAgentConfigured?: boolean
-    dynamicTools?: CodexAppServerDynamicToolSpec[]
+    dynamicTools?: RuntimeToolDefinition[]
   } = {}
 ): CodexAppServerThreadStartParams {
   const runtime = getCodexRuntimeSettings(settings)
@@ -3374,41 +2984,25 @@ function baseThreadParams(
     approvalPolicy: mapApprovalPolicy(runtime.approvalPolicy, runtime.sandboxMode),
     sandbox: mapThreadSandboxMode(runtime.sandboxMode),
     config: codexAppServerThreadReasoningConfig(),
-    ...(dynamicDeveloperInstructions({ ...dynamicMcp, workspacePatchConfigured: true })
-      ? { developerInstructions: dynamicDeveloperInstructions({ ...dynamicMcp, workspacePatchConfigured: true }) }
+    ...(dynamicDeveloperInstructions(dynamicMcp)
+      ? { developerInstructions: dynamicDeveloperInstructions(dynamicMcp) }
       : {}),
     ...(dynamicTools ? { dynamicTools } : {})
   }
 }
 
 function dynamicDeveloperInstructions(input: {
-  specializedMcpConfigured?: boolean
   multiAgentConfigured?: boolean
-  workspacePatchConfigured?: boolean
 }): string {
   return [
-    input.workspacePatchConfigured ? CODEX_WORKSPACE_PATCH_DEVELOPER_INSTRUCTIONS : '',
-    input.specializedMcpConfigured ? CODEX_SPECIALIZED_MCP_DEVELOPER_INSTRUCTIONS : '',
     input.multiAgentConfigured ? CODEX_MULTI_AGENT_DEVELOPER_INSTRUCTIONS : ''
   ].filter(Boolean).join('\n\n')
-}
-
-function workspaceReadKey(threadId: string, turnId: string, canonicalPath: string): string {
-  return `${threadId}\u0000${turnId}\u0000${canonicalPath}`
-}
-
-function workspacePatchApprovalId(request: CodexAppServerDynamicToolCallRequest): string {
-  const digest = createHash('sha256')
-    .update(`${request.threadId ?? ''}\u0000${request.turnId ?? ''}\u0000${String(request.requestId)}`)
-    .digest('hex')
-    .slice(0, 24)
-  return `workspace-patch-${digest}`
 }
 
 function failedDynamicToolCall(
   message: string,
   metadata: Partial<Pick<
-    CodexAppServerDynamicToolCallResponse,
+    RuntimeToolCallResponse,
     | 'structuredContent'
     | 'errorCode'
     | 'failureClass'
@@ -3417,7 +3011,7 @@ function failedDynamicToolCall(
     | 'evidenceDelta'
     | 'stateChanged'
   >> = {}
-): CodexAppServerDynamicToolCallResponse {
+): RuntimeToolCallResponse {
   return {
     success: false,
     contentItems: [{ type: 'inputText', text: message }],
@@ -4058,7 +3652,7 @@ function dynamicToolArgumentsRecord(value: unknown): Record<string, unknown> | n
   }
 }
 
-function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallResponse): string {
+function dynamicToolResponseSummary(response: RuntimeToolCallResponse): string {
   const text = response.contentItems
     .map((item) => item.type === 'inputText' ? item.text : '[image result]')
     .filter(Boolean)
@@ -4069,31 +3663,30 @@ function dynamicToolResponseSummary(response: CodexAppServerDynamicToolCallRespo
 }
 
 function dynamicToolErrorMetadata(error: unknown): Pick<
-  CodexAppServerDynamicToolCallResponse,
-  'errorCode' | 'failureClass' | 'retryable'
+  RuntimeToolCallResponse,
+  | 'errorCode'
+  | 'failureClass'
+  | 'retryable'
+  | 'resourceIdentity'
+  | 'evidenceDelta'
+  | 'stateChanged'
 > {
   const record = asRecord(error)
   const code = stringValue(record?.code).trim()
   const failureClass = stringValue(record?.failureClass).trim()
   const retryable = booleanValue(record?.retryable)
+  const resourceIdentity = stringValue(record?.resourceIdentity).trim()
+  const evidenceDelta = booleanValue(record?.evidenceDelta)
+  const stateChanged = booleanValue(record?.stateChanged)
   return {
     ...(code ? { errorCode: code } : {}),
     ...(failureClass ? { failureClass } : {}),
-    ...(retryable !== undefined ? { retryable } : {})
+    ...(retryable !== undefined ? { retryable } : {}),
+    ...(resourceIdentity ? { resourceIdentity } : {}),
+    ...(evidenceDelta !== undefined ? { evidenceDelta } : {}),
+    ...(stateChanged !== undefined ? { stateChanged } : {})
   }
 }
-
-function workspaceIntelToolNameForRequest(
-  request: CodexAppServerDynamicToolCallRequest
-): WorkspaceIntelToolName | null {
-  const tool = request.tool.trim()
-  if (!tool) return null
-  return WorkspaceIntelToolNames.find((name) => tool === name || tool.endsWith(`_${name}`)) ?? null
-}
-
-const WORKSPACE_INTEL_THREAD_WORKSPACE_TOOLS = new Set<WorkspaceIntelToolName>(
-  WorkspaceIntelToolNames
-)
 
 function arrayValue(value: unknown): unknown[] {
   return Array.isArray(value) ? value : []

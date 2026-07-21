@@ -824,7 +824,11 @@ export function ModelAccessSettings({
               {(status.tone === 'busy' || status.tone === 'error' ? status.message : '')
                 || serviceStatus?.action
                 || status.message
-                || t(accessMode === 'api' ? 'modelAccessApiStatusIdle' : 'modelAccessPlanStatusIdle')}
+                || t(accessMode === 'api'
+                  ? (textMember.protocol ?? 'auto') === 'auto'
+                    ? 'modelAccessApiStatusIdle'
+                    : 'modelAccessApiStatusIdleExplicit'
+                  : 'modelAccessPlanStatusIdle')}
             </p>
           </div>
         </div>

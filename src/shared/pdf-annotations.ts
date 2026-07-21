@@ -34,6 +34,15 @@ export type PdfAnchorRect = {
   height: number
 }
 
+export type PdfAnchorTextRange = {
+  start: number
+  end: number
+  startLine?: number
+  startColumn?: number
+  endLine?: number
+  endColumn?: number
+}
+
 export type PdfAnchor = {
   id: string
   kind: PdfAnchorKind
@@ -44,6 +53,7 @@ export type PdfAnchor = {
   textHash: string
   contextBefore: string
   contextAfter: string
+  textRange?: PdfAnchorTextRange
   pdfFingerprint: PdfFingerprint
   createdAt: string
   updatedAt: string
@@ -239,6 +249,20 @@ export const pdfAnchorRectSchema = z
   })
   .strict()
 
+export const pdfAnchorTextRangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    startLine: z.number().int().positive().optional(),
+    startColumn: z.number().int().positive().optional(),
+    endLine: z.number().int().positive().optional(),
+    endColumn: z.number().int().positive().optional()
+  })
+  .strict()
+  .refine((range) => range.end >= range.start, {
+    message: 'Annotation text range end must be greater than or equal to start.'
+  })
+
 export const pdfAnchorSchema = z
   .object({
     id: idSchema,
@@ -250,6 +274,7 @@ export const pdfAnchorSchema = z
     textHash: z.string().trim().max(128),
     contextBefore: boundedTextSchema,
     contextAfter: boundedTextSchema,
+    textRange: pdfAnchorTextRangeSchema.optional(),
     pdfFingerprint: pdfFingerprintSchema,
     createdAt: isoDateSchema,
     updatedAt: isoDateSchema
@@ -635,6 +660,7 @@ export function createPdfAnchor(input: {
   quote?: string
   contextBefore?: string
   contextAfter?: string
+  textRange?: PdfAnchorTextRange
   pdfFingerprint: PdfFingerprint
   createdAt?: string
   updatedAt?: string
@@ -643,6 +669,9 @@ export function createPdfAnchor(input: {
   const pageRange = pdfAnchorPageRange(rects)
   const quote = sanitizePdfAnnotationText(input.quote ?? '')
   const createdAt = input.createdAt ?? new Date().toISOString()
+  const textRange = input.textRange
+    ? pdfAnchorTextRangeSchema.parse(input.textRange)
+    : undefined
   return {
     id: input.id,
     kind: input.kind ?? (quote ? 'text' : 'visual'),
@@ -652,6 +681,7 @@ export function createPdfAnchor(input: {
     textHash: quote ? hashPdfAnchorText(quote) : '',
     contextBefore: sanitizePdfAnnotationText(input.contextBefore ?? '', 2_000),
     contextAfter: sanitizePdfAnnotationText(input.contextAfter ?? '', 2_000),
+    ...(textRange ? { textRange } : {}),
     pdfFingerprint: input.pdfFingerprint,
     createdAt,
     updatedAt: input.updatedAt ?? createdAt

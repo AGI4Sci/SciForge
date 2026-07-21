@@ -18,11 +18,13 @@ test('provider compatibility is capability-driven and independent of provider id
   const explicit = resolveProviderCompatibility({
     preferredProtocol: 'chat-completions',
     allowedProtocols: ['chat-completions'],
+    probeBeforeUse: true,
     chatMaxTokensField: 'max_completion_tokens',
     preserveChatReasoningContent: true,
   });
   assert.equal(explicit.preferredProtocol, 'chat-completions');
   assert.deepEqual(explicit.allowedProtocols, ['chat-completions']);
+  assert.equal(explicit.probeBeforeUse, true);
   assert.equal(explicit.chatMaxTokensField, 'max_completion_tokens');
 
   const requested = resolveProviderCompatibility(undefined, 'anthropic-messages');
@@ -32,6 +34,7 @@ test('provider compatibility is capability-driven and independent of provider id
     'chat-completions',
     'anthropic-messages',
   ]);
+  assert.equal(requested.probeBeforeUse, false);
   assert.throws(
     () => resolveProviderCompatibility({
       preferredProtocol: 'responses',
@@ -46,6 +49,10 @@ test('provider compatibility is capability-driven and independent of provider id
   assert.throws(
     () => resolveProviderCompatibility({ providerFamily: 'example' } as never),
     /unknown compatibility setting/u,
+  );
+  assert.throws(
+    () => resolveProviderCompatibility({ probeBeforeUse: 'yes' } as never),
+    /probeBeforeUse must be a boolean/u,
   );
 });
 
@@ -298,9 +305,17 @@ test('schema traversal treats instance literals as data and fails closed on unsa
     /property name exceeds/u,
   );
 
-  let nested: JsonObject = { type: 'string' };
-  for (let depth = 0; depth < 32; depth += 1) nested = { type: 'array', items: nested };
-  assert.throws(() => normalizeProviderJsonSchema(nested), /maximum depth/u);
+  let supportedNested: JsonObject = { type: 'string' };
+  for (let depth = 0; depth < 1_500; depth += 1) {
+    supportedNested = { type: 'array', items: supportedNested };
+  }
+  assert.doesNotThrow(() => normalizeProviderJsonSchema(supportedNested));
+
+  let excessiveNested: JsonObject = { type: 'string' };
+  for (let depth = 0; depth < 5_100; depth += 1) {
+    excessiveNested = { type: 'array', items: excessiveNested };
+  }
+  assert.throws(() => normalizeProviderJsonSchema(excessiveNested), /maximum node count/u);
 });
 
 test('Responses-to-Chat conversion rejects non-object tool parameter roots', () => {

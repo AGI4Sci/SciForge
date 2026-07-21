@@ -1,13 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
-  createCodexDynamicMcpToolBridge,
-  dynamicToolResponseFromMcpResult,
-  type CodexDynamicMcpClient
-} from './codex-dynamic-mcp-tools'
-import { createCodexMultiAgentToolBridge } from './codex-multi-agent-tools'
+  createRuntimeMcpToolGateway,
+  runtimeToolResponseFromMcpResult,
+  type McpToolDescriptor,
+  type RuntimeMcpClient
+} from './runtime-mcp-tool-gateway'
 
-describe('Codex dynamic MCP tool bridge', () => {
-  it('advertises MCP tools as flat Codex dynamic tools', async () => {
+describe('runtime MCP tool gateway', () => {
+  it('advertises MCP tools as runtime tool definitions', async () => {
     const client = fakeMcpClient({
       tools: [
         {
@@ -21,7 +21,7 @@ describe('Codex dynamic MCP tool bridge', () => {
         }
       ]
     })
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{
         id: 'gui.research',
         command: '/bin/research-mcp',
@@ -30,9 +30,12 @@ describe('Codex dynamic MCP tool bridge', () => {
       clientFactory: async () => client
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([
+    await expect(bridge.tools()).resolves.toEqual([
       {
         type: 'function',
+        namespace: 'mcp_gui_research',
+        providerId: 'gui.research',
+        providerToolName: 'research.search',
         name: 'research_search',
         description: 'Search scientific literature.',
         inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
@@ -40,8 +43,8 @@ describe('Codex dynamic MCP tool bridge', () => {
     ])
   })
 
-  it('advertises provider-safe MCP input schemas for Codex dynamic tools', async () => {
-    const bridge = createCodexDynamicMcpToolBridge({
+  it('advertises provider-safe MCP input schemas for runtime tools', async () => {
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{
         id: 'gui_owl_computer_use',
         command: '/bin/computer-use-mcp',
@@ -72,16 +75,19 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([
+    await expect(bridge.tools()).resolves.toEqual([
       {
         type: 'function',
+        namespace: 'mcp_gui_owl_computer_use',
+        providerId: 'gui_owl_computer_use',
+        providerToolName: 'computer_use',
         name: 'computer_use',
         description: 'Shared host UI control.',
         inputSchema: {
           type: 'object',
           properties: {
             action: { type: 'string', enum: ['list_targets', 'bind_target'] },
-            targetId: { type: 'string', minLength: 1 }
+            targetId: { type: 'string' }
           },
           required: ['action']
         }
@@ -91,7 +97,7 @@ describe('Codex dynamic MCP tool bridge', () => {
 
   it('isolates an items tuple schema while keeping valid tools available', async () => {
     const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'healthy result' }] }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'mixed-tools', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{
@@ -121,8 +127,11 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([{
+    await expect(bridge.tools()).resolves.toEqual([{
       type: 'function',
+      namespace: 'mcp_mixed-tools',
+      providerId: 'mixed-tools',
+      providerToolName: 'healthy_tool',
       name: 'healthy_tool',
       description: 'Must remain callable.',
       inputSchema: {
@@ -131,7 +140,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       }
     }])
     // Re-enumeration must not flood the bounded diagnostic history.
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'healthy-after-invalid-schema',
       tool: 'healthy_tool',
@@ -157,7 +166,7 @@ describe('Codex dynamic MCP tool bridge', () => {
   })
 
   it('rejects an explicit non-object input schema without exposing its value', async () => {
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'non-object', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{
@@ -167,7 +176,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    await expect(bridge.tools()).resolves.toEqual([])
     expect(bridge.lifecycleEvents()).toEqual([
       expect.objectContaining({
         event: 'tool_unavailable',
@@ -179,7 +188,7 @@ describe('Codex dynamic MCP tool bridge', () => {
   })
 
   it('rejects a JSON Schema whose root explicitly describes a non-object', async () => {
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'array-root', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{
@@ -189,7 +198,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    await expect(bridge.tools()).resolves.toEqual([])
     expect(bridge.lifecycleEvents()).toEqual([
       expect.objectContaining({
         event: 'tool_unavailable',
@@ -200,7 +209,7 @@ describe('Codex dynamic MCP tool bridge', () => {
   })
 
   it('rejects nested non-object property schemas without leaking private fields', async () => {
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'nested-invalid', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{
@@ -215,7 +224,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([])
+    await expect(bridge.tools()).resolves.toEqual([])
     expect(bridge.lifecycleEvents()).toEqual([
       expect.objectContaining({
         event: 'tool_unavailable',
@@ -238,13 +247,13 @@ describe('Codex dynamic MCP tool bridge', () => {
         }
       }
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: '/private/mcp/server', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({ tools })
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([])
-    await bridge.dynamicTools()
+    await expect(bridge.tools()).resolves.toEqual([])
+    await bridge.tools()
     const diagnostics = bridge.toolUnavailableDiagnostics()
     expect(diagnostics).toHaveLength(50)
     expect(new Set(diagnostics.map((item) => `${item.toolName}:${item.diagnosticCode}`)).size).toBe(50)
@@ -273,14 +282,17 @@ describe('Codex dynamic MCP tool bridge', () => {
       listTools: secondListTools
     })
     const clients = [firstClient, secondClient]
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: vi.fn(async () => clients.shift() ?? secondClient)
     })
 
-    await expect(bridge.dynamicTools()).resolves.toEqual([
+    await expect(bridge.tools()).resolves.toEqual([
       {
         type: 'function',
+        namespace: 'mcp_server-1',
+        providerId: 'server-1',
+        providerToolName: 'lookup',
         name: 'lookup',
         description: 'Callable.',
         inputSchema: { type: 'object', properties: {} }
@@ -295,7 +307,7 @@ describe('Codex dynamic MCP tool bridge', () => {
     const workingCallTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'called working server' }]
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [
         { id: 'optional-broken', command: '/bin/broken' },
         { id: 'working', command: '/bin/working' }
@@ -329,10 +341,10 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('disambiguates duplicate MCP tool names without relying on namespace exposure', async () => {
+  it('uses stable provider namespaces for duplicate MCP tool names', async () => {
     const labACallTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'lab-a' }] }))
     const labBCallTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'lab-b' }] }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [
         { id: 'lab.a', command: '/bin/lab-a' },
         { id: 'lab.b', command: '/bin/lab-b' }
@@ -343,12 +355,16 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    const tools = await bridge.dynamicTools()
-    expect(tools.map((tool) => tool.name)).toEqual(['mcp_lab_a_lookup', 'mcp_lab_b_lookup'])
+    const tools = await bridge.tools()
+    expect(tools.map((tool) => ({ namespace: tool.namespace, name: tool.name }))).toEqual([
+      { namespace: 'mcp_lab_a', name: 'lookup' },
+      { namespace: 'mcp_lab_b', name: 'lookup' }
+    ])
 
     await expect(bridge.callTool({
-      requestId: 'call-request-flat',
-      tool: 'mcp_lab_b_lookup',
+      requestId: 'call-request-namespaced',
+      namespace: 'mcp_lab_b',
+      tool: 'lookup',
       arguments: { value: 1 }
     })).resolves.toEqual({
       contentItems: [{ type: 'inputText', text: 'lab-b' }],
@@ -361,12 +377,12 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('routes dynamic tool calls back to the original MCP tool name', async () => {
+  it('routes runtime tool calls back to the original MCP tool name', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'ok' }],
       structuredContent: { rows: 1 }
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{ name: 'tool.with.dot', description: 'Callable.' }],
@@ -374,7 +390,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'call-request-1',
       namespace: 'mcp_server-1',
@@ -385,7 +401,8 @@ describe('Codex dynamic MCP tool bridge', () => {
         { type: 'inputText', text: 'ok' },
         { type: 'inputText', text: 'structuredContent:\n{\n  "rows": 1\n}' }
       ],
-      success: true
+      success: true,
+      structuredContent: { rows: 1 }
     })
     expect(callTool).toHaveBeenCalledWith(
       { name: 'tool.with.dot', arguments: { value: 1 } },
@@ -393,11 +410,11 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('parses JSON string arguments from Codex dynamic tool calls', async () => {
+  it('parses JSON string arguments from Codex runtime tool calls', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'ok' }]
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{ name: 'lookup', description: 'Callable.' }],
@@ -405,7 +422,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'call-request-json-string',
       tool: 'lookup',
@@ -420,11 +437,11 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('repairs numeric MCP arguments to match advertised schema bounds', async () => {
+  it('passes MCP arguments through without silent schema repair', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'ok' }]
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{
@@ -456,7 +473,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'call-request-bounded-number',
       tool: 'research_search',
@@ -471,8 +488,8 @@ describe('Codex dynamic MCP tool bridge', () => {
         name: 'research_search',
         arguments: {
           query: 'AI scientist',
-          maxResults: 100,
-          nested: { limit: 10 }
+          maxResults: 1000,
+          nested: { limit: '12' }
         }
       },
       expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
@@ -488,21 +505,29 @@ describe('Codex dynamic MCP tool bridge', () => {
       content: [{ type: 'text', text: 'reconnected' }]
     }))
     const firstClient = fakeMcpClient({
-      tools: [{ name: 'lookup', description: 'Callable.' }],
+      tools: [{
+        name: 'lookup',
+        description: 'Callable.',
+        annotations: { readOnlyHint: true }
+      }],
       callTool: firstCallTool,
       close: firstClose
     })
     const secondClient = fakeMcpClient({
-      tools: [{ name: 'lookup', description: 'Callable.' }],
+      tools: [{
+        name: 'lookup',
+        description: 'Callable.',
+        annotations: { readOnlyHint: true }
+      }],
       callTool: secondCallTool
     })
     const clients = [firstClient, secondClient]
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: vi.fn(async () => clients.shift() ?? secondClient)
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'call-request-reconnect',
       tool: 'lookup',
@@ -520,9 +545,9 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('routes dotted dynamic tool call names back to their MCP server namespace', async () => {
+  it('routes dotted runtime tool call names back to their MCP server namespace', async () => {
     const callTool = vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{ name: 'lookup', description: 'Callable.' }],
@@ -530,7 +555,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'call-request-dotted',
       tool: 'mcp_server-1.lookup',
@@ -545,8 +570,8 @@ describe('Codex dynamic MCP tool bridge', () => {
     )
   })
 
-  it('returns a failed dynamic tool response instead of throwing when lookup fails', async () => {
-    const bridge = createCodexDynamicMcpToolBridge({
+  it('returns a failed runtime tool response instead of throwing when lookup fails', async () => {
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => ({
         listTools: vi.fn(async () => {
@@ -561,18 +586,20 @@ describe('Codex dynamic MCP tool bridge', () => {
       requestId: 'call-request-catalog-error',
       tool: 'lookup',
       arguments: {}
-    })).resolves.toEqual({
+    })).resolves.toMatchObject({
       contentItems: [{ type: 'inputText', text: 'MCP tool lookup failed: catalog unavailable' }],
-      success: false
+      success: false,
+      errorCode: 'mcp_tool_failed',
+      retryable: true
     })
   })
 
-  it('passes Codex computer-use arguments through dynamic MCP calls', async () => {
+  it('passes runtime computer-use arguments through runtime MCP calls', async () => {
     const callTool = vi.fn(async () => ({
       content: [{ type: 'text', text: 'bound' }],
       structuredContent: { ok: true }
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{
         id: 'gui_owl_computer_use',
         command: '/bin/computer-use-mcp',
@@ -584,7 +611,7 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     await expect(bridge.callTool({
       requestId: 'request-1',
       threadId: 'codex-thread-1',
@@ -612,13 +639,13 @@ describe('Codex dynamic MCP tool bridge', () => {
     const started = new Promise<void>((resolve) => {
       resolveStarted = resolve
     })
-    const callTool: CodexDynamicMcpClient['callTool'] = vi.fn((_input, options) => new Promise((_, reject) => {
+    const callTool: RuntimeMcpClient['callTool'] = vi.fn((_input, options) => new Promise((_, reject) => {
       resolveStarted()
       options?.signal?.addEventListener('abort', () => {
         reject(options.signal?.reason ?? new Error('aborted'))
       }, { once: true })
     }))
-    const bridge = createCodexDynamicMcpToolBridge({
+    const bridge = createRuntimeMcpToolGateway({
       servers: [{ id: 'server-1', command: '/bin/mcp' }],
       clientFactory: async () => fakeMcpClient({
         tools: [{ name: 'slow_tool', description: 'Slow callable.' }],
@@ -626,16 +653,26 @@ describe('Codex dynamic MCP tool bridge', () => {
       })
     })
 
-    await bridge.dynamicTools()
+    await bridge.tools()
     const pending = bridge.callTool({
       requestId: 'request-1',
+      runtimeId: 'test-runtime',
       threadId: 'thread-1',
       turnId: 'turn-1',
       tool: 'slow_tool',
       arguments: {}
     })
     await started
-    expect(bridge.abortRequestsForTurn('thread-1', 'turn-1', 'user_stop')).toBe(1)
+    expect(bridge.abortRequestsForTurn({
+      runtimeId: 'other-runtime',
+      threadId: 'thread-1',
+      turnId: 'turn-1'
+    }, 'user_stop')).toBe(0)
+    expect(bridge.abortRequestsForTurn({
+      runtimeId: 'test-runtime',
+      threadId: 'thread-1',
+      turnId: 'turn-1'
+    }, 'user_stop')).toBe(1)
     await expect(pending).resolves.toMatchObject({ success: false })
     expect(bridge.lifecycleEvents()).toEqual([
       expect.objectContaining({
@@ -649,41 +686,100 @@ describe('Codex dynamic MCP tool bridge', () => {
     ])
   })
 
-  it('only aborts multi-agent child calls for the exact interrupted turn', async () => {
-    const bridge = createCodexMultiAgentToolBridge({
-      executor: async ({ signal }) => {
-        await new Promise((_resolve, reject) => {
-          signal.addEventListener('abort', () => {
-            reject(signal.reason ?? new Error('aborted'))
-          }, { once: true })
-        })
-        return { summary: 'unreachable' }
-      }
-    })
-    const first = bridge.callTool({
-      requestId: 'request-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'delegate_task',
-      arguments: { prompt: 'wait' }
-    })
-    const second = bridge.callTool({
-      requestId: 'request-2',
-      threadId: 'thread-1',
-      turnId: 'turn-2',
-      tool: 'delegate_task',
-      arguments: { prompt: 'wait' }
+  it('compacts a deeply nested catalog schema without recursive cloning', async () => {
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [{ id: 'deep-schema', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({
+        tools: [{
+          name: 'deep_tool',
+          inputSchema: {
+            type: 'object',
+            properties: { recipe: deepSchema(5_000) }
+          }
+        }]
+      })
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(bridge.abortRequestsForTurn('thread-1', 'turn-1')).toBe(1)
-    await expect(first).resolves.toMatchObject({ success: false })
-    expect(bridge.abortRequestsForTurn('thread-1', 'turn-2')).toBe(1)
-    await expect(second).resolves.toMatchObject({ success: false })
+    await expect(bridge.tools()).resolves.toEqual([
+      expect.objectContaining({
+        providerId: 'deep-schema',
+        providerToolName: 'deep_tool',
+        inputSchema: {
+          type: 'object',
+          properties: { recipe: { type: 'object' } }
+        }
+      })
+    ])
   })
 
-  it('converts MCP error results into failed dynamic tool responses', () => {
-    expect(dynamicToolResponseFromMcpResult({
+  it('rejects non-object arguments without calling the MCP server', async () => {
+    const callTool = vi.fn(async () => ({ content: [] }))
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [{ id: 'server-1', command: '/bin/mcp' }],
+      clientFactory: async () => fakeMcpClient({ tools: [{ name: 'lookup' }], callTool })
+    })
+
+    await bridge.tools()
+    await expect(bridge.callTool({
+      requestId: 'invalid-arguments',
+      tool: 'lookup',
+      arguments: ['not', 'an', 'object']
+    })).resolves.toMatchObject({
+      success: false,
+      errorCode: 'invalid_arguments',
+      failureClass: 'invalid_arguments'
+    })
+    expect(callTool).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a non-idempotent tool after an ambiguous disconnect', async () => {
+    const firstCall = vi.fn(async () => { throw new Error('Connection closed') })
+    const secondCall = vi.fn(async () => ({ content: [{ type: 'text', text: 'duplicated' }] }))
+    const clients = [
+      fakeMcpClient({
+        tools: [{
+          name: 'mutate',
+          annotations: { readOnlyHint: false, idempotentHint: false }
+        }],
+        callTool: firstCall
+      }),
+      fakeMcpClient({ tools: [{ name: 'mutate' }], callTool: secondCall })
+    ]
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [{ id: 'server-1', command: '/bin/mcp' }],
+      clientFactory: async () => clients.shift()!
+    })
+
+    await bridge.tools()
+    await expect(bridge.callTool({
+      requestId: 'non-idempotent-disconnect',
+      tool: 'mutate',
+      arguments: {}
+    })).resolves.toMatchObject({ success: false })
+    expect(firstCall).toHaveBeenCalledTimes(1)
+    expect(secondCall).not.toHaveBeenCalled()
+  })
+
+  it('synchronizes changed server configs through the single shared gateway', async () => {
+    const oldClose = vi.fn(async () => undefined)
+    const oldClient = fakeMcpClient({ tools: [{ name: 'old_tool' }], close: oldClose })
+    const newClient = fakeMcpClient({ tools: [{ name: 'new_tool' }] })
+    const bridge = createRuntimeMcpToolGateway({
+      servers: [{ id: 'shared', command: '/bin/old' }],
+      clientFactory: async (server) => server.command === '/bin/old' ? oldClient : newClient
+    })
+
+    await bridge.tools()
+    await expect(bridge.sync([{ id: 'shared', command: '/bin/new' }])).resolves.toBe(true)
+    expect(oldClose).toHaveBeenCalledTimes(1)
+    await expect(bridge.tools()).resolves.toEqual([
+      expect.objectContaining({ providerId: 'shared', providerToolName: 'new_tool' })
+    ])
+    await expect(bridge.sync([{ id: 'shared', command: '/bin/new' }])).resolves.toBe(false)
+  })
+
+  it('converts MCP error results into failed runtime tool responses', () => {
+    expect(runtimeToolResponseFromMcpResult({
       content: [{ type: 'text', text: 'failed upstream' }],
       isError: true
     })).toEqual({
@@ -693,7 +789,7 @@ describe('Codex dynamic MCP tool bridge', () => {
   })
 
   it('preserves structured MCP failure receipts for execution governance', () => {
-    expect(dynamicToolResponseFromMcpResult({
+    expect(runtimeToolResponseFromMcpResult({
       structuredContent: {
         error: {
           code: 'unknown_resource_ref',
@@ -712,12 +808,20 @@ describe('Codex dynamic MCP tool bridge', () => {
   })
 })
 
+function deepSchema(depth: number): Record<string, unknown> {
+  let schema: Record<string, unknown> = { type: 'string' }
+  for (let index = 0; index < depth; index += 1) {
+    schema = { type: 'object', properties: { child: schema } }
+  }
+  return schema
+}
+
 function fakeMcpClient(options: {
-  tools?: Array<{ name: string; description?: string; inputSchema?: unknown }>
-  listTools?: CodexDynamicMcpClient['listTools']
-  callTool?: CodexDynamicMcpClient['callTool']
-  close?: CodexDynamicMcpClient['close']
-}): CodexDynamicMcpClient {
+  tools?: McpToolDescriptor[]
+  listTools?: RuntimeMcpClient['listTools']
+  callTool?: RuntimeMcpClient['callTool']
+  close?: RuntimeMcpClient['close']
+}): RuntimeMcpClient {
   return {
     listTools: options.listTools ?? vi.fn(async () => ({ tools: options.tools ?? [] })),
     callTool: options.callTool ?? vi.fn(async () => ({ content: [] })),

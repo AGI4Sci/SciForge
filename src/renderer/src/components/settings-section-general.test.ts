@@ -33,6 +33,7 @@ const labels: Record<string, string> = {
   modelAccessPlanStatusIdle: 'Local plan path only.',
   modelAccessCheck: 'Check setup',
   modelAccessApiStatusIdle: 'Automatic connection.',
+  modelAccessApiStatusIdleExplicit: 'Explicit connection.',
   modelAccessAdvancedCapabilities: 'Advanced model capabilities',
   modelAccessAdvancedCapabilitiesDesc: 'Optional image and scientific models',
   modelRouterModels: 'Model Router models',

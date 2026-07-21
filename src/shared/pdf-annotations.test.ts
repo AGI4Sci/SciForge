@@ -57,6 +57,52 @@ describe('pdf annotation sidecar schema', () => {
     expect(migrated.manifest.schemaVersion).toBe(1)
   })
 
+  it('persists stable text ranges through create, schema migration, and stable normalization', () => {
+    const anchor = createPdfAnchor({
+      id: 'markdown-anchor',
+      rects: [],
+      quote: 'bounded selection',
+      contextBefore: 'before',
+      contextAfter: 'after',
+      textRange: {
+        start: 12,
+        end: 29,
+        startLine: 2,
+        startColumn: 4,
+        endLine: 2,
+        endColumn: 21
+      },
+      pdfFingerprint: fingerprint,
+      createdAt: '2026-06-22T00:00:00.000Z'
+    })
+    const sidecar: PdfAnnotationSidecar = {
+      ...createEmptyPdfAnnotationSidecar(fingerprint),
+      anchors: [anchor]
+    }
+
+    expect(anchor.textRange).toEqual({
+      start: 12,
+      end: 29,
+      startLine: 2,
+      startColumn: 4,
+      endLine: 2,
+      endColumn: 21
+    })
+    expect(migratePdfAnnotationSidecar(JSON.parse(JSON.stringify(sidecar))).anchors[0]?.textRange)
+      .toEqual(anchor.textRange)
+    expect(stablePdfAnnotationSidecar(sidecar).anchors[0]?.textRange).toEqual(anchor.textRange)
+  })
+
+  it('rejects inverted stable text ranges', () => {
+    expect(() => createPdfAnchor({
+      id: 'bad-range',
+      rects: [],
+      quote: 'bad',
+      textRange: { start: 9, end: 3 },
+      pdfFingerprint: fingerprint
+    })).toThrow('Annotation text range end')
+  })
+
   it('keeps stable ordering for reviewable JSON diffs', () => {
     const sidecar: PdfAnnotationSidecar = {
       ...createEmptyPdfAnnotationSidecar(fingerprint),

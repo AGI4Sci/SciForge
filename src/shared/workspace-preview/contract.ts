@@ -82,7 +82,7 @@ export const WORKSPACE_PREVIEW_ANNOTATION_KINDS = [
   'question',
   'answer'
 ] as const
-export const WORKSPACE_PREVIEW_ANNOTATION_DOCUMENT_KINDS = ['pdf', 'docx'] as const
+export const WORKSPACE_PREVIEW_ANNOTATION_DOCUMENT_KINDS = ['pdf', 'docx', 'markdown'] as const
 export const WORKSPACE_PREVIEW_ANNOTATION_ANCHOR_KINDS = ['text', 'image', 'visual'] as const
 export const WORKSPACE_PREVIEW_ANNOTATION_THREAD_STATUSES = ['open', 'resolved'] as const
 export const TEXT_WORKSPACE_PREVIEW_PLUGIN_ID = 'text'
@@ -498,6 +498,20 @@ export const workspacePreviewAnnotationAnchorRectSchema = z.object({
   height: z.number().finite().gt(0).max(1)
 }).strict()
 
+export const workspacePreviewAnnotationTextRangeSchema = z.object({
+  start: z.number().int().nonnegative(),
+  end: z.number().int().nonnegative(),
+  startLine: z.number().int().positive().optional(),
+  startColumn: z.number().int().positive().optional(),
+  endLine: z.number().int().positive().optional(),
+  endColumn: z.number().int().positive().optional()
+}).strict().refine((range) => range.end >= range.start, {
+  message: 'Annotation text range end must be greater than or equal to start.'
+})
+
+export type WorkspacePreviewAnnotationTextRange =
+  z.infer<typeof workspacePreviewAnnotationTextRangeSchema>
+
 export const workspacePreviewAnnotationUpsertTargetSchema = z.object({
   documentKind: workspacePreviewAnnotationDocumentKindSchema.optional(),
   threadId: idSchema.optional(),
@@ -507,6 +521,7 @@ export const workspacePreviewAnnotationUpsertTargetSchema = z.object({
     quote: boundedString(WORKSPACE_PREVIEW_MAX_ANNOTATION_TEXT_CHARS).optional(),
     contextBefore: boundedString(WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS).optional(),
     contextAfter: boundedString(WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS).optional(),
+    textRange: workspacePreviewAnnotationTextRangeSchema.optional(),
     pageStart: z.number().int().positive().max(1_000_000).optional(),
     pageEnd: z.number().int().positive().max(1_000_000).optional(),
     rects: z.array(workspacePreviewAnnotationAnchorRectSchema)

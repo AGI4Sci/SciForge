@@ -27,6 +27,7 @@ const caller: CapabilityCallerContext = {
 
 const context: CapabilityAgentToolRequestContext = {
   requestId: 'request-1',
+  runtimeId: 'test',
   threadId: 'thread-1',
   workspaceId: '/workspace'
 }
@@ -164,7 +165,7 @@ describe('CapabilityAgentToolSurface', () => {
       expectedRevision: documentHandle.semanticRevision,
       invocationId: expect.stringMatching(/^agent_inv_/u),
       input: { title: 'Updated' }
-    }), {})
+    }), { context })
     expect(JSON.stringify({ opened, observed })).not.toMatch(
       /cap_|semanticRevision|expiresAt|actionId|invocationId|expectedRevision|snapshotToken|componentId/u
     )

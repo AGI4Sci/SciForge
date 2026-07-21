@@ -249,7 +249,7 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).not.toContain('file://')
   })
 
-  it('maps an initial document selection to the PDF page and jump rectangle', () => {
+  it('maps an initial document selection to the initial PDF page without a replayable jump request', () => {
     const observation = createPdfObservation({
       selection: {
         kind: 'document',
@@ -273,7 +273,7 @@ describe('PdfWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-initial-page="6"')
-    expect(html).toContain('data-has-jump-rect="true"')
+    expect(html).toContain('data-has-jump-rect="false"')
   })
 
   it('prefers workspace preview URL transport for browser-native PDF loading', async () => {

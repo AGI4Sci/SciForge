@@ -56,8 +56,9 @@ type ModelRouterMemberConfig = {
   apiKeyEnv: string
   model: string
   compatibility?: {
-    preferredProtocol: Exclude<ModelRouterProtocolPreference, 'auto'>
-    allowedProtocols: Array<Exclude<ModelRouterProtocolPreference, 'auto'>>
+    preferredProtocol?: Exclude<ModelRouterProtocolPreference, 'auto'>
+    allowedProtocols?: Array<Exclude<ModelRouterProtocolPreference, 'auto'>>
+    probeBeforeUse?: boolean
   }
 }
 
@@ -345,7 +346,13 @@ function memberConfig(
 function protocolCompatibility(
   protocol: ModelRouterProtocolPreference | undefined
 ): Pick<ModelRouterMemberConfig, 'compatibility'> | Record<string, never> {
-  if (!protocol || protocol === 'auto') return {}
+  if (!protocol || protocol === 'auto') {
+    return {
+      compatibility: {
+        probeBeforeUse: true
+      }
+    }
+  }
   return {
     compatibility: {
       preferredProtocol: protocol,
