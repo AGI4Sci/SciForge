@@ -1,11 +1,13 @@
 import {
   DEFAULT_MODEL_ROUTER_BASE_URL,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
+  MODEL_ROUTER_PROTOCOL_PREFERENCES,
   type AppSettingsV1,
   type ModelAccessSettingsPatchV1,
   type ModelAccessSettingsV1,
   type ModelRouterMemberSettingsPatchV1,
   type ModelRouterMemberSettingsV1,
+  type ModelRouterProtocolPreference,
   type ModelRouterSettingsPatchV1,
   type ModelRouterSettingsV1
 } from './app-settings-types'
@@ -186,7 +188,8 @@ function defaultModelRouterMember(model = ''): ModelRouterMemberSettingsV1 {
   return {
     baseUrl: '',
     apiKey: '',
-    model
+    model,
+    protocol: 'auto'
   }
 }
 
@@ -197,8 +200,18 @@ function normalizeModelRouterMember(
   return {
     baseUrl: optionalString(input?.baseUrl) || defaults.baseUrl,
     apiKey: optionalString(input?.apiKey),
-    model: optionalString(input?.model) || defaults.model
+    model: optionalString(input?.model) || defaults.model,
+    protocol: normalizeModelRouterProtocol(input?.protocol, defaults.protocol)
   }
+}
+
+function normalizeModelRouterProtocol(
+  value: unknown,
+  fallback: ModelRouterProtocolPreference | undefined
+): ModelRouterProtocolPreference {
+  return MODEL_ROUTER_PROTOCOL_PREFERENCES.includes(value as ModelRouterProtocolPreference)
+    ? value as ModelRouterProtocolPreference
+    : fallback ?? 'auto'
 }
 
 function normalizeModelRouterPublicModelAlias(value: unknown, fallback: string): string {

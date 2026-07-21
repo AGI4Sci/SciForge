@@ -37,6 +37,11 @@ const labels: Record<string, string> = {
   modelRouterRoleBaseUrl: 'Base URL',
   modelRouterRoleApiKey: 'API key',
   modelRouterRoleModel: 'Model name',
+  modelRouterRoleProtocol: 'Upstream protocol',
+  modelRouterProtocol_auto: 'Auto-negotiate',
+  modelRouterProtocol_responses: 'OpenAI Responses',
+  'modelRouterProtocol_chat-completions': 'OpenAI Chat Completions',
+  'modelRouterProtocol_anthropic-messages': 'Anthropic Messages',
   modelRouterTextReasonerBaseUrlPlaceholder: 'https://api.example.com/v1',
   modelRouterTextReasonerModelPlaceholder: 'model-name',
   showSecret: 'Show',
@@ -83,7 +88,7 @@ function settings(mode?: 'api' | 'coding-plan'): AppSettingsV1 {
 }
 
 describe('ModelAccessSettings', () => {
-  it('shows exactly three primary inputs in API mode without technical selectors', () => {
+  it('shows provider credentials and an explicit upstream protocol selector', () => {
     const html = renderToStaticMarkup(createElement(ModelAccessSettings, {
       form: settings('api'),
       update: vi.fn(),
@@ -94,10 +99,11 @@ describe('ModelAccessSettings', () => {
     expect(html).toContain('Base URL')
     expect(html).toContain('API key')
     expect(html).toContain('Model name')
-    expect(html).not.toContain('<select')
+    expect(html).toContain('<select')
+    expect(html).toContain('Upstream protocol')
+    expect(html).toContain('Auto-negotiate')
     expect(html).toContain('Model access status')
     expect(html).not.toContain('Provider')
-    expect(html).not.toContain('Protocol')
   })
 
   it('shows official plan sign-in without rendering API fields', () => {
@@ -201,6 +207,7 @@ describe('model access normalization', () => {
     expect(sameGenericApiMember(checked, { ...checked })).toBe(true)
     expect(sameGenericApiMember(checked, { ...checked, model: 'new-model' })).toBe(false)
     expect(sameGenericApiMember(checked, { ...checked, apiKey: 'new-key' })).toBe(false)
+    expect(sameGenericApiMember(checked, { ...checked, protocol: 'chat-completions' })).toBe(false)
   })
 
   it('keeps onboarding blocked until the selected access path is complete', () => {

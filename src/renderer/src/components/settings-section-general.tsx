@@ -92,6 +92,7 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
                         })}
                         t={t}
                         testId="vision"
+                        showProtocol
                         baseUrlPlaceholder={t('modelRouterVisionTranslatorBaseUrlPlaceholder')}
                         modelPlaceholder={t('modelRouterVisionTranslatorModelPlaceholder')}
                       />

@@ -398,14 +398,25 @@ describe('buildModelRouterSidecarLaunch', () => {
     try {
       const current = settings()
       current.modelRouter!.profiles.default.textReasoner.baseUrl = 'https://text-sync.example/v1'
+      current.modelRouter!.profiles.default.textReasoner.protocol = 'chat-completions'
       current.modelRouter!.profiles.default.imageGenerator.model = 'image-sync-model'
+      current.modelRouter!.profiles.default.translators.vision.protocol = 'anthropic-messages'
       current.modelRouter!.profiles.default.translators.scientific.model = 'scientific-sync-model'
 
       const synced = await syncModelRouterConfigFileFromSettings(current, { userDataDir })
       const parsed = JSON.parse(await readFile(synced.path, 'utf8'))
 
       expect(parsed.profiles.default.textReasoner.baseUrl).toBe('https://text-sync.example/v1')
+      expect(parsed.profiles.default.textReasoner.compatibility).toEqual({
+        preferredProtocol: 'chat-completions',
+        allowedProtocols: ['chat-completions']
+      })
+      expect(parsed.profiles.default.translators.vision.compatibility).toEqual({
+        preferredProtocol: 'anthropic-messages',
+        allowedProtocols: ['anthropic-messages']
+      })
       expect(parsed.profiles.default.imageGenerator.model).toBe('image-sync-model')
+      expect(parsed.profiles.default.imageGenerator).not.toHaveProperty('compatibility')
       expect(parsed.profiles.default.translators.scientific.model).toBe('scientific-sync-model')
       expect(JSON.stringify(parsed)).not.toContain('text-secret')
       expect(JSON.stringify(parsed)).not.toContain('image-secret')

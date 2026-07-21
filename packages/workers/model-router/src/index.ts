@@ -52,4 +52,10 @@ export {
   type UpstreamTraceAttemptStart,
   type UpstreamWireProtocol,
 } from './upstream-drivers';
+export {
+  type ProviderCompatibilityConfig,
+  type ProviderCompatibilityProfile,
+  type ProviderSchemaPatternPolicy,
+  type ProviderWireProtocol,
+} from './provider-compat';
 export { assertLoopbackBinding, isLoopbackHost, normalizeLoopbackHost } from './network-policy';

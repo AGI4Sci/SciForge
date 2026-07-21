@@ -64,6 +64,34 @@ describe('getModelAccessStatus', () => {
     expect(JSON.stringify(status)).not.toContain('private upstream detail')
   })
 
+  it('reports an explicitly configured upstream protocol before the first request', async () => {
+    const current = settings({ mode: 'api', planAdapterId: '' })
+    current.modelRouter = {
+      profiles: {
+        default: {
+          textReasoner: {
+            baseUrl: 'https://models.example/v1',
+            apiKey: 'secret',
+            model: 'configured-model',
+            protocol: 'chat-completions'
+          }
+        }
+      }
+    } as AppSettingsV1['modelRouter']
+    const status = await getModelAccessStatus(current, {
+      checkModelRouterHealthImpl: async () => ({
+        ok: true,
+        status: 'healthy',
+        message: 'healthy',
+        protocol: null,
+        traceCaptureReady: true
+      })
+    })
+
+    expect(status.protocol).toBe('chat-completions')
+    expect(status.protocolState).toBe('selected')
+  })
+
   it('keeps incomplete API fields setup-required without probing a stale Router', async () => {
     const current = settings({ mode: 'api', planAdapterId: '' })
     const fetchImpl = vi.fn()

@@ -32,6 +32,11 @@ import {
 import { redactTraceText, redactUserVisibleText } from './trace-redaction';
 import { normalizeLoopbackHost } from './network-policy';
 import {
+  preferredProviderProtocol,
+  providerCompatibilityConfigurationIssue,
+  type ProviderCompatibilityConfig,
+} from './provider-compat';
+import {
   UpstreamProtocolNegotiator,
   UpstreamRequestError,
   captureUpstreamResponse,
@@ -43,6 +48,7 @@ export interface ModelRouterProviderConfig {
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  compatibility?: ProviderCompatibilityConfig;
   maxSupplementRounds?: number;
 }
 
@@ -387,7 +393,11 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
       if (request.method === 'GET' && url.pathname === '/healthz') {
         const defaultTextReasoner = options.config.profiles[options.config.defaultProfile]?.textReasoner;
         const protocol = defaultTextReasoner
-          ? upstreamNegotiator.cachedProtocol(defaultTextReasoner.baseUrl, defaultTextReasoner.model) ?? null
+          ? upstreamNegotiator.cachedProtocol(
+            defaultTextReasoner.baseUrl,
+            defaultTextReasoner.model,
+            defaultTextReasoner.compatibility,
+          ) ?? null
           : null;
         const recentProviderDiagnostic = recentProviderErrorDiagnostic(recentRouterError);
         const upstream = recentProviderDiagnostic
@@ -1685,14 +1695,10 @@ function preferredResponsesProtocol(
   incoming: IncomingMessage,
 ): UpstreamWireProtocol {
   const profileId = requestedProfileId(isRecord(request) ? request : {}, incoming, config);
-  const model = config.profiles[profileId]?.textReasoner.model ?? '';
-  // DeepSeek-compatible gateways commonly expose a partial /responses route that
-  // returns HTTP 200 without a terminal response.completed event. Prefer their
-  // broadly supported Chat Completions wire so a request is never replayed after
-  // an ambiguous 2xx response.
-  return /(?:^|[/_.-])deepseek(?:[/_.-]|$)/i.test(model)
-    ? 'chat-completions'
-    : 'responses';
+  const provider = config.profiles[profileId]?.textReasoner;
+  if (!provider) return 'responses';
+  validateProviderConfig(provider, 'textReasoner');
+  return preferredProviderProtocol(provider.compatibility, 'responses');
 }
 
 function validateRequestedModel(model: unknown, publicModelAlias: string | undefined) {
@@ -1738,6 +1744,14 @@ function validateProviderConfig(config: ModelRouterProviderConfig, role: string)
   }
   if (issue === 'invalid_url') {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+  }
+  const compatibilityIssue = providerCompatibilityConfigurationIssue(config.compatibility);
+  if (compatibilityIssue) {
+    throw routerError(
+      400,
+      'invalid_provider_config',
+      `Model Router profile role "${role}" has invalid compatibility settings: ${compatibilityIssue}.`,
+    );
   }
 }
 
@@ -2886,6 +2900,7 @@ async function callCanonicalProvider(options: {
       baseUrl: options.provider.baseUrl,
       apiKey: options.secret,
       model: options.provider.model,
+      compatibility: options.provider.compatibility,
       fetchImpl: options.fetchImpl,
       signal: options.signal,
       preferredProtocol: options.preferredProtocol,
@@ -3892,6 +3907,7 @@ function providerBindingHash(provider: ModelRouterProviderConfig) {
     provider.baseUrl,
     provider.model,
     provider.apiKeyEnv,
+    JSON.stringify(provider.compatibility ?? {}),
   ].join('\n'));
 }
 

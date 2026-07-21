@@ -1363,7 +1363,7 @@ describe('agent runtime settings', () => {
     expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('legacy-image-model')
   })
 
-  it('normalizes every Model Router member to the same three-field shape', () => {
+  it('normalizes Model Router protocol preferences without provider inference', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       modelRouter: {
@@ -1376,7 +1376,8 @@ describe('agent runtime settings', () => {
               vision: {
                 baseUrl: 'https://vision.example/v1',
                 apiKey: 'vision-key',
-                model: 'vision-model'
+                model: 'vision-model',
+                protocol: 'anthropic-messages'
               },
               scientific: defaultModelRouterSettings().profiles.default.translators.scientific
             }
@@ -1388,7 +1389,8 @@ describe('agent runtime settings', () => {
     expect(normalized.modelRouter?.profiles.default.translators.vision).toEqual({
       baseUrl: 'https://vision.example/v1',
       apiKey: 'vision-key',
-      model: 'vision-model'
+      model: 'vision-model',
+      protocol: 'anthropic-messages'
     })
     expect(listModelRouterModelIds(normalized)).toEqual(['sciforge-router'])
   })
@@ -1410,7 +1412,8 @@ describe('agent runtime settings', () => {
     expect(normalized.profiles.default.textReasoner).toEqual({
       baseUrl: 'https://text.example/v1',
       apiKey: 'text-key',
-      model: 'text-model'
+      model: 'text-model',
+      protocol: 'auto'
     })
     expect(normalized.profiles.default.textReasoner).not.toHaveProperty('provider')
   })

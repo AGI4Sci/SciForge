@@ -2940,7 +2940,7 @@ test('responses tool outputs are preserved through canonical upstream routing', 
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config: testResponsesExtensionConfig(),
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -3368,7 +3368,7 @@ test('responses tool outputs restore cached function calls stripped by app-serve
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config: testResponsesExtensionConfig(),
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -3445,7 +3445,7 @@ test('responses assistant text history preserves reasoning_content for thinking 
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config: testResponsesExtensionConfig(),
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -4832,6 +4832,70 @@ test('profile and provider configuration failures fail closed before upstream ca
   }
 });
 
+test('invalid provider compatibility settings fail closed before upstream calls', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-invalid-compatibility-'));
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['chat-completions'],
+  };
+  let calls = 0;
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => {
+      calls += 1;
+      return chatCompletion('must-not-send', 'must not send');
+    },
+  });
+
+  try {
+    const response = await fetch(server.url + '/v1/responses', {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /invalid_provider_config/u);
+    assert.equal(calls, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('explicit provider compatibility selects the configured upstream wire', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-explicit-wire-'));
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('explicit-chat', 'configured wire'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(server.url + '/v1/responses', {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(new URL(calls[0]?.url ?? '').pathname, '/v1/chat/completions');
+  } finally {
+    await server.close();
+  }
+});
+
 test('default public model alias rejects unregistered request models', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-default-alias-'));
   const calls: CapturedFetch[] = [];
@@ -5125,12 +5189,17 @@ test('text reasoner invalid JSON failures preserve safe provider diagnostics', a
   }
 });
 
-test('text reasoner provider error payloads are classified without leaking body text', async () => {
+test('single-protocol provider rejections are classified without leaking body text', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-text-error-payload-'));
   const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config,
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -5155,8 +5224,8 @@ test('text reasoner provider error payloads are classified without leaking body 
 
     assert.equal(response.status, 502);
     const responseBody = await response.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(responseBody.error?.code, 'upstream_error_payload');
-    assert.match(responseBody.error?.message ?? '', /error payload/);
+    assert.equal(responseBody.error?.code, 'upstream_protocol_unsupported');
+    assert.match(responseBody.error?.message ?? '', /definitively rejected/);
     assert.doesNotMatch(responseBody.error?.message ?? '', /text-secret|raw prompt payload|Explain SciForge|text-model/i);
 
   } finally {
@@ -5281,6 +5350,14 @@ function testConfig(options: {
     },
   };
   if (typeof options.publicModelAlias === 'string') config.publicModelAlias = options.publicModelAlias;
+  return config;
+}
+
+function testResponsesExtensionConfig(): ModelRouterConfig {
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preserveResponsesReasoningContent: true,
+  };
   return config;
 }
 

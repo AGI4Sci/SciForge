@@ -523,7 +523,8 @@ const modelAccessPatchSchema = z.object({
 const modelRouterMemberPatchSchema = z.object({
   baseUrl: z.string().trim().max(MAX_URL_LENGTH).optional(),
   apiKey: z.string().max(MAX_BODY_BYTES).optional(),
-  model: z.string().trim().max(128).optional()
+  model: z.string().trim().max(128).optional(),
+  protocol: z.enum(['auto', 'responses', 'chat-completions', 'anthropic-messages']).optional()
 }).strict()
 
 const modelRouterPatchSchema = z.object({

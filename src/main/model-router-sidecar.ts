@@ -7,7 +7,8 @@ import {
   getModelRouterSettings,
   isModelRouterTextReasonerConfigured,
   type AppSettingsV1,
-  type ModelRouterMemberSettingsV1
+  type ModelRouterMemberSettingsV1,
+  type ModelRouterProtocolPreference
 } from '../shared/app-settings'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -54,6 +55,10 @@ type ModelRouterMemberConfig = {
   baseUrl: string
   apiKeyEnv: string
   model: string
+  compatibility?: {
+    preferredProtocol: Exclude<ModelRouterProtocolPreference, 'auto'>
+    allowedProtocols: Array<Exclude<ModelRouterProtocolPreference, 'auto'>>
+  }
 }
 
 type ModelRouterScientificTranslatorConfig = {
@@ -274,7 +279,7 @@ function defaultModelRouterSidecarConfig(
 ): ModelRouterSidecarConfig & { runtimeApiKeyEnv: string } {
   const router = getModelRouterSettings(settings)
   const textReasoner = router.profiles.default.textReasoner
-  const vision = memberConfig(router.profiles.default.translators.vision, VISION_TRANSLATOR_KEY_ENV)
+  const vision = memberConfig(router.profiles.default.translators.vision, VISION_TRANSLATOR_KEY_ENV, true)
   const imageGenerator = memberConfig(router.profiles.default.imageGenerator, IMAGE_GENERATOR_KEY_ENV)
   const scientific = scientificTranslatorConfig(router.profiles.default.translators.scientific)
   return {
@@ -286,7 +291,8 @@ function defaultModelRouterSidecarConfig(
         textReasoner: {
           baseUrl: textReasoner.baseUrl.trim(),
           apiKeyEnv: TEXT_REASONER_KEY_ENV,
-          model: textReasoner.model.trim()
+          model: textReasoner.model.trim(),
+          ...protocolCompatibility(textReasoner.protocol)
         },
         ...(imageGenerator ? { imageGenerator } : {}),
         translators: {
@@ -324,13 +330,27 @@ function modelRouterManagedLaunchSignature(launch: ModelRouterSidecarLaunch): st
 
 function memberConfig(
   member: ModelRouterMemberSettingsV1,
-  apiKeyEnv: string
+  apiKeyEnv: string,
+  protocolAware = false
 ): ModelRouterMemberConfig | null {
   if (!isModelRouterMemberConfigured(member)) return null
   return {
     baseUrl: member.baseUrl,
     apiKeyEnv,
-    model: member.model
+    model: member.model,
+    ...(protocolAware ? protocolCompatibility(member.protocol) : {})
+  }
+}
+
+function protocolCompatibility(
+  protocol: ModelRouterProtocolPreference | undefined
+): Pick<ModelRouterMemberConfig, 'compatibility'> | Record<string, never> {
+  if (!protocol || protocol === 'auto') return {}
+  return {
+    compatibility: {
+      preferredProtocol: protocol,
+      allowedProtocols: [protocol]
+    }
   }
 }
 

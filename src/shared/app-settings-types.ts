@@ -54,10 +54,19 @@ export type ModelAccessSettingsV1 = {
 
 export type ModelAccessSettingsPatchV1 = Partial<ModelAccessSettingsV1>
 
+export const MODEL_ROUTER_PROTOCOL_PREFERENCES = [
+  'auto',
+  'responses',
+  'chat-completions',
+  'anthropic-messages'
+] as const
+export type ModelRouterProtocolPreference = typeof MODEL_ROUTER_PROTOCOL_PREFERENCES[number]
+
 export type ModelRouterMemberSettingsV1 = {
   baseUrl: string
   apiKey: string
   model: string
+  protocol?: ModelRouterProtocolPreference
 }
 
 export type ModelRouterProfileSettingsV1 = {

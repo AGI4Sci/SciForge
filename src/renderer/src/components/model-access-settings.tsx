@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react'
 import {
+  MODEL_ROUTER_PROTOCOL_PREFERENCES,
   getModelRouterSettings,
   type AgentRuntimeId,
   type AppSettingsPatch,
-  type AppSettingsV1
+  type AppSettingsV1,
+  type ModelRouterProtocolPreference
 } from '@shared/app-settings'
 import type { ModelAccessStatus } from '@shared/sciforge-api'
 import type { AgentRuntimeAuxiliaryOperation } from '@shared/agent-runtime-contract'
@@ -142,7 +144,12 @@ export type GenericApiCheckResult =
   | { kind: 'service'; status: ModelAccessStatus }
 
 export async function checkGenericApiAccess(input: {
-  member: { baseUrl: string; apiKey: string; model: string }
+  member: {
+    baseUrl: string
+    apiKey: string
+    model: string
+    protocol?: ModelRouterProtocolPreference
+  }
   serviceProbeEnabled: boolean
   readStatus: () => Promise<ModelAccessStatus>
 }): Promise<GenericApiCheckResult> {
@@ -153,12 +160,13 @@ export async function checkGenericApiAccess(input: {
 }
 
 export function sameGenericApiMember(
-  left: { baseUrl: string; apiKey: string; model: string },
-  right: { baseUrl: string; apiKey: string; model: string }
+  left: { baseUrl: string; apiKey: string; model: string; protocol?: ModelRouterProtocolPreference },
+  right: { baseUrl: string; apiKey: string; model: string; protocol?: ModelRouterProtocolPreference }
 ): boolean {
   return left.baseUrl === right.baseUrl
     && left.apiKey === right.apiKey
     && left.model === right.model
+    && (left.protocol ?? 'auto') === (right.protocol ?? 'auto')
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -306,15 +314,22 @@ export function GenericApiMemberFields({
   compact = false,
   testId,
   baseUrlPlaceholder,
-  modelPlaceholder
+  modelPlaceholder,
+  showProtocol = false
 }: {
-  member: { baseUrl: string; apiKey: string; model: string }
-  onChange: (patch: { baseUrl?: string; apiKey?: string; model?: string }) => void
+  member: { baseUrl: string; apiKey: string; model: string; protocol?: ModelRouterProtocolPreference }
+  onChange: (patch: {
+    baseUrl?: string
+    apiKey?: string
+    model?: string
+    protocol?: ModelRouterProtocolPreference
+  }) => void
   t: Translate
   compact?: boolean
   testId?: string
   baseUrlPlaceholder?: string
   modelPlaceholder?: string
+  showProtocol?: boolean
 }): ReactElement {
   const [secretVisible, setSecretVisible] = useState(false)
   const fieldClass = compact
@@ -333,6 +348,24 @@ export function GenericApiMemberFields({
           spellCheck={false}
         />
       </label>
+      {showProtocol ? (
+        <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
+          <span>{t('modelRouterRoleProtocol')}</span>
+          <select
+            className={fieldClass}
+            value={member.protocol ?? 'auto'}
+            onChange={(event) => onChange({
+              protocol: event.target.value as ModelRouterProtocolPreference
+            })}
+          >
+            {MODEL_ROUTER_PROTOCOL_PREFERENCES.map((protocol) => (
+              <option key={protocol} value={protocol}>
+                {t(`modelRouterProtocol_${protocol}`)}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       <label className="grid gap-1.5 text-[12px] font-medium text-ds-muted">
         <span>{t('modelRouterRoleApiKey')}</span>
         <span className="relative block">
@@ -414,7 +447,12 @@ export function ModelAccessSettings({
     }))
   }
 
-  const updateApiMember = (patch: { baseUrl?: string; apiKey?: string; model?: string }): void => {
+  const updateApiMember = (patch: {
+    baseUrl?: string
+    apiKey?: string
+    model?: string
+    protocol?: ModelRouterProtocolPreference
+  }): void => {
     setStatus({ tone: 'idle', message: '' })
     setServiceStatus(null)
     update({ modelRouter: { profiles: { default: { textReasoner: patch } } } })
@@ -644,6 +682,7 @@ export function ModelAccessSettings({
             t={t}
             compact={compact}
             testId="primary"
+            showProtocol
           />
           <button
             type="button"

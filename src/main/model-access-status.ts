@@ -1,4 +1,8 @@
-import { getModelAccessSettings, type AppSettingsV1 } from '../shared/app-settings'
+import {
+  getModelAccessSettings,
+  getModelRouterSettings,
+  type AppSettingsV1
+} from '../shared/app-settings'
 import type {
   ModelAccessCredentialState,
   ModelAccessStatus
@@ -44,6 +48,10 @@ export async function getModelAccessStatus(
   if (access.mode === 'api') {
     const result = await (options.checkModelRouterHealthImpl ?? checkModelRouterHealth)(settings)
     const credentialState = modelRouterCredentialState(result)
+    const configuredProtocol = getModelRouterSettings(settings).profiles.default.textReasoner.protocol
+    const selectedProtocol = configuredProtocol && configuredProtocol !== 'auto'
+      ? configuredProtocol
+      : null
     return {
       setupRequired: !result.ok && result.status === 'not_configured',
       mode: 'api',
@@ -51,8 +59,10 @@ export async function getModelAccessStatus(
       health: modelRouterServiceHealth(result),
       adapterId: null,
       credentialState,
-      protocol: result.protocol,
-      protocolState: result.protocol ? 'cached' : 'pending-first-request',
+      protocol: result.protocol ?? selectedProtocol,
+      protocolState: result.protocol
+        ? 'cached'
+        : selectedProtocol ? 'selected' : 'pending-first-request',
       traceCaptureReady: result.traceCaptureReady,
       action: modelRouterActionableMessage(result)
     }

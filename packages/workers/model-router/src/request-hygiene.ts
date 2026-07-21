@@ -33,11 +33,17 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   const recordType = stringField(value.type);
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
-    out[key] = hygienizeValue(entry, {
+    const hygienized = hygienizeValue(entry, {
       key,
       role,
       recordType,
       source: sourceForRecordEntry(context, role, key),
+    });
+    Object.defineProperty(out, key, {
+      configurable: true,
+      enumerable: true,
+      value: hygienized,
+      writable: true,
     });
   }
   return out;

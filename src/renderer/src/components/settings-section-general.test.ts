@@ -39,6 +39,11 @@ const labels: Record<string, string> = {
   modelRouterRoleBaseUrl: 'Base URL',
   modelRouterRoleApiKey: 'API key',
   modelRouterRoleModel: 'Model name',
+  modelRouterRoleProtocol: 'Upstream protocol',
+  modelRouterProtocol_auto: 'Auto-negotiate',
+  modelRouterProtocol_responses: 'OpenAI Responses',
+  'modelRouterProtocol_chat-completions': 'OpenAI Chat Completions',
+  'modelRouterProtocol_anthropic-messages': 'Anthropic Messages',
   modelRouterTextReasoner: 'Text understanding and reasoning',
   modelRouterTextReasonerDesc: 'Default model.',
   modelRouterTextReasonerBaseUrlPlaceholder: 'https://api.example.com/v1',
@@ -190,7 +195,7 @@ describe('GeneralSettingsSection', () => {
     expect(html).toContain('Scientific modality translation')
     expect(html).not.toContain('Model Router config file')
     expect(html).not.toContain('Provider')
-    expect(html).not.toContain('Protocol')
+    expect(html).toContain('Upstream protocol')
     expect(html).not.toContain('Enable Evidence DAG')
   })
 

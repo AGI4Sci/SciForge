@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
+import { normalizeProviderJsonSchema } from './provider-compat';
+
 export type JsonValue =
   | null
   | boolean
@@ -36,31 +38,7 @@ type ResponseToolDescriptor = {
   parameters: unknown;
 };
 
-const PROVIDER_TOOL_SCHEMA_MAX_DEPTH = 8;
-const PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES = 80;
-const PROVIDER_TOOL_SCHEMA_MAX_DESCRIPTION_CHARS = 1_000;
-const PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES = 120;
 const PROVIDER_TOOL_SCHEMA_MAX_STRING_CHARS = 2_000;
-const PROVIDER_TOOL_SCHEMA_KEYS = new Set([
-  'type',
-  'description',
-  'properties',
-  'required',
-  'additionalProperties',
-  'items',
-  'enum',
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'minLength',
-  'maxLength',
-  'minItems',
-  'maxItems',
-  'pattern',
-  'format',
-  'nullable',
-]);
 
 export type AnthropicMessagesRequest = {
   model?: string;
@@ -936,103 +914,30 @@ function responseToolChoiceToChatToolChoice(
 }
 
 function providerSafeChatToolParameters(value: unknown): JsonObject {
-  const sanitized = sanitizeProviderToolSchema(value, 0);
+  const sanitized = normalizeProviderJsonSchema(value);
   if (isRecord(sanitized)) {
-    const properties = isRecord(sanitized.properties) ? sanitized.properties : {};
-    return compactJsonObject({ ...sanitized, type: 'object', properties });
-  }
-  return { type: 'object', properties: {} };
-}
-
-function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | undefined {
-  if (depth > PROVIDER_TOOL_SCHEMA_MAX_DEPTH) return {};
-  if (!isRecord(value)) return undefined;
-  const out: Record<string, JsonValue> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (key.startsWith('$') || !PROVIDER_TOOL_SCHEMA_KEYS.has(key)) continue;
-    switch (key) {
-      case 'properties': {
-        const properties = isRecord(raw) ? raw : undefined;
-        if (!properties) break;
-        const entries = Object.entries(properties).slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES);
-        out.properties = Object.fromEntries(entries.map(([name, schema]) => [
-          boundedProviderToolString(name),
-          sanitizeProviderToolSchema(schema, depth + 1) ?? {},
-        ]));
-        break;
-      }
-      case 'items': {
-        if (Array.isArray(raw)) {
-          out.items = raw
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map((item) => sanitizeProviderToolSchema(item, depth + 1) ?? {});
-        } else if (isRecord(raw)) {
-          out.items = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
-        }
-        break;
-      }
-      case 'required': {
-        const required = Array.isArray(raw)
-          ? raw
-            .filter((item): item is string => typeof item === 'string' && item.length > 0)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map(boundedProviderToolString)
-          : [];
-        if (required.length) out.required = [...new Set(required)];
-        break;
-      }
-      case 'enum': {
-        if (Array.isArray(raw)) {
-          out.enum = raw
-            .filter(isJsonPrimitive)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES)
-            .map((item) => typeof item === 'string' ? boundedProviderToolString(item) : item);
-        }
-        break;
-      }
-      case 'additionalProperties': {
-        if (typeof raw === 'boolean') {
-          out.additionalProperties = raw;
-        } else if (isRecord(raw)) {
-          out.additionalProperties = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
-        }
-        break;
-      }
-      case 'type': {
-        const type = providerToolSchemaType(raw);
-        if (type) out.type = type;
-        break;
-      }
-      case 'description': {
-        if (typeof raw === 'string' && raw.trim()) {
-          out.description = boundedProviderToolString(raw, PROVIDER_TOOL_SCHEMA_MAX_DESCRIPTION_CHARS);
-        }
-        break;
-      }
-      case 'pattern':
-      case 'format': {
-        if (typeof raw === 'string' && raw.trim()) out[key] = boundedProviderToolString(raw);
-        break;
-      }
-      case 'nullable': {
-        if (typeof raw === 'boolean') out.nullable = raw;
-        break;
-      }
-      default: {
-        if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw;
-        break;
-      }
+    const schemaTypes = typeof sanitized.type === 'string'
+      ? [sanitized.type]
+      : Array.isArray(sanitized.type)
+        ? sanitized.type
+        : [];
+    if (schemaTypes.length > 0 && !schemaTypes.includes('object')) {
+      throw new RangeError('Provider tool parameters must use an object root schema.');
     }
+    if (sanitized.properties !== undefined && !isRecord(sanitized.properties)) {
+      throw new RangeError('Provider tool parameter properties must be a schema map.');
+    }
+    return compactJsonObject({
+      ...sanitized,
+      type: sanitized.type ?? 'object',
+      properties: sanitized.properties ?? {},
+    });
   }
-  if (isRecord(out.properties) && !out.type) out.type = 'object';
-  return out;
-}
-
-function providerToolSchemaType(value: unknown): JsonValue | undefined {
-  if (typeof value === 'string' && value.trim()) return value;
-  if (!Array.isArray(value)) return undefined;
-  const types = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
-  return types.length ? [...new Set(types)] : undefined;
+  if (sanitized === false) {
+    throw new RangeError('Provider tool parameters cannot be represented by an always-false root schema.');
+  }
+  if (sanitized === true) return { type: 'object', properties: {} };
+  throw new RangeError('Provider tool parameters must be a JSON Schema object or boolean.');
 }
 
 function boundedProviderToolString(
@@ -1040,10 +945,6 @@ function boundedProviderToolString(
   maxLength = PROVIDER_TOOL_SCHEMA_MAX_STRING_CHARS,
 ): string {
   return value.trim().slice(0, maxLength);
-}
-
-function isJsonPrimitive(value: unknown): value is string | number | boolean | null {
-  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 function chatToolNameAlias(name: string, index: number, used: Set<string>): string {
@@ -1234,7 +1135,14 @@ function compactJsonObject(values: Record<string, unknown>): JsonObject {
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(values)) {
     const normalized = jsonValue(value);
-    if (normalized !== undefined) out[key] = normalized;
+    if (normalized !== undefined) {
+      Object.defineProperty(out, key, {
+        configurable: true,
+        enumerable: true,
+        value: normalized,
+        writable: true,
+      });
+    }
   }
   return out;
 }

@@ -29,7 +29,31 @@ The required config file uses role-oriented settings. Credentials remain environ
 }
 ```
 
-Each upstream role needs only a base URL, model name, and API key. There is no provider or wire-protocol setting. The router prefers the protocol used by the incoming request, then safely negotiates Responses, Chat Completions, or Anthropic Messages and caches the working protocol by normalized base URL and model. It retries another protocol only after a definitive endpoint or request-schema rejection; authentication, quota, rate-limit, timeout, ambiguous server, and ordinary validation failures are returned without retrying a potentially billable request. A 2xx response whose body or terminal stream frame does not match the selected wire schema is also terminal and is never resubmitted through another protocol.
+Each upstream role needs a base URL, model name, and API key. Provider behavior is capability-driven: the router does not infer a vendor from domains, model names, or error text. In `auto` mode it starts with the client wire, then uses the same adapters and negotiation state machine for every upstream. The desktop settings expose an upstream-protocol selector; selecting a wire also constrains `allowedProtocols` to that wire.
+
+Capabilities can be configured for private gateways without adding provider-specific branches to routing code:
+
+```json
+{
+  "baseUrl": "https://gateway.example/v1",
+  "apiKeyEnv": "SCIFORGE_MODEL_ROUTER_TEXT_API_KEY",
+  "model": "gateway-model",
+  "compatibility": {
+    "preferredProtocol": "chat-completions",
+    "allowedProtocols": ["chat-completions"],
+    "preserveResponsesReasoningContent": true,
+    "preserveChatReasoningContent": true,
+    "chatMaxTokensField": "max_completion_tokens",
+    "schemaPatternPolicy": "reject"
+  }
+}
+```
+
+All compatibility fields are optional. `allowedProtocols` is also a safety boundary: negotiation never sends a request on a wire outside that list. Working protocols are cached by normalized base URL, model, and compatibility settings.
+
+The router retries another protocol only after protocol-level HTTP status evidence (`404`, `405`, or `415`). It never infers retry safety from localized error-message keywords or vendor-specific error codes. Authentication, quota, rate-limit, timeout, ambiguous server, and ordinary validation failures remain terminal. An explicit error inside a 2xx Responses payload may trigger fallback only before any model output or ambiguous provider data has arrived; malformed successful payloads and partial streams are terminal and are never resubmitted.
+
+Tool JSON Schema passes through one bounded, prototype-safe normalizer on every protocol path. Property names, `required`, composition keywords, and validation constraints are never truncated or silently removed. If a configured provider cannot safely represent a schema constraint such as `pattern`, the candidate fails closed before a provider request is sent.
 
 When a Responses request negotiates to Anthropic Messages, reasoning effort maps to enabled thinking with a budget bounded by the output-token limit. Invalid constraints fail explicitly. Native Anthropic thinking controls, including adaptive controls, remain native on Messages requests and fail explicitly when another protocol cannot represent them. Response finish reasons, stop reasons, and stop sequences are retained through the canonical response and mapped only where the client protocol can represent them.
 
