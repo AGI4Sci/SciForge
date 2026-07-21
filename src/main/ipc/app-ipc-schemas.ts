@@ -551,13 +551,6 @@ const imageGenerationPatchSchema = z.object({
   fastSamModelPath: defaultPathSchema
 }).strict()
 
-const runtimeToolBudgetProfilePatchSchema = z.object({
-  softLimit: z.number().int().positive().max(10_000).optional(),
-  hardLimit: z.number().int().positive().max(10_000).optional(),
-  maxAutomaticPhases: z.number().int().positive().max(32).optional(),
-  totalLimit: z.number().int().positive().max(100_000).optional()
-}).strict()
-
 const localRuntimePatchSchema = z.object({
   binaryPath: defaultPathSchema,
   port: z.number().int().min(1).max(65_535).optional(),
@@ -602,24 +595,6 @@ const localRuntimePatchSchema = z.object({
     summaryTimeoutMs: z.number().int().positive().max(120_000).optional(),
     summaryMaxTokens: z.number().int().positive().max(16_000).optional(),
     summaryInputMaxBytes: z.number().int().positive().max(8 * 1024 * 1024).optional()
-  }).strict().optional(),
-  runtimeTuning: z.object({
-    toolArgumentRepair: z.object({
-      maxStringBytes: z.number().int().positive().max(16 * 1024 * 1024).optional()
-    }).strict().optional(),
-    toolBudget: z.object({
-      enabled: z.boolean().optional(),
-      profiles: z.object({
-        explanation: runtimeToolBudgetProfilePatchSchema.optional(),
-        review: runtimeToolBudgetProfilePatchSchema.optional(),
-        implementation: runtimeToolBudgetProfilePatchSchema.optional(),
-        long: runtimeToolBudgetProfilePatchSchema.optional()
-      }).strict().optional()
-    }).strict().optional(),
-    parallelism: z.object({
-      localReadOnly: z.number().int().positive().max(64).optional(),
-      networkMcp: z.number().int().positive().max(64).optional()
-    }).strict().optional()
   }).strict().optional()
 }).strict()
 

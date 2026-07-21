@@ -1293,7 +1293,7 @@ describe('app-ipc-schemas', () => {
     ).toThrow(/Unrecognized key/)
   })
 
-  it('rejects legacy local runtime execution governance patches in favor of runtime guards', () => {
+  it('rejects legacy local runtime tuning patches in favor of runtime guards', () => {
     expect(() =>
       settingsPatchSchema.parse({
         agents: {
@@ -1341,39 +1341,6 @@ describe('app-ipc-schemas', () => {
         }
       })
     ).toThrow(/Unrecognized key/)
-  })
-
-  it('accepts bounded local runtime tool budget and parallelism patches', () => {
-    const parsed = settingsPatchSchema.parse({
-      agents: {
-        sciforge: {
-          runtimeTuning: {
-            toolBudget: {
-              enabled: true,
-              profiles: {
-                review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
-                long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
-              }
-            },
-            parallelism: { localReadOnly: 8, networkMcp: 4 }
-          }
-        }
-      }
-    })
-
-    expect(parsed.agents?.sciforge?.runtimeTuning).toMatchObject({
-      toolBudget: {
-        enabled: true,
-        profiles: {
-          review: { hardLimit: 16 },
-          long: { maxAutomaticPhases: 3, totalLimit: 48 }
-        }
-      },
-      parallelism: { localReadOnly: 8, networkMcp: 4 }
-    })
-    expect(() => settingsPatchSchema.parse({
-      agents: { sciforge: { runtimeTuning: { parallelism: { localReadOnly: 65 } } } }
-    })).toThrow()
   })
 
   it('rejects unknown schedule patch fields', () => {

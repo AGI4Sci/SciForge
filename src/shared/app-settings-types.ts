@@ -155,8 +155,6 @@ export type LocalRuntimeSettingsV1 = {
   storage: LocalRuntimeStorageSettingsV1
   /** Fallback compaction thresholds and summary behavior. Per-model thresholds live in local runtime config models.profiles. */
   contextCompaction: LocalRuntimeContextCompactionSettingsV1
-  /** Low-level model argument repair tuning. Runtime-neutral loop guards live in `runtimeGuards`. */
-  runtimeTuning: LocalRuntimeTuningSettingsV1
 }
 
 export type ResolvedLocalRuntimeSettingsV1 = LocalRuntimeSettingsV1 & {
@@ -210,38 +208,6 @@ export type LocalRuntimeContextCompactionSettingsV1 = {
   summaryTimeoutMs: number
   summaryMaxTokens: number
   summaryInputMaxBytes: number
-}
-
-export type LocalRuntimeToolArgumentRepairSettingsV1 = {
-  maxStringBytes: number
-}
-
-export type LocalRuntimeToolBudgetProfileSettingsV1 = {
-  softLimit: number
-  hardLimit: number
-  maxAutomaticPhases: number
-  totalLimit: number
-}
-
-export type LocalRuntimeToolBudgetSettingsV1 = {
-  enabled: boolean
-  profiles: {
-    explanation: LocalRuntimeToolBudgetProfileSettingsV1
-    review: LocalRuntimeToolBudgetProfileSettingsV1
-    implementation: LocalRuntimeToolBudgetProfileSettingsV1
-    long: LocalRuntimeToolBudgetProfileSettingsV1
-  }
-}
-
-export type LocalRuntimeParallelismSettingsV1 = {
-  localReadOnly: number
-  networkMcp: number
-}
-
-export type LocalRuntimeTuningSettingsV1 = {
-  toolArgumentRepair: LocalRuntimeToolArgumentRepairSettingsV1
-  toolBudget: LocalRuntimeToolBudgetSettingsV1
-  parallelism: LocalRuntimeParallelismSettingsV1
 }
 
 export type RuntimeExecutionGuardSettingsV1 = {
@@ -316,14 +282,6 @@ export type AgentRuntimeSettingsEnvelopeV1 = {
 
 export type AgentRuntimeSettingsMapV1 = AgentRuntimeSettingsEnvelopeV1
 
-export type LocalRuntimeTuningSettingsPatchV1 = {
-  toolArgumentRepair?: Partial<LocalRuntimeToolArgumentRepairSettingsV1>
-  toolBudget?: Partial<Omit<LocalRuntimeToolBudgetSettingsV1, 'profiles'>> & {
-    profiles?: Partial<Record<keyof LocalRuntimeToolBudgetSettingsV1['profiles'], Partial<LocalRuntimeToolBudgetProfileSettingsV1>>>
-  }
-  parallelism?: Partial<LocalRuntimeParallelismSettingsV1>
-}
-
 export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<
   Omit<LocalRuntimeTokenEconomySettingsV1, 'historyHygiene'>
 > & {
@@ -333,14 +291,13 @@ export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<
 export type LocalRuntimeSettingsPatchV1 = Partial<
   Omit<
     LocalRuntimeSettingsV1,
-    'mcpSearch' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy'
+    'mcpSearch' | 'storage' | 'contextCompaction' | 'tokenEconomy'
   >
 > & {
   mcpSearch?: Partial<LocalRuntimeMcpSearchSettingsV1>
   tokenEconomy?: LocalRuntimeTokenEconomySettingsPatchV1
   storage?: Partial<LocalRuntimeStorageSettingsV1>
   contextCompaction?: Partial<LocalRuntimeContextCompactionSettingsV1>
-  runtimeTuning?: LocalRuntimeTuningSettingsPatchV1
 }
 
 export type AgentRuntimeSettingsEnvelopePatchV1 = {

@@ -245,7 +245,7 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('defaults advanced local runtime tuning to conservative values', () => {
+  it('defaults advanced local runtime settings to conservative values', () => {
     expect(defaultLocalRuntimeSettings()).toMatchObject({
       storage: {
         backend: 'hybrid',
@@ -258,24 +258,6 @@ describe('local runtime defaults', () => {
         summaryTimeoutMs: 15000,
         summaryMaxTokens: 1200,
         summaryInputMaxBytes: 98304
-      },
-      runtimeTuning: {
-        toolArgumentRepair: {
-          maxStringBytes: 524288
-        },
-        toolBudget: {
-          enabled: true,
-          profiles: {
-            explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
-            review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
-            implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
-            long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
-          }
-        },
-        parallelism: {
-          localReadOnly: 8,
-          networkMcp: 4
-        }
       }
     })
   })
@@ -1092,23 +1074,6 @@ describe('mergeLocalRuntimeSettings', () => {
       },
       contextCompaction: {
         defaultSoftThreshold: 64000
-      },
-      runtimeTuning: {
-        toolArgumentRepair: {
-          maxStringBytes: 262144
-        },
-        toolBudget: {
-          profiles: {
-            implementation: {
-              softLimit: 24,
-              hardLimit: 48,
-              totalLimit: 96
-            }
-          }
-        },
-        parallelism: {
-          localReadOnly: 12
-        }
       }
     })
 
@@ -1117,54 +1082,6 @@ describe('mergeLocalRuntimeSettings', () => {
     expect(next.contextCompaction.defaultSoftThreshold).toBe(64000)
     expect(next.contextCompaction.defaultHardThreshold).toBe(64000)
     expect(next.contextCompaction.summaryMode).toBe('heuristic')
-    expect(next.runtimeTuning.toolArgumentRepair).toEqual({
-      maxStringBytes: 262144
-    })
-    expect(next.runtimeTuning.toolBudget.profiles.implementation).toEqual({
-      softLimit: 24,
-      hardLimit: 48,
-      maxAutomaticPhases: 1,
-      totalLimit: 96
-    })
-    expect(next.runtimeTuning.toolBudget.profiles.review).toEqual(
-      current.runtimeTuning.toolBudget.profiles.review
-    )
-    expect(next.runtimeTuning.parallelism).toEqual({
-      localReadOnly: 12,
-      networkMcp: 4
-    })
-  })
-
-  it('normalizes tool budget relationships and parallelism bounds', () => {
-    const next = mergeLocalRuntimeSettings(defaultLocalRuntimeSettings(), {
-      runtimeTuning: {
-        toolBudget: {
-          profiles: {
-            long: {
-              softLimit: 100,
-              hardLimit: 20,
-              maxAutomaticPhases: 99,
-              totalLimit: 10
-            }
-          }
-        },
-        parallelism: {
-          localReadOnly: 100,
-          networkMcp: 0
-        }
-      }
-    } as never)
-
-    expect(next.runtimeTuning.toolBudget.profiles.long).toEqual({
-      softLimit: 20,
-      hardLimit: 20,
-      maxAutomaticPhases: 32,
-      totalLimit: 20
-    })
-    expect(next.runtimeTuning.parallelism).toEqual({
-      localReadOnly: 64,
-      networkMcp: 4
-    })
   })
 
   it('deep-merges runtime guard settings through the new config model', () => {
