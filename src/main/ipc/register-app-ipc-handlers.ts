@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
+import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent, type NativeImage, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -378,6 +378,7 @@ export type AppBridgeDispatcher = {
 type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
   getMainWindow: () => BrowserWindow | null
+  isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
   traces?: {
@@ -1364,6 +1365,9 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
     ipcMain.handle(channel, async (event, payload: unknown) => {
+      if (!options.isTrustedIpcSender(event)) {
+        throw new Error('Rejected IPC invocation from an untrusted renderer frame.')
+      }
       const startedAt = mainPerformanceMonitor.now()
       mainPerformanceMonitor.count('main.ipc.invoke')
       mainPerformanceMonitor.count(`main.ipc.invoke.${channel}`)

@@ -6,6 +6,7 @@ import { access, mkdir, open, readFile, realpath, unlink } from 'node:fs/promise
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 
 const projectRoot = await realpath(join(dirname(fileURLToPath(import.meta.url)), '..'))
@@ -15,6 +16,7 @@ const lockPath = join(lockDir, `${workspaceId}.json`)
 const instanceId = randomUUID()
 let lockOwned = false
 let child = null
+const require = createRequire(import.meta.url)
 
 const requiredDevDependencies = [
   'node_modules/typescript/package.json',
@@ -34,6 +36,12 @@ async function assertDevDependenciesInstalled() {
   throw new Error(
     'SciForge development dependencies are not installed. Run `npm install` in the project root, then run `npm run dev` again.'
   )
+}
+
+function ensureElectronBinaryInstalled() {
+  // Electron 42+ downloads its binary on first require. electron-vite 3 reads
+  // path.txt directly, so trigger Electron's verified installer first.
+  require('electron')
 }
 
 function isProcessAlive(pid) {
@@ -132,6 +140,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 try {
   await assertDevDependenciesInstalled()
   await acquireLock()
+  ensureElectronBinaryInstalled()
   const env = {
     ...process.env,
     SCIFORGE_DEV_INSTANCE_ID: instanceId,

@@ -8,7 +8,7 @@
 
 ### 从源码运行
 
-环境要求：Node.js 20+；首次安装依赖需要联网。独立运行 Paper Radar service 时，Node.js 22.5+ 更合适。
+环境要求：Node.js 22.12+；首次安装依赖需要联网。
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
