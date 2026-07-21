@@ -45,6 +45,7 @@ const DISCORD_INTENTS =
 const DISCORD_TEXT_CHANNEL_TYPES = new Set([0, 5])
 const MAX_DISCORD_MESSAGE_LENGTH = 2_000
 const MESSAGE_CONTENT_WARNING_INTERVAL_MS = 10 * 60_000
+const MAX_DISCORD_GATEWAY_PAYLOAD_BYTES = 4 * 1024 * 1024
 const INTERNAL_REMOTE_CHANNEL_WORKSPACE_ROOT = '/.sciforge/remote-channel'
 const DISCORD_MESSAGE_FAILURE_REPLY = 'Sorry, I could not process that message.'
 const DISCORD_COMMAND_FAILURE_REPLY = 'Sorry, I could not process that command.'
@@ -76,6 +77,7 @@ type NodeWebSocketConstructor = new (
       callback: (error: Error | null, socket?: Socket | TLSSocket) => void
     ) => undefined
     handshakeTimeout?: number
+    maxPayload?: number
     perMessageDeflate?: boolean
   }
 ) => NodeWebSocketLike
@@ -254,6 +256,7 @@ function createNodeRuntimeWebSocket(url: string, proxyUrl?: string): RuntimeWebS
   const ctor = loadNodeWebSocketConstructor()
   const socket = new ctor(url, [], {
     handshakeTimeout: 15_000,
+    maxPayload: MAX_DISCORD_GATEWAY_PAYLOAD_BYTES,
     perMessageDeflate: false,
     ...(proxyUrl ? { createConnection: createProxyWebSocketConnection(proxyUrl) } : {})
   })

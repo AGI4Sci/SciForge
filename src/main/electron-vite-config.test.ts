@@ -2,12 +2,28 @@ import { describe, expect, it } from 'vitest'
 import config from '../../electron.vite.config'
 
 describe('electron renderer dev server config', () => {
-  it('keeps the browser debug surface reachable through both loopback families', () => {
-    const renderer = (config as { renderer?: { server?: { host?: string; port?: number; strictPort?: boolean } } }).renderer
+  it('keeps the privileged browser debug surface on a strict loopback file boundary', () => {
+    const renderer = (config as {
+      renderer?: {
+        server?: {
+          host?: string
+          port?: number
+          strictPort?: boolean
+          fs?: { strict?: boolean; deny?: string[] }
+        }
+      }
+    }).renderer
 
-    expect(renderer?.server?.host).toBe('::')
+    expect(renderer?.server?.host).toBe('127.0.0.1')
     expect(renderer?.server?.port).toBe(5173)
     expect(renderer?.server?.strictPort).toBe(true)
+    expect(renderer?.server?.fs?.strict).toBe(true)
+    expect(renderer?.server?.fs?.deny).toEqual(expect.arrayContaining([
+      '.env',
+      '.env.*',
+      '*.{crt,pem,key}',
+      '**/.git/**'
+    ]))
   })
 
   it('embeds the bootstrap instance identity in the renderer bundle', () => {

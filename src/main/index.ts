@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   JsonSettingsStore,
   devServerHintUrl
@@ -44,6 +44,7 @@ import type { GuiUpdateState } from '../shared/gui-update'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
 import { decideDevPreviewPopup } from './dev-preview-popup-policy'
+import { isTrustedRendererUrl } from './renderer-trust'
 import {
   codingPlanCredentialStateForAdapter,
   getModelAccessStatus
@@ -836,7 +837,7 @@ function installDevPreviewWebviewGuards(): void {
       if (decision.action === 'navigate-preview') {
         try {
           const hostContents = contents.hostWebContents
-          if (!hostContents.isDestroyed()) {
+          if (hostContents && !hostContents.isDestroyed()) {
             hostContents.send(DEV_PREVIEW_NAVIGATE_CHANNEL, {
               url: decision.url,
               webContentsId: contents.id
@@ -1029,6 +1030,12 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     console.error(`[sciforge] failed to load preload ${preloadPath}:`, error)
     logError('preload', 'Failed to load preload script', { preloadPath, message })
   })
+  const devUrl = devServerHintUrl()
+  const rendererFile = join(__dirname, '../renderer/index.html')
+  const trustedRendererUrl = devUrl ?? pathToFileURL(rendererFile).toString()
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl, trustedRendererUrl)) event.preventDefault()
+  })
   const showWindow = (): void => {
     if (options.suppressInitialShow) return
     if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isVisible()) return
@@ -1042,12 +1049,11 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
-  const devUrl = devServerHintUrl()
   traceStartup('createWindow:load', { devUrl: devUrl ?? 'file' })
   if (devUrl) {
     mainWindow.loadURL(devUrl)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(rendererFile)
   }
   mainWindow.once('ready-to-show', () => {
     traceStartup('window:ready-to-show')
@@ -1078,7 +1084,7 @@ app.whenReady().then(async () => {
   traceStartup('install webview guards:done')
 
   if (process.platform === 'darwin' && !appIcon.isEmpty()) {
-    app.dock.setIcon(appIcon)
+    app.dock?.setIcon(appIcon)
   }
 
   store = new JsonSettingsStore(app.getPath('userData'))
@@ -1566,6 +1572,16 @@ app.whenReady().then(async () => {
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     getMainWindow: () => mainWindow,
+    isTrustedIpcSender: (event) => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return false
+      const contents = window.webContents
+      const frame = event.senderFrame
+      const expected = devServerHintUrl() ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
+      return event.sender === contents &&
+        frame === contents.mainFrame &&
+        isTrustedRendererUrl(frame?.url ?? '', expected)
+    },
     applySettingsPatch,
     getModelAccessStatus: readModelAccessStatus,
     traces: fullTraceStore,

@@ -89,6 +89,7 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
   return {
     store: { load: vi.fn(async () => settings()) } as never,
     getMainWindow: () => null,
+    isTrustedIpcSender: () => true,
     applySettingsPatch,
     getModelAccessStatus: vi.fn(async () => ({
       setupRequired: false,
@@ -442,6 +443,18 @@ describe('registerAppIpcHandlers', () => {
 
     expect(handlers.get('remoteChannel:message:mirror')).toBeTypeOf('function')
     expect(handlers.has(removedFeishuMirrorChannel)).toBe(false)
+  })
+
+  it('rejects IPC from an untrusted renderer before dispatching a handler', async () => {
+    const getModelAccessStatus = vi.fn()
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions({
+      isTrustedIpcSender: () => false,
+      getModelAccessStatus
+    }))
+
+    await expect(handlers.get('modelAccess:status')?.({})).rejects.toThrow('untrusted renderer frame')
+    expect(getModelAccessStatus).not.toHaveBeenCalled()
   })
 
   it('does not register the removed draw.io runtime channel', async () => {

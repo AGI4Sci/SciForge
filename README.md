@@ -135,7 +135,7 @@ SciForge 默认本地优先；模型、远程执行和科学专家服务由用�
 
 ### 从源码运行
 
-环境要求：Node.js 20+，并在本机安装及登录 Codex（默认）或 Claude Code CLI。
+环境要求：Node.js 22.12+，并在本机安装及登录 Codex（默认）或 Claude Code CLI。
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git

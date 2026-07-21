@@ -188,15 +188,24 @@ function parseYamlScalar(source: string, key: string): string {
   return match?.[1]?.trim() ?? ''
 }
 
-function macAutoUpdateAllowed(): boolean {
-  if (process.platform !== 'darwin') return true
+export function nativeAutoUpdateAllowed(platform: NodeJS.Platform = process.platform): boolean {
   if (process.env.SCIFORGE_ALLOW_UNSIGNED_UPDATES === '1') return true
 
   const pkg = readPackageJson()
   const hints = pkg?.buildHints
   if (!hints || typeof hints !== 'object') return false
-  const values = hints as { macSigningEnabled?: unknown; notarizationEnabled?: unknown }
-  return values.macSigningEnabled === true && values.notarizationEnabled === true
+  const values = hints as {
+    macSigningEnabled?: unknown
+    notarizationEnabled?: unknown
+    windowsSigningEnabled?: unknown
+  }
+  if (platform === 'darwin') {
+    return values.macSigningEnabled === true && values.notarizationEnabled === true
+  }
+  if (platform === 'win32') return values.windowsSigningEnabled === true
+  // AppImage metadata and its SHA-512 are delivered from the same feed. Until
+  // Linux release signing is independently verified, keep installation manual.
+  return false
 }
 
 function unsupportedMessage(): string {
@@ -497,7 +506,7 @@ export async function checkGuiUpdate(channel?: GuiUpdateChannel): Promise<GuiUpd
   const selectedChannel = await resolveUpdateChannel(channel)
   configureUpdaterChannel(selectedChannel)
 
-  if (!macAutoUpdateAllowed()) {
+  if (!nativeAutoUpdateAllowed()) {
     return checkManualUpdate(selectedChannel, 'unsupported')
   }
 
@@ -530,7 +539,7 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
   const selectedChannel = await resolveUpdateChannel(channel)
   configureUpdaterChannel(selectedChannel)
 
-  if (!macAutoUpdateAllowed()) {
+  if (!nativeAutoUpdateAllowed()) {
     return {
       ok: false,
       currentVersion: app.getVersion(),
@@ -576,6 +585,14 @@ export async function downloadGuiUpdate(channel?: GuiUpdateChannel): Promise<Gui
 
 export async function installGuiUpdate(): Promise<GuiUpdateInstallResult> {
   try {
+    if (!nativeAutoUpdateAllowed()) {
+      return {
+        ok: false,
+        currentVersion: app.getVersion(),
+        code: 'unsupported',
+        message: unsupportedMessage()
+      }
+    }
     if (!downloaded) {
       return {
         ok: false,

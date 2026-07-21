@@ -73,6 +73,7 @@ import {
   remoteMessageDedupeKey,
   replyTextForGeneratedFiles,
   runRemoteChannelProviderRetry,
+  sanitizeOutboundAttachmentFileName,
   sanitizePathSegment,
   shouldDirectSendExistingGeneratedFilesForPrompt,
   splitRemoteChannelReplyText,
@@ -2508,7 +2509,7 @@ export class RemoteChannelRuntime {
         resolvedFiles.push({
           ...file,
           path: realFile,
-          fileName: file.fileName || realFile.split(/[\\/]/).pop() || 'attachment'
+          fileName: sanitizeOutboundAttachmentFileName(file.fileName, basename(realFile))
         })
       } catch (error) {
         this.deps.logError('remote-channel-feishu', 'Skipping generated file that cannot be read for Feishu upload', {

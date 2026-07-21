@@ -23,6 +23,7 @@ import {
   remoteChannelAttachmentFromGeneratedFile,
   latestGeneratedFiles,
   prepareRemoteChannelReplyText,
+  sanitizeOutboundAttachmentFileName,
   splitRemoteChannelReplyText
 } from './remote-channel-runtime-helpers'
 import type { RemoteChannelRuntimeDeps, ThreadDetailJson } from './remote-channel-runtime-helpers'
@@ -302,6 +303,16 @@ describe('RemoteChannelRuntime', () => {
     expect(chunks[0]).toContain('```ts')
     expect(chunks[0].trimEnd()).toMatch(/```$/)
     expect(chunks[1]).toMatch(/^```ts\n/)
+  })
+
+  it('sanitizes outbound attachment names at the provider boundary', () => {
+    expect(sanitizeOutboundAttachmentFileName('../reports\\paper\r\n".pdf', 'fallback.pdf')).toBe('paper_.pdf')
+    expect(sanitizeOutboundAttachmentFileName('\u0000\r\n', 'result.txt')).toBe('result.txt')
+    const longName = `${'a'.repeat(300)}.csv`
+    const sanitized = sanitizeOutboundAttachmentFileName(longName, 'fallback.csv')
+    expect(sanitized).toHaveLength(255)
+    expect(sanitized.endsWith('.csv')).toBe(true)
+    expect(sanitizeOutboundAttachmentFileName('实验结果.tsv', 'fallback.tsv')).toBe('实验结果.tsv')
   })
 
   it('adds an attachment fallback summary when a provider cannot deliver generated files', () => {

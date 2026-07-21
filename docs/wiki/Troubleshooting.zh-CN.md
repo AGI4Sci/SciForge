@@ -12,7 +12,7 @@
 
 ### `npm run dev` 失败或重复启动
 
-- 运行 `node --version`，确认 Node.js 20+。
+- 运行 `node --version`，确认 Node.js 22.12+。
 - 删除并重装依赖前先保留 `package-lock.json`：`npm install`。
 - 若提示 workspace dev lock 已占用，退出旧 Electron / `npm run dev`，再重试；不要同时启动两个相同工作区实例。
 - native module 报错时重新执行 `npm install`，并保留完整安装日志用于定位具体依赖。
