@@ -275,9 +275,6 @@
     "type": "git",
     "url": "git+https://github.com/XingYu-Zhong/SciForge.git"
   },
-  "directories": {
-    "doc": "docs"
-  },
   "keywords": [],
   "bugs": {
     "url": "https://github.com/XingYu-Zhong/SciForge/issues"
