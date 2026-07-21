@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   Scissors,
+  Sparkles,
   Trash2
 } from 'lucide-react'
 import {
@@ -95,6 +96,7 @@ type FileTreeRenameDialogState = {
   value: string
   submitting: boolean
   error: string | null
+  autoSuggested?: boolean
 }
 
 export type FileTreeWorkspaceDropAction = 'copy' | 'move'
@@ -128,6 +130,12 @@ function normalizePath(value: string): string {
 
 function pathKey(value: string): string {
   return normalizePath(value).toLowerCase()
+}
+
+export function isPdfWorkspaceReference(reference: AgentRuntimeWorkspaceReference): boolean {
+  return reference.kind === 'pdf' ||
+    reference.mimeType?.toLocaleLowerCase() === 'application/pdf' ||
+    reference.name.toLocaleLowerCase().endsWith('.pdf')
 }
 
 function workspaceName(workspaceRoot: string): string {
@@ -326,6 +334,7 @@ export function ChatFileTreePanel({
   const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<FileTreeContextMenuState | null>(null)
   const [renameDialog, setRenameDialog] = useState<FileTreeRenameDialogState | null>(null)
+  const [suggestingPdfPath, setSuggestingPdfPath] = useState<string | null>(null)
   const [fileClipboard, setFileClipboard] = useState<FileTreeClipboardState | null>(null)
   const [dragTargetDirectoryPath, setDragTargetDirectoryPath] = useState<string | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
@@ -658,6 +667,34 @@ export function ChatFileTreePanel({
     })
   }
 
+  const suggestPdfRename = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
+    if (suggestingPdfPath) return
+    const referencePath = normalizePath(reference.relativePath)
+    setSuggestingPdfPath(referencePath)
+    try {
+      const result = await window.sciforge.suggestWorkspacePdfName({
+        path: referencePath,
+        workspaceRoot: reference.workspaceRoot || root
+      })
+      if (!result.ok) {
+        window.alert(result.message)
+        return
+      }
+      setRenameDialog({
+        reference,
+        directory: false,
+        value: result.suggestedName,
+        submitting: false,
+        error: null,
+        autoSuggested: true
+      })
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSuggestingPdfPath(null)
+    }
+  }
+
   const openReferenceInEditor = (reference: AgentRuntimeWorkspaceReference): void => {
     void openWorkspacePathInEditor(
       { path: reference.relativePath },
@@ -887,6 +924,8 @@ export function ChatFileTreePanel({
           workspaceRoot: reference.workspaceRoot
         })
         const selected = selectedReferenceKeys.has(referenceKey)
+        const pdf = !directory && isPdfWorkspaceReference(reference)
+        const suggestingPdfName = pdf && pathKey(suggestingPdfPath ?? '') === pathKey(reference.relativePath)
         const dragTarget = directory && pathKey(dragTargetDirectoryPath ?? '') === pathKey(reference.relativePath)
         const row = (
           <div
@@ -930,6 +969,23 @@ export function ChatFileTreePanel({
               {referenceIcon(reference.kind, expandedDirectory)}
               <span className="min-w-0 flex-1 truncate">{reference.name}</span>
             </button>
+            {pdf ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void suggestPdfRename(reference)
+                }}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-card hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                disabled={Boolean(suggestingPdfPath)}
+                title={t('fileTreeAutoRenamePdf')}
+                aria-label={t('fileTreeAutoRenamePdf')}
+              >
+                {suggestingPdfName
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+                  : <Sparkles className="h-3.5 w-3.5" strokeWidth={1.8} />}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => addReference(reference)}
@@ -1281,6 +1337,11 @@ function FileTreeRenameDialog({
           onFocus={(event) => event.currentTarget.select()}
           className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
         />
+        {state.autoSuggested ? (
+          <p className="mt-2 text-[12px] leading-5 text-ds-muted">
+            {t('fileTreeAutoRenameReview')}
+          </p>
+        ) : null}
         {state.error ? (
           <p className="mt-3 text-[12px] leading-5 text-red-600 dark:text-red-300">
             {state.error}

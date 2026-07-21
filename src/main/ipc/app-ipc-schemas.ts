@@ -1983,6 +1983,13 @@ export const workspaceEntryRenamePayloadSchema = z
   })
   .strict()
 
+export const workspacePdfRenameSuggestionPayloadSchema = z
+  .object({
+    path: trimmedString(MAX_PATH_LENGTH),
+    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
+  })
+  .strict()
+
 export const workspaceEntryCopyPayloadSchema = z
   .object({
     sourcePath: trimmedString(MAX_PATH_LENGTH),

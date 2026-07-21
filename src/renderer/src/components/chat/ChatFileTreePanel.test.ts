@@ -7,6 +7,7 @@ import {
   fileTreeExternalImportPayload,
   fileTreeWorkspaceDropDecision,
   fileTreeWorkspaceDropDecisionFromDragData,
+  isPdfWorkspaceReference,
   renamedRelativePath,
   rewriteRenamedPath,
   shouldProcessInitialDirectory
@@ -18,6 +19,21 @@ import {
 } from '../../lib/workspace-reference-drag'
 
 describe('ChatFileTreePanel helpers', () => {
+  it('shows automatic naming only for PDF workspace references', () => {
+    expect(isPdfWorkspaceReference({
+      workspaceRoot: '/tmp/workspace',
+      relativePath: 'papers/2603.10165v2.pdf',
+      name: '2603.10165v2.pdf',
+      kind: 'file'
+    })).toBe(true)
+    expect(isPdfWorkspaceReference({
+      workspaceRoot: '/tmp/workspace',
+      relativePath: 'notes/readme.md',
+      name: 'readme.md',
+      kind: 'text'
+    })).toBe(false)
+  })
+
   it('converts shared workspace references into composer references', () => {
     expect(composerReferenceFromWorkspaceReference({
       workspaceRoot: '/tmp/workspace',

@@ -30,6 +30,10 @@ declare module 'pdfjs-dist/build/pdf.mjs' {
   export type PDFDocumentProxy = {
     numPages: number
     getPage: (pageNumber: number) => Promise<PDFPageProxy>
+    getMetadata: () => Promise<{
+      info?: Record<string, unknown>
+      metadata?: { get?: (name: string) => unknown } | null
+    }>
     destroy: () => Promise<void>
   }
   export type PDFDocumentLoadingTask = {
@@ -75,6 +79,10 @@ declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
   export type PDFDocumentProxy = {
     numPages: number
     getPage: (pageNumber: number) => Promise<PDFPageProxy>
+    getMetadata: () => Promise<{
+      info?: Record<string, unknown>
+      metadata?: { get?: (name: string) => unknown } | null
+    }>
     destroy: () => Promise<void>
   }
   export type PDFDocumentLoadingTask = {

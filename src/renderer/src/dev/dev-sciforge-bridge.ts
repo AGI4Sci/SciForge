@@ -282,6 +282,7 @@ function createApi(): SciForgeApi {
     pasteWorkspaceClipboard: (payload) => invoke('clipboard:paste-workspace', payload),
     startWorkspaceNativeFileDrag: (payload) => invoke('file:start-workspace-native-drag', payload),
     renameWorkspaceEntry: (payload) => invoke('file:rename-workspace-entry', payload),
+    suggestWorkspacePdfName: (payload) => invoke('file:suggest-workspace-pdf-name', payload),
     copyWorkspaceEntry: (payload) => invoke('file:copy-workspace-entry', payload),
     importWorkspaceEntries: (payload) => invoke('file:import-workspace-entries', payload),
     moveWorkspaceEntry: (payload) => invoke('file:move-workspace-entry', payload),

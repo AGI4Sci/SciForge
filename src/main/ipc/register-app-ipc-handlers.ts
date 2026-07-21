@@ -143,6 +143,7 @@ import {
   workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspacePdfRenameSuggestionPayloadSchema,
   workspaceNativeFileDragPayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
@@ -303,6 +304,7 @@ import {
   readWorkspaceFile,
   moveWorkspaceEntry,
   renameWorkspaceEntry,
+  suggestWorkspacePdfName,
   resolveWorkspaceFile,
   saveWorkspaceClipboardImage,
   writeWorkspaceFile
@@ -2796,6 +2798,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('file:rename-workspace-entry', async (_, payload: unknown) =>
     renameWorkspaceEntry(
       parseIpcPayload('file:rename-workspace-entry', workspaceEntryRenamePayloadSchema, payload)
+    )
+  )
+  handleInvoke('file:suggest-workspace-pdf-name', async (_, payload: unknown) =>
+    suggestWorkspacePdfName(
+      parseIpcPayload(
+        'file:suggest-workspace-pdf-name',
+        workspacePdfRenameSuggestionPayloadSchema,
+        payload
+      )
     )
   )
   handleInvoke('file:copy-workspace-entry', async (_, payload: unknown) =>
