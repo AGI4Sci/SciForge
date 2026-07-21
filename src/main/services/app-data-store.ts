@@ -24,6 +24,40 @@ export type AppDataJsonlStoreOptions = {
 }
 
 const NOFOLLOW = constants.O_NOFOLLOW ?? 0
+const WINDOWS_ATOMIC_RENAME_RETRY_DELAYS_MS = [10, 25, 50, 100] as const
+
+type AtomicRenameOptions = {
+  platform?: NodeJS.Platform
+  renameFile?: (source: string, target: string) => Promise<void>
+  wait?: (delayMs: number) => Promise<void>
+}
+
+export async function renameAppDataFileAtomically(
+  source: string,
+  target: string,
+  options: AtomicRenameOptions = {}
+): Promise<void> {
+  const platform = options.platform ?? process.platform
+  const renameFile = options.renameFile ?? rename
+  const wait = options.wait ?? ((delayMs: number) => new Promise<void>((resolve) => {
+    setTimeout(resolve, delayMs)
+  }))
+
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await renameFile(source, target)
+      return
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code
+      const retryDelay = WINDOWS_ATOMIC_RENAME_RETRY_DELAYS_MS[attempt]
+      const retryable = platform === 'win32' && (
+        code === 'EPERM' || code === 'EACCES' || code === 'EBUSY'
+      )
+      if (!retryable || retryDelay === undefined) throw error
+      await wait(retryDelay)
+    }
+  }
+}
 
 export class AppDataJsonlStore {
   private readonly rootDir: string
@@ -182,7 +216,7 @@ async function atomicWriteResolvedAppDataText(
     })
     await assertSafeExistingDirectory(target.rootPath, target.parentPath)
     await assertSafeExistingFile(target.rootPath, target.path)
-    await rename(tmpPath, target.path)
+    await renameAppDataFileAtomically(tmpPath, target.path)
     await assertSafeExistingFile(target.rootPath, target.path)
   } catch (error) {
     await rm(tmpPath, { force: true }).catch(() => undefined)

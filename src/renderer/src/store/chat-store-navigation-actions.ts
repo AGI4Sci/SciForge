@@ -28,7 +28,13 @@ import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/wor
 import { onRemoteChannelActivityApi } from '../lib/remote-channel-api'
 import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 import { requestProjectDagSetup } from '../lib/project-dag-setup'
-import { buildRemoteChannelRuntimePrompt, getActiveAgentApiKey, getActiveAgentRuntime, type AgentRuntimeId } from '@shared/app-settings'
+import {
+  buildRemoteChannelRuntimePrompt,
+  getActiveAgentApiKey,
+  getActiveAgentRuntime,
+  getModelAccessSettings,
+  type AgentRuntimeId
+} from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import {
   activeRemoteChannel,
@@ -393,7 +399,13 @@ export function createNavigationActions(
           [workspaceRoot]
         )
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(readCodeWorkspaceRoots(), [workspaceRoot])
-        const needsInitialSetup = !getActiveAgentApiKey(settings).trim()
+        // Older SciForge settings can contain a valid runtime key while
+        // predating the explicit Model API / Coding Plan selection. Do not
+        // probe a runtime with that ambiguous billing configuration: route it
+        // through the current setup experience instead. Settings that already
+        // completed the new flow (including macOS installs) are unchanged.
+        const modelAccess = getModelAccessSettings(settings)
+        const needsInitialSetup = !modelAccess || !getActiveAgentApiKey(settings).trim()
         applyTheme(settings.theme)
         applyUiFontScale(settings.uiFontScale)
         await get().applyI18nFromSettings(settings.locale)
@@ -421,6 +433,7 @@ export function createNavigationActions(
           hiddenCodeWorkspaceRoots,
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           activeAgentRuntime: getActiveAgentRuntime(settings),
+          modelAccessMode: modelAccess?.mode ?? null,
           remoteChannels: settings.remoteChannel.channels,
           activeRemoteChannelId: settings.remoteChannel.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,

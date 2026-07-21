@@ -2,7 +2,7 @@
 
 import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
+import { access, mkdir, open, readFile, realpath, unlink } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import process from 'node:process'
@@ -15,6 +15,26 @@ const lockPath = join(lockDir, `${workspaceId}.json`)
 const instanceId = randomUUID()
 let lockOwned = false
 let child = null
+
+const requiredDevDependencies = [
+  'node_modules/typescript/package.json',
+  'node_modules/electron-vite/package.json'
+]
+
+async function assertDevDependenciesInstalled() {
+  const missing = []
+  for (const relativePath of requiredDevDependencies) {
+    try {
+      await access(join(projectRoot, relativePath))
+    } catch {
+      missing.push(relativePath)
+    }
+  }
+  if (missing.length === 0) return
+  throw new Error(
+    'SciForge development dependencies are not installed. Run `npm install` in the project root, then run `npm run dev` again.'
+  )
+}
 
 function isProcessAlive(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0) return false
@@ -110,6 +130,7 @@ for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
 }
 
 try {
+  await assertDevDependenciesInstalled()
   await acquireLock()
   const env = {
     ...process.env,

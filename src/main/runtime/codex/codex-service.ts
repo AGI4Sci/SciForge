@@ -1215,6 +1215,13 @@ export class CodexRuntimeService {
   }> {
     const current = settings ?? await this.options.settings()
     if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
+      const modelAccess = getModelAccessSettings(current)
+      if (!modelAccess) {
+        throw new Error('Model access setup is required. Choose Model API or Coding Plan in Settings before connecting Codex.')
+      }
+      if (modelAccess.mode === 'coding-plan' && !modelAccess.planAdapterId.trim()) {
+        throw new Error('Select a Coding Plan in Settings before connecting Codex.')
+      }
       throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
     }
     const client = await this.ensureClient(current, access)
