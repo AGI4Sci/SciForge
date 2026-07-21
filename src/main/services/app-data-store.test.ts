@@ -1,12 +1,13 @@
 import { lstat, mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   AppDataJsonlStore,
   appendAppDataStoreText,
   appDataStorePath,
   atomicWriteAppDataJson,
+  renameAppDataFileAtomically,
   readAppDataStoreText
 } from './app-data-store'
 
@@ -15,6 +16,33 @@ async function tempRoot(): Promise<string> {
 }
 
 describe('app-data-store', () => {
+  it('retries transient Windows rename failures without changing other platforms', async () => {
+    const windowsRename = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('temporarily locked'), { code: 'EPERM' }))
+      .mockRejectedValueOnce(Object.assign(new Error('busy'), { code: 'EBUSY' }))
+      .mockResolvedValueOnce(undefined)
+    const wait = vi.fn(async () => undefined)
+
+    await expect(renameAppDataFileAtomically('source.tmp', 'target.json', {
+      platform: 'win32',
+      renameFile: windowsRename,
+      wait
+    })).resolves.toBeUndefined()
+
+    expect(windowsRename).toHaveBeenCalledTimes(3)
+    expect(wait).toHaveBeenNthCalledWith(1, 10)
+    expect(wait).toHaveBeenNthCalledWith(2, 25)
+
+    const macRename = vi.fn()
+      .mockRejectedValue(Object.assign(new Error('denied'), { code: 'EPERM' }))
+    await expect(renameAppDataFileAtomically('source.tmp', 'target.json', {
+      platform: 'darwin',
+      renameFile: macRename,
+      wait
+    })).rejects.toThrow('denied')
+    expect(macRename).toHaveBeenCalledTimes(1)
+  })
+
   it('writes JSON through a temp file and resolves the final path inside app data', async () => {
     const root = await tempRoot()
 

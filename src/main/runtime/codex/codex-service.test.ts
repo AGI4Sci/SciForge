@@ -187,6 +187,23 @@ function deferred<T>(): {
 }
 
 describe('CodexRuntimeService model access selection', () => {
+  it('reports missing model access as a setup problem before starting Codex', async () => {
+    const createClient = vi.fn(() => controllableClient())
+    const current = settings()
+    delete (current as Partial<AppSettingsV1>).modelAccess
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Model access setup is required')
+    })
+    expect(createClient).not.toHaveBeenCalled()
+  })
+
   it.each([
     {
       name: 'API mode selects another runtime',

@@ -107,3 +107,15 @@ describe('installGuiUpdate', () => {
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
   })
 })
+
+describe('background update scheduling', () => {
+  it('keeps packaged updates enabled while source builds require an explicit opt-in', async () => {
+    const module = await import('./gui-updater')
+
+    expect(module.shouldScheduleBackgroundGuiUpdates(true, {})).toBe(true)
+    expect(module.shouldScheduleBackgroundGuiUpdates(false, {})).toBe(false)
+    expect(module.shouldScheduleBackgroundGuiUpdates(false, {
+      SCIFORGE_DEV_UPDATE_CHECK: '1'
+    })).toBe(true)
+  })
+})
