@@ -32,7 +32,8 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     expect(observation.violation).toMatchObject({
       code: 'runtime_execution_incomplete',
       verdict: 'blocked',
-      unsatisfiedObligationIds: ['requested-execution']
+      unsatisfiedObligationIds: ['requested-execution'],
+      message: 'Completion rejected: unsatisfied requirements: requested-execution.'
     })
   })
 
@@ -477,11 +478,26 @@ describe('execution integrity input policy', () => {
     expect(guarded.metadata?.[EXECUTION_INTEGRITY_POLICY_METADATA_KEY]).toBe('execution-integrity.v2')
   })
 
-  it('creates a read obligation from an inspect intent without requirements', () => {
+  it('creates a generic success obligation from an inspect intent without requirements', () => {
     const input = baseInput('codex', 'Inspect the current file.')
     input.executionIntent = { mode: 'inspect' }
     const guarded = withExecutionIntegrityRequirement(input)
-    expect(guarded.text).toContain('"effectClass":"read"')
+    expect(guarded.text).toContain('"kind":"any_success"')
+    expect(guarded.text).not.toContain('"effectClass"')
+  })
+
+  it('accepts a trusted inspection success when no specific receipt type was requested', () => {
+    const input = baseInput('codex', 'Inspect the current file.')
+    input.executionIntent = { mode: 'inspect' }
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    guard.observe('codex', {
+      ...tool('codex', 'succeeded'),
+      toolName: 'semantic_observer',
+      toolKind: 'tool_call'
+    })
+
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
   it('supports typed tool and completion requirements', () => {
@@ -503,10 +519,10 @@ describe('execution integrity input policy', () => {
     expect(withExecutionIntegrityRequirement(input).text).toContain('"effectClass":"external_mutation"')
   })
 
-  it('keeps legacy structured intent metadata backward compatible', () => {
+  it('applies the same generic success rule to structured intent metadata', () => {
     const input = baseInput('codex', 'Inspect the current file.')
     input.metadata = { [EXECUTION_INTENT_METADATA_KEY]: { mode: 'inspect' } }
-    expect(withExecutionIntegrityRequirement(input).text).toContain('"effectClass":"read"')
+    expect(withExecutionIntegrityRequirement(input).text).toContain('"kind":"any_success"')
   })
 
   it('requires declared receipt effects instead of guessing from tool names', () => {

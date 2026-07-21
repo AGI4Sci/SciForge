@@ -262,6 +262,10 @@ describe('Evidence DAG runtime feed', () => {
 
   it('notifies the Project queue with Evidence vector references only', async () => {
     const calls: Array<{ url: string; body: Record<string, unknown> }> = []
+    const acceptedProjectVector = [
+      { threadId: 'sciforge:thread-1', digest: 'sha256:10' },
+      { threadId: 'sciforge:thread-2', digest: 'sha256:8' }
+    ]
     const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input)
       if (url.startsWith('http://127.0.0.1:3897') && url.includes('/updates/status')) {
@@ -272,10 +276,7 @@ describe('Evidence DAG runtime feed', () => {
           status: 'fresh',
           pending: 0,
           committedSnapshot: {
-            evidenceVector: [
-              { threadId: 'sciforge:thread-1', digest: 'sha256:10' },
-              { threadId: 'sciforge:thread-2', digest: 'sha256:8' }
-            ]
+            evidenceVector: acceptedProjectVector
           }
         })
       }
@@ -283,7 +284,7 @@ describe('Evidence DAG runtime feed', () => {
       calls.push({ url, body })
       return url.startsWith('http://127.0.0.1:3897')
         ? ok({ snapshot: committedSnapshot() })
-        : ok({ update: { id: 'project-job-1', status: 'queued' } })
+        : ok({ id: 'project-job-1', status: 'queued', desiredEvidenceVector: acceptedProjectVector })
     })
     const queue = new EvidenceDagUpdateQueue({
       storagePath: await queuePath(),
@@ -293,7 +294,7 @@ describe('Evidence DAG runtime feed', () => {
       },
       fetchImpl
     })
-    await queue.enqueue({
+    const queued = await queue.enqueue({
       runtimeId: 'sciforge', threadId: 'thread-1', targetWatermark: '10', reason: 'turn_committed',
       items: [{ id: 'a1', kind: 'assistant_message', text: 'answer' }],
       projectContext: {
@@ -301,6 +302,7 @@ describe('Evidence DAG runtime feed', () => {
         includedSessions: ['sciforge:thread-1', 'sciforge:thread-2']
       }
     })
+    await expect(queue.waitForJob(queued.jobId, 5_000)).resolves.toMatchObject({ digest: 'sha256:10' })
     await vi.waitFor(() => expect(calls).toHaveLength(2))
     expect(calls[1]).toMatchObject({
       url: 'http://127.0.0.1:3898/updates',
@@ -340,7 +342,7 @@ describe('Evidence DAG runtime feed', () => {
       }
       if (url === 'http://127.0.0.1:3898/updates') {
         order.push('project')
-        return ok({ id: 'project-job-1', status: 'queued' })
+        return ok({ id: 'project-job-1', status: 'queued', desiredEvidenceVector: expectedVector })
       }
       if (url.startsWith('http://127.0.0.1:3898/updates/status')) {
         return ok({ state: 'fresh', pending: 0, committedSnapshot: { evidenceVector: expectedVector } })
@@ -392,7 +394,7 @@ describe('Evidence DAG runtime feed', () => {
         if (statusReads === 2) return ok({ status: 'running', running: true, pending: 0 })
         return ok({ status: 'fresh', pending: 0, running: false, committedSnapshot: { evidenceVector: expectedVector } })
       }
-      return ok({ update: { id: 'project-job-1', status: 'queued' } })
+      return ok({ id: 'project-job-1', status: 'queued', desiredEvidenceVector: expectedVector })
     })
     const queue = new EvidenceDagUpdateQueue({
       storagePath: await queuePath(),

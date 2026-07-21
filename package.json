@@ -1,5 +1,5 @@
 {
-  "name": "sciforge",
+  "name": "@sciforge/sciforge",
   "productName": "SciForge",
   "version": "0.1.0",
   "private": true,
@@ -273,6 +273,13 @@
   "homepage": "https://sciforge.ai",
   "repository": {
     "type": "git",
-    "url": "https://github.com/XingYu-Zhong/SciForge.git"
+    "url": "git+https://github.com/XingYu-Zhong/SciForge.git"
+  },
+  "directories": {
+    "doc": "docs"
+  },
+  "keywords": [],
+  "bugs": {
+    "url": "https://github.com/XingYu-Zhong/SciForge/issues"
   }
 }

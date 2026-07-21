@@ -234,7 +234,12 @@ function stubProjectDagReady(status = 200, compileData: Record<string, unknown> 
       }
       autonomyMode = body.autonomyMode ?? autonomyMode
       return new Response(JSON.stringify({
-        ok: true, data: { id: String(compileData.id ?? 'project-job-1'), status: 'queued' }
+        ok: true,
+        data: {
+          id: String(compileData.id ?? 'project-job-1'),
+          status: 'queued',
+          desiredEvidenceVector: committedVector
+        }
       }), { status: 200 })
     }
     if (href.includes('/updates/status') && method === 'GET') {
@@ -1601,7 +1606,11 @@ describe('registerAppIpcHandlers', () => {
         }), { status: 200 })
       }
       if (href === 'http://127.0.0.1:3898/updates') {
-        return new Response(JSON.stringify({ ok: true, data: { id: 'project-job-1', status: 'queued' } }), {
+        return new Response(JSON.stringify({ ok: true, data: {
+          id: 'project-job-1',
+          status: 'queued',
+          desiredEvidenceVector: [{ threadId: 'codex:thread-1', digest: 'sha256:evidence-1' }]
+        } }), {
           status: 200
         })
       }

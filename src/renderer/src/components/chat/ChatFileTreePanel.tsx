@@ -38,6 +38,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { getProvider } from '../../agent/registry'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
+import { suggestPdfNameFromWorkspaceRead } from '../../lib/workspace-pdf-auto-rename'
 import {
   composerFileReferenceKey,
   type ComposerFileReference
@@ -670,12 +671,27 @@ export function ChatFileTreePanel({
   const suggestPdfRename = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
     if (suggestingPdfPath) return
     const referencePath = normalizePath(reference.relativePath)
+    const referenceRoot = reference.workspaceRoot || root
     setSuggestingPdfPath(referencePath)
     try {
-      const result = await window.sciforge.suggestWorkspacePdfName({
-        path: referencePath,
-        workspaceRoot: reference.workspaceRoot || root
-      })
+      let result: Awaited<ReturnType<typeof window.sciforge.suggestWorkspacePdfName>> | undefined
+      if (typeof window.sciforge.suggestWorkspacePdfName === 'function') {
+        try {
+          result = await window.sciforge.suggestWorkspacePdfName({
+            path: referencePath,
+            workspaceRoot: referenceRoot
+          })
+        } catch {
+          result = undefined
+        }
+      }
+      if (!result) {
+        const readResult = await window.sciforge.readWorkspaceFile({
+          path: referencePath,
+          workspaceRoot: referenceRoot
+        })
+        result = await suggestPdfNameFromWorkspaceRead(readResult, reference.name)
+      }
       if (!result.ok) {
         window.alert(result.message)
         return

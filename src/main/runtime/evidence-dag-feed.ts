@@ -425,6 +425,21 @@ function objectRecord(value: unknown): Record<string, unknown> | null {
     : null
 }
 
+function projectEvidenceVector(value: unknown): EvidenceVectorEntry[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error('Project DAG update returned no desired Evidence vector.')
+  }
+  return value.map((entry) => {
+    const record = objectRecord(entry)
+    const threadId = nonEmptyString(record?.threadId)
+    const digest = nonEmptyString(record?.digest)
+    if (!threadId || !digest) {
+      throw new Error('Project DAG update returned an invalid desired Evidence vector.')
+    }
+    return { threadId, digest }
+  })
+}
+
 function canonicalSnapshot(value: unknown): EvidenceSnapshot {
   const record = objectRecord(value)
   const artifactDigests = Array.isArray(record?.artifactDigests)
@@ -1078,7 +1093,7 @@ export class EvidenceDagUpdateQueue {
       const snapshot = canonicalSnapshot(status?.snapshot)
       return { threadId: snapshot.threadId, digest: snapshot.digest }
     }))
-    await requestServiceData(
+    const projectUpdate = objectRecord(await requestServiceData(
       serviceUrl,
       apiKey,
       '/updates',
@@ -1102,8 +1117,9 @@ export class EvidenceDagUpdateQueue {
       },
       this.fetchImpl(),
       this.timeoutMs(env)
-    )
-    await this.waitForProjectSnapshot(serviceUrl, apiKey, evidenceVector, job.projectContext, env)
+    ))
+    const desiredEvidenceVector = projectEvidenceVector(projectUpdate?.desiredEvidenceVector)
+    await this.waitForProjectSnapshot(serviceUrl, apiKey, desiredEvidenceVector, job.projectContext, env)
   }
 
   private async waitForProjectSnapshot(
@@ -1131,13 +1147,11 @@ export class EvidenceDagUpdateQueue {
         this.timeoutMs(env)
       )) ?? {}
       const committed = objectRecord(status.committedSnapshot)
-      const vector = Array.isArray(committed?.evidenceVector) ? committed.evidenceVector : []
-      const actual = new Map(vector.flatMap((entry) => {
-        const record = objectRecord(entry)
-        const threadId = nonEmptyString(record?.threadId)
-        const digest = nonEmptyString(record?.digest)
-        return threadId && digest ? [[threadId, digest] as const] : []
-      }))
+      const actual = new Map(
+        Array.isArray(committed?.evidenceVector)
+          ? projectEvidenceVector(committed.evidenceVector).map((entry) => [entry.threadId, entry.digest] as const)
+          : []
+      )
       const matches = actual.size === expected.size && [...expected].every(([threadId, digest]) => actual.get(threadId) === digest)
       const active = status.state === 'updating' || status.state === 'pending' ||
         (typeof status.pending === 'number' && status.pending > 0) ||

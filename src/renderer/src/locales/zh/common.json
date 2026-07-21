@@ -694,7 +694,8 @@
     "evidence": "正在抽取证据",
     "project": "正在更新项目图谱",
     "compile": "正在编译图谱",
-    "retrying": "等待重试"
+    "retrying": "等待重试",
+    "failed": "更新失败"
   },
   "dagProgressAttempt": "第 {{count}} 次尝试",
   "dagProgressWaiting": "等待工作进程",

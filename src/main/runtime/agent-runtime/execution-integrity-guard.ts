@@ -221,8 +221,7 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
   if (requirements.length === 0) {
     return [{
       id: 'requested-execution',
-      kind: mode === 'inspect' ? 'effect' : 'any_success',
-      ...(mode === 'inspect' ? { effectClass: 'read' as const } : {}),
+      kind: 'any_success',
       completion: 'success',
       source: 'metadata'
     }]
@@ -526,12 +525,16 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
   const verdict = 'blocked'
   const openCallIds = open.map((item) => item.callId)
   const unsatisfiedObligationIds = unsatisfied.map((item) => item.id)
+  const failureReasons = [
+    openCallIds.length ? `open calls: ${openCallIds.join(', ')}` : '',
+    unsatisfiedObligationIds.length ? `unsatisfied requirements: ${unsatisfiedObligationIds.join(', ')}` : ''
+  ].filter(Boolean)
   return {
     code,
     verdict,
     message: visualMissing
       ? 'Visual completion rejected: verified visual inspection did not execute.'
-      : 'Completion rejected: required execution has no matching terminal receipt.',
+      : `Completion rejected: ${failureReasons.join('; ')}.`,
     detail: [
       openCallIds.length ? `Open calls: ${openCallIds.join(', ')}.` : '',
       unsatisfiedObligationIds.length ? `Unsatisfied obligations: ${unsatisfiedObligationIds.join(', ')}.` : '',

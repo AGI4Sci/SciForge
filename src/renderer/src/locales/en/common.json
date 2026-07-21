@@ -694,7 +694,8 @@
     "evidence": "Extracting evidence",
     "project": "Updating project graph",
     "compile": "Compiling graph",
-    "retrying": "Waiting to retry"
+    "retrying": "Waiting to retry",
+    "failed": "Update failed"
   },
   "dagProgressAttempt": "Attempt {{count}}",
   "dagProgressWaiting": "Waiting for worker",
