@@ -55,6 +55,7 @@ import {
   workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
+  workspacePdfRenameSuggestionPayloadSchema,
   workspaceNativeFileDragPayloadSchema,
   workspacePreviewOpenPayloadSchema,
   writeExportPayloadSchema,
@@ -1500,6 +1501,15 @@ describe('app-ipc-schemas', () => {
     })
 
     expect(payload.newName).toBe('final.md')
+  })
+
+  it('accepts PDF rename suggestion payloads', () => {
+    const payload = workspacePdfRenameSuggestionPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      path: 'papers/2603.10165v2.pdf'
+    })
+
+    expect(payload.path).toBe('papers/2603.10165v2.pdf')
   })
 
   it('accepts workspace delete payloads', () => {

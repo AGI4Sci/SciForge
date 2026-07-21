@@ -722,6 +722,8 @@
   "workspaceReferenceRefresh": "刷新文件",
   "workspaceReferenceAdd": "添加引用",
   "workspaceReferenceAdded": "已添加引用",
+  "fileTreeAutoRenamePdf": "根据论文标题自动重命名 PDF",
+  "fileTreeAutoRenameReview": "已根据论文标题生成文件名，请确认后再重命名。",
   "workspaceReferenceUnavailable": "Workspace 引用不可用。",
   "fileTreeLoading": "正在加载文件",
   "fileTreeEmpty": "没有找到文件。",

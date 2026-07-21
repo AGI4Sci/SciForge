@@ -166,6 +166,20 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('file:import-workspace-entries', payload)
   })
 
+  it('exposes PDF rename suggestion IPC', async () => {
+    const api = exposedApi as {
+      suggestWorkspacePdfName(payload: unknown): Promise<unknown>
+    }
+    const payload = {
+      workspaceRoot: '/tmp/workspace',
+      path: 'papers/2603.10165v2.pdf'
+    }
+
+    await api.suggestWorkspacePdfName(payload)
+
+    expect(invoke).toHaveBeenCalledWith('file:suggest-workspace-pdf-name', payload)
+  })
+
   it('exposes workspace clipboard paste IPC', async () => {
     const api = exposedApi as {
       pasteWorkspaceClipboard(payload: unknown): Promise<unknown>

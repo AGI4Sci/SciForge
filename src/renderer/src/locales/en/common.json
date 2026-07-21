@@ -722,6 +722,8 @@
   "workspaceReferenceRefresh": "Refresh files",
   "workspaceReferenceAdd": "Add reference",
   "workspaceReferenceAdded": "Reference added",
+  "fileTreeAutoRenamePdf": "Auto-rename PDF from paper title",
+  "fileTreeAutoRenameReview": "Generated from the paper title. Review the filename before renaming.",
   "workspaceReferenceUnavailable": "Workspace references are unavailable.",
   "fileTreeLoading": "Loading files",
   "fileTreeEmpty": "No files found.",

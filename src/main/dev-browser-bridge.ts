@@ -101,6 +101,7 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'file:read-workspace',
   'file:read-workspace-image',
   'file:rename-workspace-entry',
+  'file:suggest-workspace-pdf-name',
   'file:resolve-workspace',
   'file:save-workspace-clipboard-image',
   'file:start-workspace-native-drag',

@@ -62,6 +62,11 @@ export type WorkspaceEntryRenamePayload = {
   newName: string
 }
 
+export type WorkspacePdfRenameSuggestionPayload = {
+  path: string
+  workspaceRoot: string
+}
+
 export const workspaceFileConflictStrategySchema = z.enum(['ask', 'overwrite', 'rename', 'skip', 'merge'])
 export type WorkspaceFileConflictStrategy = z.infer<typeof workspaceFileConflictStrategySchema>
 
@@ -279,6 +284,15 @@ export type WorkspaceEntryRenameResult =
       path: string
       previousPath: string
       renamedAt: string
+    }
+  | { ok: false; message: string }
+
+export type WorkspacePdfRenameSuggestionResult =
+  | {
+      ok: true
+      suggestedName: string
+      title: string
+      source: 'metadata' | 'first-page'
     }
   | { ok: false; message: string }
 

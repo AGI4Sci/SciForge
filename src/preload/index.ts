@@ -226,6 +226,8 @@ const api = {
     ipcRenderer.invoke('file:start-workspace-native-drag', payload),
   renameWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:rename-workspace-entry', payload),
+  suggestWorkspacePdfName: (payload) =>
+    ipcRenderer.invoke('file:suggest-workspace-pdf-name', payload),
   copyWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:copy-workspace-entry', payload),
   importWorkspaceEntries: (payload) =>

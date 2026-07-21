@@ -57,6 +57,8 @@ import type {
   WorkspaceDirectoryTarget,
   WorkspaceEntryRenamePayload,
   WorkspaceEntryRenameResult,
+  WorkspacePdfRenameSuggestionPayload,
+  WorkspacePdfRenameSuggestionResult,
   WorkspaceEntryCopyPayload,
   WorkspaceEntryCopyResult,
   WorkspaceEntryImportPayload,
@@ -1237,6 +1239,9 @@ export type SciForgeApi = {
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
+  suggestWorkspacePdfName: (
+    payload: WorkspacePdfRenameSuggestionPayload
+  ) => Promise<WorkspacePdfRenameSuggestionResult>
   copyWorkspaceEntry: (
     payload: WorkspaceEntryCopyPayload
   ) => Promise<WorkspaceEntryCopyResult>
