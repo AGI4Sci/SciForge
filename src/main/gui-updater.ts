@@ -295,6 +295,13 @@ function shouldSkipScheduledCheck(): boolean {
   )
 }
 
+export function shouldScheduleBackgroundGuiUpdates(
+  isPackaged: boolean,
+  env: NodeJS.ProcessEnv = process.env
+): boolean {
+  return isPackaged || env.SCIFORGE_DEV_UPDATE_CHECK?.trim() === '1'
+}
+
 async function scheduleNextBackgroundCheck(): Promise<void> {
   clearBackgroundCheckTimer()
   const lastCheckedAtMs = await readLastScheduledCheckAt()
@@ -474,7 +481,12 @@ export function initializeGuiUpdater(
     })
   })
 
-  void scheduleNextBackgroundCheck()
+  // Source builds should not make an unsolicited release-network request on
+  // startup. Packaged Windows/macOS/Linux builds retain the existing update
+  // experience; developers can explicitly opt in when testing the updater.
+  if (shouldScheduleBackgroundGuiUpdates(app.isPackaged)) {
+    void scheduleNextBackgroundCheck()
+  }
 }
 
 export function getGuiUpdateState(): GuiUpdateState {

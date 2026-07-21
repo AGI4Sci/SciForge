@@ -663,6 +663,7 @@ describe('chat-store-navigation-actions boot', () => {
       uiFontScale: 'small',
       activeAgentRuntime: 'codex',
       workspaceRoot: '/workspace/sciforge',
+      modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' },
       modelRouter: { runtimeApiKey: 'runtime-key' },
       agents: {},
       remoteChannel: { channels: [] }
@@ -693,6 +694,52 @@ describe('chat-store-navigation-actions boot', () => {
 
     expect(runtimeClientMock.getSettings).toHaveBeenCalledWith({ forceRefresh: true })
     expect(state.probeRuntime).toHaveBeenCalledWith('user')
+    expect(state.initialSetupOpen).toBe(false)
+    expect(state.modelAccessMode).toBe('coding-plan')
+  })
+
+  it('opens the current setup flow instead of probing a legacy configuration without model access', async () => {
+    const settings = {
+      version: 1,
+      locale: 'en',
+      theme: 'system',
+      uiFontScale: 'small',
+      activeAgentRuntime: 'codex',
+      workspaceRoot: '/workspace/sciforge',
+      modelRouter: { runtimeApiKey: 'legacy-runtime-key' },
+      agents: {},
+      remoteChannel: { channels: [] }
+    } as unknown as AppSettingsV1
+    runtimeClientMock.getSettings.mockResolvedValue(settings)
+    let state: ChatState
+    state = {
+      runtimeConnection: 'idle',
+      error: 'stale',
+      runtimeErrorDetail: 'stale detail',
+      composerPickList: [],
+      codeWorkspaceRoots: [],
+      hiddenCodeWorkspaceRoots: [],
+      applyI18nFromSettings: vi.fn(async () => undefined),
+      probeRuntime: vi.fn(async () => undefined)
+    } as unknown as ChatState
+    const set: ChatStoreSet = (partial) => {
+      const update = typeof partial === 'function' ? partial(state) : partial
+      Object.assign(state, update)
+    }
+    const actions = createNavigationActions({
+      set,
+      get: () => state,
+      sseAbortRef: { current: null }
+    })
+
+    await actions.boot()
+
+    expect(state.initialSetupOpen).toBe(true)
+    expect(state.initialSetupMode).toBe('required')
+    expect(state.modelAccessMode).toBeNull()
+    expect(state.runtimeConnection).toBe('idle')
+    expect(state.error).toBeNull()
+    expect(state.probeRuntime).not.toHaveBeenCalled()
   })
 })
 
