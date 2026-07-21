@@ -131,9 +131,7 @@ minimal wiring needed to expose it to the agent runtime:
 | File | Why |
 |---|---|
 | `src/main/computer-use-mcp-server.ts` | GUI-managed MCP wrapper that exposes `computer_use` and calls this sidecar |
-| `src/main/gui-mcp-registry.ts` | registers `gui_owl_computer_use` for Codex, Claude, and local runtime |
-| `src/main/local-runtime-process.ts` | writes the managed MCP config for the local runtime |
-| `kun/src/adapters/tool/mcp-tool-provider.ts` | gives `gui_owl_computer_use/computer_use` the flat `computer_use` alias |
+| `src/main/gui-mcp-registry.ts` | registers `gui_owl_computer_use` for Codex and Claude Code |
 
 ## Config
 

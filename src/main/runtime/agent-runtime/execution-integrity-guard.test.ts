@@ -7,9 +7,12 @@ import type {
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
 import {
-  EXECUTION_CONTINUITY_TEXT_METADATA_KEY,
+  EXECUTION_INTENT_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_OBLIGATIONS_METADATA_KEY,
   RuntimeExecutionIntegrityGuard,
+  type ExecutionEffectClass,
+  type ExecutionObligation,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
 import {
@@ -22,7 +25,7 @@ const ATTESTATION = `sha256:${'b'.repeat(64)}`
 
 describe('RuntimeExecutionIntegrityGuard', () => {
   it.each(RUNTIME_IDS)('blocks a requested execution with no receipt for %s', (runtimeId) => {
-    const guard = rememberedGuard(runtimeId, 'Run the unit tests.')
+    const guard = rememberedGuard(runtimeId, 'Run the unit tests.', 'command_execution')
     const observation = guard.observe(runtimeId, completed(runtimeId))
 
     expect(observation.event).toMatchObject({ kind: 'turn_lifecycle', state: 'failed' })
@@ -33,14 +36,9 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
-  it('inherits a prior mutation obligation when the current message only says continue', () => {
+  it('accepts a structured mutation obligation for a continuation turn', () => {
     const guard = new RuntimeExecutionIntegrityGuard()
-    const input = withExecutionIntegrityRequirement({
-      ...baseInput('codex', 'Continue.'),
-      metadata: {
-        [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: 'Modify the document and verify every annotation.'
-      }
-    })
+    const input = intentInput('codex', 'Continue.', 'local_write')
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
 
     expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
@@ -49,9 +47,9 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
-  it('adds a mutation obligation when a user steers an active turn', () => {
+  it('adds only structured obligations when a user steers an active turn', () => {
     const guard = rememberedGuard('codex', 'Explain the current state.')
-    guard.rememberSteer('codex', 'codex-thread', 'codex-turn', 'Modify the document now.')
+    guard.rememberSteer('codex', 'codex-thread', 'codex-turn', [obligation('local_write')])
 
     expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
       code: 'runtime_execution_incomplete',
@@ -70,7 +68,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it.each(RUNTIME_IDS)('accepts a correlated executor success receipt for %s', (runtimeId) => {
-    const guard = rememberedGuard(runtimeId, 'Run the unit tests.')
+    const guard = rememberedGuard(runtimeId, 'Run the unit tests.', 'command_execution')
     guard.observe(runtimeId, tool(runtimeId, 'requested'))
     guard.observe(runtimeId, tool(runtimeId, 'succeeded'))
 
@@ -80,7 +78,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('does not treat a failed executor receipt as successful execution', () => {
-    const guard = rememberedGuard('codex', 'Run the unit tests.')
+    const guard = rememberedGuard('codex', 'Run the unit tests.', 'command_execution')
     guard.observe('codex', tool('codex', 'requested'))
     guard.observe('codex', tool('codex', 'failed'))
 
@@ -91,10 +89,11 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('does not use an unrelated read receipt to satisfy a requested file modification', () => {
-    const guard = rememberedGuard('codex', 'Modify the file and fix the bug.')
+    const guard = rememberedGuard('codex', 'Modify the file and fix the bug.', 'local_write')
     guard.observe('codex', {
       ...tool('codex', 'succeeded'),
-      toolName: 'read_file'
+      toolName: 'read_file',
+      meta: { effectClasses: ['read'] }
     })
 
     expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
@@ -104,7 +103,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('accepts a matching write receipt for a requested file modification', () => {
-    const guard = rememberedGuard('codex', 'Modify the file and fix the bug.')
+    const guard = rememberedGuard('codex', 'Modify the file and fix the bug.', 'local_write')
     guard.observe('codex', {
       ...tool('codex', 'succeeded'),
       toolName: 'apply_patch',
@@ -115,22 +114,22 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it.each([
-    ['Run the auto-fix command.', 'eslint --fix src'],
-    ['Run rm -f temp.txt.', 'rm -f temp.txt'],
-    ['Delete temp.txt.', 'rm -f temp.txt']
-  ])('accepts all effects proved by one command receipt: %s', (request, command) => {
-    const guard = rememberedGuard('codex', request)
+    ['Run the auto-fix command.', 'command_execution' as const, ['command_execution']],
+    ['Run rm -f temp.txt.', 'local_write' as const, ['command_execution', 'local_write']],
+    ['Delete temp.txt.', 'local_write' as const, ['command_execution', 'local_write']]
+  ])('accepts declared effects proved by one command receipt: %s', (request, expectedEffect, effectClasses) => {
+    const guard = rememberedGuard('codex', request, expectedEffect)
     const receipt = {
       ...tool('codex', 'succeeded'),
       toolKind: 'command_execution' as const,
-      meta: { arguments: { command } }
+      meta: { effectClasses }
     }
     guard.observe('codex', receipt)
 
     expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
-  it('marks an affirmative claim without a receipt as unverified', () => {
+  it('does not infer obligations from affirmative assistant prose', () => {
     const guard = rememberedGuard('claude', 'Summarize what happened.')
     guard.observe('claude', {
       kind: 'assistant_delta',
@@ -141,17 +140,15 @@ describe('RuntimeExecutionIntegrityGuard', () => {
       text: 'I successfully ran the command and fixed the file.'
     })
 
-    expect(guard.observe('claude', completed('claude')).violation).toMatchObject({
-      code: 'runtime_execution_claim_unverified',
-      verdict: 'unverified'
-    })
+    expect(guard.observe('claude', completed('claude')).violation).toBeUndefined()
   })
 
-  it('does not use an unrelated read receipt to validate a claimed file edit', () => {
-    const guard = rememberedGuard('claude', 'Summarize what happened.')
+  it('uses structured obligations rather than assistant wording when validating effects', () => {
+    const guard = rememberedGuard('claude', 'Summarize what happened.', 'local_write')
     guard.observe('claude', {
       ...tool('claude', 'succeeded'),
-      toolName: 'read_file'
+      toolName: 'read_file',
+      meta: { effectClasses: ['read'] }
     })
     guard.observe('claude', {
       kind: 'assistant_delta',
@@ -163,8 +160,8 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
 
     expect(guard.observe('claude', completed('claude')).violation).toMatchObject({
-      code: 'runtime_execution_claim_unverified',
-      verdict: 'unverified'
+      code: 'runtime_execution_incomplete',
+      unsatisfiedObligationIds: ['requested-execution']
     })
   })
 
@@ -225,7 +222,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('does not confuse an accepted asynchronous job with job completion', () => {
-    const guard = rememberedGuard('sciforge', 'Submit the folding job.')
+    const guard = rememberedGuard('sciforge', 'Submit the folding job.', 'external_mutation')
     guard.observe('sciforge', tool('sciforge', 'requested'))
     guard.observe('sciforge', {
       ...tool('sciforge', 'succeeded'),
@@ -239,7 +236,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('closes an asynchronous command launch when a later poll for the same session succeeds', () => {
-    const guard = rememberedGuard('sciforge', 'Run the checks.')
+    const guard = rememberedGuard('sciforge', 'Run the checks.', 'command_execution')
     guard.observe('sciforge', {
       ...tool('sciforge', 'requested'),
       callId: 'bash-run',
@@ -329,7 +326,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('correlates a terminal poll across tool names by the shared async handle', () => {
-    const guard = rememberedGuard('sciforge', 'Run the checks.')
+    const guard = rememberedGuard('sciforge', 'Run the checks.', 'command_execution')
     guard.observe('sciforge', {
       ...tool('sciforge', 'succeeded'),
       callId: 'launch',
@@ -370,7 +367,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('reconstructs only marked policy turns during replay', () => {
-    const guarded = withExecutionIntegrityRequirement(baseInput('claude', 'Run the checks.'))
+    const guarded = intentInput('claude', 'Run the checks.', 'command_execution')
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.observe('claude', {
       kind: 'user_message',
@@ -398,7 +395,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('emits a replayed violation only once while keeping completion failed', () => {
-    const guarded = withExecutionIntegrityRequirement(baseInput('codex', 'Run the checks.'))
+    const guarded = intentInput('codex', 'Run the checks.', 'command_execution')
     const guard = new RuntimeExecutionIntegrityGuard()
     const userEvent: AgentRuntimeEvent = {
       kind: 'user_message',
@@ -417,7 +414,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('fails closed on conflicting terminal receipts for the same call', () => {
-    const guard = rememberedGuard('codex', 'Run the checks.')
+    const guard = rememberedGuard('codex', 'Run the checks.', 'command_execution')
     guard.observe('codex', tool('codex', 'requested'))
     guard.observe('codex', tool('codex', 'succeeded'))
     guard.observe('codex', tool('codex', 'failed'))
@@ -429,7 +426,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('handles a bounded batch of concurrent receipts deterministically', () => {
-    const guard = rememberedGuard('codex', 'Run the checks.')
+    const guard = rememberedGuard('codex', 'Run the checks.', 'command_execution')
     for (let index = 0; index < 100; index += 1) {
       const callId = `call-${index}`
       guard.observe('codex', { ...tool('codex', 'requested'), callId, itemId: callId })
@@ -443,216 +440,103 @@ describe('RuntimeExecutionIntegrityGuard', () => {
 })
 
 describe('execution integrity input policy', () => {
-  it('detects direct Chinese execution requests without relying on ASCII word boundaries', () => {
-    const input = baseInput('codex', '支持，帮我修改这个文件。')
-    const guarded = withExecutionIntegrityRequirement(input)
-    expect(guarded.text).toContain('"effectClass":"local_write"')
-  })
-
-  it('does not let an English safety prohibition broaden a read-only check into a write', () => {
-    const input = baseInput('sciforge', 'Do not edit or write files. Run the existing read-only checks and report the result.')
-    const guarded = withExecutionIntegrityRequirement(input)
-
-    expect(guarded.text).toContain('"effectClass":"command_execution"')
-    expect(guarded.text).not.toContain('"effectClass":"local_write"')
-  })
-
-  it('does not let a Chinese safety prohibition broaden a command request into a write', () => {
-    const input = baseInput('sciforge', '不要修改或删除文件，只运行现有检查并报告结果。')
-    const guarded = withExecutionIntegrityRequirement(input)
-
-    expect(guarded.text).toContain('"effectClass":"command_execution"')
-    expect(guarded.text).not.toContain('"effectClass":"local_write"')
-  })
-
-  it('does not create an execution obligation from a prohibition alone', () => {
-    const input = baseInput('codex', 'Do not open, copy, execute, or display any protected data. Explain the prior failure.')
-    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
-  })
-
   it.each([
-    ['Do not edit, but run the tests.', '"effectClass":"command_execution"'],
-    ['Do not open protected data, only read public.txt.', 'requested-execution'],
-    ['不要修改，但是运行测试。', '"effectClass":"command_execution"']
-  ])('keeps an affirmative action after a negated clause: %s', (text, marker) => {
-    expect(withExecutionIntegrityRequirement(baseInput('sciforge', text)).text).toContain(marker)
-  })
-
-  it('does not treat an action token in a status label as a write request', () => {
-    const input = baseInput(
-      'sciforge',
-      'You are reviewing a POST-FIX acceptance run. Do not edit artifacts. Read the files and verify their hashes.'
-    )
-    const guarded = withExecutionIntegrityRequirement(input)
-
-    expect(guarded.text).toContain('requested-execution')
-    expect(guarded.text).not.toContain('"effectClass":"local_write"')
-  })
-
-  it.each([
-    'Explain the POST-FIX acceptance report.',
-    'Run 8c50d482 failed. Explain why.',
-    'Run history shows the prior failure. Summarize it.',
-    'Fix is a status label. Explain it.',
-    'Read-only mode is enabled. Explain it.',
-    'Create Loop is open. Describe the UI.',
-    'Delete operation failed. Explain it.',
-    'Update job succeeded.',
-    'Publish task failed.',
-    'Patch failed validation.',
-    '运行已失败，请解释。',
-    '创建 Loop 已完成。',
-    '发布任务失败。'
-  ])('does not create an obligation from an action token used only in a status label: %s', (text) => {
-    const input = baseInput('sciforge', text)
-    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
-  })
-
-  it.each([
-    'Explain why you must fix the file.',
-    'Tell me whether I should delete the file.',
-    '解释为什么我们必须修改这个文件。'
-  ])('does not treat a subordinate action mention as the requested root action: %s', (text) => {
-    const input = baseInput('sciforge', text)
-    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
-  })
-
-  it.each([
-    'Explain why I should read the file and then delete it.',
-    'Tell me whether I should run tests and also publish the result.'
-  ])('ignores coordinated actions inside a non-execution subordinate clause: %s', (text) => {
-    const input = baseInput('sciforge', text)
-    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
-  })
-
-  it.each([
-    ['We need to run the tests.', '"effectClass":"command_execution"'],
-    ['I need to edit the file.', '"effectClass":"local_write"'],
-    ['Could you please run the tests?', '"effectClass":"command_execution"'],
-    ['Would you kindly edit the file?', '"effectClass":"local_write"'],
-    ['We need to actually run the tests.', '"effectClass":"command_execution"'],
-    ['I need you to please edit the file.', '"effectClass":"local_write"'],
-    ['我们需要运行测试。', '"effectClass":"command_execution"'],
-    ['我们需要修改文件。', '"effectClass":"local_write"'],
-    ['必须运行测试。', '"effectClass":"command_execution"'],
-    ['需要修改文件。', '"effectClass":"local_write"'],
-    ['请务必运行测试。', '"effectClass":"command_execution"'],
-    ['请你运行测试。', '"effectClass":"command_execution"'],
-    ['麻烦你修改文件。', '"effectClass":"local_write"'],
-    ['你需要运行测试。', '"effectClass":"command_execution"'],
-    ['请实际运行测试。', '"effectClass":"command_execution"'],
-    ['重新运行测试。', '"effectClass":"command_execution"'],
-    ['请你务必运行测试。', '"effectClass":"command_execution"'],
-    ['麻烦你重新运行测试。', '"effectClass":"command_execution"'],
-    ['我需要你实际修改文件。', '"effectClass":"local_write"'],
-    ['Task: run the tests.', '"effectClass":"command_execution"'],
-    ['Please do the following: edit the file.', '"effectClass":"local_write"']
-  ])('recognizes a root action request with an explicit subject: %s', (text, marker) => {
-    expect(withExecutionIntegrityRequirement(baseInput('codex', text)).text).toContain(marker)
-  })
-
-  it.each([
-    'The docs say: run the tests.',
-    'Explain this example: delete the file.'
-  ])('does not promote a quoted colon suffix into an execution request: %s', (text) => {
+    '支持，帮我修改这个文件。',
+    'Run the unit tests.',
+    '实现个性化肺癌 mRNA 疫苗从 0 到 1 的精准工程化突破。',
+    '设计 mRNA 疫苗序列和器官芯片的关系是什么？',
+    'Do not edit, but explain how the command works.'
+  ])('never infers an execution obligation from natural-language text: %s', (text) => {
     const input = baseInput('codex', text)
     expect(withExecutionIntegrityRequirement(input)).toEqual(input)
   })
 
-  it.each([
-    'Fix the file and run the tests.',
-    'Please patch the module.',
-    '请修改这个文件。',
-    'Create a local summary for the issue.',
-    'Update the local report about the ticket.',
-    'Delete the cached message file.',
-    'Create a file describing the pull request.',
-    '创建一份关于议题的本地报告。',
-    '更新关于工单的本地笔记。'
-  ])('preserves a real local write request: %s', (text) => {
-    expect(withExecutionIntegrityRequirement(baseInput('codex', text)).text)
-      .toContain('"effectClass":"local_write"')
+  it('ignores historical prose stored under unrelated metadata', () => {
+    const input = {
+      ...baseInput('codex', '继续解释。'),
+      metadata: {
+        sciforgeDirectiveContinuityText: '实现系统。修改文件。运行测试。'
+      }
+    }
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
   })
 
-  it('classifies a command whose name mentions a write effect by its requested root action', () => {
-    expect(withExecutionIntegrityRequirement(baseInput('codex', 'Run the auto-fix command.')).text)
-      .toContain('"effectClass":"command_execution"')
+  it('does not create an obligation for a structured answer intent', () => {
+    const input = {
+      ...baseInput('codex', 'Explain the algorithm.'),
+      executionIntent: { mode: 'answer' as const }
+    }
+    expect(withExecutionIntegrityRequirement(input)).toEqual(input)
   })
 
-  it.each([
-    ['Open an issue.', 'open_issue'],
-    ['Create a pull request.', 'create_pull_request'],
-    ['Create a message.', 'create_message'],
-    ['Delete the issue.', 'delete_issue'],
-    ['Update the ticket.', 'update_ticket']
-  ])('accepts a matching external mutation receipt: %s', (request, toolName) => {
-    const guard = rememberedGuard('codex', request)
-    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
-    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
-  })
-
-  it.each([
-    'delete_file',
-    'delete_file_for_issue'
-  ])('does not accept a local file deletion for an external issue deletion: %s', (toolName) => {
-    const guard = rememberedGuard('codex', 'Delete the issue.')
-    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      unsatisfiedObligationIds: ['requested-execution']
-    })
-  })
-
-  it.each([
-    ['Publish the release.', 'github_search_issues'],
-    ['Submit the job.', 'github_list_jobs']
-  ])('does not accept an unrelated provider read for an external mutation: %s', (request, toolName) => {
-    const guard = rememberedGuard('codex', request)
-    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName })
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      unsatisfiedObligationIds: ['requested-execution']
-    })
-  })
-
-  it.each([
-    ['Deploy the app.', 'npm run deploy'],
-    ['Deploy the app.', 'kubectl apply -f deploy.yaml'],
-    ['Deploy the app.', 'kubectl apply -n production -f deploy.yaml'],
-    ['Publish the image.', 'docker push example/image:latest'],
-    ['Publish the release.', 'git -C repo push origin main']
-  ])('accepts an external mutation performed by an explicit command: %s', (request, command) => {
-    const guard = rememberedGuard('codex', request)
-    guard.observe('codex', {
-      ...tool('codex', 'succeeded'),
-      toolKind: 'command_execution',
-      meta: { arguments: { command } }
-    })
-    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
-  })
-
-  it.each([
-    ['Publish the release.', 'git push --dry-run origin main'],
-    ['Publish the release.', 'git push -n origin main'],
-    ['Publish the package.', 'npm publish --dry-run'],
-    ['Deploy the app.', 'kubectl apply --dry-run=client -f deploy.yaml']
-  ])('does not accept a dry-run command as an external mutation: %s', (request, command) => {
-    const guard = rememberedGuard('codex', request)
-    guard.observe('codex', {
-      ...tool('codex', 'succeeded'),
-      toolKind: 'command_execution',
-      meta: { arguments: { command } }
-    })
-    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
-      unsatisfiedObligationIds: ['requested-execution']
-    })
-  })
-
-  it('injects a replay marker for explicit execution while preserving display text', () => {
-    const input = baseInput('codex', 'Run the unit tests.')
-    const guarded = withExecutionIntegrityRequirement(input)
-
+  it('creates an effect obligation from a structured execution intent', () => {
+    const guarded = intentInput('codex', 'Please patch the module.', 'local_write')
+    expect(guarded.text).toContain('"effectClass":"local_write"')
     expect(guarded.text).toContain('Runtime-enforced execution integrity gate:')
-    expect(guarded.displayText).toBe(input.displayText)
-    expect(guarded.metadata?.[EXECUTION_INTEGRITY_POLICY_METADATA_KEY]).toBe('execution-integrity.v1')
+    expect(guarded.displayText).toBe('Please patch the module.')
+    expect(guarded.metadata?.[EXECUTION_INTEGRITY_POLICY_METADATA_KEY]).toBe('execution-integrity.v2')
+  })
+
+  it('creates a read obligation from an inspect intent without requirements', () => {
+    const input = baseInput('codex', 'Inspect the current file.')
+    input.executionIntent = { mode: 'inspect' }
+    const guarded = withExecutionIntegrityRequirement(input)
+    expect(guarded.text).toContain('"effectClass":"read"')
+  })
+
+  it('supports typed tool and completion requirements', () => {
+    const input = baseInput('codex', 'Run the checks.')
+    input.executionIntent = {
+      mode: 'execute',
+      requirements: [{ toolNames: ['exec_command'], completion: 'terminal' }]
+    }
+    const guarded = withExecutionIntegrityRequirement(input)
+    expect(guarded.text).toContain('"toolNames":["exec_command"]')
+    expect(guarded.text).toContain('"completion":"terminal"')
+  })
+
+  it('keeps explicit obligation metadata backward compatible', () => {
+    const input = baseInput('codex', 'Apply the prepared operation.')
+    input.metadata = {
+      [EXECUTION_OBLIGATIONS_METADATA_KEY]: [obligation('external_mutation')]
+    }
+    expect(withExecutionIntegrityRequirement(input).text).toContain('"effectClass":"external_mutation"')
+  })
+
+  it('keeps legacy structured intent metadata backward compatible', () => {
+    const input = baseInput('codex', 'Inspect the current file.')
+    input.metadata = { [EXECUTION_INTENT_METADATA_KEY]: { mode: 'inspect' } }
+    expect(withExecutionIntegrityRequirement(input).text).toContain('"effectClass":"read"')
+  })
+
+  it('requires declared receipt effects instead of guessing from tool names', () => {
+    const guard = rememberedGuard('codex', 'Publish the release.', 'external_mutation')
+    guard.observe('codex', { ...tool('codex', 'succeeded'), toolName: 'publish_release' })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it('accepts an explicitly declared external mutation receipt', () => {
+    const guard = rememberedGuard('codex', 'Publish the release.', 'external_mutation')
+    guard.observe('codex', {
+      ...tool('codex', 'succeeded'),
+      toolName: 'provider_action',
+      effects: ['external_mutation']
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
+  it('accepts a trusted failed receipt for a terminal-only requirement', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn(
+      'codex',
+      intentInput('codex', 'Run the tests and report the result.', 'command_execution', 'terminal'),
+      'codex-thread',
+      'codex-turn'
+    )
+    guard.observe('codex', tool('codex', 'failed'))
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
   it('adds no prompt or metadata overhead to a text-only turn', () => {
@@ -670,10 +554,39 @@ describe('execution integrity input policy', () => {
   })
 })
 
-function rememberedGuard(runtimeId: AgentRuntimeId, text: string): RuntimeExecutionIntegrityGuard {
+function rememberedGuard(
+  runtimeId: AgentRuntimeId,
+  text: string,
+  effectClass?: ExecutionEffectClass
+): RuntimeExecutionIntegrityGuard {
   const guard = new RuntimeExecutionIntegrityGuard()
-  guard.rememberTurn(runtimeId, withExecutionIntegrityRequirement(baseInput(runtimeId, text)), `${runtimeId}-thread`, `${runtimeId}-turn`)
+  const input = effectClass ? intentInput(runtimeId, text, effectClass) : baseInput(runtimeId, text)
+  guard.rememberTurn(runtimeId, input, `${runtimeId}-thread`, `${runtimeId}-turn`)
   return guard
+}
+
+function intentInput(
+  runtimeId: AgentRuntimeId,
+  text: string,
+  effectClass: ExecutionEffectClass,
+  completion: 'terminal' | 'success' = 'success'
+): AgentRuntimeTurnStartInput {
+  const input = baseInput(runtimeId, text)
+  input.executionIntent = {
+    mode: 'execute',
+    requirements: [{ effectClass, completion }]
+  }
+  return withExecutionIntegrityRequirement(input)
+}
+
+function obligation(effectClass: ExecutionEffectClass): ExecutionObligation {
+  return {
+    id: 'requested-execution',
+    kind: 'effect',
+    effectClass,
+    completion: 'success',
+    source: 'metadata'
+  }
 }
 
 function baseInput(runtimeId: AgentRuntimeId, text: string): AgentRuntimeTurnStartInput {
@@ -706,7 +619,8 @@ function tool(
     turnId: `${runtimeId}-turn`,
     itemId: `${runtimeId}-call`,
     callId: `${runtimeId}-call`,
-    toolName: 'local_shell'
+    toolName: 'local_shell',
+    toolKind: 'command_execution' as const
   }
   if (phase === 'requested') {
     return {

@@ -213,7 +213,7 @@ export function newRemoteChannel(
     label: profileName,
     enabled: true,
     model: 'auto',
-    runtimeId: 'sciforge',
+    runtimeId: 'codex',
     agentThreadIds: {},
     workspaceRoot: '',
     conversations: [],

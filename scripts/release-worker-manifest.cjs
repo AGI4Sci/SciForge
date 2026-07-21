@@ -13,20 +13,6 @@ const PACKAGE_DEFINITIONS = {
       'dist/*.js'
     ]
   },
-  localRuntimeExecutionGovernance: {
-    dir: 'packages/execution-governance',
-    filter: [
-      'package.json',
-      'dist/*.js'
-    ]
-  },
-  localRuntimeFullTrace: {
-    dir: 'packages/full-trace',
-    filter: [
-      'package.json',
-      'dist/*.js'
-    ]
-  },
   modelRouter: {
     dir: 'packages/workers/model-router'
   },
@@ -114,8 +100,6 @@ const WORKSPACE_PACKAGE_IDS = [
 
 const BUNDLED_PACKAGE_IDS = [
   'fullTrace',
-  'localRuntimeExecutionGovernance',
-  'localRuntimeFullTrace',
   'modelRouter',
   'planGateway',
   'schedule',
@@ -479,6 +463,11 @@ function createBundledFileSets() {
 function createAsarUnpackGlobs() {
   return [
     ...BUILT_RUNTIME_UNPACK_GLOBS,
+    // electron-builder applies asarUnpack matching to a FileSet's source path
+    // before honoring its `to` remap. Include both sides so remapped packages
+    // such as packages/full-trace -> node_modules/@sciforge/full-trace are
+    // physically emitted under app.asar.unpacked.
+    ...bundledPackageDirs.map((packageDirectory) => `**/${packageDirectory}/**/*`),
     ...bundledPackageTargets.map((packageDirectory) => `**/${packageDirectory}/**/*`)
   ]
 }

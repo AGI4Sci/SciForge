@@ -1,9 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   buildClaudeCodeManagedGuiMcpServers,
-  buildCodexManagedGuiMcpServers,
-  buildLocalRuntimeManagedGuiMcpServers,
-  managedGuiMcpServerNames
+  buildCodexManagedGuiMcpServers
 } from './gui-mcp-registry'
 import {
   defaultConnectPhoneSettings,
@@ -17,7 +15,6 @@ import {
   defaultWriteSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME } from './remote-executor-mcp-config'
 import {
   COMPUTER_USE_MCP_TOOL_NAME,
   GUI_COMPUTER_USE_MCP_SERVER_NAME
@@ -89,135 +86,10 @@ describe('GUI MCP runtime registry', () => {
     else process.env.SCIFORGE_CUA_SERVICE_TOKEN = originalCuaServiceToken
   })
 
-  it('exposes every managed server name that must be stripped from external local runtime mcp.json', () => {
-    expect(managedGuiMcpServerNames()).toEqual(expect.arrayContaining([
-      'sciforge_capabilities',
-      'gui_schedule',
-      'gui_research',
-      'gui_workflow',
-      'gui_workspace_intel',
-      'remote_executor',
-      'gui_paper_radar',
-      'gui_write_assist',
-      'gui_runtime_inspector',
-      'scientific_skills',
-      'scientific_plotting',
-      'image_generation',
-      'ppt_master',
-      'visual_document',
-      'sciforge_canvas',
-      'gui_owl_computer_use',
-      'gui_computer_use'
-    ]))
-  })
-
-  it('adds the private capability bridge only to the local runtime registry', () => {
-    const capabilityRuntimeBridge = {
-      rootDir: '/Users/example/Library/Application Support/SciForge/capability-runtime-bridge',
-      authSecret: 'runtime-bridge-test-secret-that-is-long-enough',
-      timeoutMs: 30_000
-    }
-    const localRuntime = buildLocalRuntimeManagedGuiMcpServers({ capabilityRuntimeBridge })
-
-    expect(localRuntime.sciforge_capabilities).toEqual({
-      enabled: true,
-      transport: 'file-bridge',
-      rootDir: capabilityRuntimeBridge.rootDir,
-      authSecret: capabilityRuntimeBridge.authSecret,
-      trustScope: 'user',
-      timeoutMs: 30_000
-    })
-    expect(buildCodexManagedGuiMcpServers({ capabilityRuntimeBridge })).toEqual([])
-    expect(buildClaudeCodeManagedGuiMcpServers({ capabilityRuntimeBridge })).toEqual({})
-  })
-
-  it('builds local runtime managed server configs from shared descriptors and preserves existing env safely', () => {
-    const settings = createSettings()
-    settings.remoteExecutor = {
-      enabled: true,
-      defaultTargetId: 'cluster-a',
-      targets: [{
-        id: 'cluster-a',
-        label: 'Cluster A',
-        enabled: true,
-        kind: 'slurm',
-        ssh: { host: 'cluster.example.edu', user: 'alice', port: 2222 },
-        remoteWorkspaceRoot: '/home/alice/project',
-        slurm: { defaults: { partition: 'gpu' } },
-        trustedWorkspaces: []
-      }]
-    }
-    const servers = buildLocalRuntimeManagedGuiMcpServers({
-      scheduleMcp: { settings, launch },
-      workflowMcp: { settings, launch },
-      remoteExecutorMcp: { settings, launch }
-    })
-
-    expect(servers.gui_schedule).toMatchObject({
-      enabled: true,
-      command: expect.stringContaining('SciForge Helper'),
-      args: expect.arrayContaining(['--gui-schedule-mcp-server', '--base-url', 'http://127.0.0.1:9797']),
-      env: { ELECTRON_RUN_AS_NODE: '1', GUI_SCHEDULE_INTERNAL_SECRET: 'schedule-secret' },
-      timeoutMs: 5000
-    })
-    expect(servers.gui_workflow).toMatchObject({
-      enabled: true,
-      args: expect.arrayContaining(['--gui-workflow-mcp-server', '--base-url', 'http://127.0.0.1:9898']),
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
-      },
-      timeoutMs: 30000
-    })
-    expect(servers[GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME]).toMatchObject({
-      enabled: true,
-      command: expect.stringContaining('SciForge Helper'),
-      args: expect.arrayContaining(['--gui-remote-executor-mcp-server']),
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      trustScope: 'user',
-      timeoutMs: 30000
-    })
-    const remoteEnv = (servers[GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME] as { env?: Record<string, string> }).env
-    expect(JSON.parse(remoteEnv?.SCIFORGE_REMOTE_EXECUTOR_TARGETS_JSON ?? '[]')).toEqual([{
-      id: 'cluster-a',
-      label: 'Cluster A',
-      kind: 'ssh',
-      host: 'cluster.example.edu',
-      disabled: false,
-      capabilities: {
-        directRun: true,
-        stdin: true,
-        deploy: true,
-        slurm: true
-      },
-      user: 'alice',
-      port: 2222,
-      workspaceRoot: '/home/alice/project'
-    }])
-    expect(servers.gui_computer_use).toBeUndefined()
-    expect(servers[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toBeUndefined()
-  })
-
-  it('builds the managed computer-use MCP server for every runtime from the shared registry', () => {
+  it('builds the managed computer-use MCP server for Codex and Claude', () => {
     process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
     process.env.SCIFORGE_CUA_SERVICE_TOKEN = 'test-token'
     const settings = createSettings()
-
-    const localRuntime = buildLocalRuntimeManagedGuiMcpServers({
-      settings,
-      computerUseMcp: { settings, launch }
-    })
-    expect(localRuntime[GUI_COMPUTER_USE_MCP_SERVER_NAME]).toMatchObject({
-      enabled: true,
-      command: expect.stringContaining('SciForge Helper'),
-      args: expect.arrayContaining(['--gui-owl-computer-use-mcp-server']),
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900',
-        SCIFORGE_CUA_SERVICE_TOKEN: 'test-token'
-      },
-      timeoutMs: 600000
-    })
 
     const codex = buildCodexManagedGuiMcpServers({
       settings,
@@ -302,17 +174,6 @@ describe('GUI MCP runtime registry', () => {
         SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
       }
     })
-    expect(buildLocalRuntimeManagedGuiMcpServers({
-      settings,
-      workspaceIntelMcp: { settings, launch }
-    }).gui_workspace_intel).toMatchObject({
-      env: {
-        ELECTRON_RUN_AS_NODE: '1',
-        SCIFORGE_MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4567/v1',
-        SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY: 'router-runtime-test-key',
-        SCIFORGE_MODEL_ROUTER_VISUAL_MODEL: 'router-vision-model'
-      }
-    })
     expect(servers.find((server) => server.id === 'remote_executor')).toMatchObject({
       env: { ELECTRON_RUN_AS_NODE: '1' },
       args: expect.arrayContaining(['--gui-remote-executor-mcp-server']),
@@ -322,14 +183,6 @@ describe('GUI MCP runtime registry', () => {
 
   it('passes the workspace root to artifact worker MCP launch args', () => {
     const settings = createSettings()
-    const localRuntime = buildLocalRuntimeManagedGuiMcpServers({
-      settings,
-      scientificSkillsMcp: { launch },
-      scientificPlottingMcp: { launch },
-      imageGenerationMcp: { launch },
-      pptMasterMcp: { launch },
-      visualDocumentMcp: { launch }
-    }) as Record<string, { args?: string[] }>
     const codex = buildCodexManagedGuiMcpServers({
       settings,
       scientificSkillsMcp: { launch },
@@ -340,7 +193,6 @@ describe('GUI MCP runtime registry', () => {
     })
 
     for (const id of ['scientific_skills', 'scientific_plotting', 'image_generation', 'ppt_master', 'visual_document']) {
-      expect(localRuntime[id]?.args).toEqual(expect.arrayContaining(['--workspace-root', '/tmp/project']))
       expect(codex.find((server) => server.id === id)?.args).toEqual(
         expect.arrayContaining(['--workspace-root', '/tmp/project'])
       )
@@ -368,16 +220,13 @@ describe('GUI MCP runtime registry', () => {
     expect(servers).toEqual({})
   })
 
-  it('keeps retired MCP servers out of generated runtime configs while still cleaning them from disk', () => {
+  it('keeps retired MCP servers out of generated Codex and Claude configs', () => {
     for (const id of ['gui_computer_use', 'gui_research_memory', 'sciforge_canvas']) {
-      const localRuntime = buildLocalRuntimeManagedGuiMcpServers({})[id]
       const codex = buildCodexManagedGuiMcpServers({}).find((server) => server.id === id)
       const claude = buildClaudeCodeManagedGuiMcpServers()[id]
 
-      expect(localRuntime).toBeUndefined()
       expect(codex).toBeUndefined()
       expect(claude).toBeUndefined()
-      expect(managedGuiMcpServerNames()).toContain(id)
     }
   })
 })

@@ -5,7 +5,7 @@
 先确认三个状态：
 
 1. **GUI**：应用是否启动，当前工作目录是否正确。
-2. **Runtime**：Settings → Agents 的选中 runtime、命令、端口、sandbox 和审批策略是否正确。
+2. **Runtime**：Settings → Agents 的选中 runtime、命令、sandbox 和审批策略是否正确。
 3. **Model Router**：Settings → Model Router 的 `/health`、text reasoner profile、public alias 和 key 是否完整。
 
 ## 常见问题
@@ -15,12 +15,12 @@
 - 运行 `node --version`，确认 Node.js 20+。
 - 删除并重装依赖前先保留 `package-lock.json`：`npm install`。
 - 若提示 workspace dev lock 已占用，退出旧 Electron / `npm run dev`，再重试；不要同时启动两个相同工作区实例。
-- native module 报错时尝试 `npm run rebuild:electron-native`，然后 `npm run verify:electron-native`。
+- native module 报错时重新执行 `npm install`，并保留完整安装日志用于定位具体依赖。
 
 ### Runtime 显示未连接
 
-- SciForge Runtime：确认 `autoStart`、binary path、端口 `8899`、data dir 和 runtime token；有 token 时 GUI 与 runtime 必须一致。
-- Codex / Claude Code：在终端运行 `command -v codex` 或 `command -v claude`，确认命令可执行，并按各自官方流程完成登录。
+- Codex：在终端运行 `command -v codex`；应用也会检查 GUI 继承 PATH、macOS login shell 和常见安装目录。若仍失败，在设置中填写绝对路径并确认文件可执行。
+- Claude Code：默认 `claude` 使用 Agent SDK 自带 CLI；若填写外部命令，请确认它能从 PATH 解析或直接使用绝对路径。
 - 选中 runtime 后重启一次应用。失败时查看对应 runtime 日志；不要期待自动切换到另一个 runtime。
 
 ### Runtime 已连接但模型无响应
@@ -61,7 +61,7 @@ npm run mac:unquarantine -- '/Applications/SciForge.app'
 
 - GUI / worker 日志：`<userData>/logs/`（macOS 在 `~/Library/Application Support/SciForge/logs`）。
 - Full trace：`<userData>/full-traces/`，从设置或 trace 面板导出；导出前检查敏感信息。
-- SciForge Runtime 数据和 `config.json`：默认 `~/.sciforge/runtime` 或 Settings 中指定的 `dataDir`。
+- Codex / Claude Code 的隔离配置位于 SciForge 托管目录；设置页不会直接改写用户自己的 `~/.codex` 或 `~/.claude`。
 
 ## 提交问题时附带
 

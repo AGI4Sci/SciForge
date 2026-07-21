@@ -266,8 +266,10 @@ describe('chat-store remote-channel helpers', () => {
 
     expect(feishu.label).toBe('feishu agent')
     expect(feishu.agentProfile.name).toBe('feishu agent')
+    expect(feishu.runtimeId).toBe('codex')
     expect(weixin.label).toBe('weixin agent')
     expect(weixin.agentProfile.name).toBe('weixin agent')
+    expect(weixin.runtimeId).toBe('codex')
   })
 
   it('recognizes current remote-channel summaries but not legacy Claw titles as managed sessions', () => {

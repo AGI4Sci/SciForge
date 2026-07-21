@@ -190,12 +190,12 @@ describe('CodexRuntimeService model access selection', () => {
   it.each([
     {
       name: 'API mode selects another runtime',
-      settings: { activeAgentRuntime: 'sciforge' as const }
+      settings: { activeAgentRuntime: 'claude' as const }
     },
     {
       name: 'coding-plan adapter does not match the selected runtime',
       settings: {
-        activeAgentRuntime: 'sciforge' as const,
+        activeAgentRuntime: 'claude' as const,
         modelAccess: { mode: 'coding-plan' as const, planAdapterId: 'codex' }
       }
     }

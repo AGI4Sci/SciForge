@@ -373,11 +373,34 @@ export function PdfWorkspaceViewer({
   ])
 
   const activePreviewState = previewState ?? loadedPreviewState
-  const initialDocumentAnchor = observation?.selection?.kind === 'document'
-    ? observation.selection.anchors[0]
-    : undefined
-  const initialAnchorRect = initialDocumentAnchor?.rects?.[0]
-  const initialPage = initialDocumentAnchor?.page ?? initialAnchorRect?.page ?? 1
+  const initialAnchorStateRef = useRef<{
+    documentKey: string
+    page: number
+    rect?: WritePdfSelectionPageRect
+  } | null>(null)
+  if (initialAnchorStateRef.current?.documentKey !== documentRevisionKey) {
+    const initialDocumentAnchor = observation?.selection?.kind === 'document'
+      ? observation.selection.anchors[0]
+      : undefined
+    const observedRect = initialDocumentAnchor?.rects?.[0]
+    initialAnchorStateRef.current = {
+      documentKey: documentRevisionKey,
+      page: initialDocumentAnchor?.page ?? observedRect?.page ?? 1,
+      ...(observedRect
+        ? {
+            rect: {
+              page: observedRect.page,
+              x: observedRect.x,
+              y: observedRect.y,
+              width: observedRect.width,
+              height: observedRect.height
+            }
+          }
+        : {})
+    }
+  }
+  const initialAnchorRect = initialAnchorStateRef.current.rect
+  const initialPage = initialAnchorStateRef.current.page
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
   const observationPath = observation?.file.path
   const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {

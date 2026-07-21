@@ -551,7 +551,7 @@ function runtimeStatusText(event: RuntimeStatusEventPayload): string {
 }
 
 function runtimeDisplayName(runtimeId: string | undefined): string {
-  if (runtimeId === 'sciforge') return 'SciForge Runtime'
+  if (runtimeId === 'sciforge') return 'SciForge Runtime (Unavailable)'
   if (runtimeId === 'codex') return 'Codex'
   if (runtimeId === 'claude') return 'Claude'
   return runtimeId?.trim() || 'runtime'

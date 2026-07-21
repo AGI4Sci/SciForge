@@ -82,6 +82,9 @@ export type DocumentAnnotationQuestionSideBlock = {
   id: string
   kind: string
   text?: string
+  meta?: {
+    displayText?: string
+  }
   createdAt?: string
 }
 
@@ -133,7 +136,10 @@ export function DocumentAnnotationPanelController({
   const [sidecar, setSidecar] = useState<PdfAnnotationSidecar | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
-  const [jumpRevision, setJumpRevision] = useState(0)
+  const [jumpRequest, setJumpRequest] = useState<{
+    threadId: string
+    rect: WritePdfSelectionPageRect
+  } | null>(null)
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
   const [displayMode, setDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
   const [loadingSidecar, setLoadingSidecar] = useState(false)
@@ -199,6 +205,7 @@ export function DocumentAnnotationPanelController({
   useEffect(() => {
     setSidecar(null)
     setSelectedThreadId(null)
+    setJumpRequest(null)
     setHoveredThreadId(null)
     setPdfReviewSelection(null)
     setPdfReviewNotice(null)
@@ -216,10 +223,7 @@ export function DocumentAnnotationPanelController({
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const jumpToRect = useMemo(() => {
-    const rect = firstPdfAnnotationThreadRect(sidecar, selectedThreadId)
-    return rect ? { ...rect, requestId: jumpRevision } : null
-  }, [jumpRevision, selectedThreadId, sidecar])
+  const jumpToRect = jumpRequest?.rect ?? null
 
   const clearPdfReviewNotice = useCallback((): void => {
     setPdfReviewNotice(null)
@@ -249,9 +253,10 @@ export function DocumentAnnotationPanelController({
 
   const selectThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
-    setJumpRevision((revision) => revision + 1)
+    const rect = firstPdfAnnotationThreadRect(sidecar, threadId)
+    setJumpRequest(rect ? { threadId, rect: { ...rect } } : null)
     setPanelOpen(true)
-  }, [])
+  }, [sidecar])
 
   const mutateAnnotationOperation = useCallback(async (
     operation: WorkspacePreviewEditOperation | null
@@ -298,7 +303,6 @@ export function DocumentAnnotationPanelController({
       const threadId = annotationThreadIdFromOperation(operation)
       if (threadId && options.revealThread) {
         setSelectedThreadId(threadId)
-        setJumpRevision((revision) => revision + 1)
         setPanelOpen(true)
       }
       if (sidecarLoaded) setAnnotationNotice(null)
@@ -467,6 +471,7 @@ export function DocumentAnnotationPanelController({
     if (!path) return
     void applyAnnotationOperation(createAnnotationThreadDeleteOperation({ path, threadId }))
     setSelectedThreadId((current) => current === threadId ? null : current)
+    setJumpRequest((current) => current?.threadId === threadId ? null : current)
     setHoveredThreadId((current) => current === threadId ? null : current)
   }, [applyAnnotationOperation, path])
 
@@ -512,7 +517,6 @@ export function DocumentAnnotationPanelController({
         setSidecar(nextSidecar)
         const firstReviewThread = nextSidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
         setSelectedThreadId(firstReviewThread?.id ?? selectedThreadId)
-        setJumpRevision((revision) => revision + 1)
       }
       await context.host.observe(sessionId)
       setDisplayMode('all')
@@ -551,7 +555,6 @@ export function DocumentAnnotationPanelController({
       if (nextSidecar) setSidecar(nextSidecar)
       await context.host.observe(sessionId)
       setSelectedThreadId(threadId)
-      setJumpRevision((revision) => revision + 1)
       setPanelOpen(true)
       setPdfReviewNotice({ tone: 'success', message: 'SciForge added improvement advice to the selected comment.' })
     } catch (error) {
@@ -685,15 +688,22 @@ function sideBlockSourceMessageId(sideThreadId: string, blockId: string): string
   return `${sideThreadId}:${blockId}`
 }
 
+export function documentAnnotationSideBlockText(block: DocumentAnnotationQuestionSideBlock): string {
+  if (block.kind === 'user') {
+    return block.meta?.displayText?.trim() || block.text?.trim() || ''
+  }
+  return block.text?.trim() || ''
+}
+
 function sideBlockTurns(side: DocumentAnnotationQuestionSideConversation): AnnotationQuestionTurn[] {
   return side.blocks
-    .filter((block) => (block.kind === 'user' || block.kind === 'assistant') && Boolean(block.text?.trim()))
+    .filter((block) => (block.kind === 'user' || block.kind === 'assistant') && Boolean(documentAnnotationSideBlockText(block)))
     .map((block) => ({
       blockId: block.id,
       sourceMessageId: sideBlockSourceMessageId(side.threadId, block.id),
       kind: block.kind === 'user' ? 'question' : 'answer',
       role: block.kind === 'user' ? 'user' : 'assistant',
-      text: block.text?.trim() ?? '',
+      text: documentAnnotationSideBlockText(block),
       ...(block.createdAt ? { createdAt: block.createdAt } : {})
     }))
 }

@@ -66,7 +66,6 @@ const MAX_NOTIFICATION_TITLE_LENGTH = 200
 const MAX_NOTIFICATION_BODY_LENGTH = 5_000
 const MAX_CHANNEL_TEXT_LENGTH = 100_000
 const MAX_SKILL_FILE_BYTES = 1_000_000
-const MAX_CONFIG_FILE_BYTES = 2_000_000
 const MAX_WORKSPACE_BINARY_BODY_BASE64_CHARS = 90_000_000
 const MAX_DEVICE_CODE_LENGTH = 8_192
 const MAX_EDITOR_COMPLETION_TEXT = 200_000
@@ -1900,8 +1899,6 @@ export const pptMasterMcpConfigPayloadSchema = z
   .strict()
 
 export const rootPathSchema = trimmedString(MAX_PATH_LENGTH)
-export const runtimeConfigContentSchema = z.string().max(MAX_CONFIG_FILE_BYTES)
-
 export const workspaceRootSchema = trimmedString(MAX_PATH_LENGTH)
 export const gitBranchPayloadSchema = z
   .object({

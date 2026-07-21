@@ -272,7 +272,7 @@ const defaultSettings = (): AppSettingsV1 => ({
   computerUse: defaultComputerUseSettings(),
   runtimeGuards: defaultRuntimeGuardSettings(),
   evidenceDag: normalizeEvidenceDagSettings(),
-  activeAgentRuntime: 'sciforge',
+  activeAgentRuntime: 'codex',
   agents: {
     sciforge: defaultLocalRuntimeSettings(),
     codex: defaultCodexRuntimeSettings(),
@@ -452,6 +452,7 @@ export class JsonSettingsStore {
       normalized.installationId !== normalizedBeforeLocalIds.installationId ||
       normalized.schedule.internal.secret !== normalizedBeforeLocalIds.schedule.internal.secret ||
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
+      parsed.activeAgentRuntime !== normalized.activeAgentRuntime ||
       !('remoteExecutor' in parsed) ||
       !('agentCapabilities' in parsed) ||
       !('evidenceDag' in parsed)

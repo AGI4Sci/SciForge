@@ -18,10 +18,10 @@ function settings(
 
 describe('model access runtime policy', () => {
   it.each([
-    ['sciforge', { sciforge: true, codex: false, claude: false }],
+    ['sciforge', { activeRuntime: 'codex', sciforge: false, codex: true, claude: false }],
     ['codex', { sciforge: false, codex: true, claude: false }],
     ['claude', { sciforge: false, codex: false, claude: true }]
-  ] as const)('allows only the selected API-backed %s runtime', (activeRuntime, expected) => {
+  ] as const)('allows only a supported API-backed runtime for %s settings', (activeRuntime, expected) => {
     expect(resolveModelAccessRuntimePolicy(settings('api', activeRuntime))).toMatchObject(expected)
   })
 
@@ -29,7 +29,7 @@ describe('model access runtime policy', () => {
     expect(resolveModelAccessRuntimePolicy(settings('coding-plan', 'codex', 'codex')))
       .toMatchObject({ sciforge: false, claude: false, codex: true })
     expect(resolveModelAccessRuntimePolicy(settings('coding-plan', 'sciforge', 'codex')))
-      .toMatchObject({ sciforge: false, claude: false, codex: false })
+      .toMatchObject({ activeRuntime: 'codex', sciforge: false, claude: false, codex: true })
   })
 
   it('fails closed for missing access and unknown plan adapters', () => {

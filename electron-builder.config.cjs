@@ -79,15 +79,10 @@ module.exports = {
   productName: 'SciForge',
   asar: true,
   asarUnpack: [
-    '**/kun/dist/**/*',
-    '**/kun/package*.json',
-    '**/kun/node_modules/**/*',
     ...releaseWorkerManifest.createAsarUnpackGlobs(),
-    '**/node_modules/better-sqlite3/**/*',
     '**/node_modules/node-pty/**/*',
     '**/node_modules/proxy-from-env/**/*',
-    '**/node_modules/bindings/**/*',
-    '**/node_modules/file-uri-to-path/**/*'
+    '**/node_modules/zod/**/*',
   ],
   npmRebuild: true,
   directories: {
@@ -96,10 +91,7 @@ module.exports = {
   files: [
     'out/**/*',
     'package.json',
-    'kun/dist/**/*',
-    'kun/package.json',
-    'kun/package-lock.json',
-    'kun/node_modules/**/*',
+    'node_modules/zod/**/*',
     '!**/*.map',
     '!**/*.d.ts',
     '!**/*.ts',

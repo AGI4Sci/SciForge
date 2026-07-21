@@ -37,25 +37,6 @@ describe('preload agentRuntime bridge', () => {
     await import('./index')
   })
 
-  it('exposes runtime status notifications', () => {
-    const api = exposedApi as {
-      onRuntimeStatus(handler: (payload: unknown) => void): () => void
-    }
-    const handler = vi.fn()
-
-    const unsubscribe = api.onRuntimeStatus(handler)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'runtime:status')?.[1]
-    wrapped?.({}, { state: 'running', source: 'test', at: '2026-06-14T00:00:00.000Z' })
-    unsubscribe()
-
-    expect(handler).toHaveBeenCalledWith({
-      state: 'running',
-      source: 'test',
-      at: '2026-06-14T00:00:00.000Z'
-    })
-    expect(removeListener).toHaveBeenCalledWith('runtime:status', wrapped)
-  })
-
   it('uses native Chromium zoom for renderer UI scaling', () => {
     const api = exposedApi as {
       setUiZoomFactor(factor: number): void

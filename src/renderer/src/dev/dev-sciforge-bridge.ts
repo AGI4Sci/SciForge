@@ -263,9 +263,6 @@ function createApi(): SciForgeApi {
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
     openSkillRoot: (rootPath) => invoke('skill:open-root', rootPath),
-    getRuntimeConfigFile: () => invoke('runtimeConfig:read'),
-    setRuntimeConfigFile: (content) => invoke('runtimeConfig:write', content),
-    openRuntimeConfigDir: () => invoke('runtimeConfig:open-dir'),
     getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
     switchGitBranch: (workspaceRoot, branch) =>
       invoke('git:switch-branch', { workspaceRoot, branch }),
@@ -354,7 +351,6 @@ function createApi(): SciForgeApi {
       update: (input) => invoke('researchCards:update', input),
       archive: (input) => invoke('researchCards:archive', input)
     },
-    onRuntimeStatus: (handler) => onChannel('runtime:status', handler),
     agentRuntime: {
       connect: (runtimeId) => invoke('agentRuntime:connect', { runtimeId }),
       capabilities: (runtimeId) => invoke('agentRuntime:capabilities', { runtimeId }),

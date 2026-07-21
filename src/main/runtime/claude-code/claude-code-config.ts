@@ -1,6 +1,8 @@
-import { mkdir } from 'node:fs/promises'
+import { execFile } from 'node:child_process'
+import { constants } from 'node:fs'
+import { access, mkdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 import type { Options as ClaudeAgentSdkOptions } from '@anthropic-ai/claude-agent-sdk'
 import {
   deriveTraceId,
@@ -51,6 +53,14 @@ export type ClaudeCodeSdkLaunchConfig = {
   pathToClaudeCodeExecutable?: string
 }
 
+type ClaudeCodeExecutableResolutionOptions = {
+  env?: NodeJS.ProcessEnv
+  homeDir?: string
+  platform?: NodeJS.Platform
+  isExecutable?: (path: string) => Promise<boolean>
+  readLoginShellPath?: (env: NodeJS.ProcessEnv) => Promise<string>
+}
+
 export async function prepareClaudeCodeSdkLaunch(options: {
   settings: AppSettingsV1
   text: string
@@ -71,6 +81,10 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   const runtime = getClaudeRuntimeSettings(options.settings)
   const command = runtime.command.trim()
   if (!command) throw new Error('Claude Code command is required.')
+  const baseEnv = options.env ?? process.env
+  const pathToClaudeCodeExecutable = await resolveClaudeCodeExecutable(command, {
+    env: baseEnv
+  })
   const configDir = expandHome(options.managedConfigDir || runtime.configDir)
   if (!configDir) throw new Error('Claude Code config directory is required.')
   const router = claudeModelRouterConfig(options.settings)
@@ -79,16 +93,15 @@ export async function prepareClaudeCodeSdkLaunch(options: {
   await mkdir(configDir, { recursive: true })
   const permissionMode = claudePermissionMode(runtime)
   const cliModel = claudeCodeCliModel(runtime.model, router.model)
-  const env = claudeCodeRuntimeEnv(options.env ?? process.env, {
+  const env = prependExecutableDirectoryToPath(claudeCodeRuntimeEnv(baseEnv, {
     configDir,
     baseUrl: claudeCodeAnthropicBaseUrl(router.baseUrl),
     apiKey: router.apiKey,
     model: cliModel,
     threadId: options.threadId,
     turnId: options.turnId
-  })
+  }), pathToClaudeCodeExecutable)
   const extraArgs = claudeCodeSdkExtraArgs(runtime.extraArgs)
-  const pathToClaudeCodeExecutable = command === 'claude' ? undefined : command
   const mcpServers = claudeCodeMcpServers(options.settings, options.managedMcp)
   const reasoningOptions = claudeCodeReasoningOptions(options.reasoningEffort)
   const sdkOptions: ClaudeAgentSdkOptions = {
@@ -122,6 +135,73 @@ export async function prepareClaudeCodeSdkLaunch(options: {
     permissionMode,
     pathToClaudeCodeExecutable
   }
+}
+
+/**
+ * Resolve an explicitly configured Claude Code executable.
+ *
+ * The literal default `claude` is intentionally reserved for the executable
+ * bundled with `@anthropic-ai/claude-agent-sdk`. This keeps launches stable
+ * when a GUI process happens to inherit a different PATH. Users who want an
+ * external Claude Code installation can configure its absolute path, or a
+ * distinct command name that can be found on PATH.
+ */
+export async function resolveClaudeCodeExecutable(
+  raw: string,
+  options: ClaudeCodeExecutableResolutionOptions = {}
+): Promise<string | undefined> {
+  const command = raw.trim()
+  if (!command) throw new Error('Claude Code command is required.')
+  if (command === 'claude') return undefined
+
+  const homeDir = options.homeDir ?? homedir()
+  const expanded = expandHomeFrom(command, homeDir)
+  const platform = options.platform ?? process.platform
+  const isExecutable = options.isExecutable ?? ((path: string) => executableFileExists(path, platform))
+  if (isAbsolute(expanded) || hasPathSeparator(expanded)) {
+    if (!isAbsolute(expanded)) {
+      throw new Error('Claude Code executable path must be absolute (or start with ~/).')
+    }
+    if (!await isExecutable(expanded)) {
+      throw new Error(`Claude Code executable is missing or not executable: ${expanded}`)
+    }
+    return expanded
+  }
+
+  const env = options.env ?? process.env
+  const inheritedPathDirs = pathEntries(environmentPath(env).value, homeDir, platform)
+  const inheritedExecutable = await findExecutableInDirs(
+    command,
+    inheritedPathDirs,
+    platform,
+    isExecutable
+  )
+  if (inheritedExecutable) return inheritedExecutable
+
+  if (platform !== 'win32') {
+    const readLoginShellPath = options.readLoginShellPath ?? defaultReadLoginShellPath
+    const loginShellPath = await readLoginShellPath(env).catch(() => '')
+    const loginShellExecutable = await findExecutableInDirs(
+      command,
+      pathEntries(loginShellPath, homeDir, platform),
+      platform,
+      isExecutable
+    )
+    if (loginShellExecutable) return loginShellExecutable
+  }
+
+  const commonExecutable = await findExecutableInDirs(
+    command,
+    commonClaudeCodeBinDirs(platform, env, homeDir),
+    platform,
+    isExecutable
+  )
+  if (commonExecutable) return commonExecutable
+
+  throw new Error(
+    `Claude Code executable "${command}" was not found. ` +
+    'Use the default "claude" for the SDK-bundled executable, or configure an absolute path.'
+  )
 }
 
 function hasScientificVisualMcpServers(
@@ -291,11 +371,135 @@ export function claudeCodeSdkExtraArgs(args: readonly string[]): NonNullable<Cla
 }
 
 export function expandHome(raw: string): string {
+  return expandHomeFrom(raw, homedir())
+}
+
+function expandHomeFrom(raw: string, homeDir: string): string {
   const value = raw.trim()
   if (!value) return ''
-  if (value === '~') return homedir()
-  if (value.startsWith('~/') || value.startsWith('~\\')) return join(homedir(), value.slice(2))
+  if (value === '~') return homeDir
+  if (value.startsWith('~/') || value.startsWith('~\\')) return join(homeDir, value.slice(2))
   return value
+}
+
+function hasPathSeparator(value: string): boolean {
+  return value.includes('/') || value.includes('\\')
+}
+
+function pathEntries(
+  value: string,
+  homeDir: string,
+  platform: NodeJS.Platform = process.platform
+): string[] {
+  return value
+    .split(platform === 'win32' ? ';' : ':')
+    .map((entry) => expandHomeFrom(entry, homeDir))
+    .filter(Boolean)
+}
+
+function commonClaudeCodeBinDirs(
+  platform: NodeJS.Platform,
+  env: NodeJS.ProcessEnv,
+  homeDir: string
+): string[] {
+  const envDir = (value: string | undefined): string =>
+    value?.trim() ? expandHomeFrom(value, homeDir) : ''
+  if (platform === 'win32') {
+    return [
+      env.APPDATA ? join(env.APPDATA, 'npm') : '',
+      env.LOCALAPPDATA ? join(env.LOCALAPPDATA, 'Programs', 'Claude') : '',
+      join(homeDir, '.local', 'bin'),
+      join(homeDir, '.claude', 'local')
+    ].filter(Boolean)
+  }
+  const asdfHome = envDir(env.ASDF_DATA_DIR) || join(homeDir, '.asdf')
+  const voltaHome = envDir(env.VOLTA_HOME) || join(homeDir, '.volta')
+  const bunHome = envDir(env.BUN_INSTALL) || join(homeDir, '.bun')
+  return [
+    envDir(env.NVM_BIN),
+    envDir(env.PNPM_HOME),
+    join(homeDir, '.local', 'bin'),
+    join(homeDir, '.claude', 'local'),
+    join(asdfHome, 'shims'),
+    join(voltaHome, 'bin'),
+    join(homeDir, 'Library', 'pnpm'),
+    join(homeDir, '.local', 'share', 'pnpm'),
+    join(bunHome, 'bin'),
+    join(homeDir, '.npm-global', 'bin'),
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin'
+  ].filter(Boolean)
+}
+
+function executableNames(command: string, platform: NodeJS.Platform): string[] {
+  if (platform !== 'win32') return [command]
+  if (/\.(?:exe|cmd|bat)$/i.test(command)) return [command]
+  return [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
+}
+
+async function findExecutableInDirs(
+  command: string,
+  directories: readonly string[],
+  platform: NodeJS.Platform,
+  isExecutable: (path: string) => Promise<boolean>
+): Promise<string | undefined> {
+  for (const directory of new Set(directories)) {
+    for (const name of executableNames(command, platform)) {
+      const candidate = join(directory, name)
+      if (await isExecutable(candidate)) return candidate
+    }
+  }
+  return undefined
+}
+
+async function executableFileExists(path: string, platform: NodeJS.Platform): Promise<boolean> {
+  try {
+    const info = await stat(path)
+    if (!info.isFile()) return false
+    if (platform !== 'win32') await access(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function defaultReadLoginShellPath(env: NodeJS.ProcessEnv): Promise<string> {
+  const shell = env.SHELL?.trim() || '/bin/sh'
+  if (!isAbsolute(shell)) return Promise.resolve('')
+  const marker = '__SCIFORGE_LOGIN_SHELL_PATH__'
+  return new Promise((resolve) => {
+    execFile(
+      shell,
+      ['-ilc', `printf '\\n${marker}%s' "$PATH"`],
+      { env, encoding: 'utf8', timeout: 3_000, windowsHide: true },
+      (error, stdout) => {
+        if (error) return resolve('')
+        const markerIndex = stdout.lastIndexOf(marker)
+        resolve(markerIndex < 0 ? '' : stdout.slice(markerIndex + marker.length).trim())
+      }
+    )
+  })
+}
+
+function prependExecutableDirectoryToPath(
+  env: NodeJS.ProcessEnv,
+  executable: string | undefined
+): NodeJS.ProcessEnv {
+  if (!executable) return env
+  const executableDir = dirname(executable)
+  const { key: pathKey, value: currentPath } = environmentPath(env)
+  const entries = pathEntries(currentPath, homedir())
+  if (entries.includes(executableDir)) return env
+  return {
+    ...env,
+    [pathKey]: [executableDir, currentPath].filter(Boolean).join(delimiter)
+  }
+}
+
+function environmentPath(env: NodeJS.ProcessEnv): { key: string; value: string } {
+  const key = Object.keys(env).find((candidate) => candidate.toLowerCase() === 'path') ?? 'PATH'
+  return { key, value: env[key] ?? '' }
 }
 
 export function claudeCodeCliModel(configuredModel: string | undefined, routerModel: string): string {

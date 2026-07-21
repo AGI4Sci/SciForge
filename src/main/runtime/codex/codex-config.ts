@@ -1,7 +1,8 @@
+import { execFile } from 'node:child_process'
 import { constants } from 'node:fs'
 import { access, chmod, copyFile, lstat, mkdir, readdir, rename, rm, stat, writeFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
-import { delimiter, dirname, isAbsolute, join } from 'node:path'
+import { homedir, userInfo } from 'node:os'
+import { delimiter, dirname, isAbsolute, join, win32 } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
@@ -128,23 +129,56 @@ export async function resolveCodexCommand(
     homeDir?: string
     platform?: NodeJS.Platform
     isExecutable?: (path: string) => Promise<boolean>
+    getLoginShellPath?: (env: NodeJS.ProcessEnv, homeDir: string) => Promise<string>
   } = {}
 ): Promise<string> {
   const command = raw.trim()
   if (!command) throw new Error('Codex command is required.')
   const homeDir = options.homeDir ?? homedir()
-  const expanded = expandHomeFrom(command, homeDir)
-  if (isAbsolute(expanded) || expanded.includes('/') || expanded.includes('\\')) return expanded
-
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
+  const isExecutable = options.isExecutable ?? ((path: string) => executableFileExists(path, platform))
+  const expanded = expandHomeFrom(command, homeDir)
+  const pathIsAbsolute = platform === 'win32' ? win32.isAbsolute(expanded) : isAbsolute(expanded)
+  if (pathIsAbsolute || expanded.includes('/') || expanded.includes('\\')) {
+    if (!pathIsAbsolute) {
+      throw new Error(
+        `Codex command path must be absolute: "${expanded}". ` +
+        'Enter the absolute path to the Codex executable, or use "codex" to auto-detect it.'
+      )
+    }
+    if (!(await isExecutable(expanded))) {
+      throw new Error(
+        `Codex executable was not found or is not executable at "${expanded}". ` +
+        'Check the path and file permissions, or use "codex" to auto-detect it.'
+      )
+    }
+    return expanded
+  }
+
   const pathValue = env.PATH ?? env.Path ?? env.path ?? ''
-  const searchDirs = pathValue
-    .split(delimiter)
-    .map((entry) => entry.trim())
-    .filter(Boolean)
+  const searchDirs = splitSearchPath(pathValue)
+  const inheritedPathMatch = await findExecutableCommand(command, searchDirs, platform, isExecutable)
+  if (inheritedPathMatch) return inheritedPathMatch
+
   if (platform === 'darwin') {
-    searchDirs.push(join(homeDir, '.local', 'bin'), '/opt/homebrew/bin', '/usr/local/bin')
+    const getLoginShellPath = options.getLoginShellPath ?? readMacOSLoginShellPath
+    const loginShellPath = await getLoginShellPath(env, homeDir).catch(() => '')
+    const loginShellMatch = await findExecutableCommand(
+      command,
+      splitSearchPath(loginShellPath),
+      platform,
+      isExecutable
+    )
+    if (loginShellMatch) return loginShellMatch
+
+    const fallbackMatch = await findExecutableCommand(
+      command,
+      await macOSCommandSearchDirectories(homeDir, env),
+      platform,
+      isExecutable
+    )
+    if (fallbackMatch) return fallbackMatch
   } else if (platform === 'win32') {
     // GUI apps launched from Explorer do not always inherit the same PATH as
     // an interactive shell. Cover the standard npm and standalone locations.
@@ -155,12 +189,35 @@ export async function resolveCodexCommand(
       searchDirs.push(join(localAppData, 'Programs'), join(localAppData, 'Microsoft', 'WinGet', 'Packages'))
     }
     searchDirs.push(join(homeDir, '.local', 'bin'), join(homeDir, '.cargo', 'bin'))
+    const windowsPathMatch = await findExecutableCommand(command, searchDirs, platform, isExecutable)
+    if (windowsPathMatch) return windowsPathMatch
   } else {
     searchDirs.push(join(homeDir, '.local', 'bin'), '/usr/local/bin', '/usr/bin')
+    const unixPathMatch = await findExecutableCommand(command, searchDirs, platform, isExecutable)
+    if (unixPathMatch) return unixPathMatch
   }
 
-  const isExecutable = options.isExecutable ?? ((path: string) => executableFileExists(path, platform))
-  for (const directory of new Set(searchDirs)) {
+  if (platform === 'win32') {
+    const packaged = await resolvePackagedWindowsCodex(command, env, homeDir, isExecutable)
+    if (packaged) return packaged
+  }
+  return command
+}
+
+function splitSearchPath(pathValue: string): string[] {
+  return pathValue
+    .split(delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+}
+
+async function findExecutableCommand(
+  command: string,
+  directories: readonly string[],
+  platform: NodeJS.Platform,
+  isExecutable: (path: string) => Promise<boolean>
+): Promise<string | null> {
+  for (const directory of new Set(directories)) {
     const names = platform === 'win32'
       ? [command, `${command}.exe`, `${command}.cmd`, `${command}.bat`]
       : [command]
@@ -169,11 +226,104 @@ export async function resolveCodexCommand(
       if (await isExecutable(candidate)) return candidate
     }
   }
-  if (platform === 'win32') {
-    const packaged = await resolvePackagedWindowsCodex(command, env, homeDir, isExecutable)
-    if (packaged) return packaged
+  return null
+}
+
+const LOGIN_SHELL_PATH_START = '\u001e'
+const LOGIN_SHELL_PATH_END = '\u001f'
+const PRINT_LOGIN_SHELL_PATH = `exec /bin/sh -c 'printf "\\036%s\\037" "$PATH"'`
+
+async function readMacOSLoginShellPath(env: NodeJS.ProcessEnv, homeDir: string): Promise<string> {
+  const shellCandidates = new Set<string>()
+  if (env.SHELL?.trim()) shellCandidates.add(expandHomeFrom(env.SHELL.trim(), homeDir))
+  try {
+    const accountShell = userInfo().shell
+    if (accountShell?.trim()) shellCandidates.add(accountShell.trim())
+  } catch {
+    // Fall through to standard macOS shells when account metadata is unavailable.
   }
-  return command
+  shellCandidates.add('/bin/zsh')
+  shellCandidates.add('/bin/bash')
+  shellCandidates.add('/bin/sh')
+
+  const shellEnv: NodeJS.ProcessEnv = {
+    ...env,
+    HOME: env.HOME || homeDir
+  }
+  for (const shell of shellCandidates) {
+    const shellPath = await readLoginShellPathFrom(shell, shellEnv)
+    if (shellPath) return shellPath
+  }
+  return ''
+}
+
+function readLoginShellPathFrom(shell: string, env: NodeJS.ProcessEnv): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(
+      shell,
+      ['-ilc', PRINT_LOGIN_SHELL_PATH],
+      {
+        encoding: 'utf8',
+        env,
+        maxBuffer: 1024 * 1024,
+        timeout: 4_000
+      },
+      (error, stdout) => {
+        if (error) {
+          resolve('')
+          return
+        }
+        const start = stdout.lastIndexOf(LOGIN_SHELL_PATH_START)
+        const end = start < 0 ? -1 : stdout.indexOf(LOGIN_SHELL_PATH_END, start + 1)
+        resolve(start >= 0 && end > start ? stdout.slice(start + 1, end).trim() : '')
+      }
+    )
+  })
+}
+
+async function macOSCommandSearchDirectories(
+  homeDir: string,
+  env: NodeJS.ProcessEnv
+): Promise<string[]> {
+  const expandEnvDir = (value: string | undefined): string | undefined => {
+    const trimmed = value?.trim()
+    return trimmed ? expandHomeFrom(trimmed, homeDir) : undefined
+  }
+  const nvmDir = expandEnvDir(env.NVM_DIR) ?? join(homeDir, '.nvm')
+  const asdfDir = expandEnvDir(env.ASDF_DATA_DIR) ?? join(homeDir, '.asdf')
+  const voltaDir = expandEnvDir(env.VOLTA_HOME) ?? join(homeDir, '.volta')
+  const bunDir = expandEnvDir(env.BUN_INSTALL) ?? join(homeDir, '.bun')
+  const nvmVersionBins = await versionManagerBinDirectories(join(nvmDir, 'versions', 'node'))
+
+  return [
+    expandEnvDir(env.NVM_BIN),
+    expandEnvDir(env.PNPM_HOME),
+    join(homeDir, '.local', 'bin'),
+    join(asdfDir, 'shims'),
+    join(asdfDir, 'bin'),
+    join(voltaDir, 'bin'),
+    join(homeDir, 'Library', 'pnpm'),
+    join(homeDir, '.local', 'share', 'pnpm'),
+    join(bunDir, 'bin'),
+    join(homeDir, '.npm-global', 'bin'),
+    ...nvmVersionBins,
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+    '/usr/bin'
+  ].filter((directory): directory is string => Boolean(directory))
+}
+
+async function versionManagerBinDirectories(versionsDir: string): Promise<string[]> {
+  try {
+    const versions = await readdir(versionsDir, { withFileTypes: true })
+    return versions
+      .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
+      .map((entry) => entry.name)
+      .sort((left, right) => right.localeCompare(left, undefined, { numeric: true }))
+      .map((version) => join(versionsDir, version, 'bin'))
+  } catch {
+    return []
+  }
 }
 
 async function resolvePackagedWindowsCodex(
@@ -243,6 +393,8 @@ function prependCommandDirectoryToPath(env: NodeJS.ProcessEnv, command: string):
 
 async function executableFileExists(path: string, platform: NodeJS.Platform): Promise<boolean> {
   try {
+    const info = await stat(path)
+    if (!info.isFile()) return false
     // Windows does not expose POSIX executable bits; existence is sufficient.
     await access(path, platform === 'win32' ? constants.F_OK : constants.X_OK)
     return true

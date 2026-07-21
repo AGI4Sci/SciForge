@@ -37,9 +37,10 @@ const REASONING_OPTIONS: Array<{ id: ComposerReasoningEffort; labelKey: string }
   { id: 'max', labelKey: 'composerReasoningMax' }
 ]
 
-const RUNTIME_OPTIONS: Array<{ id: AgentRuntimeId; labelKey: string; shortLabelKey: string }> = [
+export const COMPOSER_RUNTIME_IDS = ['codex', 'claude'] as const satisfies readonly AgentRuntimeId[]
+
+const RUNTIME_OPTIONS: Array<{ id: (typeof COMPOSER_RUNTIME_IDS)[number]; labelKey: string; shortLabelKey: string }> = [
   { id: 'codex', labelKey: 'composerRuntimeCodex', shortLabelKey: 'composerRuntimeCodexShort' },
-  { id: 'sciforge', labelKey: 'composerRuntimeLocal', shortLabelKey: 'composerRuntimeLocalShort' },
   { id: 'claude', labelKey: 'composerRuntimeClaude', shortLabelKey: 'composerRuntimeClaudeShort' }
 ]
 
@@ -84,7 +85,7 @@ export function FloatingComposerModelPicker({
   composerModel,
   composerPickList,
   composerModelGroups = [],
-  activeAgentRuntime = 'sciforge',
+  activeAgentRuntime = 'codex',
   runtimeLocked = false,
   canChangeModel,
   stretch = false,
@@ -649,13 +650,13 @@ function reasoningLabelKey(value: ComposerReasoningEffort): string {
   return REASONING_OPTIONS.find((option) => option.id === value)?.labelKey ?? 'composerReasoningMax'
 }
 
-function normalizeComposerRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
+export function normalizeComposerRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
   if (value === 'codex' || value === 'claude') return value
-  return 'sciforge'
+  return 'codex'
 }
 
 function runtimeShortLabelKey(value: AgentRuntimeId): string {
-  return RUNTIME_OPTIONS.find((option) => option.id === value)?.shortLabelKey ?? 'composerRuntimeLocalShort'
+  return RUNTIME_OPTIONS.find((option) => option.id === value)?.shortLabelKey ?? 'composerRuntimeCodexShort'
 }
 
 function clamp(value: number, min: number, max: number): number {

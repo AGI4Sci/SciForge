@@ -1,7 +1,6 @@
 import {
   chmodSync,
   cpSync,
-  existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
@@ -61,7 +60,6 @@ const workspacePreviewWorkerPackageDirs = [
 const require = createRequire(import.meta.url)
 const builderConfig = require('../../electron-builder.config.cjs')
 const afterPack = require('../../scripts/after-pack.cjs')
-const localRuntimePackage = require('../../scripts/local-runtime-package.cjs')
 const macNotarize = require('../../scripts/mac-notarize.cjs')
 const releaseWorkerManifest = require(
   '../../scripts/release-worker-manifest.cjs'
@@ -154,62 +152,20 @@ afterEach(() => {
   }
 })
 
-describe('electron-builder local runtime packaging', () => {
-  it('keeps local runtime install/build decisions in one package script', () => {
-    const root = tempRoot()
-
-    expect(localRuntimePackage.hasProjectLocalRuntimeInstall(root)).toBe(false)
-    for (const relativePath of localRuntimePackage.LOCAL_RUNTIME_INSTALL_REQUIRED_PATHS) {
-      touch(join(root, relativePath))
-    }
-    expect(localRuntimePackage.hasProjectLocalRuntimeInstall(root)).toBe(true)
-
-    const sqliteModule = join(root, 'kun/node_modules/better-sqlite3')
-    touch(join(sqliteModule, 'package.json'))
-    localRuntimePackage.removeProjectLocalRuntimeSqlite(root)
-
-    expect(existsSync(sqliteModule)).toBe(false)
-  })
-
-  it('uses an Electron ABI stamp only while the native addon fingerprint matches', () => {
-    const target = {
-      electronVersion: '34.5.8',
-      betterSqliteVersion: '12.10.0',
-      platform: 'darwin',
-      arch: 'arm64'
-    }
-    const fingerprint = { size: 1234, mtimeMs: 5678 }
-    const stamp = { ...target, runtimeModules: '132', addon: fingerprint }
-
-    expect(localRuntimePackage.electronNativeStampMatches(stamp, target, fingerprint)).toBe(true)
-    expect(localRuntimePackage.electronNativeStampMatches(
-      stamp,
-      { ...target, electronVersion: '35.0.0' },
-      fingerprint
-    )).toBe(false)
-    expect(localRuntimePackage.electronNativeStampMatches(
-      stamp,
-      target,
-      { ...fingerprint, size: fingerprint.size + 1 }
-    )).toBe(false)
-  })
-
-  it('includes local runtime dependencies in the packaged app', () => {
+describe('electron-builder release packaging', () => {
+  it('packages shared agent support without the retired Kun runtime', () => {
     expect(builderConfig.npmRebuild).toBe(true)
     expect(builderConfig.files).toEqual(expect.arrayContaining([
-      'kun/dist/**/*',
-      'kun/package.json',
-      'kun/package-lock.json',
-      'kun/node_modules/**/*'
+      'node_modules/zod/**/*'
     ]))
     expect(builderConfig.asarUnpack).toEqual(expect.arrayContaining([
-      '**/kun/dist/**/*',
-      '**/kun/package*.json',
-      '**/kun/node_modules/**/*',
-      '**/node_modules/better-sqlite3/**/*',
       '**/node_modules/node-pty/**/*',
-      '**/node_modules/proxy-from-env/**/*'
+      '**/node_modules/proxy-from-env/**/*',
+      '**/node_modules/zod/**/*'
     ]))
+    expect(stringEntries(builderConfig.files).some((entry) => entry.includes('kun/'))).toBe(false)
+    expect(stringEntries(builderConfig.asarUnpack).some((entry) => entry.includes('/kun/'))).toBe(false)
+    expect(stringEntries(builderConfig.asarUnpack).some((entry) => entry.includes('better-sqlite3'))).toBe(false)
     expect(builderConfig.asarUnpack).not.toEqual(expect.arrayContaining([
       '**/node_modules/node-bin-darwin-*/*',
       '**/node_modules/node-bin-linux-*/*',
@@ -232,6 +188,8 @@ describe('electron-builder local runtime packaging', () => {
     ))
     expect(releaseWorkerManifest.BUILT_RUNTIME_UNPACK_GLOBS).toEqual(['**/out/main/**/*'])
     expect(builderConfig.asarUnpack).toContain('**/out/main/**/*')
+    expect(builderConfig.asarUnpack).toContain('**/packages/full-trace/**/*')
+    expect(builderConfig.asarUnpack).toContain('**/node_modules/@sciforge/full-trace/**/*')
     expect(fileSets.map((entry) => entry.to)).toEqual(releaseWorkerManifest.bundledPackageTargets)
   })
 
@@ -297,31 +255,33 @@ describe('electron-builder local runtime packaging', () => {
     }
   })
 
-  it('validates the unpacked local runtime before release artifacts are created', () => {
-    expect(afterPack.LOCAL_RUNTIME_REQUIRED_PATHS).toEqual(
-      localRuntimePackage.LOCAL_RUNTIME_REQUIRED_PATHS
-    )
-
+  it('loads the packaged multi-agent contract with zod at the worker resolution root', () => {
     const root = tempRoot()
     const context = createMacPackContext(root)
-    const unpackedRoot = afterPack._internals.unpackedAppRoot(context)
+    const packagedRoot = afterPack._internals.unpackedAppRoot(context)
+    const packagedWorker = join(packagedRoot, 'packages/workers/multi-agent')
+    const rootZod = join(packagedRoot, 'node_modules/zod')
 
-    for (const relativePath of afterPack.LOCAL_RUNTIME_REQUIRED_PATHS) {
-      touch(join(unpackedRoot, relativePath))
-    }
-    touch(join(unpackedRoot, 'node_modules/better-sqlite3/package.json'))
-    touch(join(
-      unpackedRoot,
-      'node_modules/better-sqlite3/build/Release/better_sqlite3.node'
-    ))
-
-    expect(() => afterPack._internals.validateBundledLocalRuntime(context)).not.toThrow()
-
-    rmSync(join(unpackedRoot, 'kun/node_modules/zod'), { recursive: true, force: true })
-
-    expect(() => afterPack._internals.validateBundledLocalRuntime(context)).toThrow(
-      /kun\/node_modules\/zod\/package\.json/
+    mkdirSync(join(packagedWorker, 'dist'), { recursive: true })
+    cpSync(
+      join(projectRoot, 'packages/workers/multi-agent/package.json'),
+      join(packagedWorker, 'package.json')
     )
+    cpSync(
+      join(projectRoot, 'packages/workers/multi-agent/dist/contract.js'),
+      join(packagedWorker, 'dist/contract.js')
+    )
+    cpSync(join(projectRoot, 'node_modules/zod'), rootZod, { recursive: true })
+
+    expect(() => {
+      afterPack._internals.verifyBundledMultiAgentContract(context)
+    }).not.toThrow()
+
+    rmSync(rootZod, { recursive: true, force: true })
+
+    expect(() => {
+      afterPack._internals.verifyBundledMultiAgentContract(context)
+    }).toThrow(/root zod dependency/)
   })
 
   it('exports and validates release worker runtime requirements from the shared manifest', () => {
@@ -405,21 +365,6 @@ describe('electron-builder local runtime packaging', () => {
     expect(releaseWorkerManifest.bundledPackageDirs).toContain('packages/workers/plan-gateway')
   })
 
-  it('keeps packaged local-runtime workspace links resolvable', () => {
-    expect(releaseWorkerManifest.createBundledFileSets()).toEqual(expect.arrayContaining([
-      {
-        from: 'packages/execution-governance',
-        to: 'packages/execution-governance',
-        filter: ['package.json', 'dist/*.js']
-      },
-      {
-        from: 'packages/full-trace',
-        to: 'packages/full-trace',
-        filter: ['package.json', 'dist/*.js']
-      }
-    ]))
-  })
-
   it('installs the built Full Trace package at the workers runtime resolution path', () => {
     const fullTrace = releaseWorkerManifest.runtimeEntries.find((entry) => entry.id === 'full-trace')
     const fullTraceFileSet = releaseWorkerManifest.createBundledFileSets()
@@ -480,17 +425,6 @@ describe('electron-builder local runtime packaging', () => {
     )
   })
 
-  it('runs npm through cmd.exe during Windows afterPack hooks', () => {
-    expect(afterPack._internals.npmCommand(['prune'], 'win32')).toEqual({
-      command: 'cmd.exe',
-      args: ['/d', '/s', '/c', 'npm', 'prune']
-    })
-    expect(afterPack._internals.npmCommand(['prune'], 'darwin')).toEqual({
-      command: 'npm',
-      args: ['prune']
-    })
-  })
-
   it('repairs node-pty spawn-helper execute bits in unpacked packages', () => {
     const root = tempRoot()
     const context = createMacPackContext(root)
@@ -522,7 +456,7 @@ describe('electron-builder local runtime packaging', () => {
     const framework = join(appBundle, 'Contents/Frameworks/Electron Framework.framework')
     const nativeAddon = join(
       appBundle,
-      'Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node'
+      'Contents/Resources/app.asar.unpacked/node_modules/node-pty/prebuilds/darwin-arm64/pty.node'
     )
     const resourceScript = join(appBundle, 'Contents/Resources/postinstall.sh')
 
@@ -560,10 +494,10 @@ describe('root package workspace contracts', () => {
     expect(rootPackage.workspaces).not.toContain('kun')
     expect(rootPackage.workspaces).not.toContain('packages/workers/gui-owl-computer-use')
     expect(rootPackage.scripts).toMatchObject({
+      'build:execution-governance': 'npm --workspace @sciforge/execution-governance run build',
       'build:full-trace': 'npm --workspace @sciforge/full-trace run build',
-      'build:local-runtime': 'node ./scripts/local-runtime-package.cjs build',
-      'rebuild:electron-native': 'node ./scripts/local-runtime-package.cjs rebuild-electron-native',
-      'verify:electron-native': 'node ./scripts/local-runtime-package.cjs verify-electron-native',
+      'build:multi-agent': 'npm --workspace @sciforge/multi-agent run build',
+      'build:agent-support': 'npm run build:execution-governance && npm run build:full-trace && npm run build:multi-agent',
       'model-router:start': 'npm --workspace @sciforge/model-router run start',
       'model-router:test': 'npm --workspace @sciforge/model-router run test',
       'plan-gateway:start': 'npm --workspace @sciforge/plan-gateway run start',
@@ -573,5 +507,7 @@ describe('root package workspace contracts', () => {
       'paper-radar:test': 'npm --workspace @sciforge/paper-radar run test',
       'paper-radar:typecheck': 'npm --workspace @sciforge/paper-radar run typecheck'
     })
+    expect(rootPackage.scripts).not.toHaveProperty('build:local-runtime')
+    expect(rootPackage.scripts).not.toHaveProperty('local-runtime:test')
   })
 })

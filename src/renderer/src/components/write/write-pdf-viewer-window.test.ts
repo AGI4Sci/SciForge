@@ -8,11 +8,21 @@ vi.mock('pdfjs-dist/build/pdf.mjs', () => ({
 
 import {
   buildPdfPresentationState,
+  nextPdfScale,
+  normalizePdfScale,
+  PDF_MAX_SCALE,
   pdfPageRenderWindow,
   type WritePdfSelection
 } from './WritePdfViewer'
 
 describe('PDF page render window', () => {
+  it('allows PDF zoom up to 500 percent through every scale path', () => {
+    expect(PDF_MAX_SCALE).toBe(5)
+    expect(normalizePdfScale(8)).toBe(5)
+    expect(nextPdfScale(4.95, 1)).toBe(5)
+    expect(nextPdfScale(5, 1)).toBe(5)
+  })
+
   it('renders only the current page and its two nearest neighbours on each side', () => {
     expect(pdfPageRenderWindow(42, 83)).toEqual([40, 41, 42, 43, 44])
     expect(pdfPageRenderWindow(42, 83)).toHaveLength(5)

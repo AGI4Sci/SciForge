@@ -4,7 +4,7 @@
 
 ### SciForge 是不是另一个大模型？
 
-不是。SciForge 是 GUI、运行时治理和科研 artifact / 证据层；模型通过 Model Router 接入，Agent 执行由 SciForge Runtime、Codex 或 Claude Code 等 runtime 完成。
+不是。SciForge 是 GUI、运行时治理和科研 artifact / 证据层；模型通过 Model Router 接入，Agent 执行由 Codex 或 Claude Code 完成。
 
 ### 为什么不让 Agent 自动做完？
 
@@ -30,7 +30,6 @@ Model Router 的 GUI Base URL 默认要求本机 loopback。把远程 provider �
 
 - [README](../../README.md)：项目价值、能力总览和 showcase 入口。
 - [`docs/agent-runtime-contract.md`](../agent-runtime-contract.md)：runtime-neutral contract。
-- [`docs/local-runtime-config.md`](../local-runtime-config.md)：SciForge Runtime 配置。
 - [`docs/CONTRIBUTING.zh-CN.md`](../CONTRIBUTING.zh-CN.md)：贡献规范。
 - [`docs/DEVELOPMENT.zh-CN.md`](../DEVELOPMENT.zh-CN.md)：分支、PR 和验证流程。
 

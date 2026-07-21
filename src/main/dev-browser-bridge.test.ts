@@ -350,10 +350,10 @@ describe('dev browser bridge server', () => {
 
     const sse = await openSse('/events?clientId=browser-local')
 
-    server.send('runtime:status', { state: 'ready' })
+    server.send('agentRuntime:event', { kind: 'heartbeat' })
     await vi.waitFor(() => {
-      expect(sse.chunks.join('')).toContain('"channel":"runtime:status"')
-      expect(sse.chunks.join('')).toContain('"state":"ready"')
+      expect(sse.chunks.join('')).toContain('"channel":"agentRuntime:event"')
+      expect(sse.chunks.join('')).toContain('"kind":"heartbeat"')
     })
     sse.close()
   })

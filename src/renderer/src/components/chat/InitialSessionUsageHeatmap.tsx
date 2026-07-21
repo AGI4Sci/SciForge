@@ -61,8 +61,8 @@ const MODEL_USAGE_BREAKDOWN_COLORS = {
 } as const
 const EMPTY_DAILY_USAGE_BUCKETS: DailyUsageBucket[] = []
 const DEFAULT_USAGE_RUNTIME_META: UsageRuntimeMeta = {
-  runtimeId: 'sciforge',
-  runtimeLabel: 'SciForge Runtime',
+  runtimeId: 'codex',
+  runtimeLabel: 'Codex',
   modelLabel: ''
 }
 const PENDING_DAILY_USAGE_STATE: DailyUsageState = {
@@ -212,9 +212,9 @@ function usageViewMode(state: DailyUsageState): UsageViewMode {
   return 'empty'
 }
 
-function usageRuntimeLabel(runtimeId: AgentRuntimeId): string {
+export function usageRuntimeLabel(runtimeId: AgentRuntimeId): string {
   if (runtimeId === 'claude') return 'Claude Code'
-  return runtimeId === 'codex' ? 'Codex' : 'SciForge Runtime'
+  return runtimeId === 'codex' ? 'Codex' : 'SciForge Runtime (Unavailable)'
 }
 
 function usageRuntimeMetaFromSettings(settings: AppSettingsV1): UsageRuntimeMeta {
@@ -222,9 +222,7 @@ function usageRuntimeMetaFromSettings(settings: AppSettingsV1): UsageRuntimeMeta
   const runtimeLabel = usageRuntimeLabel(runtimeId)
   const configuredModel = runtimeId === 'claude'
     ? getClaudeRuntimeSettings(settings).model
-    : runtimeId === 'codex'
-      ? getCodexRuntimeSettings(settings).model
-      : settings.agents.sciforge.model
+    : getCodexRuntimeSettings(settings).model
   return {
     runtimeId,
     runtimeLabel,

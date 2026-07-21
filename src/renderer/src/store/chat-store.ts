@@ -126,7 +126,7 @@ export const useChatStore = create<ChatState>((set, get) => {
   workspaceRoot: '',
   workspaceLabel: i18n.t('common:workingDirectory'),
   runtimeConnection: 'idle',
-  activeAgentRuntime: 'sciforge',
+  activeAgentRuntime: 'codex',
   modelAccessMode: null,
   codeWorkspaceRoots: [],
   hiddenCodeWorkspaceRoots: [],

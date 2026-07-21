@@ -14,7 +14,8 @@ import {
   getModelAccessSettings,
   defaultLocalRuntimeSettings,
   defaultSpeechToTextSettings,
-  getCodexRuntimeSettings
+  getCodexRuntimeSettings,
+  type AppSettingsV1
 } from '../shared/app-settings'
 import { DEFAULT_GUI_UPDATE_CHANNEL } from '../shared/gui-update'
 import { JsonSettingsStore } from './settings-store'
@@ -27,7 +28,8 @@ describe('JsonSettingsStore', () => {
     const loaded = await store.load()
 
     expect(loaded.guiUpdate.channel).toBe(DEFAULT_GUI_UPDATE_CHANNEL)
-    expect(loaded.activeAgentRuntime).toBe('sciforge')
+    expect(loaded.activeAgentRuntime).toBe('codex')
+    expect(loaded.agents.sciforge.autoStart).toBe(false)
     expect(getAgentCapabilitySettings(loaded)).toEqual(defaultAgentCapabilitySettings())
     expect(loaded.agents.sciforge.approvalPolicy).toBe(DEFAULT_APPROVAL_POLICY)
     expect(getCodexRuntimeSettings(loaded).codexHome).toBe(DEFAULT_CODEX_DATA_DIR)
@@ -53,6 +55,22 @@ describe('JsonSettingsStore', () => {
     const loaded = await new JsonSettingsStore(userDataDir).load()
 
     expect(getModelAccessSettings(loaded)).toBeUndefined()
+  })
+
+  it.each(['sciforge', 'unknown-runtime'])('migrates persisted %s runtime selection to Codex', async (activeAgentRuntime) => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-'))
+    const settingsPath = join(userDataDir, 'sciforge-settings.json')
+    const initial = await new JsonSettingsStore(userDataDir).load()
+    await writeFile(settingsPath, JSON.stringify({
+      ...initial,
+      activeAgentRuntime
+    }), 'utf8')
+
+    const loaded = await new JsonSettingsStore(userDataDir).load()
+    const persisted = JSON.parse(await readFile(settingsPath, 'utf8')) as AppSettingsV1
+
+    expect(loaded.activeAgentRuntime).toBe('codex')
+    expect(persisted.activeAgentRuntime).toBe('codex')
   })
 
   it('persists an explicit model access selection', async () => {

@@ -42,12 +42,12 @@ Future agents will automate an increasing share of research, but their work must
 | **Scientific enhancement layer** | Extend general-purpose agents with scientific multimodal routing, literature search, Evidence / Project DAGs, controlled plotting, writing, presentation, and rerunnable workflows. |
 | **Long-lived research workspace** | Keep research across sessions, roles, and tools resumable, reviewable, and transferable. |
 
-SciForge does **not reinvent or replace** mature runtimes such as Codex and Claude Code. It works with them: runtimes provide general-purpose agent execution, while SciForge provides scientific objects, research context, human review interfaces, and evidence governance. Choose **Codex, Claude Code, SciForge Runtime, or a custom runtime** for each scenario.
+SciForge does **not reinvent or replace** mature runtimes such as Codex and Claude Code. It works with them: runtimes provide general-purpose agent execution, while SciForge provides scientific objects, research context, human review interfaces, and evidence governance. **Codex is the default runtime; Claude Code can be selected explicitly in Settings.**
 
 ```text
 Research goals and materials
       ↓
-Codex / Claude Code / SciForge Runtime execution
+Codex / Claude Code execution
       ↓
 Scientific search · Multimodal translation · Analysis · Plotting · Writing · Workflows
       ↓
@@ -135,7 +135,7 @@ Download a macOS, Windows, or Linux installer from [GitHub Releases](https://git
 
 ### Run from Source
 
-Requirements: Node.js 20+ and a working model provider. If you choose the Codex or Claude Code runtime, its corresponding CLI must also be installed and authenticated locally.
+Requirements: Node.js 20+ and a locally installed, authenticated Codex (default) or Claude Code CLI.
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
@@ -161,8 +161,8 @@ For complete instructions on installation, first-time setup, runtime selection, 
 | [Usage Wiki](./docs/wiki/README.md) | From installation to your first task, plus common scenarios, configuration, and troubleshooting |
 | [SciForge Paper](./paper/sciforge-report.pdf) | System positioning, architecture, real interfaces, and eight end-to-end showcases |
 | [Development Guide](./docs/DEVELOPMENT.md) | Local development, testing, and builds |
-| [Runtime Contract](./docs/agent-runtime-contract.md) | The unified adaptation boundary for SciForge, Codex, and Claude Code |
-| [Architecture](./docs/local-runtime-architecture.en.md) | Agent runtime, GUI, and service boundaries |
+| [Runtime Contract](./docs/agent-runtime-contract.md) | The unified adaptation boundary for Codex, Claude Code, and the GUI |
+| [Architecture](./DESIGN.md) | Agent runtime, GUI, and service boundaries |
 | [Contribution Guide](./docs/CONTRIBUTING.md) | How to contribute to the project |
 | [Security Policy](./SECURITY.md) | Vulnerability reporting and security information |
 

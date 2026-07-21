@@ -16,13 +16,10 @@ import { APP_PRODUCT_NAME, configureAppIdentity } from './app-identity'
 import {
   applyCodexRuntimePatch,
   applyClaudeRuntimePatch,
-  applyLocalRuntimePatch,
   agentRuntimeSettingsEnvelope,
-  getLocalRuntimeSettings,
   getModelAccessSettings,
   isEvidenceDagEnabled,
   mergeConnectPhoneSettings,
-  mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
   mergeRemoteExecutorSettings,
   mergeAgentCapabilitySettings,
@@ -36,7 +33,6 @@ import {
   normalizeAppBehaviorSettings,
   normalizeKeyboardShortcuts,
   resolveRuntimeModelRouterSettings,
-  resolveLocalRuntimeSettings,
   modelAccessRuntimePolicyChanged,
   resolveModelAccessRuntimePolicy,
   type AgentRuntimeId,
@@ -44,7 +40,6 @@ import {
   type AppSettingsPatch,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { runtimeErrorToError, type RuntimeErrorCode } from '../shared/runtime-error'
 import type { GuiUpdateState } from '../shared/gui-update'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
@@ -57,7 +52,6 @@ import { synchronizeModelAccessSidecar } from './model-access-sidecars'
 import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
 import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
 import {
-  managedLocalRuntimeAction,
   stopDisallowedAgentRuntimes
 } from './model-access-runtime-lifecycle'
 import {
@@ -72,12 +66,6 @@ import {
   paperRadarDbPath,
   paperRadarProfilesPath
 } from './paper-radar-paths'
-import {
-  localRuntimeAdapter,
-  getRuntimeBaseUrlForSettings,
-  runtimeAuthHeaders,
-  localRuntimeHttpRequestViaHost
-} from './runtime/local-runtime-adapter'
 import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   configureEvidenceDagUpdateQueue,
@@ -85,13 +73,11 @@ import {
   syncEvidenceDagUpdateQueue
 } from './runtime/evidence-dag-feed'
 import { EvidenceArtifactLifecycle } from './runtime/evidence-artifact-lifecycle'
-import { createLocalRuntimeAgentRuntimeAdapter } from './runtime/local-runtime-agent-runtime-adapter'
 import { createCodexAgentRuntimeAdapter } from './runtime/codex/codex-agent-runtime-adapter'
 import {
   ClaudeCodeRuntimeService,
   createClaudeCodeAgentRuntimeAdapter
 } from './runtime/claude-code'
-import { waitForRuntimeTurnsIdle } from './runtime/managed-runtime-idle'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
 import { LocalTraceStore } from '@sciforge/full-trace'
 import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-service'
@@ -135,8 +121,6 @@ import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
 import {
-  scheduleMcpSettingsChanged,
-  resolveLocalRuntimeMcpJsonPath,
   syncScheduleMcpConfig,
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
@@ -150,13 +134,11 @@ import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-co
 import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import {
-  imageGenerationMcpSettingsChanged,
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
 import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
-import { syncExternalManagedGuiMcpConfig } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
@@ -171,7 +153,6 @@ import {
   capabilityAgentCallerId,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
-import { CapabilityRuntimeBridge } from './capabilities/runtime-bridge'
 import {
   installCapabilityResourceContentProtocol,
   registerCapabilityResourceContentScheme
@@ -187,7 +168,6 @@ import {
   startFeishuInstallQrcode,
   startWeixinInstallQrcode
 } from './claw-platform-install'
-import { localRuntimeEvents } from './runtime-sse-ipc'
 import {
   CodexRuntimeService,
   type CodexRuntimeEventSink
@@ -199,14 +179,6 @@ import {
   stopWeixinBridgeRuntime
 } from './weixin-bridge-runtime'
 import { webhookUrl } from './remote-channel-runtime-helpers'
-import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
-import {
-  resolveAvailableLocalRuntimePort,
-  setLocalRuntimeCapabilityBridge,
-  setLocalRuntimeUnexpectedExitHandler,
-  type LocalRuntimeUnexpectedExitInfo
-} from './local-runtime-process'
-import { RestartBudget, type LocalRuntimeStatus } from './local-runtime-supervisor'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
 
@@ -391,32 +363,6 @@ function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-function runtimeFailure(code: string, message: string, status = 0, details?: unknown) {
-  return {
-    ok: false as const,
-    status,
-    body: JSON.stringify({ code, message, ...(details !== undefined ? { details } : {}) })
-  }
-}
-
-function resolveModelRouterApiKey(settings: AppSettingsV1): string {
-  if (getModelAccessSettings(settings)?.mode !== 'api') return ''
-  return resolveRuntimeModelRouterSettings(settings).apiKey
-}
-
-function resolveLocalRuntimeApiKey(settings: AppSettingsV1): string {
-  if (!resolveModelAccessRuntimePolicy(settings).sciforge) return ''
-  return resolveModelRouterApiKey(settings)
-}
-
-function runtimeJsonError(code: string, message: string): Error {
-  return runtimeErrorToError({ code: code as RuntimeErrorCode, message })
-}
-
 traceStartup('main module evaluated')
 
 // 在最早的阶段把 app 名称、AppUserModelId 都设好。
@@ -442,15 +388,12 @@ let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
-let capabilityRuntimeBridge: CapabilityRuntimeBridge | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let paperRadarWorkerService: PaperRadarWorkerService | null = null
 let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
-type RuntimeIdleListThreads = NonNullable<Parameters<typeof waitForRuntimeTurnsIdle>[0]['listThreads']>
-let runtimeIdleListThreads: RuntimeIdleListThreads | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
 let tray: Tray | null = null
 let isQuitting = false
@@ -763,16 +706,6 @@ function cancelCodexRuntimePrewarm(): void {
 
 async function reconcileSelectedAgentRuntime(settings: AppSettingsV1): Promise<void> {
   await stopDisallowedAgentRuntimes(settings, {
-    stopSciforge: async () => {
-      stopRuntimeWatchdog()
-      if (!localRuntimeAdapter.isChildRunning()) return
-      await localRuntimeAdapter.stopAndWait()
-      publishRuntimeStatus({
-        state: 'stopped',
-        source: 'model-access-switch',
-        message: 'SciForge Runtime was stopped because it is not the selected API runtime.'
-      })
-    },
     stopClaude: async () => {
       await claudeCodeRuntime?.stop()
     },
@@ -792,7 +725,6 @@ async function stopManagedRuntimesForQuit(): Promise<void> {
 async function stopManagedRuntimes(): Promise<void> {
   if (!managedRuntimesStopPromise) {
     managedRuntimesStopPromise = (async () => {
-      stopRuntimeWatchdog()
       cancelCodexRuntimePrewarm()
       workflowRuntime?.stop()
       scheduleRuntime?.stop()
@@ -809,17 +741,12 @@ async function stopManagedRuntimes(): Promise<void> {
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
-      await localRuntimeAdapter.stopAndWait()
       // Drain model clients before terminating the shared access sidecar so an
       // active request can finish and its tail trace can be persisted.
       await stopModelAccessGatewaySidecar({
         userDataDir: app.getPath('userData'),
         log: (message) => logWarn('model-access-gateway', message)
       })
-      await capabilityRuntimeBridge?.close()
-      capabilityRuntimeBridge = null
-      setLocalRuntimeCapabilityBridge(null)
-      publishRuntimeStatus({ state: 'stopped', source: 'app-shutdown' })
     })().finally(() => {
       managedRuntimesStopPromise = null
     })
@@ -1055,568 +982,6 @@ async function showTurnCompleteNotification(
   }
 }
 
-async function waitForLocalRuntimeHealth(settings: AppSettingsV1, timeoutMs: number): Promise<boolean> {
-  const base = getRuntimeBaseUrlForSettings(settings)
-  const deadline = Date.now() + timeoutMs
-
-  while (Date.now() <= deadline) {
-    try {
-      const remaining = Math.max(1, deadline - Date.now())
-      const res = await fetch(`${base}/health`, {
-        headers: runtimeAuthHeaders(settings),
-        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remaining)))
-      })
-      if (res.ok && isLocalRuntimeHealthResponseBody(await res.text())) return true
-    } catch {
-      /* retry until the deadline */
-    }
-    await sleep(150)
-  }
-
-  return false
-}
-
-async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted || ms <= 0) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-let runtimeEnsurePromise: Promise<void> | null = null
-let runtimeEnsureFingerprint: string | null = null
-let runtimeRestartPromise: Promise<void> | null = null
-let runtimeSettingsApplyPromise: Promise<void> | null = null
-let lastAppliedSettings: AppSettingsV1 | null = null
-
-const RUNTIME_RESTART_MAX_ATTEMPTS = 3
-const RUNTIME_RESTART_BUDGET_RESET_MS = 60_000
-const RUNTIME_WATCHDOG_INTERVAL_MS = 30_000
-const RUNTIME_WATCHDOG_FAILURE_THRESHOLD = 3
-const runtimeRestartBudget = new RestartBudget({
-  windowMs: 60_000,
-  maxRestarts: RUNTIME_RESTART_MAX_ATTEMPTS
-})
-let lastRuntimeStatus: LocalRuntimeStatus | null = null
-let supervisedRestartInFlight = false
-let runtimeWatchdogTimer: NodeJS.Timeout | null = null
-let runtimeWatchdogFailures = 0
-let runtimeWatchdogTickInFlight = false
-let managedLocalRuntimePortOverride: { configuredPort: number; port: number } | null = null
-let runtimeRestartBudgetResetTimer: NodeJS.Timeout | null = null
-
-function publishRuntimeStatus(status: Omit<LocalRuntimeStatus, 'at'>): void {
-  const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.runtime.status')
-  mainPerformanceMonitor.count(`main.runtime.status.${status.state}`)
-  const full: LocalRuntimeStatus = { ...status, at: new Date().toISOString() }
-  lastRuntimeStatus = full
-  logWarn('runtime-status', `${full.state} (${full.source})${full.message ? `: ${full.message}` : ''}`)
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('runtime:status', full)
-  }
-  devBrowserBridgeServer?.send('runtime:status', full)
-  mainPerformanceMonitor.sample('main.runtime.status.send', mainPerformanceMonitor.now() - startedAt, {
-    state: status.state,
-    source: status.source
-  })
-}
-
-function noteRuntimeHealthy(source: string): void {
-  runtimeWatchdogFailures = 0
-  scheduleRuntimeRestartBudgetReset()
-  startRuntimeWatchdog()
-  if (!lastRuntimeStatus || lastRuntimeStatus.state !== 'running') {
-    publishRuntimeStatus({ state: 'running', source })
-  }
-}
-
-function scheduleRuntimeRestartBudgetReset(): void {
-  if (runtimeRestartBudgetResetTimer) return
-  runtimeRestartBudgetResetTimer = setTimeout(() => {
-    runtimeRestartBudgetResetTimer = null
-    runtimeRestartBudget.reset()
-  }, RUNTIME_RESTART_BUDGET_RESET_MS)
-  runtimeRestartBudgetResetTimer.unref()
-}
-
-function clearRuntimeRestartBudgetReset(): void {
-  if (!runtimeRestartBudgetResetTimer) return
-  clearTimeout(runtimeRestartBudgetResetTimer)
-  runtimeRestartBudgetResetTimer = null
-}
-
-function handleUnexpectedLocalRuntimeExit(info: LocalRuntimeUnexpectedExitInfo): void {
-  void superviseLocalRuntimeCrash(info).catch((error: unknown) => {
-    logError('local-runtime-supervisor', 'Supervised local runtime restart crashed.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-}
-
-async function superviseLocalRuntimeCrash(info: LocalRuntimeUnexpectedExitInfo): Promise<void> {
-  if (managedRuntimesStoppedForQuit || isQuitting) return
-  clearRuntimeRestartBudgetReset()
-  const exitLabel = info.signal ? `signal ${info.signal}` : `code ${info.code ?? 'unknown'}`
-  publishRuntimeStatus({
-    state: 'crashed',
-    source: 'supervisor',
-    message: `SciForge Runtime exited unexpectedly (${exitLabel}).`,
-    stderrTail: info.stderrTail
-  })
-  if (supervisedRestartInFlight) return
-  supervisedRestartInFlight = true
-  try {
-    const settings = await store.load()
-    const runtime = getLocalRuntimeSettings(settings)
-    if (!resolveLocalRuntimeApiKey(settings) || !runtime.autoStart) {
-      publishRuntimeStatus({
-        state: 'stopped',
-        source: 'supervisor',
-        message: 'SciForge Runtime exited and automatic restart is unavailable because the API key is missing or auto-start is disabled.'
-      })
-      return
-    }
-
-    let lastError = ''
-    for (;;) {
-      if (managedRuntimesStoppedForQuit || isQuitting) return
-      const verdict = runtimeRestartBudget.note()
-      if (!verdict.allowed) {
-        publishRuntimeStatus({
-          state: 'failed',
-          source: 'supervisor',
-          message: lastError
-            ? `SciForge Runtime keeps crashing; automatic restarts are paused. Last error: ${lastError}`
-            : 'SciForge Runtime keeps crashing; automatic restarts are paused. Check the runtime logs, then retry.',
-          stderrTail: info.stderrTail
-        })
-        return
-      }
-      publishRuntimeStatus({
-        state: 'restarting',
-        source: 'supervisor',
-        attempt: verdict.attempt,
-        maxAttempts: RUNTIME_RESTART_MAX_ATTEMPTS,
-        message: `Restarting SciForge Runtime automatically (attempt ${verdict.attempt}/${RUNTIME_RESTART_MAX_ATTEMPTS}).`
-      })
-      await sleep(verdict.delayMs)
-      try {
-        await ensureRuntime(await store.load())
-        noteRuntimeHealthy('supervisor')
-        return
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error)
-        logWarn('local-runtime-supervisor', `Automatic restart attempt ${verdict.attempt} failed: ${lastError}`)
-      }
-    }
-  } finally {
-    supervisedRestartInFlight = false
-  }
-}
-
-function startRuntimeWatchdog(): void {
-  if (runtimeWatchdogTimer) return
-  const timer = setInterval(() => {
-    void runRuntimeWatchdogTick().catch((error: unknown) => {
-      logWarn('local-runtime-watchdog', 'Watchdog tick failed.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-  }, RUNTIME_WATCHDOG_INTERVAL_MS)
-  timer.unref()
-  runtimeWatchdogTimer = timer
-}
-
-function stopRuntimeWatchdog(): void {
-  if (runtimeWatchdogTimer) {
-    clearInterval(runtimeWatchdogTimer)
-    runtimeWatchdogTimer = null
-  }
-  runtimeWatchdogFailures = 0
-  clearRuntimeRestartBudgetReset()
-}
-
-async function runRuntimeWatchdogTick(): Promise<void> {
-  const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.runtime.watchdog.tick')
-  try {
-    await runtimeWatchdogTick()
-  } finally {
-    mainPerformanceMonitor.sample('main.runtime.watchdog.tick.duration', mainPerformanceMonitor.now() - startedAt)
-  }
-}
-
-async function runtimeWatchdogTick(): Promise<void> {
-  if (runtimeWatchdogTickInFlight) return
-  if (managedRuntimesStoppedForQuit || isQuitting) return
-  if (
-    supervisedRestartInFlight ||
-    runtimeRestartPromise ||
-    runtimeSettingsApplyPromise ||
-    runtimeEnsurePromise
-  ) {
-    return
-  }
-  if (!localRuntimeAdapter.isChildRunning()) return
-
-  runtimeWatchdogTickInFlight = true
-  try {
-    const settings = await store.load()
-    if (!resolveModelAccessRuntimePolicy(settings).sciforge) {
-      stopRuntimeWatchdog()
-      await localRuntimeAdapter.stopAndWait()
-      publishRuntimeStatus({
-        state: 'stopped',
-        source: 'watchdog',
-        message: 'SciForge Runtime was stopped because it is no longer the selected API runtime.'
-      })
-      return
-    }
-    const healthy = await waitForLocalRuntimeHealth(settings, 5_000)
-    if (healthy) {
-      runtimeWatchdogFailures = 0
-      return
-    }
-    runtimeWatchdogFailures += 1
-    logWarn(
-      'local-runtime-watchdog',
-      `SciForge Runtime health probe failed (${runtimeWatchdogFailures}/${RUNTIME_WATCHDOG_FAILURE_THRESHOLD}).`
-    )
-    if (runtimeWatchdogFailures < RUNTIME_WATCHDOG_FAILURE_THRESHOLD) return
-    runtimeWatchdogFailures = 0
-    const verdict = runtimeRestartBudget.note()
-    if (!verdict.allowed) {
-      publishRuntimeStatus({
-        state: 'failed',
-        source: 'watchdog',
-        message: 'SciForge Runtime remains unhealthy after repeated automatic restarts; automatic restarts are paused.'
-      })
-      return
-    }
-    publishRuntimeStatus({
-      state: 'restarting',
-      source: 'watchdog',
-      attempt: verdict.attempt,
-      maxAttempts: RUNTIME_RESTART_MAX_ATTEMPTS,
-      message: `SciForge Runtime stopped responding to health checks; restarting it (attempt ${verdict.attempt}/${RUNTIME_RESTART_MAX_ATTEMPTS}).`
-    })
-    try {
-      await restartRuntime(settings)
-      noteRuntimeHealthy('watchdog')
-    } catch (error) {
-      publishRuntimeStatus({
-        state: 'failed',
-        source: 'watchdog',
-        message: `SciForge Runtime is unresponsive and the automatic restart failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      })
-    }
-  } finally {
-    runtimeWatchdogTickInFlight = false
-  }
-}
-
-function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): Promise<void> {
-  // Always update the prev/next anchor so a later task diffs against
-  // the settings that were actually applied last, not against the
-  // original `prev` captured when this call was queued.
-  const anchor = lastAppliedSettings ?? prev
-  lastAppliedSettings = next
-  const startupConfigChanged = runtimeStartupConfigChanged(anchor, next)
-  if (!startupConfigChanged) return Promise.resolve()
-
-  const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
-  const task = previousTask
-    .catch(() => undefined)
-    .then(async () => {
-      const current = lastAppliedSettings ?? next
-      await restartManagedRuntimeForSettingsChange(anchor, current)
-    })
-    .catch((error: unknown) => {
-      logWarn('settings-apply', 'Failed to apply local runtime settings in background', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-    .finally(() => {
-      if (runtimeSettingsApplyPromise === task) {
-        runtimeSettingsApplyPromise = null
-      }
-    })
-
-  runtimeSettingsApplyPromise = task
-  return task
-}
-
-function queueRuntimeMcpConfigApply(settings: AppSettingsV1): Promise<void> {
-  lastAppliedSettings = settings
-
-  const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
-  const task = previousTask
-    .catch(() => undefined)
-    .then(async () => {
-      const current = lastAppliedSettings ?? settings
-      await restartManagedRuntimeForMcpConfigChange(current)
-    })
-    .catch((error: unknown) => {
-      logWarn('mcp-config', 'Failed to apply local runtime MCP config change in background', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-    .finally(() => {
-      if (runtimeSettingsApplyPromise === task) {
-        runtimeSettingsApplyPromise = null
-      }
-    })
-
-  runtimeSettingsApplyPromise = task
-  return task
-}
-
-async function waitForQueuedRuntimeSettingsApply(): Promise<void> {
-  if (!runtimeSettingsApplyPromise) return
-  await runtimeSettingsApplyPromise
-}
-
-/**
- * Build a stable fingerprint of the settings that affect the
- * local runtime so that `ensureRuntime` can debounce on real
- * state instead of on a single in-flight promise. Without this,
- * a fresh call that arrives while a failing ensure is still pending
- * would re-throw the old error.
- */
-function runtimeFingerprint(settings: AppSettingsV1): string {
-  return stableSettingsStringify({
-    runtime: resolveLocalRuntimeSettings(settings),
-    access: resolveModelAccessRuntimePolicy(settings)
-  })
-}
-
-async function ensureRuntime(settings: AppSettingsV1): Promise<void> {
-  const restart = runtimeRestartPromise
-  if (restart) {
-    try {
-      await restart
-      return
-    } catch {
-      /* fall through to a normal ensure so callers see the latest state */
-    }
-  }
-  const fingerprint = runtimeFingerprint(settings)
-  const pending = runtimeEnsurePromise
-  const pendingFingerprint = runtimeEnsureFingerprint
-  if (pending) {
-    // Wait for the in-flight ensure, then re-evaluate against the
-    // fingerprint so callers don't inherit a stale result.
-    let pendingSucceeded = true
-    try {
-      await pending
-    } catch {
-      pendingSucceeded = false
-      /* fall through to retry with the current settings */
-    }
-    if (pendingSucceeded && pendingFingerprint === fingerprint) return
-  }
-  const task = ensureRuntimeOnce(settings)
-  runtimeEnsurePromise = task.finally(() => {
-    if (runtimeEnsurePromise === task) {
-      runtimeEnsurePromise = null
-      runtimeEnsureFingerprint = null
-    }
-  })
-  runtimeEnsureFingerprint = fingerprint
-  try {
-    return await task
-  } finally {
-    /* cleanup runs via the .finally above */
-  }
-}
-
-async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<void> {
-  await waitForQueuedRuntimeSettingsApply()
-  await ensureLocalRuntime(settings)
-}
-
-function syncSettingsObject(target: AppSettingsV1, source: AppSettingsV1): void {
-  Object.assign(target, source)
-}
-
-function settingsWithLocalRuntimePort(settings: AppSettingsV1, port: number): AppSettingsV1 {
-  return {
-    ...settings,
-    agents: {
-      ...settings.agents,
-      sciforge: {
-        ...settings.agents.sciforge,
-        port
-      }
-    }
-  }
-}
-
-function applyManagedLocalRuntimePortOverride(settings: AppSettingsV1): AppSettingsV1 {
-  const override = managedLocalRuntimePortOverride
-  if (!override) return settings
-  const runtime = getLocalRuntimeSettings(settings)
-  if (runtime.port === override.port) return settings
-  if (runtime.port !== override.configuredPort) {
-    managedLocalRuntimePortOverride = null
-    return settings
-  }
-  const next = settingsWithLocalRuntimePort(settings, override.port)
-  syncSettingsObject(settings, next)
-  return settings
-}
-
-async function resolveManagedLocalRuntimeLaunchSettings(
-  settings: AppSettingsV1,
-  source: string
-): Promise<AppSettingsV1> {
-  const runtime = getLocalRuntimeSettings(settings)
-  const resolved = await resolveAvailableLocalRuntimePort(runtime.port)
-  if (!resolved.changed) {
-    if (managedLocalRuntimePortOverride?.configuredPort === runtime.port) {
-      managedLocalRuntimePortOverride = null
-    }
-    return settings
-  }
-
-  managedLocalRuntimePortOverride = { configuredPort: runtime.port, port: resolved.port }
-  const next = settingsWithLocalRuntimePort(settings, resolved.port)
-  syncSettingsObject(settings, next)
-  const message = `SciForge Runtime port ${runtime.port} is unavailable; using ${resolved.port} instead.`
-  logWarn(source, message, {
-    previousPort: runtime.port,
-    port: resolved.port,
-    reason: resolved.message
-  })
-  publishRuntimeStatus({
-    state: source === 'runtime-start' ? 'starting' : 'restarting',
-    source,
-    message
-  })
-  return settings
-}
-
-async function ensureLocalRuntime(settings: AppSettingsV1): Promise<void> {
-  settings = applyManagedLocalRuntimePortOverride(settings)
-  const runtime = getLocalRuntimeSettings(settings)
-  if (!resolveModelAccessRuntimePolicy(settings).sciforge) {
-    throw runtimeJsonError(
-      'runtime_unavailable',
-      'SciForge Runtime requires API model access and must be the selected Agent runtime.'
-    )
-  }
-  const hasApiKey = Boolean(resolveLocalRuntimeApiKey(settings))
-
-  const healthy = await waitForLocalRuntimeHealth(settings, 2_000)
-  if (healthy) {
-    noteRuntimeHealthy('ensure')
-    return
-  }
-
-  if (!hasApiKey) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'Model Router runtime API key is required before the GUI can start SciForge Runtime.'
-    )
-  }
-  if (!runtime.autoStart) {
-    throw runtimeJsonError(
-      'runtime_offline',
-      'SciForge Runtime is offline. Enable automatic startup in Settings, or start the configured runtime service manually.'
-    )
-  }
-
-  publishRuntimeStatus({ state: 'starting', source: 'ensure' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'runtime-start')
-    const adapter = localRuntimeAdapter
-    await adapter.ensureRunning(launchSettings)
-    const started = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!started) {
-      throw runtimeJsonError(
-        'runtime_unhealthy',
-        'SciForge Runtime did not become healthy after launch.'
-      )
-    }
-
-    noteRuntimeHealthy('ensure')
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.error('[sciforge] failed to start local runtime:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'ensure',
-      message: `SciForge Runtime failed to start: ${message}`
-    })
-    throw e
-  }
-}
-
-async function restartRuntime(settings: AppSettingsV1): Promise<void> {
-  if (runtimeRestartPromise) return runtimeRestartPromise
-  const task = restartRuntimeOnce(settings)
-    .finally(() => {
-      if (runtimeRestartPromise === task) {
-        runtimeRestartPromise = null
-      }
-    })
-  runtimeRestartPromise = task
-  runtimeEnsurePromise = null
-  runtimeEnsureFingerprint = null
-  return task
-}
-
-async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
-  await waitForQueuedRuntimeSettingsApply()
-  const runtime = getLocalRuntimeSettings(settings)
-
-  if (!resolveLocalRuntimeApiKey(settings)) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'Model Router runtime API key is required before the GUI can start SciForge Runtime.'
-    )
-  }
-  if (!runtime.autoStart) {
-    throw runtimeJsonError(
-      'runtime_offline',
-      'SciForge Runtime is offline. Enable automatic startup in Settings, or start the configured runtime service manually.'
-    )
-  }
-
-  const adapter = localRuntimeAdapter
-  await adapter.stopAndWait()
-  const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'runtime-restart')
-
-  try {
-    await adapter.ensureRunning(launchSettings)
-  } catch (e) {
-    console.error('[sciforge] failed to restart local runtime:', e)
-    throw e
-  }
-
-  const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-  if (!healthy) {
-    throw runtimeJsonError(
-      'runtime_unhealthy',
-      'SciForge Runtime did not become healthy after restart.'
-    )
-  }
-
-  noteRuntimeHealthy('restart')
-}
-
 function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   traceStartup('createWindow:start')
   const preloadPath = resolvePreloadPath()
@@ -1673,170 +1038,12 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   })
   mainWindow.webContents.once('did-finish-load', () => {
     traceStartup('window:did-finish-load')
-    if (lastRuntimeStatus && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('runtime:status', lastRuntimeStatus)
-    }
     showWindow()
   })
   setTimeout(() => {
     traceStartup('window:fallback-show-timeout')
     showWindow()
   }, 1500)
-}
-
-/**
- * Stable equality for the local runtime settings. Most fields are flat,
- * but GUI-managed capability options can be nested, so compare values
- * structurally while still surviving future field additions.
- */
-function localRuntimeConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  const a = resolveLocalRuntimeSettings(prev)
-  const b = resolveLocalRuntimeSettings(next)
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as Array<keyof typeof a>)
-  for (const key of keys) {
-    if (!stableSettingsValueEqual(a[key], b[key])) return true
-  }
-  return false
-}
-
-function stableSettingsValueEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  return stableSettingsStringify(a) === stableSettingsStringify(b)
-}
-
-function stableSettingsStringify(value: unknown): string {
-  return JSON.stringify(canonicalSettingsValue(value))
-}
-
-function canonicalSettingsValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalSettingsValue)
-  if (!value || typeof value !== 'object') return value
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    out[key] = canonicalSettingsValue((value as Record<string, unknown>)[key])
-  }
-  return out
-}
-
-function runtimeStartupConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  return (
-    modelAccessRuntimePolicyChanged(prev, next) ||
-    localRuntimeConfigChanged(prev, next) ||
-    scheduleMcpSettingsChanged(prev, next) ||
-    imageGenerationMcpSettingsChanged(prev, next)
-  )
-}
-
-async function restartManagedRuntimeForSettingsChange(
-  prev: AppSettingsV1,
-  next: AppSettingsV1
-): Promise<void> {
-  const configurationChanged = runtimeStartupConfigChanged(prev, next)
-  if (!configurationChanged) return
-  const adapter = localRuntimeAdapter
-  const wasRunning = adapter.isChildRunning()
-  const action = managedLocalRuntimeAction(next, {
-    running: wasRunning,
-    configurationChanged,
-    hasApiKey: Boolean(resolveModelRouterApiKey(next))
-  })
-  if (action === 'none') return
-  if (action === 'stop') {
-    stopRuntimeWatchdog()
-    await adapter.stopAndWait()
-    publishRuntimeStatus({
-      state: 'stopped',
-      source: 'settings-apply',
-      message: 'SciForge Runtime was stopped because API access or the SciForge Agent runtime is no longer selected.'
-    })
-    return
-  }
-
-  await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
-  await adapter.stopAndWait()
-
-  publishRuntimeStatus({ state: 'restarting', source: 'settings-apply' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(next, 'settings-apply')
-    await adapter.ensureRunning(launchSettings)
-    const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!healthy) {
-      throw new Error('SciForge Runtime did not become healthy after the settings change')
-    }
-    noteRuntimeHealthy('settings-apply')
-    publishRuntimeStatus({ state: 'running', source: 'settings-apply' })
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[sciforge] local runtime restart failed after settings change:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'settings-apply',
-      message: `SciForge Runtime failed to restart after the settings change: ${message}`
-    })
-  }
-}
-
-async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1): Promise<void> {
-  const adapter = localRuntimeAdapter
-  const wasRunning = adapter.isChildRunning()
-  const action = managedLocalRuntimeAction(settings, {
-    running: wasRunning,
-    configurationChanged: true,
-    hasApiKey: Boolean(resolveModelRouterApiKey(settings))
-  })
-  if (action === 'none') return
-  if (action === 'stop') {
-    stopRuntimeWatchdog()
-    await adapter.stopAndWait()
-    publishRuntimeStatus({
-      state: 'stopped',
-      source: 'mcp-config',
-      message: 'SciForge Runtime remained stopped because API access or the SciForge Agent runtime is not selected.'
-    })
-    return
-  }
-
-  await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
-  await adapter.stopAndWait()
-
-  publishRuntimeStatus({ state: 'restarting', source: 'mcp-config' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'mcp-config')
-    await adapter.ensureRunning(launchSettings)
-    const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!healthy) {
-      throw new Error('SciForge Runtime did not become healthy after the MCP config change')
-    }
-    noteRuntimeHealthy('mcp-config')
-    publishRuntimeStatus({ state: 'running', source: 'mcp-config' })
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[sciforge] local runtime restart failed after MCP config change:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'mcp-config',
-      message: `SciForge Runtime failed to restart after the MCP config change: ${message}`
-    })
-  }
-}
-
-async function waitForManagedRuntimeReadyBeforeStop(
-  settings: AppSettingsV1,
-  source: string
-): Promise<void> {
-  const healthy = await waitForLocalRuntimeHealth(settings, 20_000)
-  if (!healthy) {
-    logWarn(source, 'SciForge Runtime did not become healthy before a managed restart; stopping it anyway')
-    return
-  }
-  const idle = await waitForRuntimeTurnsIdle({
-    listThreads: runtimeIdleListThreads ?? undefined
-  })
-  if (idle === 'timeout') {
-    logWarn(source, 'SciForge Runtime still has running turns after waiting; stopping it anyway')
-  } else if (idle === 'unavailable') {
-    logWarn(source, 'Could not verify SciForge Runtime turn idleness before a managed restart; stopping it anyway')
-  }
 }
 
 app.whenReady().then(async () => {
@@ -1861,7 +1068,6 @@ app.whenReady().then(async () => {
   traceStartup('settings load:start')
   const initial = await store.load()
   traceStartup('settings load:done')
-  setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
   syncLoginItemSettings(initial)
   syncTray(initial)
@@ -1874,10 +1080,6 @@ app.whenReady().then(async () => {
   await syncScheduleMcpConfig(initial, getScheduleMcpLaunchConfig()).catch((error) => {
     console.error('[schedule-mcp] failed to sync config on startup:', error)
   })
-  await syncExternalManagedGuiMcpConfig().catch((error) => {
-    console.error('[managed-gui-mcp] failed to clean external SciForge MCP config on startup:', error)
-  })
-
   logDir = resolveLogDirectory()
   configureLogger({
     dir: logDir,
@@ -1971,16 +1173,6 @@ app.whenReady().then(async () => {
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
     })
   })
-  capabilityRuntimeBridge = new CapabilityRuntimeBridge({
-    rootDir: join(app.getPath('userData'), 'capability-runtime-bridge'),
-    surface: capabilityAgentTools,
-    capabilityIds: () => capabilityBroker.registry.discover({
-      audience: 'agent',
-      callerId: 'sciforge-runtime:catalog'
-    }).map((descriptor) => descriptor.id)
-  })
-  await capabilityRuntimeBridge.start()
-  setLocalRuntimeCapabilityBridge(capabilityRuntimeBridge.launchConfig())
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({
@@ -1990,11 +1182,6 @@ app.whenReady().then(async () => {
       return Boolean(definition?.descriptor.audiences.includes(audience))
     },
     adapters: [
-      createLocalRuntimeAgentRuntimeAdapter({
-        request: async (settings, pathAndQuery, init) =>
-          localRuntimeHttpRequestViaHost(settings, pathAndQuery, init, ensureRuntime),
-        events: localRuntimeEvents
-      }),
       createCodexAgentRuntimeAdapter(getCodexRuntime()),
       createClaudeCodeAgentRuntimeAdapter(getClaudeCodeRuntime())
     ],
@@ -2019,7 +1206,7 @@ app.whenReady().then(async () => {
     maxAttempts: 5,
     canRunBackground: () => !agentRuntimeHost.hasActiveTurns(),
     resolveProjectContext: async ({ runtimeId, threadId }) => {
-      if (runtimeId !== 'sciforge' && runtimeId !== 'codex' && runtimeId !== 'claude') return undefined
+      if (runtimeId !== 'codex' && runtimeId !== 'claude') return undefined
       const detailWorkspace = await agentRuntimeHost.readThread({
         runtimeId,
         threadId
@@ -2075,8 +1262,6 @@ app.whenReady().then(async () => {
       })
     })
   }
-  runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
-
   workflowRuntime = createWorkflowRuntime({
     store,
     agentRuntime: agentRuntimeHost,
@@ -2230,7 +1415,7 @@ app.whenReady().then(async () => {
     } = partial
     const next = normalizeAppSettings({
       ...applyClaudeRuntimePatch(
-        applyCodexRuntimePatch(applyLocalRuntimePatch(prev, agentsPatch?.sciforge), agentsPatch?.codex),
+        applyCodexRuntimePatch(prev, agentsPatch?.codex),
         agentsPatch?.claude
       ),
       ...restPatch,
@@ -2267,9 +1452,6 @@ app.whenReady().then(async () => {
     await syncScheduleMcpConfig(saved, getScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[schedule-mcp] failed to sync config after settings change:', error)
     })
-    await syncExternalManagedGuiMcpConfig().catch((error) => {
-      console.error('[managed-gui-mcp] failed to clean external SciForge MCP config after settings change:', error)
-    })
     if (prev.guiUpdate.channel !== saved.guiUpdate.channel && guiUpdaterModulePromise) {
       void guiUpdaterModulePromise.then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
     }
@@ -2277,7 +1459,6 @@ app.whenReady().then(async () => {
     if (runtimePolicyChanged) {
       await reconcileSelectedAgentRuntime(saved)
     }
-    await queueRuntimeSettingsApply(prev, saved)
     if (isEvidenceDagEnabled(prev) !== isEvidenceDagEnabled(saved)) {
       await syncEvidenceDagUpdateQueue(isEvidenceDagEnabled(saved))
       if (isEvidenceDagEnabled(saved)) {
@@ -2382,13 +1563,8 @@ app.whenReady().then(async () => {
     pollFeishuInstall,
     startWeixinInstallQrcode,
     pollWeixinInstall,
-    resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
     getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
-    onRuntimeMcpConfigWritten: async () => {
-      const settings = await store.load()
-      await queueRuntimeMcpConfigApply(settings)
-    },
     showTurnCompleteNotification,
     getAppVersion: () => app.getVersion(),
     readGuiUpdateState,
@@ -2457,14 +1633,6 @@ app.whenReady().then(async () => {
     console.warn('[sciforge] prune logs:', err)
   })
 
-  if (resolveLocalRuntimeApiKey(initial)) {
-    setTimeout(() => {
-      void localRuntimeAdapter.resolveExecutable(initial).catch((err) => {
-        console.warn('[sciforge] prewarm local runtime binary:', err)
-      })
-    }, 1500)
-  }
-
   app.on('second-instance', () => {
     revealMainWindow()
   })
@@ -2482,7 +1650,7 @@ app.whenReady().then(async () => {
 
 app.on('window-all-closed', () => {
   void stopManagedRuntimes().catch((error) => {
-    console.warn('[sciforge] failed to stop local runtime:', error)
+    console.warn('[sciforge] failed to stop managed runtimes:', error)
   })
   if (process.platform !== 'darwin') {
     app.quit()
@@ -2506,7 +1674,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   void stopManagedRuntimesForQuit()
     .catch((error) => {
-      console.warn('[sciforge] failed to stop local runtime:', error)
+      console.warn('[sciforge] failed to stop managed runtimes:', error)
       managedRuntimesStoppedForQuit = true
     })
     .finally(() => {

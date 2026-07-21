@@ -29,6 +29,12 @@ function task(id: string, patch: Partial<ScheduledTaskV1> = {}): ScheduledTaskV1
 }
 
 describe('ScheduleTasksView helpers', () => {
+  it('creates Codex tasks by default and rejects legacy runtime defaults', () => {
+    expect(newScheduledTask('/tmp/workspace').runtimeId).toBe('codex')
+    expect(newScheduledTask('/tmp/workspace', { runtimeId: 'sciforge' }).runtimeId).toBe('codex')
+    expect(newScheduledTask('/tmp/workspace', { runtimeId: 'claude' }).runtimeId).toBe('claude')
+  })
+
   it('validates task form drafts', () => {
     const now = new Date('2026-06-02T00:00:00.000Z')
 

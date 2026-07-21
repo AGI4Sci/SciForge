@@ -43,7 +43,7 @@ SciForge 的一个完整回合通常是：**提出问题 → 规划 → 采集�
 - 把搜索、清洗、分析、人工审批和输出拆成可观察节点；每个节点保留状态与结果。
 - 计划触发、手动触发和 webhook 触发共享同一 workflow 数据结构。
 - 长任务使用 Plan、side conversation 或 child agents 分解；每次恢复时先查看已有证据和未完成 Todo。
-- Connect phone / Schedule 适合提醒与人工值守。当前非 SciForge Runtime 的后台 runtime 路径可能 fail closed，生产使用前请先做一次手动冒烟。
+- Connect phone / Schedule 适合提醒与人工值守。后台任务使用 Codex 或 Claude Code；生产使用前请先做一次手动冒烟。
 
 ## 产物验收清单
 

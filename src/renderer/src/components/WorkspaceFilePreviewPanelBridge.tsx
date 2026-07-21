@@ -47,6 +47,8 @@ const BiologyRoomPanelBridge = lazy(() =>
   import('./BiologyRoomPanelBridge').then((module) => ({ default: module.BiologyRoomPanelBridge }))
 )
 
+const WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS = 80
+
 export type WorkspaceFilePreviewPanelBridgeRoute =
   | {
       kind: 'biology-room'
@@ -375,6 +377,7 @@ function WorkspacePreviewShellBody({
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const observeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const presentationOwnerKey = `${context.state.session?.id ?? ''}:${target?.path ?? ''}`
   const [presentationSnapshot, setPresentationSnapshot] = useState<{
     ownerKey: string
@@ -457,7 +460,11 @@ function WorkspacePreviewShellBody({
       if (resourceRef && payload.event.resourceRef !== resourceRef) return
       const sessionId = context.state.session?.id
       if (!sessionId) return
-      void context.host.observe(sessionId)
+      if (observeTimerRef.current !== null) window.clearTimeout(observeTimerRef.current)
+      observeTimerRef.current = window.setTimeout(() => {
+        observeTimerRef.current = null
+        void context.host.observe(sessionId)
+      }, WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS)
     })
 
     void capabilities.subscribe(capabilityWorkspaceRoot)
@@ -473,6 +480,10 @@ function WorkspacePreviewShellBody({
     return () => {
       active = false
       offEvent()
+      if (observeTimerRef.current !== null) {
+        window.clearTimeout(observeTimerRef.current)
+        observeTimerRef.current = null
+      }
       if (subscriptionId) void capabilities.unsubscribe(subscriptionId)
     }
   }, [capabilityWorkspaceRoot, context.host, context.state.capability?.resourceRef, context.state.session?.id])

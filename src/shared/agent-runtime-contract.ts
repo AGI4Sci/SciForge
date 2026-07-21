@@ -524,11 +524,31 @@ export type AgentRuntimeThreadSidebarProbe = {
   text: string | null
 }
 
+export type AgentRuntimeExecutionEffectClass =
+  | 'read'
+  | 'command_execution'
+  | 'local_write'
+  | 'external_mutation'
+  | 'async_job'
+  | 'child_agent'
+  | 'other'
+
+export type AgentRuntimeExecutionIntent = {
+  mode: 'answer' | 'inspect' | 'execute'
+  requirements?: Array<{
+    id?: string
+    effectClass?: AgentRuntimeExecutionEffectClass
+    toolNames?: string[]
+    completion?: 'terminal' | 'success'
+  }>
+}
+
 export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
   clientDirectiveId?: string
+  executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>
   workspace?: string
   mode?: string
@@ -571,6 +591,7 @@ export type AgentRuntimeTurnSteerInput = {
   turnId: string
   text: string
   clientDirectiveId?: string
+  executionIntent?: AgentRuntimeExecutionIntent
 }
 
 export type AgentRuntimeUsage = {
@@ -919,6 +940,7 @@ export type AgentRuntimeItem = {
   summary?: string
   status?: 'pending' | 'running' | 'success' | 'error' | 'completed' | 'failed' | 'aborted'
   toolKind?: AgentRuntimeToolKind
+  effects?: AgentRuntimeExecutionEffectClass[]
   detail?: string
   meta?: Record<string, unknown>
   createdAt?: string
@@ -976,6 +998,7 @@ type AgentRuntimeToolEventBase = AgentRuntimeBaseEvent & {
   kind: 'tool_event'
   itemId: string
   toolKind?: AgentRuntimeToolKind
+  effects?: AgentRuntimeExecutionEffectClass[]
   callId?: string
   toolName?: string
   phase?: AgentRuntimeToolExecutionPhase

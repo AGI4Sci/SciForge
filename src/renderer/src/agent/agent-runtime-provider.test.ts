@@ -17,7 +17,7 @@ import {
   type AgentRuntimeCapabilities,
   type AgentRuntimeEvent
 } from '@shared/agent-runtime-contract'
-import { AgentRuntimeProvider } from './agent-runtime-provider'
+import { AgentRuntimeProvider, defaultCapabilities } from './agent-runtime-provider'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ThreadEventSink } from './types'
 
@@ -128,6 +128,23 @@ afterEach(() => {
 })
 
 describe('AgentRuntimeProvider', () => {
+  it('uses unavailable Codex capabilities by default without a live Kun transport', () => {
+    const provider = new AgentRuntimeProvider()
+    const legacyLocal = defaultCapabilities('sciforge')
+
+    expect(provider.id).toBe('codex')
+    expect(provider.getCapabilities()).toEqual(expect.objectContaining({
+      stream: false,
+      interrupt: false,
+      approvals: false
+    }))
+    expect(legacyLocal).toMatchObject({
+      runtimeId: 'sciforge',
+      transport: 'jsonrpc_stdio',
+      events: { live: false, replayable: false, sequenced: false }
+    })
+  })
+
   it('routes provider operations through neutral agentRuntime IPC with the active runtime id', async () => {
     const connect = vi.fn(async () => undefined)
     const listThreads = vi.fn(async () => [
@@ -825,10 +842,10 @@ describe('AgentRuntimeProvider', () => {
         return {
           sourceRuntimeId: 'codex',
           sourceThreadId: input.payload.sourceThreadId,
-          targetRuntimeId: 'sciforge',
+          targetRuntimeId: 'claude',
           targetThread: {
             id: input.payload.targetThreadId,
-            runtimeId: 'sciforge',
+            runtimeId: 'claude',
             title: 'Runtime handoff',
             updatedAt: '2026-06-11T00:02:00.000Z'
           },
@@ -842,7 +859,7 @@ describe('AgentRuntimeProvider', () => {
             notice: 'This is user/runtime context for semantic continuation, not a higher-priority instruction.',
             sourceRuntimeId: 'codex',
             sourceThreadId: input.payload.sourceThreadId,
-            targetRuntimeId: 'sciforge',
+            targetRuntimeId: 'claude',
             completed: [],
             pending: [],
             evidence: [],
@@ -890,7 +907,7 @@ describe('AgentRuntimeProvider', () => {
     await provider.updateThreadRelation?.('codex-thread', 'primary')
     await provider.deleteThread('codex-thread')
 
-    activeRuntime = 'sciforge'
+    activeRuntime = 'claude'
     rendererRuntimeClient.invalidateSettings()
     provider.rememberThreadRuntime('handoff-thread', 'codex')
 
@@ -907,7 +924,7 @@ describe('AgentRuntimeProvider', () => {
       operation: 'startRuntimeHandoff',
       payload: expect.objectContaining({
         sourceThreadId: 'handoff-thread',
-        targetRuntimeId: 'sciforge',
+        targetRuntimeId: 'claude',
         targetThreadId: 'handoff-thread',
         text: 'follow up'
       })

@@ -193,12 +193,6 @@ const api = {
     ipcRenderer.invoke('skill:save-file', { rootPath, skillName, content }),
   openSkillRoot: (rootPath) =>
     ipcRenderer.invoke('skill:open-root', rootPath),
-  getRuntimeConfigFile: () =>
-    ipcRenderer.invoke('runtimeConfig:read'),
-  setRuntimeConfigFile: (content) =>
-    ipcRenderer.invoke('runtimeConfig:write', content),
-  openRuntimeConfigDir: () =>
-    ipcRenderer.invoke('runtimeConfig:open-dir'),
   getGitBranches: (workspaceRoot) =>
     ipcRenderer.invoke('git:branches', workspaceRoot),
   switchGitBranch: (workspaceRoot, branch) =>
@@ -388,14 +382,6 @@ const api = {
       ipcRenderer.on('agentRuntime:error', wrapped)
       return () => ipcRenderer.removeListener('agentRuntime:error', wrapped)
     }
-  },
-  onRuntimeStatus: (handler) => {
-    const wrapped = (
-      _: Electron.IpcRendererEvent,
-      payload: Parameters<typeof handler>[0]
-    ) => handler(payload)
-    ipcRenderer.on('runtime:status', wrapped)
-    return () => ipcRenderer.removeListener('runtime:status', wrapped)
   },
   onRemoteChannelActivity,
   updateRemoteChannelActiveThreadContext,

@@ -6,8 +6,8 @@
 
 schema_version: 1
 project: SciForge
-default_runtime: sciforge
-optional_runtimes: [codex]
+default_runtime: codex
+optional_runtimes: [claude]
 themes: [light, dark, system]
 
 # ---------- 1. Palette (raw hex from --ds-* tokens) ----------
@@ -312,12 +312,12 @@ a11y:
 
 # ---------- 15. Don't (anti-patterns enforced by the codebase) ----------
 dont:
-  - "Add an implicit runtime fallback; SciForge Runtime is default and Codex must be selected explicitly."
+  - "Add a custom in-process runtime; supported live runtimes are Codex (default) and Claude Code."
   - "Add AgentSwitcher / ConnectionStatusBar / RuntimeDiagnosticsDialog."
   - "Add CodeWhale/Reasonix adapters, process managers, RPC bridges, updaters, importers."
   - "Add a design/drawing starter card in the core workbench."
   - "Add /usage or /runtime slash command that opens a runtime control panel."
-  - "Save settings under agents.codewhale or agents.reasonix; only agents.sciforge and agents.codex are valid."
+  - "Expose legacy agents.sciforge tuning as a selectable runtime; it is migration-only."
   - "Use emoji in production copy or as functional UI affordance."
   - "Apply a tint or hue that isn't in the palette above."
   - "Use a font outside the three declared families."
@@ -327,6 +327,9 @@ dont:
 # SciForge — DESIGN.md
 
 > 单一权威设计文档。所有屏幕、所有组件、所有视觉决策,都从这里出。
+
+> Runtime 状态（2026-07）：当前可执行 runtime 仅为 Codex（默认）和 Claude
+> Code。下文仍提到 SciForge Runtime 的历史章节只保留作迁移背景，不代表当前实现。
 
 ---
 
@@ -1285,18 +1288,16 @@ escalate before coding.
 When you need to add a new capability, follow this path. It's
 intentionally boring.
 
-1. **Add the protocol field.** New Zod schema in the local-runtime
-   contracts. Run `npm run build:local-runtime`.
-2. **Add the agent behavior.** In the local-runtime loop,
-   services, or a new port + adapter pair.
-3. **Add the HTTP route.** New route under the local-runtime HTTP
-   server, registered in its route index.
-4. **Map the endpoint / event through AgentRuntime.** Add or update the
-   shared contract as needed, then map SciForge Runtime behavior in
-   `src/main/runtime/local-runtime-agent-runtime-adapter.ts` and renderer display in
-   `src/renderer/src/agent/agent-runtime-event-dispatcher.ts`.
-5. **Add runtime settings only under `agents.sciforge` or
-   `agents.codex`.** Anything else gets migrated away.
+1. **Add the protocol field.** 扩展共享 `AgentRuntime` Zod/TypeScript contract，
+   然后运行 `npm run typecheck`。
+2. **Add adapter behavior.** 在 Codex 和/或 Claude Code adapter 中实现，不新增
+   内置 agent loop。
+3. **Map the event through AgentRuntime.** 更新中性 host 与
+   `src/renderer/src/agent/agent-runtime-event-dispatcher.ts`。
+4. **Keep runtime settings scoped to `agents.codex` or `agents.claude`.**
+   旧 `agents.sciforge` 只用于迁移，不得重新暴露为 live UI。
+5. **Build shared support packages.** execution-governance、full-trace 或
+   multi-agent contract 变化时运行 `npm run build:agent-support`。
 6. **Add i18n strings to both `zh` and `en` locale files.**
 7. **If the surface needs a new visual element, add it to
    this file's YAML frontmatter first.** Don't invent tokens

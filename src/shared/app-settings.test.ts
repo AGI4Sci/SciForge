@@ -295,7 +295,7 @@ describe('local runtime defaults', () => {
     expect(defaultComputerUseSettings()).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -321,7 +321,7 @@ describe('local runtime defaults', () => {
     expect(getComputerUseSettings(normalized)).toEqual({
       enabled: false,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: false,
         claude: true
       }
@@ -346,7 +346,7 @@ describe('local runtime defaults', () => {
     expect(getComputerUseSettings(legacyExperimental)).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -858,7 +858,7 @@ describe('claw settings', () => {
     } as unknown as AppSettingsV1)
 
     const channel = normalized.remoteChannel.channels[0]
-    expect(channel.runtimeId).toBe('sciforge')
+    expect(channel.runtimeId).toBe('codex')
     expect(channel).not.toHaveProperty('threadId')
     expect(channel.agentThreadIds).toEqual({})
     expect(channel.agentThreadIds?.codex).toBeUndefined()
@@ -979,7 +979,7 @@ describe('mergeComputerUseSettings', () => {
     expect(current).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -993,7 +993,7 @@ describe('mergeComputerUseSettings', () => {
     expect(disabled).toEqual({
       enabled: false,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -1009,7 +1009,7 @@ describe('mergeComputerUseSettings', () => {
     })
 
     expect(next.runtimeEnabled).toEqual({
-      sciforge: true,
+      sciforge: false,
       codex: false,
       claude: false
     })
@@ -1203,7 +1203,7 @@ describe('local runtime envelope helpers', () => {
 })
 
 describe('agent runtime settings', () => {
-  it('defaults to SciForge while normalizing a Codex runtime settings slot', () => {
+  it('migrates the legacy SciForge selection to Codex', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: {
@@ -1211,7 +1211,7 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(getActiveAgentRuntime(normalized)).toBe('sciforge')
+    expect(getActiveAgentRuntime(normalized)).toBe('codex')
     expect(getCodexRuntimeSettings(normalized)).toEqual(expect.objectContaining({
       command: 'codex',
       codexHome: DEFAULT_CODEX_DATA_DIR,
@@ -1219,13 +1219,13 @@ describe('agent runtime settings', () => {
     }))
   })
 
-  it('normalizes invalid runtime ids back to SciForge', () => {
+  it('normalizes invalid runtime ids to Codex', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       activeAgentRuntime: 'mystery-runtime'
     } as unknown as AppSettingsV1)
 
-    expect(getActiveAgentRuntime(normalized)).toBe('sciforge')
+    expect(getActiveAgentRuntime(normalized)).toBe('codex')
   })
 
   it('preserves Claude Code as an active runtime with default settings', () => {
@@ -1642,7 +1642,7 @@ describe('schedule settings', () => {
     } as unknown as AppSettingsV1['schedule'])
 
     expect(normalized.tasks[0]).toMatchObject({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       agentThreadIds: {}
     })
     expect(normalized.tasks[0]).not.toHaveProperty('lastThreadId')

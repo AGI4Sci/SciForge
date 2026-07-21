@@ -254,7 +254,7 @@ export function normalizeAgentThreadIds(input: unknown): AgentThreadIdsV1 {
 
 export function normalizeSettingsRuntimeId(value: unknown): AgentRuntimeId {
   if (value === 'sciforge' || value === 'codex' || value === 'claude') return value
-  return 'sciforge'
+  return 'codex'
 }
 
 export function normalizeRemoteChannelConversation(

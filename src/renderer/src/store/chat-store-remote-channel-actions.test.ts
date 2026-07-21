@@ -109,7 +109,7 @@ type TestRemoteChannelProvider = {
 
 function settingsWithChannels(
   channels: RemoteChannelV1[],
-  activeAgentRuntime: AgentRuntimeId = 'sciforge'
+  activeAgentRuntime: AgentRuntimeId = 'codex'
 ): TestSettings {
   return {
     workspaceRoot: '/Users/zxy/project',
@@ -150,7 +150,7 @@ function createRemoteChannelActionHarness(options: {
   vi.stubGlobal('window', { sciforge })
 
   const provider: TestRemoteChannelProvider = {
-    id: 'sciforge' as AgentRuntimeId,
+    id: 'codex' as AgentRuntimeId,
     rememberThreadRuntime: vi.fn<(threadId: string, runtimeId?: AgentRuntimeId) => void>(),
     createThread: vi.fn<(input: { workspace: string; title: string; mode: 'agent' | 'plan' }) => Promise<NormalizedThread>>(
       async () => thread('created-thread', '[Remote channel:Feishu Agent01]')
@@ -305,14 +305,19 @@ describe('chat-store remote channel actions helpers', () => {
     expect(recovered).toBeNull()
   })
 
-  it('writes recovered provider thread ids to the single runtime mapping', () => {
+  it('normalizes removed runtime writes to the Codex mapping', () => {
     const now = '2026-06-01T00:03:00.000Z'
-    const next = channelWithRemoteThreadMapping(channel(), 'kun-thread', now, 'conversation-1', 'sciforge')
+    const next = channelWithRemoteThreadMapping(channel({
+      threadId: '',
+      agentThreadIds: {},
+      conversations: [{ localThreadId: '', agentThreadIds: {} }]
+    }), 'codex-thread', now, 'conversation-1', 'sciforge')
 
     expect(next).not.toHaveProperty('threadId')
+    expect(next.runtimeId).toBe('codex')
     expect(next.conversations[0]).not.toHaveProperty('localThreadId')
-    expect(next.agentThreadIds).toEqual({ sciforge: 'kun-thread' })
-    expect(next.conversations[0]?.agentThreadIds).toEqual({ sciforge: 'kun-thread' })
+    expect(next.agentThreadIds).toEqual({ codex: 'codex-thread' })
+    expect(next.conversations[0]?.agentThreadIds).toEqual({ codex: 'codex-thread' })
   })
 
   it('writes Codex thread mappings without overwriting local runtime mappings', () => {
@@ -342,10 +347,10 @@ describe('chat-store remote channel actions helpers', () => {
     })
   })
 
-  it('uses the current project workspace when adding a new IM channel without an explicit workspace', async () => {
+  it('uses Codex and the current project workspace for a new channel with legacy settings', async () => {
     const baseChannel = channel({ workspaceRoot: '', threadId: '', conversations: [] })
     const { actions, sciforge, getSettings, getState } = createRemoteChannelActionHarness({
-      settings: settingsWithChannels([], 'codex'),
+      settings: settingsWithChannels([], 'sciforge'),
       newRemoteChannel: () => baseChannel
     })
 

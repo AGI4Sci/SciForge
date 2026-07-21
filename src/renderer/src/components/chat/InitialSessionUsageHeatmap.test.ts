@@ -7,7 +7,8 @@ import type { ModelUsageState } from '../../hooks/use-model-usage'
 import {
   InitialSessionUsageHeatmapView,
   USAGE_HEATMAP_CONTRAST_COLORS,
-  usageHeatmapIntensityLevel
+  usageHeatmapIntensityLevel,
+  usageRuntimeLabel
 } from './InitialSessionUsageHeatmap'
 
 function bucket(date: string, totalTokens: number, turns = 1) {
@@ -122,6 +123,11 @@ describe('InitialSessionUsageHeatmap', () => {
     await i18n.changeLanguage('en')
   })
 
+  it('marks the historical SciForge runtime label as unavailable', () => {
+    expect(usageRuntimeLabel('sciforge')).toBe('SciForge Runtime (Unavailable)')
+    expect(usageRuntimeLabel('codex')).toBe('Codex')
+  })
+
   it('renders populated usage with accessible day summaries without starter actions', () => {
     const html = render(state({ usage: usage(), loaded: true }))
 
@@ -131,7 +137,7 @@ describe('InitialSessionUsageHeatmap', () => {
     expect(html).toContain('Models')
     expect(html).toContain('All')
     expect(html).toContain('90d')
-    expect(html).toContain('Daily SciForge Runtime activity pulse')
+    expect(html).toContain('Daily Codex activity pulse')
     expect(html).toContain('Sessions')
     expect(html).toContain('Messages')
     expect(html).toContain('Current streak')

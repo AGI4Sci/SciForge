@@ -33,8 +33,9 @@ import {
 } from './app-settings-claude'
 
 /**
- * Local runtime settings. Mirrors the bundled runtime CLI
- * options. It is the only active local-agent settings object the GUI stores.
+ * Legacy SciForge runtime settings retained so older settings files and
+ * internal tuning readers remain compatible. The runtime is not selected or
+ * started by default.
  */
 export function defaultLocalRuntimeSettings(
   port = DEFAULT_LOCAL_RUNTIME_PORT
@@ -42,7 +43,7 @@ export function defaultLocalRuntimeSettings(
   return {
     binaryPath: '',
     port,
-    autoStart: true,
+    autoStart: false,
     runtimeToken: '',
     dataDir: DEFAULT_LOCAL_RUNTIME_DATA_DIR,
     model: DEFAULT_LOCAL_RUNTIME_MODEL,

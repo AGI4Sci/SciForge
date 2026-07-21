@@ -52,7 +52,7 @@ export function isComputerUseEnabledForRuntime(
 
 function defaultComputerUseRuntimeEnabled(): Record<AgentRuntimeId, boolean> {
   return {
-    sciforge: true,
+    sciforge: false,
     codex: true,
     claude: true
   }
@@ -63,7 +63,9 @@ function normalizeComputerUseRuntimeEnabled(
 ): Record<AgentRuntimeId, boolean> {
   const defaults = defaultComputerUseRuntimeEnabled()
   return {
-    sciforge: input?.sciforge !== false && defaults.sciforge,
+    // Kept in the shape for legacy settings compatibility, but the retired
+    // custom runtime must not be re-enabled by persisted input.
+    sciforge: false,
     codex: input?.codex !== false && defaults.codex,
     claude: input?.claude !== false && defaults.claude
   }

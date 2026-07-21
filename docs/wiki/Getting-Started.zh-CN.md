@@ -30,7 +30,7 @@ npm install --registry=https://registry.npmmirror.com
 1. 打开 **Settings → Model Router**，确认 Router 已启用。
 2. 设置本地 Router 地址（默认 `http://127.0.0.1:3892/v1`）、runtime API key（可选但推荐）和 public model alias（默认 `sciforge-router`）。
 3. 在默认 provider profile 中填写上游模型的 Base URL、API key 和模型名；这些凭据不会写入 Agent runtime 配置。
-4. 在 **Settings → Agents** 保持 `SciForge Runtime`，确认自动启动、端口（默认 `8899`）、sandbox 和审批策略。
+4. 在 **Settings → Agents** 保持默认 `Codex`（或显式选择 Claude Code），确认命令、sandbox 和审批策略。macOS GUI 会自动探测 login shell 与常见安装目录，也可以填写绝对可执行路径。
 5. 选择一个工作目录，在 **Code** 中新建线程，用一个小任务做冒烟测试，例如：
 
    > 阅读当前项目的 package.json，列出启动命令；不要修改文件。

@@ -62,7 +62,7 @@ import {
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 const PDF_MIN_SCALE = 0.65
-const PDF_MAX_SCALE = 2.4
+export const PDF_MAX_SCALE = 5
 const PDF_SCALE_STEP = 0.1
 const DEFAULT_PDF_SCALE = 1.15
 const MAX_SELECTION_FRAGMENT_RECTS = 6000
@@ -602,7 +602,7 @@ function clamp01(value: number): number {
   return clamp(value, 0, 1)
 }
 
-function nextScale(value: number, direction: 1 | -1): number {
+export function nextPdfScale(value: number, direction: 1 | -1): number {
   return stepContentScale(value, direction, {
     min: PDF_MIN_SCALE,
     max: PDF_MAX_SCALE,
@@ -610,7 +610,7 @@ function nextScale(value: number, direction: 1 | -1): number {
   })
 }
 
-function normalizePdfScale(value: number): number {
+export function normalizePdfScale(value: number): number {
   return clampContentScale(value, PDF_MIN_SCALE, PDF_MAX_SCALE)
 }
 
@@ -2223,6 +2223,9 @@ export function WritePdfViewer({
   const onQuoteSelectionRef = useRef(onQuoteSelection)
   const onPresentationStateChangeRef = useRef(onPresentationStateChange)
   const currentPageRef = useRef(Math.max(1, Math.round(restoredInitialPage)))
+  const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null)
+  const preservedReloadViewRef = useRef<{ currentPage: number; scrollTop: number } | null>(null)
+  const handledJumpTargetRef = useRef<WritePdfSelectionPageRect | null>(null)
   const initialPageRef = useRef(initialPage)
   const activeFilePathRef = useRef(filePath)
   const activeViewStateKeyRef = useRef(viewStateKey)
@@ -2245,6 +2248,7 @@ export function WritePdfViewer({
   const [liveSelection, setLiveSelection] = useState(false)
   const rootRef = viewerRef ?? localViewerRef
   const pageCount = pdfDocument?.numPages ?? 0
+  pdfDocumentRef.current = pdfDocument
   currentPageRef.current = currentPage
   initialPageRef.current = initialPage
   const sourceTitle = useMemo(() => relativeToWorkspace(workspaceRoot, filePath), [filePath, workspaceRoot])
@@ -2262,11 +2266,11 @@ export function WritePdfViewer({
   }, [t])
 
   const zoomIn = useCallback((): void => {
-    setScale((value) => nextScale(value, 1))
+    setScale((value) => nextPdfScale(value, 1))
   }, [])
 
   const zoomOut = useCallback((): void => {
-    setScale((value) => nextScale(value, -1))
+    setScale((value) => nextPdfScale(value, -1))
   }, [])
 
   const handleZoomWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>): void => {
@@ -2296,6 +2300,17 @@ export function WritePdfViewer({
 
   useEffect(() => {
     let cancelled = false
+    const currentScrollTop = scrollerRef.current?.scrollTop
+    const reloadingSameDocument = activeFilePathRef.current === filePath &&
+      activeViewStateKeyRef.current === viewStateKey
+    if (pdfDocumentRef.current && currentScrollTop != null) {
+      const currentView = {
+        currentPage: currentPageRef.current,
+        scrollTop: currentScrollTop
+      }
+      rememberRightPanelContextState<RememberedPdfViewState>(activeViewStateKeyRef.current, currentView)
+      preservedReloadViewRef.current = reloadingSameDocument ? currentView : null
+    }
     const rememberedView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
     const pageToRestore = activeFilePathRef.current === filePath
       ? currentPageRef.current
@@ -2370,12 +2385,16 @@ export function WritePdfViewer({
   useEffect(() => {
     if (!pdfDocument) return
     const page = currentPageRef.current
+    const preservedReloadView = preservedReloadViewRef.current
+    preservedReloadViewRef.current = null
     const frame = window.requestAnimationFrame(() => {
-      const rememberedScrollTop = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scrollTop
+      const rememberedScrollTop = preservedReloadView?.scrollTop ??
+        readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scrollTop
       if (rememberedScrollTop != null && scrollerRef.current) {
         scrollerRef.current.scrollTop = rememberedScrollTop
       } else {
-        pageRefs.current.get(page)?.scrollIntoView({ block: 'start' })
+        const restoredPage = preservedReloadView?.currentPage ?? page
+        pageRefs.current.get(restoredPage)?.scrollIntoView({ block: 'start' })
       }
     })
     return () => window.cancelAnimationFrame(frame)
@@ -2975,7 +2994,10 @@ export function WritePdfViewer({
   }, [contextMenu])
 
   useEffect(() => {
-    if (!jumpToRect) return
+    if (!jumpToRect || pageCount <= 0 || handledJumpTargetRef.current === jumpToRect) return
+    // A jump target represents a user navigation request. PDF reloads change pageCount,
+    // but must not replay an already handled request and move the reader's viewport.
+    handledJumpTargetRef.current = jumpToRect
     const page = clamp(Math.round(jumpToRect.page), 1, pageCount || 1)
     setCurrentPage(page)
     setPageInput(String(page))

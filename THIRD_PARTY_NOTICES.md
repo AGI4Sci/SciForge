@@ -1,8 +1,8 @@
 # Third Party Notices
 
-Last updated: 2026-07-02
+Last updated: 2026-07-21
 
-This file records the third-party license and distribution boundary for the current SciForge source tree. It is an engineering compliance index, not legal advice. The exact npm dependency graph is pinned by `package-lock.json`; the separate local runtime graph is pinned by `kun/package-lock.json`.
+This file records the third-party license and distribution boundary for the current SciForge source tree. It is an engineering compliance index, not legal advice. The exact npm dependency graph is pinned by `package-lock.json`.
 
 ## SciForge Source Boundary
 
@@ -14,7 +14,7 @@ Package metadata policy:
 | Scope | Package metadata | Distribution policy |
 | --- | --- | --- |
 | Root desktop app | `private: true`, `license: MIT` | Not published as a public npm package. Source release follows root `LICENSE`. |
-| `kun` local runtime | `private: true`, `license: MIT` | Bundled as project code, not published as a public npm package. |
+| `packages/full-trace` | package-local license field absent | Project-owned workspace package; source release follows root `LICENSE`. |
 | `packages/workers/*` | `license: MIT` | Project-owned worker packages. |
 | `vendor/openclaw-shim` | `private: true`, `license: MIT` | Project-local compatibility shim for peer imports; not an upstream OpenClaw source distribution. |
 
@@ -24,7 +24,7 @@ README and design documentation mention these upstream projects as product or ar
 
 | Project | Current use in SciForge | Audit statement |
 | --- | --- | --- |
-| Reasonix | Cache-first runtime ideas such as stable prompt prefixes, append-only logs, bounded cache discipline, history hygiene, steering, compaction, and cache/usage telemetry. | Reference/inspiration only. Current SciForge Runtime code is independently implemented; no Reasonix source code, tests, fixtures, event contracts, binaries, or assets are copied into this repository. |
+| Reasonix | Historical runtime and cache-design reference retained for provenance. SciForge no longer distributes a custom agent runtime. | Reference/inspiration only. No Reasonix source code, tests, fixtures, event contracts, binaries, or assets are copied into this repository. |
 | OpenHanako | Write-mode interaction ideas such as Markdown live editing, writing-space organization, and selected-text inline agent UX. | Reference/inspiration only. No OpenHanako source code, tests, fixtures, binaries, or assets are copied into this repository. |
 | LobsterAI | Connect phone product-flow ideas such as IM management, QR binding, agent binding, and customizable agent profiles. | Reference/inspiration only. No LobsterAI source code, tests, fixtures, binaries, or assets are copied into this repository. |
 
@@ -42,7 +42,7 @@ Audited reference anchors:
 | Project | Upstream repository | Audited reference revision | License at audited revision | Current license status checked on 2026-07-02 | SciForge boundary |
 | --- | --- | --- | --- | --- | --- |
 | Reasonix | `https://github.com/esengine/DeepSeek-Reasonix` | `v1.15.0` / `484bca854f4e669eaa21716939ad7d5b323b4962` | MIT (`LICENSE`, copyright Reasonix Contributors) | MIT; `main-v2` HEAD checked at `d5ba463964a025ed37e1771a686eaa2ef303f026` | Design reference only. No Reasonix source, tests, fixtures, event contracts, binaries, or assets are copied. |
-| Kun / historical DeepSeek-GUI lineage | `https://github.com/KunAgent/Kun` (local audit checkout: `/Applications/workspace/ailab/research/app/Kun`) | `363fdf566657cd4d60801f62b0b8f3aa8dfbf2fc`, the parent of the relicense commit | MIT (`LICENSE`, copyright xingyu). `package.json` at this revision had no explicit package-license field, so the root `LICENSE` is the controlling evidence for the source tree. | Relicensed at `5472bed3b878854d296851820834145f5fe1a353` to `PolyForm-Noncommercial-1.0.0`; current GitHub license detection reports `Other`. | Historical reference only. SciForge must not treat `5472bed3` or later Kun source/assets as MIT-licensed material. No Kun source, tests, fixtures, binaries, or assets are copied into this repository under the reference-only relationship. |
+| Kun / historical DeepSeek-GUI lineage | `https://github.com/KunAgent/Kun` | `363fdf566657cd4d60801f62b0b8f3aa8dfbf2fc`, the parent of the relicense commit | MIT (`LICENSE`, copyright xingyu). `package.json` at this revision had no explicit package-license field, so the root `LICENSE` is the controlling evidence for that audited source tree. | Relicensed at `5472bed3b878854d296851820834145f5fe1a353` to `PolyForm-Noncommercial-1.0.0`; current GitHub license detection reports `Other`. | Historical lineage record only. SciForge must not treat `5472bed3` or later Kun source/assets as MIT-licensed material. Kun source, tests, fixtures, binaries, and assets are not included in the current SciForge source distribution or packaged application. |
 | OpenHanako | `https://github.com/liliMozi/openhanako` | `v0.36.0` / `92a727959f75e556df5013d37037a5007a5c5e16` | Apache-2.0. The `LICENSE` history begins at this initial open-source release as Apache-2.0; no MIT-to-Apache transition was observed in the upstream `LICENSE` history. | Apache-2.0; current `v0.350.2` checked at `2c3691c31043004e2b72cf3851faed9a8f584658` | Interaction reference only. No OpenHanako source, tests, fixtures, binaries, or assets are copied. |
 | LobsterAI | `https://github.com/netease-youdao/LobsterAI` | `2026.6.30` / `7d02d107fa46d0801c0a2d6b14b4b34c37ac943a` | MIT (`LICENSE`, copyright NetEase Youdao). Initial open-source `LICENSE` commit `3ab5afbc53b6eea8cdbcd9370ca115f5a32fb16f` is also MIT. | MIT | Product-flow reference only. No LobsterAI source, tests, fixtures, binaries, or assets are copied. |
 
@@ -65,6 +65,8 @@ Direct root dependencies recorded in `package-lock.json`:
 | `@jbrowse/react-linear-genome-view2` | `4.3.0` | `MIT` |
 | `@larksuiteoapi/node-sdk` | `^1.64.0` | `MIT` |
 | `@modelcontextprotocol/sdk` | `^1.29.0` | `MIT` |
+| `@napi-rs/canvas` | `^0.1.100` | `MIT` |
+| `@sciforge/full-trace` | `0.1.0` | Package-local license field absent; project source follows root `LICENSE` |
 | `@tencent-weixin/openclaw-weixin` | `2.4.3` | `MIT` |
 | `@tiptap/core` | `3.26.0` | `MIT` |
 | `@tiptap/extension-image` | `3.26.0` | `MIT` |
@@ -78,9 +80,9 @@ Direct root dependencies recorded in `package-lock.json`:
 | `@xterm/addon-web-links` | `^0.12.0` | `MIT` |
 | `@xterm/xterm` | `^6.0.0` | `MIT` |
 | `@xyflow/react` | `^12.11.0` | `MIT` |
-| `better-sqlite3` | `^12.10.0` | `MIT` |
 | `electron-store` | `^10.1.0` | `MIT` |
 | `electron-updater` | `^6.8.3` | `MIT` |
+| `fractional-indexing` | `^3.2.0` | `CC0-1.0` |
 | `html-to-docx` | `^1.8.0` | `MIT` |
 | `i18next` | `^25.4.2` | `MIT` |
 | `jszip` | `^3.10.1` | `(MIT OR GPL-3.0-or-later)` |
@@ -89,13 +91,14 @@ Direct root dependencies recorded in `package-lock.json`:
 | `molstar` | `5.10.1` | `MIT` |
 | `node-pty` | `^1.1.0` | `MIT` |
 | `openclaw` | `file:vendor/openclaw-shim` | `MIT`, project-local shim |
+| `pdf-lib` | `^1.17.1` | `MIT` |
 | `pdfjs-dist` | `5.4.394` | `Apache-2.0` |
+| `proxy-from-env` | `^2.1.0` | `MIT` |
 | `qrcode.react` | `^4.2.0` | `ISC` |
 | `react` | `^19.0.0` | `MIT` |
 | `react-dom` | `^19.0.0` | `MIT` |
 | `react-i18next` | `^15.7.4` | `MIT` |
 | `react-markdown` | `^10.1.0` | `MIT` |
-| `rehype-harden` | `^1.1.8` | `MIT` |
 | `rehype-katex` | `^7.0.1` | `MIT` |
 | `remark-gfm` | `^4.0.1` | `MIT` |
 | `remark-math` | `^6.0.0` | `MIT` |
@@ -104,6 +107,7 @@ Direct root dependencies recorded in `package-lock.json`:
 | `seqviz` | `3.10.22` | `MIT` |
 | `shiki` | `^3.23.0` | `MIT` |
 | `streamdown` | `^2.5.0` | `Apache-2.0` |
+| `tldraw` | `^4.2.0` | `SEE LICENSE IN LICENSE.md` |
 | `unified` | `^11.0.5` | `MIT` |
 | `ws` | `^8.20.1` | `MIT` |
 | `zod` | `^4.4.3` | `MIT` |
@@ -132,7 +136,7 @@ Current source dependencies that may include native code or platform binaries:
 
 | Component | Source | License metadata |
 | --- | --- | --- |
-| `better-sqlite3` | npm dependency | `MIT` |
+| `@napi-rs/canvas` | npm dependency | `MIT` |
 | `node-pty` | npm dependency | `MIT` |
 | Electron/Chromium/Node/V8 | Electron runtime | See Electron and Chromium notices above. |
 
@@ -208,4 +212,3 @@ Before any source or binary release:
 - Confirm or replace all media and brand assets listed above.
 - Confirm Python dependency metadata for any sidecar worker actually distributed.
 - Confirm that no model weights, default model endpoints, or provider credentials are bundled outside the Model Router policy.
-- Re-run the local runtime exact-blob provenance scan against the final source package.

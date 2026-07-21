@@ -17,9 +17,9 @@ type DirectCallHit = {
 }
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const sourceRoots = ['src', 'kun/src', 'packages/workers', 'scripts']
-const guiRuntimeSourceRoots = ['src', 'kun/src']
-const runtimeImageDirectEnvSourceRoots = ['src/main', 'src/renderer', 'kun/src']
+const sourceRoots = ['src', 'packages/workers', 'scripts']
+const guiRuntimeSourceRoots = ['src']
+const runtimeImageDirectEnvSourceRoots = ['src/main', 'src/renderer']
 const sourceExtensions = new Set([
   '.bat',
   '.cjs',
@@ -166,12 +166,6 @@ function scanProductionTextInRoots(sourceRootsToScan: string[], pattern: RegExp)
 }
 
 function isAllowedBoundaryMarker(hit: DirectCallHit): boolean {
-  if (hit.file === 'kun/src/adapters/model/model-error-probe.ts') {
-    return hit.marker === 'DeepSeek API host' && hit.text.includes("host === 'api.deepseek.com'")
-  }
-  if (hit.file === 'kun/src/contracts/model-endpoint-format.ts') {
-    return hit.marker === 'chat completions endpoint' || hit.marker === 'messages endpoint'
-  }
   if (hit.file === 'src/main/zulip-bot-runtime.ts') {
     return hit.marker === 'messages endpoint' && hit.text.includes("'/api/v1/messages'")
   }
@@ -185,7 +179,6 @@ function isAllowedBoundaryMarker(hit: DirectCallHit): boolean {
     return true
   }
   if (
-    hit.file === 'src/main/local-runtime-process.ts' ||
     hit.file === 'src/main/runtime/codex/codex-config.ts' ||
     hit.file === 'src/main/runtime/claude-code/claude-code-config.ts'
   ) {
@@ -210,20 +203,10 @@ function formatHits(hits: DirectCallHit[]): string {
 }
 
 function isAllowedLegacyImageDirectWorkerEnvMarker(hit: DirectCallHit): boolean {
-  if (allowedLegacyImageDirectWorkerEnvFiles.has(hit.file)) return true
-  return (
-    hit.file === 'src/main/local-runtime-process.ts' &&
-    hit.text.includes('LEGACY_DIRECT_WORKER_ENV_PREFIXES')
-  )
+  return allowedLegacyImageDirectWorkerEnvFiles.has(hit.file)
 }
 
 function isAllowedEvidenceDagLegacyLlmEnvMarker(hit: DirectCallHit): boolean {
-  if (
-    hit.file === 'src/main/local-runtime-process.ts' &&
-    hit.text.includes('LEGACY_DIRECT_WORKER_ENV_PREFIXES')
-  ) {
-    return true
-  }
   return allowedEvidenceDagLegacyLlmEnvFiles.has(hit.file)
 }
 
@@ -234,10 +217,7 @@ function isAllowedSciModalityBoundaryMarker(hit: DirectCallHit): boolean {
   ) {
     return true
   }
-  return (
-    hit.file === 'src/main/local-runtime-process.ts' &&
-    hit.text.includes('LEGACY_DIRECT_WORKER_ENV_PREFIXES')
-  )
+  return false
 }
 
 describe('model router API boundary static audit inventory', () => {
@@ -261,10 +241,10 @@ describe('P7/P8 model router API boundary enforcement', () => {
     expect(formatHits(disallowedHits)).toBe('')
   })
 
-  it('keeps ModelRouterModelClient production construction behind the local Model Router runtime factory', () => {
+  it('keeps ModelRouterModelClient construction out of GUI production code', () => {
     const directConstructors = scanProductionText(/\bnew\s+ModelRouterModelClient\b/)
 
-    expect(directConstructors.map((hit) => hit.file)).toEqual(['kun/src/server/runtime-factory.ts'])
+    expect(directConstructors).toEqual([])
   })
 
   it('blocks GUI/runtime direct calls to the sci-modality service endpoint', () => {

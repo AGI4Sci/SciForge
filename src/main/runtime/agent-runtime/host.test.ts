@@ -39,11 +39,9 @@ import {
 } from '../../../shared/agent-runtime-contract'
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
-import { withExecutionIntegrityRequirement } from './execution-integrity-guard'
 import { createAgentRuntimeHost } from './host'
 import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
-import { createLocalRuntimeAgentRuntimeAdapter } from '../local-runtime-agent-runtime-adapter'
 import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from '../../services/runtime-context-ledger-service'
@@ -205,10 +203,6 @@ function fakeAdapter(id: AgentRuntimeId, thread: AgentRuntimeThread): AgentRunti
     }),
     publishSyntheticEvent: vi.fn(async (_ctx, event) => event)
   }
-}
-
-function json(body: unknown, status = 200): { ok: boolean; status: number; body: string } {
-  return { ok: status >= 200 && status < 300, status, body: JSON.stringify(body) }
 }
 
 function deferred<T>(): {
@@ -759,7 +753,11 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread',
       text: 'Run the unit tests.',
-      displayText: 'Run the unit tests.'
+      displayText: 'Run the unit tests.',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [{ effectClass: 'command_execution' }]
+      }
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
@@ -868,7 +866,15 @@ describe('AgentRuntimeHost', () => {
         adapters: [adapter]
       })
 
-      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text: 'Run the unit tests.',
+        executionIntent: {
+          mode: 'execute',
+          requirements: [{ effectClass: 'command_execution' }]
+        }
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
@@ -900,6 +906,7 @@ describe('AgentRuntimeHost', () => {
           itemId: 'call-1',
           callId: 'call-1',
           toolName: 'local_shell',
+          toolKind: 'command_execution',
           status: 'running',
           phase: 'requested',
           factSource: 'model_output',
@@ -913,6 +920,7 @@ describe('AgentRuntimeHost', () => {
           itemId: 'call-1-result',
           callId: 'call-1',
           toolName: 'local_shell',
+          toolKind: 'command_execution',
           status: 'success',
           receipt: createExecutionReceipt({ status: 'success' }),
           phase: 'succeeded',
@@ -932,7 +940,15 @@ describe('AgentRuntimeHost', () => {
         adapters: [adapter]
       })
 
-      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text: 'Run the unit tests.',
+        executionIntent: {
+          mode: 'execute',
+          requirements: [{ effectClass: 'command_execution' }]
+        }
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
@@ -2205,76 +2221,6 @@ describe('AgentRuntimeHost', () => {
       status: 'blocked',
       resumeCount: 0,
       lastFailureReason: 'runtime offline'
-    })
-  })
-
-  it('records local runtime native compaction and goal events in shared context state', async () => {
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        body: JSON.stringify({})
-      })),
-      events: async function* () {
-        yield {
-          kind: 'compaction_completed',
-          threadId: 'local-thread',
-          turnId: 'turn-1',
-          itemId: 'compact-1',
-          summary: 'Runtime compacted summary',
-          replacedTokens: 800,
-          sourceDigest: 'digest-800',
-          digestMarker: '<compact:digest-800>',
-          sourceItemIds: ['item-a', 'item-b'],
-          auto: false
-        }
-        yield {
-          kind: 'goal_updated',
-          threadId: 'local-thread',
-          goal: {
-            threadId: 'local-thread',
-            objective: 'Finish shared context migration',
-            status: 'active',
-            tokensUsed: 20,
-            timeUsedSeconds: 4,
-            createdAt: '2026-06-10T00:00:00.000Z',
-            updatedAt: '2026-06-10T00:00:01.000Z'
-          }
-        }
-      }
-    })
-    const contextState = new RuntimeContextStateService()
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('sciforge'),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of host.subscribeEvents({
-      runtimeId: 'sciforge',
-      threadId: 'local-thread'
-    })) {
-      events.push(event)
-    }
-
-    expect(events.map((event) => event.kind)).toEqual(['compaction_event', 'goal_event'])
-    expect(contextState.get({
-      runtimeId: 'sciforge',
-      threadId: 'local-thread'
-    })).toMatchObject({
-      summary: 'Runtime compacted summary',
-      summarySource: 'runtime',
-      triggerReason: 'replacedTokens=800',
-      replacedTokens: 800,
-      sourceDigest: 'digest-800',
-      digestMarker: '<compact:digest-800>',
-      sourceItemIds: ['item-a', 'item-b'],
-      goalResume: {
-        objective: 'Finish shared context migration',
-        status: 'active',
-        resumeCount: 0
-      }
     })
   })
 
@@ -4671,491 +4617,6 @@ describe('AgentRuntimeHost', () => {
       { settings: expect.objectContaining({ activeAgentRuntime: 'codex' }) },
       query
     )
-  })
-})
-
-describe('createLocalRuntimeAgentRuntimeAdapter', () => {
-  it('uses local runtime /v1 thread endpoints and maps thread snapshots to the neutral contract', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/threads?')) {
-          return json({
-            threads: [{
-              id: 'thr-sciforge',
-              title: 'SciForge thread',
-              workspace: '/tmp/workspace',
-              model: 'deepseek-v4-pro',
-              mode: 'agent',
-              status: 'idle',
-              createdAt: '2026-06-09T00:00:00.000Z',
-              updatedAt: '2026-06-10T00:00:00.000Z'
-            }]
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge' && init.method === 'GET') {
-          return json({
-            id: 'thr-sciforge',
-            title: 'SciForge thread',
-            workspace: '/tmp/workspace',
-            model: 'deepseek-v4-pro',
-            mode: 'agent',
-            status: 'idle',
-            createdAt: '2026-06-09T00:00:00.000Z',
-            updatedAt: '2026-06-10T00:00:00.000Z',
-            latestSeq: 2,
-            turns: [{
-              id: 'turn-1',
-              threadId: 'thr-sciforge',
-              status: 'completed',
-              createdAt: '2026-06-10T00:00:00.000Z',
-              finishedAt: '2026-06-10T00:00:01.000Z',
-              items: [
-                {
-                  id: 'user-1',
-                  kind: 'user_message',
-                  text: 'hello',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:00.000Z'
-                },
-                {
-                  id: 'assistant-1',
-                  kind: 'assistant_text',
-                  text: 'hi',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:01.000Z'
-                },
-                {
-                  id: 'tool-1',
-                  kind: 'tool_result',
-                  toolKind: 'command_execution',
-                  toolName: 'bash',
-                  output: 'ok',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:01.000Z'
-                }
-              ]
-            }]
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge/turns' && init.method === 'POST') {
-          return json({ threadId: 'thr-sciforge', turnId: 'turn-2', userMessageItemId: 'user-2' }, 202)
-        }
-        return json({ code: 'not_found', message: path }, 404)
-      }
-    })
-    const ctx = { settings: settings('sciforge') }
-
-    await expect(adapter.listThreads(ctx, { limit: 3, search: 'Local' })).resolves.toEqual([expect.objectContaining({
-      id: 'thr-sciforge',
-      runtimeId: 'sciforge',
-      title: 'SciForge thread',
-      backendThreadId: 'thr-sciforge'
-    })])
-    await expect(adapter.readThread(ctx, { runtimeId: 'sciforge', threadId: 'thr-sciforge' })).resolves.toMatchObject({
-      id: 'thr-sciforge',
-      runtimeId: 'sciforge',
-      latestSeq: 2,
-      turns: [{
-        id: 'turn-1',
-        status: 'completed',
-        items: [
-          { id: 'user-1', kind: 'user_message', text: 'hello' },
-          { id: 'assistant-1', kind: 'assistant_message', text: 'hi' },
-          { id: 'tool-1', kind: 'tool', toolKind: 'command_execution', detail: 'ok' }
-        ]
-      }]
-    })
-    await expect(adapter.startTurn(ctx, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-sciforge',
-      text: 'run',
-      mode: 'agent',
-      displayText: 'Run it',
-      attachmentIds: ['att-1']
-    })).resolves.toEqual({
-      threadId: 'thr-sciforge',
-      turnId: 'turn-2',
-      userMessageItemId: 'user-2'
-    })
-
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/threads?limit=3&search=Local', 'GET'],
-      ['/v1/threads/thr-sciforge', 'GET'],
-      ['/v1/threads/thr-sciforge/turns', 'POST']
-    ])
-    expect(JSON.parse(seen[2].init.body ?? '{}')).toEqual({
-      prompt: 'run',
-      model: 'sciforge-router',
-      mode: 'agent',
-      approvalPolicy: 'auto',
-      sandboxMode: 'danger-full-access',
-      displayText: 'Run it',
-      attachmentIds: ['att-1']
-    })
-  })
-
-  it('maps local runtime info capabilities without dropping tool diagnostics', async () => {
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path) => {
-        if (path !== '/v1/runtime/info') return json({}, 404)
-        return json({
-          capabilities: {
-            contractVersion: 1,
-            model: {
-              id: 'deepseek-v4-pro',
-              inputModalities: ['text', 'image'],
-              outputModalities: ['text'],
-              supportsToolCalling: true,
-              contextWindowTokens: 64000,
-              messageParts: ['text', 'image_url']
-            },
-            cli: {
-              serve: { status: 'available', enabled: true, available: true },
-              run: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' },
-              chat: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' },
-              exec: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' }
-            },
-            mcp: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              configuredServers: 2,
-              connectedServers: 1,
-              toolCount: 7,
-              search: {
-                enabled: true,
-                mode: 'auto',
-                active: true,
-                indexedToolCount: 7,
-                advertisedToolCount: 4
-              }
-            },
-            web: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              fetch: { status: 'available', enabled: true, available: true },
-              search: { status: 'unavailable', enabled: true, available: false, reason: 'search provider missing' },
-              provider: 'test-web'
-            },
-            research: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              toolName: 'research_search',
-              arxiv: { status: 'available', enabled: true, available: true },
-              biorxiv: { status: 'unavailable', enabled: true, available: false },
-              semanticScholar: { status: 'available', enabled: true, available: true },
-              tavily: { status: 'available', enabled: true, available: true },
-              cns: { status: 'unavailable', enabled: true, available: false },
-              maxResults: 12
-            },
-            skills: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              configuredRoots: 1,
-              discoveredSkills: 3
-            },
-            subagents: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              maxParallel: 2,
-              maxChildRuns: 5
-            },
-            attachments: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              maxImageBytes: 10,
-              maxImageDimension: 10,
-              allowedMimeTypes: ['image/png'],
-              textFallbackMaxBase64Bytes: 10,
-              textFallbackMaxImageDimension: 10,
-              textFallbackPreferredMimeType: 'image/webp'
-            },
-            memory: {
-              status: 'unavailable',
-              enabled: true,
-              available: false,
-              reason: 'memory store missing',
-              scopes: ['user'],
-              maxInjectedRecords: 4
-            }
-          }
-        })
-      }
-    })
-
-    await expect(adapter.capabilities({ settings: settings('sciforge') })).resolves.toMatchObject({
-      runtimeId: 'sciforge',
-      transport: 'http_sse',
-      model: {
-        id: 'deepseek-v4-pro',
-        inputModalities: ['text', 'image'],
-        supportsToolCalling: true,
-        contextWindowTokens: 64000
-      },
-      tools: {
-        toolCalling: true,
-        mcp: { available: true, toolCount: 7, search: { available: true } },
-        web: { available: true, fetch: { available: true }, search: { available: false } },
-        research: {
-          available: true,
-          server: 'mcp',
-          toolName: 'research_search',
-          sources: ['arxiv', 'semantic_scholar', 'web'],
-          maxResults: 12
-        },
-        skills: { available: true },
-        subagents: { available: true, maxParallel: 2, maxChildren: 5 },
-        diagnostics: { available: true }
-      },
-      storage: {
-        attachments: { available: true },
-        memory: { available: false, reason: 'memory store missing' }
-      }
-    })
-  })
-
-  it('keeps local runtime usage endpoints behind the neutral adapter contract', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/usage?')) {
-          return json({
-            group_by: 'thread',
-            buckets: [{
-              thread_id: 'thr-sciforge',
-              input_tokens: 100,
-              output_tokens: 20,
-              total_tokens: 120,
-              cached_tokens: 0,
-              cache_hit_rate: null,
-              cache_savings_usd: 0.003,
-              token_economy_savings_tokens: 4096,
-              token_economy_savings_usd: 0.0018,
-              turns: 1
-            }],
-            totals: {
-              total_tokens: 120,
-              token_economy_savings_tokens: 4096,
-              token_economy_savings_usd: 0.0018,
-              turns: 1
-            }
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge') {
-          return json({
-            turns: [{
-              usage: {
-                prompt_cache_hit_tokens: 80,
-                prompt_cache_miss_tokens: 20
-              }
-            }]
-          })
-        }
-        return json({}, 404)
-      }
-    })
-
-    await expect(adapter.usage({ settings: settings('sciforge') }, {
-      groupBy: 'thread',
-      threadId: 'thr-sciforge'
-    })).resolves.toMatchObject({
-      supported: true,
-      groupBy: 'thread',
-      buckets: [{
-        threadId: 'thr-sciforge',
-        inputTokens: 100,
-        outputTokens: 20,
-        totalTokens: 120,
-        cachedTokens: 80,
-        cacheMissTokens: 20,
-        cacheHitRate: 0.8,
-        tokenEconomySavingsTokens: 4096,
-        tokenEconomySavingsUsd: 0.0018,
-        turns: 1
-      }],
-      totals: {
-        totalTokens: 120,
-        tokenEconomySavingsTokens: 4096,
-        tokenEconomySavingsUsd: 0.0018,
-        turns: 1
-      }
-    })
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/usage?group_by=thread', 'GET'],
-      ['/v1/threads/thr-sciforge', 'GET']
-    ])
-  })
-
-  it('keeps local runtime usage available when cache stat hydration misses a stale thread', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/usage?')) {
-          return json({
-            group_by: 'thread',
-            buckets: [{
-              thread_id: 'stale-thread',
-              input_tokens: 100,
-              output_tokens: 20,
-              total_tokens: 120
-            }],
-            totals: { total_tokens: 120 }
-          })
-        }
-        if (path === '/v1/threads/stale-thread') {
-          return json({ code: 'not_found', message: 'thread not found: stale-thread' }, 404)
-        }
-        return json({}, 404)
-      }
-    })
-
-    await expect(adapter.usage({ settings: settings('sciforge') }, {
-      groupBy: 'thread',
-      threadId: 'stale-thread'
-    })).resolves.toMatchObject({
-      supported: true,
-      groupBy: 'thread',
-      buckets: [{
-        threadId: 'stale-thread',
-        totalTokens: 120
-      }]
-    })
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/usage?group_by=thread', 'GET'],
-      ['/v1/threads/stale-thread', 'GET']
-    ])
-  })
-
-  it('updates local runtime thread relation through the neutral adapter', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        return json({})
-      }
-    })
-
-    await expect(adapter.updateThreadRelation?.({ settings: settings('sciforge') }, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-side',
-      relation: 'primary'
-    })).resolves.toBeUndefined()
-
-    expect(seen).toEqual([{
-      path: '/v1/threads/thr-side',
-      init: {
-        method: 'PATCH',
-        body: JSON.stringify({ relation: 'primary' })
-      }
-    }])
-  })
-
-  it('maps local runtime SSE events to neutral lifecycle and delta events', async () => {
-    const rawEvents = [
-      {
-        kind: 'turn_started',
-        seq: 1,
-        timestamp: '2026-06-12T04:41:37.972Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1'
-      },
-      {
-        kind: 'item_created',
-        seq: 2,
-        timestamp: '2026-06-12T04:41:37.980Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'user-1',
-        item: {
-          id: 'user-1',
-          kind: 'user_message',
-          text: 'hello',
-          status: 'completed',
-          createdAt: '2026-06-12T04:41:37.980Z'
-        }
-      },
-      {
-        kind: 'assistant_text_delta',
-        seq: 3,
-        timestamp: '2026-06-12T04:41:39.999Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'assistant-1',
-        item: {
-          id: 'assistant-1',
-          kind: 'assistant_text',
-          text: 'hi',
-          status: 'running'
-        }
-      },
-      {
-        kind: 'turn_completed',
-        seq: 4,
-        timestamp: '2026-06-12T04:41:40.021Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1'
-      }
-    ]
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async () => json({}),
-      events: async function* () {
-        yield* rawEvents
-      }
-    })
-
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of adapter.subscribeEvents!({ settings: settings('sciforge') }, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-sciforge',
-      sinceSeq: 0
-    })) {
-      events.push(event)
-    }
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        kind: 'turn_lifecycle',
-        runtimeId: 'sciforge',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        state: 'started',
-        seq: 1,
-        createdAt: '2026-06-12T04:41:37.972Z'
-      }),
-      expect.objectContaining({
-        kind: 'item_snapshot',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        seq: 2,
-        item: expect.objectContaining({ id: 'user-1', kind: 'user_message', text: 'hello' })
-      }),
-      expect.objectContaining({
-        kind: 'assistant_delta',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'assistant-1',
-        text: 'hi',
-        seq: 3
-      }),
-      expect.objectContaining({
-        kind: 'turn_lifecycle',
-        runtimeId: 'sciforge',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        state: 'completed',
-        seq: 4,
-        createdAt: '2026-06-12T04:41:40.021Z'
-      })
-    ])
   })
 })
 

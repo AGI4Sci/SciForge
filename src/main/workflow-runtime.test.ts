@@ -6,9 +6,9 @@ import { createServer as createTcpServer, type AddressInfo } from 'node:net'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
+  defaultCodexRuntimeSettings,
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
-  defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -133,9 +133,8 @@ function settingsWith(workflows: WorkflowV1[], port: number, secret = 'workflow-
       ...defaultModelRouterSettings(),
       runtimeApiKey: 'local-runtime-router-key'
     },
-    agents: {
-      sciforge: defaultLocalRuntimeSettings()
-    },
+    activeAgentRuntime: 'codex',
+    agents: { codex: defaultCodexRuntimeSettings() } as AppSettingsV1['agents'],
     workspaceRoot: '/tmp/workspace',
     log: { enabled: true, retentionDays: 7 },
     notifications: { turnComplete: true },

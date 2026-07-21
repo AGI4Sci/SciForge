@@ -66,14 +66,10 @@ type InteractionRequestRef = {
   requestId?: string
 }
 
-function defaultCapabilities(runtimeId: AgentRuntimeId = 'sciforge'): AgentRuntimeCapabilities {
+export function defaultCapabilities(runtimeId: AgentRuntimeId = 'codex'): AgentRuntimeCapabilities {
   return createDefaultAgentRuntimeCapabilities({
     runtimeId,
-    transport: runtimeId === 'sciforge'
-      ? 'http_sse'
-      : runtimeId === 'claude'
-        ? 'cli_process'
-        : 'jsonrpc_stdio'
+    transport: runtimeId === 'claude' ? 'cli_process' : 'jsonrpc_stdio'
   })
 }
 

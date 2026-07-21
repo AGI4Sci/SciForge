@@ -363,8 +363,6 @@ export type SkillListItem = {
 export type SkillListResult =
   | { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
   | { ok: false; message: string }
-export type RuntimeConfigFileResult = { path: string; content: string; exists: boolean }
-export type RuntimeConfigSaveResult = { ok: true; path: string }
 export type ScientificSkillsMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -933,22 +931,6 @@ export type ZulipTestSendResult =
 export type ZulipGuardResult =
   | { ok: true; status: ZulipBotStatus }
   | { ok: false; message: string; status?: ZulipBotStatus; conflict?: ZulipGuardConflictStatus }
-export type LocalRuntimeStatusState =
-  | 'starting'
-  | 'running'
-  | 'restarting'
-  | 'crashed'
-  | 'failed'
-  | 'stopped'
-export type LocalRuntimeStatusPayload = {
-  state: LocalRuntimeStatusState
-  source: string
-  message?: string
-  stderrTail?: string
-  attempt?: number
-  maxAttempts?: number
-  at: string
-}
 export type PerformanceSnapshotResult =
   | { ok: true; snapshot: unknown }
   | { ok: false; message: string }
@@ -1228,9 +1210,6 @@ export type SciForgeApi = {
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
-  getRuntimeConfigFile: () => Promise<RuntimeConfigFileResult>
-  setRuntimeConfigFile: (content: string) => Promise<RuntimeConfigSaveResult>
-  openRuntimeConfigDir: () => Promise<PathOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
@@ -1441,7 +1420,6 @@ export type SciForgeApi = {
       request: FeedbackSubmissionStatusRequest
     ) => Promise<FeedbackSubmissionStatusResult>
   }
-  onRuntimeStatus: (handler: (payload: LocalRuntimeStatusPayload) => void) => () => void
   agentRuntime: {
     connect: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<AgentRuntimeCapabilities>

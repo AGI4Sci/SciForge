@@ -1,5 +1,7 @@
 import type {
   AgentRuntimeEvent,
+  AgentRuntimeExecutionEffectClass,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeId,
   AgentRuntimeToolEvidenceStrength,
   AgentRuntimeToolExecutionPhase,
@@ -11,31 +13,26 @@ import {
   VISUAL_EXECUTION_REQUIRED_METADATA_KEY
 } from './visual-execution-guard'
 
-export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v1'
+export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v2'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
 export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
-export const EXECUTION_CONTINUITY_TEXT_METADATA_KEY = 'sciforgeDirectiveContinuityText'
+export const EXECUTION_INTENT_METADATA_KEY = 'sciforgeExecutionIntent'
 
 const EXECUTION_INTEGRITY_MARKER = 'Runtime-enforced execution integrity gate:'
-const MAX_ASSISTANT_CLAIM_TEXT = 16_384
 const MAX_REMEMBERED_VIOLATIONS = 2_048
 
-export type ExecutionEffectClass =
-  | 'read'
-  | 'command_execution'
-  | 'local_write'
-  | 'external_mutation'
-  | 'async_job'
-  | 'child_agent'
-  | 'other'
+export type ExecutionEffectClass = AgentRuntimeExecutionEffectClass
 
 export type ExecutionObligation = {
   id: string
   kind: 'any_success' | 'visual_inspection' | 'tool' | 'effect'
   toolNames?: string[]
   effectClass?: ExecutionEffectClass
+  completion?: 'terminal' | 'success'
   source: 'user' | 'metadata' | 'visual'
 }
+
+export type ExecutionIntent = AgentRuntimeExecutionIntent
 
 type ToolReceipt = {
   callId: string
@@ -51,6 +48,7 @@ type ToolReceipt = {
   asyncHandle?: string
   /** True only when the executor reports that the asynchronous handle is terminal. */
   asyncTerminal?: boolean
+  trustedTerminal: boolean
   trustedSuccess: boolean
   visualSuccess: boolean
 }
@@ -58,7 +56,6 @@ type ToolReceipt = {
 type ExecutionIntegrityState = {
   obligations: ExecutionObligation[]
   calls: Map<string, ToolReceipt>
-  assistantText: string
   enabled: boolean
 }
 
@@ -93,18 +90,20 @@ export class RuntimeExecutionIntegrityGuard {
     this.states.set(key, {
       obligations: obligationsFromInput(input),
       calls: new Map(),
-      assistantText: '',
       enabled: true
     })
   }
 
-  rememberSteer(runtimeId: AgentRuntimeId, threadId: string, turnId: string, text: string): void {
+  rememberSteer(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string,
+    obligations: ExecutionObligation[]
+  ): void {
     const key = executionKey(runtimeId, threadId, turnId)
     const state = key ? this.states.get(key) : undefined
     if (!state) return
-    const obligation = requestedExecutionObligationFromTexts([text])
-    if (!obligation) return
-    state.obligations = mergeRequestedExecutionObligation(state.obligations, obligation)
+    state.obligations = dedupeObligations([...state.obligations, ...obligations])
   }
 
   rejectedTurnIds(runtimeId: AgentRuntimeId, threadId: string): string[] {
@@ -126,7 +125,6 @@ export class RuntimeExecutionIntegrityGuard {
       state = {
         obligations: obligationsFromMarker(event.text),
         calls: new Map(),
-        assistantText: '',
         enabled: true
       }
       this.states.set(key, state)
@@ -137,7 +135,6 @@ export class RuntimeExecutionIntegrityGuard {
       return { event }
     }
 
-    rememberAssistantText(state, event)
     const receipt = receiptFromEvent(event)
     if (receipt) rememberReceipt(state, receipt)
 
@@ -188,7 +185,7 @@ export function withExecutionIntegrityRequirement(
   const marker = `${EXECUTION_INTEGRITY_MARKER} ${JSON.stringify(obligations)}`
   const instruction = [
     marker,
-    'Only a real terminal executor receipt counts; otherwise report the blocker.'
+    'Only a matching typed terminal executor receipt counts; success requirements also need a successful outcome.'
   ].join('\n')
   return {
     ...input,
@@ -198,40 +195,60 @@ export function withExecutionIntegrityRequirement(
   }
 }
 
-export function requiresRuntimeExecution(text: string): boolean {
-  return requestedExecutionClass(text) !== null
-}
-
-/**
- * Policy text often contains explicit safety boundaries such as "do not edit"
- * or "禁止删除" next to the action that is actually requested. Those negated
- * phrases must not broaden the receipt obligation into a write or mutation.
- */
-function executionIntentText(text: string): string {
-  return text
-    .replace(
-      /\b(?:(?:do|does|did)\s+not|don't|doesn't|didn't|must\s+not|should\s+not|cannot|can't|never)\b[^.!?;\n]*?(?=(?:[.!?;\n]|,\s*(?:but|however|instead|only|then)\b|$))/giu,
-      ' '
-    )
-    .replace(
-      /(?:不要|不得|禁止|无需|无须|不应|不能|不可|不需要|切勿|勿)[^。；;!！?？\n]*?(?=(?:[。；;!！?？\n]|[，,]\s*(?:但|但是|不过|而是|只|仅|然后|并且|且|同时)|$))/gu,
-      ' '
-    )
-}
-
 function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionObligation[] {
   const metadata = recordValue(input.metadata)
   const explicit = normalizeObligations(metadata[EXECUTION_OBLIGATIONS_METADATA_KEY])
-  const obligations = [...explicit]
+  const intent = executionObligationsFromIntent(
+    input.executionIntent ?? metadata[EXECUTION_INTENT_METADATA_KEY]
+  )
+  const obligations = [...explicit, ...intent]
   if (metadata[VISUAL_EXECUTION_REQUIRED_METADATA_KEY] === true) {
     obligations.push({ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' })
   }
-  const requested = requestedExecutionObligationFromTexts([
-    input.displayText ?? input.text,
-    stringValue(metadata[EXECUTION_CONTINUITY_TEXT_METADATA_KEY])
-  ])
-  if (requested) return dedupeObligations(mergeRequestedExecutionObligation(obligations, requested))
   return dedupeObligations(obligations)
+}
+
+/**
+ * Natural-language understanding belongs to the caller that owns routing.
+ * This guard consumes only a typed decision and never reclassifies user text,
+ * quoted documents, assistant prose, or historical context.
+ */
+export function executionObligationsFromIntent(value: unknown): ExecutionObligation[] {
+  const intent = recordValue(value)
+  const mode = stringValue(intent.mode)
+  if (mode === 'answer' || (mode !== 'inspect' && mode !== 'execute')) return []
+  const requirements = Array.isArray(intent.requirements) ? intent.requirements : []
+  if (requirements.length === 0) {
+    return [{
+      id: 'requested-execution',
+      kind: mode === 'inspect' ? 'effect' : 'any_success',
+      ...(mode === 'inspect' ? { effectClass: 'read' as const } : {}),
+      completion: 'success',
+      source: 'metadata'
+    }]
+  }
+  const obligations: ExecutionObligation[] = []
+  requirements.forEach((entry, index) => {
+    const requirement = recordValue(entry)
+    const effectClass = normalizedEffectClass(requirement.effectClass)
+    const toolNames = Array.isArray(requirement.toolNames)
+      ? requirement.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
+      : []
+    const completion = requirement.completion === 'terminal' ? 'terminal' : 'success'
+    const id = stringValue(requirement.id) || (
+      requirements.length === 1 ? 'requested-execution' : `requested-execution-${index + 1}`
+    )
+    if (toolNames.length > 0) {
+      obligations.push({ id, kind: 'tool', toolNames, completion, source: 'metadata' })
+      return
+    }
+    if (effectClass) {
+      obligations.push({ id, kind: 'effect', effectClass, completion, source: 'metadata' })
+      return
+    }
+    obligations.push({ id, kind: 'any_success', completion, source: 'metadata' })
+  })
+  return obligations
 }
 
 function obligationsFromMarker(text: string): ExecutionObligation[] {
@@ -256,6 +273,7 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
     if (kind !== 'any_success' && kind !== 'visual_inspection' && kind !== 'tool' && kind !== 'effect') return []
     const source = stringValue(item.source)
     const effectClass = normalizedEffectClass(item.effectClass)
+    const completion = item.completion === 'terminal' ? 'terminal' : 'success'
     const toolNames = Array.isArray(item.toolNames)
       ? item.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
       : undefined
@@ -264,6 +282,7 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
       kind,
       ...(toolNames?.length ? { toolNames } : {}),
       ...(effectClass ? { effectClass } : {}),
+      completion,
       source: source === 'metadata' || source === 'visual' ? source : 'user'
     } satisfies ExecutionObligation]
   })
@@ -310,12 +329,13 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     ? attemptValue
     : 1
   const visualSuccess = phase === 'succeeded' && isVerifiedVisualExecutionEvent(event)
-  const trustedSuccess = phase === 'succeeded' && (
+  const trustedTerminal = (phase === 'succeeded' || phase === 'failed' || phase === 'cancelled') && (
     visualSuccess ||
     factSource === 'executor_result' ||
     evidenceStrength === 'executor_receipt' ||
     evidenceStrength === 'attested'
   )
+  const trustedSuccess = phase === 'succeeded' && trustedTerminal
   const asyncReceipt = asyncReceiptFromMeta(meta)
   return {
     callId: rawCallId.trim(),
@@ -324,7 +344,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     factSource,
     evidenceStrength,
     attempt,
-    effectClasses: effectClassesFromEvent(event, toolName, meta),
+    effectClasses: effectClassesFromEvent(event, meta),
     ...(event.kind === 'tool_event'
       ? {
           ...(event.resultDigest || stringValue(meta.resultDigest)
@@ -340,6 +360,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
         }),
     ...(asyncReceipt.handle ? { asyncHandle: asyncReceipt.handle } : {}),
     ...(asyncReceipt.terminal ? { asyncTerminal: true } : {}),
+    trustedTerminal,
     trustedSuccess,
     visualSuccess
   }
@@ -377,6 +398,7 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
       ...receipt,
       callId: existing.callId,
       phase: 'unresolved',
+      trustedTerminal: false,
       trustedSuccess: false,
       visualSuccess: false
     })
@@ -474,6 +496,7 @@ function rememberChildReceipt(
     evidenceStrength: 'runtime_lifecycle',
     attempt: 1,
     effectClasses: ['child_agent'],
+    trustedTerminal: phase === 'succeeded' || phase === 'failed' || phase === 'cancelled',
     trustedSuccess: phase === 'succeeded',
     visualSuccess: false
   })
@@ -482,9 +505,11 @@ function rememberChildReceipt(
 function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrityViolation | null {
   const receipts = [...state.calls.values()]
   const open = receipts.filter((item) => !isTerminalPhase(item.phase))
-  const trusted = receipts.filter((item) => item.trustedSuccess)
+  const trustedTerminal = receipts.filter((item) => item.trustedTerminal)
+  const trustedSuccess = receipts.filter((item) => item.trustedSuccess)
   const unsatisfied = state.obligations.filter((obligation) => {
-    if (obligation.kind === 'visual_inspection') return !trusted.some((item) => item.visualSuccess)
+    const trusted = obligation.completion === 'terminal' ? trustedTerminal : trustedSuccess
+    if (obligation.kind === 'visual_inspection') return !trustedSuccess.some((item) => item.visualSuccess)
     if (obligation.kind === 'tool') {
       const names = new Set((obligation.toolNames ?? []).map(normalizedToolName))
       return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
@@ -494,19 +519,11 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     }
     return trusted.length === 0
   })
-  const claimedEffect = affirmativeExecutionClaim(state.assistantText)
-  const claimUnverified = claimedEffect !== null && !trusted.some((item) => (
-    claimedEffect === 'any' || item.effectClasses.includes(claimedEffect)
-  ))
-  if (!open.length && !unsatisfied.length && !claimUnverified) return null
+  if (!open.length && !unsatisfied.length) return null
 
   const visualMissing = unsatisfied.some((item) => item.kind === 'visual_inspection')
-  const code = visualMissing
-    ? 'runtime_visual_execution_missing'
-    : claimUnverified && !open.length && !unsatisfied.length
-      ? 'runtime_execution_claim_unverified'
-      : 'runtime_execution_incomplete'
-  const verdict = code === 'runtime_execution_claim_unverified' ? 'unverified' : 'blocked'
+  const code = visualMissing ? 'runtime_visual_execution_missing' : 'runtime_execution_incomplete'
+  const verdict = 'blocked'
   const openCallIds = open.map((item) => item.callId)
   const unsatisfiedObligationIds = unsatisfied.map((item) => item.id)
   return {
@@ -514,49 +531,15 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     verdict,
     message: visualMissing
       ? 'Visual completion rejected: verified visual inspection did not execute.'
-      : verdict === 'unverified'
-        ? 'Completion rejected: the assistant claimed execution without an executor receipt.'
-        : 'Completion rejected: required execution has no successful terminal receipt.',
+      : 'Completion rejected: required execution has no matching terminal receipt.',
     detail: [
       openCallIds.length ? `Open calls: ${openCallIds.join(', ')}.` : '',
       unsatisfiedObligationIds.length ? `Unsatisfied obligations: ${unsatisfiedObligationIds.join(', ')}.` : '',
-      claimUnverified ? 'An affirmative execution claim was observed without trusted success evidence.' : '',
       'A model statement, request event, dispatch event, or accepted asynchronous job is not proof of completion.'
     ].filter(Boolean).join(' '),
     openCallIds,
     unsatisfiedObligationIds
   }
-}
-
-function rememberAssistantText(state: ExecutionIntegrityState, event: AgentRuntimeEvent): void {
-  let text = ''
-  if (event.kind === 'assistant_delta') text = event.text
-  if (event.kind === 'item_snapshot' && event.item.kind === 'assistant_message') {
-    text = event.item.text ?? event.item.detail ?? ''
-  }
-  if (!text) return
-  state.assistantText = `${state.assistantText}${text}`.slice(-MAX_ASSISTANT_CLAIM_TEXT)
-}
-
-function affirmativeExecutionClaim(text: string): ExecutionEffectClass | 'any' | null {
-  if (!text.trim()) return null
-  const affirmative = [
-    /(?:我|我们|已|已经)(?:成功)?(?:执行|运行|调用|修改|编辑|删除|发送|提交|安装|渲染|部署|发布|修复|实现)(?!不了|失败|尚未|未)/u,
-    /(?:我|我们|已|已经)(?:成功)?使用.{0,16}(?:工具|命令|接口|API)/iu,
-    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?(?:ran|executed|called|invoked|edited|modified|deleted|removed|sent|submitted|installed|opened|clicked|downloaded|uploaded|rendered|deployed|published|implemented|fixed)\b/iu,
-    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?used\s+(?:the\s+)?(?:tool|command|api|view_image|sciforge_invoke)\b/iu
-  ].some((pattern) => pattern.test(text))
-  if (!affirmative) return null
-  if (
-    /(?:修改|编辑|删除|安装|修复|实现)/u.test(text) ||
-    /\b(?:edited|modified|deleted|removed|installed|implemented|fixed)\b/iu.test(text)
-  ) return 'local_write'
-  if (
-    /(?:发送|提交|上传|部署|发布)/u.test(text) ||
-    /\b(?:sent|submitted|uploaded|deployed|published)\b/iu.test(text)
-  ) return 'external_mutation'
-  if (/(?:执行|运行)/u.test(text) || /\b(?:ran|executed)\b/iu.test(text)) return 'command_execution'
-  return 'any'
 }
 
 function normalizedPhase(value: unknown, status: unknown): AgentRuntimeToolExecutionPhase | null {
@@ -590,221 +573,22 @@ function isAcceptedAsyncResult(meta: Record<string, unknown>): boolean {
   return status === 'accepted' || status === 'submitted' || status === 'queued' || status === 'pending' || status === 'running'
 }
 
-function requestedExecutionObligationFromTexts(texts: string[]): ExecutionObligation | null {
-  let selected: RequestedExecutionClass | null = null
-  for (const text of texts) {
-    const candidate = requestedExecutionClass(text)
-    if (candidate && requestedExecutionRank(candidate) > requestedExecutionRank(selected)) selected = candidate
-  }
-  if (!selected) return null
-  return selected === 'any_success'
-    ? { id: 'requested-execution', kind: 'any_success', source: 'user' }
-    : { id: 'requested-execution', kind: 'effect', effectClass: selected, source: 'user' }
-}
-
-function mergeRequestedExecutionObligation(
-  obligations: ExecutionObligation[],
-  requested: ExecutionObligation
-): ExecutionObligation[] {
-  const existing = obligations.find((item) => item.id === 'requested-execution')
-  if (!existing) return [...obligations, requested]
-  const existingClass = existing.kind === 'effect' ? existing.effectClass ?? 'any_success' : 'any_success'
-  const requestedClass = requested.kind === 'effect' ? requested.effectClass ?? 'any_success' : 'any_success'
-  const strongest = requestedExecutionRank(requestedClass) > requestedExecutionRank(existingClass)
-    ? requested
-    : existing
-  return obligations.map((item) => item.id === 'requested-execution' ? strongest : item)
-}
-
-function requestedExecutionRank(value: RequestedExecutionClass | null): number {
-  switch (value) {
-    case 'external_mutation': return 4
-    case 'local_write': return 3
-    case 'command_execution': return 2
-    case 'any_success': return 1
-    default: return 0
-  }
-}
-
-type RequestedExecutionClass = ExecutionEffectClass | 'any_success'
-
-/** Classify affirmative action requests, not incidental action-word mentions. */
-function requestedExecutionClass(text: string): RequestedExecutionClass | null {
-  const value = executionIntentText(text).toLowerCase().trim()
-  if (!value) return null
-  const requested = new Set<RequestedExecutionClass>()
-  for (const clause of value.split(/[.!?;,，。；！？？\n]+/u)) {
-    for (const root of requestedClauseRoots(clause)) collectRequestedClauseEffects(root, requested)
-  }
-  if (requested.has('external_mutation')) return 'external_mutation'
-  if (requested.has('local_write')) return 'local_write'
-  if (requested.has('command_execution')) return 'command_execution'
-  return requested.has('any_success') ? 'any_success' : null
-}
-
-const ENGLISH_ACTION = /^(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/iu
-const CHINESE_ACTION = /^(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/u
-const EXTERNAL_OBJECT_ACTIONS = new Set([
-  'create', 'open', 'delete', 'remove', 'update', '创建', '新建', '打开', '删除', '移除', '更新'
-])
-
-function requestedClauseRoots(clause: string): string[] {
-  const value = clause.trim()
-  const separator = value.search(/[:：]/u)
-  if (separator < 0) return [value]
-  const header = value.slice(0, separator).trim()
-  const body = value.slice(separator + 1).trim()
-  if (
-    /^(?:task|action|required action|instruction|next step|step|please (?:do|perform) (?:the )?following|do (?:the )?following)$/iu.test(header) ||
-    /^(?:任务|操作|必要操作|指令|下一步|步骤|请(?:执行|完成)以下(?:任务|操作|步骤)?)$/u.test(header)
-  ) return [body]
-  return [header]
-}
-
-function collectRequestedClauseEffects(clause: string, requested: Set<RequestedExecutionClass>): void {
-  const english = requestedEnglishRoot(clause)
-  const englishRoot = ENGLISH_ACTION.exec(english)
-  if (englishRoot && !isStatusDescription(englishRoot[1], english.slice(englishRoot[0].length))) {
-    requested.add(effectForRequestedAction(englishRoot[1], english.slice(englishRoot[0].length)))
-    const coordinated = /\b(?:and|then|also)(?:\s+(?:then|also))?\s+(?:(?:please|kindly|actually|now)\s+)*(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/giu
-    for (const match of english.matchAll(coordinated)) {
-      requested.add(effectForRequestedAction(match[1], english.slice((match.index ?? 0) + match[0].length)))
-    }
-    return
-  }
-
-  const chinese = requestedChineseRoot(clause)
-  const chineseRoot = CHINESE_ACTION.exec(chinese)
-  if (!chineseRoot || isStatusDescription(chineseRoot[1], chinese.slice(chineseRoot[0].length))) return
-  requested.add(effectForRequestedAction(chineseRoot[1], chinese.slice(chineseRoot[0].length)))
-  const coordinated = /(?:并且|然后|同时|且|再)\s*(?:(?:请|务必|直接)\s*)*(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/gu
-  for (const match of chinese.matchAll(coordinated)) {
-    requested.add(effectForRequestedAction(match[1], chinese.slice((match.index ?? 0) + match[0].length)))
-  }
-}
-
-function requestedEnglishRoot(clause: string): string {
-  return clause.trim()
-    .replace(/^(?:[-*]\s*|\d+[.)]\s*)/u, '')
-    .replace(/^(?:(?:but|however|instead|only|then)\s+)/iu, '')
-    .replace(
-      /^(?:(?:(?:can|could|would|will)\s+you\s+)(?:(?:please|kindly|actually|now)\s+)*|(?:i|we)\s+(?:(?:need|want)\s+(?:you\s+)?to|must|should|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|you\s+(?:must|should|need\s+to|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|(?:(?:please|kindly|now|actually|just|must|should|need\s+to|have\s+to)\s+)+)/iu,
-      ''
-    )
-}
-
-function requestedChineseRoot(clause: string): string {
-  let value = clause.trim()
-    .replace(/^(?:[-*]\s*|\d+[.)、]\s*)/u, '')
-    .replace(/^(?:但是|不过|而是|然后|并且|同时|但|只|仅|且)\s*/u, '')
-  let prefixRemoved = false
-  for (;;) {
-    const before = value
-    value = value
-      .replace(/^(?:我|我们)\s*(?:需要|必须|务必|希望|想让)\s*/u, '')
-      .replace(/^(?:请|麻烦|现在|直接|继续|只|仅|务必|必须|需要|实际|真正|确实|重新|帮我)\s*/u, '')
-    if (value !== before) prefixRemoved = true
-    if (prefixRemoved) value = value.replace(/^你\s*/u, '')
-    else value = value.replace(/^你\s*(?=(?:需要|必须|务必|希望|想让))/u, '')
-    if (value === before) break
-  }
-  return value
-}
-
-function isStatusDescription(action: string, remainder: string): boolean {
-  if (remainder.startsWith('-')) return true
-  if (/^[a-z]/iu.test(action)) {
-    return /^(?:\s+[\w@./:-]+){0,5}\s+(?:is|are|was|were|shows?|failed|succeeded|completed|enabled|open|closed|pending)\b/iu
-      .test(remainder)
-  }
-  return /^.{0,20}?(?:已|已经|曾经|当前|仍然)?(?:失败|成功|完成|开启|打开|关闭|待处理|运行中)$/u
-    .test(remainder.trim())
-}
-
-function effectForRequestedAction(action: string, remainder: string): RequestedExecutionClass {
-  if (isExternalObjectMutation(action, remainder)) return 'external_mutation'
-  if (/^(?:send|submit|upload|deploy|publish|发送|提交|上传|部署|发布)$/iu.test(action)) {
-    return 'external_mutation'
-  }
-  if (/^(?:edit|modify|create|delete|remove|update|install|implement|fix|patch|write|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入)$/iu.test(action)) {
-    return 'local_write'
-  }
-  if (/^(?:run|execute|执行|运行)$/iu.test(action)) return 'command_execution'
-  return 'any_success'
-}
-
-function isExternalObjectMutation(action: string, objectText: string): boolean {
-  return EXTERNAL_OBJECT_ACTIONS.has(action.toLowerCase()) && hasExternalObject(objectText)
-}
-
-function hasExternalObject(value: string): boolean {
-  const normalized = value.replace(/[_-]+/gu, ' ')
-  if (
-    /(?:^|\s)(?:file|report|summary|cache|cached|note|artifact|document|record|copy|folder|directory|code)(?:\s|$)/iu.test(normalized) ||
-    /(?:文件|报告|摘要|缓存|笔记|制品|文档|记录|副本|目录|代码)/u.test(normalized)
-  ) return false
-  return /(?:^|\s)(?:message|email|issue|ticket|pr|pull\s+request|comment|release)(?:\s|$)/iu.test(normalized) ||
-    /(?:消息|邮件|工单|议题|评论|发布项)/u.test(normalized)
-}
-
-function isExternalMutationToolName(name: string): boolean {
-  if (/(?:^|_)(?:send|submit|upload|deploy|publish)(?:_|$)/u.test(name)) return true
-  const match = name.match(/(?:^|_)(create|open|delete|remove|update)_(.+)$/u)
-  return Boolean(match && isExternalObjectMutation(match[1], match[2]))
-}
-
-function isExternalMutationCommand(command: string): boolean {
-  return command.split(/&&|\|\||[;|\n]/u).some((part) => {
-    const segment = part.trim()
-    if (!segment || /(?:^|\s)--(?:dry[-_]?run|preview|no[-_]?act|noop)(?:[=\s]|$)/iu.test(segment)) {
-      return false
-    }
-    const shortNoOp = /(?:^|\s)-n(?:\s|$)/u.test(segment) &&
-      /^(?:sudo\s+)?(?:git\b|(?:npm|pnpm|yarn)\b)/iu.test(segment)
-    if (shortNoOp) return false
-    return [
-      /^(?:sudo\s+)?(?:deploy|publish|submit|upload|send)(?:\s|$)/iu,
-      /^(?:sudo\s+)?git(?:\s+(?:-[a-z]\s+\S+|--[\w-]+(?:=\S+)?))*\s+push(?:\s|$)/iu,
-      /^(?:sudo\s+)?gh\s+(?:issue|pr|release)\s+(?:create|edit|delete|close|reopen|merge|upload)(?:\s|$)/iu,
-      /^(?:sudo\s+)?(?:docker|podman)\s+push(?:\s|$)/iu,
-      /^(?:sudo\s+)?kubectl\s+(?:apply|create|delete|patch|replace|set|rollout)(?:\s|$)/iu,
-      /^(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:deploy|publish)(?:\s|$)/iu
-    ].some((pattern) => pattern.test(segment))
-  })
-}
-
 function effectClassesFromEvent(
   event: Extract<AgentRuntimeEvent, { kind: 'tool_event' | 'item_snapshot' }>,
-  toolName: string,
   meta: Record<string, unknown>
 ): ExecutionEffectClass[] {
   const toolKind = event.kind === 'tool_event' ? event.toolKind : event.item.toolKind
-  const name = normalizedToolName(toolName)
-  const effects = new Set<ExecutionEffectClass>()
-  const isCommand = toolKind === 'command_execution' ||
-    /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(name)
-  if (isCommand) effects.add('command_execution')
-
-  const argumentsValue = recordValue(meta.arguments)
-  const command = [
-    stringValue(meta.command),
-    stringValue(argumentsValue.command),
-    stringValue(argumentsValue.cmd)
-  ].filter(Boolean).join(' ')
-  const externalTool = isExternalMutationToolName(name)
-  if (
-    toolKind === 'file_change' ||
-    (!externalTool && /(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) ||
-    (isCommand && /(?:^|\s)(?:apply_patch|rm|mv|cp|mkdir|touch|install)(?:\s|$)|(?:sed\s+-i|>>?|\btee\b|--(?:fix|write)\b)/iu.test(command))
-  ) {
-    effects.add('local_write')
-  }
-  if (externalTool || (isCommand && isExternalMutationCommand(command))) {
-    effects.add('external_mutation')
-  }
-  if (/(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(name)) {
-    effects.add('read')
-  }
+  const typedEffects = event.kind === 'tool_event' ? event.effects : event.item.effects
+  const declared = Array.isArray(typedEffects)
+    ? typedEffects
+    : Array.isArray(meta.effectClasses)
+      ? meta.effectClasses
+      : Array.isArray(meta.effects)
+        ? meta.effects
+        : []
+  const effects = new Set(declared.map(normalizedEffectClass).filter((effect): effect is ExecutionEffectClass => Boolean(effect)))
+  if (toolKind === 'command_execution') effects.add('command_execution')
+  if (toolKind === 'file_change') effects.add('local_write')
   return effects.size > 0 ? [...effects] : ['other']
 }
 

@@ -19,6 +19,7 @@ import type {
 } from './WorkspacePreviewPanelShell'
 import {
   DocumentAnnotationPanelController,
+  documentAnnotationSideBlockText,
   type DocumentAnnotationPanelRenderInput
 } from './DocumentAnnotationPanelController'
 
@@ -173,6 +174,22 @@ function createContext(observation: WorkspaceObservation): WorkspacePreviewPanel
 }
 
 describe('DocumentAnnotationPanelController', () => {
+  it('uses the user-visible side message instead of the internal runtime prompt', () => {
+    expect(documentAnnotationSideBlockText({
+      id: 'user-1',
+      kind: 'user',
+      text: 'Canonical visible state bound atomically for this turn: {"revision":87}\n\n用户问题',
+      meta: { displayText: '用户问题' }
+    })).toBe('用户问题')
+
+    expect(documentAnnotationSideBlockText({
+      id: 'assistant-1',
+      kind: 'assistant',
+      text: '  助手回答  ',
+      meta: { displayText: '不应覆盖助手文本' }
+    })).toBe('助手回答')
+  })
+
   it('routes document annotation edits through the controller-owned sidecar flow', async () => {
     const observation = createObservation()
     const context = createContext(observation)

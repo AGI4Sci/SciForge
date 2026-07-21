@@ -18,6 +18,7 @@ import type {
   AgentRuntimeCodeNavigationOutput,
   AgentRuntimeChild,
   AgentRuntimeContextState,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeFileReference,
   AgentRuntimeGitCheckpoint,
   AgentRuntimeListThreadChildrenResponse,
@@ -580,6 +581,7 @@ export interface AgentProvider {
       model?: string
       reasoningEffort?: string
       remoteTargetId?: string
+      executionIntent?: AgentRuntimeExecutionIntent
       governanceProfile?: 'default' | 'write' | 'remote_guard'
       displayText?: string
       visibleContextOwnerThreadId?: string

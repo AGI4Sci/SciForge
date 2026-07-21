@@ -1,84 +1,81 @@
 # Agent Runtime Notes
 
-SciForge supports two user-selectable local agent runtimes: **SciForge Runtime** and
-**Codex**. SciForge Runtime remains the default runtime for existing and new users. Codex is
-optional and must be selected or enabled explicitly; the app must never
-silently fall back from SciForge Runtime to Codex.
+SciForge supports two user-selectable agent runtimes: **Codex** and **Claude
+Code**. Codex is the default for fresh installs and migrated settings. Claude
+Code must be selected explicitly. SciForge does not ship or expose a custom
+agent runtime, and a runtime failure must never silently switch the user to the
+other runtime.
 
 Code, Write, Connect phone, and scheduled tasks should enter agent work through
-the runtime-neutral `AgentRuntime` contract. Renderer code should use
-`AgentRuntimeProvider` and the `window.sciforge.agentRuntime` preload API instead
-of calling SciForge Runtime `/v1/*` endpoints or Codex `codex:*` IPC directly. SciForge Runtime continues
-to serve HTTP/SSE behind its adapter. Codex runtime code must stay modular and
-centralized under `src/main/runtime/codex/`. Connect phone / remote-channel
-code still has a small number of historical `claw` files or symbols; when kept,
-they are internal compatibility names, not user-visible or public API names.
-Connect phone and scheduled tasks record runtime ids and preserve runtime-specific thread mappings, but
-their non-default runtime execution path currently fails closed until native adapter support
-is implemented for those background workflows.
+the runtime-neutral `AgentRuntime` contract. Renderer code uses
+`AgentRuntimeProvider` and the `window.sciforge.agentRuntime` preload API; it
+must not call Codex app-server JSON-RPC or the Claude Agent SDK directly.
+Connect phone and scheduled tasks record runtime ids and keep runtime-specific
+thread mappings. A background workflow must fail closed when its selected
+runtime does not support a required operation.
 
-The contract and event/capability shape are documented in
+The shared contract and event/capability shape are documented in
 [`docs/agent-runtime-contract.md`](./agent-runtime-contract.md).
 
 ## Allowed Extension Path
 
-1. For SciForge Runtime behavior, add protocol fields in `kun/src/contracts/`.
-2. For SciForge Runtime behavior, add agent behavior in `kun/src/loop/`, `kun/src/services/`, or a
-   new port/adapter under `kun/src/ports/` and `kun/src/adapters/`.
-3. For SciForge Runtime behavior, add HTTP endpoints under `kun/src/server/routes/`.
-4. Map SciForge Runtime endpoint/events through `src/main/runtime/local-runtime-agent-runtime-adapter.ts`
-   and the shared AgentRuntime event/capability types. Renderer mapping belongs
-   in `src/renderer/src/agent/agent-runtime-event-dispatcher.ts`.
-5. For Codex behavior, keep app-server JSON-RPC, configuration, event
-   normalization, thread/event stores, and lifecycle code inside
-   `src/main/runtime/codex/`; expose only the narrow adapter surface from that
-   directory.
-6. Keep shared integration thin: settings type/schema/migration, main-process
-   runtime selection, renderer provider registry, and Settings UI may know
-   about `sciforge | codex`.
-7. Add settings under `agents.sciforge` or `agents.codex`, with
-   `activeAgentRuntime` recording the explicit user choice.
-8. Do not add `runtimeRequest` / `startSse` renderer paths; app code uses the
-   neutral `agentRuntime:*` IPC surface. Renderer-specific `codex:*` IPC has
-   been removed; `codex:` strings should
-   remain internal app-server method/event names only.
+1. Keep Codex app-server JSON-RPC, executable discovery, configuration, event
+   normalization, thread/event stores, and process lifecycle code inside
+   `src/main/runtime/codex/`.
+2. Keep Claude Agent SDK integration, executable discovery, configuration,
+   event normalization, and lifecycle code inside
+   `src/main/runtime/claude-code/`.
+3. Put runtime-neutral adapter contracts, host orchestration, governance, and
+   shared lifecycle behavior under `src/main/runtime/agent-runtime/`.
+4. Map runtime events into the shared contract in the main process. Renderer
+   display mapping belongs in
+   `src/renderer/src/agent/agent-runtime-event-dispatcher.ts`.
+5. Keep shared integration thin: settings type/schema/migration, main-process
+   runtime selection, renderer provider registration, and Settings UI may know
+   about `codex | claude`.
+6. Add user-facing settings under `agents.codex` or `agents.claude`, with
+   `activeAgentRuntime` recording the selected runtime.
+7. Keep command-path discovery centralized in each runtime module. Do not add
+   renderer-side shell probing or assume that a GUI process inherits a login
+   shell's `PATH`.
+8. Keep model-access boundaries explicit: provider API credentials use Model
+   Router, while login-backed coding subscriptions use the adapter selected for
+   that runtime. These paths do not silently fall back to one another.
 
 ## Forbidden Paths
 
-- No CodeWhale/Reasonix adapter, process manager, RPC bridge, updater, or
-  importer.
-- No implicit fallback from SciForge Runtime to Codex when SciForge Runtime fails.
-- No new renderer business logic that bypasses `AgentRuntimeProvider` or the
-  neutral `window.sciforge.agentRuntime` API.
-- No scattered Codex implementation outside `src/main/runtime/codex/`, beyond
-  the thin integration points listed above.
-- Model access has one explicit billing boundary: API credentials use the Model
-  Router sidecar, while login-backed coding subscriptions use the Plan Gateway
-  adapter selected for that runtime. These paths never fall back to each other.
-  Do not mix SciForge workspace server, Browser, Computer Use, desktop runtime
-  launcher, VSCode app module, or artifact pipeline into either boundary.
-- No legacy `AgentSwitcher`, `ConnectionStatusBar`, `RuntimeDiagnosticsDialog`,
-  or runtime self-check UI for old providers.
-- No drawing/design starter card in the core workbench.
-- No `/usage` or `/runtime` slash command that opens a runtime control panel.
+- Do not restore SciForge Runtime, Kun, CodeWhale, Reasonix, or another custom
+  runtime process, HTTP/SSE adapter, updater, or importer.
+- Do not silently fall back between Codex and Claude Code when an executable,
+  login, model, or runtime operation fails.
+- Do not add renderer business logic that bypasses `AgentRuntimeProvider` or
+  the neutral `window.sciforge.agentRuntime` API.
+- Do not scatter Codex or Claude implementation outside their runtime modules,
+  beyond the thin shared integration points above.
+- Do not mix SciForge workspace services, Browser, Computer Use, VSCode app
+  modules, or artifact pipelines into the model-access billing boundary.
+- Do not restore legacy `AgentSwitcher`, `ConnectionStatusBar`,
+  `RuntimeDiagnosticsDialog`, or self-check UI for removed providers.
+- Do not add `/usage` or `/runtime` slash commands that open a runtime control
+  panel.
 
 ## Historical Data Migration Rule
 
-Old persisted keys may be read only inside settings migration. They are
-historical input, not a compatibility API for new writes or new code paths:
+Old persisted keys may be read only by migration or narrowly scoped legacy
+cleanup. They are historical input, not a compatibility API for new writes:
 
-- `agentProvider: codewhale | reasonix | deepseek-runtime` maps to
-  `activeAgentRuntime: "sciforge"`.
-- `agents.codewhale`, `agents.reasonix`, and historical `deepseek` values are
-  discarded during migration; configure canonical `agents.sciforge`,
-  `agents.codex`, or `agents.claude` entries instead.
-- Saved settings preserve `agents.sciforge` and may contain `agents.codex`; they must
-  not retain `agents.codewhale` or `agents.reasonix`.
-- Old Connect phone `agentThreadIds.codewhale/reasonix` mappings are discarded;
-  only canonical `agentThreadIds.sciforge`, `agentThreadIds.codex`, and
-  `agentThreadIds.claude` mappings are retained.
-- New Codex thread mappings must use Codex-owned runtime/thread storage and must
-  not be written into local runtime mappings.
+- `activeAgentRuntime: "sciforge"`, unknown runtime ids, and historical
+  `agentProvider: codewhale | reasonix | deepseek-runtime` selections normalize
+  to `activeAgentRuntime: "codex"`.
+- `agents.sciforge`, `agents.codewhale`, `agents.reasonix`, and historical
+  `deepseek` values must not be exposed as selectable runtime settings or used
+  by new code. New user-facing settings belong to `agents.codex` or
+  `agents.claude`.
+- Historical `sciforge`, `codewhale`, and `reasonix` thread mappings may be read
+  only where migration requires them. New mappings use `codex` or `claude` and
+  remain owned by that runtime.
+- Historical internal `claw` filenames or symbols in remote-channel code may
+  remain for compatibility, but they are not user-visible or public API names.
 
 ## Verification
 
@@ -92,27 +89,17 @@ npm run build
 
 Manual smoke:
 
-- Existing users and fresh installs default to SciForge Runtime.
-- Settings -> Agents can expose SciForge Runtime and Codex runtime settings, but not
-  CodeWhale/Reasonix blocks.
-- Code can create a SciForge Runtime thread, stream a reply, approve/deny tools, and
-  interrupt a turn.
-- When Codex is explicitly configured and selected, Code routes through the
-  Codex runtime boundary without changing SciForge Runtime settings or threads.
-- SciForge Runtime covers the current AgentRuntime behaviors: thread search/archive
-  filters, fork, session resume, request_user_input submit/cancel, and usage.
-- Cache telemetry uses upstream DeepSeek-compatible `prompt_cache_hit_tokens` /
-  `prompt_cache_miss_tokens` returned through Model Router; hot SciForge Runtime
-  turns should stay above 90% cache hit after the stable prefix is warm.
-- Immutable prefix drift and malformed tool-call/tool-result history must be
-  caught before a request reaches Model Router.
-- Write can open the workspace, request inline completion, and use selected-text
-  assistant actions; assistant threads are isolated by active runtime.
-- Connect phone can save settings and run manual SciForge Runtime tasks. Runtime-id support
-  for Codex-backed phone/schedule tasks must preserve migrated SciForge Runtime mappings
-  and must not write Codex thread IDs into local runtime mappings.
-
-SciForge Runtime details are in
-[`docs/local-runtime-architecture.md`](./local-runtime-architecture.md). Product-level runtime
-contract details are in
-[`docs/agent-runtime-contract.md`](./agent-runtime-contract.md).
+- Fresh installs and migrated settings select Codex by default.
+- Settings -> Agents exposes Codex and Claude Code, with no SciForge Runtime,
+  Kun, CodeWhale, or Reasonix block.
+- Codex can connect, create and resume threads, stream replies, approve or deny
+  tools, interrupt turns, and surface actionable executable/login errors.
+- Claude Code can be selected explicitly and perform the supported shared
+  operations without changing Codex settings or thread mappings.
+- A missing or unhealthy selected runtime fails visibly and does not switch to
+  the other runtime.
+- Write uses the selected runtime for inline and selected-text assistant work;
+  assistant threads stay isolated by runtime.
+- Connect phone, schedules, and workflows preserve their selected runtime id
+  and fail closed for unsupported operations.
+- Saved settings do not reintroduce a removed runtime as a selectable value.

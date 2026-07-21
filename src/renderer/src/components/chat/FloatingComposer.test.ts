@@ -21,10 +21,12 @@ import {
   parseSteerCommand
 } from './FloatingComposer'
 import {
+  COMPOSER_RUNTIME_IDS,
   FloatingComposerModelPicker,
   calculateFloatingMenuPlacement,
   calculateFloatingSubmenuPlacement,
   composerReasoningEffortRequestValue,
+  normalizeComposerRuntimeId,
 } from './FloatingComposerModelPicker'
 import { getGoalPanelDraftObjective } from './floating-composer-commands'
 import { useChatStore } from '../../store/chat-store'
@@ -1298,6 +1300,28 @@ describe('FloatingComposer capability controls', () => {
     expect(html).not.toContain('Claude Code CLI')
     expect(html).toContain('Execution runtime, Model Router, model, and reasoning settings')
     expect(html).toContain('model chain managed by Model Router')
+  })
+
+  it('only offers supported external runtimes and falls back to Codex', () => {
+    expect(COMPOSER_RUNTIME_IDS).toEqual(['codex', 'claude'])
+    expect(normalizeComposerRuntimeId(undefined)).toBe('codex')
+    expect(normalizeComposerRuntimeId('sciforge')).toBe('codex')
+
+    const html = renderToStaticMarkup(
+      createElement(FloatingComposerModelPicker, {
+        compact: true,
+        mode: 'combobox',
+        composerModel: 'auto',
+        composerPickList: ['auto'],
+        activeAgentRuntime: 'sciforge',
+        canChangeModel: true,
+        onActiveAgentRuntimeChange: () => undefined,
+        onComposerModelChange: () => undefined
+      })
+    )
+
+    expect(html).toContain('Execution: codex')
+    expect(html).not.toContain('Execution: local')
   })
 
   it('shows a plan badge in the input toolbar when plan mode is enabled', () => {

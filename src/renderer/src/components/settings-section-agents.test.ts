@@ -1,266 +1,105 @@
-import { describe, expect, it } from 'vitest'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { describe, expect, it } from 'vitest'
 import {
-  defaultModelRouterSettings,
+  defaultClaudeRuntimeSettings,
   defaultCodexRuntimeSettings,
-  defaultLocalRuntimeSettings
+  defaultComputerUseSettings
 } from '@shared/app-settings'
-import { AgentsSettingsSection, codexRuntimeSettingsPatch } from './settings-section-agents'
+import {
+  AgentsSettingsSection,
+  claudeRuntimeSettingsPatch,
+  codexRuntimeSettingsPatch
+} from './settings-section-agents'
 
 const labels: Record<string, string> = {
-  agentsQuickBase: 'Base',
-  agentsQuickSkill: 'Skills',
-  agentsQuickMcp: 'MCP',
-  agentsQuickPermissions: 'Permissions',
-  agentsQuickLocalRuntimePermissions: 'SciForge Runtime access',
   agents: 'Agents',
-  agentRuntime: 'Agent runtime',
-  agentRuntimeDesc: 'Choose which runtime powers Code mode and chat.',
+  agentsQuickBase: 'Assistant',
+  agentsQuickSkill: 'Skills',
+  agentsQuickMcp: 'External tools',
+  agentsQuickPermissions: 'Access',
+  codexRuntime: 'Codex app-server',
+  codexRuntimeDesc: 'Configure Codex.',
+  codexCommand: 'Executable',
+  codexCommandDesc:
+    'SciForge detects Codex automatically. Enter an absolute executable path to override detection.',
+  codexCommandPlaceholder: 'codex',
+  codexManagedHomeDesc:
+    'Codex state is kept in an app-managed directory. This location is not configurable here.',
+  codexExtraArgs: 'Extra arguments',
+  codexExtraArgsDesc: 'One per line.',
+  codexExtraArgsPlaceholder: '--search',
+  claudeRuntime: 'Claude Code CLI',
+  claudeRuntimeDesc: 'Configure Claude Code.',
+  claudeCommand: 'Executable',
+  claudeCommandDesc:
+    'SciForge detects Claude Code automatically. Enter an absolute executable path to override detection.',
+  claudeCommandPlaceholder: 'claude',
+  claudeManagedConfigDesc:
+    'Claude Code configuration is kept in an app-managed directory. This location is not configurable here.',
+  claudeModel: 'Model',
+  claudeModelDesc: 'Optional Claude Code model override.',
+  runtimeModelAutoPlaceholder: 'Automatic',
+  claudeExtraArgs: 'Extra arguments',
+  claudeExtraArgsDesc: 'One per line.',
+  claudeExtraArgsPlaceholder: '--allowedTools Edit',
+  codePromptPrefix: 'Code prompt prefix',
+  codePromptPrefixDesc: 'Persistent instructions.',
+  codePromptPrefixPlaceholder: 'Always run tests.',
+  approvalPolicy: 'Approval policy',
+  approvalPolicyDesc: 'Approval policy description',
+  approvalFullAccessDesc: 'Full access approval description',
+  claudeApprovalPolicyDesc: 'Claude approval description',
+  approvalOnRequest: 'On request',
+  approvalUntrusted: 'Untrusted',
+  approvalNever: 'Never',
+  approvalAuto: 'Auto',
+  sandboxMode: 'Sandbox mode',
+  sandboxModeDesc: 'Sandbox description',
+  claudeSandboxModeDesc: 'Claude sandbox description',
+  sandboxWorkspaceWrite: 'Workspace write',
+  sandboxReadOnly: 'Read only',
+  sandboxFullAccess: 'Full access',
+  skill: 'Skills',
+  skillsLocation: 'Skill location',
+  skillsLocationDesc: 'Choose a skill root.',
+  skillsPath: 'Skills path',
+  skillsPathDesc: 'Selected skill root.',
+  skillsRootUnavailable: 'Unavailable',
+  skillsScanDirs: 'Additional skill directories',
+  skillsScanDirsDesc: 'One per line.',
+  skillsActions: 'Skill actions',
+  skillsActionsDesc: 'Open skills or plugins.',
+  skillsOpenRoot: 'Open root',
+  skillsOpenPlugins: 'Open plugins',
+  computerUseTitle: 'Computer use',
+  computerUseHint:
+    'GUI-managed computer use connects Codex or Claude Code to GUI-Owl.',
+  computerUseEnable: 'Enable computer use',
+  computerUseEnableDesc: 'Enable the service.',
+  computerUseRuntimeAccess: 'Runtime access',
+  computerUseRuntimeAccessDesc: 'Choose runtimes.',
   agentRuntimeSciForge: 'SciForge Runtime',
   agentRuntimeCodex: 'Codex app-server',
   agentRuntimeClaude: 'Claude Code CLI',
-  modelRouter: 'Model Router',
-  modelRouterConfigFile: 'Model Router config file',
-  modelRouterConfigFileDesc: 'Edit provider members, routing rules, and upstream credentials in the local config file.',
-  modelRouterOpenConfigFile: 'Open Model Router config file',
-  modelRouterOpenConfigFileError: 'Could not open Model Router config file: {{message}}',
-  modelRouterOpenConfigFileUnavailable: 'Model Router config file opener is unavailable.',
-  codexRuntime: 'Codex app-server',
-  codexRuntimeDesc: 'Codex runtime description',
-  codexCommand: 'Command',
-  codexCommandDesc: 'Command description',
-  codexCommandPlaceholder: 'codex',
-  codexHome: 'Codex home',
-  codexHomeDesc: 'Codex home description',
-  codexHomePlaceholder: '~/.sciforge/codex',
-  codexProfile: 'Profile',
-  codexProfileDesc: 'Profile description',
-  codexProfilePlaceholder: 'default',
-  codexExtraArgs: 'Extra arguments',
-  codexExtraArgsDesc: 'Extra arguments description',
-  codexExtraArgsPlaceholder: '--search',
-  claudeRuntime: 'Claude Code CLI',
-  claudeRuntimeDesc: 'Claude runtime description',
-  claudeCommand: 'Command',
-  claudeCommandDesc: 'Command description',
-  claudeCommandPlaceholder: 'claude',
-  claudeConfigDir: 'Claude config dir',
-  claudeConfigDirDesc: 'Claude config dir description',
-  claudeConfigDirPlaceholder: '~/.sciforge/claude-code',
-  claudeModel: 'Model note',
-  claudeModelDesc: 'Model note description',
-  claudeApprovalPolicyDesc: 'Claude approval description',
-  claudeSandboxModeDesc: 'Claude sandbox description',
-  claudeExtraArgs: 'Extra arguments',
-  claudeExtraArgsDesc: 'Extra arguments description',
-  claudeExtraArgsPlaceholder: '--allowedTools Edit',
-  localRuntimeServiceAdvanced: 'Local Runtime service settings',
-  localRuntimeServiceAdvancedDesc: 'Local Runtime service settings description',
-  autoStart: 'Auto start',
-  autoStartDesc: 'Auto start description',
-  port: 'Port',
-  portDesc: 'Port description',
-  localRuntimeBinary: 'Local Runtime binary',
-  localRuntimeBinaryDesc: 'Local Runtime binary description',
-  localRuntimeBinaryPlaceholder: 'Bundled Local Runtime',
-  localRuntimeDataDir: 'Data dir',
-  localRuntimeDataDirDesc: 'Data dir description',
-  localRuntimeTokenEconomy: 'Token-saving mode',
-  localRuntimeTokenEconomyDesc: 'Token-saving mode description',
-  localRuntimeTokenEconomySavings: 'Saved {{tokens}} / {{cost}}',
-  localRuntimeTokenEconomySavingsLoading: 'Loading savings',
-  localRuntimeTokenEconomySavingsEmpty: 'Savings empty',
-  localRuntimeTokenEconomyAdvanced: 'Token-saving advanced settings',
-  localRuntimeTokenEconomyAdvancedDesc: 'Token-saving advanced settings description',
-  localRuntimeTokenEconomyOptions: 'Token-saving options',
-  localRuntimeTokenEconomyOptionsDesc: 'Token-saving options description',
-  localRuntimeCompressToolDescriptions: 'Compress tool descriptions',
-  localRuntimeCompressToolResults: 'Compress tool results',
-  localRuntimeConciseResponses: 'Concise responses',
-  localRuntimeHistoryHygiene: 'History guard',
-  localRuntimeHistoryHygieneDesc: 'History guard description',
-  localRuntimeHistoryMaxResultLines: 'Max result lines',
-  localRuntimeHistoryMaxResultBytes: 'Max result bytes',
-  localRuntimeHistoryMaxResultTokens: 'Max result tokens',
-  localRuntimeHistoryMaxArgumentBytes: 'Max argument bytes',
-  localRuntimeHistoryMaxArgumentTokens: 'Max argument tokens',
-  localRuntimeHistoryMaxArrayItems: 'Max array items',
-  runtimeToken: 'Runtime token',
-  runtimeTokenDesc: 'Runtime token description',
-  showSecret: 'Show',
-  hideSecret: 'Hide',
-  localRuntimeInsecure: 'Insecure',
-  localRuntimeInsecureDesc: 'Insecure description',
-  localRuntimeInsecureForcedDesc: 'Insecure forced',
-  localRuntimeAdvanced: 'Advanced runtime settings',
-  localRuntimeAdvancedDetails: 'Storage, model context, and tool guards',
-  localRuntimeAdvancedDetailsDesc: 'Per-model context policy comes from models.profiles',
-  localRuntimeStorageBackend: 'Storage backend',
-  localRuntimeStorageBackendDesc: 'Storage backend description',
-  localRuntimeStorageHybrid: 'Hybrid storage',
-  localRuntimeStorageFile: 'Pure JSONL file storage',
-  localRuntimeStorageSqlitePath: 'SQLite path',
-  localRuntimeStorageSqlitePathDesc: 'SQLite path description',
-  localRuntimeStorageSqlitePathPlaceholder: 'Automatic SQLite path',
-  localRuntimeModelContextProfile: 'Current model context policy',
-  localRuntimeModelContextProfileDesc: 'Current model context policy description',
-  localRuntimeModelContextModel: 'Matched model',
-  localRuntimeModelContextWindow: 'Context window',
-  localRuntimeModelContextSoft: 'Model soft threshold',
-  localRuntimeModelContextHard: 'Model hard threshold',
-  localRuntimeModelContextSourceBuiltIn: 'Built-in model config',
-  localRuntimeModelContextSourceFallback: 'Fallback model config',
-  localRuntimeCompactionThresholds: 'Fallback compaction thresholds',
-  localRuntimeCompactionThresholdsDesc: 'Fallback compaction thresholds description',
-  localRuntimeCompactionSoftThreshold: 'Fallback soft threshold',
-  localRuntimeCompactionHardThreshold: 'Fallback hard threshold',
-  localRuntimeCompactionSummary: 'Compaction summary',
-  localRuntimeCompactionSummaryDesc: 'Compaction summary description',
-  localRuntimeCompactionSummaryMode: 'Summary mode',
-  localRuntimeCompactionSummaryHeuristic: 'Heuristic summary',
-  localRuntimeCompactionSummaryModel: 'Model summary',
-  localRuntimeCompactionSummaryTimeout: 'Summary timeout',
-  localRuntimeCompactionSummaryMaxTokens: 'Summary max tokens',
-  localRuntimeCompactionSummaryInputBytes: 'Summary input bytes',
-  runtimeGuardExecution: 'Runtime guard',
-  runtimeGuardExecutionDesc: 'Runtime guard description',
-  runtimeGuardExecutionLimits: 'Execution governance limits',
-  runtimeGuardExecutionLimitsDesc: 'Execution governance limits description',
-  runtimeGuardExecutionWindowSize: 'Execution governance window',
-  runtimeGuardExecutionExactRepeatThreshold: 'Exact-repeat threshold',
-  runtimeGuardExecutionSemanticFailureThreshold: 'Semantic-failure threshold',
-  localRuntimeToolBudget: 'Adaptive tool budget',
-  localRuntimeToolBudgetDesc: 'Adaptive tool budget description',
-  localRuntimeToolBudgetProfiles: 'Task budget profiles',
-  localRuntimeToolBudgetProfilesDesc: 'Task budget profiles description',
-  localRuntimeToolBudgetProfileExplanation: 'Explanation',
-  localRuntimeToolBudgetProfileReview: 'Review',
-  localRuntimeToolBudgetProfileImplementation: 'Implementation',
-  localRuntimeToolBudgetProfileLong: 'Long task',
-  localRuntimeToolBudgetSoft: 'Soft budget',
-  localRuntimeToolBudgetHard: 'Phase hard budget',
-  localRuntimeToolBudgetPhases: 'Automatic phases',
-  localRuntimeToolBudgetTotal: 'Total budget',
-  localRuntimeParallelism: 'Tool parallelism',
-  localRuntimeParallelismDesc: 'Tool parallelism description',
-  localRuntimeParallelismLocal: 'Local read-only concurrency',
-  localRuntimeParallelismNetwork: 'Network MCP concurrency',
-  localRuntimeToolArgumentRepair: 'Tool argument repair',
-  localRuntimeToolArgumentRepairDesc: 'Tool argument repair description',
-  localRuntimeDiagnostics: 'SciForge Runtime diagnostics',
-  localRuntimeDiagnosticsAdvanced: 'Detailed diagnostics',
-  localRuntimeDiagnosticsAdvancedDesc: 'Detailed diagnostics description',
-  localRuntimeCapabilities: 'Runtime capabilities',
-  localRuntimeCapabilitiesDesc: 'Runtime capabilities description',
-  localRuntimeDiagnosticsModel: 'Runtime model',
-  localRuntimeDiagnosticsPid: 'Runtime PID',
-  localRuntimeDiagnosticsRefresh: 'Refresh diagnostics',
-  localRuntimeToolDiagnostics: 'Tool diagnostics',
-  localRuntimeToolDiagnosticsDesc: 'Tool diagnostics description',
-  localRuntimeDiagnosticsProviders: 'Providers',
-  localRuntimeDiagnosticsMcpServers: 'MCP servers',
-  localRuntimeDiagnosticsSkills: 'Discovered Skills',
-  localRuntimeDiagnosticsAttachments: 'Attachments',
-  traceRecords: 'Full model and Agent traces',
-  traceRecordsDesc: 'Durable local traces with secrets removed',
-  traceCount: '{{count}} recent trace(s)',
-  traceExportAll: 'Export all',
-  traceExportOne: 'Export this trace',
-  traceClear: 'Clear traces',
-  traceEmpty: 'No durable traces',
-  traceNoPreview: 'No preview',
-  traceUnknownRuntime: 'Model access',
-  traceEventCount: '{{count}} event(s)',
-  traceRequestCount: '{{count}} request(s)',
-  traceTokens: '{{count}} tokens',
-  traceStatus_active: 'active',
-  traceStatus_completed: 'completed',
-  traceStatus_error: 'error',
-  localRuntimeMemoryRecords: 'Memory records',
-  localRuntimeMemoryRecordsDesc: 'Memory records description',
-  localRuntimeMemoryEmpty: 'No memories',
-  localRuntimeMemoryDisable: 'Disable memory',
-  localRuntimeMemoryDelete: 'Delete memory',
-  localRuntimeMemoryDisabled: 'Disabled',
-  skill: 'Skill',
-  skillsLocation: 'Skill location',
-  skillsLocationDesc: 'Skill location description',
-  skillsPath: 'Skills path',
-  skillsPathDesc: 'Skills path description',
-  skillsRootUnavailable: 'Unavailable',
-  skillsScanDirs: 'Scan dirs',
-  skillsScanDirsDesc: 'Scan dirs description',
-  skillsActions: 'Skill actions',
-  skillsActionsDesc: 'Skill actions description',
-  skillsOpenRoot: 'Open root',
-  skillsOpenPlugins: 'Open plugins',
-  mcp: 'MCP',
-  mcpSearchEnabled: 'MCP search enabled',
-  mcpSearchEnabledDesc: 'MCP search description',
-  mcpAdvanced: 'MCP advanced settings',
-  mcpAdvancedDesc: 'MCP advanced settings description',
-  mcpSearchMode: 'MCP search mode',
-  mcpSearchModeDesc: 'MCP search mode description',
-  mcpSearchModeAuto: 'Auto mode',
-  mcpSearchModeSearch: 'Search mode',
-  mcpSearchModeDirect: 'Direct mode',
-  mcpSearchLimits: 'MCP search limits',
-  mcpSearchLimitsDesc: 'MCP search limits description',
-  mcpSearchAutoThreshold: 'Auto threshold',
-  mcpSearchTopKDefault: 'Default results',
-  mcpSearchTopKMax: 'Max results',
-  mcpSearchMinScore: 'Minimum score',
-  mcpSearchDiagnostics: 'MCP search diagnostics',
-  mcpSearchDiagnosticsDesc: 'MCP search diagnostics description',
-  mcpSearchStatus: 'MCP search status',
-  mcpSearchActive: 'Active',
-  mcpSearchInactive: 'Inactive',
-  mcpSearchIndexed: 'Indexed',
-  mcpSearchAdvertised: 'Advertised',
-  configFilePath: 'External tool config path',
-  mcpPathDesc: 'MCP JSON path description',
-  mcpEditor: 'MCP editor',
-  mcpEditorDesc: 'Model and API credentials do not live in this MCP file',
-  mcpFileStatusReady: 'MCP config ready',
-  mcpFileStatusMissing: 'MCP config missing',
-  loading: 'Loading',
-  mcpActions: 'MCP actions',
-  mcpRuntimeHint: 'MCP runtime hint',
-  mcpSave: 'Save MCP config',
-  mcpReload: 'Reload MCP config',
-  mcpOpenDir: 'Open MCP directory',
-  computerUseTitle: 'Computer use',
-  computerUseHint: 'GUI-managed computer use defaults to the GUI-Owl sidecar.',
-  computerUseEnable: 'Enable computer use',
-  computerUseEnableDesc: 'Expose the GUI-managed computer-use MCP server.',
-  computerUseRuntimeAccess: 'Runtime access',
-  computerUseRuntimeAccessDesc: 'Choose runtime access.',
   computerUseBackend: 'Backend status',
-  computerUseBackendDesc: 'Shows the configured backend and latest runtime diagnostic.',
+  computerUseBackendDesc: 'Backend description',
   computerUseConfiguredBackend: 'Configured',
   computerUseRuntimeBackend: 'Runtime',
   computerUsePlatform: 'Platform',
   computerUseBackendAvailable: 'available',
   computerUseBackendUnavailable: 'unavailable',
   computerUseBackendUnknown: 'not reported',
+  computerUseRefresh: 'Refresh status',
+  computerUseDisabledHint: 'Computer use is disabled.',
   computerUseSafetyInputSurface: 'Input surface',
-  computerUseSafetyInputAgentIsolated: 'isolated browser',
-  computerUseSafetyInputHostGlobal: 'host desktop',
-  computerUseSafetyInputHostAppScoped: 'selected app/window',
   computerUseSafetyInputHostApproved: 'GUI approved desktop',
-  computerUseSafetyInputUnknown: 'not reported',
   computerUseSafetyUserInput: 'User input',
-  computerUseSafetyUserInputIsolated: 'does not affect active input',
   computerUseSafetyUserInputHost: 'can affect active input',
   computerUseSafetyHostFocus: 'Host focus',
-  computerUseSafetyHostFocusNotRequired: 'not required',
   computerUseSafetyHostFocusRequired: 'required',
   computerUseSafetyClipboard: 'Clipboard',
   computerUseSafetyClipboardNotUsed: 'not used',
-  computerUseSafetyClipboardUsed: 'can be used',
-  computerUseRefresh: 'Refresh status',
-  computerUseDisabledHint: 'Computer use is disabled in settings.',
   computerUsePermissions: 'macOS permissions',
   computerUsePermissionsDesc: 'Accessibility and Screen Recording permissions.',
   computerUseAccessibility: 'Accessibility',
@@ -273,26 +112,11 @@ const labels: Record<string, string> = {
   computerUseGrantAccessibility: 'Open Accessibility',
   computerUseGrantScreenRecording: 'Open Screen Recording',
   computerUseActiveLeases: 'Active leases',
-  computerUseActiveLeasesDesc: 'Currently held computer-use targets.',
-  computerUseNoActiveLeases: 'No active computer-use leases.',
+  computerUseActiveLeasesDesc: 'Active targets.',
+  computerUseNoActiveLeases: 'No active leases.',
   computerUseRecentRejections: 'Recent rejections',
-  computerUseRecentRejectionsDesc: 'Most recent denials.',
-  computerUseNoRecentRejections: 'No recent computer-use rejections.',
-  permissions: 'Permissions',
-  localRuntimePermissions: 'SciForge Runtime permissions',
-  approvalPolicy: 'Approval policy',
-  approvalPolicyDesc: 'Approval policy description',
-  approvalAuto: 'Auto',
-  approvalOnRequest: 'On request',
-  approvalUntrusted: 'Untrusted',
-  approvalSuggest: 'Suggest',
-  approvalNever: 'Never',
-  sandboxMode: 'Sandbox mode',
-  sandboxModeDesc: 'Sandbox description',
-  sandboxWorkspaceWrite: 'Workspace write',
-  sandboxReadOnly: 'Read only',
-  sandboxFullAccess: 'Full access',
-  sandboxExternal: 'External sandbox'
+  computerUseRecentRejectionsDesc: 'Recent denials.',
+  computerUseNoRecentRejections: 'No recent rejections.'
 }
 
 function t(key: string): string {
@@ -303,70 +127,39 @@ function baseCtx(): Record<string, unknown> {
   const noop = () => undefined
   const asyncNoop = async () => undefined
   const ref = { current: null }
-  const localRuntime = {
-    ...defaultLocalRuntimeSettings(),
-    autoStart: true,
-    runtimeToken: '',
-    insecure: true
-  }
   const codex = {
     ...defaultCodexRuntimeSettings(),
-    command: 'codex-dev',
-    codexHome: '/tmp/codex-home',
-    profile: 'work',
-    model: 'gpt-5-codex',
-    modelProvider: 'openai',
+    command: '/opt/tools/codex',
+    codexHome: '/tmp/hidden-codex-home',
+    profile: 'hidden-profile',
+    model: 'hidden-codex-model',
     extraArgs: ['--search', '--quiet']
+  }
+  const claude = {
+    ...defaultClaudeRuntimeSettings(),
+    command: '/opt/tools/claude',
+    configDir: '/tmp/hidden-claude-config',
+    model: 'sonnet',
+    extraArgs: ['--allowedTools', 'Edit']
   }
   return {
     t,
     tCommon: t,
     form: {
-      activeAgentRuntime: 'sciforge',
-      agents: { sciforge: localRuntime, codex },
+      agents: { codex, claude },
+      computerUse: defaultComputerUseSettings(),
+      codePromptPrefix: 'Prefer pnpm.',
       remoteChannel: { skills: { extraDirs: ['/tmp/project/.agents/skills'] } }
     },
-    localRuntime,
     codex,
-    activeAgentRuntime: 'sciforge',
+    claude,
     update: noop,
-    updateLocalRuntime: noop,
     updateCodex: noop,
-    updateActiveAgentRuntime: noop,
-    showRuntimeToken: false,
-    setShowRuntimeToken: noop,
-    portError: '',
+    updateClaude: noop,
     selectControlClass: 'select',
-    openOnboardingPreview: noop,
-    pickWorkspace: asyncNoop,
-    resetWorkspaceToDefault: noop,
-    workspacePickerError: '',
-    guiUpdateInfo: null,
-    checkingGuiUpdate: false,
-    downloadingGuiUpdate: false,
-    installingGuiUpdate: false,
-    guiUpdateDownloaded: false,
-    guiUpdateProgress: null,
-    guiUpdateError: null,
-    checkGuiUpdate: asyncNoop,
-    downloadGuiUpdate: asyncNoop,
-    installGuiUpdate: asyncNoop,
-    logPath: '',
-    logDirOpenError: '',
-    setLogDirOpenError: noop,
-    pickWriteWorkspace: asyncNoop,
-    resetWriteWorkspaceToDefault: noop,
-    writeWorkspacePickerError: '',
-    writeInlineBaseUrlInherited: false,
-    effectiveWriteInlineBaseUrl: '',
-    writeInlineModelInherited: false,
-    effectiveWriteInlineModel: '',
-    setWriteDebugModalOpen: noop,
-    loadWriteDebugEntries: asyncNoop,
     scrollToAgentSection: noop,
     agentsSectionRef: ref,
     skillSectionRef: ref,
-    mcpSectionRef: ref,
     permissionsSectionRef: ref,
     selectedSkillRoot: {
       id: 'workspace',
@@ -387,181 +180,77 @@ function baseCtx(): Record<string, unknown> {
     skillNotice: null,
     openSkillRoot: asyncNoop,
     openPlugins: noop,
-    mcpConfigPath: '/tmp/project/.sciforge/mcp.json',
-    mcpConfigExists: true,
-    mcpConfigText: '{"mcpServers":{}}',
-    setMcpConfigText: noop,
-    mcpLoading: false,
-    mcpBusy: false,
-    mcpNotice: null,
-    saveMcpConfig: asyncNoop,
-    loadMcpConfig: asyncNoop,
-    openMcpConfigDir: asyncNoop,
-    runtimeInfo: null,
-    toolDiagnostics: null,
-    memoryRecords: [],
-    runtimeDiagnosticsBusy: false,
-    runtimeDiagnosticsNotice: null,
-    refreshLocalRuntimeDiagnostics: asyncNoop,
-    traceSummaries: [],
-    exportTraces: asyncNoop,
-    clearTraces: asyncNoop,
-    disableMemoryRecord: asyncNoop,
-    deleteMemoryRecord: asyncNoop,
-    pickConnectPhoneWorkspace: asyncNoop,
-    resetConnectPhoneWorkspaceToDefault: noop,
-    connectPhoneWorkspacePickerError: '',
     splitSettingsList: (value: string) => value.split('\n').filter(Boolean),
     listSettingsText: (value: string[]) => value.join('\n')
   }
 }
 
-describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
-  it('wraps Codex runtime changes in agents.codex without touching SciForge Runtime settings', () => {
-    const patch = codexRuntimeSettingsPatch({
-      command: 'codex-dev',
-      codexHome: '/tmp/codex-home',
-      extraArgs: ['--search']
+describe('AgentsSettingsSection', () => {
+  it('wraps runtime patches without touching the removed custom runtime', () => {
+    expect(codexRuntimeSettingsPatch({ command: '/opt/tools/codex' })).toEqual({
+      agents: { codex: { command: '/opt/tools/codex' } }
     })
-
-    expect(patch).toEqual({
-      agents: {
-        codex: {
-          command: 'codex-dev',
-          codexHome: '/tmp/codex-home',
-          extraArgs: ['--search']
-        }
-      }
+    expect(
+      claudeRuntimeSettingsPatch({ command: '/opt/tools/claude' })
+    ).toEqual({
+      agents: { claude: { command: '/opt/tools/claude' } }
     })
-    expect(patch.agents?.sciforge).toBeUndefined()
   })
 
-  it('renders Codex and Claude settings forms without the runtime selector', () => {
-    const ctx = {
-      ...baseCtx(),
-      activeAgentRuntime: 'codex'
-    }
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
+  it('renders executable detection and only settings consumed by Codex and Claude Code', () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentsSettingsSection, { ctx: baseCtx() })
+    )
 
-    expect(html).not.toContain('Agent runtime')
-    expect(html).not.toContain('<option value="sciforge" selected="">SciForge Runtime</option>')
-    expect(html).not.toContain('<option value="codex" selected="">Codex app-server</option>')
-    expect(html).not.toContain('<option value="claude">Claude Code CLI</option>')
-    expect(html).toContain('Codex app-server')
-    expect(html).toContain('Claude Code CLI')
-    expect(html).toContain('Command')
-    expect(html).toContain('value="codex-dev"')
-    expect(html).toContain('Codex home')
-    expect(html).toContain('value="/tmp/codex-home"')
-    expect(html).toContain('Profile')
-    expect(html).toContain('value="work"')
-    expect(html).not.toContain('value="gpt-5-codex"')
-    expect(html).not.toContain('Model provider')
-    expect(html).not.toContain('value="openai"')
+    expect(html).toContain('SciForge detects Codex automatically')
+    expect(html).toContain('SciForge detects Claude Code automatically')
+    expect(html).toContain('absolute executable path')
+    expect(html).toContain('value="/opt/tools/codex"')
+    expect(html).toContain('value="/opt/tools/claude"')
+    expect(html).toContain('value="sonnet"')
     expect(html).toContain('Approval policy')
     expect(html).toContain('Sandbox mode')
-    expect(html).toContain('Extra arguments')
     expect(html).toContain('--search')
-    expect(html).toContain('--quiet')
+    expect(html).toContain('--allowedTools')
+
+    expect(html).not.toContain('/tmp/hidden-codex-home')
+    expect(html).not.toContain('/tmp/hidden-claude-config')
+    expect(html).not.toContain('hidden-profile')
+    expect(html).not.toContain('hidden-codex-model')
+    expect(html).not.toContain('Auto start')
   })
 
-  it('omits Model Router service settings and member provider forms from Agents', () => {
-    const ctx = baseCtx() as Record<string, any>
-    const router = defaultModelRouterSettings()
-    ctx.form = {
-      ...ctx.form,
-      modelRouter: {
-        ...router,
-        runtimeApiKey: 'local-runtime-key',
-        profiles: {
-          default: {
-            textReasoner: {
-              provider: 'openai-compatible',
-              baseUrl: 'https://text-member.example/v1',
-              apiKey: 'text-key',
-              model: 'text-model'
-            },
-            imageGenerator: {
-              provider: 'openai-compatible',
-              baseUrl: 'https://image-member.example/v1',
-              apiKey: 'image-key',
-              model: 'image-model'
-            },
-            translators: {
-              vision: {
-                provider: 'qwen-compatible',
-                baseUrl: 'https://vision-member.example/v1',
-                apiKey: 'vision-key',
-                model: 'vision-model'
-              },
-              scientific: {
-                baseUrl: 'http://127.0.0.1:3898',
-                apiKey: 'scientific-key',
-                model: 'scientific-model'
-              }
-            }
-          }
-        }
-      }
-    }
+  it('explains app-managed runtime directories without exposing editable directory fields', () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentsSettingsSection, { ctx: baseCtx() })
+    )
 
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
-
-    expect(html).not.toContain('Model Router')
-    expect(html).not.toContain('Local router base URL')
-    expect(html).not.toContain('Auto-start Model Router')
-    expect(html).not.toContain('Runtime API key')
-    expect(html).not.toContain('Public model alias')
-    expect(html).not.toContain('Model Router config file')
-    expect(html).not.toContain('Open Model Router config file')
-    expect(html).not.toContain('Text member provider')
-    expect(html).not.toContain('Vision member provider')
-    expect(html).not.toContain('Provider member ID')
-    expect(html).not.toContain('Provider member URL')
-    expect(html).not.toContain('Provider member API key')
-    expect(html).not.toContain('Provider member model')
-    expect(html).not.toContain('Provider API key')
-    expect(html).not.toContain('Provider description')
-    expect(html).not.toContain('value="openai-compatible"')
-    expect(html).not.toContain('value="qwen-compatible"')
-    expect(html).not.toMatch(/direct upstream provider/i)
+    expect(html).toContain('Codex state is kept in an app-managed directory')
+    expect(html).toContain(
+      'Claude Code configuration is kept in an app-managed directory'
+    )
+    expect(html).toContain('not configurable here')
   })
 
-  it('does not render Local Runtime credential override fields', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
+  it('removes Kun runtime and its non-functional MCP editor from the settings UI', () => {
+    const html = renderToStaticMarkup(
+      createElement(AgentsSettingsSection, { ctx: baseCtx() })
+    )
 
-    expect(html).not.toContain('Provider API key')
-    expect(html).not.toContain('Provider description')
-    expect(html).not.toContain('Local Runtime API key')
-    expect(html).not.toContain('Local Runtime base URL')
-    expect(html).not.toContain('Override API key')
-    expect(html).not.toContain('Override base URL')
+    expect(html).not.toContain('SciForge Runtime')
+    expect(html).not.toContain('Local Runtime')
+    expect(html).not.toContain('Runtime token')
+    expect(html).not.toContain('Storage backend')
+    expect(html).not.toContain('Token-saving')
+    expect(html).not.toContain('External tools')
+    expect(html).not.toContain('MCP editor')
   })
 
-  it('labels the bottom permissions section as runtime-specific when Codex is active', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, {
-      ctx: {
-        ...baseCtx(),
-        activeAgentRuntime: 'codex'
-      }
-    }))
-
-    expect(html).toContain('SciForge Runtime access')
-    expect(html).toContain('SciForge Runtime permissions')
-  })
-
-  it('renders computer-use status, macOS restart guidance, active leases, and recent rejections', () => {
+  it('keeps Skills and generic computer use for Codex and Claude Code only', () => {
     const ctx = {
       ...baseCtx(),
       computerUseStatus: {
-        settings: {
-          enabled: true,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: true
-          }
-        },
+        settings: defaultComputerUseSettings(),
         permissions: {
           platform: 'darwin',
           supported: true,
@@ -577,232 +266,28 @@ describe('AgentsSettingsSection SciForge Runtime diagnostics smoke', () => {
             backend: 'gui-owl',
             available: true,
             platform: 'darwin',
-            reason: 'GUI-Owl sidecar ready',
+            reason: 'GUI-Owl ready',
             inputIsolation: 'host-approved',
             affectsUserInput: true,
             requiresHostFocus: true,
-            usesHostClipboard: false,
-            activeLeases: [],
-            recentRejections: []
+            usesHostClipboard: false
           },
-          activeLeases: [
-            {
-              leaseId: 'lease-1',
-              computerUseSessionId: 'session-1',
-              agentId: 'agent-main',
-              threadId: 'thread-1',
-              targetId: 'gui-owl:desktop',
-              backend: 'gui-owl',
-              inputIsolation: 'host-approved',
-              affectsUserInput: true,
-              acquiredAt: '2026-06-23T00:00:00.000Z',
-              updatedAt: '2026-06-23T00:00:01.000Z'
-            }
-          ],
-          recentRejections: [
-            {
-              code: 'target_in_use',
-              message: 'main-desktop is already leased',
-              targetId: 'main-desktop'
-            }
-          ]
+          activeLeases: [],
+          recentRejections: []
         }
       }
     }
+    const html = renderToStaticMarkup(
+      createElement(AgentsSettingsSection, { ctx })
+    )
 
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
-
+    expect(html).toContain('Skills')
+    expect(html).toContain('/tmp/project/.agents/skills')
     expect(html).toContain('Computer use')
-    expect(html).toContain('Enable computer use')
-    expect(html).toContain('Runtime access')
     expect(html).toContain('Codex app-server')
-    expect(html).toContain('Configured')
-    expect(html).toContain('gui-owl')
-    expect(html).toContain('available')
-    expect(html).toContain('Input surface')
-    expect(html).toContain('GUI approved desktop')
-    expect(html).toContain('User input')
-    expect(html).toContain('can affect active input')
-    expect(html).toContain('Host focus')
-    expect(html).toContain('required')
-    expect(html).toContain('Clipboard')
-    expect(html).toContain('not used')
-    expect(html).not.toContain('inputIsolation')
-    expect(html).not.toContain('host-approved')
-    expect(html).not.toContain('affectsUserInput')
-    expect(html).not.toContain('requiresHostFocus')
-    expect(html).not.toContain('usesHostClipboard')
-    expect(html).toContain('GUI-Owl sidecar ready')
+    expect(html).toContain('Claude Code CLI')
+    expect(html).not.toContain('SciForge Runtime')
+    expect(html).toContain('GUI-Owl ready')
     expect(html).toContain('macOS permissions')
-    expect(html).toContain('Accessibility')
-    expect(html).toContain('granted, restart needed')
-    expect(html).toContain('Restart SciForge before using computer use.')
-    expect(html).toContain('Screen Recording')
-    expect(html).toContain('Active leases')
-    expect(html).toContain('gui-owl:desktop')
-    expect(html).toContain('agent-main')
-    expect(html).toContain('Recent rejections')
-    expect(html).toContain('target_in_use')
-    expect(html).toContain('main-desktop is already leased')
-  })
-
-  it('does not expose default-runtime-specific permission choices in the Codex runtime form', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, {
-      ctx: {
-        ...baseCtx(),
-        activeAgentRuntime: 'codex'
-      }
-    }))
-
-    expect(html.match(/value="suggest"/g)).toHaveLength(1)
-    expect(html.match(/value="external-sandbox"/g)).toHaveLength(1)
-  })
-
-  it('keeps advanced agent controls behind collapsed disclosures', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('Local Runtime service settings')
-    expect(html).toContain('Token-saving advanced settings')
-    expect(html).toContain('MCP advanced settings')
-    expect(html).not.toContain('<details open')
-  })
-
-  it('renders explicit exact-repeat and semantic-failure governance thresholds', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('Execution governance window')
-    expect(html).toContain('Execution governance limits')
-    expect(html).toContain('Exact-repeat threshold')
-    expect(html).toContain('Semantic-failure threshold')
-  })
-
-  it('renders task budgets and the default 8/4 parallelism controls', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('Adaptive tool budget')
-    expect(html).toContain('Task budget profiles')
-    expect(html).toContain('Explanation')
-    expect(html).toContain('Long task')
-    expect(html).toContain('Local read-only concurrency')
-    expect(html).toContain('Network MCP concurrency')
-    expect(html).toContain('value="8"')
-    expect(html).toContain('value="4"')
-  })
-
-  it('renders pure JSONL as a selectable storage backend', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('Storage backend')
-    expect(html).toContain('<option value="hybrid"')
-    expect(html).toContain('Hybrid storage')
-    expect(html).toContain('<option value="file"')
-    expect(html).toContain('Pure JSONL file storage')
-  })
-
-  it('renders durable trace summaries with export and clear controls', () => {
-    const ctx = {
-      ...baseCtx(),
-      traceSummaries: [{
-        traceId: 'trace-1',
-        runtimeId: 'codex',
-        threadId: 'thread-1',
-        turnId: 'turn-1',
-        sources: ['agent-runtime', 'model-router'],
-        model: 'coding-model',
-        startedAt: '2026-07-19T00:00:00.000Z',
-        endedAt: '2026-07-19T00:00:01.000Z',
-        durationMs: 1_000,
-        status: 'completed',
-        requestCount: 2,
-        eventCount: 12,
-        agentEventCount: 6,
-        errorCount: 0,
-        preview: 'Completed the requested edit.',
-        usage: { totalTokens: 128 }
-      }]
-    }
-
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
-
-    expect(html).toContain('Full model and Agent traces')
-    expect(html).toContain('Durable local traces with secrets removed')
-    expect(html).toContain('Export all')
-    expect(html).toContain('Clear traces')
-    expect(html).toContain('codex · coding-model')
-    expect(html).toContain('thread-1')
-    expect(html).toContain('turn-1')
-    expect(html).toContain('Completed the requested edit.')
-    expect(html).not.toContain('Model request audit')
-    expect(html).not.toContain('memory only')
-  })
-
-  it('shows public router alias compaction thresholds from the built-in model profile', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('Current model context policy')
-    expect(html).toContain('sciforge-router')
-    expect(html).toContain('Built-in model config')
-    expect(html).toContain('1,000,000')
-    expect(html).toContain('980,000')
-    expect(html).toContain('990,000')
-    expect(html).toContain('Fallback compaction thresholds')
-  })
-
-  it('renders MCP, Skill, web, attachment, and memory diagnostics', () => {
-    const ctx = {
-      ...baseCtx(),
-      runtimeInfo: {
-        pid: 123,
-        capabilities: {
-          model: { id: 'deepseek-chat' },
-          mcp: { status: 'available', configuredServers: 2, connectedServers: 2 },
-          web: { status: 'available', provider: 'brave-search' },
-          skills: { status: 'available' },
-          subagents: { status: 'available' },
-          attachments: { status: 'available' },
-          memory: { status: 'available' }
-        }
-      },
-      toolDiagnostics: {
-        providers: [{ id: 'builtin' }, { id: 'mcp' }, { id: 'web' }, { id: 'memory' }],
-        mcpServers: [{ id: 'github' }],
-        skills: { skills: [{ id: 'skill_docs' }] },
-        attachments: { count: 1 }
-      },
-      memoryRecords: [
-        {
-          id: 'mem_1',
-          content: 'Prefer pnpm for this workspace',
-          scope: 'workspace',
-          tags: ['tooling']
-        }
-      ]
-    }
-
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx }))
-
-    expect(html).toContain('SciForge Runtime diagnostics')
-    expect(html).toContain('MCP')
-    expect(html).toContain('available')
-    expect(html).toContain('2/2')
-    expect(html).toContain('brave-search')
-    expect(html).toContain('Providers')
-    expect(html).toContain('MCP servers')
-    expect(html).toContain('Discovered Skills')
-    expect(html).toContain('Prefer pnpm for this workspace')
-    expect(html).toContain('mem_1')
-    expect(html).toContain('Disable memory')
-    expect(html).toContain('Delete memory')
-  })
-
-  it('describes MCP config as an external-tool JSON file instead of model credentials', () => {
-    const html = renderToStaticMarkup(createElement(AgentsSettingsSection, { ctx: baseCtx() }))
-
-    expect(html).toContain('External tool config path')
-    expect(html).toContain('/tmp/project/.sciforge/mcp.json')
-    expect(html).toContain('Model and API credentials do not live in this MCP file')
-    expect(html).not.toContain('DeepSeek auth')
-    expect(html).not.toContain('Base URL are stored in this file')
-    expect(html).not.toContain('config.toml')
   })
 })

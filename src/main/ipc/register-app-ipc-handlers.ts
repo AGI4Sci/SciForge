@@ -78,7 +78,6 @@ import {
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
-  runtimeConfigContentSchema,
   desktopCommandSchema,
   evidenceDagEvidencePreviewResolvePayloadSchema,
   evidenceDagUpdatePayloadSchema,
@@ -435,10 +434,8 @@ type RegisterAppIpcHandlersOptions = {
   pollFeishuInstall: (deviceCode: string) => Promise<ConnectPhoneInstallPollResult>
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
   pollWeixinInstall: (deviceCode: string, weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallPollResult>
-  resolveRuntimeConfigPath: () => string
   getPaperRadarService?: () => PaperRadarWorkerService | null
   researchCards?: ResearchCardService
-  onRuntimeMcpConfigWritten?: (path: string, content: string) => Promise<void> | void
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>
@@ -1230,21 +1227,6 @@ async function assertProjectDagServiceReachable(
   }
 }
 
-function validateMcpConfigContent(content: string): void {
-  const trimmed = content.trim()
-  if (!trimmed) return
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed) as unknown
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`MCP config must be JSON: ${message}`)
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('MCP config must be a JSON object.')
-  }
-}
-
 function runDesktopCommand(
   command: DesktopCommand,
   sender: AppBridgeSender,
@@ -1334,8 +1316,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     pollFeishuInstall,
     startWeixinInstallQrcode,
     pollWeixinInstall,
-    resolveRuntimeConfigPath,
-    onRuntimeMcpConfigWritten,
     showTurnCompleteNotification,
     getAppVersion,
     readGuiUpdateState,
@@ -2705,54 +2685,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       }
       await mkdir(target, { recursive: true })
       return openPathWithShell(target)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('runtimeConfig:read', async () => {
-    const path = resolveRuntimeConfigPath()
-    try {
-      const content = await readFile(path, 'utf8')
-      return { path, content, exists: true as const }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { path, content: '', exists: false as const }
-      }
-      throw error
-    }
-  })
-
-  handleInvoke('runtimeConfig:write', async (_, content: unknown) => {
-    const validatedContent = parseIpcPayload(
-      'runtimeConfig:write',
-      runtimeConfigContentSchema,
-      content
-    )
-    const path = resolveRuntimeConfigPath()
-    validateMcpConfigContent(validatedContent)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, validatedContent, 'utf8')
-    try {
-      await onRuntimeMcpConfigWritten?.(path, validatedContent)
-    } catch (error: unknown) {
-      logError('mcp-config', 'Failed to apply MCP config change after write', {
-        path,
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
-    return { ok: true as const, path }
-  })
-
-  handleInvoke('runtimeConfig:open-dir', async () => {
-    try {
-      const path = resolveRuntimeConfigPath()
-      const dirPath = dirname(path)
-      await mkdir(dirPath, { recursive: true })
-      return openPathWithShell(dirPath)
     } catch (error) {
       return {
         ok: false as const,

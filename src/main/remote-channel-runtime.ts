@@ -31,10 +31,8 @@ import type {
 import {
   DEFAULT_REMOTE_CHANNEL_MODEL,
   buildRemoteChannelRuntimePrompt,
-  getCodexRuntimeSettings,
   normalizeAgentRuntimeId,
   parseRemoteChannelUserPromptForDisplay,
-  resolveLocalRuntimeSettings,
   resolveRuntimeModelRouterSettings
 } from '../shared/app-settings'
 import { APP_WEBHOOK_SECRET_HEADER } from '../shared/app-brand'
@@ -243,18 +241,11 @@ function currentImModel(settings: AppSettingsV1, channel?: RemoteChannelV1): str
 
 function effectiveImRuntimeModel(
   settings: AppSettingsV1,
-  requestedModel: string,
-  runtimeId: AgentRuntimeId
+  requestedModel: string
 ): string {
   const trimmed = requestedModel.trim()
   if (trimmed && trimmed.toLowerCase() !== DEFAULT_REMOTE_CHANNEL_MODEL) return trimmed
-  if (runtimeId !== 'sciforge') {
-    return resolveRuntimeModelRouterSettings(settings).model.trim() ||
-      (runtimeId === 'codex' ? getCodexRuntimeSettings(settings).model.trim() : '') ||
-      trimmed ||
-      DEFAULT_REMOTE_CHANNEL_MODEL
-  }
-  return resolveLocalRuntimeSettings(settings).model.trim() || trimmed || DEFAULT_REMOTE_CHANNEL_MODEL
+  return resolveRuntimeModelRouterSettings(settings).model.trim() || trimmed || DEFAULT_REMOTE_CHANNEL_MODEL
 }
 
 function currentImMode(settings: AppSettingsV1): RemoteChannelRunMode {
@@ -766,7 +757,7 @@ export class RemoteChannelRuntime {
     const existingThreadId = options.threadId?.trim()
     const runtimeId = normalizeAgentRuntimeId(options.runtimeId)
     const requestedModel = normalizeTaskModel(options.model) ?? DEFAULT_REMOTE_CHANNEL_MODEL
-    const model = effectiveImRuntimeModel(settings, requestedModel, runtimeId)
+    const model = effectiveImRuntimeModel(settings, requestedModel)
     return this.runAgentRuntimePrompt(settings, { ...options, model }, runtimeId, workspace, existingThreadId)
   }
 
@@ -2573,7 +2564,7 @@ export class RemoteChannelRuntime {
     threadId: string,
     workspaceRoot: string,
     context: Record<string, unknown>,
-    runtimeId: AgentRuntimeId = 'sciforge'
+    runtimeId: AgentRuntimeId = 'codex'
   ): Promise<RemoteChannelGeneratedFileV1[]> {
     const targetThreadId = threadId.trim()
     if (!targetThreadId) return []

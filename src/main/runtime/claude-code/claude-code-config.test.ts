@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { delimiter, dirname } from 'node:path'
 import { deriveTraceId } from '@sciforge/full-trace'
 import {
   defaultConnectPhoneSettings,
@@ -17,7 +18,8 @@ import {
   claudeCodeCliModel,
   claudeCodeSdkExtraArgs,
   claudeCodeRuntimeEnv,
-  prepareClaudeCodeSdkLaunch
+  prepareClaudeCodeSdkLaunch,
+  resolveClaudeCodeExecutable
 } from './claude-code-config'
 
 const computerUseLaunch = {
@@ -77,6 +79,95 @@ function settings(): AppSettingsV1 {
 }
 
 describe('claude-code config launch helpers', () => {
+  it('keeps the literal default command on the SDK-bundled executable', async () => {
+    let executableChecks = 0
+    await expect(resolveClaudeCodeExecutable(' claude ', {
+      env: { PATH: '/external/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async () => {
+        executableChecks += 1
+        return true
+      },
+      readLoginShellPath: async () => '/login-shell/bin'
+    })).resolves.toBeUndefined()
+    expect(executableChecks).toBe(0)
+  })
+
+  it('expands and validates an explicitly configured executable path', async () => {
+    const checked: string[] = []
+    await expect(resolveClaudeCodeExecutable('~/.local/bin/claude', {
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => {
+        checked.push(path)
+        return true
+      }
+    })).resolves.toBe('/users/tester/.local/bin/claude')
+    expect(checked).toEqual(['/users/tester/.local/bin/claude'])
+
+    await expect(resolveClaudeCodeExecutable('/missing/claude', {
+      platform: 'darwin',
+      isExecutable: async () => false
+    })).rejects.toThrow('missing or not executable: /missing/claude')
+
+    await expect(resolveClaudeCodeExecutable('./bin/claude', {
+      platform: 'darwin',
+      isExecutable: async () => true
+    })).rejects.toThrow('must be absolute')
+  })
+
+  it('resolves a custom command from the inherited PATH', async () => {
+    let loginShellReads = 0
+    await expect(resolveClaudeCodeExecutable('claude-enterprise', {
+      env: { PATH: '/gui/bin:/team/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/team/bin/claude-enterprise',
+      readLoginShellPath: async () => {
+        loginShellReads += 1
+        return ''
+      }
+    })).resolves.toBe('/team/bin/claude-enterprise')
+    expect(loginShellReads).toBe(0)
+  })
+
+  it('falls back to the login-shell PATH and common install directories', async () => {
+    await expect(resolveClaudeCodeExecutable('claude-login', {
+      env: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/volta/bin/claude-login',
+      readLoginShellPath: async () => '/volta/bin:/opt/custom/bin'
+    })).resolves.toBe('/volta/bin/claude-login')
+
+    await expect(resolveClaudeCodeExecutable('claude-local', {
+      env: { PATH: '' },
+      homeDir: '/users/tester',
+      platform: 'linux',
+      isExecutable: async (path) => path === '/users/tester/.local/bin/claude-local',
+      readLoginShellPath: async () => ''
+    })).resolves.toBe('/users/tester/.local/bin/claude-local')
+
+    await expect(resolveClaudeCodeExecutable('claude-nvm', {
+      env: { PATH: '/usr/bin', NVM_BIN: '~/.nvm/current/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/users/tester/.nvm/current/bin/claude-nvm',
+      readLoginShellPath: async () => ''
+    })).resolves.toBe('/users/tester/.nvm/current/bin/claude-nvm')
+  })
+
+  it('reports an actionable error when a custom command cannot be resolved', async () => {
+    await expect(resolveClaudeCodeExecutable('missing-claude', {
+      env: { PATH: '/usr/bin' },
+      homeDir: '/users/tester',
+      platform: 'linux',
+      isExecutable: async () => false,
+      readLoginShellPath: async () => ''
+    })).rejects.toThrow('Use the default "claude" for the SDK-bundled executable')
+  })
+
   it('rejects Coding Plan and non-selected API access without a fallback', async () => {
     const codingPlan = settings()
     codingPlan.activeAgentRuntime = 'codex'
@@ -239,6 +330,27 @@ describe('claude-code config launch helpers', () => {
       '--allowedTools',
       'Edit'
     ])).toEqual({ allowedTools: 'Edit' })
+  })
+
+  it('passes a validated custom executable to the SDK and makes its directory discoverable', async () => {
+    const current = settings()
+    current.agents.claude = {
+      ...(current.agents.claude ?? defaultClaudeRuntimeSettings()),
+      command: process.execPath
+    }
+    const launch = await prepareClaudeCodeSdkLaunch({
+      settings: current,
+      text: 'hello',
+      threadId: 'thread-custom-executable',
+      turnId: 'turn-custom-executable',
+      workspace: '/tmp/workspace',
+      managedConfigDir: '/tmp/claude-managed',
+      env: { PATH: '/usr/bin' }
+    })
+
+    expect(launch.pathToClaudeCodeExecutable).toBe(process.execPath)
+    expect(launch.sdkOptions.pathToClaudeCodeExecutable).toBe(process.execPath)
+    expect(launch.env.PATH?.split(delimiter)[0]).toBe(dirname(process.execPath))
   })
 
   it('injects the managed computer-use MCP server into SDK options when configured', async () => {

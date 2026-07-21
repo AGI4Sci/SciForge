@@ -308,6 +308,7 @@ export type ClaudeRuntimeSettingsV1 = {
 }
 
 export type AgentRuntimeSettingsEnvelopeV1 = {
+  /** @deprecated Legacy/internal tuning only; SciForge is not a selectable runtime. */
   sciforge: LocalRuntimeSettingsV1
   codex?: CodexRuntimeSettingsV1
   claude?: ClaudeRuntimeSettingsV1

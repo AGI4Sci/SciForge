@@ -68,8 +68,8 @@ import {
   withVisualExecutionRequirement
 } from './visual-execution-guard'
 import {
-  EXECUTION_CONTINUITY_TEXT_METADATA_KEY,
   RuntimeExecutionIntegrityGuard,
+  executionObligationsFromIntent,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
 import {
@@ -136,6 +136,9 @@ const RUNTIME_HANDOFF_TRANSCRIPT_ITEM_MAX_BYTES = 4_000
 const RUNTIME_HANDOFF_TRANSCRIPT_TOOL_LIMIT = 8
 const AUXILIARY_READ_CACHE_MS = 1_000
 const AUXILIARY_READ_CACHE_MAX_ENTRIES = 128
+// `sciforge` remains accepted as a legacy identifier so persisted metadata can
+// fail with a clear "adapter not registered" result. Production startup only
+// registers Codex and Claude; there is no bundled adapter behind this ID.
 const AGENT_RUNTIME_IDS = ['sciforge', 'codex', 'claude'] as const satisfies readonly AgentRuntimeId[]
 
 type ActiveThreadTurn = {
@@ -327,7 +330,12 @@ export class AgentRuntimeHost {
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       })
-      this.executionIntegrity.rememberSteer(adapter.id, input.threadId, input.turnId, steerInput.text)
+      this.executionIntegrity.rememberSteer(
+        adapter.id,
+        input.threadId,
+        input.turnId,
+        executionObligationsFromIntent(input.executionIntent)
+      )
       await adapter.steerTurn(context, steerInput)
       return { value: undefined, turnId: input.turnId }
     }, () => undefined)
@@ -1314,15 +1322,11 @@ export class AgentRuntimeHost {
     if (!service || !threadId) return input
     const ledger = await service.peek({ runtimeId, threadId }).catch(() => null)
     const ledgerText = renderRuntimeContextLedger(ledger, input.clientDirectiveId)
-    const continuityText = runtimeDirectiveContinuityText(ledger)
-    if (!ledgerText && !continuityText) return input
+    if (!ledgerText) return input
     return {
       ...input,
-      text: ledgerText ? `${ledgerText}\n\n${input.text}` : input.text,
-      displayText: input.displayText ?? input.text,
-      metadata: continuityText
-        ? { ...(input.metadata ?? {}), [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: continuityText }
-        : input.metadata
+      text: `${ledgerText}\n\n${input.text}`,
+      displayText: input.displayText ?? input.text
     }
   }
 
@@ -1335,18 +1339,8 @@ export class AgentRuntimeHost {
       ? await service.peek({ runtimeId, threadId: input.threadId }).catch(() => null)
       : null
     const ledgerText = renderRuntimeDirectiveContinuity(ledger, input.clientDirectiveId)
-    const continuityText = runtimeDirectiveContinuityText(ledger)
     const text = ledgerText ? `${ledgerText}\n\n${input.text}` : input.text
-    const guarded = withExecutionIntegrityRequirement({
-      runtimeId,
-      threadId: input.threadId,
-      text,
-      displayText: input.text,
-      ...(continuityText
-        ? { metadata: { [EXECUTION_CONTINUITY_TEXT_METADATA_KEY]: continuityText } }
-        : {})
-    })
-    return { ...input, text: guarded.text }
+    return { ...input, text }
   }
 
   private withSharedContextState(
@@ -1741,19 +1735,20 @@ export class AgentRuntimeHost {
       return null
     }
     if (capabilities.controls.steer !== true) return null
+    this.executionIntegrity.rememberSteer(
+      adapter.id,
+      threadId,
+      activity.turnId,
+      executionObligationsFromIntent(input.executionIntent)
+    )
     await adapter.steerTurn(context, {
       runtimeId: adapter.id,
       threadId,
       turnId: activity.turnId,
       text: input.text,
-      ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {})
+      ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
+      ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
     })
-    this.executionIntegrity.rememberSteer(
-      adapter.id,
-      threadId,
-      activity.turnId,
-      optionalString(recordPayload(input.metadata)[EXECUTION_CONTINUITY_TEXT_METADATA_KEY]) ?? input.text
-    )
     await this.publishSyntheticEvent(adapter, context, {
       kind: 'runtime_status',
       runtimeId: adapter.id,
@@ -2361,7 +2356,9 @@ function optionalString(value: unknown): string | undefined {
 }
 
 function optionalRuntimeId(value: unknown): AgentRuntimeId | undefined {
-  return AGENT_RUNTIME_IDS.includes(value as AgentRuntimeId) ? value as AgentRuntimeId : undefined
+  return typeof value === 'string' && (AGENT_RUNTIME_IDS as readonly string[]).includes(value)
+    ? value as AgentRuntimeId
+    : undefined
 }
 
 function requiredRuntimeId(payload: Record<string, unknown>, key: string): AgentRuntimeId {
@@ -2779,10 +2776,6 @@ function renderRuntimeDirectiveContinuity(
     'Accepted user directives in chronological order; later directives override conflicting earlier directives:',
     JSON.stringify(directives, null, 2)
   ].join('\n')
-}
-
-function runtimeDirectiveContinuityText(ledger: AgentRuntimeContextLedger | null): string {
-  return (ledger?.directives ?? []).map((directive) => directive.text.trim()).filter(Boolean).join('\n\n')
 }
 
 const CANONICAL_VISIBLE_STATE_MAX_COMPONENTS = 64

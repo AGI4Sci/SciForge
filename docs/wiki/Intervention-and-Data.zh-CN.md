@@ -42,7 +42,7 @@ SciForge 的 UI 价值不只是展示 Agent 输出，而是让研究者在机器
 - App logs：`<userData>/logs/`，默认保留约 2 天，可在设置中调整。
 - Full traces：`<userData>/full-traces/`，默认保留 30 天；写入前会脱敏已知凭据、Authorization header 和识别到的 secret。
 - Paper Radar：`<userData>/paper-radar/` 下的 SQLite 元数据和 profiles。
-- SciForge Runtime：默认 `~/.sciforge/runtime`；Codex / Claude Code 使用各自 managed home 或 config dir。
+- Codex / Claude Code 使用各自的 SciForge managed home 或 config dir；旧 `~/.sciforge/runtime` 数据不会被自动删除，可按需备份后手动清理。
 
 平台 userData 根目录：macOS `~/Library/Application Support/SciForge`，Windows `%APPDATA%/SciForge`，Linux `~/.config/SciForge`。
 

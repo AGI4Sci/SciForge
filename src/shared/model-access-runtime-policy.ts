@@ -22,7 +22,7 @@ export function resolveModelAccessRuntimePolicy(
       mode: 'api',
       activeRuntime,
       planAdapterId: null,
-      sciforge: activeRuntime === 'sciforge',
+      sciforge: false,
       codex: activeRuntime === 'codex',
       claude: activeRuntime === 'claude'
     }

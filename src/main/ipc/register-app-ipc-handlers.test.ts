@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -109,7 +109,6 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
     pollFeishuInstall: vi.fn() as never,
     startWeixinInstallQrcode: vi.fn() as never,
     pollWeixinInstall: vi.fn() as never,
-    resolveRuntimeConfigPath: () => '/tmp/sciforge-runtime.json',
     showTurnCompleteNotification: vi.fn() as never,
     getAppVersion: () => '0.1.0',
     readGuiUpdateState: vi.fn() as never,
@@ -2584,62 +2583,6 @@ describe('registerAppIpcHandlers', () => {
       }
     })
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
-  })
-
-  it('writes MCP config JSON and notifies the runtime apply hook', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const tempRoot = mkdtempSync(join(tmpdir(), 'sciforge-ipc-'))
-    const configPath = join(tempRoot, 'mcp.json')
-    const onRuntimeMcpConfigWritten = vi.fn(async () => undefined)
-    const content = `${JSON.stringify({
-      servers: {
-        filesystem: {
-          command: 'npx',
-          args: ['-y', '@modelcontextprotocol/server-filesystem', '/tmp/project']
-        }
-      }
-    }, null, 2)}\n`
-
-    try {
-      registerAppIpcHandlers(registerOptions({
-        resolveRuntimeConfigPath: () => configPath,
-        onRuntimeMcpConfigWritten
-      }))
-
-      await expect(handlers.get('runtimeConfig:write')?.({}, content)).resolves.toEqual({
-        ok: true,
-        path: configPath
-      })
-      expect(readFileSync(configPath, 'utf8')).toBe(content)
-      expect(onRuntimeMcpConfigWritten).toHaveBeenCalledWith(configPath, content)
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('rejects invalid MCP config JSON before writing or applying it', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const tempRoot = mkdtempSync(join(tmpdir(), 'sciforge-ipc-'))
-    const configPath = join(tempRoot, 'mcp.json')
-    const onRuntimeMcpConfigWritten = vi.fn(async () => undefined)
-
-    try {
-      registerAppIpcHandlers(registerOptions({
-        resolveRuntimeConfigPath: () => configPath,
-        onRuntimeMcpConfigWritten
-      }))
-
-      await expect(handlers.get('runtimeConfig:write')?.({}, '{')).rejects.toThrow(
-        /MCP config must be JSON/
-      )
-      await expect(handlers.get('runtimeConfig:write')?.({}, '[]')).rejects.toThrow(
-        /MCP config must be a JSON object/
-      )
-      expect(existsSync(configPath)).toBe(false)
-      expect(onRuntimeMcpConfigWritten).not.toHaveBeenCalled()
-    } finally {
-      rmSync(tempRoot, { recursive: true, force: true })
-    }
   })
 
   it('uses the GUI-managed WeChat bridge for WeChat install handlers', async () => {

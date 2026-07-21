@@ -77,8 +77,75 @@ describe('codex config launch helpers', () => {
     await expect(resolveCodexCommand('codex', {
       env: { PATH: '/usr/bin:/bin' },
       homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(command)
+  })
+
+  it('uses the interactive login shell PATH when Finder supplies only the system PATH', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-login-shell-'))
+    const shellBin = join(home, 'shell-managed', 'bin')
+    const command = join(shellBin, 'codex')
+    const fakeShell = join(home, 'test-login-shell')
+    await mkdir(shellBin, { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+    await writeFile(
+      fakeShell,
+      '#!/bin/sh\nprintf \'\\036%s\\037\' "$SCIFORGE_TEST_LOGIN_PATH"\n',
+      'utf8'
+    )
+    await chmod(fakeShell, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: {
+        PATH: '/usr/bin:/bin',
+        SHELL: fakeShell,
+        SCIFORGE_TEST_LOGIN_PATH: `/usr/bin:${shellBin}`
+      },
+      homeDir: home,
       platform: 'darwin'
     })).resolves.toBe(command)
+  })
+
+  it.each([
+    ['asdf', ['.asdf', 'shims']],
+    ['Volta', ['.volta', 'bin']],
+    ['pnpm', ['Library', 'pnpm']],
+    ['Bun', ['.bun', 'bin']]
+  ])('finds a Codex install managed by %s outside the inherited PATH', async (_manager, parts) => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-manager-'))
+    const binDir = join(home, ...parts)
+    const command = join(binDir, 'codex')
+    await mkdir(binDir, { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(command)
+  })
+
+  it('searches installed nvm Node versions when no version is activated in Finder', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-nvm-'))
+    const olderBin = join(home, '.nvm', 'versions', 'node', 'v20.19.0', 'bin')
+    const newerBin = join(home, '.nvm', 'versions', 'node', 'v22.17.0', 'bin')
+    await mkdir(olderBin, { recursive: true })
+    await mkdir(newerBin, { recursive: true })
+    await writeFile(join(olderBin, 'codex'), '#!/bin/sh\n', 'utf8')
+    await writeFile(join(newerBin, 'codex'), '#!/bin/sh\n', 'utf8')
+    await chmod(join(olderBin, 'codex'), 0o755)
+    await chmod(join(newerBin, 'codex'), 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(join(newerBin, 'codex'))
   })
 
   it('finds the Windows cmd shim when Explorer provides Path instead of PATH', async () => {
@@ -94,7 +161,10 @@ describe('codex config launch helpers', () => {
         APPDATA: join(home, 'AppData', 'Roaming')
       },
       homeDir: home,
-      platform: 'win32'
+      platform: 'win32',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect a Unix shell on Windows')
+      }
     })).resolves.toBe(command)
   })
 
@@ -122,18 +192,61 @@ describe('codex config launch helpers', () => {
     await expect(readFile(resolved, 'utf8')).resolves.toBe('packaged-codex-runtime')
   })
 
-  it('preserves an explicit Codex path and prefers the supplied PATH', async () => {
-    await expect(resolveCodexCommand('~/custom/codex', {
-      homeDir: '/Users/example',
-      platform: 'darwin',
-      isExecutable: async () => false
-    })).resolves.toBe('/Users/example/custom/codex')
+  it('expands and validates an explicit Codex executable path', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-explicit-codex-'))
+    const command = join(home, 'custom', 'codex')
+    await mkdir(join(home, 'custom'), { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
 
+    await expect(resolveCodexCommand('~/custom/codex', {
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect the shell for an explicit path')
+      }
+    })).resolves.toBe(command)
+
+    const windowsCommand = 'C:\\Tools\\Codex\\codex.exe'
+    await expect(resolveCodexCommand(windowsCommand, {
+      homeDir: 'C:\\Users\\example',
+      platform: 'win32',
+      isExecutable: async (path) => path === windowsCommand
+    })).resolves.toBe(windowsCommand)
+  })
+
+  it('rejects missing and relative explicit Codex paths with actionable errors', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-invalid-codex-'))
+
+    await expect(resolveCodexCommand('~/missing/codex', {
+      homeDir: home,
+      platform: 'darwin'
+    })).rejects.toThrow(
+      `Codex executable was not found or is not executable at "${join(home, 'missing', 'codex')}". ` +
+      'Check the path and file permissions, or use "codex" to auto-detect it.'
+    )
+
+    await expect(resolveCodexCommand('./tools/codex', {
+      homeDir: home,
+      platform: 'darwin',
+      isExecutable: async () => {
+        throw new Error('must not inspect a relative explicit path')
+      }
+    })).rejects.toThrow(
+      'Codex command path must be absolute: "./tools/codex". ' +
+      'Enter the absolute path to the Codex executable, or use "codex" to auto-detect it.'
+    )
+  })
+
+  it('prefers the supplied PATH for a bare Codex command', async () => {
     await expect(resolveCodexCommand('codex', {
       env: { PATH: '/custom/bin:/usr/bin' },
       homeDir: '/Users/example',
       platform: 'darwin',
-      isExecutable: async (path) => path === '/custom/bin/codex'
+      isExecutable: async (path) => path === '/custom/bin/codex',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect the shell after PATH resolves the command')
+      }
     })).resolves.toBe('/custom/bin/codex')
   })
 

@@ -1,8 +1,0 @@
-# Build artifacts
-dist/
-node_modules/
-*.tsbuildinfo
-
-# Local data and caches
-*.log
-.DS_Store

@@ -1,32 +1,19 @@
 import type { ReactElement } from 'react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   codexSettingsPatch,
   claudeSettingsPatch,
-  localRuntimeSettingsPatch,
   type AppSettingsPatch,
   type CodexRuntimeSettingsPatchV1,
   type ClaudeRuntimeSettingsPatchV1,
   getClaudeRuntimeSettings,
   getCodexRuntimeSettings,
-  getLocalRuntimeSettings,
   getModelAccessSettings,
   getModelRouterSettings,
-  isLocalRuntimeInsecure,
-  type AppSettingsV1,
+  type AppSettingsV1
 } from '@shared/app-settings'
-import type {
-  AgentRuntimeGitCheckpoint
-} from '@shared/agent-runtime-contract'
-import type { TraceSummary } from '@sciforge/full-trace'
 import { rendererRuntimeClient } from '../agent/runtime-client'
-import { getProvider } from '../agent/registry'
-import type {
-  LocalRuntimeMemoryRecordJson,
-  LocalRuntimeInfoJson,
-  LocalRuntimeToolDiagnosticsJson
-} from '../agent/local-runtime-contract'
 import { applyTheme, applyUiFontScale } from '../lib/apply-theme'
 import { formatWorkspacePickerError } from '../lib/format-workspace-picker-error'
 import {
@@ -42,14 +29,14 @@ import { useSettingsGuiUpdate } from './use-settings-gui-update'
 import {
   DEFAULT_WORKSPACE_ROOT,
   coerceRendererSettings,
-  hasValidPort,
   listSettingsText,
   mergeSettings,
   splitSettingsList
 } from './settings-utils'
-import { loadLocalRuntimeDiagnostics } from '../lib/load-local-runtime-diagnostics'
-import { createSettingsMemoryActions } from '../lib/settings-memory-actions'
-import { SETTINGS_CHANGED_EVENT, emitRendererSettingsChanged } from '../lib/keyboard-shortcut-settings'
+import {
+  SETTINGS_CHANGED_EVENT,
+  emitRendererSettingsChanged
+} from '../lib/keyboard-shortcut-settings'
 import type { InlineNotice } from './settings-controls'
 import {
   AgentsSettingsSection,
@@ -60,51 +47,20 @@ import {
   SpeechToTextSettingsSection
 } from './settings-sections'
 
-type SettingsCategory = 'general' | 'speechToText' | 'agents' | 'shortcuts' | 'connectPhone' | 'remoteResources'
+type SettingsCategory =
+  | 'general'
+  | 'speechToText'
+  | 'agents'
+  | 'shortcuts'
+  | 'connectPhone'
+  | 'remoteResources'
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 type SettingsPatch = AppSettingsPatch
-type MemoryScopeFilter = 'all' | 'user' | 'workspace' | 'project'
 type SkillRootOption = {
   id: SkillRootId
   label: string
   path: string
   available: boolean
-}
-
-function unknownRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : {}
-}
-
-function clipDiagnosticText(value: string, limit = 12_000): string {
-  return value.length > limit ? `${value.slice(0, limit)}\n...` : value
-}
-
-function formatGitCheckpointPreviewResult(result: unknown, emptyLabel: string): string {
-  const response = unknownRecord(result)
-  if (response.ok === false) {
-    return String(response.message ?? response.reason ?? emptyLabel)
-  }
-  const value = unknownRecord(response.value ?? result)
-  const sections: string[] = []
-  const untrackedFiles = Array.isArray(value.untrackedFiles)
-    ? value.untrackedFiles.filter((item): item is string => typeof item === 'string')
-    : []
-  if (untrackedFiles.length > 0) {
-    sections.push(`Untracked files:\n${untrackedFiles.slice(0, 50).join('\n')}`)
-  }
-  const stagedPatch = typeof value.stagedPatch === 'string' ? value.stagedPatch.trim() : ''
-  if (stagedPatch) sections.push(`Staged patch:\n${stagedPatch}`)
-  const unstagedPatch = typeof value.unstagedPatch === 'string' ? value.unstagedPatch.trim() : ''
-  if (unstagedPatch) sections.push(`Unstaged patch:\n${unstagedPatch}`)
-  return clipDiagnosticText(sections.join('\n\n') || emptyLabel)
-}
-
-function runtimeResultMessage(result: unknown): string | null {
-  const response = unknownRecord(result)
-  if (response.ok !== false) return null
-  return String(response.message ?? response.reason ?? 'Operation failed.')
 }
 
 export function SettingsView(): ReactElement {
@@ -123,51 +79,31 @@ export function SettingsView(): ReactElement {
   const [category, setCategory] = useState<SettingsCategory>('general')
   const [form, setForm] = useState<AppSettingsV1 | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
-  const [workspacePickerError, setWorkspacePickerError] = useState<string | null>(null)
-  const [connectPhoneWorkspacePickerError, setConnectPhoneWorkspacePickerError] = useState<string | null>(null)
+  const [workspacePickerError, setWorkspacePickerError] = useState<
+    string | null
+  >(null)
+  const [
+    connectPhoneWorkspacePickerError,
+    setConnectPhoneWorkspacePickerError
+  ] = useState<string | null>(null)
   const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
   const [saveError, setSaveError] = useState<string | null>(null)
-  const [showRuntimeToken, setShowRuntimeToken] = useState(false)
   const [logPath, setLogPath] = useState('')
   const [logDirOpenError, setLogDirOpenError] = useState<string | null>(null)
-  const [skillRootId, setSkillRootId] = useState<SkillRootId>(() => loadPreferredSkillRootId())
+  const [skillRootId, setSkillRootId] = useState<SkillRootId>(() =>
+    loadPreferredSkillRootId()
+  )
   const [skillNotice, setSkillNotice] = useState<InlineNotice | null>(null)
-  const [mcpConfigPath, setMcpConfigPath] = useState('~/.sciforge/mcp.json')
-  const [mcpConfigText, setMcpConfigText] = useState('')
-  const [mcpConfigExists, setMcpConfigExists] = useState(false)
-  const [mcpLoading, setMcpLoading] = useState(false)
-  const [mcpLoaded, setMcpLoaded] = useState(false)
-  const [mcpBusy, setMcpBusy] = useState(false)
-  const [mcpNotice, setMcpNotice] = useState<InlineNotice | null>(null)
-  const [runtimeInfo, setRuntimeInfo] = useState<LocalRuntimeInfoJson | null>(null)
-  const [toolDiagnostics, setToolDiagnostics] = useState<LocalRuntimeToolDiagnosticsJson | null>(null)
-  const [memoryRecords, setMemoryRecords] = useState<LocalRuntimeMemoryRecordJson[]>([])
-  const [memoryScopeFilter, setMemoryScopeFilter] = useState<MemoryScopeFilter>('all')
-  const [memoryQuery, setMemoryQuery] = useState('')
-  const [memoryDraftContent, setMemoryDraftContent] = useState('')
-  const [memoryDraftScope, setMemoryDraftScope] = useState<'user' | 'workspace' | 'project'>('workspace')
-  const [memoryEditingId, setMemoryEditingId] = useState<string | null>(null)
-  const [memoryEditingContent, setMemoryEditingContent] = useState('')
-  const [traceSummaries, setTraceSummaries] = useState<TraceSummary[]>([])
-  const [gitCheckpoints, setGitCheckpoints] = useState<AgentRuntimeGitCheckpoint[]>([])
-  const [gitCheckpointPreviewId, setGitCheckpointPreviewId] = useState<string | null>(null)
-  const [gitCheckpointPreview, setGitCheckpointPreview] = useState('')
-  const [gitCheckpointForceRestore, setGitCheckpointForceRestore] = useState(false)
-  const [runtimeDiagnosticsBusy, setRuntimeDiagnosticsBusy] = useState(false)
-  const [runtimeDiagnosticsNotice, setRuntimeDiagnosticsNotice] = useState<InlineNotice | null>(null)
   const initializedCategory = useRef(false)
   const saveTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const statusTimer = useRef<ReturnType<typeof window.setTimeout> | null>(null)
   const draftVersion = useRef(0)
   const agentsSectionRef = useRef<HTMLDivElement | null>(null)
   const skillSectionRef = useRef<HTMLDivElement | null>(null)
-  const mcpSectionRef = useRef<HTMLDivElement | null>(null)
   const permissionsSectionRef = useRef<HTMLDivElement | null>(null)
   const formTheme = form?.theme
   const formUiFontScale = form?.uiFontScale
   const formWorkspaceRoot = form?.workspaceRoot
-  const formLocalRuntime = form ? getLocalRuntimeSettings(form) : null
-  const formPort = formLocalRuntime?.port
   const formGuiUpdateChannel = form?.guiUpdate?.channel
   const {
     checkingGuiUpdate,
@@ -209,14 +145,17 @@ export function SettingsView(): ReactElement {
 
   useEffect(() => {
     const onSettingsChanged = (event: Event): void => {
-      const next = coerceRendererSettings((event as CustomEvent<AppSettingsV1>).detail)
+      const next = coerceRendererSettings(
+        (event as CustomEvent<AppSettingsV1>).detail
+      )
       setForm(next)
       void applyI18n(next.locale)
       void reloadUiSettings()
       void probeRuntime('background')
     }
     window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
-    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () =>
+      window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
   }, [applyI18n, probeRuntime, reloadUiSettings])
 
   useEffect(() => {
@@ -227,19 +166,28 @@ export function SettingsView(): ReactElement {
 
   useEffect(() => {
     if (typeof window.sciforge?.getLogPath !== 'function') return
-    void window.sciforge.getLogPath().then((p) => setLogPath(p)).catch(() => undefined)
+    void window.sciforge
+      .getLogPath()
+      .then((p) => setLogPath(p))
+      .catch(() => undefined)
   }, [category])
 
   useEffect(() => {
     if (!form || initializedCategory.current) return
     initializedCategory.current = true
     const access = getModelAccessSettings(form)
-    const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
-    const accessConfigured = access?.mode === 'coding-plan'
-      ? Boolean(access.planAdapterId.trim())
-      : access?.mode === 'api'
-        ? Boolean(textReasoner.apiKey.trim() && textReasoner.baseUrl.trim() && textReasoner.model.trim())
-        : false
+    const textReasoner =
+      getModelRouterSettings(form).profiles.default.textReasoner
+    const accessConfigured =
+      access?.mode === 'coding-plan'
+        ? Boolean(access.planAdapterId.trim())
+        : access?.mode === 'api'
+          ? Boolean(
+              textReasoner.apiKey.trim() &&
+              textReasoner.baseUrl.trim() &&
+              textReasoner.model.trim()
+            )
+          : false
     if (!accessConfigured) {
       setCategory('general')
     }
@@ -281,10 +229,20 @@ export function SettingsView(): ReactElement {
     ) {
       return
     }
-    const refs: Record<Exclude<SettingsRouteSection, 'general' | 'speechToText' | 'connectPhone' | 'remoteResources' | 'shortcuts'>, HTMLDivElement | null> = {
+    const refs: Record<
+      Exclude<
+        SettingsRouteSection,
+        | 'general'
+        | 'speechToText'
+        | 'connectPhone'
+        | 'remoteResources'
+        | 'shortcuts'
+      >,
+      HTMLDivElement | null
+    > = {
       agents: agentsSectionRef.current,
       skill: skillSectionRef.current,
-      mcp: mcpSectionRef.current
+      mcp: agentsSectionRef.current
     }
     const target = refs[settingsSection]
     if (!target) return
@@ -299,12 +257,6 @@ export function SettingsView(): ReactElement {
       if (statusTimer.current) window.clearTimeout(statusTimer.current)
     }
   }, [])
-
-  const portError = useMemo(() => {
-    if (!form || typeof formPort !== 'number') return null
-    if (!hasValidPort(form)) return t('portInvalid')
-    return null
-  }, [form, formPort, t])
 
   const skillRootOptions = useMemo<SkillRootOption[]>(() => {
     const workspaceRoot = normalizeWorkspaceRoot(formWorkspaceRoot)
@@ -338,11 +290,14 @@ export function SettingsView(): ReactElement {
   }, [formWorkspaceRoot, tCommon])
 
   const selectedSkillRoot =
-    skillRootOptions.find((option) => option.id === skillRootId && option.available) ??
-    skillRootOptions.find((option) => option.available)
+    skillRootOptions.find(
+      (option) => option.id === skillRootId && option.available
+    ) ?? skillRootOptions.find((option) => option.available)
 
   useEffect(() => {
-    const selectedOption = skillRootOptions.find((option) => option.id === skillRootId && option.available)
+    const selectedOption = skillRootOptions.find(
+      (option) => option.id === skillRootId && option.available
+    )
     if (selectedOption) {
       savePreferredSkillRootId(skillRootId)
       return
@@ -353,31 +308,6 @@ export function SettingsView(): ReactElement {
     }
   }, [skillRootId, skillRootOptions])
 
-  const loadMcpConfig = async (): Promise<void> => {
-    if (typeof window.sciforge?.getRuntimeConfigFile !== 'function') return
-    setMcpLoading(true)
-    setMcpNotice(null)
-    try {
-      const config = await window.sciforge.getRuntimeConfigFile()
-      setMcpConfigPath(config.path)
-      setMcpConfigText(config.content)
-      setMcpConfigExists(config.exists)
-      setMcpLoaded(true)
-    } catch (e) {
-      setMcpNotice({
-        tone: 'error',
-        message: e instanceof Error ? e.message : String(e)
-      })
-    } finally {
-      setMcpLoading(false)
-    }
-  }
-
-  useEffect(() => {
-    if (category !== 'agents' || mcpLoaded || mcpLoading) return
-    void loadMcpConfig()
-  }, [category, mcpLoaded, mcpLoading])
-
   const openSkillRoot = async (): Promise<void> => {
     if (!selectedSkillRoot?.path || !selectedSkillRoot.available) {
       setSkillNotice({ tone: 'error', message: t('skillsRootUnavailable') })
@@ -387,219 +317,35 @@ export function SettingsView(): ReactElement {
     setSkillNotice(null)
     const result = await window.sciforge.openSkillRoot(selectedSkillRoot.path)
     if (!result.ok) {
-      setSkillNotice({ tone: 'error', message: result.message ?? t('applyFailed') })
-    }
-  }
-
-  const saveMcpConfig = async (): Promise<void> => {
-    if (typeof window.sciforge?.setRuntimeConfigFile !== 'function') return
-    setMcpBusy(true)
-    setMcpNotice(null)
-    try {
-      const result = await window.sciforge.setRuntimeConfigFile(mcpConfigText)
-      setMcpConfigPath(result.path)
-      setMcpConfigExists(true)
-      setMcpNotice({
-        tone: 'success',
-        message: t('mcpSaved', { path: result.path })
-      })
-    } catch (e) {
-      setMcpNotice({
+      setSkillNotice({
         tone: 'error',
-        message: e instanceof Error ? e.message : String(e)
-      })
-    } finally {
-      setMcpBusy(false)
-    }
-  }
-
-  const openMcpConfigDir = async (): Promise<void> => {
-    if (typeof window.sciforge?.openRuntimeConfigDir !== 'function') return
-    const result = await window.sciforge.openRuntimeConfigDir()
-    if (!result.ok) {
-      setMcpNotice({ tone: 'error', message: result.message ?? t('applyFailed') })
-    }
-  }
-
-  const refreshLocalRuntimeDiagnostics = useCallback(async (): Promise<void> => {
-    const provider = getProvider()
-    setRuntimeDiagnosticsBusy(true)
-    setRuntimeDiagnosticsNotice(null)
-    try {
-      setTraceSummaries(await window.sciforge.traces.summaries({ limit: 20 }))
-      const loaded = await loadLocalRuntimeDiagnostics(provider, {
-        workspace: normalizeWorkspaceRoot(formWorkspaceRoot),
-        memoryScope: memoryScopeFilter === 'all' ? undefined : memoryScopeFilter,
-        memoryQuery
-      })
-      if (loaded.runtimeInfo !== undefined) setRuntimeInfo(loaded.runtimeInfo)
-      if (loaded.toolDiagnostics !== undefined) setToolDiagnostics(loaded.toolDiagnostics)
-      if (loaded.memoryRecords !== undefined) setMemoryRecords(loaded.memoryRecords)
-      if (typeof provider.listGitCheckpoints === 'function') {
-        setGitCheckpoints(await provider.listGitCheckpoints({
-          workspaceRoot: normalizeWorkspaceRoot(formWorkspaceRoot)
-        }))
-      }
-      if (loaded.errors.length > 0) {
-        setRuntimeDiagnosticsNotice({
-          tone: 'error',
-          message: loaded.errors.join(' | ')
-        })
-      }
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setRuntimeDiagnosticsBusy(false)
-    }
-  }, [formWorkspaceRoot, memoryQuery, memoryScopeFilter])
-
-  const exportTraces = async (traceIds?: readonly string[]): Promise<void> => {
-    setRuntimeDiagnosticsBusy(true)
-    try {
-      const result = await window.sciforge.traces.export(traceIds)
-      if (result.canceled) return
-      setRuntimeDiagnosticsNotice({
-        tone: 'success',
-        message: t('traceExported', { count: result.traceCount, path: result.destination })
-      })
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setRuntimeDiagnosticsBusy(false)
-    }
-  }
-
-  const clearTraces = async (): Promise<void> => {
-    if (!window.confirm(t('traceClearConfirm'))) return
-    setRuntimeDiagnosticsBusy(true)
-    try {
-      const result = await window.sciforge.traces.clear()
-      setTraceSummaries([])
-      setRuntimeDiagnosticsNotice({
-        tone: 'success',
-        message: t('traceCleared', { count: result.deletedEvents })
-      })
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    } finally {
-      setRuntimeDiagnosticsBusy(false)
-    }
-  }
-
-  const previewGitCheckpoint = async (checkpointId: string): Promise<void> => {
-    const provider = getProvider()
-    if (typeof provider.previewGitCheckpoint !== 'function') return
-    try {
-      const result = await provider.previewGitCheckpoint(checkpointId)
-      setGitCheckpointPreviewId(checkpointId)
-      setGitCheckpointPreview(formatGitCheckpointPreviewResult(result, t('gitCheckpointPreviewEmpty')))
-      const failure = runtimeResultMessage(result)
-      if (failure) {
-        setRuntimeDiagnosticsNotice({
-          tone: 'error',
-          message: failure
-        })
-      }
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
+        message: result.message ?? t('applyFailed')
       })
     }
   }
 
-  const restoreGitCheckpoint = async (checkpointId: string): Promise<void> => {
-    const provider = getProvider()
-    if (typeof provider.restoreGitCheckpoint !== 'function') return
-    try {
-      const result = await provider.restoreGitCheckpoint(checkpointId, {
-        force: gitCheckpointForceRestore
-      })
-      const failure = runtimeResultMessage(result)
-      if (failure) {
-        setRuntimeDiagnosticsNotice({
-          tone: 'error',
-          message: failure
-        })
-        return
-      }
-      setRuntimeDiagnosticsNotice({
-        tone: 'success',
-        message: t('gitCheckpointRestored')
-      })
-      if (typeof provider.listGitCheckpoints === 'function') {
-        setGitCheckpoints(await provider.listGitCheckpoints({
-          workspaceRoot: normalizeWorkspaceRoot(formWorkspaceRoot)
-        }))
-      }
-    } catch (error) {
-      setRuntimeDiagnosticsNotice({
-        tone: 'error',
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
-  }
-
-  useEffect(() => {
-    if (category !== 'agents') return
-    void refreshLocalRuntimeDiagnostics()
-  }, [category, refreshLocalRuntimeDiagnostics])
-
-  const {
-    createMemoryRecord,
-    disableMemoryRecord,
-    startEditingMemoryRecord,
-    cancelEditingMemoryRecord,
-    saveMemoryRecord,
-    deleteMemoryRecord
-  } = useMemo(() => createSettingsMemoryActions({
-    getProvider,
-    getState: () => ({
-      memoryDraftContent,
-      memoryDraftScope,
-      memoryEditingContent,
-      workspaceRoot: normalizeWorkspaceRoot(formWorkspaceRoot)
-    }),
-    setMemoryRecords,
-    setMemoryDraftContent,
-    setMemoryEditingId,
-    setMemoryEditingContent,
-    setNotice: setRuntimeDiagnosticsNotice,
-    t
-  }), [
-    formWorkspaceRoot,
-    memoryDraftContent,
-    memoryDraftScope,
-    memoryEditingContent,
-    t
-  ])
-
-  const scrollToAgentSection = (target: 'agents' | 'skill' | 'mcp' | 'permissions'): void => {
+  const scrollToAgentSection = (
+    target: 'agents' | 'skill' | 'permissions'
+  ): void => {
     const refs = {
       agents: agentsSectionRef.current,
       skill: skillSectionRef.current,
-      mcp: mcpSectionRef.current,
       permissions: permissionsSectionRef.current
     }
     refs[target]?.scrollIntoView({ behavior: 'smooth', block: 'start' })
   }
 
-  const persistSettings = async (snapshot: AppSettingsV1, version: number): Promise<void> => {
-    if (!hasValidPort(snapshot)) return
+  const persistSettings = async (
+    snapshot: AppSettingsV1,
+    version: number
+  ): Promise<void> => {
     setSaveStatus('saving')
     setSaveError(null)
 
     try {
-      const next = coerceRendererSettings(await rendererRuntimeClient.setSettings(snapshot))
+      const next = coerceRendererSettings(
+        await rendererRuntimeClient.setSettings(snapshot)
+      )
       if (version !== draftVersion.current) return
 
       setForm(next)
@@ -631,11 +377,6 @@ export function SettingsView(): ReactElement {
     statusTimer.current = null
     setSaveError(null)
 
-    if (!hasValidPort(next)) {
-      setSaveStatus('idle')
-      return
-    }
-
     setSaveStatus('saving')
     saveTimer.current = window.setTimeout(() => {
       saveTimer.current = null
@@ -644,7 +385,7 @@ export function SettingsView(): ReactElement {
   }
 
   const flushPendingSave = async (): Promise<void> => {
-    if (!form || !hasValidPort(form)) return
+    if (!form) return
     draftVersion.current += 1
     const version = draftVersion.current
 
@@ -685,7 +426,9 @@ export function SettingsView(): ReactElement {
 
   if (loadError) {
     const msg =
-      loadError === 'PRELOAD_BRIDGE' ? t('preloadBridgeError') : t('loadFailed', { message: loadError })
+      loadError === 'PRELOAD_BRIDGE'
+        ? t('preloadBridgeError')
+        : t('loadFailed', { message: loadError })
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4 bg-ds-main p-6 text-center">
         <p className="max-w-md text-sm text-red-700 dark:text-red-300">{msg}</p>
@@ -708,33 +451,33 @@ export function SettingsView(): ReactElement {
     )
   }
 
-  const localRuntime = getLocalRuntimeSettings(form)
   const codex = getCodexRuntimeSettings(form)
   const claude = getClaudeRuntimeSettings(form)
   const modelAccess = getModelAccessSettings(form)
-  const textReasoner = getModelRouterSettings(form).profiles.default.textReasoner
-  const modelAccessConfigured = modelAccess?.mode === 'coding-plan'
-    ? Boolean(modelAccess.planAdapterId.trim())
-    : modelAccess?.mode === 'api'
-      ? Boolean(
-        textReasoner.apiKey.trim() &&
-        textReasoner.baseUrl.trim() &&
-        textReasoner.model.trim()
-      )
-      : false
+  const textReasoner =
+    getModelRouterSettings(form).profiles.default.textReasoner
+  const modelAccessConfigured =
+    modelAccess?.mode === 'coding-plan'
+      ? Boolean(modelAccess.planAdapterId.trim())
+      : modelAccess?.mode === 'api'
+        ? Boolean(
+            textReasoner.apiKey.trim() &&
+            textReasoner.baseUrl.trim() &&
+            textReasoner.model.trim()
+          )
+        : false
 
   const update = (partial: SettingsPatch): void => {
     const next = mergeSettings(form, partial)
     setForm(next)
     if (partial.locale) void applyI18n(partial.locale)
-    if (partial.guiUpdate?.channel && partial.guiUpdate.channel !== form.guiUpdate.channel) {
+    if (
+      partial.guiUpdate?.channel &&
+      partial.guiUpdate.channel !== form.guiUpdate.channel
+    ) {
       resetGuiUpdateState()
     }
     scheduleSave(next)
-  }
-
-  const updateLocalRuntime = (patch: Partial<AppSettingsV1['agents']['sciforge']>): void => {
-    update({ agents: localRuntimeSettingsPatch(patch) })
   }
 
   const updateCodex = (patch: CodexRuntimeSettingsPatchV1): void => {
@@ -751,7 +494,9 @@ export function SettingsView(): ReactElement {
       if (typeof window.sciforge?.pickWorkspaceDirectory !== 'function') {
         throw new Error('workspace:pick-directory unavailable')
       }
-      const picked = await window.sciforge.pickWorkspaceDirectory(form.workspaceRoot || undefined)
+      const picked = await window.sciforge.pickWorkspaceDirectory(
+        form.workspaceRoot || undefined
+      )
       if (!picked.canceled && picked.path) {
         update({ workspaceRoot: picked.path })
       }
@@ -794,17 +539,12 @@ export function SettingsView(): ReactElement {
     t,
     tCommon,
     form,
-    localRuntime,
     codex,
     claude,
     update,
     saveStatus,
-    updateLocalRuntime,
     updateCodex,
     updateClaude,
-    showRuntimeToken,
-    setShowRuntimeToken,
-    portError,
     selectControlClass,
     openOnboardingPreview,
     pickWorkspace,
@@ -826,7 +566,6 @@ export function SettingsView(): ReactElement {
     scrollToAgentSection,
     agentsSectionRef,
     skillSectionRef,
-    mcpSectionRef,
     permissionsSectionRef,
     selectedSkillRoot,
     skillRootOptions,
@@ -835,49 +574,6 @@ export function SettingsView(): ReactElement {
     skillNotice,
     openSkillRoot,
     openPlugins,
-    mcpConfigPath,
-    mcpConfigExists,
-    mcpConfigText,
-    setMcpConfigText,
-    mcpLoading,
-    mcpBusy,
-    mcpNotice,
-    saveMcpConfig,
-    loadMcpConfig,
-    openMcpConfigDir,
-    runtimeInfo,
-    toolDiagnostics,
-    memoryRecords,
-    memoryScopeFilter,
-    setMemoryScopeFilter,
-    memoryQuery,
-    setMemoryQuery,
-    memoryDraftContent,
-    setMemoryDraftContent,
-    memoryDraftScope,
-    setMemoryDraftScope,
-    memoryEditingId,
-    memoryEditingContent,
-    setMemoryEditingContent,
-    traceSummaries,
-    gitCheckpoints,
-    gitCheckpointPreviewId,
-    gitCheckpointPreview,
-    gitCheckpointForceRestore,
-    setGitCheckpointForceRestore,
-    runtimeDiagnosticsBusy,
-    runtimeDiagnosticsNotice,
-    refreshLocalRuntimeDiagnostics,
-    exportTraces,
-    clearTraces,
-    previewGitCheckpoint,
-    restoreGitCheckpoint,
-    createMemoryRecord,
-    startEditingMemoryRecord,
-    cancelEditingMemoryRecord,
-    saveMemoryRecord,
-    disableMemoryRecord,
-    deleteMemoryRecord,
     pickConnectPhoneWorkspace,
     resetConnectPhoneWorkspaceToDefault,
     connectPhoneWorkspacePickerError,
@@ -887,13 +583,20 @@ export function SettingsView(): ReactElement {
 
   return (
     <div className="ds-drag flex h-full min-h-0 w-full min-w-0 bg-ds-main">
-      <SettingsSidebar category={category} setCategory={setCategory} goBack={goBack} t={t} />
+      <SettingsSidebar
+        category={category}
+        setCategory={setCategory}
+        goBack={goBack}
+        t={t}
+      />
 
       <div className="ds-no-drag min-h-0 min-w-0 flex-1 overflow-y-auto px-10 py-10">
         <div className="mx-auto max-w-3xl">
           {!modelAccessConfigured ? (
             <div className="mb-6 rounded-2xl border border-amber-300/80 bg-amber-50/95 px-5 py-4 text-amber-950 shadow-sm dark:border-amber-700/60 dark:bg-amber-950/35 dark:text-amber-100">
-              <div className="text-[15px] font-semibold">{t('modelAccessRequiredTitle')}</div>
+              <div className="text-[15px] font-semibold">
+                {t('modelAccessRequiredTitle')}
+              </div>
               <p className="mt-1 text-[13px] leading-6 text-amber-900/90 dark:text-amber-100/90">
                 {t('modelAccessRequiredBody')}
               </p>
@@ -902,41 +605,53 @@ export function SettingsView(): ReactElement {
 
           <div className="mb-8 flex items-start justify-between gap-4">
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-ds-ink">{t('title')}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-ds-ink">
+                {t('title')}
+              </h1>
               <p className="mt-1 text-[14px] text-ds-muted">{t('subtitle')}</p>
             </div>
             <span
-              title={saveStatus === 'error' && saveError ? saveError : undefined}
+              title={
+                saveStatus === 'error' && saveError ? saveError : undefined
+              }
               className={`max-w-md shrink-0 rounded-full px-3 py-1 text-right text-[12px] font-medium leading-5 ${
-                portError
-                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-200'
-                  : saveStatus === 'saved'
-                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200'
-                    : saveStatus === 'error'
-                      ? 'bg-red-500/15 text-red-700 dark:text-red-200'
-                      : 'bg-ds-subtle text-ds-muted'
+                saveStatus === 'saved'
+                  ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-200'
+                  : saveStatus === 'error'
+                    ? 'bg-red-500/15 text-red-700 dark:text-red-200'
+                    : 'bg-ds-subtle text-ds-muted'
               }`}
             >
-              {portError
-                ? t('autoApplyBlocked')
-                : saveStatus === 'saving'
-                  ? t('applying')
-                  : saveStatus === 'saved'
-                    ? t('applied')
-                    : saveStatus === 'error'
-                      ? saveError
-                        ? t('applyFailedWithReason', { message: saveError })
-                        : t('applyFailed')
-                      : t('autoApplyHint')}
+              {saveStatus === 'saving'
+                ? t('applying')
+                : saveStatus === 'saved'
+                  ? t('applied')
+                  : saveStatus === 'error'
+                    ? saveError
+                      ? t('applyFailedWithReason', { message: saveError })
+                      : t('applyFailed')
+                    : t('autoApplyHint')}
             </span>
           </div>
 
-          {category === 'general' ? <GeneralSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'speechToText' ? <SpeechToTextSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'agents' ? <AgentsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'shortcuts' ? <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'remoteResources' ? <RemoteResourcesSettingsSection ctx={settingsSectionContext} /> : null}
-          {category === 'connectPhone' ? <ConnectPhoneSettingsSection ctx={settingsSectionContext} /> : null}
+          {category === 'general' ? (
+            <GeneralSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {category === 'speechToText' ? (
+            <SpeechToTextSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {category === 'agents' ? (
+            <AgentsSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {category === 'shortcuts' ? (
+            <KeyboardShortcutsSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {category === 'remoteResources' ? (
+            <RemoteResourcesSettingsSection ctx={settingsSectionContext} />
+          ) : null}
+          {category === 'connectPhone' ? (
+            <ConnectPhoneSettingsSection ctx={settingsSectionContext} />
+          ) : null}
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ SciForge 是一个面向科学研究的本地 AI 工作台。它的长期定位�
 
 ## 三分钟理解价值
 
-- **接入**：在一个桌面工作区里选择 SciForge Runtime、Codex 或 Claude Code。
+- **接入**：在一个桌面工作区里选择 Codex 或 Claude Code。
 - **干预**：在计划、工具调用、文件变更、外部副作用和最终证据处审批、拒绝、追问、暂停或修改。
 - **沉淀**：把会话、trace、批注、图表、证据和 review packet 组织成可复盘的研究记录。
 
@@ -28,7 +28,7 @@ SciForge 是一个面向科学研究的本地 AI 工作台。它的长期定位�
         ↓
 SciForge GUI：计划 / 审批 / 批注 / 证据审阅
         ↓
-Codex、Claude Code 或 SciForge Runtime：执行工具与任务
+Codex 或 Claude Code：执行工具与任务
         ↓
 Model Router：统一模型出口与科学多模态 worker
         ↓
@@ -37,8 +37,8 @@ Model Router：统一模型出口与科学多模态 worker
 
 ## 约定
 
-- SciForge Runtime 默认启用；Codex 和 Claude Code 必须由用户显式配置与选择，运行时失败时不会静默切换。
-- 上游 provider 的 API key 只应配置在 Model Router；runtime token 是本地边界凭据，两者不要混用。
+- Codex 是默认 runtime，Claude Code 可显式选择；历史 `sciforge` runtime 记录只读保留，不会静默恢复成 Codex 会话。
+- 上游 provider 的 API key 只应配置在 Model Router，不要写进 workspace、prompt 或 runtime 命令参数。
 - 高影响操作先审阅再提交。科学翻译、自动绘图和模型生成的内容都应视为草稿或证据线索，最终结论由研究者确认。
 
 更完整的产品能力列表见仓库根目录的 [README](../../README.md)，运行时边界见 [`docs/agent-runtime-contract.md`](../agent-runtime-contract.md)。

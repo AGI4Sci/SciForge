@@ -18,24 +18,6 @@ const excludedSegments = new Set(['dist', 'node_modules', 'out'])
 const directKunImportPattern =
   /\bfrom\s+['"]([^'"]*kun\/src\/[^'"]+)['"]|\bimport\s*\(\s*['"]([^'"]*kun\/src\/[^'"]+)['"]\s*\)/g
 
-const allowedKunBoundaryImports = new Map<string, string[]>([
-  ['src/main/atomic-write-file.ts', ['kun/src/adapters/file/atomic-write.js']],
-  [
-    'src/main/local-runtime-package-contract.ts',
-    [
-      'kun/src/config/kun-config.js',
-      'kun/src/contracts/capabilities.js',
-      'kun/src/contracts/capability-runtime-bridge.js'
-    ]
-  ],
-  [
-    'src/shared/gui-plan.test.ts',
-    ['kun/src/shared/gui-plan']
-  ]
-])
-
-const localRuntimePackageContractWrapper = 'src/main/local-runtime-package-contract.ts'
-
 function toRepoPath(path: string): string {
   return relative(repoRoot, path).replaceAll('\\', '/')
 }
@@ -100,32 +82,25 @@ function isLocalRuntimeSchemaContractImport(hit: KunImportHit): boolean {
   )
 }
 
-function isAllowedKunBoundaryImport(hit: KunImportHit): boolean {
-  const allowedSpecifiers = allowedKunBoundaryImports.get(hit.file) ?? []
-  return allowedSpecifiers.some((specifier) => hit.specifier.includes(specifier))
-}
-
 function formatHits(hits: KunImportHit[]): string {
   return hits
     .map((hit) => `${hit.file}:${hit.line}:${hit.column} ${hit.specifier} :: ${hit.text}`)
     .join('\n')
 }
 
-describe('GUI kun/src import boundary', () => {
-  it('keeps direct kun/src imports inside explicit GUI boundary wrappers', () => {
+describe('retired Kun source boundary', () => {
+  it('keeps GUI code independent from the removed Kun source tree', () => {
     const hits = scanDirectKunImports()
-    const disallowedHits = hits.filter((hit) => !isAllowedKunBoundaryImport(hit))
-
-    expect(formatHits(disallowedHits)).toBe('')
+    expect(formatHits(hits)).toBe('')
   })
 
-  it('keeps local runtime config and capability schemas behind one contract wrapper', () => {
+  it('does not depend on Kun runtime config or capability schemas', () => {
     const schemaContractFiles = new Set(
       scanDirectKunImports()
         .filter(isLocalRuntimeSchemaContractImport)
         .map((hit) => hit.file)
     )
 
-    expect([...schemaContractFiles].sort()).toEqual([localRuntimePackageContractWrapper])
+    expect([...schemaContractFiles].sort()).toEqual([])
   })
 })

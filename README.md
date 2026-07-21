@@ -42,12 +42,12 @@
 | **科学场景增强层** | 为通用 Agent 增加科学多模态路由、文献检索、Evidence / Project DAG、受控绘图、写作、汇报和可复跑工作流。 |
 | **长期研究工作区** | 让跨会话、跨角色、跨工具的研究过程可继续、可复盘、可交接。 |
 
-SciForge **不重新发明、也不替代** Codex、Claude Code 等成熟 runtime。它与这些 runtime 是合作关系：runtime 负责通用 Agent 执行，SciForge 提供科学对象、研究上下文、人类审阅界面和证据治理。你可以按场景选用 **Codex、Claude Code、SciForge Runtime 或自定义 runtime**。
+SciForge **不重新发明、也不替代** Codex、Claude Code 等成熟 runtime。它与这些 runtime 是合作关系：runtime 负责通用 Agent 执行，SciForge 提供科学对象、研究上下文、人类审阅界面和证据治理。**Codex 是默认 runtime，Claude Code 可在 Settings 中显式选择。**
 
 ```text
 研究目标与材料
       ↓
-Codex / Claude Code / SciForge Runtime 执行
+Codex / Claude Code 执行
       ↓
 科学检索 · 多模态翻译 · 分析 · 绘图 · 写作 · 工作流
       ↓
@@ -135,7 +135,7 @@ SciForge 默认本地优先；模型、远程执行和科学专家服务由用�
 
 ### 从源码运行
 
-环境要求：Node.js 20+，以及一个可用的模型 provider；若选择 Codex 或 Claude Code runtime，还需在本机完成对应 CLI 的安装与登录配置。
+环境要求：Node.js 20+，并在本机安装及登录 Codex（默认）或 Claude Code CLI。
 
 ```bash
 git clone https://github.com/AGI4Sci/SciForge.git
@@ -161,8 +161,8 @@ npm run build
 | [使用 Wiki](./docs/wiki/README.md) | 从安装到第一个任务，以及常用场景、配置和排障 |
 | [SciForge 论文](./paper/sciforge-report.pdf) | 系统定位、架构、真实界面与 8 个端到端 Showcase |
 | [开发指南](./docs/DEVELOPMENT.zh-CN.md) | 本地开发、测试与构建 |
-| [Runtime contract](./docs/agent-runtime-contract.md) | SciForge、Codex、Claude Code 的统一适配边界 |
-| [架构说明](./docs/local-runtime-architecture.md) | Agent runtime、GUI 与服务边界 |
+| [Runtime contract](./docs/agent-runtime-contract.md) | Codex、Claude Code 与 GUI 的统一适配边界 |
+| [架构说明](./DESIGN.md) | Agent runtime、GUI 与服务边界 |
 | [贡献指南](./docs/CONTRIBUTING.zh-CN.md) | 如何参与项目 |
 | [安全策略](./SECURITY.zh-CN.md) | 漏洞报告与安全说明 |
 

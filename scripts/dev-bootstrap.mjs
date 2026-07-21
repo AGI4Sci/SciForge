@@ -117,8 +117,8 @@ try {
     SCIFORGE_DEV_WORKSPACE_ID: workspaceId
   }
   const npmCli = process.env.npm_execpath
-  if (npmCli) await run(process.execPath, [npmCli, 'run', 'build:local-runtime'], env)
-  else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:local-runtime'], env)
+  if (npmCli) await run(process.execPath, [npmCli, 'run', 'build:agent-support'], env)
+  else await run(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build:agent-support'], env)
   await run(process.execPath, [join(projectRoot, 'node_modules/electron-vite/bin/electron-vite.js'), 'dev'], env)
 } catch (error) {
   console.error(`[sciforge dev] ${error instanceof Error ? error.message : String(error)}`)
