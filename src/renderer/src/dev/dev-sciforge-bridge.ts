@@ -1,6 +1,5 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
 import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
-import { createCapabilityFacades } from '../../../preload/capability-facades'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
 const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
@@ -121,16 +120,6 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
 }
 
 function createApi(): SciForgeApi {
-  const capabilityFacades = createCapabilityFacades({
-    invoke,
-    createResourceContentUrl: (access) => {
-      const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/capability/resources/content`)
-      url.searchParams.set('clientId', clientId)
-      if (DEV_INSTANCE_ID) url.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
-      url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
-      return url.toString()
-    }
-  })
   const getConnectPhoneStatus: SciForgeApi['getConnectPhoneStatus'] = () => invoke('connectPhone:status')
   const startConnectPhoneInstallQr: SciForgeApi['startConnectPhoneInstallQr'] = (provider, options) =>
     invoke('connectPhone:install:qrcode', { provider, isLark: options?.isLark })
@@ -218,7 +207,7 @@ function createApi(): SciForgeApi {
         ...(forceTakeover ? { forceTakeover } : {})
       }),
     pickWorkspaceDirectory: (defaultPath) => invoke('workspace:pick-directory', defaultPath),
-    pickWorkspaceFile: (defaultPath) => invoke('workspace:pick-file', defaultPath),
+    pickFile: (request) => invoke('workspace:pick-file', request),
     buildScientificSkillsMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildScientificPlottingMcpConfig: (workspaceRoot) =>
@@ -298,15 +287,14 @@ function createApi(): SciForgeApi {
       events: (input = {}) => invoke('capability:events', input),
       subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),
       unsubscribe: (subscriptionId) => invoke('capability:unsubscribe', { subscriptionId }),
+      resourceContentUrl: (access) => {
+        const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/capability/resources/content`)
+        url.searchParams.set('clientId', clientId)
+        if (DEV_INSTANCE_ID) url.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
+        url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
+        return url.toString()
+      },
       onEvent: (handler) => onChannel('capability:event', handler)
-    },
-    workspacePreview: {
-      ...capabilityFacades.workspacePreview,
-      onChanged: (handler) => onChannel('file:workspace-changed', handler)
-    },
-    biologyRoom: {
-      pickFile: (workspaceRoot) => invoke('biologyRoom:pick-file', { workspaceRoot }),
-      ...capabilityFacades.biologyRoom
     },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),
@@ -333,18 +321,6 @@ function createApi(): SciForgeApi {
     },
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
-    },
-    paperRadar: {
-      status: () => invoke('paperRadar:status'),
-      syncArxiv: (payload) => invoke('paperRadar:sync-arxiv', payload),
-      syncBiorxiv: (payload) => invoke('paperRadar:sync-biorxiv', payload),
-      syncProfile: (payload) => invoke('paperRadar:sync-profile', payload),
-      listProfiles: () => invoke('paperRadar:profiles:list'),
-      saveProfile: (payload) => invoke('paperRadar:profiles:save', payload),
-      review: (payload) => invoke('paperRadar:review', payload),
-      search: (payload) => invoke('paperRadar:search', payload),
-      rank: (payload) => invoke('paperRadar:rank', payload),
-      digest: (payload) => invoke('paperRadar:digest', payload)
     },
     researchCards: {
       list: (input) => invoke('researchCards:list', input ?? {}),

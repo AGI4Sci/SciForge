@@ -5,7 +5,7 @@ import {
   workspaceStructuredSelectionSchema,
   type WorkspaceObservation,
   type WorkspaceStructuredSelection
-} from './workspace-preview/contract'
+} from '@sciforge/domain-sdk/workspace-preview'
 
 export const SCIENTIFIC_OBJECT_SCHEMA_VERSION = 1
 export const SCIENTIFIC_OBJECT_MAX_EXTRACT_DEPTH = 8
@@ -19,15 +19,24 @@ const pathSchema = z.string().trim().min(1).max(4096)
 const shortStringSchema = z.string().trim().min(1).max(256)
 const timestampSchema = z.string().trim().min(1).max(128)
 
-export const scientificObjectModalitySchema = z.enum([
-  'molecular',
-  'sequence',
-  'spectra',
-  'omics',
-  'bioimaging'
-])
+export const scientificObjectModalitySchema = z.string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(
+    /^[a-z0-9]+(?:[._-][a-z0-9]+)*$/,
+    'Scientific object modality must be a canonical lowercase identifier.'
+  )
 
 export type ScientificObjectModality = z.infer<typeof scientificObjectModalitySchema>
+
+export const scientificObjectObservationSchema = workspaceObservationSchema.extend({
+  view: workspaceObservationSchema.shape.view.extend({
+    modality: scientificObjectModalitySchema
+  })
+})
+
+export type ScientificObjectObservation = z.infer<typeof scientificObjectObservationSchema>
 
 export const scientificObjectSourceSchema = z.enum([
   'workspace',
@@ -113,9 +122,13 @@ export const scientificObjectRefSchema = z.object({
   hash: scientificObjectHashSchema,
   sessionId: idSchema.optional(),
   selection: workspaceStructuredSelectionSchema.optional(),
-  observation: workspaceObservationSchema.optional(),
+  observation: scientificObjectObservationSchema.optional(),
   preview: scientificObjectPreviewSchema.optional(),
   provenance: scientificObjectProvenanceSchema.optional(),
+  metadata: z.record(
+    z.string().trim().min(1).max(128),
+    workspacePreviewJsonValueSchema
+  ).optional(),
   annotations: z.array(scientificObjectAnnotationSchema)
     .max(SCIENTIFIC_OBJECT_MAX_ANNOTATIONS)
     .optional()

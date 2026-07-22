@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react'
-import { createWorkspacePreviewHostState } from './host'
 import {
   buildWorkspacePreviewChromeModel,
   type WorkspacePreviewChromeInput,
@@ -23,9 +22,10 @@ export function WorkspacePreviewChrome({
   className,
   showInspector = false
 }: WorkspacePreviewChromeProps): ReactNode {
-  const resolvedModel = model ?? buildWorkspacePreviewChromeModel(input ?? {
-    state: createWorkspacePreviewHostState()
-  })
+  const resolvedModel = model ?? (input ? buildWorkspacePreviewChromeModel(input) : null)
+  if (!resolvedModel) {
+    throw new Error('WorkspacePreviewChrome requires either a model or a registry-backed input.')
+  }
   const statusRole = resolvedModel.status.kind === 'error' ? 'alert' : 'status'
 
   return (

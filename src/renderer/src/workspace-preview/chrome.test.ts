@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  workspacePreviewExtensionIdSchema,
   type WorkspaceObservation,
   type WorkspacePreviewAssetTransportDescriptor,
   type WorkspacePreviewFileState,
@@ -16,10 +17,21 @@ import {
 } from './chrome-model'
 import { WorkspacePreviewChrome } from './WorkspacePreviewChrome'
 import {
-  createRendererWorkspacePreviewRegistry,
+  createRendererWorkspacePreviewRegistry as createRegistry,
   type RendererWorkspacePreviewPluginDescriptor,
   type RendererWorkspacePreviewRegistry
 } from './registry'
+import {
+  createBuiltInWorkspacePreviewPluginRegistrations
+} from './built-in-plugin-contributions'
+
+function createRendererWorkspacePreviewRegistry(): RendererWorkspacePreviewRegistry {
+  return createRegistry({ registrations: createBuiltInWorkspacePreviewPluginRegistrations() })
+}
+
+vi.mock('./PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
+
+const DOMAIN_MODALITY = workspacePreviewExtensionIdSchema.parse('fixture.preview.modality')
 
 function requireDescriptor(
   registry: RendererWorkspacePreviewRegistry,
@@ -66,8 +78,8 @@ function createAssetTransportDescriptor(
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
     sessionId: 'session-1',
     assetId: 'asset:session-1',
-    pluginId: 'molecular',
-    modality: 'molecular',
+    pluginId: 'fixture-preview',
+    modality: DOMAIN_MODALITY,
     file: {
       name: 'protein.pdb',
       relativePath: 'data/protein.pdb',
@@ -181,7 +193,7 @@ describe('workspace preview shared chrome', () => {
       label: 'Export TSV',
       source: 'manifest',
       format: 'tsv',
-      enabled: false
+      enabled: true
     })
     expect(actionsById.get('tabular.updateCell')).toMatchObject({
       label: 'Tabular Update Cell',
@@ -211,42 +223,11 @@ describe('workspace preview shared chrome', () => {
       label: 'Annotate',
       source: 'observation'
     })
-    expect(actionsById.get('molecular.workbench')).toMatchObject({
-      label: 'Molecular Workbench',
-      source: 'observation'
-    })
-    expect(actionsById.get('sequence.selectRegion')).toMatchObject({
-      label: 'Select Region',
-      source: 'observation'
-    })
-    expect(actionsById.get('omics.selectDataset')).toMatchObject({
-      label: 'Select Dataset',
-      source: 'observation'
-    })
-    expect(actionsById.get('bioimaging.selectChannels')).toMatchObject({
-      label: 'Select Channels',
-      source: 'observation'
-    })
-    expect(actionsById.get('bioimaging.annotateRegion')).toMatchObject({
-      label: 'Annotate ROI',
-      source: 'observation'
-    })
-    expect(actionsById.get('bioimaging.exportRoiSet')).toMatchObject({
-      label: 'Export ROI Set',
-      source: 'observation'
-    })
-    expect(actionsById.get('spectra.selectPeaksByRange')).toMatchObject({
-      label: 'Select Peaks',
-      source: 'observation'
-    })
-    expect(actionsById.get('spectra.annotateRange')).toMatchObject({
-      label: 'Annotate Range',
-      source: 'observation'
-    })
-    expect(actionsById.get('spectra.exportPeakList')).toMatchObject({
-      label: 'Export Peaks',
-      source: 'observation'
-    })
+    expect(actionsById.has('molecular.workbench')).toBe(false)
+    expect(actionsById.has('sequence.selectRegion')).toBe(false)
+    expect(actionsById.has('omics.selectDataset')).toBe(false)
+    expect(actionsById.has('bioimaging.selectChannels')).toBe(false)
+    expect(actionsById.has('spectra.exportPeakList')).toBe(false)
   })
 
   it('keeps read-only tabular observations from re-enabling write toolbar actions', () => {
@@ -295,8 +276,8 @@ describe('workspace preview shared chrome', () => {
       reason: 'This action needs a dedicated editor control before it can run.'
     })
     expect(actionsById.get('tabular.filterRows')).toMatchObject({ source: 'observation', enabled: true })
-    expect(actionsById.get('workspace.export:csv')).toMatchObject({ enabled: false })
-    expect(actionsById.get('workspace.export:tsv')).toMatchObject({ enabled: false })
+    expect(actionsById.get('workspace.export:csv')).toMatchObject({ enabled: true })
+    expect(actionsById.get('workspace.export:tsv')).toMatchObject({ enabled: true })
     expect(actionsById.has('tabular.updateCell')).toBe(false)
     expect(actionsById.has('tabular.insertRows')).toBe(false)
     expect(actionsById.has('tabular.insertColumns')).toBe(false)
@@ -427,7 +408,7 @@ describe('workspace preview shared chrome', () => {
     })
   })
 
-  it('reports deferred and unsupported paths without falling through to legacy chrome', () => {
+  it('reports unsupported paths without falling through to legacy chrome', () => {
     const registry = createRendererWorkspacePreviewRegistry()
 
     const empty = buildWorkspacePreviewChromeModel({
@@ -435,7 +416,7 @@ describe('workspace preview shared chrome', () => {
       requestedPath: 'notes.md',
       state: createWorkspacePreviewHostState()
     })
-    const deferred = buildWorkspacePreviewChromeModel({
+    const scientificUnsupported = buildWorkspacePreviewChromeModel({
       registry,
       requestedPath: 'mesh.vtk',
       state: createWorkspacePreviewHostState()
@@ -452,12 +433,12 @@ describe('workspace preview shared chrome', () => {
     })
     expect(empty.title.text).toBe('notes.md')
     expect(empty.toolbar.actions.every((action) => !action.enabled)).toBe(true)
-    expect(deferred.status).toMatchObject({
+    expect(scientificUnsupported.status).toMatchObject({
       kind: 'error',
-      variant: 'deferred',
-      title: 'Preview deferred'
+      variant: 'unsupported',
+      title: 'Unsupported preview'
     })
-    expect(deferred.status.kind === 'error' ? deferred.status.message : '').toContain('mesh.vtk')
+    expect(scientificUnsupported.status.kind === 'error' ? scientificUnsupported.status.message : '').toContain('mesh.vtk')
     expect(unsupported.status).toMatchObject({
       kind: 'error',
       variant: 'unsupported',
@@ -466,90 +447,38 @@ describe('workspace preview shared chrome', () => {
     expect(unsupported.status.kind === 'error' ? unsupported.status.message : '').toContain('archive.custombin')
   })
 
-  it('builds selection, annotation, table, slide, and life-science inspector summaries', () => {
+  it('uses only the active plugin contribution for inspector sections', () => {
     const registry = createRendererWorkspacePreviewRegistry()
-    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    const descriptor = requireDescriptor(registry, 'data/samples.csv')
     const observation: WorkspaceObservation = {
       schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
       file: {
-        path: '/workspace/lab/data/protein.pdb',
+        path: '/workspace/lab/data/samples.csv',
         workspaceRoot: '/workspace/lab',
-        mimeType: 'chemical/x-pdb',
+        mimeType: 'text/csv',
         size: 8192
       },
       view: {
         pluginId: descriptor.manifest.id,
         modality: descriptor.manifest.modality,
         mode: 'inspect',
-        title: 'Protein structure'
+        title: 'Assay samples'
       },
       selection: {
         kind: 'tabular',
-        sheet: 'Assay',
-        ranges: [{ rowStart: 0, rowEnd: 4, columnStart: 1, columnEnd: 2 }],
-        cells: [
-          { row: 0, column: 1, value: 'A' },
-          { row: 1, column: 1, value: 'B' }
-        ]
+        ranges: [{ rowStart: 0, rowEnd: 0, columnStart: 0, columnEnd: 0 }],
+        cells: [{ row: 0, column: 0, value: 'sample-1' }]
       },
       tables: [{ id: 'table-1', name: 'Assay', rowCount: 120, columnCount: 8 }],
       slides: [{ id: 'slide-3', index: 2, title: 'Results', notes: 'QC review' }],
-      molecular: {
-        modelCount: 1,
-        chains: ['A', 'B'],
-        ligands: ['ATP'],
-        representations: ['cartoon']
-      },
-      sequence: {
-        sequenceCount: 2,
-        totalLength: 1200,
-        alphabet: 'dna'
-      },
-      omics: {
-        format: 'h5ad',
-        matrixShape: [2700, 32738],
-        matrixIds: ['matrix-1'],
-        observationCount: 2700,
-        variableCount: 32738,
-        obsKeys: ['cell_type', 'batch'],
-        varKeys: ['gene_symbol'],
-        embeddings: ['umap', 'pca'],
-        metadataKeys: ['n_obs', 'n_vars']
-      },
-      bioimaging: {
-        format: 'ome-tiff',
-        detectedBy: 'metadata',
-        byteLength: 4096,
-        dimensions: { width: 512, height: 256, z: 3, t: 5 },
-        channels: ['DAPI', 'FITC'],
-        tilePlan: {
-          status: 'metadata-only',
-          source: 'ome-tiff-metadata',
-          levelCount: 2,
-          tileSize: { width: 512, height: 512 },
-          pixelDecoding: false,
-          tileRendererImplemented: false
-        }
-      },
-      spectra: {
-        format: 'mgf',
-        spectrumCount: 5,
-        peakCount: 240,
-        scanCount: 2,
-        xAxis: 'm/z',
-        mzRange: { min: 100.1, max: 900.2 },
-        intensityRange: { min: 10, max: 2000 },
-        sampledPeaks: [{ mz: 100.1, intensity: 10 }],
-        scanMarkers: [{ index: 0, scanNumber: '27', peakCount: 120 }]
-      },
-      annotations: [{ id: 'annotation-1', kind: 'note', summary: 'Check chain A' }],
+      annotations: [{ id: 'annotation-1', kind: 'note', summary: 'Check sample 1' }],
       actions: []
     }
     const model = buildWorkspacePreviewChromeModel({
       registry,
       state: createWorkspacePreviewHostState({
         session: createSession(descriptor, {
-          path: 'data/protein.pdb',
+          path: 'data/samples.csv',
           modality: descriptor.manifest.modality,
           mode: 'inspect'
         }),
@@ -557,19 +486,19 @@ describe('workspace preview shared chrome', () => {
         observation,
         asset: createAssetTransportDescriptor(),
         file: createFileState({
-          path: '/workspace/lab/data/protein.pdb',
-          relativePath: 'data/protein.pdb',
-          mimeType: 'chemical/x-pdb',
+          path: '/workspace/lab/data/samples.csv',
+          relativePath: 'data/samples.csv',
+          mimeType: 'text/csv',
           size: 8192
         })
       })
     })
 
     expect(model.title).toMatchObject({
-      text: 'Protein structure',
+      text: 'Assay samples',
       subtitle: expect.stringContaining(descriptor.manifest.displayName)
     })
-    expect(model.breadcrumb.map((item) => item.label)).toEqual(['data', 'protein.pdb'])
+    expect(model.breadcrumb.map((item) => item.label)).toEqual(['data', 'samples.csv'])
     expect(findSection(model, 'asset-transport')).toMatchObject({
       summary: 'primary byte-range, eager read disabled, byte range available'
     })
@@ -581,53 +510,20 @@ describe('workspace preview shared chrome', () => {
       ])
     )
     expect(findSection(model, 'selection')).toMatchObject({
-      summary: 'Tabular, 1 range, 2 cells'
+      summary: 'Tabular, 1 range, 1 cell'
     })
-    expect(findSection(model, 'tables').rows[0]).toMatchObject({
-      label: 'Assay',
-      value: '120 rows x 8 columns'
+    expect(findSection(model, 'tables')).toMatchObject({
+      summary: '1 table'
     })
-    expect(findSection(model, 'slides').rows[0]).toMatchObject({
-      label: 'Slide 3',
-      value: 'Results',
-      description: 'QC review'
-    })
-    expect(findSection(model, 'molecular')).toMatchObject({
-      summary: '1 model, 2 chains, 1 ligand'
-    })
-    expect(findSection(model, 'sequence')).toMatchObject({
-      summary: '2 sequences, 1200 bp/aa, DNA'
-    })
-    expect(findSection(model, 'omics')).toMatchObject({
-      summary: 'h5ad, 2700 x 32738, 1 matrix, 2700 observations, 32738 variables'
-    })
-    expect(findSection(model, 'omics').rows.map((row) => row.label)).toEqual(expect.arrayContaining([
-      'Matrices',
-      'Observation keys',
-      'Variable keys',
-      'Metadata keys'
-    ]))
-    expect(findSection(model, 'bioimaging')).toMatchObject({
-      summary: 'ome-tiff, 512 x 256, Z 3, T 5, 2 channels, 2 tile levels'
-    })
-    expect(findSection(model, 'bioimaging').rows.find((row) => row.id === 'tile-plan')).toMatchObject({
-      value: expect.stringContaining('metadata-only')
-    })
-    expect(findSection(model, 'spectra')).toMatchObject({
-      summary: 'mgf, 5 spectra, 240 peaks, 2 scans, x: m/z'
-    })
-    expect(findSection(model, 'spectra').rows.map((row) => row.label)).toEqual(expect.arrayContaining([
-      'm/z range',
-      'Intensity range',
-      'Sampled peaks',
-      'Scan markers'
+    expect(model.inspector.sections.map((section) => section.id)).not.toEqual(expect.arrayContaining([
+      'slides'
     ]))
     expect(findSection(model, 'annotations')).toMatchObject({
       summary: '1 annotation'
     })
     expect(findSection(model, 'annotations').rows[0]).toMatchObject({
       label: 'Note',
-      value: 'Check chain A'
+      value: 'Check sample 1'
     })
   })
 
@@ -685,16 +581,15 @@ describe('workspace preview shared chrome', () => {
 
   it('keeps inspector model useful with only host state selection and no observation', () => {
     const registry = createRendererWorkspacePreviewRegistry()
-    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    const descriptor = requireDescriptor(registry, 'data/samples.csv')
     const inspector = buildInspectorModel(
       createWorkspacePreviewHostState({
         session: createSession(descriptor, {
-          path: 'protein.pdb',
+          path: 'data/samples.csv',
           selection: {
-            kind: 'molecular',
-            chains: ['A'],
-            residues: [{ chain: 'A', index: 42, name: 'GLY' }],
-            atoms: [{ index: 4, element: 'C' }]
+            kind: 'tabular',
+            ranges: [{ rowStart: 0, rowEnd: 1, columnStart: 0, columnEnd: 1 }],
+            cells: [{ row: 0, column: 0 }]
           }
         }),
         descriptor
@@ -703,48 +598,7 @@ describe('workspace preview shared chrome', () => {
     )
 
     expect(inspector.sections.find((section) => section.id === 'selection')).toMatchObject({
-      summary: 'Molecular, 1 chain, 1 residue, 1 atom'
+      summary: 'Tabular, 1 range, 1 cell'
     })
-  })
-
-  it('summarizes omics selections from host state without requiring a rendered matrix', () => {
-    const registry = createRendererWorkspacePreviewRegistry()
-    const descriptor = requireDescriptor(registry, 'atlas.h5ad')
-    const inspector = buildInspectorModel(
-      createWorkspacePreviewHostState({
-        session: createSession(descriptor, {
-          path: 'atlas.h5ad',
-          selection: {
-            kind: 'omics',
-            matrixIds: ['matrix-1'],
-            obsKeys: ['cell_type'],
-            varKeys: ['gene_symbol'],
-            embeddings: ['X_umap'],
-            ranges: [{
-              matrixId: 'matrix-1',
-              axis: 'obs',
-              start: 0,
-              end: 128,
-              axisLength: 2700
-            }]
-          }
-        }),
-        descriptor
-      }),
-      descriptor
-    )
-    const selection = inspector.sections.find((section) => section.id === 'selection')
-
-    expect(selection).toMatchObject({
-      summary: 'Omics, 1 matrix, 1 obs key, 1 var key, 1 embedding, 1 range'
-    })
-    expect(selection?.rows.map((row) => row.label)).toEqual([
-      'Kind',
-      'Matrices',
-      'Observation keys',
-      'Variable keys',
-      'Embeddings',
-      'Ranges'
-    ])
   })
 })

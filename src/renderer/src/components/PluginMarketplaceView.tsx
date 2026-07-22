@@ -19,30 +19,19 @@ import {
   type SkillRootId
 } from '../lib/skill-root-preference'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
-import {
-  loadInstalledPluginKeys,
-  PAPER_RADAR_EXTENSION_ID,
-  pluginStorageKey,
-  saveInstalledPluginKeys,
-  type PluginInstallKind
-} from '../lib/plugin-install-state'
 import type {
   ScientificSkillsInstallRequest,
   ScientificSkillsStatusResult,
   SkillListItem
 } from '@shared/sciforge-api'
 import { useChatStore } from '../store/chat-store'
-import { NoticeView, TabButton, type MarketplaceNotice } from './PluginMarketplaceParts'
+import { NoticeView, type MarketplaceNotice } from './PluginMarketplaceParts'
 
-type PluginKind = Exclude<PluginInstallKind, 'mcp'>
 type PluginFilter = 'all' | 'recommended' | 'installed'
-type NoticeTone = 'success' | 'error' | 'info'
 
-type Notice = MarketplaceNotice
-
-type MarketplaceItem = {
+export type MarketplaceItem = {
   id: string
-  kind: PluginKind
+  kind: 'skill'
   titleKey?: string
   descriptionKey?: string
   title?: string
@@ -50,7 +39,6 @@ type MarketplaceItem = {
   group: 'recommended' | 'personal'
   sourceLabel?: string
   statusTone?: 'default' | 'success' | 'warning' | 'error'
-  systemManaged?: boolean
   skillInstructions?: string
 }
 
@@ -91,6 +79,10 @@ function buildSkillContent(id: string, title: string, description: string, instr
   ].join('\n')
 }
 
+function skillItemKey(id: string): string {
+  return `skill:${id}`
+}
+
 function itemTitle(item: MarketplaceItem, t: (key: string) => string): string {
   return item.title ?? (item.titleKey ? t(item.titleKey) : item.id)
 }
@@ -118,14 +110,7 @@ function skillNameLooksValid(raw: string): boolean {
   return !!value && value !== '.' && value !== '..' && !/[\\/]/.test(value)
 }
 
-const RECOMMENDED_ITEMS: MarketplaceItem[] = [
-  {
-    id: PAPER_RADAR_EXTENSION_ID,
-    kind: 'extension',
-    titleKey: 'pluginExtensionPaperRadarTitle',
-    descriptionKey: 'pluginExtensionPaperRadarDesc',
-    group: 'recommended'
-  },
+export const RECOMMENDED_SKILL_ITEMS: readonly MarketplaceItem[] = [
   {
     id: 'code-review',
     kind: 'skill',
@@ -167,12 +152,10 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
 export function PluginMarketplaceView(): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = normalizeWorkspaceRoot(useChatStore((s) => s.workspaceRoot))
-  const [activeKind, setActiveKind] = useState<PluginKind>('skill')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<PluginFilter>('all')
-  const [installed, setInstalled] = useState<string[]>(() => loadInstalledPluginKeys())
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const [notice, setNotice] = useState<MarketplaceNotice | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customDescription, setCustomDescription] = useState('')
@@ -261,9 +244,8 @@ export function PluginMarketplaceView(): ReactElement {
   }, [t, workspaceRoot])
 
   useEffect(() => {
-    if (activeKind !== 'skill') return
     void refreshScientificSkillsStatus()
-  }, [activeKind, refreshScientificSkillsStatus])
+  }, [refreshScientificSkillsStatus])
 
   const scientificSkillsInstallTarget = scientificSkillsInstallTargetForWorkspace(workspaceRoot)
 
@@ -334,22 +316,8 @@ export function PluginMarketplaceView(): ReactElement {
   }, [t, workspaceRoot])
 
   useEffect(() => {
-    if (activeKind !== 'skill') return
     void refreshSkillList()
-  }, [activeKind, refreshSkillList])
-
-  useEffect(() => {
-    setNotice(null)
-    setCustomOpen(false)
-  }, [activeKind])
-
-  const markInstalled = (key: string): void => {
-    setInstalled((prev) => {
-      const next = [...new Set([...prev, key])]
-      saveInstalledPluginKeys(next)
-      return next
-    })
-  }
+  }, [refreshSkillList])
 
   const discoveredSkillIds = useMemo(
     () => new Set(discoveredSkills.map((skill) => skill.id)),
@@ -363,26 +331,18 @@ export function PluginMarketplaceView(): ReactElement {
     [discoveredSkills, t]
   )
   const marketplaceItems = useMemo(
-    () => {
-      if (activeKind === 'skill') return [...RECOMMENDED_ITEMS, ...discoveredSkillItems]
-      return RECOMMENDED_ITEMS
-    },
-    [activeKind, discoveredSkillItems]
+    () => [...RECOMMENDED_SKILL_ITEMS, ...discoveredSkillItems],
+    [discoveredSkillItems]
   )
 
-  const isInstalled = useCallback((item: Pick<MarketplaceItem, 'kind' | 'id'>): boolean => {
-    if ('group' in item && item.group === 'personal') return true
-    const catalogItem = RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
-    if (catalogItem?.systemManaged) return true
-    if (item.kind === 'skill' && discoveredSkillIds.has(item.id)) return true
-    const key = pluginStorageKey(item.kind, item.id)
-    return installed.includes(key)
-  }, [discoveredSkillIds, installed])
+  const isInstalled = useCallback(
+    (item: Pick<MarketplaceItem, 'id'>): boolean => discoveredSkillIds.has(item.id),
+    [discoveredSkillIds]
+  )
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    return marketplaceItems.filter((item) => item.kind === activeKind)
-      .filter((item) => {
+    return marketplaceItems.filter((item) => {
         const title = itemTitle(item, t).toLowerCase()
         const description = itemDescription(item, t).toLowerCase()
         const source = item.sourceLabel?.toLowerCase() ?? ''
@@ -397,24 +357,15 @@ export function PluginMarketplaceView(): ReactElement {
         if (filter === 'installed') return isInstalled(item)
         return true
       })
-  }, [activeKind, filter, isInstalled, marketplaceItems, query, t])
+  }, [filter, isInstalled, marketplaceItems, query, t])
 
-  const recommendedItems = visibleItems.filter((item) => !item.systemManaged && !isInstalled(item))
-  const personalItems = visibleItems.filter((item) =>
-    item.group === 'personal' ||
-    (!item.systemManaged && isInstalled(item) && !discoveredSkillIds.has(item.id))
-  )
+  const recommendedItems = visibleItems.filter((item) => item.group === 'recommended' && !isInstalled(item))
+  const personalItems = visibleItems.filter((item) => item.group === 'personal')
 
   const addItem = async (item: MarketplaceItem): Promise<void> => {
-    setBusyId(pluginStorageKey(item.kind, item.id))
+    setBusyId(skillItemKey(item.id))
     setNotice(null)
     try {
-      if (item.kind === 'extension') {
-        markInstalled(pluginStorageKey('extension', item.id))
-        setNotice({ tone: 'success', message: t('pluginExtensionEnabled') })
-        return
-      }
-
       if (!selectedSkillRoot?.path) {
         setNotice({ tone: 'error', message: t('pluginSkillRootMissing') })
         return
@@ -433,7 +384,6 @@ export function PluginMarketplaceView(): ReactElement {
         setNotice({ tone: 'error', message: result.message })
         return
       }
-      markInstalled(pluginStorageKey('skill', item.id))
       await refreshSkillList()
       setNotice({ tone: 'success', message: t('pluginSkillAdded', { path: result.path }) })
     } catch (e) {
@@ -444,14 +394,13 @@ export function PluginMarketplaceView(): ReactElement {
   }
 
   const addCustom = async (): Promise<void> => {
-    if (activeKind === 'extension') return
     const id = normalizePluginId(customName)
     if (!id) {
       setNotice({ tone: 'error', message: t('pluginCustomNameRequired') })
       return
     }
     const description = customDescription.trim() || t('pluginCustomFallbackDesc')
-    setBusyId(`custom:${activeKind}`)
+    setBusyId('custom:skill')
     setNotice(null)
     try {
       if (!selectedSkillRoot?.path) {
@@ -465,7 +414,6 @@ export function PluginMarketplaceView(): ReactElement {
         setNotice({ tone: 'error', message: result.message })
         return
       }
-      markInstalled(pluginStorageKey('skill', id))
       await refreshSkillList()
       setNotice({ tone: 'success', message: t('pluginSkillAdded', { path: result.path }) })
       setCustomName('')
@@ -495,40 +443,30 @@ export function PluginMarketplaceView(): ReactElement {
   return (
     <div className="ds-no-drag h-full min-h-0 overflow-y-auto px-6 py-7 md:px-10 lg:px-14">
       <div className="mx-auto max-w-6xl">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-xl bg-ds-subtle p-1">
-            <TabButton active={activeKind === 'skill'} tone="skill" onClick={() => setActiveKind('skill')}>
-              {t('pluginTabSkill')}
-            </TabButton>
-            <TabButton active={activeKind === 'extension'} onClick={() => setActiveKind('extension')}>
-              {t('pluginTabExtension')}
-            </TabButton>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void openManageTarget()}
+              className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+            >
+              <Settings className="h-4 w-4" strokeWidth={1.75} />
+              {t('pluginManage')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCustomOpen((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.9} />
+              {t('pluginCreate')}
+            </button>
           </div>
-          {activeKind !== 'extension' ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void openManageTarget()}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} />
-                {t('pluginManage')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setCustomOpen((value) => !value)}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
-              >
-                <Plus className="h-4 w-4" strokeWidth={1.9} />
-                {t('pluginCreate')}
-              </button>
-            </div>
-          ) : null}
         </div>
 
         <div className="mt-9 flex flex-col items-center text-center">
           <h1 className="text-[32px] font-semibold text-ds-ink md:text-[40px]">
-            {activeKind === 'skill' ? t('pluginSkillTitle') : t('pluginExtensionTitle')}
+            {t('pluginSkillTitle')}
           </h1>
         </div>
 
@@ -539,7 +477,7 @@ export function PluginMarketplaceView(): ReactElement {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-              placeholder={activeKind === 'skill' ? t('pluginSearchSkill') : t('pluginSearchExtension')}
+              placeholder={t('pluginSearchSkill')}
             />
           </label>
           <label className="relative w-full md:w-[168px]">
@@ -556,70 +494,66 @@ export function PluginMarketplaceView(): ReactElement {
           </label>
         </div>
 
-        {activeKind === 'skill' ? (
-          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
-            <select
-              value={selectedSkillRoot?.id ?? ''}
-              onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
-              className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-            >
-              {skillRootOptions.map((option) => (
-                <option key={option.id} value={option.id} disabled={!option.available}>
-                  {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => void openManageTarget()}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-            >
-              <FolderOpen className="h-4 w-4" />
-              {t('pluginOpenLocation')}
-            </button>
-            <button
-              type="button"
-              onClick={() => void refreshSkillList()}
-              disabled={skillListLoading}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {skillListLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {t('pluginSkillRefresh')}
-            </button>
-            {skillListError ? (
-              <span className="text-[12px] text-red-700 dark:text-red-300">
-                {skillListError}
-              </span>
-            ) : (
-              <span className="text-[12px] text-ds-faint">
-                {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
-              </span>
-            )}
-          </div>
-        ) : null}
+        <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+          <select
+            value={selectedSkillRoot?.id ?? ''}
+            onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
+            className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+          >
+            {skillRootOptions.map((option) => (
+              <option key={option.id} value={option.id} disabled={!option.available}>
+                {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void openManageTarget()}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+          >
+            <FolderOpen className="h-4 w-4" />
+            {t('pluginOpenLocation')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshSkillList()}
+            disabled={skillListLoading}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {skillListLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {t('pluginSkillRefresh')}
+          </button>
+          {skillListError ? (
+            <span className="text-[12px] text-red-700 dark:text-red-300">
+              {skillListError}
+            </span>
+          ) : (
+            <span className="text-[12px] text-ds-faint">
+              {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
+            </span>
+          )}
+        </div>
 
-        {activeKind === 'skill' ? (
-          <ScientificSkillsStatusPanel
-            status={scientificSkillsStatus}
-            loading={scientificSkillsLoading}
-            error={scientificSkillsError}
-            installTarget={scientificSkillsInstallTarget}
-            installDisabled={!workspaceRoot || scientificSkillsInstalling}
-            onRefresh={() => void refreshScientificSkillsStatus()}
-            onInstall={() => {
-              setScientificSkillsInstallError('')
-              setScientificSkillsInstallOpen(true)
-            }}
-            t={t}
-          />
-        ) : null}
+        <ScientificSkillsStatusPanel
+          status={scientificSkillsStatus}
+          loading={scientificSkillsLoading}
+          error={scientificSkillsError}
+          installTarget={scientificSkillsInstallTarget}
+          installDisabled={!workspaceRoot || scientificSkillsInstalling}
+          onRefresh={() => void refreshScientificSkillsStatus()}
+          onInstall={() => {
+            setScientificSkillsInstallError('')
+            setScientificSkillsInstallOpen(true)
+          }}
+          t={t}
+        />
 
         {customOpen ? (
           <CustomPluginPanel
             customName={customName}
             customDescription={customDescription}
             customSkillBody={customSkillBody}
-            busy={busyId === `custom:${activeKind}`}
+            busy={busyId === 'custom:skill'}
             onNameChange={setCustomName}
             onDescriptionChange={setCustomDescription}
             onSkillBodyChange={setCustomSkillBody}
@@ -952,7 +886,7 @@ function PluginSection({
   emptyText: string
   items: MarketplaceItem[]
   busyId: string | null
-  isInstalled: (item: Pick<MarketplaceItem, 'kind' | 'id'>) => boolean
+  isInstalled: (item: Pick<MarketplaceItem, 'id'>) => boolean
   onAdd: (item: MarketplaceItem) => Promise<void>
   t: (key: string, values?: Record<string, unknown>) => string
 }): ReactElement {
@@ -966,7 +900,7 @@ function PluginSection({
       ) : (
         <div className="grid gap-x-14 md:grid-cols-2">
           {items.map((item) => {
-            const itemKey = pluginStorageKey(item.kind, item.id)
+            const itemKey = skillItemKey(item.id)
             const installed = isInstalled(item)
             const busy = busyId === itemKey
             return (

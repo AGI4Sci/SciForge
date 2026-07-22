@@ -197,7 +197,12 @@ describe('GUI MCP runtime registry', () => {
   })
 
   it('keeps retired MCP servers out of the shared registry', () => {
-    for (const id of ['gui_computer_use', 'gui_research_memory', 'sciforge_canvas']) {
+    for (const id of [
+      'gui_computer_use',
+      'gui_research_memory',
+      'sciforge_canvas',
+      ['gui', 'paper', 'radar'].join('_')
+    ]) {
       expect(buildManagedGuiMcpServers({}).find((server) => server.id === id)).toBeUndefined()
     }
   })

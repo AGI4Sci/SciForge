@@ -3,10 +3,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ScientificObjectAnnotation,
-  ScientificObjectModality,
   ScientificObjectRef
 } from '@shared/scientific-objects'
-import type { WorkspaceObservation } from '@shared/workspace-preview'
+import {
+  workspacePreviewExtensionIdSchema,
+  workspacePreviewModalitySchema
+} from '@shared/workspace-preview'
 import {
   ScientificObjectCard,
   scientificObjectCardViewModel,
@@ -14,14 +16,20 @@ import {
 } from './ScientificObjectCard'
 
 const HASH = 'a'.repeat(64)
+const MOLECULAR_MODALITY = 'sciforge.life-science-preview.molecular'
+const MOLECULAR_SELECTION_TYPE = workspacePreviewExtensionIdSchema.parse(
+  'sciforge.life-science-preview.molecular.selection'
+)
+type ScientificObjectObservation = NonNullable<ScientificObjectRef['observation']>
 
 function objectFixture(
-  modality: ScientificObjectModality,
-  observationPatch: Partial<WorkspaceObservation> = {},
+  modalityInput: ScientificObjectRef['modality'],
+  observationPatch: Partial<ScientificObjectObservation> = {},
   overrides: Partial<ScientificObjectRef> = {}
 ): ScientificObjectRef {
-  const path = `/workspace/${modality}.${modality === 'molecular' ? 'pdb' : 'dat'}`
-  const observation: WorkspaceObservation = {
+  const modality = workspacePreviewModalitySchema.parse(modalityInput)
+  const path = `/workspace/${modality}.dat`
+  const observation: ScientificObjectObservation = {
     schemaVersion: 1,
     file: {
       path,
@@ -45,7 +53,7 @@ function objectFixture(
     source: 'workspace',
     path,
     workspaceRoot: '/workspace',
-    mimeType: modality === 'molecular' ? 'chemical/x-pdb' : 'application/octet-stream',
+    mimeType: 'application/octet-stream',
     hash: { algorithm: 'sha256', digest: HASH },
     observation,
     ...overrides
@@ -53,54 +61,66 @@ function objectFixture(
 }
 
 describe('scientificObjectCardViewModel', () => {
-  it.each([
-    {
-      modality: 'molecular' as const,
-      observation: { molecular: { modelCount: 2, chains: ['A', 'B'], ligands: ['ATP'] } },
-      expected: ['Models', '2', 'Chains', '2 · A, B', 'Ligands', '1 · ATP']
-    },
-    {
-      modality: 'sequence' as const,
-      observation: { sequence: { sequenceCount: 3, totalLength: 4200, alphabet: 'dna' as const, features: [] } },
-      expected: ['Sequences', '3', 'Length', '4,200', 'Alphabet', 'dna']
-    },
-    {
-      modality: 'spectra' as const,
-      observation: { spectra: { spectrumCount: 12, peakCount: 850, scanCount: 4, xAxis: 'm/z', mzRange: { min: 50, max: 1600 } } },
-      expected: ['Spectra', '12', 'Peaks', '850', 'm/z range', '50–1,600']
-    },
-    {
-      modality: 'omics' as const,
-      observation: { omics: { format: 'h5ad', matrixShape: [120, 4800] as [number, number], observationCount: 120, variableCount: 4800 } },
-      expected: ['Format', 'h5ad', 'Matrix', '120 × 4,800', 'Variables', '4,800']
-    },
-    {
-      modality: 'bioimaging' as const,
-      observation: { bioimaging: { format: 'ome-tiff', channels: ['DAPI', 'GFP'], dimensions: { width: 2048, height: 1024, z: 12, t: 3 } } },
-      expected: ['Format', 'ome-tiff', 'Dimensions', '2,048 × 1,024 · Z=12 · T=3', 'Channels', '2 · DAPI, GFP']
-    }
-  ])('builds a recognizable $modality summary', ({ modality, observation, expected }) => {
-    const model = scientificObjectCardViewModel(objectFixture(modality, observation))
-    const flattened = model.facts.flatMap((fact) => [fact.label, fact.value])
-    for (const value of expected) expect(flattened).toContain(value)
-  })
-
   it('falls back to source and MIME format when observations are absent', () => {
-    const object = objectFixture('sequence', {}, { observation: undefined, mimeType: 'text/fasta' })
+    const object = objectFixture('genomics.sequence', {}, { observation: undefined, mimeType: 'text/fasta' })
     const model = scientificObjectCardViewModel(object)
 
-    expect(model.sourceLabel).toBe('sequence.dat')
+    expect(model.sourceLabel).toBe('genomics.sequence.dat')
     expect(model.formatLabel).toBe('FASTA')
     expect(model.facts).toEqual([])
+  })
+
+  it('renders a custom modality with generic metadata instead of coercing it to a core modality', () => {
+    const object: ScientificObjectRef = {
+      schemaVersion: 1,
+      id: 'terrain-1',
+      modality: 'geospatial-terrain',
+      title: 'Terrain survey',
+      source: 'tool',
+      path: '/workspace/terrain.geojson',
+      workspaceRoot: '/workspace',
+      mimeType: 'application/geo+json',
+      hash: { algorithm: 'sha256', digest: HASH },
+      metadata: {
+        'geospatial-terrain': {
+          coordinateReferenceSystem: 'EPSG:4326',
+          featureCount: 128,
+          bounds: [-180, -90, 180, 90]
+        }
+      }
+    }
+
+    const model = scientificObjectCardViewModel(object)
+    const html = renderToStaticMarkup(createElement(ScientificObjectCard, { object }))
+
+    expect(model.modality).toBe('geospatial-terrain')
+    expect(model.modalityLabel).toBe('Geospatial Terrain')
+    expect(model.facts).toEqual([
+      { label: 'Coordinate Reference System', value: 'EPSG:4326' },
+      { label: 'Feature Count', value: '128' },
+      { label: 'Bounds', value: '4 · -180, -90, 180, …' }
+    ])
+    expect(html).toContain('data-scientific-object-modality="geospatial-terrain"')
+    expect(html).toContain('aria-label="Geospatial Terrain"')
+    expect(html).not.toContain('Molecular structure')
   })
 })
 
 describe('ScientificObjectCard', () => {
-  it('renders a compact molecular card with one workspace action and selection context', () => {
+  it('renders a compact domain card with one workspace action and selection context', () => {
     const object = objectFixture(
-      'molecular',
-      { molecular: { modelCount: 1, chains: ['A'], ligands: ['ATP'] } },
-      { selection: { kind: 'molecular', chains: ['A'] } }
+      MOLECULAR_MODALITY,
+      {},
+      {
+        metadata: {
+          [MOLECULAR_MODALITY]: { modelCount: 1, chains: ['A'], ligands: ['ATP'] }
+        },
+        selection: {
+          kind: 'domain',
+          selectionType: MOLECULAR_SELECTION_TYPE,
+          data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'] } }
+        }
+      }
     )
     const html = renderToStaticMarkup(createElement(ScientificObjectCard, {
       object,
@@ -110,19 +130,19 @@ describe('ScientificObjectCard', () => {
     }))
 
     expect(html).toContain('<article')
-    expect(html).toContain('data-scientific-object-modality="molecular"')
+    expect(html).toContain(`data-scientific-object-modality="${MOLECULAR_MODALITY}"`)
     expect(html).toContain('Open in workspace')
     expect(html).toContain('Ask about current selection')
     expect(html).toContain('molecular · 1 chains')
     expect(html).not.toContain('interactive 3D')
   })
 
-  it('uses a static placeholder for non-molecular modalities and exposes an injectable preview seam', () => {
+  it('uses a static placeholder for arbitrary modalities and exposes an injectable preview seam', () => {
     const sequenceHtml = renderToStaticMarkup(createElement(ScientificObjectCard, {
-      object: objectFixture('sequence')
+      object: objectFixture('genomics.sequence')
     }))
     const customHtml = renderToStaticMarkup(createElement(ScientificObjectCard, {
-      object: objectFixture('bioimaging'),
+      object: objectFixture('microscopy.image-stack'),
       renderStaticPreview: () => createElement('div', { 'data-testid': 'safe-thumbnail' }, 'Resolved thumbnail')
     }))
 
@@ -143,7 +163,7 @@ describe('ScientificObjectCard', () => {
       createdAt: '2026-07-11T00:00:00.000Z'
     }
     const html = renderToStaticMarkup(createElement(ScientificObjectCard, {
-      object: objectFixture('molecular'),
+      object: objectFixture(MOLECULAR_MODALITY),
       annotations: [annotation],
       compact: true,
       onAddAnnotation: vi.fn(),
@@ -159,22 +179,25 @@ describe('ScientificObjectCard', () => {
 
   it('disables selection questions when no structured selection exists', () => {
     const html = renderToStaticMarkup(createElement(ScientificObjectCard, {
-      object: objectFixture('sequence'),
+      object: objectFixture('genomics.sequence'),
       compact: true,
       onAskAboutSelection: vi.fn()
     }))
 
     expect(html).toContain('disabled=""')
-    expect(html).toContain('Select a chain, residue, atom, or ligand first')
+    expect(html).toContain('Select an item or region first')
   })
 })
 
 describe('summarizeScientificObjectSelection', () => {
   it('summarizes bounded structured selection counts', () => {
     expect(summarizeScientificObjectSelection({
-      kind: 'molecular',
-      chains: ['A', 'B'],
-      ligands: ['ATP']
+      kind: 'domain',
+      selectionType: MOLECULAR_SELECTION_TYPE,
+      data: {
+        wireVersion: 2,
+        selection: { kind: 'molecular', chains: ['A', 'B'], ligands: ['ATP'] }
+      }
     })).toBe('molecular · 2 chains · 1 ligands')
   })
 })

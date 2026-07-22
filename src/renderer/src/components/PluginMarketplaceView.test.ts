@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest'
 import {
+  RECOMMENDED_SKILL_ITEMS,
   scientificSkillsRootSourceLabel,
   scientificSkillsRootSourceTitle,
   skillMarketplaceItemsFromDiscoveredSkills
 } from './PluginMarketplaceView'
+
+describe('recommended skill catalog', () => {
+  it('contains only real skill install candidates and no fake extension entry', () => {
+    expect(RECOMMENDED_SKILL_ITEMS.length).toBeGreaterThan(0)
+    expect(RECOMMENDED_SKILL_ITEMS.every((item) => item.kind === 'skill')).toBe(true)
+    expect(RECOMMENDED_SKILL_ITEMS.some((item) => item.id === 'paper-radar')).toBe(false)
+  })
+})
 
 describe('skillMarketplaceItemsFromDiscoveredSkills', () => {
   it('turns discovered project and global skills into personal marketplace items', () => {

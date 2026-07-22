@@ -1,14 +1,26 @@
 import { open, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
-import { createWorkspaceTabularService } from '../../../../packages/workers/workspace-tabular/src/service'
-import type { WorkspaceTabularPreviewResult } from '../../../../packages/workers/workspace-tabular/src/contract'
-import { createWorkspaceDeckService } from '../../../../packages/workers/workspace-deck/src/service'
-import { createWorkspaceMolecularService } from '../../../../packages/workers/workspace-molecular/src/service'
-import { createWorkspaceSequenceService } from '../../../../packages/workers/workspace-sequence/src/service'
-import { createWorkspaceOmicsService } from '../../../../packages/workers/workspace-omics/src/service'
-import { createWorkspaceBioimagingService } from '../../../../packages/workers/workspace-bioimaging/src/service'
-import { createWorkspaceSpectraService } from '../../../../packages/workers/workspace-spectra/src/service'
-import type { WorkspaceDeckPreviewResult } from '../../../../packages/workers/workspace-deck/src/contract'
+import {
+  type BuiltInWorkspaceDeckPreviewResult,
+  type BuiltInWorkspaceTabularPreviewResult,
+  type WorkspacePreviewBuiltInHostProviderAdapters,
+  type WorkspacePreviewBuiltInProviderAdapters
+} from './built-in-providers'
+import {
+  WorkspacePreviewProviderRegistry,
+  type WorkspacePreviewProviderActionInput,
+  type WorkspacePreviewProviderActionResult,
+  type WorkspacePreviewProviderArtifactInput,
+  type WorkspacePreviewProviderArtifactResult,
+  type WorkspacePreviewProviderObservationInput,
+  type WorkspacePreviewProviderObservationResult,
+  type WorkspacePreviewProviderApplyEditInput,
+  type WorkspacePreviewProviderApplyEditResult,
+  type WorkspacePreviewProviderExportInput,
+  type WorkspacePreviewProviderExportResult,
+  type WorkspacePreviewProviderFileValidationInput,
+  type WorkspacePreviewProviderFileValidationResult
+} from './provider-registry'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS,
@@ -17,112 +29,41 @@ import {
   workspaceObservationSchema,
   type WorkspaceObservation,
   type WorkspacePreviewFileState,
-  type WorkspacePreviewJsonValue,
   type WorkspacePreviewModality,
-  type WorkspacePreviewPrepareArtifactRequest,
   type WorkspacePreviewPluginActionInput,
-  type WorkspacePreviewPluginManifest,
-  type WorkspacePreviewSession
+  type WorkspacePreviewPluginManifest
 } from '../../../shared/workspace-preview'
+import {
+  createComposedWorkspacePreviewRuntime,
+  type ComposedWorkspacePreviewRuntime,
+  type WorkspacePreviewPluginRegistrationInput
+} from './composition'
 
 export const WORKSPACE_PREVIEW_WORKER_TEXT_BYTES = 2_000_000
 export const WORKSPACE_PREVIEW_WORKER_BINARY_BYTES = 4 * 1024 * 1024
 
-export type WorkspacePreviewWorkerObservationInput = {
-  session: WorkspacePreviewSession
-  manifest: WorkspacePreviewPluginManifest
-  file: WorkspacePreviewFileState
-}
-
-export type WorkspacePreviewWorkerObservationResult =
-  | {
-      ok: true
-      observation: WorkspaceObservation
-      bytesRead: number
-      truncated: boolean
-    }
-  | {
-      ok: false
-      message: string
-      reason: 'unsupported-plugin' | 'unsupported-format' | 'too-large' | 'worker-error'
-    }
-
-export type WorkspacePreviewWorkerActionInput = WorkspacePreviewWorkerObservationInput & {
-  action: WorkspacePreviewPluginActionInput
-}
-
-export type WorkspacePreviewWorkerActionResult =
-  | {
-      ok: true
-      result: unknown
-      bytesRead: number
-      truncated: boolean
-    }
-  | {
-      ok: false
-      message: string
-      reason: 'unsupported-plugin' | 'unsupported-action' | 'unsupported-format' | 'too-large' | 'worker-error'
-    }
-
-export type WorkspacePreviewWorkerArtifactInput = WorkspacePreviewWorkerObservationInput & {
-  request: WorkspacePreviewPrepareArtifactRequest
-}
-
-export type WorkspacePreviewWorkerArtifactResult =
-  | {
-      ok: true
-      kind: 'tile'
-      mimeType: string
-      bytes: Uint8Array
-      tile: {
-        level: number
-        x: number
-        y: number
-        width: number
-        height: number
-      }
-      bytesRead: number
-      truncated: boolean
-      pixelDecoding?: true
-      tileRendererImplemented?: true
-    }
-  | {
-      ok: true
-      kind: 'thumbnail'
-      mimeType: string
-      bytes: Uint8Array
-      thumbnail: {
-        width: number
-        height: number
-      }
-      bytesRead: number
-      truncated: boolean
-      pixelDecoding?: true
-      thumbnailRendererImplemented?: true
-    }
-  | {
-      ok: false
-      message: string
-      reason: 'unsupported-plugin' | 'unsupported-artifact' | 'unsupported-format' | 'too-large' | 'worker-error'
-    }
-
 export type WorkspacePreviewWorkerClientOptions = {
   maxTextBytes?: number
   maxBinaryBytes?: number
+  providerRegistry: WorkspacePreviewProviderRegistry
 }
 
-type ObservationBuildInput = WorkspacePreviewWorkerObservationInput & {
+export type WorkspacePreviewHostRuntime = ComposedWorkspacePreviewRuntime & Readonly<{
+  workerClient: WorkspacePreviewWorkerClient
+}>
+
+type BuiltInProviderServices = {
+  tabular: Parameters<WorkspacePreviewBuiltInProviderAdapters['observeTabular']>[1]
+  deck: Parameters<WorkspacePreviewBuiltInProviderAdapters['observeDeck']>[1]
+}
+
+type ObservationBuildInput = WorkspacePreviewProviderObservationInput & {
   visibleText?: string
   selection?: WorkspaceObservation['selection']
   outline?: WorkspaceObservation['outline']
   tables?: WorkspaceObservation['tables']
   tabular?: WorkspaceObservation['tabular']
   slides?: WorkspaceObservation['slides']
-  molecular?: WorkspaceObservation['molecular']
-  sequence?: WorkspaceObservation['sequence']
-  omics?: WorkspaceObservation['omics']
-  bioimaging?: WorkspaceObservation['bioimaging']
-  spectra?: WorkspaceObservation['spectra']
   annotations?: WorkspaceObservation['annotations']
   pluginMetadata?: WorkspaceObservation['pluginMetadata']
   deck?: WorkspaceObservation['deck']
@@ -135,36 +76,56 @@ type WorkerObservationLike = Partial<WorkspaceObservation> | undefined
 export class WorkspacePreviewWorkerClient {
   private readonly maxTextBytes: number
   private readonly maxBinaryBytes: number
+  private providerRegistry: WorkspacePreviewProviderRegistry
 
-  constructor(options: WorkspacePreviewWorkerClientOptions = {}) {
+  constructor(options: WorkspacePreviewWorkerClientOptions) {
     this.maxTextBytes = options.maxTextBytes ?? WORKSPACE_PREVIEW_WORKER_TEXT_BYTES
     this.maxBinaryBytes = options.maxBinaryBytes ?? WORKSPACE_PREVIEW_WORKER_BINARY_BYTES
+    this.providerRegistry = options.providerRegistry
   }
 
-  async observe(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
+  static compose(options: Readonly<{
+    hostAdapters?: WorkspacePreviewBuiltInHostProviderAdapters
+    domainPlugins?: readonly WorkspacePreviewPluginRegistrationInput[]
+    maxTextBytes?: number
+    maxBinaryBytes?: number
+  }>): WorkspacePreviewHostRuntime {
+    const workerClient = new WorkspacePreviewWorkerClient({
+      ...(options.maxTextBytes === undefined ? {} : { maxTextBytes: options.maxTextBytes }),
+      ...(options.maxBinaryBytes === undefined ? {} : { maxBinaryBytes: options.maxBinaryBytes }),
+      providerRegistry: new WorkspacePreviewProviderRegistry()
+    })
+    const runtime = createComposedWorkspacePreviewRuntime(
+      workerClient.builtInProviderAdapters(options.hostAdapters),
+      options.domainPlugins
+    )
+    workerClient.providerRegistry = runtime.providers
+    return Object.freeze({ ...runtime, workerClient })
+  }
+
+  private builtInProviderAdapters(
+    host: WorkspacePreviewBuiltInHostProviderAdapters | undefined
+  ): WorkspacePreviewBuiltInProviderAdapters {
+    return {
+      ...(host ? { host } : {}),
+      observeTabular: (input, service) => this.observeTabular(input, service),
+      invokeTabularAction: (input, service) => this.invokeTabularAction(input, service),
+      observeDeck: (input, service) => this.observeDeck(input, service),
+      invokeDeckAction: (input, service) => this.invokeDeckAction(input, service),
+    }
+  }
+
+  async observe(input: WorkspacePreviewProviderObservationInput): Promise<WorkspacePreviewProviderObservationResult> {
     try {
-      switch (input.manifest.id) {
-        case 'tabular':
-          return await this.observeTabular(input)
-        case 'deck':
-          return await this.observeDeck(input)
-        case 'molecular':
-          return await this.observeMolecular(input)
-        case 'sequence-genomics':
-          return await this.observeSequence(input)
-        case 'omics-matrix':
-          return await this.observeOmics(input)
-        case 'bioimaging':
-          return await this.observeBioimaging(input)
-        case 'proteomics-spectra':
-          return await this.observeSpectra(input)
-        default:
-          return {
-            ok: false,
-            reason: 'unsupported-plugin',
-            message: `Workspace preview plugin ${input.manifest.id} does not have a first-party worker observer.`
-          }
+      const provider = this.providerRegistry.get(input.manifest.id)
+      if (!provider?.observe) {
+        return {
+          ok: false,
+          reason: 'unsupported-plugin',
+          message: `Workspace preview plugin ${input.manifest.id} does not have a first-party worker observer.`
+        }
       }
+      return await provider.observe(input)
     } catch (error) {
       return {
         ok: false,
@@ -174,30 +135,73 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  async invokeAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
+  async validateFile(
+    input: WorkspacePreviewProviderFileValidationInput
+  ): Promise<WorkspacePreviewProviderFileValidationResult> {
     try {
-      switch (input.manifest.id) {
-        case 'tabular':
-          return await this.invokeTabularAction(input)
-        case 'deck':
-          return await this.invokeDeckAction(input)
-        case 'molecular':
-          return await this.invokeMolecularAction(input)
-        case 'sequence-genomics':
-          return await this.invokeSequenceAction(input)
-        case 'omics-matrix':
-          return await this.invokeOmicsAction(input)
-        case 'bioimaging':
-          return await this.invokeBioimagingAction(input)
-        case 'proteomics-spectra':
-          return await this.invokeSpectraAction(input)
-        default:
-          return {
-            ok: false,
-            reason: 'unsupported-plugin',
-            message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker actions.`
-          }
+      const validateFile = this.providerRegistry.get(input.manifest.id)?.validateFile
+      return validateFile ? await validateFile(input) : { ok: true }
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
       }
+    }
+  }
+
+  async applyEdit(
+    input: WorkspacePreviewProviderApplyEditInput
+  ): Promise<WorkspacePreviewProviderApplyEditResult> {
+    try {
+      const applyEdit = this.providerRegistry.get(input.manifest.id)?.applyEdit
+      const result = applyEdit ? await applyEdit(input) : null
+      return result ?? {
+        ok: false,
+        message: `Workspace preview edit operation ${input.operation.kind} is not implemented for plugin ${input.manifest.id}.`
+      }
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  async exportPreview(
+    input: WorkspacePreviewProviderExportInput
+  ): Promise<WorkspacePreviewProviderExportResult> {
+    try {
+      const exportPreview = this.providerRegistry.get(input.manifest.id)?.exportPreview
+      if (!exportPreview) {
+        return {
+          ok: false,
+          message: `Workspace preview plugin ${input.manifest.id} does not expose first-party host exports.`
+        }
+      }
+      return await exportPreview(input)
+    } catch (error) {
+      return {
+        ok: false,
+        message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  async invokeAction(input: WorkspacePreviewProviderActionInput): Promise<WorkspacePreviewProviderActionResult> {
+    try {
+      const provider = this.providerRegistry.get(input.manifest.id)
+      const hostResult = provider?.invokeHostAction
+        ? await provider.invokeHostAction(input)
+        : null
+      if (hostResult) return hostResult
+      if (!provider?.invokeAction) {
+        return {
+          ok: false,
+          reason: 'unsupported-plugin',
+          message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker actions.`
+        }
+      }
+      return await provider.invokeAction(input)
     } catch (error) {
       return {
         ok: false,
@@ -207,7 +211,7 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  async prepareArtifact(input: WorkspacePreviewWorkerArtifactInput): Promise<WorkspacePreviewWorkerArtifactResult> {
+  async prepareArtifact(input: WorkspacePreviewProviderArtifactInput): Promise<WorkspacePreviewProviderArtifactResult> {
     try {
       if (input.request.kind !== 'tile' && input.request.kind !== 'thumbnail') {
         return {
@@ -217,16 +221,15 @@ export class WorkspacePreviewWorkerClient {
         }
       }
 
-      switch (input.manifest.id) {
-        case 'bioimaging':
-          return await this.prepareBioimagingArtifact(input)
-        default:
-          return {
-            ok: false,
-            reason: 'unsupported-plugin',
-            message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker artifacts.`
-          }
+      const provider = this.providerRegistry.get(input.manifest.id)
+      if (!provider?.prepareArtifact) {
+        return {
+          ok: false,
+          reason: 'unsupported-plugin',
+          message: `Workspace preview plugin ${input.manifest.id} does not expose first-party worker artifacts.`
+        }
       }
+      return await provider.prepareArtifact(input)
     } catch (error) {
       return {
         ok: false,
@@ -236,9 +239,10 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  private async observeTabular(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const service = createWorkspaceTabularService()
-
+  private async observeTabular(
+    input: WorkspacePreviewProviderObservationInput,
+    service: BuiltInProviderServices['tabular']
+  ): Promise<WorkspacePreviewProviderObservationResult> {
     if (isXlsxTabularFile(input)) {
       const bytes = await this.readBinaryIfWithinLimit(input.file)
       if (!bytes.ok) return bytes
@@ -309,7 +313,10 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  private async observeDeck(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
+  private async observeDeck(
+    input: WorkspacePreviewProviderObservationInput,
+    service: BuiltInProviderServices['deck']
+  ): Promise<WorkspacePreviewProviderObservationResult> {
     const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
     if (extension !== '.pptx') {
       return {
@@ -321,7 +328,7 @@ export class WorkspacePreviewWorkerClient {
     const bytes = await this.readBinaryIfWithinLimit(input.file)
     if (!bytes.ok) return bytes
 
-    const result = await createWorkspaceDeckService().previewPptx({
+    const result = await service.previewPptx({
       bytes: bytes.bytes,
       path: input.file.relativePath ?? input.file.path,
       workspaceRoot: input.file.workspaceRoot,
@@ -345,345 +352,10 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  private async observeMolecular(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
-    if (!['.pdb', '.cif', '.mmcif', '.sdf', '.mol', '.mol2', '.xyz', '.xtc', '.dcd', '.trr', '.mrc', '.ccp4'].includes(extension)) {
-      return {
-        ok: false,
-        reason: 'unsupported-format',
-        message: `Molecular worker text observation is not implemented for ${extension || 'this format'}.`
-      }
-    }
-    const text = await this.readTextPrefix(input.file)
-    const result = createWorkspaceMolecularService().preview({
-      text: text.text,
-      format: formatWithoutDot(extension),
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-    const workerObservation = result.observation
-    return {
-      ok: true,
-      bytesRead: text.bytesRead,
-      truncated: text.truncated,
-      observation: buildObservation({
-        ...input,
-        visibleText: workerObservation?.visibleText,
-        selection: workerObservation?.selection,
-        molecular: {
-          modelCount: result.modelCount,
-          chains: result.chainIds,
-          ligands: result.ligands,
-          representations: workerObservation?.molecular?.representations
-        },
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
-        actions: workerObservation?.actions
-      })
-    }
-  }
-
-  private async observeSequence(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const text = await this.readTextPrefix(input.file)
-    const result = createWorkspaceSequenceService().preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-    const workerObservation = result.observation
-    return {
-      ok: true,
-      bytesRead: text.bytesRead,
-      truncated: text.truncated,
-      observation: buildObservation({
-        ...input,
-        visibleText: workerObservation?.visibleText,
-        selection: workerObservation?.selection,
-        sequence: {
-          sequenceCount: result.sequenceCount,
-          totalLength: result.totalLength,
-          alphabet: result.alphabet,
-          references: result.references.map(({ indexedRange: _indexedRange, ...reference }) => reference),
-          features: result.features.map(({ indexedRange: _indexedRange, ...feature }) => feature),
-          indexedRanges: result.indexedRanges,
-          truncatedRecords: result.truncatedRecords,
-          truncatedReferences: result.truncatedReferences
-        },
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
-        actions: workerObservation?.actions
-      })
-    }
-  }
-
-  private async observeOmics(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const text = await this.readTextPrefix(input.file)
-    const result = createWorkspaceOmicsService().preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-    const matrix = result.matrices[0]
-    const matrixShape = matrix?.rowCount !== undefined && matrix.columnCount !== undefined
-      ? [matrix.rowCount, matrix.columnCount] as [number, number]
-      : undefined
-    const workerObservation = result.observation as WorkerObservationLike
-    return {
-      ok: true,
-      bytesRead: text.bytesRead,
-      truncated: text.truncated,
-      observation: buildObservation({
-        ...input,
-        visibleText: workerObservation?.visibleText,
-        selection: workerObservation?.selection,
-        omics: {
-          format: result.format,
-          ...(result.matrices.length ? { matrixIds: result.matrices.map((candidate) => candidate.id) } : {}),
-          ...(matrixShape ? { matrixShape } : {}),
-          ...(matrix?.rowCount !== undefined ? { observationCount: matrix.rowCount } : {}),
-          ...(matrix?.columnCount !== undefined ? { variableCount: matrix.columnCount } : {}),
-          ...(result.dataset?.obsKeys?.length ? { obsKeys: result.dataset.obsKeys } : {}),
-          ...(result.dataset?.varKeys?.length ? { varKeys: result.dataset.varKeys } : {}),
-          ...(result.dataset?.embeddingNames?.length ? { embeddings: result.dataset.embeddingNames } : {}),
-          ...(result.metadata.entries.length ? { metadataKeys: result.metadata.entries.map((entry) => entry.key) } : {})
-        },
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
-        actions: workerObservation?.actions
-      })
-    }
-  }
-
-  private async observeBioimaging(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const bytes = await this.readBinaryPrefix(input.file)
-    const result = createWorkspaceBioimagingService().preview({
-      bytes: bytes.bytes,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-    const workerObservation = result.observation
-    const bioimaging: NonNullable<WorkspaceObservation['bioimaging']> = {
-      ...(result.format ? { format: result.format } : {}),
-      ...(result.detectedBy ? { detectedBy: result.detectedBy } : {}),
-      ...(result.byteLength !== undefined ? { byteLength: result.byteLength } : {}),
-      ...(result.channels?.length ? { channels: result.channels } : {}),
-      ...(result.dimensions?.width && result.dimensions.height
-        ? {
-            dimensions: {
-              width: result.dimensions.width,
-              height: result.dimensions.height,
-              ...(result.dimensions.z ? { z: result.dimensions.z } : {}),
-              ...(result.dimensions.t ? { t: result.dimensions.t } : {})
-            }
-          }
-        : {}),
-      ...(result.tilePlan
-        ? {
-            tilePlan: {
-              ...(result.tilePlan.status ? { status: result.tilePlan.status } : {}),
-              ...(result.tilePlan.source ? { source: result.tilePlan.source } : {}),
-              levelCount: result.tilePlan.levels.length,
-              tileSize: result.tilePlan.recommendedTileSize,
-              pixelDecoding: result.tilePlan.pixelDecoding,
-              tileRendererImplemented: result.tilePlan.tileRendererImplemented
-            }
-          }
-        : {})
-    }
-    return {
-      ok: true,
-      bytesRead: bytes.bytesRead,
-      truncated: bytes.truncated,
-      observation: buildObservation({
-        ...input,
-        visibleText: workerObservation?.visibleText,
-        selection: workerObservation?.selection,
-        bioimaging,
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
-        pluginMetadata: [{
-          source: 'plugin-metadata',
-          metadataKind: 'bioimaging',
-          mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
-          metadataOnly: true,
-          containsPixels: false,
-          pixelDecoding: false,
-          data: bioimaging as WorkspacePreviewJsonValue,
-          ...(workerObservation?.selection?.kind === 'bioimaging'
-            ? { selection: workerObservation.selection }
-            : {}),
-          ...(workerObservation?.actions?.length
-            ? {
-                actions: workerObservation.actions
-                  .filter((action) => action.startsWith('bioimaging.'))
-                  .slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
-              }
-            : {})
-        }],
-        actions: workerObservation?.actions
-      })
-    }
-  }
-
-  private async observeSpectra(input: WorkspacePreviewWorkerObservationInput): Promise<WorkspacePreviewWorkerObservationResult> {
-    const text = await this.readTextPrefix(input.file)
-    const result = createWorkspaceSpectraService().preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-    const workerObservation = result.observation as WorkerObservationLike
-    return {
-      ok: true,
-      bytesRead: text.bytesRead,
-      truncated: text.truncated,
-      observation: buildObservation({
-        ...input,
-        visibleText: workerObservation?.visibleText,
-        selection: workerObservation?.selection,
-        spectra: {
-          format: result.format,
-          spectrumCount: result.spectrumCount,
-          peakCount: result.peakCount,
-          scanCount: result.scanCount,
-          xAxis: result.format === 'fcs' ? 'event' : 'm/z',
-          ...(result.mzRange ? { mzRange: result.mzRange } : {}),
-          ...(result.intensityRange ? { intensityRange: result.intensityRange } : {}),
-          ...(result.sampledPeaks.length
-            ? { sampledPeaks: result.sampledPeaks.slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) }
-            : {}),
-          ...(result.scanMarkers.length
-            ? { scanMarkers: result.scanMarkers.slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) }
-            : {})
-        },
-        annotations: mergeAnnotations(workerObservation?.annotations, result.warnings),
-        actions: workerObservation?.actions
-      })
-    }
-  }
-
-  private async invokeMolecularAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
-    if (!['.pdb', '.cif', '.mmcif', '.sdf', '.mol', '.mol2', '.xyz'].includes(extension)) {
-      return {
-        ok: false,
-        reason: 'unsupported-format',
-        message: `Molecular worker actions are not implemented for ${extension || 'this format'}.`
-      }
-    }
-
-    const text = await this.readTextPrefix(input.file)
-    const service = createWorkspaceMolecularService()
-    const preview = service.preview({
-      text: text.text,
-      format: formatWithoutDot(extension),
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-
-    if (input.action.actionId === 'molecular.workbench') {
-      return actionOk(service.workbench(withActionPreview(input.action, preview) as Parameters<typeof service.workbench>[0]), text)
-    }
-    return unsupportedAction(input)
-  }
-
-  private async prepareBioimagingArtifact(input: WorkspacePreviewWorkerArtifactInput): Promise<WorkspacePreviewWorkerArtifactResult> {
-    if (input.request.kind !== 'tile' && input.request.kind !== 'thumbnail') {
-      return unsupportedArtifact(input, 'bioimaging artifacts')
-    }
-
-    const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
-    if (!['.tif', '.tiff', '.ome.tif', '.ome.tiff'].includes(extension)) {
-      return {
-        ok: false,
-        reason: 'unsupported-format',
-        message: `Bioimaging tile artifacts are only implemented for TIFF and OME-TIFF files; received ${extension || 'unknown format'}.`
-      }
-    }
-
-    const bytes = await this.readBinaryIfWithinLimit(input.file)
-    if (!bytes.ok) return artifactReadFailure(bytes)
-
-    const service = createWorkspaceBioimagingService()
-    if (input.request.kind === 'thumbnail') {
-      const decoded = service.decodeThumbnail({
-        bytes: bytes.bytes,
-        format: 'auto',
-        path: input.file.relativePath ?? input.file.path,
-        workspaceRoot: input.file.workspaceRoot,
-        mimeType: input.file.mimeType,
-        size: input.file.size,
-        mtimeMs: input.file.mtimeMs,
-        width: input.request.width,
-        height: input.request.height,
-        ...(input.request.channelIndex !== undefined ? { channelIndex: input.request.channelIndex } : {}),
-        ...(input.request.z !== undefined ? { z: input.request.z } : {}),
-        ...(input.request.t !== undefined ? { t: input.request.t } : {})
-      })
-      return {
-        ok: true,
-        kind: 'thumbnail',
-        mimeType: decoded.mimeType,
-        bytes: decoded.bytes,
-        thumbnail: decoded.thumbnail,
-        bytesRead: bytes.bytesRead,
-        truncated: false,
-        pixelDecoding: decoded.pixelDecoding,
-        thumbnailRendererImplemented: decoded.thumbnailRendererImplemented
-      }
-    }
-
-    const decoded = service.decodeTile({
-      bytes: bytes.bytes,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs,
-      level: input.request.level,
-      x: input.request.x,
-      y: input.request.y,
-      width: input.request.width,
-      height: input.request.height,
-      ...(input.request.channelIndex !== undefined ? { channelIndex: input.request.channelIndex } : {}),
-      ...(input.request.z !== undefined ? { z: input.request.z } : {}),
-      ...(input.request.t !== undefined ? { t: input.request.t } : {})
-    })
-
-    return {
-      ok: true,
-      kind: 'tile',
-      mimeType: decoded.mimeType,
-      bytes: decoded.bytes,
-      tile: decoded.tile,
-      bytesRead: bytes.bytesRead,
-      truncated: false,
-      pixelDecoding: decoded.pixelDecoding,
-      tileRendererImplemented: decoded.tileRendererImplemented
-    }
-  }
-
-  private async invokeTabularAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const service = createWorkspaceTabularService()
+  private async invokeTabularAction(
+    input: WorkspacePreviewProviderActionInput,
+    service: BuiltInProviderServices['tabular']
+  ): Promise<WorkspacePreviewProviderActionResult> {
     const previewRead = await this.readTabularPreviewForAction(input, service)
     if (!previewRead.ok) return previewRead
 
@@ -761,14 +433,14 @@ export class WorkspacePreviewWorkerClient {
   }
 
   private async readTabularPreviewForAction(
-    input: WorkspacePreviewWorkerActionInput,
-    service: ReturnType<typeof createWorkspaceTabularService>
+    input: WorkspacePreviewProviderActionInput,
+    service: BuiltInProviderServices['tabular']
   ): Promise<{
     ok: true
-    preview: WorkspaceTabularPreviewResult
+    preview: BuiltInWorkspaceTabularPreviewResult
     read: { bytesRead: number; truncated: boolean }
     readOnly: boolean
-  } | Extract<WorkspacePreviewWorkerActionResult, { ok: false }>> {
+  } | Extract<WorkspacePreviewProviderActionResult, { ok: false }>> {
     if (isXlsxTabularFile(input)) {
       const bytes = await this.readBinaryIfWithinLimit(input.file)
       if (!bytes.ok) return bytes
@@ -808,7 +480,10 @@ export class WorkspacePreviewWorkerClient {
     }
   }
 
-  private async invokeDeckAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
+  private async invokeDeckAction(
+    input: WorkspacePreviewProviderActionInput,
+    service: BuiltInProviderServices['deck']
+  ): Promise<WorkspacePreviewProviderActionResult> {
     const extension = extensionFromPreviewPath(input.file.path, input.manifest.extensions)
     if (extension !== '.pptx') {
       return {
@@ -820,7 +495,6 @@ export class WorkspacePreviewWorkerClient {
     const bytes = await this.readBinaryIfWithinLimit(input.file)
     if (!bytes.ok) return bytes
 
-    const service = createWorkspaceDeckService()
     const preview = await service.previewPptx({
       bytes: bytes.bytes,
       path: input.file.relativePath ?? input.file.path,
@@ -845,222 +519,6 @@ export class WorkspacePreviewWorkerClient {
     return unsupportedAction(input)
   }
 
-  private async invokeSequenceAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const text = await this.readTextPrefix(input.file)
-    const service = createWorkspaceSequenceService()
-    const preview = service.preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-
-    if (input.action.actionId === 'sequence.selectRegion') {
-      return actionOk(service.selectRegion(withActionPreview(input.action, preview) as Parameters<typeof service.selectRegion>[0]), text)
-    }
-    if (input.action.actionId === 'sequence.search') {
-      return actionOk(service.search(withActionPreview(input.action, preview) as Parameters<typeof service.search>[0]), text)
-    }
-    if (input.action.actionId === 'sequence.inspectFeatures') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        featureCount: preview.featureCount ?? preview.features.length,
-        intervalCount: preview.intervalCount,
-        variantCount: preview.variantCount ?? preview.variants.length,
-        features: preview.features,
-        variants: preview.variants,
-        regionSummary: preview.regionSummary,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    if (input.action.actionId === 'sequence.exportSummary') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        sequenceCount: preview.sequenceCount,
-        totalLength: preview.totalLength,
-        alphabet: preview.alphabet,
-        readCount: preview.readCount,
-        featureCount: preview.featureCount,
-        intervalCount: preview.intervalCount,
-        variantCount: preview.variantCount,
-        records: preview.records,
-        references: preview.references,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    return unsupportedAction(input)
-  }
-
-  private async invokeOmicsAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const text = await this.readTextPrefix(input.file)
-    const service = createWorkspaceOmicsService()
-    const preview = service.preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-
-    if (input.action.actionId === 'omics.preview') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        matrices: preview.matrices,
-        dataset: preview.dataset,
-        placeholder: preview.placeholder,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    if (input.action.actionId === 'omics.inspectMetadata') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        metadata: preview.metadata,
-        dataset: preview.dataset,
-        matrices: preview.matrices,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    if (input.action.actionId === 'omics.selectDataset') {
-      return actionOk(service.selectDataset(withActionPreview(input.action, preview) as Parameters<typeof service.selectDataset>[0]), text)
-    }
-    if (input.action.actionId === 'omics.declareCapabilities') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        capabilities: preview.capabilities,
-        placeholder: preview.placeholder
-      }, text)
-    }
-    return unsupportedAction(input)
-  }
-
-  private async invokeBioimagingAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const bytes = await this.readBinaryPrefix(input.file)
-    const service = createWorkspaceBioimagingService()
-    const preview = service.preview({
-      bytes: bytes.bytes,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-
-    if (input.action.actionId === 'bioimaging.observeMetadata') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        detectedBy: preview.detectedBy,
-        byteLength: preview.byteLength,
-        dimensions: preview.dimensions,
-        channels: preview.channels,
-        placeholder: preview.placeholder,
-        warnings: preview.warnings,
-        visibleText: preview.observation?.visibleText
-      }, bytes)
-    }
-    if (input.action.actionId === 'bioimaging.inspectHeader') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        detectedBy: preview.detectedBy,
-        tiff: preview.tiff,
-        ome: preview.ome,
-        placeholder: preview.placeholder,
-        warnings: preview.warnings
-      }, bytes)
-    }
-    if (input.action.actionId === 'bioimaging.describeTilePlan') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        tilePlan: preview.tilePlan,
-        dimensions: preview.dimensions,
-        channels: preview.channels,
-        placeholder: preview.placeholder,
-        warnings: preview.warnings
-      }, bytes)
-    }
-    if (input.action.actionId === 'bioimaging.selectRegion') {
-      return actionOk(service.selectRegion(withActionPreview(input.action, preview) as Parameters<typeof service.selectRegion>[0]), bytes)
-    }
-    if (input.action.actionId === 'bioimaging.selectChannels') {
-      return actionOk(service.selectChannels(withActionPreview(input.action, preview) as Parameters<typeof service.selectChannels>[0]), bytes)
-    }
-    if (input.action.actionId === 'bioimaging.annotateRegion') {
-      return actionOk(service.annotateRegion(withActionPreview(input.action, preview) as Parameters<typeof service.annotateRegion>[0]), bytes)
-    }
-    if (input.action.actionId === 'bioimaging.exportRoiSet') {
-      return actionOk(service.exportRoiSet(withActionPreview(input.action, preview) as Parameters<typeof service.exportRoiSet>[0]), bytes)
-    }
-    return unsupportedAction(input)
-  }
-
-  private async invokeSpectraAction(input: WorkspacePreviewWorkerActionInput): Promise<WorkspacePreviewWorkerActionResult> {
-    const text = await this.readTextPrefix(input.file)
-    const service = createWorkspaceSpectraService()
-    const preview = service.preview({
-      text: text.text,
-      format: 'auto',
-      path: input.file.relativePath ?? input.file.path,
-      workspaceRoot: input.file.workspaceRoot,
-      mimeType: input.file.mimeType,
-      size: input.file.size,
-      mtimeMs: input.file.mtimeMs
-    })
-
-    if (input.action.actionId === 'spectra.preview') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        spectrumCount: preview.spectrumCount,
-        peakCount: preview.peakCount,
-        scanCount: preview.scanCount,
-        mzRange: preview.mzRange,
-        intensityRange: preview.intensityRange,
-        spectra: preview.spectra,
-        scanMarkers: preview.scanMarkers,
-        sampledPeaks: preview.sampledPeaks,
-        fcs: preview.fcs,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    if (input.action.actionId === 'spectra.inspectScans') {
-      return actionOk({
-        ok: true,
-        format: preview.format,
-        scanCount: preview.scanCount,
-        scanMarkers: preview.scanMarkers,
-        mzRange: preview.mzRange,
-        intensityRange: preview.intensityRange,
-        visibleText: preview.observation?.visibleText
-      }, text)
-    }
-    if (input.action.actionId === 'spectra.selectPeaksByRange') {
-      return actionOk(service.selectPeaksByRange({
-        ...input.action.input,
-        peaks: preview.sampledPeaks
-      } as Parameters<typeof service.selectPeaksByRange>[0]), text)
-    }
-    if (input.action.actionId === 'spectra.annotateRange') {
-      return actionOk(service.annotateRange(withActionPreview(input.action, preview) as Parameters<typeof service.annotateRange>[0]), text)
-    }
-    if (input.action.actionId === 'spectra.exportPeakList') {
-      return actionOk(service.exportPeakList(withActionPreview(input.action, preview) as Parameters<typeof service.exportPeakList>[0]), text)
-    }
-    return unsupportedAction(input)
-  }
-
   private async readTextPrefix(file: WorkspacePreviewFileState): Promise<{ text: string; bytesRead: number; truncated: boolean }> {
     const binary = await this.readBinaryPrefix(file, this.maxTextBytes)
     return {
@@ -1072,7 +530,7 @@ export class WorkspacePreviewWorkerClient {
 
   private async readBinaryIfWithinLimit(
     file: WorkspacePreviewFileState
-  ): Promise<{ ok: true; bytes: Uint8Array<ArrayBuffer>; bytesRead: number } | Extract<WorkspacePreviewWorkerObservationResult, { ok: false }>> {
+  ): Promise<{ ok: true; bytes: Uint8Array<ArrayBuffer>; bytesRead: number } | Extract<WorkspacePreviewProviderObservationResult, { ok: false }>> {
     const fileInfo = await stat(file.path)
     if (fileInfo.size > this.maxBinaryBytes) {
       return {
@@ -1115,7 +573,7 @@ export class WorkspacePreviewWorkerClient {
 function actionOk(
   result: unknown,
   read: { bytesRead: number; truncated: boolean }
-): Extract<WorkspacePreviewWorkerActionResult, { ok: true }> {
+): Extract<WorkspacePreviewProviderActionResult, { ok: true }> {
   return {
     ok: true,
     result,
@@ -1152,18 +610,18 @@ function tabularObservationActions(actions: string[] | undefined, readOnly: bool
   return actions?.filter((actionId) => !isTabularWriteAction(actionId))
 }
 
-function isXlsxTabularFile(input: WorkspacePreviewWorkerObservationInput): boolean {
+function isXlsxTabularFile(input: WorkspacePreviewProviderObservationInput): boolean {
   const path = input.file.relativePath ?? input.file.path
   const extension = extensionFromPreviewPath(path, input.manifest.extensions)
   const mimeType = input.file.mimeType?.toLowerCase()
   return extension === '.xlsx' || mimeType === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 }
 
-function isReadOnlyTabularPreviewFormat(format: WorkspaceTabularPreviewResult['format']): boolean {
+function isReadOnlyTabularPreviewFormat(format: BuiltInWorkspaceTabularPreviewResult['format']): boolean {
   return format === 'xlsx' || format === 'jsonl' || format === 'ndjson'
 }
 
-function tabularFormatDisplayName(format: WorkspaceTabularPreviewResult['format']): string {
+function tabularFormatDisplayName(format: BuiltInWorkspaceTabularPreviewResult['format']): string {
   if (format === 'xlsx') return 'XLSX'
   if (format === 'ndjson') return 'NDJSON'
   return format.toUpperCase()
@@ -1182,35 +640,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function unsupportedAction(
-  input: WorkspacePreviewWorkerActionInput
-): Extract<WorkspacePreviewWorkerActionResult, { ok: false }> {
+  input: WorkspacePreviewProviderActionInput
+): Extract<WorkspacePreviewProviderActionResult, { ok: false }> {
   return {
     ok: false,
     reason: 'unsupported-action',
     message: `Workspace preview action ${input.action.actionId} is not implemented for plugin ${input.manifest.id}.`
-  }
-}
-
-function unsupportedArtifact(
-  input: WorkspacePreviewWorkerArtifactInput,
-  artifactName: string
-): Extract<WorkspacePreviewWorkerArtifactResult, { ok: false }> {
-  return {
-    ok: false,
-    reason: 'unsupported-artifact',
-    message: `Workspace preview ${artifactName} are not implemented for plugin ${input.manifest.id}.`
-  }
-}
-
-function artifactReadFailure(
-  result: Extract<WorkspacePreviewWorkerObservationResult, { ok: false }>
-): Extract<WorkspacePreviewWorkerArtifactResult, { ok: false }> {
-  return {
-    ok: false,
-    reason: result.reason === 'unsupported-plugin' || result.reason === 'unsupported-format' || result.reason === 'too-large'
-      ? result.reason
-      : 'worker-error',
-    message: result.message
   }
 }
 
@@ -1237,11 +672,6 @@ function buildObservation(input: ObservationBuildInput): WorkspaceObservation {
     ...(input.tabular ? { tabular: input.tabular } : {}),
     ...(input.slides ? { slides: input.slides } : {}),
     ...(input.deck ? { deck: input.deck } : {}),
-    ...(input.molecular ? { molecular: input.molecular } : {}),
-    ...(input.sequence ? { sequence: input.sequence } : {}),
-    ...(input.omics ? { omics: input.omics } : {}),
-    ...(input.bioimaging ? { bioimaging: sanitizeBioimagingObservation(input.bioimaging) } : {}),
-    ...(input.spectra ? { spectra: input.spectra } : {}),
     ...(input.annotations?.length ? { annotations: input.annotations } : {}),
     ...(input.pluginMetadata?.length ? { pluginMetadata: input.pluginMetadata } : {}),
     actions: mergeActions(input.manifest, input.actions, input.readOnly)
@@ -1249,7 +679,7 @@ function buildObservation(input: ObservationBuildInput): WorkspaceObservation {
 }
 
 function buildDeckObservation(
-  result: Pick<WorkspaceDeckPreviewResult, 'elementCount' | 'elements' | 'truncatedElements' | 'observation'>
+  result: Pick<BuiltInWorkspaceDeckPreviewResult, 'elementCount' | 'elements' | 'truncatedElements' | 'observation'>
 ): WorkspaceObservation['deck'] | undefined {
   const slidePreviews = result.observation.deck?.slidePreviews?.slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) ?? []
   if (result.elementCount === 0 && slidePreviews.length === 0) return undefined
@@ -1272,29 +702,6 @@ function buildDeckObservation(
         }
       : {}),
     ...(slidePreviews.length > 0 ? { slidePreviews } : {})
-  }
-}
-
-function sanitizeBioimagingObservation(
-  bioimaging: NonNullable<WorkspaceObservation['bioimaging']>
-): NonNullable<WorkspaceObservation['bioimaging']> {
-  const dimensions = bioimaging.dimensions
-  return {
-    ...(bioimaging.format ? { format: bioimaging.format } : {}),
-    ...(bioimaging.detectedBy ? { detectedBy: bioimaging.detectedBy } : {}),
-    ...(bioimaging.byteLength !== undefined ? { byteLength: bioimaging.byteLength } : {}),
-    ...(bioimaging.channels ? { channels: bioimaging.channels } : {}),
-    ...(dimensions?.width && dimensions.height
-      ? {
-          dimensions: {
-            width: dimensions.width,
-            height: dimensions.height,
-            ...(dimensions.z ? { z: dimensions.z } : {}),
-            ...(dimensions.t ? { t: dimensions.t } : {})
-          }
-        }
-      : {}),
-    ...(bioimaging.tilePlan ? { tilePlan: bioimaging.tilePlan } : {})
   }
 }
 
@@ -1327,20 +734,4 @@ function mergeAnnotations(
     })
   }
   return annotations.slice(0, 1000)
-}
-
-function formatWithoutDot(
-  extension: string
-): 'pdb' | 'cif' | 'mmcif' | 'sdf' | 'mol' | 'mol2' | 'xyz' | 'xtc' | 'dcd' | 'trr' | 'mrc' | 'ccp4' {
-  const format = extension.replace(/^\./, '')
-  if (format === 'pdb' || format === 'cif' || format === 'mmcif' || format === 'sdf' || format === 'mol' || format === 'mol2' || format === 'xyz' || format === 'xtc' || format === 'dcd' || format === 'trr' || format === 'mrc' || format === 'ccp4') {
-    return format
-  }
-  return 'pdb'
-}
-
-export function createWorkspacePreviewWorkerClient(
-  options: WorkspacePreviewWorkerClientOptions = {}
-): WorkspacePreviewWorkerClient {
-  return new WorkspacePreviewWorkerClient(options)
 }

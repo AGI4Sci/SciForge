@@ -61,6 +61,23 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('modelAccess:status')
   })
 
+  it('exposes one generic constrained file picker without a Biology Room facade', async () => {
+    const api = exposedApi as {
+      pickFile(request: unknown): Promise<unknown>
+      biologyRoom?: Record<string, unknown>
+    }
+    const request = {
+      title: 'Select data',
+      defaultPath: '/tmp/workspace',
+      filters: [{ name: 'Data', extensions: ['csv'] }]
+    }
+
+    await api.pickFile(request)
+
+    expect(invoke).toHaveBeenCalledWith('workspace:pick-file', request)
+    expect(api.biologyRoom).toBeUndefined()
+  })
+
   it('exposes durable full-trace read, export, and clear IPC', async () => {
     const api = exposedApi as {
       traces: {
@@ -246,24 +263,17 @@ describe('preload agentRuntime bridge', () => {
     expect(api.writeWorkspaceDocxText).toBeUndefined()
   })
 
-  it('exposes broker-backed workspace preview methods without replacing file channels', async () => {
+  it('exposes generic capability and file APIs without domain facades', async () => {
     const api = exposedApi as {
-      readWorkspaceFile(options: unknown): Promise<unknown>
-      workspacePreview: {
-        listPlugins(): Promise<unknown>
-        open(input: unknown): Promise<unknown>
-        observe(sessionId: string): Promise<unknown>
-        watch(payload: unknown): Promise<unknown>
-        unwatch(watchId: string): Promise<unknown>
-        getAssetSourceUrl(sessionId: string): string | null
-        onChanged(handler: (payload: unknown) => void): () => void
+      watchWorkspaceFile(payload: unknown): Promise<unknown>
+      unwatchWorkspaceFile(watchId: string): Promise<unknown>
+      onWorkspaceFileChanged(handler: (payload: unknown) => void): () => void
+      capabilities: {
+        invoke(input: unknown): Promise<unknown>
+        resourceContentUrl(access: unknown): string | null
       }
-    }
-    const openInput = {
-      path: 'protein.pdb',
-      workspaceRoot: '/tmp/workspace',
-      mimeType: 'chemical/x-pdb',
-      mode: 'inspect'
+      workspacePreview?: unknown
+      biologyRoom?: unknown
     }
     const resource = {
       token: 'cap_abcdefghijklmnopqrstuvwxyz',
@@ -271,80 +281,28 @@ describe('preload agentRuntime bridge', () => {
       expiresAt: '2026-07-16T14:00:00.000Z'
     }
     invoke.mockImplementation(async (channel: string, payload?: unknown) => {
-      if (channel === 'capability:readiness') {
-        const request = payload as {
-          expectedContractVersion: number
-          requiredCapabilityIds: string[]
-        }
-        return {
-          contractVersion: request.expectedContractVersion,
-          status: 'ready',
-          registryFingerprint: 'a'.repeat(64),
-          availableCapabilityIds: request.requiredCapabilityIds,
-          missingCapabilityIds: [],
-          message: 'Capability broker is ready.'
-        }
-      }
-      if (channel === 'capability:invoke') {
-        const request = (payload as { request: { actionId: string } }).request
-        const output = request.actionId === 'workspace-preview.list'
-          ? []
-          : {
-              ok: true,
-              session: { id: 'session-1', workspaceRoot: '/tmp/workspace' },
-              manifest: { id: 'molecular' },
-              route: 'matched',
-              file: { path: 'protein.pdb' },
-              resource
-            }
-        return {
-          actionId: request.actionId,
-          output,
-          changed: false,
-          replayed: false,
-          completedAt: '2026-07-16T13:00:00.000Z'
-        }
-      }
-      if (channel === 'capability:observe') {
-        return {
-          resource,
-          resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
-          resourceKind: 'workspace-preview',
-          semanticRevision: resource.semanticRevision,
-          observedAt: '2026-07-16T13:00:00.000Z',
-          state: { session: { id: 'session-1' }, observation: { sessionId: 'session-1' } },
-          operations: []
-        }
-      }
       if (channel === 'file:watch-workspace') return { watchId: 'watch-1' }
       if (channel === 'file:unwatch-workspace') return true
       return undefined
     })
 
-    await api.workspacePreview.listPlugins()
-    await api.workspacePreview.open(openInput)
-    await api.workspacePreview.observe('session-1')
-    await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
-    await api.workspacePreview.unwatch('watch-1')
-    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session-1')
+    const capabilityRequest = {
+      request: { actionId: 'workspace-preview.list', input: {} }
+    }
+    await api.capabilities.invoke(capabilityRequest)
+    await api.watchWorkspaceFile({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
+    await api.unwatchWorkspaceFile('watch-1')
+    const assetSourceUrl = api.capabilities.resourceContentUrl({
+      workspaceId: '/tmp/workspace',
+      resource
+    })
     const changed = vi.fn()
-    const unsubscribe = api.workspacePreview.onChanged(changed)
+    const unsubscribe = api.onWorkspaceFileChanged(changed)
     const wrapped = on.mock.calls.find(([channel]) => channel === 'file:workspace-changed')?.[1]
     wrapped?.({}, { ok: true, watchId: 'watch-1' })
     unsubscribe()
-    await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
 
-    expect(invoke).toHaveBeenCalledWith('capability:invoke', expect.objectContaining({
-      request: expect.objectContaining({ actionId: 'workspace-preview.list' })
-    }))
-    expect(invoke).toHaveBeenCalledWith('capability:invoke', expect.objectContaining({
-      workspaceId: '/tmp/workspace',
-      request: expect.objectContaining({ actionId: 'workspace-preview.open', input: openInput })
-    }))
-    expect(invoke).toHaveBeenCalledWith('capability:observe', {
-      workspaceId: '/tmp/workspace',
-      request: { resource }
-    })
+    expect(invoke).toHaveBeenCalledWith('capability:invoke', capabilityRequest)
     expect(invoke).toHaveBeenCalledWith('file:watch-workspace', {
       path: 'protein.pdb',
       workspaceRoot: '/tmp/workspace'
@@ -357,10 +315,8 @@ describe('preload agentRuntime bridge', () => {
     })
     expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
     expect(removeListener).toHaveBeenCalledWith('file:workspace-changed', wrapped)
-    expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
-      path: 'paper.pdf',
-      workspaceRoot: '/tmp/workspace'
-    })
+    expect(api.workspacePreview).toBeUndefined()
+    expect(api.biologyRoom).toBeUndefined()
   })
 
   it('exposes speech-to-text transcription IPC', async () => {
@@ -441,36 +397,16 @@ describe('preload agentRuntime bridge', () => {
     expect(removeListener).toHaveBeenCalledWith('remoteChannel:activity', wrapped)
   })
 
-  it('exposes Paper Radar IPC methods through the preload bridge', async () => {
+  it('does not expose a Paper Radar domain-specific preload bridge', () => {
     const api = exposedApi as {
-      paperRadar: {
-        status(): Promise<unknown>
-        syncProfile(payload: unknown): Promise<unknown>
-        review(payload: unknown): Promise<unknown>
-        search(payload: unknown): Promise<unknown>
-        digest(payload: unknown): Promise<unknown>
+      paperRadar?: unknown
+      capabilities?: {
+        invoke?: unknown
       }
     }
 
-    await api.paperRadar.status()
-    await api.paperRadar.syncProfile({ profile: 'lab_default', maxRecords: 20 })
-    await api.paperRadar.review({
-      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
-      days: 7,
-      topK: 5
-    })
-    await api.paperRadar.search({ query: 'protein design', topK: 5 })
-    await api.paperRadar.digest({ profile: 'lab_default', days: 7, topK: 5 })
-
-    expect(invoke).toHaveBeenCalledWith('paperRadar:status')
-    expect(invoke).toHaveBeenCalledWith('paperRadar:sync-profile', { profile: 'lab_default', maxRecords: 20 })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:review', {
-      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
-      days: 7,
-      topK: 5
-    })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:search', { query: 'protein design', topK: 5 })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:digest', { profile: 'lab_default', days: 7, topK: 5 })
+    expect(api.paperRadar).toBeUndefined()
+    expect(api.capabilities?.invoke).toBeTypeOf('function')
   })
 
   it('exposes Research Cards IPC methods through the preload bridge', async () => {

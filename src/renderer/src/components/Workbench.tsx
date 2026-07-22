@@ -124,10 +124,6 @@ import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availabi
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { buildImageGenerationWorkflowPrompt } from '../lib/image-generation-chat'
 import { useKeyboardShortcutSettings } from '../lib/keyboard-shortcut-settings'
-import {
-  isPluginInstalled,
-  PAPER_RADAR_EXTENSION_ID
-} from '../lib/plugin-install-state'
 import { providerSupportsCapability } from '../store/chat-store-provider-capabilities'
 import { collectComposerChangeSummary } from '../lib/composer-change-summary'
 import {
@@ -167,11 +163,11 @@ import {
   anchoredCommentStore,
   type AnchoredCommentsAddToConversationDetail
 } from './anchored-comments'
-import { scheduleMolecularMolstarPrewarm } from '../workspace-preview/molecular-prewarm'
 import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
 } from '../lib/session-right-panel-lifecycle'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
@@ -214,9 +210,6 @@ const WorkflowView = lazy(() =>
 const WorkflowRunPanel = lazy(() =>
   import('./workflow/WorkflowRunPanel').then((module) => ({ default: module.WorkflowRunPanel }))
 )
-const PaperRadarPanel = lazy(() =>
-  import('./paper/PaperRadarPanel').then((module) => ({ default: module.PaperRadarPanel }))
-)
 const TerminalPanel = lazy(() =>
   import('./terminal/TerminalPanel').then((module) => ({ default: module.TerminalPanel }))
 )
@@ -225,6 +218,8 @@ const VisualReviewPanel = lazy(() =>
 )
 
 function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): string {
+  const registeredTitle = installedRendererContributions.rightPanels.resolve(mode)?.contribution.title
+  if (registeredTitle) return registeredTitle
   switch (mode) {
     case 'file':
       return 'File preview'
@@ -236,8 +231,6 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'Changes'
     case 'todo':
       return 'Todos'
-    case 'paper':
-      return 'Paper radar'
     case 'evidence':
       return 'Evidence graph'
     case 'project-dag':
@@ -257,13 +250,12 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
   }
 }
 
-const RIGHT_PANEL_RESOURCE_KINDS: Record<Exclude<RightPanelMode, null>, string> = {
+const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, null>, string>> = {
   file: 'workspace-files',
   browser: 'dev-preview',
   'child-agents': 'child-agents',
   changes: 'session-changes',
   todo: 'session-todos',
-  paper: 'paper-radar',
   evidence: 'evidence-graph',
   'project-dag': 'project-dag',
   workflow: 'workflow-builder',
@@ -271,6 +263,11 @@ const RIGHT_PANEL_RESOURCE_KINDS: Record<Exclude<RightPanelMode, null>, string> 
   'visual-review': 'visual-document',
   plan: 'gui-plan',
   'sdd-ai': 'sdd-assistant'
+}
+
+function rightPanelVisibleContextResourceKind(mode: Exclude<RightPanelMode, null>): string {
+  return installedRendererContributions.rightPanels.resolve(mode)?.contribution.resourceKind ??
+    CORE_RIGHT_PANEL_RESOURCE_KINDS[mode] ?? mode
 }
 
 export type RightPanelVisibleContextInput = {
@@ -302,7 +299,7 @@ export function buildRightPanelVisibleContextComponent(
   const title = rightPanelVisibleContextTitle(input.mode)
   const workspaceRoot = input.filePreviewTarget?.workspaceRoot || input.workspaceRoot || undefined
   const baseResource = {
-    kind: RIGHT_PANEL_RESOURCE_KINDS[input.mode],
+    kind: rightPanelVisibleContextResourceKind(input.mode),
     title,
     summary: `${title} state owned by session ${input.sessionId}.`,
     sessionId: input.sessionId,
@@ -712,8 +709,6 @@ type SessionRightPanelRenderSnapshot = {
 export function Workbench(): ReactElement {
   const { t } = useTranslation('common')
 
-  useEffect(() => scheduleMolecularMolstarPrewarm(), [])
-
   const {
     threads,
     threadSearch,
@@ -974,7 +969,7 @@ export function Workbench(): ReactElement {
   const activeSddDraft = activeSddSession?.draft ?? null
   const sddDraftOperationStatus = activeSddSession?.operationStatus ?? 'idle'
   const stageInsetClass = 'ds-stage-inset'
-  const paperRadarEnabled = import.meta.env.DEV && isPluginInstalled('extension', PAPER_RADAR_EXTENSION_ID)
+  const installedRightPanels = installedRendererContributions.rightPanels.list()
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const keyboardShortcutBindings = useMemo(
     () => resolveKeyboardShortcutBindings(keyboardShortcuts),
@@ -1585,10 +1580,10 @@ export function Workbench(): ReactElement {
   }, [activeGuiPlan, rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
-    if (rightPanelMode === 'paper' && !paperRadarEnabled) {
-      setRightPanelMode(null)
-    }
-  }, [paperRadarEnabled, rightPanelMode, setRightPanelMode])
+    if (!rightPanelMode) return
+    const registered = installedRendererContributions.rightPanels.resolve(rightPanelMode)
+    if (registered && !registered.contribution.isAvailable()) setRightPanelMode(null)
+  }, [rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
     const openProjectDagPanel = (event: Event): void => {
@@ -2824,6 +2819,9 @@ export function Workbench(): ReactElement {
   ) => {
     const ownerSessionId = workspace.sessionId
     const workspaceMode = workspace.mode
+    const installedRightPanel = installedRightPanels.find(
+      ({ contribution }) => contribution.mode === workspaceMode && contribution.isAvailable()
+    )?.contribution
     const ownerFilePreviewTarget = workspace.filePreviewTarget
     const ownerFilePreviewReturnContext = workspace.filePreviewReturnContext
     const ownerVisualReviewRequest = workspace.visualReviewRequest
@@ -2978,11 +2976,6 @@ export function Workbench(): ReactElement {
                           active={active}
                           className="h-full max-h-full w-full"
                           annotationQuestionBridge={annotationQuestionBridge}
-                          onAddSelectionToChat={(context) => {
-                            setInput((current) => current.trim()
-                              ? `${current.trim()}\n\n${context}`
-                              : context)
-                          }}
                           onClose={closeOwnerFilePreview}
                           onOpenDirectory={openOwnerFileTreeDirectory}
                         />
@@ -3052,11 +3045,11 @@ export function Workbench(): ReactElement {
                 onCollapse={closeOwnerRightPanel}
                 onOpenPlan={openGuiPlanPanel}
               />
-            ) : workspaceMode === 'paper' && paperRadarEnabled ? (
-              <PaperRadarPanel
-                className="h-full max-h-full w-full"
-                onCollapse={closeOwnerRightPanel}
-              />
+            ) : installedRightPanel ? (
+              installedRightPanel.render({
+                className: 'h-full max-h-full w-full',
+                onCollapse: closeOwnerRightPanel
+              })
             ) : workspaceMode === 'evidence' ? (
               <EvidenceDagPanel
                 ownerSessionId={ownerSessionId}
@@ -3357,7 +3350,7 @@ export function Workbench(): ReactElement {
                     onToggleRightPanelMode={toggleTopBarRightPanelMode}
                     workspaceRoot={activeWorkspaceReferenceRoot}
                     planPanelEnabled={Boolean(activeGuiPlan)}
-                    paperRadarEnabled={paperRadarEnabled}
+                    rightPanelContributions={installedRightPanels}
                     terminalOpen={terminalOpen}
                     onToggleTerminal={toggleTerminal}
                     sideChatCount={currentSideConversations.length}

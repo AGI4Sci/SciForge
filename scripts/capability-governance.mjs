@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { tsImport } from 'tsx/esm/api'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const APP_REGISTRY_PATH = path.join(ROOT, 'src/main/capabilities/app-registry.ts')
+const APPLICATION_COMPOSITION_PATH = path.join(ROOT, 'src/main/modules/index.ts')
 const AGENT_TOOLS_PATH = path.join(ROOT, 'src/main/capabilities/agent-tools.ts')
 const GENERATED_REFERENCE_PATH = path.join(ROOT, 'docs/generated/capabilities.md')
 
@@ -52,9 +52,9 @@ Usage:
   node scripts/capability-governance.mjs --check         verify reference and architecture boundaries
   node scripts/capability-governance.mjs --architecture  scan architecture boundaries only
 
-The command fails closed if the application registry is missing, cannot be
-constructed, is empty, contains duplicate actions, or advertises an incomplete
-descriptor.`)
+The command fails closed if the domain catalog composition is missing, cannot
+be constructed, is empty, contains duplicate actions, or advertises an
+incomplete descriptor.`)
 }
 
 function createUnavailableDependency(label) {
@@ -153,14 +153,14 @@ function validateDescriptors(rawDescriptors) {
 function validateMigratedDomainPolicies(rawPolicies) {
   if (rawPolicies === undefined) return []
   if (!Array.isArray(rawPolicies)) {
-    throw new GovernanceError('MIGRATED_CAPABILITY_DOMAINS must be an array.')
+    throw new GovernanceError('Catalog capability domain policies must be an array.')
   }
   const ids = new Set()
   const prefixes = new Set()
   const allowedTransports = new Set()
   return rawPolicies.map((rawPolicy, index) => {
     if (!isPlainObject(rawPolicy)) {
-      throw new GovernanceError(`MIGRATED_CAPABILITY_DOMAINS[${index}] must be an object.`)
+      throw new GovernanceError(`Catalog capability domain policy at index ${index} must be an object.`)
     }
     const id = typeof rawPolicy.id === 'string' ? rawPolicy.id.trim() : ''
     const title = typeof rawPolicy.title === 'string' ? rawPolicy.title.trim() : ''
@@ -215,7 +215,7 @@ function validateDomainPolicyCoverage(descriptors, migratedDomains) {
   if (uncoveredDomains.length > 0) {
     throw new GovernanceError(
       `Registered capability domains are missing atomic-cutover policy: ${uncoveredDomains.join(', ')}. ` +
-        'Export each domain from MIGRATED_CAPABILITY_DOMAINS before exposing its actions.'
+        'Contribute each domain policy through the DomainModuleCatalog before exposing its actions.'
     )
   }
   const emptyPolicies = [...policyDomainIds].filter((id) => !registeredDomainIds.has(id)).sort()
@@ -228,31 +228,43 @@ function validateDomainPolicyCoverage(descriptors, migratedDomains) {
 
 async function loadApplicationCapabilityModel() {
   try {
-    await stat(APP_REGISTRY_PATH)
+    await stat(APPLICATION_COMPOSITION_PATH)
   } catch {
     throw new GovernanceError(
-      `Missing authoritative application registry: ${relativePath(APP_REGISTRY_PATH)}. ` +
-        'Create and export createAppCapabilityRegistry(deps) before exposing a product action.'
+      `Missing authoritative domain composition: ${relativePath(APPLICATION_COMPOSITION_PATH)}.`
     )
   }
 
   let module
   try {
-    module = await tsImport(pathToFileURL(APP_REGISTRY_PATH).href, { parentURL: import.meta.url })
+    module = await tsImport(pathToFileURL(APPLICATION_COMPOSITION_PATH).href, { parentURL: import.meta.url })
   } catch (error) {
     throw new GovernanceError(
-      `Unable to import ${relativePath(APP_REGISTRY_PATH)}: ${error instanceof Error ? error.message : String(error)}`
+      `Unable to import ${relativePath(APPLICATION_COMPOSITION_PATH)}: ${error instanceof Error ? error.message : String(error)}`
     )
   }
-  if (typeof module.createAppCapabilityRegistry !== 'function') {
+  if (
+    typeof module.createApplicationDomainCatalog !== 'function' ||
+    typeof module.createApplicationCapabilityRegistry !== 'function' ||
+    typeof module.listMainCapabilityDomainPolicies !== 'function'
+  ) {
     throw new GovernanceError(
-      `${relativePath(APP_REGISTRY_PATH)} must export createAppCapabilityRegistry(deps).`
+      `${relativePath(APPLICATION_COMPOSITION_PATH)} must export the catalog-based application composition API.`
     )
   }
 
   let registry
+  let catalog
   try {
-    registry = await module.createAppCapabilityRegistry(createReferenceDependencies())
+    catalog = await module.createApplicationDomainCatalog({
+      getUserDataDir: () => {
+        throw new GovernanceError('Governance must not instantiate a domain service.')
+      }
+    })
+    registry = await module.createApplicationCapabilityRegistry(
+      catalog,
+      createReferenceDependencies()
+    )
   } catch (error) {
     if (error instanceof GovernanceError) throw error
     throw new GovernanceError(
@@ -260,7 +272,7 @@ async function loadApplicationCapabilityModel() {
     )
   }
   if (!registry || typeof registry.list !== 'function') {
-    throw new GovernanceError('createAppCapabilityRegistry(deps) must return a registry with list().')
+    throw new GovernanceError('Catalog capability composition must return a registry with list().')
   }
   const descriptors = validateDescriptors(await registry.list())
   const ambiguousPreviewAction = descriptors.find((descriptor) =>
@@ -271,7 +283,9 @@ async function loadApplicationCapabilityModel() {
       'workspace-preview.invoke-action must be UI-only. Agent callers use registered domain operations, never a two-level action dispatcher.'
     )
   }
-  const migratedDomains = validateMigratedDomainPolicies(module.MIGRATED_CAPABILITY_DOMAINS)
+  const migratedDomains = validateMigratedDomainPolicies(
+    module.listMainCapabilityDomainPolicies(catalog)
+  )
   validateDomainPolicyCoverage(descriptors, migratedDomains)
   let agentToolsModule
   try {
@@ -311,7 +325,7 @@ function renderCapabilityReference(descriptors, migratedDomains) {
     '',
     '<!-- GENERATED FILE. DO NOT EDIT. Run `npm run capability:generate`. -->',
     '',
-    `Authoritative source: \`${relativePath(APP_REGISTRY_PATH)}\``,
+    `Authoritative source: \`${relativePath(APPLICATION_COMPOSITION_PATH)}\``,
     '',
     `Registered actions: **${descriptors.length}**`,
     '',
@@ -465,12 +479,18 @@ async function scanArchitecture(registeredIds = new Set(), migratedDomains = [])
       for (const relativeEntry of DIRECT_TRANSPORT_ROOTS) {
         const entryFiles = await walkSourceFiles(path.join(ROOT, relativeEntry))
         for (const filePath of entryFiles.filter((candidate) =>
-          !isTestFile(candidate) && path.resolve(candidate) !== APP_REGISTRY_PATH
+          !isTestFile(candidate)
         )) {
           const source = await readFile(filePath, 'utf8')
           const channelPattern = new RegExp(`(['"\`])(${escapeRegExp(transportPrefix)}[^'"\`\\s]*)\\1`, 'g')
           const matches = [...source.matchAll(channelPattern)]
             .filter((match) => !policy.allowedDirectTransports.includes(match[2]))
+            .filter((match) => {
+              const lineStart = source.lastIndexOf('\n', match.index) + 1
+              const lineEnd = source.indexOf('\n', match.index)
+              const line = source.slice(lineStart, lineEnd === -1 ? source.length : lineEnd)
+              return !line.includes('directTransportPrefixes')
+            })
           if (matches.length > 0) {
             const position = positionAt(source, matches[0].index)
             const channels = [...new Set(matches.map((match) => match[2]))].sort()

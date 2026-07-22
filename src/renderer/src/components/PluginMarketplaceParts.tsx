@@ -1,39 +1,9 @@
-import type { ReactElement, ReactNode } from 'react'
+import type { ReactElement } from 'react'
 
 export type MarketplaceNotice = {
   tone: 'success' | 'error' | 'info'
   message: string
 }
-
-export function TabButton({
-  active,
-  tone = 'default',
-  onClick,
-  children
-}: {
-  active: boolean
-  tone?: 'default' | 'skill'
-  onClick: () => void
-  children: ReactNode
-}): ReactElement {
-  const activeClass =
-    tone === 'skill'
-      ? 'bg-ds-skill-soft text-ds-skill shadow-sm'
-      : 'bg-ds-card text-ds-ink shadow-sm'
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-lg px-4 py-2 text-[15px] font-semibold transition ${
-        active ? activeClass : 'text-ds-muted hover:text-ds-ink'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
-
 
 export function NoticeView({ notice }: { notice: MarketplaceNotice }): ReactElement {
   const className =

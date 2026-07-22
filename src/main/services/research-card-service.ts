@@ -26,7 +26,7 @@ import {
   atomicWriteAppDataJson,
   readAppDataStoreText
 } from './app-data-store'
-import { canonicalPath } from './workspace-paths'
+import { canonicalPath } from '@sciforge/domain-sdk/node/workspace-paths'
 
 type StoredResearchCards = {
   schemaVersion: typeof RESEARCH_CARD_SCHEMA_VERSION

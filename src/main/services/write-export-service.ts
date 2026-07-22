@@ -35,7 +35,7 @@ import { readWorkspaceImage, resolveWorkspaceFile } from './workspace-service'
 import {
   resolveSafeWorkspaceWriteTarget,
   writeSafeWorkspaceFile
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 type HtmlToDocxDocumentOptions = {
   title?: string

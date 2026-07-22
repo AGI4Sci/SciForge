@@ -5,14 +5,120 @@ import { join } from 'node:path'
 import JSZip from 'jszip'
 import { PDFDocument } from 'pdf-lib'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createDomainMainEntry } from '@sciforge/domain-life-science-preview/main'
+import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-life-science-preview/contract'
+import {
+  encodeLifeScienceSelection,
+  lifeScienceStructuredSelectionSchema
+} from '@sciforge/domain-life-science-preview/workspace-preview-wire'
 import { loadPdfAnnotationSidecar } from '../pdf-annotation-sidecar-service'
 import { WorkspaceHtmlPreviewService } from '../workspace-html-preview-service'
 import {
+  DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
-  WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES
+  WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+  workspacePreviewExtensionIdSchema,
+  workspacePreviewModalitySchema,
+  workspacePreviewPluginMetadataItemSchema
 } from '../../../shared/workspace-preview'
-import { WorkspacePreviewHost } from './host'
-import type { WorkspacePreviewWorkerClient } from './worker-client'
+import {
+  WorkspacePreviewHost as WorkspacePreviewHostImplementation,
+  type WorkspacePreviewHostOptions
+} from './host'
+import { composeWorkspacePreviewPlugins } from './composition'
+import type { WorkspacePreviewProvider } from './provider-registry'
+import {
+  WorkspacePreviewWorkerClient,
+  type WorkspacePreviewHostRuntime
+} from './worker-client'
+
+const LIFE_SCIENCE_MODALITIES = Object.freeze({
+  molecular: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
+  sequence: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.sequence'),
+  omics: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.omics'),
+  bioimaging: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.bioimaging'),
+  spectra: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.spectra')
+})
+
+const LIFE_SCIENCE_OBSERVATION_METADATA_KINDS = Object.freeze({
+  molecular: 'sciforge.life-science-preview.molecular.observation',
+  sequence: 'sciforge.life-science-preview.sequence.observation',
+  omics: 'sciforge.life-science-preview.omics.observation',
+  bioimaging: 'sciforge.life-science-preview.bioimaging.observation',
+  spectra: 'sciforge.life-science-preview.spectra.observation'
+})
+
+type LifeScienceKind = keyof typeof LIFE_SCIENCE_MODALITIES
+
+function lifeScienceSelection(
+  kind: LifeScienceKind,
+  selection: Record<string, unknown>
+) {
+  const parsed = lifeScienceStructuredSelectionSchema.parse(selection)
+  if (parsed.kind !== kind) throw new Error(`Expected a ${kind} selection fixture.`)
+  const encoded = encodeLifeScienceSelection(parsed)
+  if (encoded.kind !== 'domain') throw new Error('Expected a domain selection fixture.')
+  return encoded
+}
+
+function lifeScienceObservationMetadata(
+  kind: LifeScienceKind,
+  observation: Record<string, unknown>
+) {
+  return workspacePreviewPluginMetadataItemSchema.parse({
+    source: 'plugin-metadata',
+    metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS[kind],
+    mimeType: 'application/vnd.sciforge.life-science-preview.observation+json',
+    metadataOnly: true,
+    containsPixels: false,
+    pixelDecoding: false,
+    data: {
+      wireVersion: 2,
+      kind,
+      observation
+    }
+  })
+}
+
+function testRuntime(
+  pluginId: string,
+  provider: WorkspacePreviewProvider
+): WorkspacePreviewHostRuntime {
+  const manifest = [
+    ...DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
+    ...LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS
+  ].find((candidate) =>
+    candidate.id === pluginId
+  )
+  if (!manifest) throw new Error(`Missing test workspace preview manifest ${pluginId}.`)
+  const composed = composeWorkspacePreviewPlugins([{
+    ownerId: 'test.workspace-preview',
+    manifest,
+    provider
+  }])
+  return Object.freeze({
+    ...composed,
+    workerClient: new WorkspacePreviewWorkerClient({ providerRegistry: composed.providers })
+  })
+}
+
+const lifeScienceEntry = createDomainMainEntry({
+  getUserDataDir: () => '',
+  defineCapability: () => undefined
+})
+const lifeScienceDomainPlugins = lifeScienceEntry.contributions.map((contribution) => ({
+  ownerId: lifeScienceEntry.definition.module.id,
+  manifest: contribution.value.manifest,
+  provider: contribution.value.provider
+}))
+
+class WorkspacePreviewHost extends WorkspacePreviewHostImplementation {
+  constructor(options: WorkspacePreviewHostOptions = {}) {
+    super(options.runtime
+      ? options
+      : { ...options, domainPlugins: options.domainPlugins ?? lifeScienceDomainPlugins })
+  }
+}
 
 describe('WorkspacePreviewHost', () => {
   let rootDir = ''
@@ -288,7 +394,7 @@ describe('WorkspacePreviewHost', () => {
         sessionId: 'session-asset',
         assetId: 'asset:session-asset',
         pluginId: 'bioimaging',
-        modality: 'bioimaging',
+        modality: LIFE_SCIENCE_MODALITIES.bioimaging,
         file: {
           name: 'cells.ome.tiff',
           relativePath: 'cells.ome.tiff',
@@ -424,7 +530,7 @@ describe('WorkspacePreviewHost', () => {
     const prepared = await host.prepareArtifact(opened.session.id, {
       kind: 'cache-artifact',
       source: 'plugin-metadata',
-      metadataKind: 'bioimaging'
+      metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.bioimaging
     }, '2026-07-08T00:07:00.000Z')
 
     expect(prepared).toMatchObject({
@@ -435,11 +541,11 @@ describe('WorkspacePreviewHost', () => {
         assetId: 'asset:session-bioimaging-metadata-artifact',
         kind: 'cache-artifact',
         pluginId: 'bioimaging',
-        mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
+        mimeType: 'application/vnd.sciforge.life-science-preview.observation+json',
         cache: {
           scope: 'session',
           source: 'plugin-metadata',
-          metadataKind: 'bioimaging',
+          metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.bioimaging,
           invalidation: 'source-size-mtime'
         }
       }
@@ -466,7 +572,7 @@ describe('WorkspacePreviewHost', () => {
       sessionId: 'session-bioimaging-metadata-artifact',
       assetId: 'asset:session-bioimaging-metadata-artifact',
       artifactId: prepared.artifact.artifactId,
-      mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json'
+      mimeType: 'application/vnd.sciforge.life-science-preview.observation+json'
     })
     if (!artifactBytes.ok) return
 
@@ -482,7 +588,7 @@ describe('WorkspacePreviewHost', () => {
     expect(payload).toMatchObject({
       kind: 'workspace-preview.plugin-metadata-cache',
       source: 'plugin-metadata',
-      metadataKind: 'bioimaging',
+      metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.bioimaging,
       asset: {
         name: 'cells.ome.tiff',
         relativePath: 'cells.ome.tiff',
@@ -493,7 +599,11 @@ describe('WorkspacePreviewHost', () => {
         containsPixels: false
       },
       metadata: {
-        byteLength: rawBytes.length
+        wireVersion: 2,
+        kind: 'bioimaging',
+        observation: {
+          byteLength: rawBytes.length
+        }
       }
     })
     expect(payload).not.toHaveProperty('bioimaging')
@@ -708,11 +818,11 @@ describe('WorkspacePreviewHost', () => {
   })
 
   it('rejects plugin metadata cache artifacts when a plugin has no metadata payload', async () => {
-    await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
+    await writeFile(join(workspaceRoot, 'notes.txt'), 'plain text\n', 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-no-plugin-metadata' })
     const opened = await host.open({
       workspaceRoot,
-      path: 'protein.pdb'
+      path: 'notes.txt'
     })
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
@@ -722,7 +832,7 @@ describe('WorkspacePreviewHost', () => {
       source: 'plugin-metadata'
     }, '2026-07-08T00:08:00.000Z')).resolves.toEqual({
       ok: false,
-      message: 'Workspace preview plugin "molecular" does not provide plugin-metadata cache artifacts.'
+      message: 'Workspace preview plugin "text" does not provide plugin-metadata cache artifacts.'
     })
 
     await expect(host.describeAsset(opened.session.id)).resolves.toMatchObject({
@@ -739,6 +849,8 @@ describe('WorkspacePreviewHost', () => {
   it('rejects unsafe plugin metadata cache payloads without committing artifacts', async () => {
     await writeFile(join(workspaceRoot, 'cells.ome.tiff'), Buffer.from('II*\0metadata'), 'binary')
     const workerClient = {
+      pluginId: 'bioimaging',
+      validateFile: vi.fn(async () => ({ ok: true as const })),
       observe: vi.fn(async () => ({
         ok: true as const,
         bytesRead: 12,
@@ -753,16 +865,13 @@ describe('WorkspacePreviewHost', () => {
           },
           view: {
             pluginId: 'bioimaging',
-            modality: 'bioimaging' as const,
+            modality: LIFE_SCIENCE_MODALITIES.bioimaging,
             mode: 'preview' as const,
             title: 'cells.ome.tiff'
           },
-          bioimaging: {
-            format: 'ome-tiff'
-          },
           pluginMetadata: [{
             source: 'plugin-metadata' as const,
-            metadataKind: 'bioimaging',
+            metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.bioimaging,
             metadataOnly: true as const,
             containsPixels: false as const,
             data: {
@@ -773,10 +882,10 @@ describe('WorkspacePreviewHost', () => {
         }
       })),
       invokeAction: vi.fn()
-    } as unknown as WorkspacePreviewWorkerClient
+    } as unknown as WorkspacePreviewProvider
     const host = new WorkspacePreviewHost({
       createSessionId: () => 'session-unsafe-plugin-metadata',
-      workerClient
+      runtime: testRuntime('bioimaging', workerClient)
     })
     const opened = await host.open({
       workspaceRoot,
@@ -789,7 +898,7 @@ describe('WorkspacePreviewHost', () => {
     await expect(host.prepareArtifact(opened.session.id, {
       kind: 'cache-artifact',
       source: 'plugin-metadata',
-      metadataKind: 'bioimaging'
+      metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.bioimaging
     }, '2026-07-08T00:09:00.000Z')).resolves.toEqual({
       ok: false,
       message: 'Workspace preview plugin metadata contains unsafe key "fileUrl".'
@@ -810,6 +919,8 @@ describe('WorkspacePreviewHost', () => {
     await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
     const oversizedParagraphText = 'x'.repeat(200_000)
     const workerClient = {
+      pluginId: 'molecular',
+      validateFile: vi.fn(async () => ({ ok: true as const })),
       observe: vi.fn(async () => ({
         ok: true as const,
         observation: {
@@ -821,7 +932,7 @@ describe('WorkspacePreviewHost', () => {
           },
           view: {
             pluginId: 'molecular',
-            modality: 'molecular' as const,
+            modality: LIFE_SCIENCE_MODALITIES.molecular,
             mode: 'preview' as const,
             title: 'protein.pdb'
           },
@@ -836,10 +947,10 @@ describe('WorkspacePreviewHost', () => {
         }
       })),
       invokeAction: vi.fn()
-    } as unknown as WorkspacePreviewWorkerClient
+    } as unknown as WorkspacePreviewProvider
     const host = new WorkspacePreviewHost({
       createSessionId: () => 'session-artifact-rollback',
-      workerClient
+      runtime: testRuntime('molecular', workerClient)
     })
     const opened = await host.open({
       workspaceRoot,
@@ -874,16 +985,18 @@ describe('WorkspacePreviewHost', () => {
   it('keeps generic fallback observations aligned with read-only life-science capabilities', async () => {
     await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
     const workerClient = {
+      pluginId: 'molecular',
+      validateFile: vi.fn(async () => ({ ok: true as const })),
       observe: vi.fn(async () => ({
         ok: false,
         reason: 'worker-error',
         message: 'forced worker fallback'
       })),
       invokeAction: vi.fn()
-    } as unknown as WorkspacePreviewWorkerClient
+    } as unknown as WorkspacePreviewProvider
     const host = new WorkspacePreviewHost({
       createSessionId: () => 'session-life-science-fallback',
-      workerClient
+      runtime: testRuntime('molecular', workerClient)
     })
     const opened = await host.open({
       workspaceRoot,
@@ -897,7 +1010,7 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'molecular', modality: 'molecular' },
+        view: { pluginId: 'molecular', modality: LIFE_SCIENCE_MODALITIES.molecular },
         actions: expect.arrayContaining(['observe', 'select', 'export'])
       }
     })
@@ -925,7 +1038,7 @@ describe('WorkspacePreviewHost', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('reports deferred non-life-science scientific formats explicitly', async () => {
+  it('uses the generic fallback for uninstalled scientific formats', async () => {
     await writeFile(join(workspaceRoot, 'mesh.vtk'), '# vtk data', 'utf8')
     const host = new WorkspacePreviewHost()
 
@@ -934,8 +1047,10 @@ describe('WorkspacePreviewHost', () => {
       path: 'mesh.vtk'
     })
 
-    expect(result.ok).toBe(false)
-    if (!result.ok) expect(result.message).toContain('deferred')
+    expect(result).toMatchObject({
+      ok: true,
+      session: { pluginId: 'text', modality: 'text' }
+    })
   })
 
   it('applies text range edits through the generic host with an audit trail', async () => {
@@ -2323,7 +2438,7 @@ describe('WorkspacePreviewHost', () => {
       .resolves.toBe('{"sample":"s1","count":2}\n')
   })
 
-  it('updates session selection for molecular selection edits', async () => {
+  it('updates session selection for domain-owned molecular selection edits', async () => {
     await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-mol' })
     const opened = await host.open({
@@ -2333,32 +2448,32 @@ describe('WorkspacePreviewHost', () => {
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
 
+    const selection = lifeScienceSelection('molecular', {
+      kind: 'molecular',
+      chains: ['A'],
+      residues: [{ chain: 'A', index: 42, name: 'TYR' }]
+    })
     const result = await host.applyEdit(opened.session.id, {
-      kind: 'molecular.setSelection',
+      kind: 'domain.applyEdit',
       path: 'protein.pdb',
-      selection: {
-        kind: 'molecular',
-        chains: ['A'],
-        residues: [{ chain: 'A', index: 42, name: 'TYR' }]
+      operationType: workspacePreviewExtensionIdSchema.parse(
+        'sciforge.life-science-preview.molecular.set-selection'
+      ),
+      data: {
+        selection
       }
     })
 
     expect(result).toMatchObject({
       ok: true,
-      operationKind: 'molecular.setSelection',
+      operationKind: 'domain.applyEdit',
       audit: { effect: 'session-update' }
     })
-    expect(host.getSession(opened.session.id)?.selection).toMatchObject({
-      kind: 'molecular',
-      chains: ['A']
-    })
+    expect(host.getSession(opened.session.id)?.selection).toEqual(selection)
     await expect(host.observe(opened.session.id)).resolves.toMatchObject({
       ok: true,
       observation: {
-        selection: {
-          kind: 'molecular',
-          chains: ['A']
-        }
+        selection
       }
     })
   })
@@ -2373,15 +2488,16 @@ describe('WorkspacePreviewHost', () => {
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
 
+    const selection = lifeScienceSelection('sequence', {
+      kind: 'sequence',
+      sequenceId: 'chr1',
+      ranges: [{ start: 42, end: 43 }],
+      features: [{ type: 'variant', start: 42, end: 43 }]
+    })
     const result = await host.applyEdit(opened.session.id, {
       kind: 'workspace.setSelection',
       path: 'variants.vcf',
-      selection: {
-        kind: 'sequence',
-        sequenceId: 'chr1',
-        ranges: [{ start: 42, end: 43 }],
-        features: [{ type: 'variant', start: 42, end: 43 }]
-      }
+      selection
     })
 
     expect(result).toMatchObject({
@@ -2392,18 +2508,20 @@ describe('WorkspacePreviewHost', () => {
     await expect(host.observe(opened.session.id)).resolves.toMatchObject({
       ok: true,
       observation: {
-        selection: {
-          kind: 'sequence',
-          sequenceId: 'chr1'
-        }
+        selection
       }
     })
   })
 
   it('overlays session selection onto worker observations at the host boundary', async () => {
     await writeFile(join(workspaceRoot, 'protein.pdb'), 'HEADER\nEND\n', 'utf8')
+    const workerMetadata = lifeScienceObservationMetadata('molecular', {
+      chains: ['B']
+    })
     const workerClient = {
-      observe: vi.fn<WorkspacePreviewWorkerClient['observe']>(async ({ session, manifest, file }) => ({
+      pluginId: 'molecular',
+      validateFile: vi.fn<NonNullable<WorkspacePreviewProvider['validateFile']>>(async () => ({ ok: true })),
+      observe: vi.fn<NonNullable<WorkspacePreviewProvider['observe']>>(async ({ session, manifest, file }) => ({
         ok: true,
         observation: {
           schemaVersion: 1,
@@ -2420,19 +2538,17 @@ describe('WorkspacePreviewHost', () => {
             mode: session.mode,
             title: 'protein.pdb'
           },
-          molecular: {
-            chains: ['B']
-          },
+          pluginMetadata: [workerMetadata],
           actions: ['molecular.workbench']
         },
         bytesRead: 0,
         truncated: false
       })),
-      invokeAction: vi.fn<WorkspacePreviewWorkerClient['invokeAction']>()
-    } as Pick<WorkspacePreviewWorkerClient, 'observe' | 'invokeAction'>
+      invokeAction: vi.fn<NonNullable<WorkspacePreviewProvider['invokeAction']>>()
+    } as WorkspacePreviewProvider
     const host = new WorkspacePreviewHost({
       createSessionId: () => 'session-molecular-overlay',
-      workerClient: workerClient as WorkspacePreviewWorkerClient
+      runtime: testRuntime('molecular', workerClient)
     })
     const opened = await host.open({
       workspaceRoot,
@@ -2441,10 +2557,10 @@ describe('WorkspacePreviewHost', () => {
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
 
-    const selection = {
-      kind: 'molecular' as const,
+    const selection = lifeScienceSelection('molecular', {
+      kind: 'molecular',
       chains: ['A']
-    }
+    })
     const applied = await host.applyEdit(opened.session.id, {
       kind: 'workspace.setSelection',
       path: 'protein.pdb',
@@ -2458,9 +2574,7 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        molecular: {
-          chains: ['B']
-        },
+        pluginMetadata: [workerMetadata],
         selection
       }
     })
@@ -2480,6 +2594,10 @@ describe('WorkspacePreviewHost', () => {
     expect(opened.ok).toBe(true)
     if (!opened.ok) return
 
+    const actionSelection = lifeScienceSelection('molecular', {
+      kind: 'molecular',
+      chains: ['A']
+    })
     const result = await host.invokeAction(opened.session.id, {
       actionId: 'molecular.workbench',
       input: {
@@ -2499,10 +2617,7 @@ describe('WorkspacePreviewHost', () => {
         ok: true,
         atomCount: 2,
         state: {
-          selection: {
-            kind: 'molecular',
-            chains: ['A']
-          }
+          selection: actionSelection
         }
       },
       audit: {
@@ -2521,6 +2636,10 @@ describe('WorkspacePreviewHost', () => {
         }
       }
     }, '2026-07-08T00:03:00.000Z')
+    const measurementSelection = lifeScienceSelection('molecular', {
+      kind: 'molecular',
+      atoms: [{ id: '1', index: 1 }, { id: '2', index: 2 }]
+    })
 
     expect(measurementResult).toMatchObject({
       ok: true,
@@ -2535,10 +2654,7 @@ describe('WorkspacePreviewHost', () => {
             kind: 'distance',
             coordinateAvailable: true,
             unit: 'angstrom',
-            selection: {
-              kind: 'molecular',
-              atoms: [{ id: '1', index: 1 }, { id: '2', index: 2 }]
-            }
+            selection: measurementSelection
           }
         }
       },
@@ -2567,12 +2683,19 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'sequence-genomics', modality: 'sequence' },
-        sequence: {
-          sequenceCount: 2,
-          totalLength: 8,
-          alphabet: 'dna'
-        },
+        view: { pluginId: 'sequence-genomics', modality: LIFE_SCIENCE_MODALITIES.sequence },
+        pluginMetadata: [expect.objectContaining({
+          metadataKind: LIFE_SCIENCE_OBSERVATION_METADATA_KINDS.sequence,
+          data: {
+            wireVersion: 2,
+            kind: 'sequence',
+            observation: expect.objectContaining({
+              sequenceCount: 2,
+              totalLength: 8,
+              alphabet: 'dna'
+            })
+          }
+        })],
         visibleText: expect.stringContaining('Sequences or references: 2')
       }
     })

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ScientificObjectRef } from '@shared/scientific-objects'
+import { workspacePreviewExtensionIdSchema } from '@shared/workspace-preview'
 import type { BrowserStorageLike } from './browser-storage'
 import {
   SCIENTIFIC_OBJECT_ANNOTATIONS_STORAGE_KEY,
@@ -13,7 +14,7 @@ import {
 const object: ScientificObjectRef = {
   schemaVersion: 1,
   id: 'molecule-1',
-  modality: 'molecular',
+  modality: 'sciforge.life-science-preview.molecular',
   title: 'Protein',
   source: 'workspace',
   path: '/workspace/protein.pdb',
@@ -38,10 +39,14 @@ describe('scientific object annotation storage', () => {
       id: 'annotation-1',
       now: '2026-07-11T00:00:00.000Z'
     })
-    const second = addScientificObjectAnnotation(first, object, 'Chain note', {
-      kind: 'molecular',
-      chains: ['A']
-    }, {
+    const molecularSelection = {
+      kind: 'domain' as const,
+      selectionType: workspacePreviewExtensionIdSchema.parse(
+        'sciforge.life-science-preview.molecular.selection'
+      ),
+      data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'] } }
+    }
+    const second = addScientificObjectAnnotation(first, object, 'Chain note', molecularSelection, {
       id: 'annotation-2',
       now: '2026-07-11T00:01:00.000Z'
     })
@@ -51,7 +56,7 @@ describe('scientific object annotation storage', () => {
       expect.objectContaining({ id: 'annotation-1', target: { kind: 'object', objectId: 'molecule-1' } }),
       expect.objectContaining({
         id: 'annotation-2',
-        target: expect.objectContaining({ kind: 'selection', selection: { kind: 'molecular', chains: ['A'] } })
+        target: expect.objectContaining({ kind: 'selection', selection: molecularSelection })
       })
     ])
   })

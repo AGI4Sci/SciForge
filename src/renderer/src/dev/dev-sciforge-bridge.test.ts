@@ -326,6 +326,15 @@ describe('dev sciforge browser bridge', () => {
     expect('previewWorkspaceHtml' in window.sciforge).toBe(false)
   })
 
+  it('does not expose a Paper Radar domain-specific dev bridge', async () => {
+    installWindow()
+    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
+
+    installDevSciForgeBridge()
+    expect('paperRadar' in window.sciforge).toBe(false)
+    expect(window.sciforge.capabilities.invoke).toBeTypeOf('function')
+  })
+
   it('forwards workspace entry import calls through the dev bridge', async () => {
     installWindow()
     const fetchMock = vi.fn(async () => new Response(JSON.stringify({
@@ -419,112 +428,10 @@ describe('dev sciforge browser bridge', () => {
     )
   })
 
-  it('forwards workspace preview calls through the dev bridge', async () => {
+  it('forwards generic capability and file calls without domain facades', async () => {
     installWindow()
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = init?.body
-        ? JSON.parse(String(init.body)) as {
-            channel?: string
-            payload?: {
-              expectedContractVersion?: number
-              requiredCapabilityIds?: string[]
-              request?: { actionId?: string }
-            }
-          }
-        : {}
-      const resource = {
-        token: 'cap_abcdefghijklmnopqrstuvwxyz',
-        semanticRevision: 'revision-1',
-        expiresAt: '2026-07-16T14:00:00.000Z'
-      }
-      if (body.channel === 'capability:readiness') {
-        return new Response(JSON.stringify({
-          ok: true,
-          payload: {
-            contractVersion: body.payload?.expectedContractVersion ?? 1,
-            status: 'ready',
-            registryFingerprint: 'a'.repeat(64),
-            availableCapabilityIds: body.payload?.requiredCapabilityIds ?? [],
-            missingCapabilityIds: [],
-            message: 'Capability broker is ready.'
-          }
-        }))
-      }
-      if (body.channel === 'capability:observe') {
-        return new Response(JSON.stringify({
-          ok: true,
-          payload: {
-            resource,
-            resourceRef: 'res_abcdefghijklmnopqrstuvwxyz',
-            resourceKind: 'workspace-preview',
-            semanticRevision: resource.semanticRevision,
-            observedAt: '2026-07-16T13:00:00.000Z',
-            state: { session: { id: 'session-1' }, observation: { sessionId: 'session-1' } },
-            operations: []
-          }
-        }))
-      }
-      if (body.channel === 'capability:invoke') {
-        const actionId = body.payload?.request?.actionId ?? ''
-        const output = actionId === 'workspace-preview.list'
-          ? [{ id: 'molecular', displayName: 'Molecular Structure Viewer' }]
-          : actionId === 'workspace-preview.open'
-            ? {
-                ok: true,
-                session: { id: 'session-1', workspaceRoot: '/tmp/work' },
-                manifest: { id: 'molecular' },
-                route: 'matched',
-                file: { path: 'protein.pdb' },
-                resource
-              }
-            : actionId === 'workspace-preview.describe-asset'
-              ? {
-                  ok: true,
-                  descriptor: {
-                    contractVersion: 1,
-                    sessionId: 'session-1',
-                    assetId: 'asset-1',
-                    primary: 'range',
-                    file: {
-                      name: 'protein.pdb',
-                      relativePath: 'protein.pdb',
-                      mimeType: 'chemical/x-pdb'
-                    },
-                    range: {
-                      available: true,
-                      size: 4,
-                      maxChunkBytes: 52_428_800,
-                      recommendedChunkBytes: 262_144
-                    },
-                    strategies: [{ kind: 'range', status: 'available' }],
-                    artifacts: []
-                  }
-                }
-              : actionId === 'workspace-preview.read-range'
-                ? {
-                    ok: true,
-                    sessionId: 'session-1',
-                    assetId: 'asset-1',
-                    offset: 0,
-                    length: 4,
-                    size: 4,
-                    dataBase64: 'REFUQQ==',
-                    mimeType: 'chemical/x-pdb'
-                  }
-            : actionId === 'workspace-preview.release'
-              ? true
-              : { ok: true }
-        return new Response(JSON.stringify({
-          ok: true,
-          payload: {
-            actionId,
-            output,
-            changed: false,
-            replayed: false,
-            completedAt: '2026-07-16T13:00:00.000Z'
-          }
-        }))
-      }
+      const body = init?.body ? JSON.parse(String(init.body)) as { channel?: string } : {}
       if (body.channel === 'file:watch-workspace') {
         return new Response(JSON.stringify({ ok: true, payload: { watchId: 'watch-1' } }))
       }
@@ -538,64 +445,30 @@ describe('dev sciforge browser bridge', () => {
     })
     Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
-    const openInput = {
-      path: '/tmp/work/protein.pdb',
-      workspaceRoot: '/tmp/work',
-      mimeType: 'chemical/x-pdb',
-      mode: 'inspect' as const
-    }
 
     installDevSciForgeBridge()
-    await window.sciforge.workspacePreview.listPlugins()
-    await window.sciforge.workspacePreview.open(openInput)
-    await window.sciforge.workspacePreview.observe('session-1')
-    const described = await window.sciforge.workspacePreview.describeAsset('session-1')
-    const range = await window.sciforge.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
-    await window.sciforge.workspacePreview.prepareArtifact('session-1', {
-      kind: 'cache-artifact',
-      source: 'observation'
+    const capabilityRequest = {
+      request: { actionId: 'workspace-preview.list', input: {} }
+    }
+    await window.sciforge.capabilities.invoke(capabilityRequest)
+    const assetSourceUrl = window.sciforge.capabilities.resourceContentUrl({
+      workspaceId: '/tmp/work',
+      resource: {
+        token: 'cap_abcdefghijklmnopqrstuvwxyz',
+        semanticRevision: 'revision-1',
+        expiresAt: '2026-07-16T14:00:00.000Z'
+      }
     })
-    await window.sciforge.workspacePreview.readArtifactRange('session-1', {
-      artifactId: 'artifact-1',
-      range: { offset: 0, length: 4 }
-    })
-    await window.sciforge.workspacePreview.applyEdit('session-1', {
-      kind: 'molecular.setSelection',
-      path: 'protein.pdb',
-      selection: { kind: 'molecular', chains: ['A'] }
-    })
-    await window.sciforge.workspacePreview.export('session-1', {
-      kind: 'workspace-file',
-      format: 'pdb',
-      path: 'exports/protein-copy.pdb'
-    })
-    const assetSourceUrl = window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')
-    await window.sciforge.workspacePreview.releaseSession('session-1')
-    await window.sciforge.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
-    await window.sciforge.workspacePreview.unwatch('watch-1')
-    expect(window.sciforge.workspacePreview.getAssetSourceUrl?.('session-1')).toBeNull()
+    await window.sciforge.watchWorkspaceFile({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    await window.sciforge.unwatchWorkspaceFile('watch-1')
+    expect('workspacePreview' in window.sciforge).toBe(false)
+    expect('biologyRoom' in window.sciforge).toBe(false)
     expect(assetSourceUrl).toContain('/__sciforge-dev-bridge/capability/resources/content?')
     expect(new URL(assetSourceUrl!).searchParams.get('clientId')).toBeTruthy()
     expect(JSON.parse(new URL(assetSourceUrl!).searchParams.get('access') ?? '{}')).toMatchObject({
       workspaceId: '/tmp/work',
       resource: { token: expect.stringMatching(/^cap_/) }
     })
-    expect(described).toMatchObject({
-      ok: true,
-      descriptor: {
-        sessionId: 'session-1',
-        assetId: 'asset-1',
-        range: { available: true, size: 4 }
-      }
-    })
-    expect(range).toMatchObject({
-      ok: true,
-      sessionId: 'session-1',
-      assetId: 'asset-1',
-      length: 4,
-      dataBase64: 'REFUQQ=='
-    })
-
     const bridgeRequests = fetchMock.mock.calls.map(([, init]) => (
       JSON.parse(String(init?.body)) as {
         channel: string
@@ -604,26 +477,10 @@ describe('dev sciforge browser bridge', () => {
     ))
     expect(bridgeRequests.map((request) => request.channel)).toEqual(expect.arrayContaining([
       'capability:invoke',
-      'capability:observe',
       'file:watch-workspace',
       'file:unwatch-workspace'
     ]))
-    expect(bridgeRequests.map((request) => request.channel).some((channel) => channel.startsWith('workspacePreview:')))
-      .toBe(false)
-    expect(bridgeRequests
-      .filter((request) => request.channel === 'capability:invoke')
-      .map((request) => request.payload?.request?.actionId))
-      .toEqual(expect.arrayContaining([
-        'workspace-preview.list',
-        'workspace-preview.open',
-        'workspace-preview.describe-asset',
-        'workspace-preview.read-range',
-        'workspace-preview.prepare-artifact',
-        'workspace-preview.read-artifact-range',
-        'workspace-preview.apply-edit',
-        'workspace-preview.export',
-        'workspace-preview.release'
-      ]))
+    expect(bridgeRequests).toContainEqual({ channel: 'capability:invoke', payload: capabilityRequest })
     expect(bridgeRequests).toContainEqual({
       channel: 'file:watch-workspace',
       payload: { path: 'protein.pdb', workspaceRoot: '/tmp/work' }

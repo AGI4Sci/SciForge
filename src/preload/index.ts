@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
 import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
 import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
 import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-asset-url'
-import { createCapabilityFacades } from './capability-facades'
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
@@ -50,11 +49,6 @@ function isDevPreviewNavigatePayload(value: unknown): value is DevPreviewNavigat
   const payload = value as { url?: unknown; webContentsId?: unknown }
   return typeof payload.url === 'string' && Number.isInteger(payload.webContentsId)
 }
-
-const capabilityFacades = createCapabilityFacades({
-  invoke: (channel, payload) => ipcRenderer.invoke(channel, payload),
-  createResourceContentUrl: capabilityResourceContentSourceUrl
-})
 
 const api = {
   platform: process.platform,
@@ -145,8 +139,7 @@ const api = {
     }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
-  pickWorkspaceFile: (defaultPath) =>
-    ipcRenderer.invoke('workspace:pick-file', defaultPath),
+  pickFile: (request) => ipcRenderer.invoke('workspace:pick-file', request),
   buildScientificSkillsMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildScientificPlottingMcpConfig: (workspaceRoot) =>
@@ -256,6 +249,7 @@ const api = {
     events: (input = {}) => ipcRenderer.invoke('capability:events', input),
     subscribe: (workspaceId) => ipcRenderer.invoke('capability:subscribe', { workspaceId }),
     unsubscribe: (subscriptionId) => ipcRenderer.invoke('capability:unsubscribe', { subscriptionId }),
+    resourceContentUrl: capabilityResourceContentSourceUrl,
     onEvent: (handler) => {
       const wrapped = (
         _: Electron.IpcRendererEvent,
@@ -264,21 +258,6 @@ const api = {
       ipcRenderer.on('capability:event', wrapped)
       return () => ipcRenderer.removeListener('capability:event', wrapped)
     }
-  },
-  workspacePreview: {
-    ...capabilityFacades.workspacePreview,
-    onChanged: (handler) => {
-      const wrapped = (
-        _: Electron.IpcRendererEvent,
-        payload: Parameters<typeof handler>[0]
-      ) => handler(payload)
-      ipcRenderer.on('file:workspace-changed', wrapped)
-      return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
-    }
-  },
-  biologyRoom: {
-    pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
-    ...capabilityFacades.biologyRoom
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),
@@ -294,18 +273,6 @@ const api = {
     ipcRenderer.invoke('write:inline-completion-debug:clear'),
   speechToText: {
     transcribe: transcribeSpeech
-  },
-  paperRadar: {
-    status: () => ipcRenderer.invoke('paperRadar:status'),
-    syncArxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-arxiv', payload),
-    syncBiorxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-biorxiv', payload),
-    syncProfile: (payload) => ipcRenderer.invoke('paperRadar:sync-profile', payload),
-    listProfiles: () => ipcRenderer.invoke('paperRadar:profiles:list'),
-    saveProfile: (payload) => ipcRenderer.invoke('paperRadar:profiles:save', payload),
-    review: (payload) => ipcRenderer.invoke('paperRadar:review', payload),
-    search: (payload) => ipcRenderer.invoke('paperRadar:search', payload),
-    rank: (payload) => ipcRenderer.invoke('paperRadar:rank', payload),
-    digest: (payload) => ipcRenderer.invoke('paperRadar:digest', payload)
   },
   researchCards: {
     list: (input) => ipcRenderer.invoke('researchCards:list', input ?? {}),

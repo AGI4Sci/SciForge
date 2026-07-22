@@ -30,7 +30,13 @@ function objectFixture(
       schemaVersion: 1,
       file: { path, workspaceRoot: '/workspace' },
       view: { pluginId: `workspace-${modality}`, modality, mode: 'inspect', title: id },
-      [modality]: modalityObservation,
+      pluginMetadata: [{
+        source: 'plugin-metadata',
+        metadataKind: `fixture.${id}.observation`,
+        metadataOnly: true,
+        containsPixels: false,
+        data: { wireVersion: 1, observation: modalityObservation }
+      }],
       actions: []
     }
   } as ScientificObjectRef
@@ -42,9 +48,9 @@ function comparisonFixture(): ScientificObjectComparison {
     id: 'comparison-1',
     title: 'Structure and sequence evidence',
     objects: [
-      objectFixture('object-a', 'molecular', { modelCount: 1, chains: ['A', 'B'], ligands: ['ATP'] }),
-      objectFixture('object-b', 'sequence', { sequenceCount: 2, totalLength: 360, alphabet: 'protein', features: [] }),
-      objectFixture('object-c', 'omics', { format: 'h5ad', matrixShape: [42, 800], observationCount: 42, variableCount: 800 })
+      objectFixture('object-a', 'fixture.preview.structure', { modelCount: 1, chains: ['A', 'B'], ligands: ['ATP'] }),
+      objectFixture('object-b', 'fixture.preview.sequence', { sequenceCount: 2, totalLength: 360, alphabet: 'protein', features: [] }),
+      objectFixture('object-c', 'fixture.preview.dataset', { format: 'h5ad', matrixShape: [42, 800], observationCount: 42, variableCount: 800 })
     ]
   }
 }
@@ -55,8 +61,8 @@ describe('scientificObjectComparisonViewModel', () => {
 
     expect(model.objects).toHaveLength(3)
     expect(model.rows.find((row) => row.label === 'Chains')?.values).toEqual(['2 · A, B', '—', '—'])
-    expect(model.rows.find((row) => row.label === 'Length')?.values).toEqual(['—', '360', '—'])
-    expect(model.rows.find((row) => row.label === 'Matrix')?.values).toEqual(['—', '—', '42 × 800'])
+    expect(model.rows.find((row) => row.label === 'Total Length')?.values).toEqual(['—', '360', '—'])
+    expect(model.rows.find((row) => row.label === 'Matrix Shape')?.values).toEqual(['—', '—', '42 × 800'])
   })
 })
 
@@ -72,9 +78,9 @@ describe('ScientificObjectComparisonPanel', () => {
     expect(html).toContain('3 Objects')
     expect(html).toContain('<table')
     expect(html).toContain('tabindex="0"')
-    expect(html).toContain('Molecular structure')
+    expect(html).toContain('Structure')
     expect(html).toContain('Sequence')
-    expect(html).toContain('Omics dataset')
+    expect(html).toContain('Dataset')
     expect(html).toContain('aria-label="Open object: object-a title"')
     expect(html).toContain('aria-label="Open object: object-b title"')
     expect(html).toContain('aria-label="Open object: object-c title"')

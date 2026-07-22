@@ -21,14 +21,17 @@ import {
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
 const queueRoots: string[] = []
-const { showSaveDialog } = vi.hoisted(() => ({ showSaveDialog: vi.fn() }))
+const { showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
+  showOpenDialog: vi.fn(async () => ({ canceled: false, filePaths: ['/tmp/workspace/data.csv'] })),
+  showSaveDialog: vi.fn()
+}))
 
 vi.mock('electron', () => ({
   app: {
     getFileIcon: vi.fn(async () => ({ isEmpty: () => false })),
     quit: vi.fn()
   },
-  dialog: { showSaveDialog },
+  dialog: { showOpenDialog, showSaveDialog },
   shell: {
     openExternal: vi.fn(async () => undefined)
   },
@@ -377,22 +380,6 @@ function writeExportAgentRuntime() {
   }
 }
 
-function createPaperRadarServiceMock() {
-  return {
-    status: vi.fn(async () => ({ ok: true, service: 'sciforge.paper-radar', stats: { papers: 0, arxiv: 0, biorxiv: 0 } })),
-    syncArxiv: vi.fn(async () => ({ ok: true, data: { source: 'arxiv', fetched: 0, upserted: 0, skipped: 0 } })),
-    syncBiorxiv: vi.fn(async () => ({ ok: true, data: { source: 'biorxiv', fetched: 0, upserted: 0, skipped: 0 } })),
-    syncProfile: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', results: [] } })),
-    listProfiles: vi.fn(async () => ({ ok: true, data: { profiles: [] } })),
-    saveProfile: vi.fn(async () => ({ ok: true, data: { profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] } } })),
-    review: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', generatedAt: '2026-06-21T00:00:00.000Z', count: 0, papers: [], syncResults: [] } })),
-    search: vi.fn(async () => ({ ok: true, data: { papers: [], count: 0 } })),
-    rank: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', count: 0, papers: [] } })),
-    digest: vi.fn(async () => ({ ok: true, data: { profile: 'lab_default', generatedAt: '2026-06-21T00:00:00.000Z', count: 0, papers: [] } })),
-    close: vi.fn()
-  }
-}
-
 function visualStyleExtractionFixture() {
   const profile = {
     version: 1 as const,
@@ -708,80 +695,12 @@ describe('registerAppIpcHandlers', () => {
     expect(applySettingsPatch).toHaveBeenCalledWith(payload)
   })
 
-  it('validates Paper Radar payloads before resolving the worker service', async () => {
+  it('does not register Paper Radar domain-specific IPC channels', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const paperRadar = createPaperRadarServiceMock()
-    const getPaperRadarService = vi.fn(() => paperRadar as never)
+    registerAppIpcHandlers(registerOptions())
 
-    registerAppIpcHandlers(registerOptions({ getPaperRadarService }))
-
-    const handler = handlers.get('paperRadar:search')
-    expect(handler).toBeTypeOf('function')
-    await expect(handler?.({}, { topK: 1_000 })).rejects.toThrow(/Invalid payload for paperRadar:search/)
-    expect(getPaperRadarService).not.toHaveBeenCalled()
-    expect(paperRadar.search).not.toHaveBeenCalled()
-  })
-
-  it('routes valid Paper Radar IPC requests through the worker service', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const paperRadar = createPaperRadarServiceMock()
-    const getPaperRadarService = vi.fn(() => paperRadar as never)
-
-    registerAppIpcHandlers(registerOptions({ getPaperRadarService }))
-
-    const handler = handlers.get('paperRadar:search')
-    const result = await handler?.({}, { query: '  protein design  ', topK: 5 })
-
-    expect(getPaperRadarService).toHaveBeenCalledTimes(1)
-    expect(paperRadar.search).toHaveBeenCalledWith({ query: 'protein design', topK: 5 })
-    expect(result).toEqual({ ok: true, data: { papers: [], count: 0 } })
-  })
-
-  it('routes Paper Radar review through the high-level worker command', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const paperRadar = createPaperRadarServiceMock()
-    const getPaperRadarService = vi.fn(() => paperRadar as never)
-
-    registerAppIpcHandlers(registerOptions({ getPaperRadarService }))
-
-    const input = {
-      profile: {
-        name: ' protein_focus ',
-        keywords: ['protein design'],
-        excludeKeywords: ['review'],
-        arxivCategories: ['q-bio'],
-        biorxivSubjects: ['bioinformatics']
-      },
-      days: 7,
-      topK: 12,
-      maxRecords: 200
-    }
-    const handler = handlers.get('paperRadar:review')
-    const result = await handler?.({}, input)
-
-    expect(getPaperRadarService).toHaveBeenCalledTimes(1)
-    expect(paperRadar.review).toHaveBeenCalledWith({
-      profile: {
-        name: 'protein_focus',
-        keywords: ['protein design'],
-        excludeKeywords: ['review'],
-        arxivCategories: ['q-bio'],
-        biorxivSubjects: ['bioinformatics']
-      },
-      days: 7,
-      topK: 12,
-      maxRecords: 200
-    })
-    expect(result).toEqual({
-      ok: true,
-      data: {
-        profile: 'lab_default',
-        generatedAt: '2026-06-21T00:00:00.000Z',
-        count: 0,
-        papers: [],
-        syncResults: []
-      }
-    })
+    expect(handlers.size).toBe(151)
+    expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
   })
 
   it('routes visual style profile extraction through its single IPC command', async () => {
@@ -1968,7 +1887,43 @@ describe('registerAppIpcHandlers', () => {
     for (const channel of retiredChannels) {
       expect(handlers.has(channel), channel).toBe(false)
     }
-    expect(handlers.has('biologyRoom:pick-file')).toBe(true)
+    expect(handlers.has('workspace:pick-file')).toBe(true)
+    expect(handlers.has('biologyRoom:pick-file')).toBe(false)
+  })
+
+  it('uses one validated generic file picker for domain-declared filters', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    registerAppIpcHandlers(registerOptions())
+
+    const result = await handlers.get('workspace:pick-file')?.({}, {
+      title: ' Select data asset ',
+      defaultPath: ' /tmp/workspace ',
+      filters: [
+        { name: ' Data ', extensions: ['csv', 'tsv', 'nii.gz'] },
+        { name: ' All files ', extensions: ['*'] }
+      ]
+    })
+
+    expect(showOpenDialog).toHaveBeenCalledWith({
+      title: 'Select data asset',
+      defaultPath: '/tmp/workspace',
+      properties: ['openFile', 'dontAddToRecent'],
+      filters: [
+        { name: 'Data', extensions: ['csv', 'tsv', 'nii.gz'] },
+        { name: 'All files', extensions: ['*'] }
+      ]
+    })
+    expect(result).toEqual({ canceled: false, path: '/tmp/workspace/data.csv' })
+  })
+
+  it('rejects unconstrained generic file-picker payloads', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const dispatcher = registerAppIpcHandlers(registerOptions())
+
+    await expect(dispatcher.invoke('workspace:pick-file', {
+      title: 'Unsafe picker',
+      filters: []
+    }, createSender(12))).rejects.toThrow('Invalid payload for workspace:pick-file')
   })
 
   it('keeps the generic workspace file watch and unwatch lifecycle', async () => {

@@ -34,9 +34,6 @@ const PACKAGE_DEFINITIONS = {
   writeAssist: {
     dir: 'packages/workers/write-assist'
   },
-  paperRadar: {
-    dir: 'packages/workers/paper-radar'
-  },
   sciModalityRouter: {
     dir: 'packages/workers/sci-modality-router'
   },
@@ -84,7 +81,6 @@ const WORKSPACE_PACKAGE_IDS = [
   'workflow',
   'workspaceIntel',
   'writeAssist',
-  'paperRadar',
   'sciModalityRouter',
   'evidenceDag',
   'projectDag',
@@ -108,7 +104,6 @@ const BUNDLED_PACKAGE_IDS = [
   'workspaceIntel',
   'remoteExecutor',
   'writeAssist',
-  'paperRadar',
   'runtimeInspector',
   'scientificPlotting',
   'bgcDiscovery',
@@ -303,29 +298,6 @@ const RUNTIME_ENTRIES = [
     ]),
     mcpNodeEntryPaths: [
       'out/main/write-assist-mcp-node-entry.js'
-    ]
-  },
-  {
-    id: 'paper-radar',
-    label: 'Paper Radar',
-    packageIds: ['paperRadar'],
-    requiredPathsExport: 'PAPER_RADAR_RUNTIME_REQUIRED_PATHS',
-    requiredPaths: [
-      ...packagePaths('paperRadar', [
-        'package.json',
-        'src/mcp-server.ts',
-        'src/service.ts',
-        'src/contract.ts',
-        'src/core/service.ts',
-        'src/core/storage.ts',
-        'src/core/profiles.ts',
-        'src/core/ranker.ts',
-        'src/core/sources.ts',
-        'src/core/types.ts'
-      ])
-    ],
-    mcpNodeEntryPaths: [
-      'out/main/paper-radar-mcp-node-entry.js'
     ]
   },
   {

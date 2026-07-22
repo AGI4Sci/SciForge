@@ -81,47 +81,19 @@ import type {
   WorkspaceObservation,
   WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAnchor,
-  WorkspacePreviewAnnotationDeleteInput,
-  WorkspacePreviewAnnotationResolveInput,
-  WorkspacePreviewAnnotationSidecarImportActionInput,
-  WorkspacePreviewAnnotationUpdateInput,
   WorkspacePreviewAssetTransportDescriptor,
-  WorkspacePreviewByteRange,
   WorkspacePreviewEditDiffSummary,
   WorkspacePreviewEditOperation,
   WorkspacePreviewExportTarget,
   WorkspacePreviewFileState,
   WorkspacePreviewIntegrityExpectation,
   WorkspacePreviewIntegrityVerification,
-  WorkspacePreviewPluginActionInput,
   WorkspacePreviewPluginActionResult,
   WorkspacePreviewPluginManifest,
-  WorkspacePreviewPrepareArtifactRequest,
-  WorkspacePreviewReadArtifactRangeRequest,
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from './workspace-preview'
 import type { PdfAnnotationSidecar } from './pdf-annotations'
-import type {
-  PdfReviewGenerateActionInput,
-  PdfReviewImproveAnnotationActionInput
-} from './pdf-review'
-import type {
-  BiologyRoomApplyInput,
-  BiologyRoomApplyResult,
-  BiologyRoomCreateInput,
-  BiologyRoomHistoryInput,
-  BiologyRoomHistoryResult,
-  BiologyRoomListInput,
-  BiologyRoomManifest,
-  BiologyRoomObserveInput,
-  BiologyRoomObserveResult,
-  BiologyRoomOpenOrCreateInput,
-  BiologyRoomOpenOrCreateResult,
-  BiologyRoomRefreshInput,
-  BiologyRoomSummary,
-  BiologyRoomTarget
-} from './biology-room'
 import type {
   CapabilityReadiness,
   CapabilityReadinessRequest,
@@ -132,6 +104,7 @@ import type {
   CapabilityInvocationResult,
   CapabilityObservation,
   CapabilityObserveRequest,
+  CapabilityResourceContentAccess,
   CapabilityResourceBinding as BrokerCapabilityResourceBinding,
   CapabilityResourceChangeEvent
 } from './capability-broker'
@@ -181,26 +154,6 @@ import type {
   TerminalResizePayload,
   TerminalWritePayload
 } from './terminal'
-import type {
-  PaperRadarApiResult,
-  PaperRadarArxivSyncInput,
-  PaperRadarBiorxivSyncInput,
-  PaperRadarDigestInput,
-  PaperRadarDigestResult,
-  PaperRadarProfile,
-  PaperRadarProfileListResult,
-  PaperRadarProfileSaveResult,
-  PaperRadarProfileSyncInput,
-  PaperRadarProfileSyncResult,
-  PaperRadarRankInput,
-  PaperRadarRankResult,
-  PaperRadarReviewInput,
-  PaperRadarReviewResult,
-  PaperRadarSearchInput,
-  PaperRadarSearchResult,
-  PaperRadarStatus,
-  PaperRadarSyncResult
-} from './paper-radar'
 import type {
   VisibleContextCapturePreviewRequest,
   VisibleContextCapturePreviewResult,
@@ -267,6 +220,15 @@ import type {
 } from './research-cards'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
+export type WorkspaceFilePickerFilter = {
+  name: string
+  extensions: string[]
+}
+export type WorkspaceFilePickerRequest = {
+  title: string
+  defaultPath?: string
+  filters: WorkspaceFilePickerFilter[]
+}
 export type PathOpenResult = { ok: boolean; message?: string }
 export type AgentRuntimeEventSubscribeInput = {
   runtimeId: AgentRuntimeId
@@ -1067,16 +1029,6 @@ export type WorkspacePreviewAnnotationReviewImproveResult =
     }
   | { ok: false; message: string }
 
-export type CapabilityBoundBiologyRoomManifest = BiologyRoomManifest & {
-  capability?: CapabilityResourceBinding
-}
-export type CapabilityBoundBiologyRoomOpenOrCreateResult = Omit<BiologyRoomOpenOrCreateResult, 'manifest'> & {
-  manifest: CapabilityBoundBiologyRoomManifest
-}
-export type CapabilityBoundBiologyRoomApplyResult = Omit<BiologyRoomApplyResult, 'manifest'> & {
-  manifest: CapabilityBoundBiologyRoomManifest
-}
-
 export type FullTraceExportDialogResult =
   | { canceled: true }
   | ({ canceled: false } & TraceExportResult)
@@ -1172,7 +1124,7 @@ export type SciForgeApi = {
     forceTakeover?: boolean
   ) => Promise<ZulipGuardResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
-  pickWorkspaceFile: (defaultPath?: string) => Promise<WorkspacePickResult>
+  pickFile: (request: WorkspaceFilePickerRequest) => Promise<WorkspacePickResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
@@ -1278,84 +1230,11 @@ export type SciForgeApi = {
     }) => Promise<CapabilityResourceChangeEvent[]>
     subscribe: (workspaceId?: string) => Promise<{ subscriptionId: string }>
     unsubscribe: (subscriptionId: string) => Promise<boolean>
+    resourceContentUrl: (access: CapabilityResourceContentAccess) => string | null
     onEvent: (handler: (payload: {
       subscriptionId: string
       event: CapabilityResourceChangeEvent
     }) => void) => () => void
-  }
-  workspacePreview: {
-    readiness: () => Promise<CapabilityReadiness>
-    listPlugins: () => Promise<WorkspacePreviewPluginManifest[]>
-    open: (input: WorkspacePreviewOpenInput) => Promise<WorkspacePreviewOpenResult>
-    observe: (sessionId: string) => Promise<WorkspacePreviewObserveResult>
-    describeAsset: (sessionId: string) => Promise<WorkspacePreviewDescribeAssetResult>
-    readRange: (
-      sessionId: string,
-      range: WorkspacePreviewByteRange
-    ) => Promise<WorkspacePreviewReadRangeResult>
-    prepareArtifact: (
-      sessionId: string,
-      request: WorkspacePreviewPrepareArtifactRequest
-    ) => Promise<WorkspacePreviewPrepareArtifactResult>
-    readArtifactRange: (
-      sessionId: string,
-      request: WorkspacePreviewReadArtifactRangeRequest
-    ) => Promise<WorkspacePreviewReadArtifactRangeResult>
-    applyEdit: (
-      sessionId: string,
-      operation: WorkspacePreviewEditOperation
-    ) => Promise<WorkspacePreviewApplyEditResult>
-    listAnnotations: (sessionId: string) => Promise<WorkspacePreviewAnnotationListResult>
-    updateAnnotation: (
-      sessionId: string,
-      input: WorkspacePreviewAnnotationUpdateInput
-    ) => Promise<WorkspacePreviewApplyEditResult>
-    resolveAnnotation: (
-      sessionId: string,
-      input: WorkspacePreviewAnnotationResolveInput
-    ) => Promise<WorkspacePreviewApplyEditResult>
-    deleteAnnotation: (
-      sessionId: string,
-      input: WorkspacePreviewAnnotationDeleteInput
-    ) => Promise<WorkspacePreviewApplyEditResult>
-    importAnnotations: (
-      sessionId: string,
-      input: WorkspacePreviewAnnotationSidecarImportActionInput
-    ) => Promise<WorkspacePreviewAnnotationImportResult>
-    generateAnnotationReview: (
-      sessionId: string,
-      input: PdfReviewGenerateActionInput
-    ) => Promise<WorkspacePreviewAnnotationReviewGenerateResult>
-    improveAnnotationReview: (
-      sessionId: string,
-      input: PdfReviewImproveAnnotationActionInput
-    ) => Promise<WorkspacePreviewAnnotationReviewImproveResult>
-    export: (
-      sessionId: string,
-      target: WorkspacePreviewExportTarget
-    ) => Promise<WorkspacePreviewExportResult>
-    invokeAction: (
-      sessionId: string,
-      action: WorkspacePreviewPluginActionInput
-    ) => Promise<WorkspacePreviewInvokeActionResult>
-    releaseSession: (sessionId: string) => Promise<boolean>
-    watch: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
-    unwatch: (watchId: string) => Promise<boolean>
-    onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
-    getAssetSourceUrl?: (sessionId: string) => string | null
-  }
-  /** Optional while connecting to an older desktop or browser-only bridge. */
-  biologyRoom?: {
-    readiness: () => Promise<CapabilityReadiness>
-    pickFile: (workspaceRoot: string) => Promise<WorkspacePickResult>
-    create: (input: BiologyRoomCreateInput) => Promise<CapabilityBoundBiologyRoomManifest>
-    openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<CapabilityBoundBiologyRoomOpenOrCreateResult>
-    load: (input: BiologyRoomTarget) => Promise<CapabilityBoundBiologyRoomManifest>
-    list: (input: BiologyRoomListInput) => Promise<BiologyRoomSummary[]>
-    observe: (input: BiologyRoomObserveInput) => Promise<BiologyRoomObserveResult>
-    apply: (input: BiologyRoomApplyInput) => Promise<CapabilityBoundBiologyRoomApplyResult>
-    refresh: (input: BiologyRoomRefreshInput) => Promise<CapabilityBoundBiologyRoomApplyResult>
-    history: (input: BiologyRoomHistoryInput) => Promise<BiologyRoomHistoryResult>
   }
   /** Optional until the BioGym service PR is installed. */
   biogym?: {
@@ -1375,18 +1254,6 @@ export type SciForgeApi = {
   ) => Promise<WriteRichClipboardResult>
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
-  }
-  paperRadar: {
-    status: () => Promise<PaperRadarStatus>
-    syncArxiv: (payload: PaperRadarArxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
-    syncBiorxiv: (payload: PaperRadarBiorxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
-    syncProfile: (payload: PaperRadarProfileSyncInput) => Promise<PaperRadarApiResult<PaperRadarProfileSyncResult>>
-    listProfiles: () => Promise<PaperRadarApiResult<PaperRadarProfileListResult>>
-    saveProfile: (payload: PaperRadarProfile) => Promise<PaperRadarApiResult<PaperRadarProfileSaveResult>>
-    review: (payload: PaperRadarReviewInput) => Promise<PaperRadarApiResult<PaperRadarReviewResult>>
-    search: (payload: PaperRadarSearchInput) => Promise<PaperRadarApiResult<PaperRadarSearchResult>>
-    rank: (payload: PaperRadarRankInput) => Promise<PaperRadarApiResult<PaperRadarRankResult>>
-    digest: (payload: PaperRadarDigestInput) => Promise<PaperRadarApiResult<PaperRadarDigestResult>>
   }
   researchCards: {
     list: (input?: ResearchCardListInput) => Promise<ResearchCard[]>

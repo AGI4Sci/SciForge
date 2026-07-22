@@ -1,14 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
+import {
+  BIOLOGY_ROOM_CAPABILITY_IDS
+} from '@sciforge/domain-biology-room/contract'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
 import { CapabilityBroker } from './broker'
 import {
   APP_CAPABILITY_IDS,
-  BIOLOGY_ROOM_RESOURCE_KIND,
   WORKSPACE_PREVIEW_RESOURCE_KIND,
-  createAppCapabilityRegistry,
   type AppCapabilityDependencies
 } from './app-registry'
 import { defineCapabilityProviderContractSuite } from './provider-contract-suite'
+import {
+  MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog,
+  isAppCapabilityContributionFactory
+} from '../modules'
+
+function createRegistry(dependencies: AppCapabilityDependencies) {
+  const catalog = createApplicationDomainCatalog({ getUserDataDir: () => '/tmp/sciforge-test' })
+  return createApplicationCapabilityRegistry(catalog, dependencies)
+}
 
 function record(value: unknown): Record<string, unknown> {
   expect(value).toBeTruthy()
@@ -103,36 +115,79 @@ function createDependencies() {
       exportPreview: vi.fn(async () => ({ ok: false as const, message: 'not needed' })),
       invokeAction: vi.fn(async () => ({ ok: false as const, message: 'not needed' })),
       releaseSession: vi.fn(() => true)
-    },
-    biologyRoomService: {
-      create: vi.fn(),
-      openOrCreate: vi.fn(),
-      load: vi.fn(),
-      list: vi.fn(async () => []),
-      observe: vi.fn(async () => ({
-        schemaVersion: 1,
-        roomId: 'room-1',
-        title: 'Room',
-        revision: 1,
-        viewerStates: {},
-        assets: [],
-        annotations: [],
-        visibleTrackIds: [],
-        truncated: { assets: false, annotations: false, contigs: false },
-        updatedAt: '2026-07-16T00:00:00.000Z'
-      })),
-      apply: vi.fn(),
-      refresh: vi.fn(),
-      history: vi.fn()
     }
   } as unknown as AppCapabilityDependencies
   return { dependencies, open, observe, applyEdit }
 }
 
 describe('app capability registry', () => {
-  it('registers executable Workspace Preview and Biology Room actions from one composition root', () => {
+  it('attributes capability definitions to domain modules without changing registration order', () => {
     const { dependencies } = createDependencies()
-    const ids = createAppCapabilityRegistry(dependencies).list().map((descriptor) => descriptor.id)
+    const dependenciesWithOptionalProviders = {
+      ...dependencies,
+      visibleContextService: {
+        currentSurface: vi.fn(),
+        inspectSurface: vi.fn()
+      },
+      inspectArtifacts: vi.fn()
+    } as unknown as AppCapabilityDependencies
+    const catalog = createApplicationDomainCatalog({ getUserDataDir: () => '/tmp/sciforge-test' })
+    const contributions = catalog.listContributions(
+      MAIN_CAPABILITY_FACTORY_CONTRIBUTION_KIND,
+      isAppCapabilityContributionFactory
+    ).map(({ value: factory }) => ({
+      moduleId: factory.moduleId,
+      capabilityIds: factory.createDefinitions(dependenciesWithOptionalProviders)
+        .map((definition) => definition.descriptor.id)
+    }))
+
+    expect(contributions).toEqual(expect.arrayContaining([
+      {
+        moduleId: 'sciforge.surface',
+        capabilityIds: [APP_CAPABILITY_IDS.surfaceCurrent, APP_CAPABILITY_IDS.surfaceInspect]
+      },
+      { moduleId: 'sciforge.artifact', capabilityIds: [APP_CAPABILITY_IDS.artifactInspect] },
+      {
+        moduleId: 'sciforge.workspace-preview',
+        capabilityIds: [
+          APP_CAPABILITY_IDS.workspacePreviewList,
+          APP_CAPABILITY_IDS.workspacePreviewOpen,
+          APP_CAPABILITY_IDS.workspacePreviewDescribeAsset,
+          APP_CAPABILITY_IDS.workspacePreviewReadRange,
+          APP_CAPABILITY_IDS.workspacePreviewPrepareArtifact,
+          APP_CAPABILITY_IDS.workspacePreviewReadArtifactRange,
+          APP_CAPABILITY_IDS.workspacePreviewApplyEdit,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsList,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsUpdate,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsResolve,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsDelete,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsImport,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewGenerate,
+          APP_CAPABILITY_IDS.workspacePreviewAnnotationsReviewImprove,
+          APP_CAPABILITY_IDS.workspacePreviewExport,
+          APP_CAPABILITY_IDS.workspacePreviewInvokeAction,
+          APP_CAPABILITY_IDS.workspacePreviewRelease
+        ]
+      },
+      {
+        moduleId: 'sciforge.biology-room',
+        capabilityIds: [
+          BIOLOGY_ROOM_CAPABILITY_IDS.list,
+          BIOLOGY_ROOM_CAPABILITY_IDS.create,
+          BIOLOGY_ROOM_CAPABILITY_IDS.openOrCreate,
+          BIOLOGY_ROOM_CAPABILITY_IDS.load,
+          BIOLOGY_ROOM_CAPABILITY_IDS.open,
+          BIOLOGY_ROOM_CAPABILITY_IDS.apply,
+          BIOLOGY_ROOM_CAPABILITY_IDS.refresh,
+          BIOLOGY_ROOM_CAPABILITY_IDS.history
+        ]
+      }
+    ]))
+  })
+
+  it('registers executable core and installed-domain actions from one composition root', () => {
+    const { dependencies } = createDependencies()
+    const ids = createRegistry(dependencies).list().map((descriptor) => descriptor.id)
 
     const optionalWithoutProviders = new Set<string>([
       APP_CAPABILITY_IDS.surfaceCurrent,
@@ -140,7 +195,10 @@ describe('app capability registry', () => {
       APP_CAPABILITY_IDS.artifactInspect
     ])
     expect(ids).toEqual(expect.arrayContaining(
-      Object.values(APP_CAPABILITY_IDS).filter((id) => !optionalWithoutProviders.has(id))
+      [
+        ...Object.values(APP_CAPABILITY_IDS).filter((id) => !optionalWithoutProviders.has(id)),
+        ...Object.values(BIOLOGY_ROOM_CAPABILITY_IDS)
+      ]
     ))
     expect(new Set(ids).size).toBe(ids.length)
   })
@@ -167,7 +225,7 @@ describe('app capability registry', () => {
       }],
       evidence: { provider: 'model-router', attestation: `sha256:${'e'.repeat(64)}` }
     }))
-    const broker = new CapabilityBroker(createAppCapabilityRegistry({
+    const broker = new CapabilityBroker(createRegistry({
       ...dependencies,
       visibleContextService: {
         currentSurface: vi.fn(async () => ({
@@ -214,7 +272,7 @@ describe('app capability registry', () => {
 
   it('uses the same Workspace Preview provider for UI and agent callers', async () => {
     const { dependencies, open } = createDependencies()
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const broker = new CapabilityBroker(createRegistry(dependencies))
     const input = { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
 
     const uiResult = await broker.invoke({ audience: 'ui', callerId: 'window-1', workspaceId: '/workspace' }, {
@@ -233,7 +291,7 @@ describe('app capability registry', () => {
 
   it('explicitly shares Workspace Preview resource handles across trusted audiences in one workspace', async () => {
     const { dependencies } = createDependencies()
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const broker = new CapabilityBroker(createRegistry(dependencies))
     const opened = await broker.invoke(
       { audience: 'ui', callerId: 'window-1', workspaceId: '/workspace' },
       {
@@ -295,7 +353,7 @@ describe('app capability registry', () => {
       dataBase64: Buffer.from('test').toString('base64'),
       mimeType: 'text/markdown'
     }))
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const broker = new CapabilityBroker(createRegistry(dependencies))
     const caller = { audience: 'ui' as const, callerId: 'window-1', workspaceId: '/workspace' }
     const opened = await broker.invoke(caller, {
       actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
@@ -316,7 +374,7 @@ describe('app capability registry', () => {
 
   it('returns executable operations and publishes a change event after a preview mutation', async () => {
     const { dependencies, applyEdit } = createDependencies()
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const broker = new CapabilityBroker(createRegistry(dependencies))
     const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
     const opened = await broker.invoke(caller, {
       actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
@@ -353,6 +411,34 @@ describe('app capability registry', () => {
     expect(broker.listEvents(caller)).toHaveLength(1)
   })
 
+  it('routes namespaced domain edits through the same generic broker operation', async () => {
+    const { dependencies, applyEdit } = createDependencies()
+    const broker = new CapabilityBroker(createRegistry(dependencies))
+    const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
+    const opened = await broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
+      input: { path: '/workspace/paper.md', workspaceRoot: '/workspace' }
+    })
+    const handle = capabilityResourceHandleSchema.parse(record(opened.output).resource)
+    const observed = await broker.observe(caller, { resource: handle })
+    const operation = {
+      kind: 'domain.applyEdit' as const,
+      path: '/workspace/paper.md',
+      operationType: 'materials.replace-site',
+      data: { site: 4, element: 'Si' }
+    }
+
+    await broker.invoke(caller, {
+      actionId: APP_CAPABILITY_IDS.workspacePreviewApplyEdit,
+      invocationId: 'domain-edit-1',
+      resource: observed.resource,
+      expectedRevision: observed.semanticRevision,
+      input: { operation }
+    })
+
+    expect(applyEdit).toHaveBeenCalledWith('preview-1', operation)
+  })
+
   it('keeps canonical annotation operations discoverable when annotation observation is temporarily unavailable', async () => {
     const { dependencies, observe } = createDependencies()
     const manifest = dependencies.workspacePreviewHost.listPlugins()[0]!
@@ -371,7 +457,7 @@ describe('app capability registry', () => {
         actions: ['html.previewUrl']
       }
     } as never)
-    const registry = createAppCapabilityRegistry(dependencies)
+    const registry = createRegistry(dependencies)
     const broker = new CapabilityBroker(registry)
     const ui = { audience: 'ui' as const, callerId: 'window-1', workspaceId: '/workspace' }
     const agent = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
@@ -418,7 +504,7 @@ describe('app capability registry', () => {
 
   it('rejects annotation variants through the generic apply-edit broker operation', async () => {
     const { dependencies, applyEdit } = createDependencies()
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
+    const broker = new CapabilityBroker(createRegistry(dependencies))
     const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
     const opened = await broker.invoke(caller, {
       actionId: APP_CAPABILITY_IDS.workspacePreviewOpen,
@@ -444,39 +530,6 @@ describe('app capability registry', () => {
     expect(applyEdit).not.toHaveBeenCalled()
   })
 
-  it('creates Biology Rooms through the registered provider and returns an opaque handle', async () => {
-    const { dependencies } = createDependencies()
-    const manifest = {
-      schemaVersion: 1 as const,
-      roomId: 'room-created',
-      title: 'Created room',
-      revision: 1,
-      assets: [],
-      viewerStates: {},
-      annotations: [],
-      createdAt: '2026-07-16T00:00:00.000Z',
-      updatedAt: '2026-07-16T00:00:00.000Z'
-    }
-    dependencies.biologyRoomService.create = vi.fn(async () => manifest)
-    const broker = new CapabilityBroker(createAppCapabilityRegistry(dependencies))
-
-    const result = await broker.invoke(
-      { audience: 'ui', callerId: 'window-1', workspaceId: '/workspace' },
-      {
-        actionId: APP_CAPABILITY_IDS.biologyRoomCreate,
-        invocationId: 'create-room-1',
-        input: { title: 'Created room' }
-      }
-    )
-
-    expect(dependencies.biologyRoomService.create).toHaveBeenCalledWith({
-      workspaceRoot: '/workspace',
-      title: 'Created room',
-      assets: []
-    })
-    expect(record(result.output).manifest).toEqual(manifest)
-    expect(capabilityResourceHandleSchema.parse(record(result.output).resource)).toBeTruthy()
-  })
 })
 
 const contractCallers = {
@@ -487,7 +540,7 @@ const contractCallers = {
 
 defineCapabilityProviderContractSuite('Workspace Preview', () => {
   const { dependencies, applyEdit } = createDependencies()
-  const registry = createAppCapabilityRegistry(dependencies)
+  const registry = createRegistry(dependencies)
   return {
     registry,
     broker: new CapabilityBroker(registry),
@@ -515,55 +568,6 @@ defineCapabilityProviderContractSuite('Workspace Preview', () => {
         state: { ready: true },
         semanticRevision: '2026-07-16T00:00:00.000Z',
         operationIds: [APP_CAPABILITY_IDS.workspacePreviewApplyEdit]
-      })
-    })
-  }
-})
-
-defineCapabilityProviderContractSuite('Biology Room', () => {
-  const { dependencies } = createDependencies()
-  let executions = 0
-  dependencies.biologyRoomService.apply = async (input) => {
-    executions += 1
-    return {
-      dryRun: false,
-      changed: true,
-      previousRevision: input.baseRevision,
-      revision: input.baseRevision + 1,
-      manifest: {
-        schemaVersion: 1,
-        roomId: input.roomId,
-        title: 'Room',
-        revision: input.baseRevision + 1,
-        assets: [],
-        viewerStates: {},
-        annotations: [],
-        createdAt: '2026-07-16T00:00:00.000Z',
-        updatedAt: '2026-07-16T00:00:01.000Z'
-      },
-      warnings: []
-    }
-  }
-  const registry = createAppCapabilityRegistry(dependencies)
-  return {
-    registry,
-    broker: new CapabilityBroker(registry),
-    actionId: APP_CAPABILITY_IDS.biologyRoomApply,
-    validInput: {
-      operations: [{ type: 'setActiveAsset', assetId: 'asset-1' }]
-    },
-    invalidInput: { operations: [] },
-    callers: contractCallers,
-    executionCount: () => executions,
-    createResource: () => ({
-      resourceId: 'room-1',
-      resourceKind: BIOLOGY_ROOM_RESOURCE_KIND,
-      workspaceId: '/workspace',
-      semanticRevision: '1',
-      observe: async () => ({
-        state: { ready: true },
-        semanticRevision: '1',
-        operationIds: [APP_CAPABILITY_IDS.biologyRoomApply]
       })
     })
   }

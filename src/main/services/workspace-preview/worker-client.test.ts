@@ -3,8 +3,14 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import JSZip from 'jszip'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { createDomainMainEntry } from '@sciforge/domain-life-science-preview/main'
+import { LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS } from '@sciforge/domain-life-science-preview/contract'
 import {
-  LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
+  LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES,
+  decodeLifeScienceSelectionsInValue,
+  decodeLifeScienceWorkspaceObservation
+} from '@sciforge/domain-life-science-preview/workspace-preview-wire'
+import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspacePreviewFileState,
   type WorkspacePreviewPluginManifest,
@@ -12,6 +18,20 @@ import {
 } from '../../../shared/workspace-preview'
 import { FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS } from './registry'
 import { WorkspacePreviewWorkerClient } from './worker-client'
+
+function createWorkerClient(): WorkspacePreviewWorkerClient {
+  const entry = createDomainMainEntry({
+    getUserDataDir: () => '',
+    defineCapability: () => undefined
+  })
+  return WorkspacePreviewWorkerClient.compose({
+    domainPlugins: entry.contributions.map((contribution) => ({
+      ownerId: entry.definition.module.id,
+      manifest: contribution.value.manifest,
+      provider: contribution.value.provider
+    }))
+  }).workerClient
+}
 
 describe('WorkspacePreviewWorkerClient', () => {
   let rootDir = ''
@@ -120,7 +140,7 @@ describe('WorkspacePreviewWorkerClient', () => {
     }
   })
 
-  it('maps omics worker-private matrix details onto shared omics fields', async () => {
+  it('maps omics worker details through the package-owned observation wire', async () => {
     const filePath = join(workspaceRoot, 'counts.mtx')
     const text = '%%MatrixMarket matrix coordinate integer general\n2 3 4\n1 1 7\n'
     await writeFile(filePath, text, 'utf8')
@@ -139,17 +159,20 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'omics-matrix', modality: 'omics' },
-        omics: {
-          matrixShape: [2, 3],
-          observationCount: 2,
-          variableCount: 3
-        }
+        view: { pluginId: 'omics-matrix', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.omics }
+      }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'omics-matrix', modality: 'omics' },
+      omics: {
+        matrixShape: [2, 3],
+        observationCount: 2,
+        variableCount: 3
       }
     })
   })
 
-  it('maps omics metadata embedding names onto shared omics fields', async () => {
+  it('maps omics metadata embedding names through the package-owned observation wire', async () => {
     const filePath = join(workspaceRoot, 'atlas.h5ad')
     const text = JSON.stringify({
       n_obs: 3,
@@ -177,22 +200,25 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'omics-matrix', modality: 'omics' },
-        omics: {
-          format: 'h5ad',
-          matrixIds: ['matrix-1'],
-          matrixShape: [3, 2],
-          observationCount: 3,
-          variableCount: 2,
-          obsKeys: ['cell_type', 'batch'],
-          varKeys: ['gene_symbol'],
-          embeddings: ['X_umap', 'X_pca']
-        }
+        view: { pluginId: 'omics-matrix', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.omics }
+      }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'omics-matrix', modality: 'omics' },
+      omics: {
+        format: 'h5ad',
+        matrixIds: ['matrix-1'],
+        matrixShape: [3, 2],
+        observationCount: 3,
+        variableCount: 2,
+        obsKeys: ['cell_type', 'batch'],
+        varKeys: ['gene_symbol'],
+        embeddings: ['X_umap', 'X_pca']
       }
     })
   })
 
-  it('maps bioimaging selection and metadata-only tile plans onto shared fields', async () => {
+  it('maps bioimaging selection and metadata-only tile plans through package wire fields', async () => {
     const filePath = join(workspaceRoot, 'cells.tif')
     const bytes = createMinimalTiffBytes(2048, 1024)
     await writeFile(filePath, bytes)
@@ -212,24 +238,28 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'bioimaging', modality: 'bioimaging' },
-        selection: {
-          kind: 'bioimaging',
-          regions: [{ x: 0, y: 0, width: 2048, height: 1024 }]
-        },
-        bioimaging: {
-          format: 'tiff',
-          detectedBy: 'path',
-          byteLength: bytes.byteLength,
-          dimensions: { width: 2048, height: 1024 },
-          tilePlan: {
-            status: 'metadata-only',
-            source: 'tiff-metadata',
-            levelCount: expect.any(Number),
-            tileSize: { width: 512, height: 512 },
-            pixelDecoding: false,
-            tileRendererImplemented: false
-          }
+        view: { pluginId: 'bioimaging', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.bioimaging },
+        selection: { kind: 'domain' }
+      }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'bioimaging', modality: 'bioimaging' },
+      selection: {
+        kind: 'bioimaging',
+        regions: [{ x: 0, y: 0, width: 2048, height: 1024 }]
+      },
+      bioimaging: {
+        format: 'tiff',
+        detectedBy: 'path',
+        byteLength: bytes.byteLength,
+        dimensions: { width: 2048, height: 1024 },
+        tilePlan: {
+          status: 'metadata-only',
+          source: 'tiff-metadata',
+          levelCount: expect.any(Number),
+          tileSize: { width: 512, height: 512 },
+          pixelDecoding: false,
+          tileRendererImplemented: false
         }
       }
     })
@@ -252,7 +282,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: bytes.byteLength,
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.prepareArtifact({
       manifest,
@@ -305,7 +335,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: bytes.byteLength,
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.prepareArtifact({
       manifest,
@@ -336,7 +366,7 @@ describe('WorkspacePreviewWorkerClient', () => {
     }
   })
 
-  it('maps spectra worker-private scan details onto shared spectra fields', async () => {
+  it('maps spectra worker scan details through package-owned wire fields', async () => {
     const filePath = join(workspaceRoot, 'run.mgf')
     const text = 'BEGIN IONS\nTITLE=s1\n100.1 200\n101.2 300\nEND IONS\n'
     await writeFile(filePath, text, 'utf8')
@@ -355,24 +385,28 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'proteomics-spectra', modality: 'spectra' },
-        selection: {
-          kind: 'spectra',
-          ranges: [{ xStart: 100.1, xEnd: 101.2, yStart: 200, yEnd: 300 }]
-        },
-        spectra: {
-          format: 'mgf',
-          spectrumCount: 1,
-          peakCount: 2,
-          scanCount: 0,
-          xAxis: 'm/z',
-          mzRange: { min: 100.1, max: 101.2 },
-          intensityRange: { min: 200, max: 300 },
-          sampledPeaks: [
-            { spectrumIndex: 0, peakIndex: 0, mz: 100.1, intensity: 200 },
-            { spectrumIndex: 0, peakIndex: 1, mz: 101.2, intensity: 300 }
-          ]
-        }
+        view: { pluginId: 'proteomics-spectra', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.spectra },
+        selection: { kind: 'domain' }
+      }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'proteomics-spectra', modality: 'spectra' },
+      selection: {
+        kind: 'spectra',
+        ranges: [{ xStart: 100.1, xEnd: 101.2, yStart: 200, yEnd: 300 }]
+      },
+      spectra: {
+        format: 'mgf',
+        spectrumCount: 1,
+        peakCount: 2,
+        scanCount: 0,
+        xAxis: 'm/z',
+        mzRange: { min: 100.1, max: 101.2 },
+        intensityRange: { min: 200, max: 300 },
+        sampledPeaks: [
+          { spectrumIndex: 0, peakIndex: 0, mz: 100.1, intensity: 200 },
+          { spectrumIndex: 0, peakIndex: 1, mz: 101.2, intensity: 300 }
+        ]
       }
     })
   })
@@ -413,11 +447,12 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'molecular', modality: 'molecular' },
-        molecular: {
-          modelCount: 1
-        }
+        view: { pluginId: 'molecular', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.molecular }
       }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'molecular', modality: 'molecular' },
+      molecular: { modelCount: 1 }
     })
     if (result.ok) {
       expect(result.observation.actions).toContain('molecular.workbench')
@@ -444,19 +479,20 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'molecular', modality: 'molecular' },
-        molecular: {
-          modelCount: 0,
-          representations: ['trajectory-placeholder']
-        },
-        annotations: [
-          {
-            kind: 'warning',
-            summary: expect.stringContaining('recognized but not decoded')
-          }
-        ],
-        actions: expect.arrayContaining(['observe', 'select', 'export', 'molecular.preview'])
+        view: { pluginId: 'molecular', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.molecular }
       }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'molecular', modality: 'molecular' },
+      molecular: {
+        modelCount: 0,
+        representations: ['trajectory-placeholder']
+      },
+      annotations: [{
+        kind: 'warning',
+        summary: expect.stringContaining('recognized but not decoded')
+      }],
+      actions: expect.arrayContaining(['observe', 'select', 'export', 'molecular.preview'])
     })
     if (result.ok) {
       expect(result.observation.actions).not.toContain('molecular.workbench')
@@ -483,33 +519,22 @@ describe('WorkspacePreviewWorkerClient', () => {
     expect(result).toMatchObject({
       ok: true,
       observation: {
-        view: { pluginId: 'sequence-genomics', modality: 'sequence' },
-        sequence: {
-          sequenceCount: 2,
-          totalLength: 12,
-          references: [
-            expect.objectContaining({
-              id: 'chr1',
-              sequenceLength: 8
-            }),
-            expect.objectContaining({
-              id: 'chr2',
-              sequenceLength: 4
-            })
-          ],
-          indexedRanges: [
-            expect.objectContaining({
-              reference: 'chr1',
-              start: 0,
-              end: 8
-            }),
-            expect.objectContaining({
-              reference: 'chr2',
-              start: 0,
-              end: 4
-            })
-          ]
-        }
+        view: { pluginId: 'sequence-genomics', modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.sequence }
+      }
+    })
+    expect(lifeScienceObservationFromResult(result)).toMatchObject({
+      view: { pluginId: 'sequence-genomics', modality: 'sequence' },
+      sequence: {
+        sequenceCount: 2,
+        totalLength: 12,
+        references: [
+          expect.objectContaining({ id: 'chr1', sequenceLength: 8 }),
+          expect.objectContaining({ id: 'chr2', sequenceLength: 4 })
+        ],
+        indexedRanges: [
+          expect.objectContaining({ reference: 'chr1', start: 0, end: 8 }),
+          expect.objectContaining({ reference: 'chr2', start: 0, end: 4 })
+        ]
       }
     })
   })
@@ -593,7 +618,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -620,7 +645,7 @@ describe('WorkspacePreviewWorkerClient', () => {
   })
 
   it('invokes declared life-science inspect and preview actions from existing metadata previews', async () => {
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const gffText = '##gff-version 3\nchr1\tsrc\tgene\t1\t10\t.\t+\t.\tID=gene1\n'
     const gffPath = join(workspaceRoot, 'genes.gff')
@@ -791,7 +816,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const query = await client.invokeAction({
       manifest,
@@ -910,7 +935,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: bytes.byteLength,
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const query = await client.invokeAction({
       manifest,
@@ -969,7 +994,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const query = await client.invokeAction({
       manifest,
@@ -1102,7 +1127,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: bytes.byteLength,
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -1136,7 +1161,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -1167,7 +1192,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -1207,7 +1232,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: bytes.byteLength,
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -1228,9 +1253,9 @@ describe('WorkspacePreviewWorkerClient', () => {
       }
     })
 
-    expect(result).toMatchObject({
-      ok: true,
-      result: {
+    expect(result).toMatchObject({ ok: true })
+    const decodedResult = result.ok ? decodeLifeScienceSelectionsInValue(result.result) : null
+    expect(decodedResult).toMatchObject({
         ok: true,
         roiId: 'roi-placeholder',
         annotation: {
@@ -1242,7 +1267,6 @@ describe('WorkspacePreviewWorkerClient', () => {
           kind: 'bioimaging',
           roiIds: ['roi-placeholder']
         }
-      }
     })
   })
 
@@ -1263,7 +1287,7 @@ describe('WorkspacePreviewWorkerClient', () => {
       size: Buffer.byteLength(text),
       mtimeMs: 1
     }
-    const client = new WorkspacePreviewWorkerClient()
+    const client = createWorkerClient()
 
     const result = await client.invokeAction({
       manifest,
@@ -1283,9 +1307,9 @@ describe('WorkspacePreviewWorkerClient', () => {
       }
     })
 
-    expect(result).toMatchObject({
-      ok: true,
-      result: {
+    expect(result).toMatchObject({ ok: true })
+    const decodedResult = result.ok ? decodeLifeScienceSelectionsInValue(result.result) : null
+    expect(decodedResult).toMatchObject({
         ok: true,
         atomCount: 2,
         state: {
@@ -1303,9 +1327,8 @@ describe('WorkspacePreviewWorkerClient', () => {
             }
           }
         }
-      }
     })
-    expect((result as { result?: { state?: { measurement?: { value?: number } } } }).result?.state?.measurement?.value)
+    expect((decodedResult as { state?: { measurement?: { value?: number } } } | null)?.state?.measurement?.value)
       .toBeCloseTo(1.4689, 3)
   })
 
@@ -1326,12 +1349,10 @@ describe('WorkspacePreviewWorkerClient', () => {
       }
     })
 
-    expect(result).toMatchObject({
-      ok: true,
-      observation: {
-        view: { pluginId: 'bioimaging', modality: 'bioimaging' }
-      }
-    })
+    expect(result).toMatchObject({ ok: true, observation: { view: {
+      pluginId: 'bioimaging',
+      modality: LIFE_SCIENCE_WORKSPACE_PREVIEW_MODALITIES.bioimaging
+    } } })
     if (result.ok) {
       expect(result.bytesRead).toBe(bytes.byteLength)
       expect(result.observation.visibleText).toContain('CZI')
@@ -1534,12 +1555,21 @@ async function observeFile(input: {
   manifest: WorkspacePreviewPluginManifest
   file: WorkspacePreviewFileState
 }) {
-  const client = new WorkspacePreviewWorkerClient()
+  const client = createWorkerClient()
   return client.observe({
     manifest: input.manifest,
     file: input.file,
     session: createSession(input.manifest, input.file)
   })
+}
+
+function lifeScienceObservationFromResult(
+  result: Awaited<ReturnType<typeof observeFile>>
+) {
+  if (!result.ok) throw new Error(result.message)
+  const observation = decodeLifeScienceWorkspaceObservation(result.observation)
+  if (!observation) throw new Error('Expected a life-science observation.')
+  return observation
 }
 
 function createSession(
@@ -1562,7 +1592,7 @@ function createSession(
 function manifestById(id: string): WorkspacePreviewPluginManifest {
   const manifest = [
     ...FIRST_PARTY_WORKSPACE_PREVIEW_MANIFESTS,
-    ...LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS
+    ...LIFE_SCIENCE_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS
   ].find((candidate) => candidate.id === id)
   if (!manifest) throw new Error(`Missing manifest ${id}`)
   return manifest

@@ -1,21 +1,11 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
-import {
-  biologyRoomFormatFromPath,
-  type BiologyRoomFormat,
-  type BiologyRoomSelection
-} from '@shared/biology-room'
 import type {
   VisibleContextComponentSnapshot,
   VisibleContextResource
 } from '@shared/visible-context'
-import {
-  isDeferredNonLifeScienceExtension,
-  type WorkspaceObservation
-} from '@shared/workspace-preview'
+import type { WorkspaceObservation } from '@shared/workspace-preview'
 import { FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
 import {
-  lazy,
-  Suspense,
   useCallback,
   useEffect,
   useMemo,
@@ -30,9 +20,9 @@ import {
   type WorkspacePreviewLastEditSummary,
   type WorkspacePreviewPanelShellContext,
   type WorkspacePreviewPluginOutletRouteReason,
-  rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor
 } from '../workspace-preview'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
 import {
   boundWorkspacePreviewPresentationState,
   workspacePreviewPresentationStatesEqual,
@@ -43,28 +33,15 @@ import {
   registerVisibleContextVisualTarget
 } from '../lib/visible-context'
 
-const BiologyRoomPanelBridge = lazy(() =>
-  import('./BiologyRoomPanelBridge').then((module) => ({ default: module.BiologyRoomPanelBridge }))
-)
-
 const WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS = 80
+const workspacePreviewRegistry = installedRendererContributions.workspacePreviews
 
-export type WorkspaceFilePreviewPanelBridgeRoute =
-  | {
-      kind: 'biology-room'
-      format: BiologyRoomFormat
-    }
-  | {
-      kind: 'workspace-preview-shell'
-      reason: WorkspacePreviewPluginOutletRouteReason
-      pluginId?: string
-      modality?: RendererWorkspacePreviewPluginDescriptor['manifest']['modality']
-    }
-
-type WorkspacePreviewShellRoute = Extract<
-  WorkspaceFilePreviewPanelBridgeRoute,
-  { kind: 'workspace-preview-shell' }
->
+export type WorkspaceFilePreviewPanelBridgeRoute = {
+  kind: 'workspace-preview-shell'
+  reason: WorkspacePreviewPluginOutletRouteReason
+  pluginId?: string
+  modality?: RendererWorkspacePreviewPluginDescriptor['manifest']['modality']
+}
 
 export type WorkspaceFilePreviewPanelBridgeProps = {
   target: WorkspaceFileTarget | null
@@ -73,7 +50,6 @@ export type WorkspaceFilePreviewPanelBridgeProps = {
   active?: boolean
   className?: string
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
-  onAddSelectionToChat?: (context: string, selection: BiologyRoomSelection) => void
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }
@@ -115,16 +91,8 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
       reason: 'empty'
     }
   }
-  const biologyFormat = biologyRoomFormatFromPath(target.path)
-  if (biologyFormat) {
-    return {
-      kind: 'biology-room',
-      format: biologyFormat
-    }
-  }
-  const descriptor = rendererWorkspacePreviewRegistry.resolve({
-    path: target.path,
-    includeFallback: false
+  const descriptor = workspacePreviewRegistry.resolve({
+    path: target.path
   })
   if (descriptor) {
     return {
@@ -132,12 +100,6 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
       reason: 'registered-plugin',
       pluginId: descriptor.manifest.id,
       modality: descriptor.manifest.modality
-    }
-  }
-  if (isDeferredNonLifeScienceExtension(target.path)) {
-    return {
-      kind: 'workspace-preview-shell',
-      reason: 'deferred-non-life-science'
     }
   }
   return {
@@ -153,7 +115,6 @@ export function WorkspaceFilePreviewPanelBridge({
   active = true,
   className,
   annotationQuestionBridge,
-  onAddSelectionToChat,
   onClose,
   onOpenDirectory
 }: WorkspaceFilePreviewPanelBridgeProps): ReactElement {
@@ -163,31 +124,11 @@ export function WorkspaceFilePreviewPanelBridge({
     [targetPath]
   )
 
-  if (route.kind === 'biology-room') {
-    if (!target) throw new Error('Biology Room routing requires a file target.')
-    return (
-      <Suspense fallback={(
-        <div
-          className={compactClassName('h-full bg-ds-sidebar', className)}
-          data-biology-room-loading
-        />
-      )}>
-        <BiologyRoomPanelBridge
-          workspaceRoot={target.workspaceRoot?.trim() || workspaceRoot}
-          initialTarget={target}
-          visibleContextActive={active}
-          className={compactClassName('ds-no-drag h-full', className)}
-          onAddSelectionToChat={onAddSelectionToChat}
-          onClose={onClose}
-        />
-      </Suspense>
-    )
-  }
-
   return (
     <WorkspacePreviewPanelShell
       target={target}
       workspaceRoot={workspaceRoot}
+      registry={workspacePreviewRegistry}
       className={compactClassName('ds-no-drag', className)}
     >
       {(context) => (
@@ -214,7 +155,7 @@ function compactClassName(...parts: Array<string | undefined>): string {
 export function buildWorkspacePreviewVisibleContextComponent(input: {
   context: Pick<WorkspacePreviewPanelShellContext, 'state' | 'asset' | 'assetStatus' | 'assetError'>
   target: WorkspaceFileTarget | null
-  route: WorkspacePreviewShellRoute
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
   updatedAt: string
   presentationState?: WorkspacePreviewPresentationState | null
@@ -368,7 +309,7 @@ function WorkspacePreviewShellBody({
 }: {
   context: WorkspacePreviewPanelShellContext
   target: WorkspaceFileTarget | null
-  route: WorkspacePreviewShellRoute
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
   sessionId?: string
   active: boolean
@@ -433,7 +374,12 @@ function WorkspacePreviewShellBody({
       target: {
         id: 'preview.current',
         kind: 'component',
-        contentType: workspacePreviewVisualContentType(modality),
+        contentType: workspacePreviewVisualContentType({
+          modality,
+          mimeType: observation?.file.mimeType ?? context.state.file?.mimeType ?? context.asset?.file.mimeType,
+          assetPrimary: context.asset?.primary,
+          assetStrategies: context.asset?.strategies
+        }),
         active: true,
         metadata: {
           path: visibleContextComponent.state?.path,
@@ -445,7 +391,16 @@ function WorkspacePreviewShellBody({
       },
       element: () => previewRef.current
     })
-  }, [context.state.observation, context.state.session?.modality, route.modality, visibleContextComponent])
+  }, [
+    context.asset?.file.mimeType,
+    context.asset?.primary,
+    context.asset?.strategies,
+    context.state.file?.mimeType,
+    context.state.observation,
+    context.state.session?.modality,
+    route.modality,
+    visibleContextComponent
+  ])
 
   useEffect(() => {
     const capabilities = window.sciforge?.capabilities
@@ -546,9 +501,9 @@ function WorkspacePreviewShellBody({
 
       <WorkspacePreviewPluginOutlet
         context={context}
+        rendererRegistry={workspacePreviewRegistry}
         routeReason={route.reason}
         routePluginId={route.pluginId}
-        routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
         visualContextComponentId={visibleContextComponent?.id}
         onPresentationStateChange={handlePresentationStateChange}
@@ -557,10 +512,19 @@ function WorkspacePreviewShellBody({
   )
 }
 
-export function workspacePreviewVisualContentType(modality: string): string {
-  if (modality === 'deck') return 'slide'
-  if (modality === 'image' || modality === 'bioimaging') return 'image'
-  return modality
+export function workspacePreviewVisualContentType(input: Readonly<{
+  modality: string
+  mimeType?: string
+  assetPrimary?: string
+  assetStrategies?: readonly Readonly<{ kind: string; status: string }>[]
+}>): string {
+  if (input.modality === 'deck') return 'slide'
+  const mimeType = input.mimeType?.trim().toLowerCase().split(';', 1)[0]
+  const hasVisualArtifactTransport = input.assetPrimary === 'tile' || input.assetPrimary === 'thumbnail' ||
+    input.assetStrategies?.some((strategy) =>
+      (strategy.kind === 'tile' || strategy.kind === 'thumbnail') && strategy.status !== 'deferred')
+  if (mimeType?.startsWith('image/') || hasVisualArtifactTransport) return 'image'
+  return input.modality
 }
 
 function WorkspacePreviewIntegrityStatus({
@@ -630,7 +594,8 @@ function fileNameFromPath(path: string): string {
 }
 
 function formatLabel(value: string): string {
-  return value
+  const leaf = value.split('.').filter(Boolean).at(-1) ?? value
+  return leaf
     .replace(/[-_]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

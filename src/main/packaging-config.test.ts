@@ -309,18 +309,10 @@ describe('electron-builder release packaging', () => {
     }
   })
 
-  it('keeps Paper Radar bundled as a worker-owned core without a plug-in service dependency', () => {
-    const paperRadar = releaseWorkerManifest.runtimeEntries.find((entry) => entry.id === 'paper-radar')
-
-    expect(paperRadar?.requiredPaths).toEqual(expect.arrayContaining([
-      'packages/workers/paper-radar/package.json',
-      'packages/workers/paper-radar/src/mcp-server.ts',
-      'packages/workers/paper-radar/src/core/service.ts',
-      'packages/workers/paper-radar/src/core/storage.ts'
-    ]))
-    expect(releaseWorkerManifest.bundledPackageDirs).toEqual(expect.arrayContaining([
-      'packages/workers/paper-radar'
-    ]))
+  it('keeps compile-time domain dependencies in the app bundle instead of shipping source runtimes', () => {
+    expect(releaseWorkerManifest.runtimeEntries.map((entry) => entry.id)).not.toContain('paper-radar')
+    expect(releaseWorkerManifest.workspacePackageDirs).not.toContain('packages/workers/paper-radar')
+    expect(releaseWorkerManifest.bundledPackageDirs).not.toContain('packages/workers/paper-radar')
     expect(releaseWorkerManifest.bundledPackageDirs.some((dir) => dir.startsWith('plugins/'))).toBe(false)
     expect(releaseWorkerManifest.nonBundledPackageDirs).toEqual(expect.arrayContaining([
       'packages/workers/sci-modality-router',
@@ -503,10 +495,13 @@ describe('root package workspace contracts', () => {
       'plan-gateway:start': 'npm --workspace @sciforge/plan-gateway run start',
       'plan-gateway:test': 'npm --workspace @sciforge/plan-gateway run test',
       'plan-gateway:typecheck': 'npm --workspace @sciforge/plan-gateway run typecheck',
-      'paper-radar:start': 'npm --workspace @sciforge/paper-radar run start',
       'paper-radar:test': 'npm --workspace @sciforge/paper-radar run test',
       'paper-radar:typecheck': 'npm --workspace @sciforge/paper-radar run typecheck'
     })
+    expect(rootPackage.scripts).not.toHaveProperty('paper-radar:start')
+    expect(rootPackage.scripts).not.toHaveProperty('paper-radar-mcp:start')
+    expect(rootPackage.scripts).not.toHaveProperty('paper-radar-mcp:test')
+    expect(rootPackage.scripts).not.toHaveProperty('paper-radar-mcp:typecheck')
     expect(rootPackage.scripts).not.toHaveProperty('build:local-runtime')
     expect(rootPackage.scripts).not.toHaveProperty('local-runtime:test')
   })

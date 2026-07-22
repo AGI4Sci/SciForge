@@ -11,8 +11,9 @@ import {
 } from './session-right-panel-workspaces'
 
 type OpenRightPanelMode = Exclude<RightPanelMode, null>
+type CoreRightPanelMode = (typeof RIGHT_PANEL_MODES)[number]
 
-function nextMode(mode: OpenRightPanelMode): OpenRightPanelMode {
+function nextMode(mode: CoreRightPanelMode): CoreRightPanelMode {
   const index = RIGHT_PANEL_MODES.indexOf(mode)
   return RIGHT_PANEL_MODES[(index + 1) % RIGHT_PANEL_MODES.length]
 }

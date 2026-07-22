@@ -7,17 +7,30 @@ import {
   scientificObjectAnnotationSchema,
   scientificObjectComparisonSchema,
   scientificObjectRefSchema,
-  type ScientificObjectModality,
   type ScientificObjectRef,
   type WorkspaceObservation
 } from './scientific-objects'
+import {
+  workspacePreviewExtensionIdSchema,
+  workspacePreviewModalitySchema
+} from './workspace-preview'
 
 const DIGEST_A = 'a'.repeat(64)
 const DIGEST_B = 'b'.repeat(64)
+const LIFE_SCIENCE_MODALITIES = Object.freeze({
+  molecular: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
+  sequence: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.sequence'),
+  spectra: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.spectra'),
+  omics: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.omics'),
+  bioimaging: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.bioimaging')
+})
+const MOLECULAR_SELECTION_TYPE = workspacePreviewExtensionIdSchema.parse(
+  'sciforge.life-science-preview.molecular.selection'
+)
 
 function observation(
   path = '/workspace/structure.pdb',
-  modality: ScientificObjectModality = 'molecular'
+  modality: WorkspaceObservation['view']['modality'] = LIFE_SCIENCE_MODALITIES.molecular
 ): WorkspaceObservation {
   return {
     schemaVersion: 1,
@@ -40,7 +53,7 @@ function scientificObject(overrides: Partial<ScientificObjectRef> = {}): Scienti
   return {
     schemaVersion: 1,
     id: 'structure-1',
-    modality: 'molecular',
+    modality: LIFE_SCIENCE_MODALITIES.molecular,
     title: 'Structure 1',
     source: 'workspace',
     path: '/workspace/structure.pdb',
@@ -52,12 +65,12 @@ function scientificObject(overrides: Partial<ScientificObjectRef> = {}): Scienti
 }
 
 describe('scientific object contracts', () => {
-  it.each<ScientificObjectModality>([
-    'molecular',
-    'sequence',
-    'spectra',
-    'omics',
-    'bioimaging'
+  it.each<WorkspaceObservation['view']['modality']>([
+    LIFE_SCIENCE_MODALITIES.molecular,
+    LIFE_SCIENCE_MODALITIES.sequence,
+    LIFE_SCIENCE_MODALITIES.spectra,
+    LIFE_SCIENCE_MODALITIES.omics,
+    LIFE_SCIENCE_MODALITIES.bioimaging
   ])('accepts the %s modality with stable source fields', (modality) => {
     const parsed = scientificObjectRefSchema.parse(scientificObject({
       id: `${modality}-1`,
@@ -89,6 +102,57 @@ describe('scientific object contracts', () => {
     expect(parsed.hash.digest).toBe(DIGEST_A)
   })
 
+  it('accepts a canonical custom modality and preserves bounded generic metadata', () => {
+    const parsed = scientificObjectRefSchema.parse(scientificObject({
+      id: 'terrain-1',
+      modality: 'geospatial-terrain',
+      title: 'Terrain survey',
+      path: '/workspace/terrain.geojson',
+      mimeType: 'application/geo+json',
+      observation: {
+        schemaVersion: 1,
+        file: {
+          path: '/workspace/terrain.geojson',
+          workspaceRoot: '/workspace',
+          mimeType: 'application/geo+json'
+        },
+        view: {
+          pluginId: 'domain-geospatial-terrain',
+          modality: 'geospatial-terrain',
+          mode: 'inspect',
+          title: 'Terrain survey'
+        },
+        visibleText: 'Terrain survey with 128 mapped features.',
+        actions: []
+      },
+      metadata: {
+        'geospatial-terrain': {
+          coordinateReferenceSystem: 'EPSG:4326',
+          featureCount: 128,
+          bounds: [-180, -90, 180, 90]
+        }
+      }
+    }))
+
+    expect(parsed.modality).toBe('geospatial-terrain')
+    expect(parsed.observation?.view.modality).toBe('geospatial-terrain')
+    expect(parsed.metadata).toEqual({
+      'geospatial-terrain': {
+        coordinateReferenceSystem: 'EPSG:4326',
+        featureCount: 128,
+        bounds: [-180, -90, 180, 90]
+      }
+    })
+    expect(extractScientificObjects({ scientificObjects: [parsed] })).toEqual([parsed])
+  })
+
+  it.each(['', 'Geospatial', 'geospatial terrain', '../geospatial'])(
+    'rejects the unsafe or non-canonical modality %j',
+    (modality) => {
+      expect(scientificObjectRefSchema.safeParse(scientificObject({ modality })).success).toBe(false)
+    }
+  )
+
   it('rejects unknown fields and inconsistent embedded observations', () => {
     expect(scientificObjectRefSchema.safeParse({
       ...scientificObject(),
@@ -98,7 +162,7 @@ describe('scientific object contracts', () => {
       observation: observation('/workspace/other.pdb')
     })).success).toBe(false)
     expect(scientificObjectRefSchema.safeParse(scientificObject({
-      observation: observation('/workspace/structure.pdb', 'sequence')
+      observation: observation('/workspace/structure.pdb', LIFE_SCIENCE_MODALITIES.sequence)
     })).success).toBe(false)
   })
 
@@ -117,9 +181,17 @@ describe('scientific object contracts', () => {
         kind: 'selection',
         objectId: 'structure-1',
         selection: {
-          kind: 'molecular',
-          chains: ['A'],
-          residues: [{ chain: 'A', index: 42, name: 'GLY' }]
+          kind: 'domain',
+          selectionType: MOLECULAR_SELECTION_TYPE,
+          data: {
+            wireVersion: 2,
+            kind: 'molecular',
+            selection: {
+              kind: 'molecular',
+              chains: ['A'],
+              residues: [{ chain: 'A', index: 42, name: 'GLY' }]
+            }
+          }
         }
       },
       kind: 'comment',
@@ -163,12 +235,12 @@ describe('scientific object metadata extraction', () => {
     const first = scientificObject({ observation: observation() })
     const second = scientificObject({
       id: 'sequence-1',
-      modality: 'sequence',
+      modality: LIFE_SCIENCE_MODALITIES.sequence,
       path: '/workspace/sequence.fasta',
       mimeType: 'text/x-fasta',
       hash: { algorithm: 'sha256', digest: DIGEST_B }
     })
-    const extraObservation = observation('/workspace/spectrum.mzML', 'spectra')
+    const extraObservation = observation('/workspace/spectrum.mzML', LIFE_SCIENCE_MODALITIES.spectra)
     const metadata = {
       outer: [{
         toolResult: {

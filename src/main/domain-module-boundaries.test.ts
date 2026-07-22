@@ -1,0 +1,257 @@
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, extname, join, relative, resolve } from 'node:path'
+import { describe, expect, it } from 'vitest'
+
+const projectRoot = resolve(import.meta.dirname, '../..')
+const sourceRoot = resolve(projectRoot, 'src')
+const packagesRoot = resolve(projectRoot, 'packages')
+const knownModuleRoots = [
+  'src/main/modules',
+  'src/main/services/workspace-preview',
+  'src/renderer/src/workspace-preview'
+] as const
+const ownerDirectoryNames = new Set(['app-contributions', 'domain-modules'])
+const privateWorkerSourceImportPattern = /['"][^'"]*packages\/workers\/[^/'"]+\/src(?:\/[^'"]*)?['"]/
+
+function sourceFiles(root: string): string[] {
+  const absoluteRoot = resolve(projectRoot, root)
+  if (!existsSync(absoluteRoot)) return []
+  return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(absoluteRoot, entry.name)
+    if (entry.isDirectory()) return sourceFiles(relative(projectRoot, path))
+    return ['.ts', '.tsx'].includes(extname(entry.name)) ? [path] : []
+  })
+}
+
+function directoriesNamed(root: string, names: ReadonlySet<string>): string[] {
+  if (!existsSync(root)) return []
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    if (!entry.isDirectory()) return []
+    const path = join(root, entry.name)
+    if (names.has(entry.name)) return [path]
+    return directoriesNamed(path, names)
+  })
+}
+
+function filesNamed(root: string, name: string): string[] {
+  if (!existsSync(root)) return []
+  return readdirSync(root, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(root, entry.name)
+    if (entry.isDirectory()) return filesNamed(path, name)
+    return entry.name === name ? [path] : []
+  })
+}
+
+function migratedModuleSourceFiles(): string[] {
+  const discoveredOwnerRoots = directoriesNamed(sourceRoot, ownerDirectoryNames)
+  const installedDomainRoots = filesNamed(packagesRoot, 'sciforge.domain.json').map(dirname)
+  const workerServices = sourceFiles('src/main/services').filter((path) =>
+    /worker-service\.tsx?$/u.test(path)
+  )
+  return [...new Set([
+    ...knownModuleRoots.flatMap(sourceFiles),
+    ...discoveredOwnerRoots.flatMap((root) => sourceFiles(relative(projectRoot, root))),
+    ...installedDomainRoots.flatMap((root) => sourceFiles(relative(projectRoot, root))),
+    ...workerServices
+  ])].sort()
+}
+
+describe('domain module boundaries', () => {
+  it('discovers owner roots, worker service adapters, and installed domain packages', () => {
+    const relativeFiles = migratedModuleSourceFiles().map((path) => relative(projectRoot, path))
+
+    expect(relativeFiles).toEqual(expect.arrayContaining([
+      'src/main/capabilities/app-contributions/composition.ts',
+      'packages/domains/paper-radar/src/main.ts',
+      'src/main/services/write-assist-worker-service.ts',
+      'src/renderer/src/domain-modules/renderer-slot-registry.ts'
+    ]))
+  })
+
+  it('recognizes private worker package root and deep source imports', () => {
+    expect(privateWorkerSourceImportPattern.test(
+      "from '../../../packages/workers/paper-radar/src'"
+    )).toBe(true)
+    expect(privateWorkerSourceImportPattern.test(
+      "from '../../../packages/workers/write-assist/src/service'"
+    )).toBe(true)
+    expect(privateWorkerSourceImportPattern.test(
+      "from '@sciforge/paper-radar/service'"
+    )).toBe(false)
+  })
+
+  it('consumes worker packages through public exports', () => {
+    const privateImports = migratedModuleSourceFiles().flatMap((path) =>
+      readFileSync(path, 'utf8').split(/\r?\n/).flatMap((line, index) =>
+        privateWorkerSourceImportPattern.test(line)
+          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          : []
+      )
+    )
+
+    expect(privateImports).toEqual([])
+  })
+
+  it('keeps renderer domain modules off main-process and domain-specific bridge paths', () => {
+    const rendererFiles = migratedModuleSourceFiles().filter((path) =>
+      relative(projectRoot, path).startsWith('src/renderer/') &&
+      !path.includes('.test.')
+    )
+    const violations = rendererFiles.flatMap((path) =>
+      readFileSync(path, 'utf8').split(/\r?\n/).flatMap((line, index) =>
+        /(?:from\s+['"][^'"]*\/main\/|window\.sciforge(?:\?\.)?\.paperRadar)/.test(line)
+          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          : []
+      )
+    )
+
+    expect(violations).toEqual([])
+  })
+
+  it('loads only pure definitions from shared and only process-local package entrypoints', () => {
+    const sharedInstallation = readFileSync(
+      resolve(projectRoot, 'src/shared/installed-domain-packages.ts'),
+      'utf8'
+    )
+    const mainInstallation = readFileSync(
+      resolve(projectRoot, 'src/main/modules/installed-domain-main.ts'),
+      'utf8'
+    )
+    const rendererInstallation = readFileSync(
+      resolve(projectRoot, 'src/renderer/src/domain-modules/installed-domain-renderer.ts'),
+      'utf8'
+    )
+
+    const generatedHeader = 'Generated by scripts/domain-packages.mjs. Do not edit.'
+    expect(sharedInstallation).toContain(generatedHeader)
+    expect(mainInstallation).toContain(generatedHeader)
+    expect(rendererInstallation).toContain(generatedHeader)
+    expect(sharedInstallation).not.toMatch(/@sciforge\/domain-[^'"/]+\/(?:main|renderer)/)
+    expect(mainInstallation).not.toMatch(/@sciforge\/domain-[^'"/]+\/renderer/)
+    expect(rendererInstallation).not.toMatch(/@sciforge\/domain-[^'"/]+\/main/)
+
+    for (const manifestPath of filesNamed(packagesRoot, 'sciforge.domain.json')) {
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        packageName: string
+        entrypoints: Array<{ process: 'main' | 'renderer' }>
+      }
+      expect(sharedInstallation).toContain(`${manifest.packageName}/definition`)
+      expect(mainInstallation.includes(`${manifest.packageName}/main`)).toBe(
+        manifest.entrypoints.some(({ process }) => process === 'main')
+      )
+      expect(rendererInstallation.includes(`${manifest.packageName}/renderer`)).toBe(
+        manifest.entrypoints.some(({ process }) => process === 'renderer')
+      )
+    }
+  })
+
+  it('keeps migrated domain implementations out of legacy host feature paths', () => {
+    const retiredPaths = [
+      'src/shared/paper-radar.ts',
+      'src/main/services/paper-radar-worker-service.ts',
+      'src/main/capabilities/app-contributions/paper-radar-contribution.ts',
+      'src/renderer/src/components/paper',
+      'src/shared/biology-room.ts',
+      'src/main/services/biology-room-service.ts'
+    ].map((path) => resolve(projectRoot, path))
+
+    expect(retiredPaths.filter(existsSync)).toEqual([])
+  })
+
+  it('forces exact domain subpath imports and keeps package implementations process-local', () => {
+    const packageRoots = filesNamed(packagesRoot, 'sciforge.domain.json').map(dirname)
+    expect(packageRoots.length).toBeGreaterThan(0)
+
+    for (const packageRoot of packageRoots) {
+      const packageJson = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')) as {
+        exports: Record<string, string | undefined>
+      }
+      const manifest = JSON.parse(readFileSync(join(packageRoot, 'sciforge.domain.json'), 'utf8')) as {
+        entrypoints: Array<{ process: 'main' | 'renderer'; export: string }>
+      }
+      const processSource = (process: 'main' | 'renderer'): string => {
+        const entrypoint = manifest.entrypoints.find((candidate) => candidate.process === process)
+        if (!entrypoint) return ''
+        const exportedPath = packageJson.exports[entrypoint.export]
+        expect(typeof exportedPath).toBe('string')
+        const sourcePath = resolve(packageRoot, (exportedPath as string).replace(/^\.\//u, ''))
+        expect(existsSync(sourcePath)).toBe(true)
+        return readFileSync(sourcePath, 'utf8')
+      }
+      const mainSource = processSource('main')
+      const rendererSource = processSource('renderer')
+
+      expect(packageJson.exports['.']).toBeUndefined()
+      expect(packageJson.exports['./definition']).toBeDefined()
+      for (const entrypoint of manifest.entrypoints) {
+        expect(packageJson.exports[entrypoint.export]).toBeDefined()
+      }
+      expect(mainSource).not.toMatch(/from\s+['"][^'"]*renderer/)
+      expect(rendererSource).not.toMatch(/from\s+['"][^'"]*\/main(?:['"/])/)
+      expect(rendererSource).not.toMatch(/@shared|@renderer|src\/main|src\/shared/)
+    }
+  })
+
+  it('keeps in-app Paper Radar agents off the retired domain MCP business path', () => {
+    const retiredMainFiles = [
+      ['paper', 'radar', 'mcp', 'config.ts'].join('-'),
+      ['paper', 'radar', 'mcp', 'server.ts'].join('-'),
+      ['paper', 'radar', 'mcp', 'node', 'entry.ts'].join('-')
+    ].map((name) => resolve(projectRoot, 'src/main', name))
+    expect(retiredMainFiles.filter(existsSync)).toEqual([])
+
+    const sources = [
+      'src/main/index.ts',
+      'src/main/gui-mcp-registry.ts',
+      'electron.vite.config.ts',
+      'scripts/release-worker-manifest.cjs'
+    ].map((path) => readFileSync(resolve(projectRoot, path), 'utf8'))
+    const retiredServerId = ['gui', 'paper', 'radar'].join('_')
+    const retiredNodeEntry = ['paper', 'radar', 'mcp', 'node', 'entry'].join('-')
+    expect(sources.some((source) => source.includes(retiredServerId))).toBe(false)
+    expect(sources.some((source) => source.includes(retiredNodeEntry))).toBe(false)
+
+    const workerRoot = resolve(projectRoot, 'packages/workers/paper-radar')
+    const retiredWorkerFiles = [
+      ['mcp', 'server.ts'].join('-'),
+      ['mcp', 'server.test.ts'].join('-'),
+      'cli.ts',
+      'write-action.ts',
+      'write-safety.ts'
+    ].map((name) => join(workerRoot, 'src', name))
+    expect(retiredWorkerFiles.filter(existsSync)).toEqual([])
+
+    const workerPackage = JSON.parse(readFileSync(join(workerRoot, 'package.json'), 'utf8')) as {
+      bin?: Record<string, string>
+      exports: Record<string, string>
+      scripts: Record<string, string>
+      sciforge?: { mcpServer?: boolean }
+    }
+    expect(workerPackage.bin).toBeUndefined()
+    expect(workerPackage.exports).not.toHaveProperty('./mcp-server')
+    expect(workerPackage.scripts).not.toHaveProperty('start')
+    expect(workerPackage.sciforge?.mcpServer).toBe(false)
+
+    const workerSources = sourceFiles(relative(projectRoot, join(workerRoot, 'src')))
+      .map((path) => readFileSync(path, 'utf8'))
+      .join('\n')
+    const retiredToolPrefix = ['gui', 'paper'].join('_')
+    const retiredPackageProtocol = ['paper', 'radar', 'mcp'].join('-')
+    expect(workerSources).not.toContain(retiredToolPrefix)
+    expect(workerSources).not.toContain(retiredPackageProtocol)
+
+    const workerServiceContract = [
+      'packages/workers/paper-radar/src/contract.ts',
+      'packages/workers/paper-radar/src/service.ts'
+    ].map((path) => readFileSync(resolve(projectRoot, path), 'utf8')).join('\n')
+    const domainMainSource = readFileSync(
+      resolve(projectRoot, 'packages/domains/paper-radar/src/main.ts'),
+      'utf8'
+    )
+    const retiredConfirmationFields = ['confirmed', 'confirmation_id', 'dry_run']
+    for (const field of retiredConfirmationFields) {
+      expect(workerServiceContract).not.toContain(field)
+      expect(domainMainSource).not.toContain(field)
+    }
+  })
+})

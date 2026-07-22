@@ -9,7 +9,6 @@ import {
   type ScientificObjectRef,
   type WorkspaceStructuredSelection
 } from '@shared/scientific-objects'
-import { biologyRoomFormatFromPath } from '@shared/biology-room'
 import { workspaceStructuredSelectionSchema } from '@shared/workspace-preview'
 import type { ChatBlock } from '../../agent/types'
 import { browserStorage } from '../../lib/browser-storage'
@@ -175,9 +174,7 @@ export function TimelineScientificObjectsPanel({
           selection={object.selection}
           annotations={annotationsForScientificObject(object, annotationStore)}
           labels={{
-            openWorkspace: biologyRoomFormatFromPath(object.path)
-              ? t('scientificObjectOpenBiologyRoom')
-              : t('scientificObjectOpenWorkspace'),
+            openWorkspace: t('scientificObjectOpenWorkspace'),
             askAboutSelection: t('scientificObjectAskSelection'),
             selectionRequired: t('scientificObjectSelectionRequired'),
             annotations: t('scientificObjectAnnotations'),

@@ -2,14 +2,16 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import {
+  DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  workspacePreviewExtensionIdSchema,
   type WorkspaceObservation,
   type WorkspacePreviewFileState,
   type WorkspacePreviewSession
 } from '@shared/workspace-preview'
 import { createWorkspacePreviewHostState } from './host'
 import {
-  createRendererWorkspacePreviewRegistry,
+  createRendererWorkspacePreviewRegistry as createRegistry,
   type RendererWorkspacePreviewPluginDescriptor,
   type RendererWorkspacePreviewRegistry
 } from './registry'
@@ -19,6 +21,15 @@ import {
   workspacePreviewOpenInputForPanelTarget,
   workspacePreviewPanelTargetKey
 } from './WorkspacePreviewPanelShell'
+
+function createRendererWorkspacePreviewRegistry(): RendererWorkspacePreviewRegistry {
+  return createRegistry({
+    registrations: DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => ({
+      ownerId: 'test',
+      contribution: { manifest, render: () => createElement('div') }
+    }))
+  })
+}
 
 function requireDescriptor(
   registry: RendererWorkspacePreviewRegistry,
@@ -71,9 +82,9 @@ describe('WorkspacePreviewPanelShell', () => {
       path: 'structures/protein.pdb',
       workspaceRoot: '/workspace/lab',
       selection: {
-        kind: 'molecular' as const,
-        chains: ['A'],
-        ligands: ['ATP']
+        kind: 'domain' as const,
+        selectionType: workspacePreviewExtensionIdSchema.parse('fixture.preview.selection'),
+        data: { selectedIds: ['item-1', 'item-2'] }
       }
     }
 
@@ -82,7 +93,7 @@ describe('WorkspacePreviewPanelShell', () => {
       workspaceRoot: '/workspace/lab',
       selection: target.selection
     })
-    expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('"kind":"molecular"')
+    expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('"kind":"domain"')
   })
 
   it('preserves a document anchor and integrity expectation in the host open input', () => {
@@ -105,19 +116,21 @@ describe('WorkspacePreviewPanelShell', () => {
     expect(workspacePreviewPanelTargetKey(target, '/fallback')).toContain('expectedDigest')
   })
 
-  it('renders deferred state through shared chrome before the legacy body opens', () => {
+  it('renders unsupported state through shared chrome before the body opens', () => {
+    const registry = createRendererWorkspacePreviewRegistry()
     const html = renderToStaticMarkup(createElement(
       WorkspacePreviewPanelShell,
       {
         target: { path: 'mesh.vtk', workspaceRoot: '/workspace/lab' },
-        workspaceRoot: '/workspace/lab'
+        workspaceRoot: '/workspace/lab',
+        registry
       },
       createElement('div', { 'data-legacy-preview-body': 'true' }, 'Legacy body')
     ))
 
     expect(html).toContain('data-workspace-preview-chrome')
     expect(html).toContain('data-status="error"')
-    expect(html).toContain('Preview deferred')
+    expect(html).toContain('Unsupported preview')
     expect(html).toContain('data-legacy-preview-body="true"')
   })
 
@@ -156,6 +169,7 @@ describe('WorkspacePreviewPanelShell', () => {
       {
         target: { path: 'data/samples.csv', workspaceRoot: '/workspace/lab' },
         workspaceRoot: '/workspace/lab',
+        registry,
         initialState: state,
         children: ({ assetStatus }: WorkspacePreviewPanelShellContext) =>
           createElement('div', { 'data-shell-status': assetStatus }, 'Preview body')

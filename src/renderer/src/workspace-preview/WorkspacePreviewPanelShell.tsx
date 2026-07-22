@@ -22,6 +22,9 @@ import {
 } from './WorkspacePreviewChrome'
 import { runWorkspacePreviewToolbarAction } from './action-runner'
 import type { WorkspacePreviewToolbarAction } from './chrome-model'
+import {
+  type RendererWorkspacePreviewRegistry
+} from './registry'
 
 export const WORKSPACE_PREVIEW_SESSION_RELEASE_GRACE_MS = 10_000
 
@@ -33,6 +36,7 @@ export type WorkspacePreviewPanelShellContext = {
   transport: WorkspacePreviewAssetTransportClient
   host: WorkspacePreviewHost
   refresh: () => void
+  toggleInspector?: () => void
   refreshing: boolean
 }
 
@@ -40,6 +44,7 @@ export type WorkspacePreviewPanelShellProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
   host?: WorkspacePreviewHost
+  registry: RendererWorkspacePreviewRegistry
   initialState?: WorkspacePreviewHostState
   className?: string
   children?: ReactNode | ((context: WorkspacePreviewPanelShellContext) => ReactNode)
@@ -82,12 +87,14 @@ export function WorkspacePreviewPanelShell({
   target,
   workspaceRoot,
   host: providedHost,
+  registry: providedRegistry,
   initialState,
   className,
   children,
   onAction
 }: WorkspacePreviewPanelShellProps): ReactElement {
-  const [host] = useState(() => providedHost ?? createWorkspacePreviewHost())
+  const [registry] = useState(() => providedRegistry)
+  const [host] = useState(() => providedHost ?? createWorkspacePreviewHost({ registry }))
   const [state, setState] = useState<WorkspacePreviewHostState>(
     () => initialState ?? createWorkspacePreviewHostState()
   )
@@ -247,6 +254,9 @@ export function WorkspacePreviewPanelShell({
     if (!openInput) return
     setRefreshRevision((revision) => revision + 1)
   }, [openInput])
+  const toggleInspector = useCallback((): void => {
+    setShowInspector((current) => !current)
+  }, [])
 
   const context = useMemo<WorkspacePreviewPanelShellContext>(() => ({
     state,
@@ -262,22 +272,20 @@ export function WorkspacePreviewPanelShell({
     }),
     host,
     refresh,
+    toggleInspector,
     refreshing: assetStatus === 'loading'
-  }), [assetError, assetStatus, host, refresh, state])
+  }), [assetError, assetStatus, host, refresh, state, toggleInspector])
 
   return (
     <WorkspacePreviewChrome
       input={{
         state,
-        requestedPath: target?.path
+        requestedPath: target?.path,
+        registry
       }}
       className={className}
       showInspector={showInspector}
       onAction={(action) => {
-        if (action.id === 'workspace.inspect') {
-          setShowInspector((current) => !current)
-          return
-        }
         if (onAction) {
           onAction(action, context)
           return

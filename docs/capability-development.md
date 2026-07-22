@@ -13,7 +13,8 @@ system 只是不同 audience，不得各自实现业务入口。
 1. `defineCapability` 和 `CapabilityRegistry` 在应用启动及测试构造时拒绝缺字段、重复
    action ID、缺 handler、无效 schema，以及不安全的 audience/effect/approval 组合。
 2. `npm run capability:check` 从唯一 composition root
-   `src/main/capabilities/app-registry.ts` 实例化 registry，并校验生成文档和架构边界。
+   `src/main/modules/application-composition.ts` 构造 domain catalog，再从 catalog 组合
+   capability registry，并校验生成文档和架构边界。
 3. 根项目的 `pretest` 与 `prebuild` 自动运行 `capability:check`。未注册、文档漂移或存在
    旁路时，测试和发布构建均不能继续。
 4. 每个 provider 必须运行公共 provider contract suite；领域测试只补充领域语义，不得
@@ -60,11 +61,11 @@ Registry 构造必须是纯操作。handler 可以闭包引用注入依赖，但
 
 ### 3. 注册到唯一 composition root
 
-把 provider 加入 `createAppCapabilityRegistry(deps)`，并在
-`MIGRATED_CAPABILITY_DOMAINS` 中登记 action ID 的首段 domain 及所有已删除的旧 transport
-prefix。治理检查要求每个已注册 domain 都有且只有一项原子迁移政策；只注册 action 而不
-声明边界也会失败。禁止创建 renderer registry、agent registry、文档 registry 或兼容
-alias。注册失败必须阻止功能暴露，不能降级成截图、shell 或文件直写旁路。
+领域能力放入 `packages/domains/<domain>` 的 main process entry，由包导出 capability
+factory 和对应治理 policy；包定义加入唯一的 `installedDomainPackages` 集合，main binding
+只负责注入宿主依赖。宿主核心能力也必须以显式 catalog entry 注册。应用 registry 和治理
+文档都从同一个 catalog 读取这些 factory，不允许维护第二份 provider、policy 或 action
+清单。注册失败必须阻止功能暴露，不能降级成截图、shell 或文件直写旁路。
 
 只有不能表达为业务能力的纯 UI transport（例如原生文件选择器）可以通过
 `allowedDirectTransports` 按完整 channel 名逐项放行。禁止 wildcard、prefix 级豁免或把
@@ -126,7 +127,8 @@ npm test
 
 一个领域的 UI 与 agent 切换到 broker 后，必须在同一个变更中：
 
-1. 在 app registry 的 `MIGRATED_CAPABILITY_DOMAINS` 中声明领域及旧 transport prefix；
+1. 把领域 definition、process entry、capability factory 和 transport policy 放入同一个
+   domain package，并通过 installed package set 激活；
 2. 删除旧业务 IPC、prompt hint、agent access 布尔开关和手动刷新链；
 3. 删除兼容 alias 和第二 provider；
 4. 让 renderer 订阅通用 resource change event 后重新 observe；

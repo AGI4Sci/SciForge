@@ -21,7 +21,6 @@ import {
   MessageCircleMore,
   Network,
   Palette,
-  Newspaper,
   RefreshCw,
   RotateCcw,
   Terminal,
@@ -32,6 +31,9 @@ import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { AnchoredCommentsTopBarActions } from '../anchored-comments'
+import type {
+  RegisteredWorkbenchRightPanelContribution
+} from '../../domain-modules/workbench-right-panel-slot'
 
 export const RIGHT_PANEL_MODES = [
   'todo',
@@ -44,19 +46,22 @@ export const RIGHT_PANEL_MODES = [
   'plan',
   'sdd-ai',
   'checkpoints',
-  'paper',
   'visual-review',
   'child-agents'
 ] as const
 
-export type RightPanelMode = (typeof RIGHT_PANEL_MODES)[number] | null
+export type CoreRightPanelMode = (typeof RIGHT_PANEL_MODES)[number]
+export type ContributedRightPanelMode = string & {
+  readonly __contributedRightPanelMode?: never
+}
+export type RightPanelMode = CoreRightPanelMode | ContributedRightPanelMode | null
 
 type Props = {
   rightPanelMode: RightPanelMode
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   workspaceRoot?: string
   planPanelEnabled?: boolean
-  paperRadarEnabled?: boolean
+  rightPanelContributions?: readonly RegisteredWorkbenchRightPanelContribution[]
   sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
@@ -76,7 +81,7 @@ export function WorkbenchTopBar({
   onToggleRightPanelMode,
   workspaceRoot = '',
   planPanelEnabled = false,
-  paperRadarEnabled = false,
+  rightPanelContributions = [],
   sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
@@ -103,7 +108,13 @@ export function WorkbenchTopBar({
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
   const items = [
-    ...(paperRadarEnabled ? [{ mode: 'paper' as const, label: t('rightPanelPaperRadar'), icon: Newspaper }] : []),
+    ...rightPanelContributions
+      .filter(({ contribution }) => contribution.isAvailable())
+      .map(({ contribution }) => ({
+        mode: contribution.mode,
+        label: t(contribution.label),
+        icon: contribution.icon
+      })),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
     { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },

@@ -30,6 +30,23 @@ describe('Workbench right-panel visible context', () => {
     }
   })
 
+  it('derives contributed panel context metadata from the registry', () => {
+    const component = buildRightPanelVisibleContextComponent({
+      mode: 'paper',
+      sessionId: 'session-a',
+      width: 420,
+      workspaceRoot: '/workspace/a',
+      updatedAt: UPDATED_AT
+    })
+
+    expect(component.title).toBe('Paper radar')
+    expect(component.state?.currentResource).toMatchObject({
+      kind: 'paper-radar',
+      title: 'Paper radar',
+      sessionId: 'session-a'
+    })
+  })
+
   it('switches modes without retaining resource state from the previous panel', () => {
     const evidence = buildRightPanelVisibleContextComponent({
       mode: 'evidence',

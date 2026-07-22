@@ -1,105 +1,31 @@
-import {
-  useCallback,
-  type ReactElement
-} from 'react'
-import { useTranslation } from 'react-i18next'
+import type { ReactElement } from 'react'
 import type {
   WorkspaceObservation,
-  WorkspacePreviewEditOperation,
-  WorkspacePreviewModality
+  WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
-import { openSafeExternalUrl } from '../lib/open-external'
-import {
-  BioimagingWorkspaceViewer
-} from './BioimagingWorkspaceViewer'
-import {
-  DeckWorkspaceViewer
-} from './DeckWorkspaceViewer'
-import {
-  DocumentAnnotationPanelController
-} from './DocumentAnnotationPanelController'
 import type {
   DocumentAnnotationQuestionBridge
 } from './DocumentAnnotationPanelController'
-import {
-  DocxWorkspaceViewer
-} from './DocxWorkspaceViewer'
-import {
-  HtmlWorkspaceViewer,
-  htmlPreviewUrlStateFromActionResult
-} from './HtmlWorkspaceViewer'
-import {
-  ImageWorkspaceViewer
-} from './ImageWorkspaceViewer'
-import {
-  MarkdownWorkspaceViewer,
-  type MarkdownWorkspaceViewerApplyEditHandler,
-  type MarkdownWorkspaceViewerProps
-} from './MarkdownWorkspaceViewer'
-import {
-  PdfWorkspaceViewer
-} from './PdfWorkspaceViewer'
-import {
-  MolecularWorkspaceViewer
-} from './MolecularWorkspaceViewer'
-import {
-  OmicsWorkspaceViewer
-} from './OmicsWorkspaceViewer'
-import {
-  SequenceWorkspaceViewer
-} from './SequenceWorkspaceViewer'
-import {
-  SpectraWorkspaceViewer
-} from './SpectraWorkspaceViewer'
-import {
-  TabularWorkspaceViewer
-} from './TabularWorkspaceViewer'
-import {
-  TextWorkspaceViewer
-} from './TextWorkspaceViewer'
+import type {
+  WorkspacePreviewPluginOutletRouteReason,
+  WorkspacePreviewPluginRendererInput,
+  RendererWorkspacePreviewRegistry
+} from './registry'
 import type {
   WorkspacePreviewPanelShellContext
 } from './WorkspacePreviewPanelShell'
 import type {
   WorkspacePreviewPresentationStateChangeHandler
 } from './presentation-state'
-import { createDocumentWorkspacePreviewAnnotationOperation } from './document-annotation-operations'
-
-export type WorkspacePreviewPluginOutletRouteReason =
-  | 'deferred-non-life-science'
-  | 'empty'
-  | 'registered-plugin'
-  | 'unregistered-format'
 
 export type WorkspacePreviewPluginOutletProps = {
   context: WorkspacePreviewPanelShellContext
   routeReason: WorkspacePreviewPluginOutletRouteReason
   routePluginId?: string
-  routeModality?: WorkspacePreviewModality
-  renderers?: readonly WorkspacePreviewPluginRendererContribution[]
+  rendererRegistry: RendererWorkspacePreviewRegistry
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   visualContextComponentId?: string
   onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
-}
-
-export type WorkspacePreviewPluginRendererInput = {
-  context: WorkspacePreviewPanelShellContext
-  routeReason: WorkspacePreviewPluginOutletRouteReason
-  observation: WorkspaceObservation | null
-  asset: WorkspacePreviewPanelShellContext['asset']
-  transport: WorkspacePreviewPanelShellContext['transport']
-  pluginId?: string
-  modality?: WorkspacePreviewModality
-  applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
-  annotationQuestionBridge?: DocumentAnnotationQuestionBridge
-  visualContextComponentId?: string
-  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
-}
-
-export type WorkspacePreviewPluginRendererContribution = {
-  id: string
-  matches: (input: Omit<WorkspacePreviewPluginRendererInput, 'applyEdit'>) => boolean
-  render: (input: WorkspacePreviewPluginRendererInput) => ReactElement
 }
 
 export async function applyWorkspacePreviewOutletEdit(
@@ -114,373 +40,11 @@ export async function applyWorkspacePreviewOutletEdit(
   throw new Error(result.message)
 }
 
-export const DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS: readonly WorkspacePreviewPluginRendererContribution[] = [
-  {
-    id: 'tabular',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'tabular' ||
-      modality === 'tabular' ||
-      Boolean(observation?.tables?.length),
-    render: ({ observation, applyEdit }) => (
-      <TabularWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0 pr-20"
-        onApplyEdit={applyEdit}
-      />
-    )
-  },
-  {
-    id: 'text',
-    matches: ({ pluginId, modality }) =>
-      pluginId === 'text' ||
-      modality === 'text',
-    render: ({ observation, applyEdit }) => (
-      <TextWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0"
-        onApplyEdit={applyEdit}
-      />
-    )
-  },
-  {
-    id: 'markdown',
-    matches: ({ pluginId, observation }) =>
-      pluginId === 'markdown' ||
-      Boolean(observation && (
-        observation.view.pluginId === 'markdown' ||
-        /\.(?:md|mdx|markdown)$/i.test(observation.file.path) ||
-        observation.file.mimeType === 'text/markdown' ||
-        observation.file.mimeType === 'text/x-markdown'
-      )),
-    render: ({ context, observation, annotationQuestionBridge }) => (
-      <DocumentAnnotationPanelController
-        context={context}
-        observation={observation}
-        documentKind="markdown"
-        questionBridge={annotationQuestionBridge}
-        className="h-full min-h-0"
-        renderDocument={({ text }) => (
-          <MarkdownWorkspaceViewerHost
-            context={context}
-            observation={observation}
-            applyEdit={text.onApplyEdit}
-            annotationOverlays={text.annotationOverlays}
-            activeAnnotationId={text.activeAnnotationId}
-            navigationRequest={text.navigationRequest}
-            onAnnotationSelect={text.onAnnotationSelect}
-            onOpenAnnotations={text.onOpenAnnotations}
-          />
-        )}
-      />
-    )
-  },
-  {
-    id: 'html',
-    matches: ({ pluginId, observation }) =>
-      pluginId === 'html' ||
-      Boolean(observation && (
-        observation.view.pluginId === 'html' ||
-        /\.(?:html|htm)$/i.test(observation.file.path) ||
-        observation.file.mimeType === 'text/html'
-      )),
-    render: ({ context, observation, applyEdit }) => (
-      <HtmlWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0"
-        onApplyEdit={applyEdit}
-        loadPreviewUrl={async () => {
-          const sessionId = context.state.session?.id
-          if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
-          return htmlPreviewUrlStateFromActionResult(await context.host.invokeAction(sessionId, {
-            actionId: 'html.previewUrl',
-            input: {}
-          }))
-        }}
-        onOpenPreviewExternal={async (url) => {
-          await openSafeExternalUrl(url)
-        }}
-      />
-    )
-  },
-  {
-    id: 'image',
-    matches: ({ pluginId, modality, observation }) =>
-      pluginId === 'image' ||
-      modality === 'image' ||
-      Boolean(observation?.file.mimeType?.startsWith('image/')),
-    render: ({ observation, asset, transport }) => (
-      <ImageWorkspaceViewer
-        observation={observation}
-        asset={asset}
-        transport={transport}
-        className="h-full min-h-0"
-      />
-    )
-  },
-  {
-    id: 'pdf',
-    matches: ({ pluginId, observation }) =>
-      pluginId === 'pdf' ||
-      Boolean(observation && (
-        observation.view.pluginId === 'pdf' ||
-        /\.pdf$/i.test(observation.file.path) ||
-        observation.file.mimeType === 'application/pdf' ||
-        observation.file.mimeType === 'application/x-pdf'
-      )),
-    render: ({ context, observation, asset, transport, annotationQuestionBridge, visualContextComponentId, onPresentationStateChange }) => (
-      <DocumentAnnotationPanelController
-        context={context}
-        observation={observation}
-        documentKind="pdf"
-        questionBridge={annotationQuestionBridge}
-        className="h-full min-h-0"
-        renderDocument={({ pdf }) => (
-          <PdfWorkspaceViewer
-            observation={observation}
-            asset={asset}
-            transport={transport}
-            className="h-full min-h-0"
-            onApplyEdit={pdf.onApplyEdit}
-            annotationOverlays={pdf.annotationOverlays}
-            activeAnnotationId={pdf.activeAnnotationId}
-            annotationsOpen={pdf.annotationsOpen}
-            jumpToRect={pdf.jumpToRect}
-            onSelectionChange={pdf.onSelectionChange}
-            onAnnotationSelect={pdf.onAnnotationSelect}
-            onOpenAnnotations={pdf.onOpenAnnotations}
-            onToggleAnnotations={pdf.onToggleAnnotations}
-            visualContextComponentId={visualContextComponentId}
-            onPresentationStateChange={onPresentationStateChange}
-          />
-        )}
-      />
-    )
-  },
-  {
-    id: 'docx',
-    matches: ({ pluginId, observation }) =>
-      pluginId === 'docx' ||
-      Boolean(observation && (
-        observation.view.pluginId === 'docx' ||
-        /\.docx$/i.test(observation.file.path) ||
-        observation.file.mimeType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
-      )),
-    render: ({ context, observation, annotationQuestionBridge }) => (
-      <DocumentAnnotationPanelController
-        context={context}
-        observation={observation}
-        documentKind="docx"
-        questionBridge={annotationQuestionBridge}
-        className="h-full min-h-0"
-        renderDocument={({ text }) => (
-          <DocxWorkspaceViewer
-            observation={observation}
-            className="h-full min-h-0"
-            onApplyEdit={text.onApplyEdit}
-            annotationOverlays={text.annotationOverlays}
-            activeAnnotationId={text.activeAnnotationId}
-            navigationRequest={text.navigationRequest}
-            onAnnotationSelect={text.onAnnotationSelect}
-            onOpenAnnotations={text.onOpenAnnotations}
-          />
-        )}
-      />
-    )
-  },
-  {
-    id: 'deck',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'deck' ||
-      modality === 'deck' ||
-      Boolean(observation?.slides?.length),
-    render: ({ observation, applyEdit }) => (
-      <DeckWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0 pr-20"
-        onApplyEdit={applyEdit}
-      />
-    )
-  },
-  {
-    id: 'molecular',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'molecular' ||
-      modality === 'molecular' ||
-      Boolean(observation?.molecular),
-    render: ({ context, observation, asset, transport, applyEdit }) => (
-      <MolecularWorkspaceViewer
-        observation={observation}
-        asset={asset}
-        assetStatus={context.assetStatus}
-        assetError={context.assetError}
-        sourceUrl={transport.sourceUrl}
-        readRange={(range) => transport.readRange(range)}
-        onApplyEdit={applyEdit}
-        className="h-full min-h-0 pr-20"
-      />
-    )
-  },
-  {
-    id: 'sequence',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'sequence-genomics' ||
-      modality === 'sequence' ||
-      Boolean(observation?.sequence),
-    render: ({ observation, applyEdit }) => (
-      <SequenceWorkspaceViewer
-        observation={observation}
-        onSetSelection={applyEdit}
-        className="h-full min-h-0 pr-20"
-      />
-    )
-  },
-  {
-    id: 'omics',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'omics-matrix' ||
-      modality === 'omics' ||
-      Boolean(observation?.omics),
-    render: ({ observation }) => (
-      <OmicsWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0 pr-20"
-      />
-    )
-  },
-  {
-    id: 'bioimaging',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'bioimaging' ||
-      modality === 'bioimaging' ||
-      Boolean(observation?.bioimaging),
-    render: ({ observation, transport }) => (
-      <BioimagingWorkspaceViewer
-        observation={observation}
-        transport={transport}
-        className="h-full min-h-0 pr-20"
-      />
-    )
-  },
-  {
-    id: 'spectra',
-    matches: ({ observation, pluginId, modality }) =>
-      pluginId === 'proteomics-spectra' ||
-      modality === 'spectra' ||
-      Boolean(observation?.spectra),
-    render: ({ observation }) => (
-      <SpectraWorkspaceViewer
-        observation={observation}
-        className="h-full min-h-0 pr-20"
-      />
-    )
-  }
-]
-
-function MarkdownWorkspaceViewerHost({
-  context,
-  observation,
-  applyEdit,
-  annotationOverlays,
-  activeAnnotationId,
-  navigationRequest,
-  onAnnotationSelect,
-  onOpenAnnotations
-}: {
-  context: WorkspacePreviewPanelShellContext
-  observation: WorkspaceObservation | null
-  applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
-  annotationOverlays: NonNullable<MarkdownWorkspaceViewerProps['annotationOverlays']>
-  activeAnnotationId: string | null
-  navigationRequest: MarkdownWorkspaceViewerProps['navigationRequest']
-  onAnnotationSelect: NonNullable<MarkdownWorkspaceViewerProps['onAnnotationSelect']>
-  onOpenAnnotations: NonNullable<MarkdownWorkspaceViewerProps['onOpenAnnotations']>
-}): ReactElement {
-  const { t } = useTranslation('common')
-  const host = context.host
-  const sessionId = context.state.session?.id
-  const loadWorkspaceImage = useCallback<NonNullable<MarkdownWorkspaceViewerProps['loadWorkspaceImage']>>(async ({ path }) => {
-    if (!sessionId) return { ok: false, message: 'No workspace preview session is active.' }
-    const result = await host.invokeAction(sessionId, {
-      actionId: 'markdown.readImage',
-      input: { path }
-    })
-    if (!result.ok) return result
-    const payload = result.result
-    if (!isRecord(payload) || typeof payload.dataUrl !== 'string') {
-      return { ok: false, message: 'Markdown image action did not return a data URL.' }
-    }
-    return {
-      ok: true,
-      dataUrl: payload.dataUrl
-    }
-  }, [host, sessionId])
-  const applyMarkdownEdit = useCallback<MarkdownWorkspaceViewerApplyEditHandler>(async (operation) => {
-    await applyEdit(operation)
-  }, [applyEdit])
-  const applyAnnotation = useCallback<NonNullable<MarkdownWorkspaceViewerProps['onAnnotationAction']>>((action, selection) => {
-    const path = observation?.file.path
-    if (!path) return
-    const operation = createDocumentWorkspacePreviewAnnotationOperation({
-      documentKind: 'markdown',
-      path,
-      action,
-      selection,
-      translationBody: t('writeDocxAnnotationTranslatePrompt')
-    })
-    if (operation) void applyEdit(operation)
-  }, [applyEdit, observation?.file.path, t])
-
-  return (
-    <MarkdownWorkspaceViewer
-      observation={observation}
-      className="h-full min-h-0"
-      onApplyEdit={applyMarkdownEdit}
-      loadWorkspaceImage={loadWorkspaceImage}
-      annotationOverlays={annotationOverlays}
-      activeAnnotationId={activeAnnotationId}
-      navigationRequest={navigationRequest}
-      onAnnotationAction={applyAnnotation}
-      onAnnotationSelect={onAnnotationSelect}
-      onOpenAnnotations={onOpenAnnotations}
-    />
-  )
-}
-
-export function resolveWorkspacePreviewPluginRendererContribution(
-  context: WorkspacePreviewPanelShellContext,
-  routeReason: WorkspacePreviewPluginOutletRouteReason,
-  renderers: readonly WorkspacePreviewPluginRendererContribution[] = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
-  routePluginId?: string,
-  routeModality?: WorkspacePreviewModality
-): WorkspacePreviewPluginRendererContribution | null {
-  const observation = context.state.observation
-  const pluginId = observation?.view.pluginId ??
-    context.state.descriptor?.manifest.id ??
-    context.state.session?.pluginId ??
-    routePluginId
-  const modality = observation?.view.modality ??
-    context.state.descriptor?.manifest.modality ??
-    context.state.session?.modality ??
-    routeModality
-  const input = {
-    context,
-    routeReason,
-    observation,
-    asset: context.asset,
-    transport: context.transport,
-    pluginId,
-    modality
-  }
-
-  return renderers.find((renderer) => renderer.matches(input)) ?? null
-}
-
 export function WorkspacePreviewPluginOutlet({
   context,
   routeReason,
   routePluginId,
-  routeModality,
-  renderers = DEFAULT_WORKSPACE_PREVIEW_PLUGIN_RENDERERS,
+  rendererRegistry,
   annotationQuestionBridge,
   visualContextComponentId,
   onPresentationStateChange
@@ -490,34 +54,22 @@ export function WorkspacePreviewPluginOutlet({
     context.state.descriptor?.manifest.id ??
     context.state.session?.pluginId ??
     routePluginId
-  const modality = observation?.view.modality ??
-    context.state.descriptor?.manifest.modality ??
-    context.state.session?.modality ??
-    routeModality
-  const applyEdit = (operation: WorkspacePreviewEditOperation): Promise<void> =>
-    applyWorkspacePreviewOutletEdit(context, operation)
-  const renderer = resolveWorkspacePreviewPluginRendererContribution(
+  const rendererInput: WorkspacePreviewPluginRendererInput = {
     context,
     routeReason,
-    renderers,
-    routePluginId,
-    routeModality
-  )
+    observation,
+    asset: context.asset,
+    transport: context.transport,
+    applyEdit: (operation: WorkspacePreviewEditOperation) =>
+      applyWorkspacePreviewOutletEdit(context, operation),
+    annotationQuestionBridge,
+    visualContextComponentId,
+    onPresentationStateChange
+  }
+  const renderer = pluginId ? rendererRegistry.get(pluginId)?.contribution : undefined
 
   if (renderer) {
-    return renderer.render({
-      context,
-      routeReason,
-      observation,
-      asset: context.asset,
-      transport: context.transport,
-      pluginId,
-      modality,
-      applyEdit,
-      annotationQuestionBridge,
-      visualContextComponentId,
-      onPresentationStateChange
-    })
+    return renderer.render(rendererInput)
   }
 
   return (
@@ -529,7 +81,7 @@ export function WorkspacePreviewPluginOutlet({
   )
 }
 
-function WorkspacePreviewPluginSummaryBody({
+export function WorkspacePreviewPluginSummaryBody({
   context,
   observation,
   routeReason
@@ -566,9 +118,6 @@ function fallbackMessageForRoute(
   assetError: string | null
 ): string {
   if (assetError) return assetError
-  if (routeReason === 'deferred-non-life-science') {
-    return 'This scientific format is recognized, but an inline viewer has not been enabled for this workspace yet.'
-  }
   if (routeReason === 'unregistered-format') {
     return 'No inline workspace preview plugin is registered for this file type.'
   }
@@ -581,8 +130,4 @@ function formatLabel(value: string): string {
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/\b\w/g, (letter) => letter.toUpperCase())
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

@@ -6,9 +6,10 @@ import {
   AnchoredCommentsTopBarActionsView,
   useAnchoredCommentStore
 } from '../anchored-comments'
+import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 import { WorkbenchTopBar } from './WorkbenchTopBar'
 
-describe('WorkbenchTopBar Paper Radar entry', () => {
+describe('WorkbenchTopBar right-panel contributions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
     useAnchoredCommentStore.setState({
@@ -18,25 +19,41 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
     })
   })
 
-  it('hides Paper Radar when the extension is not enabled', () => {
+  it('does not invent a Paper Radar entry without a registered contribution', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
-      paperRadarEnabled: false
+      onToggleRightPanelMode: vi.fn()
     }))
 
     expect(html).not.toContain('Paper Radar')
   })
 
-  it('shows and marks Paper Radar when the extension is enabled', () => {
+  it('renders and marks a registered right-panel contribution from its metadata', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'paper',
       onToggleRightPanelMode: vi.fn(),
-      paperRadarEnabled: true
+      rightPanelContributions: installedRendererContributions.rightPanels.list()
     }))
 
     expect(html).toContain('Paper Radar')
     expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('omits a registered contribution when its generic availability predicate fails', () => {
+    const registered = installedRendererContributions.rightPanels.list()[0]!
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [{
+        ...registered,
+        contribution: {
+          ...registered.contribution,
+          isAvailable: () => false
+        }
+      }]
+    }))
+
+    expect(html).not.toContain('Paper Radar')
   })
 
   it('shows Evidence DAG as a right panel item', () => {

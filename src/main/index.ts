@@ -63,10 +63,6 @@ import {
   ensureProjectDagSidecar,
   stopProjectDagSidecar
 } from '../../packages/workers/project-dag/desktop/sidecar'
-import {
-  paperRadarDbPath,
-  paperRadarProfilesPath
-} from './paper-radar-paths'
 import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   createRuntimeMcpToolGateway,
@@ -117,10 +113,6 @@ import {
   configuredFeedbackGatewayUrl
 } from './services/feedback-gateway-client'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
-import {
-  createPaperRadarWorkerService,
-  type PaperRadarWorkerService
-} from './services/paper-radar-worker-service'
 import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
@@ -134,7 +126,6 @@ import {
 import type { ResearchSearchMcpLaunchConfig } from './research-search-mcp-config'
 import type { WorkflowMcpLaunchConfig } from './workflow-mcp-config'
 import type { WorkspaceIntelMcpLaunchConfig } from './workspace-intel-mcp-config'
-import type { PaperRadarMcpLaunchConfig } from './paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
@@ -156,10 +147,15 @@ import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import { WorkspacePreviewHost } from './services/workspace-preview'
-import { BiologyRoomService } from './services/biology-room-service'
 import { CapabilityBroker } from './capabilities/broker'
-import { createAppCapabilityRegistry } from './capabilities/app-registry'
+import type { AppCapabilityDependencies } from './capabilities/app-registry'
 import { registerCapabilityIpc } from './capabilities/ipc'
+import {
+  DomainModuleCatalog,
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog,
+  listMainWorkspacePreviewPluginContributions
+} from './modules'
 import {
   createCapabilityAgentToolSurface,
   capabilityAgentCallerId,
@@ -290,17 +286,6 @@ function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
   }
 }
 
-function getPaperRadarMcpLaunchConfig(): PaperRadarMcpLaunchConfig {
-  const userDataDir = app.getPath('userData')
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged,
-    dbPath: paperRadarDbPath(userDataDir),
-    profilesPath: paperRadarProfilesPath(userDataDir)
-  }
-}
-
 function getWriteAssistMcpLaunchConfig(): WriteAssistMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
@@ -382,7 +367,6 @@ function managedGuiMcpServers(settings: AppSettingsV1) {
     researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
     workflowMcp: { settings, launch: getWorkflowMcpLaunchConfig() },
     workspaceIntelMcp: { settings, launch: getWorkspaceIntelMcpLaunchConfig() },
-    paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
     writeAssistMcp: { settings, launch: getWriteAssistMcpLaunchConfig() },
     runtimeInspectorMcp: { settings, launch: getRuntimeInspectorMcpLaunchConfig() },
     scientificSkillsMcp: { settings, launch: getScientificSkillsMcpLaunchConfig() },
@@ -432,7 +416,7 @@ let capabilityAgentTools: CapabilityAgentToolSurface | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
-let paperRadarWorkerService: PaperRadarWorkerService | null = null
+let domainModuleCatalog: DomainModuleCatalog | null = null
 let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
@@ -668,15 +652,6 @@ function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
   return claudeCodeRuntime
 }
 
-function getPaperRadarWorkerService(): PaperRadarWorkerService {
-  if (!paperRadarWorkerService) {
-    paperRadarWorkerService = createPaperRadarWorkerService({
-      userDataDir: app.getPath('userData')
-    })
-  }
-  return paperRadarWorkerService
-}
-
 function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' | 'settings-switch'): void {
   if (!resolveModelAccessRuntimePolicy(settings).codex) return
   if (codexRuntimePrewarmTimer) {
@@ -750,8 +725,9 @@ async function stopManagedRuntimes(): Promise<void> {
       codeNavigationService?.shutdown()
       evidenceArtifactLifecycle?.stop()
       evidenceArtifactLifecycle = null
-      paperRadarWorkerService?.close()
-      paperRadarWorkerService = null
+      const catalog = domainModuleCatalog
+      domainModuleCatalog = null
+      catalog?.dispose()
       await stopEvidenceDagSidecar()
       await stopProjectDagSidecar()
       stopWeixinBridgeRuntime()
@@ -1141,10 +1117,13 @@ app.whenReady().then(async () => {
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
   const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
+  const catalog = createApplicationDomainCatalog({
+    getUserDataDir: () => app.getPath('userData')
+  })
   const workspacePreviewHost = new WorkspacePreviewHost({
+    domainPlugins: listMainWorkspacePreviewPluginContributions(catalog),
     loadSettings: () => store.load()
   })
-  const biologyRoomService = new BiologyRoomService()
   const resolveVisualInspector = async () => {
     const router = resolveRuntimeModelRouterSettings(await store.load())
     if (!router.baseUrl || !router.apiKey || !router.model) return undefined
@@ -1164,9 +1143,8 @@ app.whenReady().then(async () => {
       emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
     }
   })
-  const capabilityBroker = new CapabilityBroker(createAppCapabilityRegistry({
+  const appCapabilityDependencies: AppCapabilityDependencies = {
     workspacePreviewHost,
-    biologyRoomService,
     visibleContextService,
     inspectArtifacts: async (workspaceRoot, input) => {
       if (!workspaceRoot.trim()) throw new Error('Artifact inspection requires a workspace.')
@@ -1187,7 +1165,11 @@ app.whenReady().then(async () => {
         evidence: result.evidence
       })
     }
-  }))
+  }
+  const capabilityBroker = new CapabilityBroker(
+    createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
+  )
+  domainModuleCatalog = catalog
   runtimeMcpToolGateway = createRuntimeMcpToolGateway({
     servers: managedGuiMcpServers(initial)
   })
@@ -1605,7 +1587,6 @@ app.whenReady().then(async () => {
     pollFeishuInstall,
     startWeixinInstallQrcode,
     pollWeixinInstall,
-    getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
     showTurnCompleteNotification,
     getAppVersion: () => app.getVersion(),

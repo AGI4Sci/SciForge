@@ -5,7 +5,7 @@ import type {
   WorkspacePdfRenameSuggestionPayload,
   WorkspacePdfRenameSuggestionResult
 } from '../../shared/workspace-file'
-import { resolveTargetPathWithinWorkspace } from './workspace-paths'
+import { resolveTargetPathWithinWorkspace } from '@sciforge/domain-sdk/node/workspace-paths'
 
 const MAX_PDF_RENAME_BYTES = 64 * 1024 * 1024
 const MAX_PDF_TITLE_LENGTH = 180

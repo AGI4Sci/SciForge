@@ -1,0 +1,24 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-biology-room",
+  "module": {
+    "id": "sciforge.biology-room",
+    "displayName": "Biology Room",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 100
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        { "kind": "main.capability-factory", "id": "biology-room.capabilities" }
+      ]
+    }
+  ]
+}

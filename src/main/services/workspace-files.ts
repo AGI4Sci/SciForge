@@ -65,7 +65,7 @@ import {
   resolveWorkspaceDirectory,
   validateEntryName,
   writeSafeWorkspaceFile
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 const MAX_FILE_PREVIEW_BYTES = 1_500_000
 const MAX_IMAGE_PREVIEW_BYTES = 12 * 1024 * 1024

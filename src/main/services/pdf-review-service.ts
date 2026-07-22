@@ -30,7 +30,7 @@ import {
 import {
   canonicalPath,
   resolveOpenTargetPath
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 const REVIEW_AUTHOR_ID = 'sciforge-reviewer'
 const REVIEW_ID_PREFIX = 'sciforge-review'

@@ -1,10 +1,13 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+vi.mock('../workspace-preview/PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
 import type { ReactNode } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  workspacePreviewModalitySchema,
+  workspaceStructuredSelectionSchema,
   type WorkspaceObservation
 } from '@shared/workspace-preview'
 import {
@@ -69,7 +72,9 @@ const workspacePreviewMock = vi.hoisted(() => {
           : 'tabular.updateCell'
         const isDeckEdit = operationKind === 'deck.updateTextElement'
         const isTextEdit = operationKind === 'text.replaceRange'
-        const isMolecularEdit = operationKind === 'molecular.setSelection'
+        const isMolecularEdit = operationKind === 'domain.applyEdit' &&
+          typeof operation === 'object' && operation !== null && 'operationType' in operation &&
+          operation.operationType === 'sciforge.life-science-preview.molecular.set-selection'
         const isWorkspaceSelection = operationKind === 'workspace.setSelection'
         mock.lastEditSummary = editSummary
         return {
@@ -175,8 +180,17 @@ const workspacePreviewMock = vi.hoisted(() => {
 })
 
 vi.mock('../workspace-preview', async () => {
-  const registry = await vi.importActual<typeof import('../workspace-preview/registry')>('../workspace-preview/registry')
+  const registry = await vi.importActual<typeof import('../workspace-preview/registry')>(
+    '../workspace-preview/registry'
+  )
+  const shared = await vi.importActual<typeof import('@shared/workspace-preview')>('@shared/workspace-preview')
   const { createElement: h } = await vi.importActual<typeof import('react')>('react')
+  const rendererWorkspacePreviewRegistry = registry.createRendererWorkspacePreviewRegistry({
+    registrations: shared.DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => ({
+      ownerId: 'test',
+      contribution: { manifest, render: () => h('div') }
+    }))
+  })
   const contextForTarget = (target: WorkspaceFileTarget | null) => {
     const isText = Boolean(target?.path.match(/\.(?:txt|text|log)$/i))
     const isTabular = Boolean(target?.path.match(/\.(?:csv|tsv|jsonl|ndjson|xlsx)$/i))
@@ -215,7 +229,7 @@ vi.mock('../workspace-preview', async () => {
                 pluginId: 'molecular',
                 workspaceRoot: '/workspace/lab',
                 path: '/workspace/lab/protein.pdb',
-                modality: 'molecular' as const,
+                modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
                 mode: 'preview' as const,
                 openedAt: '2026-07-08T00:00:00.000Z',
                 updatedAt: '2026-07-08T00:00:00.000Z'
@@ -226,7 +240,7 @@ vi.mock('../workspace-preview', async () => {
                 pluginId: 'sequence-genomics',
                 workspaceRoot: '/workspace/lab',
                 path: '/workspace/lab/reads.fasta',
-                modality: 'sequence' as const,
+                modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.sequence'),
                 mode: 'preview' as const,
                 openedAt: '2026-07-08T00:00:00.000Z',
                 updatedAt: '2026-07-08T00:00:00.000Z'
@@ -323,14 +337,17 @@ vi.mock('../workspace-preview', async () => {
                 },
                 view: {
                   pluginId: 'molecular',
-                  modality: 'molecular' as const,
+                  modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
                   mode: 'preview' as const,
                   title: 'protein.pdb'
                 },
-                molecular: {
-                  modelCount: 1,
-                  chains: ['A']
-                },
+                pluginMetadata: [{
+                  source: 'plugin-metadata' as const,
+                  metadataKind: 'sciforge.life-science-preview.molecular.observation',
+                  metadataOnly: true as const,
+                  containsPixels: false as const,
+                  data: { wireVersion: 2, kind: 'molecular', observation: { modelCount: 1, chains: ['A'] } }
+                }],
                 actions: ['molecular.workbench']
               }
           : isSequence
@@ -344,22 +361,26 @@ vi.mock('../workspace-preview', async () => {
                 },
                 view: {
                   pluginId: 'sequence-genomics',
-                  modality: 'sequence' as const,
+                  modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.sequence'),
                   mode: 'preview' as const,
                   title: 'reads.fasta'
                 },
-                sequence: {
-                  sequenceCount: 1,
-                  totalLength: 8,
-                  alphabet: 'dna' as const,
-                  references: [{ id: 'read1', sequenceLength: 8 }],
-                  indexedRanges: [{ kind: 'sequence' as const, reference: 'read1', start: 0, end: 8, id: 'read1' }]
-                },
-                selection: {
-                  kind: 'sequence' as const,
-                  sequenceId: 'read1',
-                  ranges: [{ start: 0, end: 8 }]
-                },
+                selection: workspaceStructuredSelectionSchema.parse({
+                  kind: 'domain',
+                  selectionType: 'sciforge.life-science-preview.sequence.selection',
+                  data: { wireVersion: 2, selection: { kind: 'sequence', sequenceId: 'read1', ranges: [{ start: 0, end: 8 }] } }
+                }),
+                pluginMetadata: [{
+                  source: 'plugin-metadata' as const,
+                  metadataKind: 'sciforge.life-science-preview.sequence.observation',
+                  metadataOnly: true as const,
+                  containsPixels: false as const,
+                  data: {
+                    wireVersion: 2,
+                    kind: 'sequence',
+                    observation: { sequenceCount: 1, totalLength: 8, alphabet: 'dna' }
+                  }
+                }],
                 actions: ['sequence.selectRegion', 'workspace.setSelection']
               }
           : null,
@@ -380,7 +401,7 @@ vi.mock('../workspace-preview', async () => {
             schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
             sessionId: 'session-molecular',
             pluginId: 'molecular',
-            modality: 'molecular' as const,
+            modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
             file: {
               name: 'protein.pdb',
               relativePath: 'protein.pdb',
@@ -416,7 +437,7 @@ vi.mock('../workspace-preview', async () => {
   }
 
   return {
-    rendererWorkspacePreviewRegistry: registry.rendererWorkspacePreviewRegistry,
+    rendererWorkspacePreviewRegistry,
     WorkspacePreviewPanelShell: (props: {
       target: WorkspaceFileTarget | null
       className?: string
@@ -471,7 +492,7 @@ vi.mock('../workspace-preview', async () => {
           'data-has-apply-edit': 'true'
         })
       }
-      if (modality === 'molecular' || observation?.molecular) {
+      if (observation?.view.pluginId === 'molecular') {
         workspacePreviewMock.latestMolecularProps = {
           asset: props.context.asset,
           assetStatus: props.context.assetStatus,
@@ -485,16 +506,16 @@ vi.mock('../workspace-preview', async () => {
           'data-has-apply-edit': 'true'
         })
       }
-      if (modality === 'sequence' || observation?.sequence) {
+      if (observation?.view.pluginId === 'sequence-genomics') {
         workspacePreviewMock.latestSequenceProps = { onSetSelection: onApplyEdit }
         return h('div', {
           'data-mock-sequence-viewer': 'true',
           'data-has-set-selection': 'true'
         })
       }
-      if (modality === 'omics' || observation?.omics) return h('div', { 'data-mock-omics-viewer': 'true' })
-      if (modality === 'bioimaging' || observation?.bioimaging) return h('div', { 'data-mock-bioimaging-viewer': 'true' })
-      if (modality === 'spectra' || observation?.spectra) return h('div', { 'data-mock-spectra-viewer': 'true' })
+      if (observation?.view.pluginId === 'omics-matrix') return h('div', { 'data-mock-omics-viewer': 'true' })
+      if (observation?.view.pluginId === 'bioimaging') return h('div', { 'data-mock-bioimaging-viewer': 'true' })
+      if (observation?.view.pluginId === 'proteomics-spectra') return h('div', { 'data-mock-spectra-viewer': 'true' })
 
       return h('div', {
         'data-mock-plugin-summary': 'true',
@@ -506,11 +527,12 @@ vi.mock('../workspace-preview', async () => {
 
 describe('WorkspaceFilePreviewPanelBridge', () => {
   it('maps generic preview modalities onto visual content types', () => {
-    expect(workspacePreviewVisualContentType('deck')).toBe('slide')
-    expect(workspacePreviewVisualContentType('image')).toBe('image')
-    expect(workspacePreviewVisualContentType('bioimaging')).toBe('image')
-    expect(workspacePreviewVisualContentType('pdf')).toBe('pdf')
-    expect(workspacePreviewVisualContentType('canvas')).toBe('canvas')
+    expect(workspacePreviewVisualContentType({ modality: 'deck' })).toBe('slide')
+    expect(workspacePreviewVisualContentType({ modality: 'image', mimeType: 'image/png' })).toBe('image')
+    expect(workspacePreviewVisualContentType({ modality: 'fixture.microscopy', mimeType: 'image/tiff' })).toBe('image')
+    expect(workspacePreviewVisualContentType({ modality: 'fixture.volume', assetPrimary: 'tile' })).toBe('image')
+    expect(workspacePreviewVisualContentType({ modality: 'pdf' })).toBe('pdf')
+    expect(workspacePreviewVisualContentType({ modality: 'canvas' })).toBe('canvas')
   })
 
   afterEach(() => {
@@ -585,33 +607,25 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     })
   })
 
-  it('routes supported biology formats only through Biology Room', () => {
-    for (const [path, format] of [
-      ['protein.pdb', 'pdb'],
-      ['structure.mmcif', 'mmcif'],
-      ['reads.fasta', 'fasta'],
-      ['record.gbk', 'genbank'],
-      ['features.gff3.gz', 'gff3'],
-      ['regions.bed.gz', 'bed'],
-      ['variants.vcf.gz', 'vcf']
+  it('routes supported life-science formats through canonical workspace preview plugins', () => {
+    for (const [path, pluginId, modality] of [
+      ['protein.pdb', 'molecular', 'sciforge.life-science-preview.molecular'],
+      ['structure.mmcif', 'molecular', 'sciforge.life-science-preview.molecular'],
+      ['reads.fasta', 'sequence-genomics', 'sciforge.life-science-preview.sequence'],
+      ['record.gbk', 'sequence-genomics', 'sciforge.life-science-preview.sequence'],
+      ['features.gff', 'sequence-genomics', 'sciforge.life-science-preview.sequence'],
+      ['regions.bed', 'sequence-genomics', 'sciforge.life-science-preview.sequence'],
+      ['variants.vcf', 'sequence-genomics', 'sciforge.life-science-preview.sequence'],
+      ['ligand.sdf', 'molecular', 'sciforge.life-science-preview.molecular'],
+      ['reads.fastq', 'sequence-genomics', 'sciforge.life-science-preview.sequence']
     ] as const) {
       expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path })).toEqual({
-        kind: 'biology-room',
-        format
+        kind: 'workspace-preview-shell',
+        reason: 'registered-plugin',
+        pluginId,
+        modality
       })
     }
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'ligand.sdf' })).toEqual({
-      kind: 'workspace-preview-shell',
-      reason: 'registered-plugin',
-      pluginId: 'molecular',
-      modality: 'molecular'
-    })
-    expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'reads.fastq' })).toEqual({
-      kind: 'workspace-preview-shell',
-      reason: 'registered-plugin',
-      pluginId: 'sequence-genomics',
-      modality: 'sequence'
-    })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'structure.pdb.gz' })).toEqual({
       kind: 'workspace-preview-shell',
       reason: 'unregistered-format'
@@ -624,15 +638,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
       kind: 'workspace-preview-shell',
       reason: 'registered-plugin',
       pluginId: 'bioimaging',
-      modality: 'bioimaging'
+      modality: 'sciforge.life-science-preview.bioimaging'
     })
     expect(resolveWorkspaceFilePreviewPanelBridgeRoute({ path: 'mesh.vtk' })).toEqual({
       kind: 'workspace-preview-shell',
-      reason: 'deferred-non-life-science'
+      reason: 'unregistered-format'
     })
   })
 
-  it('renders Biology Room directly and keeps other formats on the workspace preview shell', () => {
+  it('renders supported formats through the workspace preview shell', () => {
     const unregisteredHtml = renderToStaticMarkup(createElement(WorkspaceFilePreviewPanelBridge, {
       target: { path: 'legacy.xls', workspaceRoot: '/workspace/lab' },
       workspaceRoot: '/workspace/lab',
@@ -685,8 +699,9 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(markdownHtml).toContain('data-mock-workspace-preview-shell="true"')
     expect(markdownHtml).toContain('data-shell-class-name="ds-no-drag"')
     expect(markdownHtml).toContain('data-route-reason="registered-plugin"')
-    expect(molecularHtml).toContain('data-biology-room-loading="true"')
-    expect(molecularHtml).not.toContain('data-mock-workspace-preview-shell="true"')
+    expect(molecularHtml).toContain('data-mock-workspace-preview-shell="true"')
+    expect(molecularHtml).toContain('data-route-reason="registered-plugin"')
+    expect(molecularHtml).toContain('data-mock-molecular-viewer="true"')
     expect(tabularHtml).toContain('data-route-reason="registered-plugin"')
     expect(tabularHtml).toContain('data-mock-tabular-viewer="true"')
     expect(tabularHtml).toContain('data-has-apply-edit="true"')
@@ -699,9 +714,10 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     expect(deckHtml).toContain('data-route-reason="registered-plugin"')
     expect(deckHtml).toContain('data-mock-deck-viewer="true"')
     expect(deckHtml).toContain('data-has-apply-edit="true"')
-    expect(sequenceHtml).toContain('data-biology-room-loading="true"')
-    expect(sequenceHtml).not.toContain('data-mock-workspace-preview-shell="true"')
-    expect(deferredHtml).toContain('data-route-reason="deferred-non-life-science"')
+    expect(sequenceHtml).toContain('data-mock-workspace-preview-shell="true"')
+    expect(sequenceHtml).toContain('data-route-reason="registered-plugin"')
+    expect(sequenceHtml).toContain('data-mock-sequence-viewer="true"')
+    expect(deferredHtml).toContain('data-route-reason="unregistered-format"')
   })
 
   it('shows evidence integrity success only when an expected digest is verified', () => {
@@ -805,11 +821,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     }))
 
     const operation = {
-      kind: 'molecular.setSelection' as const,
+      kind: 'domain.applyEdit' as const,
       path: '/workspace/lab/ligand.sdf',
-      selection: {
-        kind: 'molecular' as const,
-        chains: ['A']
+      operationType: 'sciforge.life-science-preview.molecular.set-selection',
+      data: {
+        selection: workspaceStructuredSelectionSchema.parse({
+          kind: 'domain',
+          selectionType: 'sciforge.life-science-preview.molecular.selection',
+          data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'] } }
+        })
       }
     }
     await workspacePreviewMock.latestMolecularProps?.onApplyEdit?.(operation)
@@ -828,11 +848,14 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
     const operation = {
       kind: 'workspace.setSelection' as const,
       path: '/workspace/lab/reads.fastq',
-      selection: {
-        kind: 'sequence' as const,
-        sequenceId: 'read1',
-        ranges: [{ start: 0, end: 8 }]
-      }
+      selection: workspaceStructuredSelectionSchema.parse({
+        kind: 'domain',
+        selectionType: 'sciforge.life-science-preview.sequence.selection',
+        data: {
+          wireVersion: 2,
+          selection: { kind: 'sequence', sequenceId: 'read1', ranges: [{ start: 0, end: 8 }] }
+        }
+      })
     }
     await workspacePreviewMock.latestSequenceProps?.onSetSelection?.(operation)
 
@@ -873,7 +896,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             pluginId: 'molecular',
             workspaceRoot: '/workspace/lab',
             path: '/workspace/lab/protein.pdb',
-            modality: 'molecular',
+            modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
             mode: 'preview',
             openedAt: '2026-07-08T00:00:00.000Z',
             updatedAt: '2026-07-08T00:00:00.000Z'
@@ -898,17 +921,15 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
             },
             view: {
               pluginId: 'molecular',
-              modality: 'molecular',
+              modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
               mode: 'preview',
               title: 'protein.pdb'
             },
-            selection: {
-              kind: 'molecular',
-              chains: ['A']
-            },
-            molecular: {
-              chains: ['A']
-            },
+            selection: workspaceStructuredSelectionSchema.parse({
+              kind: 'domain',
+              selectionType: 'sciforge.life-science-preview.molecular.selection',
+              data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'] } }
+            }),
             documentAnnotations: {
               threadCount: 2,
               annotationCount: 5,
@@ -932,7 +953,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           sessionId: 'session-1',
           assetId: 'asset:session-1',
           pluginId: 'molecular',
-          modality: 'molecular',
+          modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular'),
           file: {
             name: 'protein.pdb',
             relativePath: 'protein.pdb'
@@ -970,7 +991,7 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         kind: 'workspace-preview-shell',
         reason: 'registered-plugin',
         pluginId: 'molecular',
-        modality: 'molecular'
+        modality: workspacePreviewModalitySchema.parse('sciforge.life-science-preview.molecular')
       },
       workspaceRoot: '/workspace/lab',
       updatedAt: '2026-07-08T00:00:01.000Z',
@@ -1008,8 +1029,8 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
           openThreadCount: 1
         },
         pluginId: 'molecular',
-        modality: 'molecular',
-        selectionKind: 'molecular',
+        modality: 'sciforge.life-science-preview.molecular',
+        selectionKind: 'domain',
         presentation: {
           kind: 'document',
           position: { index: 2, count: 12, label: 'Page 2 of 12' },
@@ -1036,14 +1057,12 @@ describe('WorkspaceFilePreviewPanelBridge', () => {
         workspaceObservation: {
           view: {
             pluginId: 'molecular',
-            modality: 'molecular'
+            modality: 'sciforge.life-science-preview.molecular'
           },
           selection: {
-            kind: 'molecular',
-            chains: ['A']
-          },
-          molecular: {
-            chains: ['A']
+            kind: 'domain',
+            selectionType: 'sciforge.life-science-preview.molecular.selection',
+            data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'] } }
           },
           actions: ['molecular.workbench']
         }

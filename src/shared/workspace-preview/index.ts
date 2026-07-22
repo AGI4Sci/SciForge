@@ -1,2 +1,2 @@
-export * from './contract'
-export * from './life-science'
+export * from '@sciforge/domain-sdk/workspace-preview'
+export * from './manifests'

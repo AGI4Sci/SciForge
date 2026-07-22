@@ -19,15 +19,6 @@ import {
   type ComputerUseMcpLaunchConfig
 } from './computer-use-mcp-config'
 import {
-  buildPaperRadarMcpArgs,
-  GUI_PAPER_RADAR_MCP_SERVER_NAME,
-  PAPER_RADAR_MCP_TIMEOUT_MS,
-  paperRadarMcpEnabledTools,
-  paperRadarMcpEnv,
-  resolvePaperRadarMcpCommand,
-  type PaperRadarMcpLaunchConfig
-} from './paper-radar-mcp-config'
-import {
   buildResearchSearchMcpArgs,
   GUI_RESEARCH_MCP_SERVER_NAME,
   RESEARCH_SEARCH_MCP_TIMEOUT_MS,
@@ -167,9 +158,6 @@ export type GuiMcpRegistryInput = {
     launch: RemoteExecutorMcpLaunchConfig
     enabled?: boolean
   }
-  paperRadarMcp?: {
-    launch: PaperRadarMcpLaunchConfig
-  }
   writeAssistMcp?: {
     settings?: AppSettingsV1
     launch: WriteAssistMcpLaunchConfig
@@ -209,17 +197,9 @@ export type GuiMcpRegistryInput = {
 }
 
 export function buildManagedGuiMcpServers(
-  input: GuiMcpRegistryInput,
-  existingServers: readonly GuiMcpRuntimeServerConfig[] = []
+  input: GuiMcpRegistryInput
 ): GuiMcpRuntimeServerConfig[] {
-  const servers = new Map<string, GuiMcpRuntimeServerConfig>()
-  for (const server of existingServers) {
-    servers.set(server.id, server)
-  }
-  for (const server of managedRuntimeServerConfigs(input)) {
-    if (!servers.has(server.id)) servers.set(server.id, server)
-  }
-  return [...servers.values()]
+  return managedRuntimeServerConfigs(input)
 }
 
 function managedRuntimeServerConfigs(
@@ -282,16 +262,6 @@ function managedRuntimeServerConfigs(
       env: remoteExecutorMcpEnv({}, remoteExecutorSettings),
       timeoutMs: GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
       enabledTools: remoteExecutorMcpEnabledTools()
-    })
-  }
-  if (input.paperRadarMcp) {
-    servers.push({
-      id: GUI_PAPER_RADAR_MCP_SERVER_NAME,
-      command: resolvePaperRadarMcpCommand(input.paperRadarMcp.launch),
-      args: buildPaperRadarMcpArgs(input.paperRadarMcp.launch),
-      env: paperRadarMcpEnv(),
-      timeoutMs: PAPER_RADAR_MCP_TIMEOUT_MS,
-      enabledTools: paperRadarMcpEnabledTools()
     })
   }
   const writeAssistSettings = input.writeAssistMcp?.settings ?? settings

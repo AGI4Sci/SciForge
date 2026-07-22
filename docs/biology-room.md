@@ -1,39 +1,29 @@
-# Biology Room
+# Biology Room persistence
 
-Biology Room is SciForge's persistent, chat-adjacent workbench for sequence,
-genome-track, and macromolecular-structure files. Viewer state and scientific
-annotations are versioned separately from the source files; Biology Room never
-rewrites FASTA, GenBank, PDB/mmCIF, GFF, BED, or VCF bytes.
+Biology Room is SciForge's persistent state service for sequence, genome-track,
+and macromolecular-structure work. Viewer state and scientific annotations are
+versioned separately from source files; the service never rewrites FASTA,
+GenBank, PDB/mmCIF, GFF, BED, or VCF bytes.
 
-## Open a room
-
-- Open any supported file from Files, chat scientific objects, or another workspace-file link;
-  SciForge routes it directly into Biology Room.
-- A GFF3, BED, or VCF track can be opened before its reference. The viewer stays
-  blocked until the user selects a real FASTA assembly.
-
-The workbench contains an Assets/Tracks rail, a central lazy-loaded viewer, and
-Selection, Annotations, Versions, and Provenance inspectors. Its single component
-tree adapts from the full three-pane layout to a horizontal asset rail and stacked
-inspector in a narrow right sidebar, so the scientific viewer keeps a usable width.
-**Add selection to
-chat** sends the source path and SHA-256, a human-readable coordinate label, the
-exact zero-based half-open selection JSON, room revision, and matching
-non-orphaned annotations to the composer.
+There is no dedicated Biology Room renderer, preload namespace, IPC facade, or
+MCP business path. Supported files enter the canonical Workspace Preview
+manifest/provider chain. Callers that need persistent room state discover and
+invoke the `biology-room.*` Broker capabilities through the same generic
+capability transport used by every other domain.
 
 ## Supported formats
 
 | Modality | Extensions | Viewer |
 | --- | --- | --- |
-| DNA/RNA/protein sequence | `.fa`, `.fasta`, `.fna`, `.faa` | SeqViz linear/circular |
-| Annotated sequence/plasmid | `.gb`, `.gbk` | SeqViz linear/circular |
-| Structure | `.pdb`, `.cif`, `.mmcif` | Mol* 3D |
-| Genome feature | `.gff`, `.gff3`, `.bed` | JBrowse linear genome view |
-| Variant | `.vcf` | JBrowse linear genome view |
+| DNA/RNA/protein sequence | `.fa`, `.fasta`, `.fna`, `.faa` | Workspace Preview sequence contribution |
+| Annotated sequence/plasmid | `.gb`, `.gbk` | Workspace Preview sequence contribution |
+| Structure | `.pdb`, `.cif`, `.mmcif` | Workspace Preview molecular contribution |
+| Genome feature | `.gff`, `.gff3`, `.bed` | Workspace Preview sequence contribution |
+| Variant | `.vcf` | Workspace Preview sequence contribution |
 
 Indexed FASTA accepts adjacent `.fai`; bgzip FASTA requires adjacent `.fai` and
 `.gzi`. Compressed GFF3, BED, and VCF require an adjacent `.tbi` or `.csi`.
-Remote JBrowse configurations and plugins are never loaded.
+Remote viewer configurations and plugins are never loaded.
 
 Common indexing commands (run outside SciForge) include:
 
@@ -75,19 +65,15 @@ and invalid annotations become orphaned.
 
 Default limits are 25 MiB per unindexed asset and 100 MiB of source assets per
 room. Large/random-access data must use the standard indexes above.
-The full-record SeqViz surface also has a 25 MiB decoded-text safety bound;
-larger indexed FASTA references are navigated through a linked genome track in
-JBrowse instead of being buffered as one sequence document.
+Renderer contributions must respect the same bounded observations and must not
+buffer data beyond the provider limits.
 
 ## Agent interface
 
-The workspace-intel MCP surface exposes only two state-only tools while the same
-room is active in visible GUI context:
-
-- `biology_room_observe`: bounded room, selection, visible-track, annotation,
-  viewer-state, and source-hash summary.
-- `biology_room_apply`: typed operations with `roomId`, `baseRevision`, and
-  optional `dryRun`; it cannot modify biological source content.
+The generic capability surface exposes `biology-room.*` operations through
+discover/observe/invoke/events. It does not create Biology-specific tool names.
+Observation is bounded; mutation requires `roomId`, `baseRevision`, and typed
+operations, and cannot modify biological source content.
 
 Selection, viewport, camera, and track-visibility updates are non-destructive.
 Asset/reference changes, persistent annotations, deletion, and revision restore
@@ -96,22 +82,19 @@ by the runtime rather than trusted from model arguments.
 
 ## Main implementation areas
 
-- Shared contract: `src/shared/biology-room.ts`
-- Persistent service: `src/main/services/biology-room-service.ts`
-- Desktop API/IPC: `src/shared/sciforge-api.ts`, `src/preload/index.ts`, and
-  `src/main/ipc/register-app-ipc-handlers.ts`
-- Agent tools: `src/main/biology-room-mcp-tools.ts`
-- Workbench bridge: `src/renderer/src/components/BiologyRoomPanelBridge.tsx`
-- Viewers and room shell: `src/renderer/src/biology-room/`
+- Domain manifest and definition: `packages/domains/biology-room/sciforge.domain.json`, `src/definition.ts`
+- Public contract: `packages/domains/biology-room/src/contract.ts`
+- Persistent service and Broker contribution: `packages/domains/biology-room/src/service.ts`, `src/main.ts`
+- Generic main composition: `src/main/modules/application-composition.ts`
+- Generic renderer viewers: `src/renderer/src/workspace-preview/`
 
 Focused validation:
 
 ```bash
+npm --prefix packages/domains/biology-room test
 npx vitest run \
-  src/shared/biology-room.test.ts \
-  src/main/services/biology-room-service.test.ts \
-  src/main/biology-room-mcp-tools.test.ts \
-  src/renderer/src/biology-room/biology-room.test.ts
+  src/main/capabilities/app-registry.test.ts \
+  src/renderer/src/workspace-preview/registry.test.ts
 ```
 
 The hard multi-turn and interactive release matrix is documented in

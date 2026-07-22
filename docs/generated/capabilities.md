@@ -2,9 +2,9 @@
 
 <!-- GENERATED FILE. DO NOT EDIT. Run `npm run capability:generate`. -->
 
-Authoritative source: `src/main/capabilities/app-registry.ts`
+Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **28**
+Registered actions: **38**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -17,6 +17,16 @@ Registered actions: **28**
 | `biology-room.open` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `biology-room.open-or-create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `biology-room.refresh` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
+| `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
+| `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
+| `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `paper-radar.rank` | 1.0.0 | ui, agent, system | read | none | global |
+| `paper-radar.review` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `paper-radar.search` | 1.0.0 | ui, agent, system | read | none | global |
+| `paper-radar.status` | 1.0.0 | ui, agent, system | read | none | global |
+| `paper-radar.sync-arxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `surface.current` | 2.0.0 | ui, agent, system | read | none | global |
 | `surface.inspect` | 2.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.annotations.delete` | 2.0.0 | ui, agent, system | workspace-write | none | resource |
@@ -322,16 +332,16 @@ Applies revisioned Biology Room operations using the canonical service.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -412,16 +422,16 @@ Creates a Biology Room in the caller workspace and returns a scoped resource han
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -494,16 +504,16 @@ Returns bounded revision history for the current Biology Room.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -573,16 +583,16 @@ Lists Biology Rooms in the caller workspace.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -650,16 +660,16 @@ Loads a Biology Room manifest and returns its scoped resource handle.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -737,7 +747,10 @@ Observes a Biology Room and returns a scoped resource handle.
       }
     },
     "required": [
-      "roomId"
+      "roomId",
+      "assetLimit",
+      "annotationLimit",
+      "contigLimit"
     ],
     "type": "object"
   },
@@ -745,16 +758,16 @@ Observes a Biology Room and returns a scoped resource handle.
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -784,7 +797,7 @@ Observes a Biology Room and returns a scoped resource handle.
 
 ## `biology-room.open-or-create`
 
-Opens the room for a workspace biology asset, creating it through the canonical service when needed.
+Opens the room for a workspace biology asset, creating it when needed.
 
 - Version: `1.0.0`
 - Audiences: ui, agent, system
@@ -859,16 +872,16 @@ Opens the room for a workspace biology asset, creating it through the canonical 
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -899,7 +912,7 @@ Opens the room for a workspace biology asset, creating it through the canonical 
 
 ## `biology-room.refresh`
 
-Refreshes source-backed assets in the current Biology Room through the canonical service.
+Refreshes source-backed assets in the current Biology Room.
 
 - Version: `1.0.0`
 - Audiences: ui, agent, system
@@ -928,16 +941,16 @@ Refreshes source-backed assets in the current Biology Room through the canonical
     "$schema": "http://json-schema.org/draft-07/schema#",
     "anyOf": [
       {
-        "type": "null"
-      },
-      {
-        "type": "boolean"
+        "type": "string"
       },
       {
         "type": "number"
       },
       {
-        "type": "string"
+        "type": "boolean"
+      },
+      {
+        "type": "null"
       },
       {
         "items": {
@@ -965,6 +978,1809 @@ Refreshes source-backed assets in the current Biology Room through the canonical
     "refresh"
   ],
   "title": "Refresh Biology Room assets"
+}
+```
+
+## `paper-radar.digest`
+
+Generates a digest from the local Paper Radar index for a profile or keyword set.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "categories": {
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "days": {
+        "exclusiveMinimum": 0,
+        "maximum": 365,
+        "type": "integer"
+      },
+      "excludeKeywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "from": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "keywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "profile": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "sources": {
+        "items": {
+          "enum": [
+            "arxiv",
+            "biorxiv"
+          ],
+          "type": "string"
+        },
+        "maxItems": 2,
+        "type": "array"
+      },
+      "to": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "topK": {
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "generatedAt": {
+                "type": "string"
+              },
+              "papers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absUrl": {
+                      "type": "string"
+                    },
+                    "abstract": {
+                      "type": "string"
+                    },
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": "string"
+                    },
+                    "externalId": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "pdfUrl": {
+                      "type": "string"
+                    },
+                    "publishedAt": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "enum": [
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "subjects": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "externalId",
+                    "title",
+                    "authors",
+                    "abstract",
+                    "categories",
+                    "subjects",
+                    "publishedAt",
+                    "absUrl"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "count",
+              "papers",
+              "generatedAt"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "digest"
+  ],
+  "title": "Generate a Paper Radar digest"
+}
+```
+
+## `paper-radar.profiles.list`
+
+Lists the locally configured Paper Radar profiles.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "profiles": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "arxivCategories": {
+                      "items": {
+                        "maxLength": 64,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    "biorxivSubjects": {
+                      "items": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    "description": {
+                      "maxLength": 500,
+                      "type": "string"
+                    },
+                    "excludeKeywords": {
+                      "items": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "keywords": {
+                      "items": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "name": {
+                      "maxLength": 80,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "keywords",
+                    "excludeKeywords",
+                    "arxivCategories",
+                    "biorxivSubjects"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "profiles"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "profile",
+    "discovery"
+  ],
+  "title": "List Paper Radar profiles"
+}
+```
+
+## `paper-radar.profiles.save`
+
+Creates or updates one local Paper Radar profile.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "arxivCategories": {
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "biorxivSubjects": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "description": {
+        "maxLength": 500,
+        "type": "string"
+      },
+      "excludeKeywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "keywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "name": {
+        "maxLength": 80,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "name",
+      "keywords",
+      "excludeKeywords",
+      "arxivCategories",
+      "biorxivSubjects"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "additionalProperties": false,
+                "properties": {
+                  "arxivCategories": {
+                    "items": {
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
+                  "biorxivSubjects": {
+                    "items": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 50,
+                    "type": "array"
+                  },
+                  "description": {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  "excludeKeywords": {
+                    "items": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "keywords": {
+                    "items": {
+                      "maxLength": 128,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 100,
+                    "type": "array"
+                  },
+                  "name": {
+                    "maxLength": 80,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "keywords",
+                  "excludeKeywords",
+                  "arxivCategories",
+                  "biorxivSubjects"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "profile"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "profile"
+  ],
+  "title": "Save a Paper Radar profile"
+}
+```
+
+## `paper-radar.rank`
+
+Ranks papers from the local Paper Radar index for a profile or keyword set.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "categories": {
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "days": {
+        "exclusiveMinimum": 0,
+        "maximum": 365,
+        "type": "integer"
+      },
+      "excludeKeywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "from": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "keywords": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "profile": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "sources": {
+        "items": {
+          "enum": [
+            "arxiv",
+            "biorxiv"
+          ],
+          "type": "string"
+        },
+        "maxItems": 2,
+        "type": "array"
+      },
+      "to": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "topK": {
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "papers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absUrl": {
+                      "type": "string"
+                    },
+                    "abstract": {
+                      "type": "string"
+                    },
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": "string"
+                    },
+                    "externalId": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "pdfUrl": {
+                      "type": "string"
+                    },
+                    "publishedAt": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "enum": [
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "subjects": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "externalId",
+                    "title",
+                    "authors",
+                    "abstract",
+                    "categories",
+                    "subjects",
+                    "publishedAt",
+                    "absUrl"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "profile",
+              "count",
+              "papers"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "rank"
+  ],
+  "title": "Rank Paper Radar papers"
+}
+```
+
+## `paper-radar.review`
+
+Synchronizes and generates a Paper Radar review for one profile.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "days": {
+        "exclusiveMinimum": 0,
+        "maximum": 365,
+        "type": "integer"
+      },
+      "maxRecords": {
+        "exclusiveMinimum": 0,
+        "maximum": 2000,
+        "type": "integer"
+      },
+      "profile": {
+        "additionalProperties": false,
+        "properties": {
+          "arxivCategories": {
+            "items": {
+              "maxLength": 64,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "biorxivSubjects": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 50,
+            "type": "array"
+          },
+          "description": {
+            "maxLength": 500,
+            "type": "string"
+          },
+          "excludeKeywords": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "keywords": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "keywords",
+          "excludeKeywords",
+          "arxivCategories",
+          "biorxivSubjects"
+        ],
+        "type": "object"
+      },
+      "topK": {
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "profile"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "generatedAt": {
+                "type": "string"
+              },
+              "papers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absUrl": {
+                      "type": "string"
+                    },
+                    "abstract": {
+                      "type": "string"
+                    },
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": "string"
+                    },
+                    "externalId": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "pdfUrl": {
+                      "type": "string"
+                    },
+                    "publishedAt": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "enum": [
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "subjects": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "externalId",
+                    "title",
+                    "authors",
+                    "abstract",
+                    "categories",
+                    "subjects",
+                    "publishedAt",
+                    "absUrl"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "profile": {
+                "type": "string"
+              },
+              "syncResults": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fetched": {
+                      "type": "number"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "skipped": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "upserted": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "fetched",
+                    "upserted",
+                    "skipped"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "profile",
+              "count",
+              "papers",
+              "generatedAt",
+              "syncResults"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "review"
+  ],
+  "title": "Review papers for a profile"
+}
+```
+
+## `paper-radar.search`
+
+Searches the local Paper Radar index with bounded filters.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "categories": {
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "from": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 1000,
+        "type": "string"
+      },
+      "sources": {
+        "items": {
+          "enum": [
+            "arxiv",
+            "biorxiv"
+          ],
+          "type": "string"
+        },
+        "maxItems": 2,
+        "type": "array"
+      },
+      "to": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "topK": {
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "integer"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "type": "number"
+              },
+              "papers": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "absUrl": {
+                      "type": "string"
+                    },
+                    "abstract": {
+                      "type": "string"
+                    },
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "categories": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": "string"
+                    },
+                    "externalId": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "string"
+                    },
+                    "pdfUrl": {
+                      "type": "string"
+                    },
+                    "publishedAt": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "type": "string"
+                    },
+                    "relevance": {
+                      "enum": [
+                        "high",
+                        "medium",
+                        "low"
+                      ],
+                      "type": "string"
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "subjects": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "updatedAt": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "source",
+                    "externalId",
+                    "title",
+                    "authors",
+                    "abstract",
+                    "categories",
+                    "subjects",
+                    "publishedAt",
+                    "absUrl"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "papers",
+              "count"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "search"
+  ],
+  "title": "Search Paper Radar papers"
+}
+```
+
+## `paper-radar.status`
+
+Returns the current status and local index statistics for Paper Radar.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkedAt": {
+        "type": "string"
+      },
+      "message": {
+        "type": "string"
+      },
+      "ok": {
+        "type": "boolean"
+      },
+      "service": {
+        "type": "string"
+      },
+      "stats": {
+        "additionalProperties": false,
+        "properties": {
+          "arxiv": {
+            "type": "number"
+          },
+          "biorxiv": {
+            "type": "number"
+          },
+          "papers": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "papers",
+          "arxiv",
+          "biorxiv"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "ok"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "status"
+  ],
+  "title": "Read Paper Radar status"
+}
+```
+
+## `paper-radar.sync-arxiv`
+
+Synchronizes a bounded arXiv paper set into the local Paper Radar index.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "categories": {
+        "items": {
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+      },
+      "maxRecords": {
+        "exclusiveMinimum": 0,
+        "maximum": 2000,
+        "type": "integer"
+      },
+      "since": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "until": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "fetched": {
+                "type": "number"
+              },
+              "from": {
+                "type": "string"
+              },
+              "skipped": {
+                "type": "number"
+              },
+              "source": {
+                "enum": [
+                  "arxiv",
+                  "biorxiv"
+                ],
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "upserted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "fetched",
+              "upserted",
+              "skipped"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "sync",
+    "arxiv"
+  ],
+  "title": "Sync arXiv papers"
+}
+```
+
+## `paper-radar.sync-biorxiv`
+
+Synchronizes a bounded bioRxiv paper set into the local Paper Radar index.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "from": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "maxRecords": {
+        "exclusiveMinimum": 0,
+        "maximum": 2000,
+        "type": "integer"
+      },
+      "to": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "fetched": {
+                "type": "number"
+              },
+              "from": {
+                "type": "string"
+              },
+              "skipped": {
+                "type": "number"
+              },
+              "source": {
+                "enum": [
+                  "arxiv",
+                  "biorxiv"
+                ],
+                "type": "string"
+              },
+              "to": {
+                "type": "string"
+              },
+              "upserted": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "source",
+              "fetched",
+              "upserted",
+              "skipped"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "sync",
+    "biorxiv"
+  ],
+  "title": "Sync bioRxiv papers"
+}
+```
+
+## `paper-radar.sync-profile`
+
+Synchronizes papers matching one configured Paper Radar profile.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "from": {
+        "maxLength": 64,
+        "type": "string"
+      },
+      "maxRecords": {
+        "exclusiveMinimum": 0,
+        "maximum": 2000,
+        "type": "integer"
+      },
+      "profile": {
+        "maxLength": 128,
+        "type": "string"
+      },
+      "to": {
+        "maxLength": 64,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "profile": {
+                "type": "string"
+              },
+              "results": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "fetched": {
+                      "type": "number"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "skipped": {
+                      "type": "number"
+                    },
+                    "source": {
+                      "enum": [
+                        "arxiv",
+                        "biorxiv"
+                      ],
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "upserted": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "source",
+                    "fetched",
+                    "upserted",
+                    "skipped"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "profile",
+              "results"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "paper-radar",
+    "sync",
+    "profile"
+  ],
+  "title": "Sync a Paper Radar profile"
 }
 ```
 
@@ -2095,6 +3911,43 @@ Applies one schema-validated edit using the canonical Workspace Preview host.
   "inputSchema": {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "null"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "maxLength": 32000,
+            "type": "string"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "maxItems": 1000,
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
     "properties": {
       "operation": {
         "oneOf": [
@@ -2372,403 +4225,24 @@ Applies one schema-validated edit using the canonical Workspace Preview host.
                   {
                     "additionalProperties": false,
                     "properties": {
-                      "atoms": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "element": {
-                              "maxLength": 8,
-                              "type": "string"
-                            },
-                            "id": {
-                              "maxLength": 128,
-                              "type": "string"
-                            },
-                            "index": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "chains": {
-                        "items": {
-                          "maxLength": 64,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
+                      "data": {
+                        "$ref": "#/definitions/__schema0"
                       },
                       "kind": {
-                        "const": "molecular",
+                        "const": "domain",
                         "type": "string"
                       },
-                      "ligands": {
-                        "items": {
-                          "maxLength": 64,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "residues": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "chain": {
-                              "maxLength": 64,
-                              "type": "string"
-                            },
-                            "index": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "insertionCode": {
-                              "maxLength": 8,
-                              "type": "string"
-                            },
-                            "name": {
-                              "maxLength": 32,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "index"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "features": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "id": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "type": {
-                              "maxLength": 128,
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "type",
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "sequence",
-                        "type": "string"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "strand": {
-                              "enum": [
-                                "+",
-                                "-"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      },
-                      "sequenceId": {
-                        "maxLength": 256,
-                        "minLength": 1,
+                      "selectionType": {
+                        "maxLength": 128,
+                        "minLength": 3,
+                        "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$",
                         "type": "string"
                       }
                     },
                     "required": [
                       "kind",
-                      "ranges"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "embeddings": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "omics",
-                        "type": "string"
-                      },
-                      "matrixIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "obsKeys": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "axis": {
-                              "enum": [
-                                "obs",
-                                "var",
-                                "row",
-                                "column"
-                              ],
-                              "type": "string"
-                            },
-                            "axisLength": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "clipped": {
-                              "type": "boolean"
-                            },
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "matrixId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "matrixName": {
-                              "maxLength": 256,
-                              "type": "string"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "matrixId",
-                            "axis",
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "varKeys": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "channels": {
-                        "items": {
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "bioimaging",
-                        "type": "string"
-                      },
-                      "regions": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "height": {
-                              "exclusiveMinimum": 0,
-                              "type": "number"
-                            },
-                            "t": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": 0,
-                              "type": "number"
-                            },
-                            "x": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "y": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "z": {
-                              "minimum": 0,
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "x",
-                            "y",
-                            "width",
-                            "height"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "roiIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "const": "spectra",
-                        "type": "string"
-                      },
-                      "peaks": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "intensity": {
-                              "type": "number"
-                            },
-                            "label": {
-                              "maxLength": 128,
-                              "type": "string"
-                            },
-                            "mz": {
-                              "type": "number"
-                            }
-                          },
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "xEnd": {
-                              "type": "number"
-                            },
-                            "xStart": {
-                              "type": "number"
-                            },
-                            "yEnd": {
-                              "type": "number"
-                            },
-                            "yStart": {
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "xStart",
-                            "xEnd"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "ranges"
+                      "selectionType",
+                      "data"
                     ],
                     "type": "object"
                   }
@@ -3111,684 +4585,30 @@ Applies one schema-validated edit using the canonical Workspace Preview host.
           {
             "additionalProperties": false,
             "properties": {
+              "data": {
+                "$ref": "#/definitions/__schema0"
+              },
               "kind": {
-                "const": "molecular.setSelection",
+                "const": "domain.applyEdit",
+                "type": "string"
+              },
+              "operationType": {
+                "maxLength": 128,
+                "minLength": 3,
+                "pattern": "^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$",
                 "type": "string"
               },
               "path": {
                 "maxLength": 4096,
                 "minLength": 1,
                 "type": "string"
-              },
-              "selection": {
-                "oneOf": [
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "const": "text",
-                        "type": "string"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "endColumn": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "endLine": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "startColumn": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "startLine": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "text": {
-                              "maxLength": 200000,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "startLine",
-                            "startColumn",
-                            "endLine",
-                            "endColumn"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "ranges"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "cells": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "column": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "row": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "value": {}
-                          },
-                          "required": [
-                            "row",
-                            "column"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "tabular",
-                        "type": "string"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "columnEnd": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "columnStart": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "rowEnd": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "rowStart": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "rowStart",
-                            "rowEnd",
-                            "columnStart",
-                            "columnEnd"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      },
-                      "sheet": {
-                        "maxLength": 256,
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "ranges"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "anchors": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "id": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "page": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "paragraphIndex": {
-                              "maximum": 9007199254740991,
-                              "minimum": 1,
-                              "type": "integer"
-                            },
-                            "quote": {
-                              "maxLength": 200000,
-                              "type": "string"
-                            },
-                            "rects": {
-                              "items": {
-                                "additionalProperties": false,
-                                "properties": {
-                                  "height": {
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 1,
-                                    "type": "number"
-                                  },
-                                  "page": {
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 1000000,
-                                    "type": "integer"
-                                  },
-                                  "width": {
-                                    "exclusiveMinimum": 0,
-                                    "maximum": 1,
-                                    "type": "number"
-                                  },
-                                  "x": {
-                                    "maximum": 1,
-                                    "minimum": 0,
-                                    "type": "number"
-                                  },
-                                  "y": {
-                                    "maximum": 1,
-                                    "minimum": 0,
-                                    "type": "number"
-                                  }
-                                },
-                                "required": [
-                                  "page",
-                                  "x",
-                                  "y",
-                                  "width",
-                                  "height"
-                                ],
-                                "type": "object"
-                              },
-                              "maxItems": 800,
-                              "type": "array"
-                            }
-                          },
-                          "required": [
-                            "id"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "document",
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "anchors"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "elementIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "deck",
-                        "type": "string"
-                      },
-                      "slideIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "slideIds"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "atoms": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "element": {
-                              "maxLength": 8,
-                              "type": "string"
-                            },
-                            "id": {
-                              "maxLength": 128,
-                              "type": "string"
-                            },
-                            "index": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "chains": {
-                        "items": {
-                          "maxLength": 64,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "molecular",
-                        "type": "string"
-                      },
-                      "ligands": {
-                        "items": {
-                          "maxLength": 64,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "residues": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "chain": {
-                              "maxLength": 64,
-                              "type": "string"
-                            },
-                            "index": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "insertionCode": {
-                              "maxLength": 8,
-                              "type": "string"
-                            },
-                            "name": {
-                              "maxLength": 32,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "index"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "features": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "id": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "type": {
-                              "maxLength": 128,
-                              "minLength": 1,
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "type",
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "sequence",
-                        "type": "string"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "strand": {
-                              "enum": [
-                                "+",
-                                "-"
-                              ],
-                              "type": "string"
-                            }
-                          },
-                          "required": [
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      },
-                      "sequenceId": {
-                        "maxLength": 256,
-                        "minLength": 1,
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "ranges"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "embeddings": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "omics",
-                        "type": "string"
-                      },
-                      "matrixIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "obsKeys": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "axis": {
-                              "enum": [
-                                "obs",
-                                "var",
-                                "row",
-                                "column"
-                              ],
-                              "type": "string"
-                            },
-                            "axisLength": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "clipped": {
-                              "type": "boolean"
-                            },
-                            "end": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            },
-                            "matrixId": {
-                              "maxLength": 256,
-                              "minLength": 1,
-                              "type": "string"
-                            },
-                            "matrixName": {
-                              "maxLength": 256,
-                              "type": "string"
-                            },
-                            "start": {
-                              "maximum": 9007199254740991,
-                              "minimum": 0,
-                              "type": "integer"
-                            }
-                          },
-                          "required": [
-                            "matrixId",
-                            "axis",
-                            "start",
-                            "end"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "varKeys": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "channels": {
-                        "items": {
-                          "maxLength": 128,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "kind": {
-                        "const": "bioimaging",
-                        "type": "string"
-                      },
-                      "regions": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "height": {
-                              "exclusiveMinimum": 0,
-                              "type": "number"
-                            },
-                            "t": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "width": {
-                              "exclusiveMinimum": 0,
-                              "type": "number"
-                            },
-                            "x": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "y": {
-                              "minimum": 0,
-                              "type": "number"
-                            },
-                            "z": {
-                              "minimum": 0,
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "x",
-                            "y",
-                            "width",
-                            "height"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "roiIds": {
-                        "items": {
-                          "maxLength": 256,
-                          "minLength": 1,
-                          "type": "string"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind"
-                    ],
-                    "type": "object"
-                  },
-                  {
-                    "additionalProperties": false,
-                    "properties": {
-                      "kind": {
-                        "const": "spectra",
-                        "type": "string"
-                      },
-                      "peaks": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "intensity": {
-                              "type": "number"
-                            },
-                            "label": {
-                              "maxLength": 128,
-                              "type": "string"
-                            },
-                            "mz": {
-                              "type": "number"
-                            }
-                          },
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "type": "array"
-                      },
-                      "ranges": {
-                        "items": {
-                          "additionalProperties": false,
-                          "properties": {
-                            "xEnd": {
-                              "type": "number"
-                            },
-                            "xStart": {
-                              "type": "number"
-                            },
-                            "yEnd": {
-                              "type": "number"
-                            },
-                            "yStart": {
-                              "type": "number"
-                            }
-                          },
-                          "required": [
-                            "xStart",
-                            "xEnd"
-                          ],
-                          "type": "object"
-                        },
-                        "maxItems": 10000,
-                        "minItems": 1,
-                        "type": "array"
-                      }
-                    },
-                    "required": [
-                      "kind",
-                      "ranges"
-                    ],
-                    "type": "object"
-                  }
-                ]
               }
             },
             "required": [
               "kind",
               "path",
-              "selection"
+              "operationType",
+              "data"
             ],
             "type": "object"
           }
@@ -4767,6 +5587,7 @@ Releases an open Workspace Preview session.
 | Domain | Forbidden direct transport prefixes | Explicit UI-only transports |
 | --- | --- | --- |
 | Artifact Inspection |  |  |
-| Biology Room | biologyRoom: | biologyRoom:pick-file |
+| Biology Room | biologyRoom: |  |
+| Paper Radar | paperRadar: |  |
 | Surface Inspection |  |  |
 | Workspace Preview | workspacePreview: |  |

@@ -20,7 +20,14 @@ export function VisualStyleControl({ workspaceRoot, profileRef, onApplied }: Pro
     setBusy(true)
     setMessage(null)
     try {
-      const picked = await window.sciforge.pickWorkspaceFile(workspaceRoot)
+      const picked = await window.sciforge.pickFile({
+        title: 'Select reference figure',
+        defaultPath: workspaceRoot,
+        filters: [
+          { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
+          { name: 'All files', extensions: ['*'] }
+        ]
+      })
       if (picked.canceled || !picked.path) return
       if (!/\.(?:png|jpe?g|webp|bmp)$/i.test(picked.path)) {
         setMessage('请选择 PNG、JPG、WEBP 或 BMP 参考图。PDF 可先在文档预览中裁剪目标图。')

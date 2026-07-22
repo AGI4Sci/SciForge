@@ -139,6 +139,16 @@ describe('dev browser bridge server', () => {
 
     expect(devBridgeChannels).toEqual(preloadChannels)
     expect(allowedChannels).toEqual(preloadChannels)
+    expect(allowedChannels.some((channel) => channel.startsWith('paperRadar:'))).toBe(false)
+    expect(allowedChannels).toEqual(expect.arrayContaining([
+      'capability:readiness',
+      'capability:discover',
+      'capability:events',
+      'capability:invoke',
+      'capability:observe',
+      'capability:subscribe',
+      'capability:unsubscribe'
+    ]))
   })
 
   it('serves health and forwards local read requests to the dispatcher', async () => {

@@ -250,8 +250,8 @@ describe('TabularWorkspaceViewer', () => {
         mimeType: 'text/x-fasta'
       },
       view: {
-        pluginId: 'sequence-genomics',
-        modality: 'sequence',
+        pluginId: 'fixture-document',
+        modality: 'document',
         mode: 'preview',
         title: 'genome.fa'
       },
@@ -271,7 +271,7 @@ describe('TabularWorkspaceViewer', () => {
     expect(emptyHtml).toContain('data-status="empty"')
     expect(emptyHtml).not.toContain('data-tabular-placeholder')
     expect(unsupportedHtml).toContain('data-status="unsupported"')
-    expect(unsupportedHtml).toContain('Sequence observations cannot be rendered')
+    expect(unsupportedHtml).toContain('Document observations cannot be rendered')
   })
 
   it('summarizes tabular ranges and cells for selection-aware rendering', () => {

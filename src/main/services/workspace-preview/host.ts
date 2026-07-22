@@ -8,10 +8,10 @@ import {
   applyWorkspaceTabularDelimitedEdit,
   type WorkspaceTabularDelimiter,
   type WorkspaceTabularDelimitedEditOperation
-} from '../../../../packages/workers/workspace-tabular/src/index.js'
+} from '@sciforge/workspace-tabular'
 import {
   updateWorkspaceDeckPptxTextElement
-} from '../../../../packages/workers/workspace-deck/src/index.js'
+} from '@sciforge/workspace-deck'
 import {
   createPdfAnchor,
   sanitizePdfAnnotationText,
@@ -113,7 +113,7 @@ import {
   normalizePathSeparators,
   resolveOpenTargetPath,
   resolveSafeWorkspaceWriteTarget
-} from '../workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 import type { WorkspaceFileWatchPayload } from '../../../shared/workspace-file'
 import { readWorkspaceFile, readWorkspaceImage, writeWorkspaceDocxText, writeWorkspaceFile } from '../workspace-files'
 import {
@@ -121,13 +121,27 @@ import {
   type WorkspaceHtmlPreviewService
 } from '../workspace-html-preview-service'
 import {
-  createWorkspacePreviewRegistry,
   type WorkspacePreviewRegistry
 } from './registry'
 import {
-  createWorkspacePreviewWorkerClient,
-  type WorkspacePreviewWorkerClient
+  WorkspacePreviewWorkerClient,
+  type WorkspacePreviewHostRuntime
 } from './worker-client'
+import type { WorkspacePreviewBuiltInHostProviderAdapters } from './built-in-providers'
+import {
+  type WorkspacePreviewPluginRegistrationInput
+} from './composition'
+import type {
+  WorkspacePreviewProviderApplyEditInput,
+  WorkspacePreviewProviderApplyEditResult,
+  WorkspacePreviewProviderExportInput,
+  WorkspacePreviewProviderExportResult,
+  WorkspacePreviewProviderInvokeActionResult,
+  WorkspacePreviewProviderActionInput,
+  WorkspacePreviewProviderActionResult,
+  WorkspacePreviewProviderObservationInput,
+  WorkspacePreviewProviderObservationResult
+} from './provider-registry'
 
 export type WorkspacePreviewOpenInput = WorkspacePreviewApiOpenInput & {
   now?: string
@@ -206,42 +220,11 @@ export type WorkspacePreviewDescribeAssetResult =
     }
   | { ok: false; message: string }
 
-export type WorkspacePreviewApplyEditResult =
-  | {
-      ok: true
-      session: WorkspacePreviewSession
-      operationKind: WorkspacePreviewEditOperation['kind']
-      appliedAt: string
-      audit: {
-        pluginId: string
-        path: string
-        operationKind: WorkspacePreviewEditOperation['kind']
-        effect: 'file-write' | 'session-update' | 'sidecar-write'
-      }
-      diffSummary?: WorkspacePreviewEditDiffSummary
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewApplyEditResult = WorkspacePreviewProviderApplyEditResult
 
-export type WorkspacePreviewExportResult =
-  | {
-      ok: true
-      sessionId: string
-      path: string
-      target: WorkspacePreviewExportTarget
-      exportedAt: string
-      audit: {
-        pluginId: string
-        sourcePath: string
-        targetKind: WorkspacePreviewExportTarget['kind']
-        format: string
-        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf'
-      }
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewExportResult = WorkspacePreviewProviderExportResult
 
-export type WorkspacePreviewInvokeActionResult =
-  | WorkspacePreviewPluginActionResult
-  | { ok: false; message: string }
+export type WorkspacePreviewInvokeActionResult = WorkspacePreviewProviderInvokeActionResult
 
 export type WorkspacePreviewWatchSnapshot = {
   ok: true
@@ -262,9 +245,9 @@ export type WorkspacePreviewWatchStartResult =
   | { ok: false; message: string }
 
 export type WorkspacePreviewHostOptions = {
-  registry?: WorkspacePreviewRegistry
+  domainPlugins?: readonly WorkspacePreviewPluginRegistrationInput[]
   createSessionId?: () => string
-  workerClient?: WorkspacePreviewWorkerClient
+  runtime?: WorkspacePreviewHostRuntime
   htmlPreviewService?: Pick<WorkspaceHtmlPreviewService, 'preview'>
   loadSettings?: () => Promise<AppSettingsV1>
 }
@@ -314,6 +297,9 @@ type WorkspacePreviewDeckTextEditOperation =
 type WorkspacePreviewDocumentParagraphEditOperation =
   Extract<WorkspacePreviewEditOperation, { kind: 'document.updateParagraph' }>
 
+type WorkspacePreviewSelectionEditOperation =
+  Extract<WorkspacePreviewEditOperation, { kind: 'workspace.setSelection' }>
+
 type WorkspacePreviewAnnotationUpsertOperation =
   Extract<WorkspacePreviewEditOperation, { kind: 'annotation.upsert' }>
 
@@ -350,15 +336,108 @@ export class WorkspacePreviewHost {
   private readonly sessions = new Map<string, WorkspacePreviewSessionRecord>()
 
   constructor(options: WorkspacePreviewHostOptions = {}) {
-    this.registry = options.registry ?? createWorkspacePreviewRegistry()
+    if (options.runtime && options.domainPlugins?.length) {
+      throw new Error('A precomposed workspace preview runtime cannot be combined with domain plugins.')
+    }
     this.createSessionId = options.createSessionId ?? (() => `preview-${randomUUID()}`)
-    this.workerClient = options.workerClient ?? createWorkspacePreviewWorkerClient()
     this.htmlPreviewService = options.htmlPreviewService ?? workspaceHtmlPreviewService
     this.loadSettings = options.loadSettings
+    const runtime = options.runtime ?? WorkspacePreviewWorkerClient.compose({
+      hostAdapters: this.builtInHostProviderAdapters(),
+      domainPlugins: options.domainPlugins
+    })
+    this.registry = runtime.manifests
+    this.workerClient = runtime.workerClient
+  }
+
+  private builtInHostProviderAdapters(): WorkspacePreviewBuiltInHostProviderAdapters {
+    return {
+      validateTextFile: async ({ file }) => {
+        const fileInfo = await stat(file.path)
+        return await isUtf8TextPreviewCompatibleFile(file.path, fileInfo)
+          ? { ok: true }
+          : { ok: false, message: `No workspace preview plugin is available for ${basename(file.path)}.` }
+      },
+      observeSourceText: async (input, hostActions) => {
+        const observation = await this.createSourceTextObservation(
+          this.providerSessionRecord(input),
+          hostActions
+        )
+        return {
+          ok: true,
+          observation,
+          bytesRead: Math.min(input.file.size ?? 0, WORKSPACE_PREVIEW_TEXT_OBSERVATION_BYTES),
+          truncated: observation.text?.truncated ?? false
+        }
+      },
+      observeDocx: async (input) => ({
+        ok: true,
+        observation: await this.createDocxObservation(this.providerSessionRecord(input)),
+        bytesRead: input.file.size ?? 0,
+        truncated: false
+      }),
+      applyTextEdit: (input) => this.applyTextEdit(
+        this.providerSessionRecord(input),
+        input.operation as Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>,
+        input.now
+      ),
+      applyTabularEdit: (input) => this.applyTabularDelimitedEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewTabularEditOperation,
+        input.now
+      ),
+      applyDeckEdit: (input) => this.applyDeckPptxTextElementEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewDeckTextEditOperation,
+        input.now
+      ),
+      applyDocumentEdit: (input) => this.applyDocumentParagraphEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewDocumentParagraphEditOperation,
+        input.now
+      ),
+      applyAnnotationUpsert: (input) => this.applyAnnotationUpsert(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationUpsertOperation,
+        input.now
+      ),
+      applyAnnotationThreadUpdate: (input) => this.applyAnnotationThreadUpdate(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationThreadUpdateOperation,
+        input.now
+      ),
+      applyAnnotationThreadDelete: (input) => this.applyAnnotationThreadDelete(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationThreadDeleteOperation,
+        input.now
+      ),
+      exportSource: (input) => this.exportSourceCopy(this.providerSessionRecord(input), input.target, input.now),
+      exportAnnotationSidecar: (input) => this.exportAnnotationSidecarPackage(
+        this.providerSessionRecord(input),
+        input.target,
+        input.now
+      ),
+      exportAnnotatedPdf: (input) => this.exportAnnotatedPdf(
+        this.providerSessionRecord(input),
+        input.target,
+        input.now
+      ),
+      invokeHtmlPreview: (input) => this.invokeHtmlPreviewUrlAction(this.providerSessionRecord(input), input),
+      invokeMarkdownImage: (input) => this.invokeMarkdownReadImageAction(this.providerSessionRecord(input), input)
+    }
+  }
+
+  private providerSessionRecord(
+    input: WorkspacePreviewProviderObservationInput | WorkspacePreviewProviderApplyEditInput |
+      WorkspacePreviewProviderExportInput | WorkspacePreviewProviderActionInput
+  ): WorkspacePreviewSessionRecord {
+    const record = this.sessions.get(input.session.id)
+    if (!record) throw new Error('Workspace preview session was not found.')
+    return record
   }
 
   listPlugins(): WorkspacePreviewPluginManifest[] {
-    return this.registry.list()
+    return this.registry.list().map(({ manifest }) => manifest)
   }
 
   getSession(sessionId: string): WorkspacePreviewSession | null {
@@ -389,16 +468,6 @@ export class WorkspacePreviewHost {
       if (route.status === 'unsupported') {
         return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
-      if (route.status === 'deferred') {
-        return {
-          ok: false,
-          message: `Preview support for ${route.extension} is deferred: ${route.reason}`
-        }
-      }
-      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
-        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
-      }
-
       const now = input.now ?? new Date().toISOString()
       const mimeType = input.mimeType ?? inferWorkspacePreviewMimeType(targetPath, route.manifest)
       const file: WorkspacePreviewFileState = {
@@ -409,6 +478,8 @@ export class WorkspacePreviewHost {
         size: fileInfo.size,
         mtimeMs: fileInfo.mtimeMs
       }
+      const validation = await this.workerClient.validateFile({ manifest: route.manifest, file })
+      if (!validation.ok) return validation
       const mode = input.mode ?? 'preview'
       const selection = resolveWorkspacePreviewInitialSelection(input)
       const integrity = input.integrity
@@ -463,34 +534,6 @@ export class WorkspacePreviewHost {
     const record = this.sessions.get(sessionId)
     if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
 
-    if (isSourceTextPreviewPlugin(record.manifest.id)) {
-      try {
-        return {
-          ok: true,
-          observation: await this.withHostObservationEnhancements(record, await this.createSourceTextObservation(record))
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          message: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
-
-    if (record.manifest.id === DOCX_WORKSPACE_PREVIEW_PLUGIN_ID) {
-      try {
-        return {
-          ok: true,
-          observation: await this.withHostObservationEnhancements(record, await this.createDocxObservation(record))
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          message: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
-
     const workerObservation = await this.workerClient.observe({
       session: record.session,
       manifest: record.manifest,
@@ -538,19 +581,22 @@ export class WorkspacePreviewHost {
       if (route.status === 'unsupported') {
         return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
-      if (route.status === 'deferred') {
-        return {
-          ok: false,
-          message: `Preview support for ${route.extension} is deferred: ${route.reason}`
-        }
+      const file: WorkspacePreviewFileState = {
+        workspaceRoot: await canonicalPath(expandHomePath(input.workspaceRoot)),
+        path: targetPath,
+        relativePath: normalizePathSeparators(relative(
+          await canonicalPath(expandHomePath(input.workspaceRoot)),
+          targetPath
+        )),
+        size: fileInfo.size,
+        mtimeMs: fileInfo.mtimeMs
       }
-      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
-        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
-      }
+      const validation = await this.workerClient.validateFile({ manifest: route.manifest, file })
+      if (!validation.ok) return validation
 
       return {
         ok: true,
-        workspaceRoot: await canonicalPath(expandHomePath(input.workspaceRoot)),
+        workspaceRoot: file.workspaceRoot,
         path: targetPath,
         content: '',
         size: fileInfo.size,
@@ -595,7 +641,10 @@ export class WorkspacePreviewHost {
     })
   }
 
-  private async createSourceTextObservation(record: WorkspacePreviewSessionRecord): Promise<WorkspaceObservation> {
+  private async createSourceTextObservation(
+    record: WorkspacePreviewSessionRecord,
+    hostActions: readonly string[]
+  ): Promise<WorkspaceObservation> {
     const fileInfo = await stat(record.file.path)
     if (fileInfo.isDirectory()) {
       throw new Error('Cannot observe a directory as text.')
@@ -641,8 +690,7 @@ export class WorkspacePreviewHost {
         'observe',
         'select',
         'workspace.setSelection',
-        ...(record.manifest.id === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID ? ['markdown.readImage'] : []),
-        ...(record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID ? ['html.previewUrl'] : []),
+        ...hostActions,
         'text.replaceRange',
         'applyEdit',
         'save',
@@ -1250,88 +1298,25 @@ export class WorkspacePreviewHost {
       if (canonicalOperationPath !== canonicalSessionPath) {
         return { ok: false, message: 'Edit operation path must match the open preview session.' }
       }
-
-      if (parsed.kind === 'workspace.setSelection' || parsed.kind === 'molecular.setSelection') {
-        const session = workspacePreviewSessionSchema.parse({
-          ...record.session,
-          selection: parsed.selection,
-          updatedAt: now
-        })
-        this.sessions.set(session.id, { ...record, session })
-        return {
-          ok: true,
-          session,
-          operationKind: parsed.kind,
-          appliedAt: now,
-          audit: {
-            pluginId: record.manifest.id,
-            path: record.file.path,
-            operationKind: parsed.kind,
-            effect: 'session-update'
-          }
-        }
+      if (parsed.kind === 'workspace.setSelection') {
+        return await this.applySelectionEdit(record, parsed, now)
       }
 
-      if (
-        parsed.kind === 'tabular.updateCell' ||
-        parsed.kind === 'tabular.insertRows' ||
-        parsed.kind === 'tabular.insertColumns' ||
-        parsed.kind === 'tabular.deleteRows' ||
-        parsed.kind === 'tabular.deleteColumns'
-      ) {
-        return await this.applyTabularDelimitedEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'deck.updateTextElement') {
-        return await this.applyDeckPptxTextElementEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'document.updateParagraph') {
-        return await this.applyDocumentParagraphEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.upsert') {
-        return await this.applyAnnotationUpsert(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.thread.update') {
-        return await this.applyAnnotationThreadUpdate(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.thread.delete') {
-        return await this.applyAnnotationThreadDelete(record, parsed, now)
-      }
-
-      if (parsed.kind !== 'text.replaceRange') {
-        return {
-          ok: false,
-          message: `Workspace preview edit operation ${operation.kind} is not implemented by the generic host yet.`
-        }
-      }
-
-      const content = await readFile(record.file.path, 'utf8')
-      const startOffset = offsetForTextPosition(content, parsed.range.start)
-      const endOffset = offsetForTextPosition(content, parsed.range.end)
-      if (endOffset < startOffset) {
-        return { ok: false, message: 'Edit range end must be after the start.' }
-      }
-      const nextContent = `${content.slice(0, startOffset)}${parsed.text}${content.slice(endOffset)}`
-      const diffSummary = createTextEditDiffSummary({
-        path: record.file.path,
+      const result = await this.workerClient.applyEdit({
+        session: record.session,
+        manifest: record.manifest,
+        file: record.file,
         operation: parsed,
-        content,
-        nextContent,
-        startOffset,
-        endOffset
+        now
       })
-      const writeResult = await writeWorkspaceFile({
-        workspaceRoot: record.file.workspaceRoot,
-        path: record.file.path,
-        content: nextContent
-      })
-      if (!writeResult.ok) return writeResult
-
-      return await this.completeFileWriteEdit(record, parsed.kind, now, diffSummary)
+      if (result.ok && result.audit.effect === 'session-update') {
+        const session = workspacePreviewSessionSchema.parse(result.session)
+        if (session.id !== record.session.id || session.pluginId !== record.manifest.id || session.path !== record.session.path) {
+          return { ok: false, message: 'Workspace preview provider returned a session for a different preview.' }
+        }
+        this.sessions.set(session.id, { ...record, session })
+      }
+      return result
     } catch (error) {
       return {
         ok: false,
@@ -1340,14 +1325,65 @@ export class WorkspacePreviewHost {
     }
   }
 
+  private async applySelectionEdit(
+    record: WorkspacePreviewSessionRecord,
+    operation: WorkspacePreviewSelectionEditOperation,
+    now: string
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const session = workspacePreviewSessionSchema.parse({
+      ...record.session,
+      selection: operation.selection,
+      updatedAt: now
+    })
+    this.sessions.set(session.id, { ...record, session })
+    return {
+      ok: true,
+      session,
+      operationKind: operation.kind,
+      appliedAt: now,
+      audit: {
+        pluginId: record.manifest.id,
+        path: record.file.path,
+        operationKind: operation.kind,
+        effect: 'session-update'
+      }
+    }
+  }
+
+  private async applyTextEdit(
+    record: WorkspacePreviewSessionRecord,
+    operation: Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>,
+    now: string
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const content = await readFile(record.file.path, 'utf8')
+    const startOffset = offsetForTextPosition(content, operation.range.start)
+    const endOffset = offsetForTextPosition(content, operation.range.end)
+    if (endOffset < startOffset) {
+      return { ok: false, message: 'Edit range end must be after the start.' }
+    }
+    const nextContent = `${content.slice(0, startOffset)}${operation.text}${content.slice(endOffset)}`
+    const diffSummary = createTextEditDiffSummary({
+      path: record.file.path,
+      operation,
+      content,
+      nextContent,
+      startOffset,
+      endOffset
+    })
+    const writeResult = await writeWorkspaceFile({
+      workspaceRoot: record.file.workspaceRoot,
+      path: record.file.path,
+      content: nextContent
+    })
+    if (!writeResult.ok) return writeResult
+    return await this.completeFileWriteEdit(record, operation.kind, now, diffSummary)
+  }
+
   private async applyTabularDelimitedEdit(
     record: WorkspacePreviewSessionRecord,
     operation: WorkspacePreviewTabularEditOperation,
     now: string
   ): Promise<WorkspacePreviewApplyEditResult> {
-    if (record.manifest.id !== 'tabular') {
-      return { ok: false, message: `Workspace preview edit operation ${operation.kind} requires the tabular plugin.` }
-    }
     const delimiter = tabularDelimiterForPath(record.file.path)
     if (!delimiter) {
       return { ok: false, message: 'Tabular file write-back is currently implemented for CSV and TSV files only.' }
@@ -1387,9 +1423,6 @@ export class WorkspacePreviewHost {
     operation: WorkspacePreviewDeckTextEditOperation,
     now: string
   ): Promise<WorkspacePreviewApplyEditResult> {
-    if (record.manifest.id !== 'deck') {
-      return { ok: false, message: `Workspace preview edit operation ${operation.kind} requires the deck plugin.` }
-    }
     if (extensionFromPreviewPath(record.file.path) !== '.pptx') {
       return { ok: false, message: 'Deck text write-back is currently implemented for PPTX OpenXML files only.' }
     }
@@ -1719,45 +1752,51 @@ export class WorkspacePreviewHost {
           message: `Workspace preview ${parsed.kind} export requires a renderer/plugin implementation.`
         }
       }
-      if (parsed.format === 'sidecar') {
-        return await this.exportAnnotationSidecarPackage(record, parsed, now)
-      }
-      if (parsed.format === 'annotated-pdf') {
-        return await this.exportAnnotatedPdf(record, parsed, now)
-      }
-      if (!sourceFormatMatchesExportFormat(record.file.path, parsed.format)) {
-        return {
-          ok: false,
-          message: `Generic workspace-file export can only copy the source ${sourceFormatLabel(record.file.path)} file; ${parsed.format} export requires a plugin implementation.`
-        }
-      }
-
-      const writeTarget = parsed.path?.trim()
-        ? await resolveSafeWorkspaceWriteTarget(parsed.path, record.file.workspaceRoot, {
-            createParentDirectories: true,
-            targetKind: 'file'
-          })
-        : await resolveDefaultExportWriteTarget(record, parsed.format)
-      await copyFile(record.file.path, writeTarget.path, constants.COPYFILE_EXCL)
-
-      return {
-        ok: true,
-        sessionId,
-        path: writeTarget.path,
+      return await this.workerClient.exportPreview({
+        session: record.session,
+        manifest: record.manifest,
+        file: record.file,
         target: parsed,
-        exportedAt: now,
-        audit: {
-          pluginId: record.manifest.id,
-          sourcePath: record.file.path,
-          targetKind: parsed.kind,
-          format: parsed.format,
-          effect: 'source-copy'
-        }
-      }
+        now
+      })
     } catch (error) {
       return {
         ok: false,
         message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  private async exportSourceCopy(
+    record: WorkspacePreviewSessionRecord,
+    target: WorkspacePreviewExportTarget,
+    now: string
+  ): Promise<WorkspacePreviewExportResult> {
+    if (!sourceFormatMatchesExportFormat(record.file.path, target.format)) {
+      return {
+        ok: false,
+        message: `Generic workspace-file export can only copy the source ${sourceFormatLabel(record.file.path)} file; ${target.format} export requires a plugin implementation.`
+      }
+    }
+    const writeTarget = target.path?.trim()
+      ? await resolveSafeWorkspaceWriteTarget(target.path, record.file.workspaceRoot, {
+          createParentDirectories: true,
+          targetKind: 'file'
+        })
+      : await resolveDefaultExportWriteTarget(record, target.format)
+    await copyFile(record.file.path, writeTarget.path, constants.COPYFILE_EXCL)
+    return {
+      ok: true,
+      sessionId: record.session.id,
+      path: writeTarget.path,
+      target,
+      exportedAt: now,
+      audit: {
+        pluginId: record.manifest.id,
+        sourcePath: record.file.path,
+        targetKind: target.kind,
+        format: target.format,
+        effect: 'source-copy'
       }
     }
   }
@@ -1772,9 +1811,6 @@ export class WorkspacePreviewHost {
 
     try {
       const parsed = workspacePreviewPluginActionInputSchema.parse(action)
-      const hostAction = await this.invokeHostAction(record, parsed, now)
-      if (hostAction) return hostAction
-
       const workerResult = await this.workerClient.invokeAction({
         session: record.session,
         manifest: record.manifest,
@@ -1796,7 +1832,7 @@ export class WorkspacePreviewHost {
           pluginId: record.manifest.id,
           path: record.file.path,
           actionId: parsed.actionId,
-          effect: 'worker-action'
+          effect: workerResult.effect ?? 'worker-action'
         }
       })
     } catch (error) {
@@ -1894,90 +1930,56 @@ export class WorkspacePreviewHost {
     }
   }
 
-  private async invokeHostAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult | null> {
-    if (record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'html.previewUrl') {
-      return this.invokeHtmlPreviewUrlAction(record, action, now)
-    }
-    if (record.manifest.id === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'markdown.readImage') {
-      return this.invokeMarkdownReadImageAction(record, action, now)
-    }
-    return null
-  }
-
   private async invokeHtmlPreviewUrlAction(
     record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
+    _input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult> {
     const preview = await this.htmlPreviewService.preview({
       path: record.file.path,
       workspaceRoot: record.file.workspaceRoot
     })
-    if (!preview.ok) return preview
+    if (!preview.ok) return { ...preview, reason: 'worker-error' }
 
-    return workspacePreviewPluginActionResultSchema.parse({
+    return {
       ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
       result: {
         url: preview.url,
         size: preview.size,
         mtimeMs: preview.mtimeMs
       },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
+      bytesRead: 0,
+      truncated: false,
+      effect: 'host-action'
+    }
   }
 
   private async invokeMarkdownReadImageAction(
     record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    const imagePath = typeof action.input.path === 'string' ? action.input.path.trim() : ''
-    if (!imagePath) return { ok: false, message: 'Markdown image path is required.' }
+    input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult> {
+    const imagePath = typeof input.action.input.path === 'string' ? input.action.input.path.trim() : ''
+    if (!imagePath) {
+      return { ok: false, reason: 'unsupported-action', message: 'Markdown image path is required.' }
+    }
 
     const image = await readWorkspaceImage({
       path: imagePath,
       workspaceRoot: record.file.workspaceRoot
     })
-    if (!image.ok) return image
+    if (!image.ok) return { ...image, reason: 'worker-error' }
 
-    return workspacePreviewPluginActionResultSchema.parse({
+    return {
       ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
       result: {
         dataUrl: image.dataUrl,
         mimeType: image.mimeType,
         size: image.size
       },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
+      bytesRead: 0,
+      truncated: false,
+      effect: 'host-action'
+    }
   }
-}
-
-function isSourceTextPreviewPlugin(pluginId: string): boolean {
-  return pluginId === TEXT_WORKSPACE_PREVIEW_PLUGIN_ID ||
-    pluginId === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID ||
-    pluginId === HTML_WORKSPACE_PREVIEW_PLUGIN_ID
 }
 
 async function isUtf8TextPreviewCompatibleFile(path: string, fileInfo: Stats): Promise<boolean> {
@@ -2170,16 +2172,13 @@ function buildAssetTransportStrategies(
   manifest: WorkspacePreviewPluginManifest,
   artifacts: readonly WorkspacePreviewArtifactDescriptor[] = []
 ): WorkspacePreviewAssetTransportDescriptor['strategies'] {
-  const rangeReason = manifest.modality === 'bioimaging'
-    ? 'Use bounded byte ranges for metadata and plugin-owned tile decoders; raw whole-slide payloads stay out of IPC.'
-    : 'Use bounded byte ranges for lazy plugin reads; host open and observe avoid eager-loading full asset bytes.'
   const availableArtifactKinds = new Set(artifacts.map((artifact) => artifact.kind))
 
   return [
     {
       kind: 'byte-range',
       status: 'available',
-      reason: rangeReason,
+      reason: 'Use bounded byte ranges for lazy plugin reads; host open and observe avoid eager-loading full asset bytes.',
       maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES
     },
     {

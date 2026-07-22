@@ -3,10 +3,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { capabilityResourceHandleSchema } from '../../shared/capability-broker'
-import { BiologyRoomService } from '../services/biology-room-service'
 import { WorkspacePreviewHost } from '../services/workspace-preview'
-import { APP_CAPABILITY_IDS, WORKSPACE_PREVIEW_RESOURCE_KIND, createAppCapabilityRegistry } from './app-registry'
+import { APP_CAPABILITY_IDS, WORKSPACE_PREVIEW_RESOURCE_KIND } from './app-registry'
 import { CapabilityBroker } from './broker'
+import {
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog
+} from '../modules'
 
 function outputRecord(value: unknown): Record<string, unknown> {
   expect(value).toBeTruthy()
@@ -35,9 +38,9 @@ describe('Workspace Preview capability content transport integration', () => {
       const workspacePreviewHost = new WorkspacePreviewHost({
         createSessionId: () => 'integration-pdf-session'
       })
-      const broker = new CapabilityBroker(createAppCapabilityRegistry({
-        workspacePreviewHost,
-        biologyRoomService: new BiologyRoomService()
+      const catalog = createApplicationDomainCatalog({ getUserDataDir: () => root })
+      const broker = new CapabilityBroker(createApplicationCapabilityRegistry(catalog, {
+        workspacePreviewHost
       }))
       const caller = {
         audience: 'ui' as const,

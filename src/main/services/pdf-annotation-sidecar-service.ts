@@ -42,7 +42,7 @@ import {
   resolveSafeWorkspaceWriteTarget,
   type ResolvedWorkspaceWriteTarget,
   writeSafeWorkspaceFile
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 const MAX_SIDECAR_JSON_BYTES = 16 * 1024 * 1024
 const MAX_IMPORT_PACKAGE_BYTES = 160 * 1024 * 1024

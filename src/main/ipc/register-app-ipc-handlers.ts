@@ -109,14 +109,6 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
-  paperRadarArxivSyncPayloadSchema,
-  paperRadarBiorxivSyncPayloadSchema,
-  paperRadarDigestPayloadSchema,
-  paperRadarProfilePayloadSchema,
-  paperRadarProfileSyncPayloadSchema,
-  paperRadarRankPayloadSchema,
-  paperRadarReviewPayloadSchema,
-  paperRadarSearchPayloadSchema,
   researchCardArchivePayloadSchema,
   researchCardCreatePayloadSchema,
   researchCardListPayloadSchema,
@@ -262,7 +254,6 @@ import {
   evaluateEvidenceDagHighImpactGate,
   type EvidenceDagGateMetadata
 } from '../../shared/evidence-dag-gate'
-import type { PaperRadarApiResult } from '../../shared/paper-radar'
 import type { ResearchCardService } from '../services/research-card-service'
 import type {
   AgentRuntimeApprovalResolveInput,
@@ -281,7 +272,6 @@ import type { RemoteChannelRuntime } from '../remote-channel-runtime'
 import type { DiscordBotRuntime } from '../discord-bot-runtime'
 import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import type { PaperRadarWorkerService } from '../services/paper-radar-worker-service'
 import { resolveEvidenceDagEvidencePreview } from '../services/evidence-dag-evidence-preview'
 import { resolveProjectDagEvidencePreview } from '../services/project-dag-evidence-preview'
 import { checkWorkflowCode, type WorkflowRuntime } from '../workflow-runtime'
@@ -437,7 +427,6 @@ type RegisterAppIpcHandlersOptions = {
   pollFeishuInstall: (deviceCode: string) => Promise<ConnectPhoneInstallPollResult>
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
   pollWeixinInstall: (deviceCode: string, weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallPollResult>
-  getPaperRadarService?: () => PaperRadarWorkerService | null
   researchCards?: ResearchCardService
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
@@ -1600,14 +1589,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       : { ok: false, message: 'Renderer performance monitor is not available.', mainSnapshot }
   })
 
-  const requirePaperRadarService = (): PaperRadarWorkerService => {
-    const service = options.getPaperRadarService?.()
-    if (!service) {
-      throw new Error('Paper Radar is not available in this build.')
-    }
-    return service
-  }
-
   const requireResearchCardService = (): ResearchCardService => {
     if (!options.researchCards) {
       throw new Error('Research card service is not initialized.')
@@ -1635,57 +1616,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('researchCards:archive', researchCardArchivePayloadSchema, payload)
     )
   )
-
-  const paperRadarRequest = async <T>(request: () => Promise<PaperRadarApiResult<T>>): Promise<PaperRadarApiResult<T>> => {
-    try {
-      return await request()
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  handleInvoke('paperRadar:status', async () => {
-    try {
-      return await requirePaperRadarService().status()
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
-    }
-  })
-  handleInvoke('paperRadar:sync-arxiv', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-arxiv', paperRadarArxivSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncArxiv(input))
-  })
-  handleInvoke('paperRadar:sync-biorxiv', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-biorxiv', paperRadarBiorxivSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncBiorxiv(input))
-  })
-  handleInvoke('paperRadar:sync-profile', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-profile', paperRadarProfileSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncProfile(input))
-  })
-  handleInvoke('paperRadar:profiles:list', async () =>
-    paperRadarRequest(() => requirePaperRadarService().listProfiles())
-  )
-  handleInvoke('paperRadar:profiles:save', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:profiles:save', paperRadarProfilePayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().saveProfile(input))
-  })
-  handleInvoke('paperRadar:review', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:review', paperRadarReviewPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().review(input))
-  })
-  handleInvoke('paperRadar:search', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:search', paperRadarSearchPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().search(input))
-  })
-  handleInvoke('paperRadar:rank', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:rank', paperRadarRankPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().rank(input))
-  })
-  handleInvoke('paperRadar:digest', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:digest', paperRadarDigestPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().digest(input))
-  })
 
   handleInvoke('visibleContext:publish', async (event, payload: unknown) => {
     const snapshot = parseIpcPayload('visibleContext:publish', visibleContextPublishPayloadSchema, payload)
@@ -2215,52 +2145,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('workspace:pick-file', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
-    const normalizedDefaultPath = parseIpcPayload(
+  handleInvoke('workspace:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+    const request = parseIpcPayload(
       'workspace:pick-file',
-      z.object({ defaultPath: defaultPathSchema }).strict(),
-      { defaultPath }
-    ).defaultPath
-    const options: Electron.OpenDialogOptions = {
-      title: 'Select reference figure',
-      defaultPath: normalizedDefaultPath,
-      properties: ['openFile', 'dontAddToRecent'],
-      filters: [
-        { name: 'Figures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'] },
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
-        { name: 'All Files', extensions: ['*'] }
-      ]
-    }
-    const mainWindow = getMainWindow()
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
-      : await dialog.showOpenDialog(options)
-    return {
-      canceled: result.canceled,
-      path: result.canceled ? null : (result.filePaths[0] ?? null)
-    }
-  })
-
-  handleInvoke('biologyRoom:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
-    const { workspaceRoot } = parseIpcPayload(
-      'biologyRoom:pick-file',
-      z.object({ workspaceRoot: z.string().trim().min(1).max(4_096) }).strict(),
+      z.object({
+        title: z.string().trim().min(1).max(160),
+        defaultPath: defaultPathSchema,
+        filters: z.array(z.object({
+          name: z.string().trim().min(1).max(80),
+          extensions: z.array(
+            z.string().trim().regex(/^(?:\*|[a-z0-9][a-z0-9.+_-]{0,31})$/i)
+          ).min(1).max(64)
+        }).strict()).min(1).max(16)
+      }).strict(),
       payload
     )
     const options: Electron.OpenDialogOptions = {
-      title: 'Select a biology asset',
-      defaultPath: workspaceRoot,
+      title: request.title,
+      defaultPath: request.defaultPath,
       properties: ['openFile', 'dontAddToRecent'],
-      filters: [
-        {
-          name: 'Biology files',
-          extensions: [
-            'fa', 'fasta', 'fna', 'faa', 'gb', 'gbk', 'pdb', 'cif', 'mmcif',
-            'gff', 'gff3', 'bed', 'vcf', 'gz'
-          ]
-        },
-        { name: 'All Files', extensions: ['*'] }
-      ]
+      filters: request.filters
     }
     const mainWindow = getMainWindow()
     const result = mainWindow

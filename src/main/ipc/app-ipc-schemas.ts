@@ -115,7 +115,6 @@ const scheduleKindSchema = z.enum(['manual', 'interval', 'daily', 'at'])
 const taskStatusSchema = z.enum(['idle', 'running', 'success', 'error'])
 const scheduleReasoningEffortSchema = z.enum(SCHEDULE_REASONING_EFFORT_IDS)
 const speechToTextProtocolSchema = z.enum(SPEECH_TO_TEXT_PROTOCOLS)
-const paperRadarSourceSchema = z.enum(['arxiv', 'biorxiv'])
 const researchCardKindSchema = z.enum(RESEARCH_CARD_KINDS)
 const researchCardStatusSchema = z.enum(RESEARCH_CARD_STATUSES)
 const researchCardStageSchema = z.enum(RESEARCH_CARD_STAGES)
@@ -363,65 +362,6 @@ export const agentRuntimeUserInputResolvePayloadSchema = z.object({
     label: z.string().trim().max(200).optional(),
     value: z.string().trim().max(MAX_CHANNEL_TEXT_LENGTH)
   }).strict()).max(50)
-}).strict()
-
-export const paperRadarArxivSyncPayloadSchema = z.object({
-  categories: z.array(z.string().trim().min(1).max(64)).max(50).optional(),
-  since: z.string().trim().max(64).optional(),
-  until: z.string().trim().max(64).optional(),
-  maxRecords: z.number().int().positive().max(2_000).optional()
-}).strict()
-
-export const paperRadarBiorxivSyncPayloadSchema = z.object({
-  from: z.string().trim().max(64).optional(),
-  to: z.string().trim().max(64).optional(),
-  maxRecords: z.number().int().positive().max(2_000).optional()
-}).strict()
-
-export const paperRadarProfileSyncPayloadSchema = z.object({
-  profile: z.string().trim().max(128).optional(),
-  from: z.string().trim().max(64).optional(),
-  to: z.string().trim().max(64).optional(),
-  maxRecords: z.number().int().positive().max(2_000).optional()
-}).strict()
-
-export const paperRadarSearchPayloadSchema = z.object({
-  query: z.string().trim().max(1_000).optional(),
-  sources: z.array(paperRadarSourceSchema).max(2).optional(),
-  categories: z.array(z.string().trim().min(1).max(64)).max(50).optional(),
-  from: z.string().trim().max(64).optional(),
-  to: z.string().trim().max(64).optional(),
-  topK: z.number().int().positive().max(100).optional()
-}).strict()
-
-export const paperRadarProfilePayloadSchema = z.object({
-  name: z.string().trim().min(1).max(80),
-  description: z.string().trim().max(500).optional(),
-  keywords: z.array(z.string().trim().min(1).max(128)).max(100),
-  excludeKeywords: z.array(z.string().trim().min(1).max(128)).max(100),
-  arxivCategories: z.array(z.string().trim().min(1).max(64)).max(50),
-  biorxivSubjects: z.array(z.string().trim().min(1).max(128)).max(50)
-}).strict()
-
-export const paperRadarReviewPayloadSchema = z.object({
-  profile: paperRadarProfilePayloadSchema,
-  days: z.number().int().positive().max(365).optional(),
-  topK: z.number().int().positive().max(100).optional(),
-  maxRecords: z.number().int().positive().max(2_000).optional()
-}).strict()
-
-export const paperRadarRankPayloadSchema = paperRadarSearchPayloadSchema.extend({
-  profile: z.string().trim().max(128).optional(),
-  keywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
-  excludeKeywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
-  days: z.number().int().positive().max(365).optional()
-}).strict()
-
-export const paperRadarDigestPayloadSchema = paperRadarSearchPayloadSchema.extend({
-  profile: z.string().trim().max(128).optional(),
-  keywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
-  excludeKeywords: z.array(z.string().trim().min(1).max(128)).max(50).optional(),
-  days: z.number().int().positive().max(365).optional()
 }).strict()
 
 const researchCardMetadataSchema = z.record(z.string(), z.unknown())

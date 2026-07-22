@@ -11,7 +11,7 @@ import type {
   EditorOpenResult,
   OpenEditorPathOptions
 } from '../../shared/editor'
-import { pathExists, resolveOpenTargetPath } from './workspace-paths'
+import { pathExists, resolveOpenTargetPath } from '@sciforge/domain-sdk/node/workspace-paths'
 
 const execFileAsync = promisify(execFile)
 

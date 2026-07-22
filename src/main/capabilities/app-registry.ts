@@ -1,19 +1,4 @@
 import { z } from 'zod'
-import {
-  biologyRoomApplyInputSchema,
-  biologyRoomCreateInputSchema,
-  biologyRoomFormatSchema,
-  biologyRoomHistoryInputSchema,
-  biologyRoomIdSchema,
-  biologyRoomListInputSchema,
-  biologyRoomObserveInputSchema,
-  biologyRoomOpenOrCreateInputSchema,
-  biologyRoomRefreshInputSchema,
-  biologyRoomTargetSchema,
-  type BiologyRoomApplyInput,
-  type BiologyRoomHistoryInput,
-  type BiologyRoomObserveInput
-} from '../../shared/biology-room'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
 import {
   SURFACE_RESOURCE_KIND,
@@ -46,40 +31,14 @@ import {
 import {
   workspacePreviewOpenPayloadSchema
 } from '../ipc/app-ipc-schemas'
-import type { BiologyRoomService } from '../services/biology-room-service'
 import type { VisibleContextService } from '../services/visible-context-service'
 import type { WorkspacePreviewHost } from '../services/workspace-preview'
-import { CapabilityRegistry, defineCapability, type CapabilityResourceRegistration } from './registry'
+import {
+  defineAppCapabilityContribution
+} from './app-contributions/composition'
+import { defineCapability, type CapabilityResourceRegistration } from './registry'
 
 export const WORKSPACE_PREVIEW_RESOURCE_KIND = 'workspace-preview'
-export const BIOLOGY_ROOM_RESOURCE_KIND = 'biology-room'
-
-export const MIGRATED_CAPABILITY_DOMAINS = [
-  {
-    id: 'workspace-preview',
-    title: 'Workspace Preview',
-    directTransportPrefixes: ['workspacePreview:'],
-    allowedDirectTransports: []
-  },
-  {
-    id: 'biology-room',
-    title: 'Biology Room',
-    directTransportPrefixes: ['biologyRoom:'],
-    allowedDirectTransports: ['biologyRoom:pick-file']
-  },
-  {
-    id: 'surface',
-    title: 'Surface Inspection',
-    directTransportPrefixes: [],
-    allowedDirectTransports: []
-  },
-  {
-    id: 'artifact',
-    title: 'Artifact Inspection',
-    directTransportPrefixes: [],
-    allowedDirectTransports: []
-  }
-] as const
 
 export const APP_CAPABILITY_IDS = {
   workspacePreviewList: 'workspace-preview.list',
@@ -99,14 +58,6 @@ export const APP_CAPABILITY_IDS = {
   workspacePreviewExport: 'workspace-preview.export',
   workspacePreviewInvokeAction: 'workspace-preview.invoke-action',
   workspacePreviewRelease: 'workspace-preview.release',
-  biologyRoomList: 'biology-room.list',
-  biologyRoomCreate: 'biology-room.create',
-  biologyRoomOpenOrCreate: 'biology-room.open-or-create',
-  biologyRoomLoad: 'biology-room.load',
-  biologyRoomOpen: 'biology-room.open',
-  biologyRoomApply: 'biology-room.apply',
-  biologyRoomRefresh: 'biology-room.refresh',
-  biologyRoomHistory: 'biology-room.history',
   surfaceCurrent: 'surface.current',
   surfaceInspect: 'surface.inspect',
   artifactInspect: 'artifact.inspect'
@@ -134,16 +85,6 @@ export type AppCapabilityDependencies = {
     | 'invokeAction'
     | 'releaseSession'
   >
-  biologyRoomService: Pick<BiologyRoomService,
-    | 'create'
-    | 'openOrCreate'
-    | 'load'
-    | 'list'
-    | 'observe'
-    | 'apply'
-    | 'refresh'
-    | 'history'
-  >
   visibleContextService?: Pick<VisibleContextService, 'currentSurface' | 'inspectSurface'>
   inspectArtifacts?: (workspaceRoot: string, input: ArtifactInspectInput) => Promise<ArtifactInspectOutput>
 }
@@ -167,46 +108,19 @@ const workspacePreviewPrepareArtifactInputSchema = z.object({
 const workspacePreviewReadArtifactRangeInputSchema = z.object({
   request: workspacePreviewReadArtifactRangeRequestSchema
 }).strict()
-const workspacePreviewBrokerEditOperationSchema: z.ZodType<WorkspacePreviewEditOperation> = z.discriminatedUnion('kind', [
-  workspacePreviewEditOperationSchema.options[0]!,
-  workspacePreviewEditOperationSchema.options[1]!,
-  workspacePreviewEditOperationSchema.options[2]!,
-  workspacePreviewEditOperationSchema.options[3]!,
-  workspacePreviewEditOperationSchema.options[4]!,
-  workspacePreviewEditOperationSchema.options[5]!,
-  workspacePreviewEditOperationSchema.options[6]!,
-  workspacePreviewEditOperationSchema.options[7]!,
-  workspacePreviewEditOperationSchema.options[8]!,
-  workspacePreviewEditOperationSchema.options[12]!
-])
+const workspacePreviewBrokerEditOperationOptions = workspacePreviewEditOperationSchema.options
+  .filter((schema) => !schema.shape.kind.value.startsWith('annotation.')) as [
+    (typeof workspacePreviewEditOperationSchema.options)[number],
+    (typeof workspacePreviewEditOperationSchema.options)[number],
+    ...(typeof workspacePreviewEditOperationSchema.options)[number][]
+  ]
+const workspacePreviewBrokerEditOperationSchema: z.ZodType<WorkspacePreviewEditOperation> =
+  z.discriminatedUnion('kind', workspacePreviewBrokerEditOperationOptions)
 const workspacePreviewApplyEditInputSchema = z.object({
   operation: workspacePreviewBrokerEditOperationSchema
 }).strict()
 const workspacePreviewExportInputSchema = z.object({ target: workspacePreviewExportTargetSchema }).strict()
 const workspacePreviewInvokeActionInputSchema = z.object({ action: workspacePreviewPluginActionInputSchema }).strict()
-const biologyRoomApplyWireSchema = z.object({
-  dryRun: z.boolean().optional(),
-  operations: z.array(z.unknown()).min(1).max(100),
-  actor: z.unknown().optional()
-}).strict()
-const biologyRoomCreateWireSchema = z.object({
-  roomId: biologyRoomIdSchema.optional(),
-  title: z.string().trim().min(1).max(300),
-  assets: z.array(z.unknown()).max(128).optional(),
-  actor: z.unknown().optional()
-}).strict()
-const biologyRoomOpenOrCreateWireSchema = z.object({
-  path: z.string().trim().min(1).max(4_096),
-  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
-  title: z.string().trim().min(1).max(300).optional(),
-  format: biologyRoomFormatSchema.optional(),
-  asReference: z.boolean().optional(),
-  indexPaths: z.array(z.string().trim().min(1).max(4_096)).max(4).optional(),
-  referenceAssetId: z.string().trim().min(1).max(256).optional(),
-  actor: z.unknown().optional()
-}).strict()
-const biologyRoomLoadWireSchema = z.object({ roomId: biologyRoomIdSchema }).strict()
-const biologyRoomRefreshWireSchema = z.object({ actor: z.unknown().optional() }).strict()
 const capabilityOutputSchema = capabilityJsonValueSchema
 
 function workspacePreviewRevision(session: WorkspacePreviewSession): string {
@@ -304,41 +218,9 @@ function requireWorkspacePreviewSession(
   return session
 }
 
-function biologyRoomResource(
-  dependencies: AppCapabilityDependencies,
-  target: BiologyRoomObserveInput,
-  revision: number
-): CapabilityResourceRegistration {
-  return {
-    resourceId: target.roomId,
-    resourceKind: BIOLOGY_ROOM_RESOURCE_KIND,
-    workspaceId: target.workspaceRoot,
-    audiences: ['ui', 'agent', 'system'],
-    semanticRevision: String(revision),
-    observe: async () => {
-      const observed = await dependencies.biologyRoomService.observe(target)
-      return {
-        semanticRevision: String(observed.revision),
-        state: capabilityJsonValueSchema.parse(observed),
-        operationIds: [
-          APP_CAPABILITY_IDS.biologyRoomApply,
-          APP_CAPABILITY_IDS.biologyRoomRefresh,
-          APP_CAPABILITY_IDS.biologyRoomHistory
-        ]
-      }
-    }
-  }
-}
-
 function resourceSessionId(resource: { resourceId: string } | undefined): string {
   if (!resource) throw new Error('Capability resource is required.')
   return resource.resourceId
-}
-
-function workspaceId(resource: { workspaceId?: string } | undefined): string {
-  const value = resource?.workspaceId?.trim()
-  if (!value) throw new Error('Capability workspace scope is required.')
-  return value
 }
 
 type CurrentSurface = Awaited<ReturnType<VisibleContextService['currentSurface']>>
@@ -444,10 +326,8 @@ function artifactCapabilities(
   })]
 }
 
-export function createAppCapabilityRegistry(dependencies: AppCapabilityDependencies): CapabilityRegistry {
-  return new CapabilityRegistry([
-    ...surfaceCapabilities(dependencies.visibleContextService),
-    ...artifactCapabilities(dependencies.inspectArtifacts),
+function workspacePreviewCapabilities(dependencies: AppCapabilityDependencies) {
+  return [
     defineCapability({
       id: APP_CAPABILITY_IDS.workspacePreviewList,
       version: '1.0.0',
@@ -840,223 +720,42 @@ export function createAppCapabilityRegistry(dependencies: AppCapabilityDependenc
         output: dependencies.workspacePreviewHost.releaseSession(resourceSessionId(context.resource)),
         changed: false
       })
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomList,
-      version: '1.0.0',
-      title: 'List Biology Rooms',
-      description: 'Lists Biology Rooms in the caller workspace.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'workspace',
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['biology', 'room', 'discovery'],
-      inputSchema: biologyRoomListInputSchema.omit({ workspaceRoot: true }),
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => ({
-        output: capabilityJsonValueSchema.parse(await dependencies.biologyRoomService.list({
-          workspaceRoot: context.caller.workspaceId ?? '',
-          ...input
-        }))
-      })
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomCreate,
-      version: '1.0.0',
-      title: 'Create Biology Room',
-      description: 'Creates a Biology Room in the caller workspace and returns a scoped resource handle.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'workspace',
-      effect: 'workspace-write',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'required' },
-      tags: ['biology', 'room', 'create'],
-      inputSchema: biologyRoomCreateWireSchema,
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const workspaceRoot = context.caller.workspaceId ?? ''
-        const manifest = await dependencies.biologyRoomService.create(
-          biologyRoomCreateInputSchema.parse({ workspaceRoot, ...input })
-        )
-        const resource = context.issueResource(biologyRoomResource(
-          dependencies,
-          { workspaceRoot, roomId: manifest.roomId },
-          manifest.revision
-        ))
-        return { output: capabilityJsonValueSchema.parse({ manifest, resource }) }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomOpenOrCreate,
-      version: '1.0.0',
-      title: 'Open or create Biology Room',
-      description: 'Opens the room for a workspace biology asset, creating it through the canonical service when needed.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'workspace',
-      effect: 'workspace-write',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'required' },
-      tags: ['biology', 'room', 'open'],
-      inputSchema: biologyRoomOpenOrCreateWireSchema,
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const workspaceRoot = context.caller.workspaceId ?? ''
-        const result = await dependencies.biologyRoomService.openOrCreate(
-          biologyRoomOpenOrCreateInputSchema.parse({ workspaceRoot, ...input })
-        )
-        const resource = context.issueResource(biologyRoomResource(
-          dependencies,
-          { workspaceRoot, roomId: result.manifest.roomId },
-          result.manifest.revision
-        ))
-        return { output: capabilityJsonValueSchema.parse({ ...result, resource }) }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomLoad,
-      version: '1.0.0',
-      title: 'Load Biology Room',
-      description: 'Loads a Biology Room manifest and returns its scoped resource handle.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'workspace',
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['biology', 'room', 'load'],
-      inputSchema: biologyRoomLoadWireSchema,
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const workspaceRoot = context.caller.workspaceId ?? ''
-        const manifest = await dependencies.biologyRoomService.load({ workspaceRoot, roomId: input.roomId })
-        const resource = context.issueResource(biologyRoomResource(
-          dependencies,
-          { workspaceRoot, roomId: manifest.roomId },
-          manifest.revision
-        ))
-        return { output: capabilityJsonValueSchema.parse({ manifest, resource }) }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomOpen,
-      version: '1.0.0',
-      title: 'Open Biology Room resource',
-      description: 'Observes a Biology Room and returns a scoped resource handle.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'workspace',
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['biology', 'room'],
-      inputSchema: biologyRoomTargetSchema.omit({ workspaceRoot: true }).merge(
-        biologyRoomObserveInputSchema.pick({ assetLimit: true, annotationLimit: true, contigLimit: true }).partial()
-      ),
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const target = biologyRoomObserveInputSchema.parse({
-          workspaceRoot: context.caller.workspaceId ?? '',
-          ...input
-        })
-        const observation = await dependencies.biologyRoomService.observe(target)
-        const resource = context.issueResource(biologyRoomResource(dependencies, target, observation.revision))
-        return { output: capabilityJsonValueSchema.parse({ observation, resource }) }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomApply,
-      version: '1.0.0',
-      title: 'Apply Biology Room operations',
-      description: 'Applies revisioned Biology Room operations using the canonical service.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'resource',
-      resourceKinds: [BIOLOGY_ROOM_RESOURCE_KIND],
-      effect: 'workspace-write',
-      approval: 'none',
-      concurrency: { revision: 'optimistic', idempotency: 'required' },
-      tags: ['biology', 'room', 'edit'],
-      inputSchema: biologyRoomApplyWireSchema,
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const resource = context.resource
-        const request: BiologyRoomApplyInput = biologyRoomApplyInputSchema.parse({
-          ...input,
-          workspaceRoot: workspaceId(resource),
-          roomId: resourceSessionId(resource),
-          baseRevision: Number(resource?.semanticRevision)
-        })
-        const result = await dependencies.biologyRoomService.apply(request)
-        return {
-          output: capabilityJsonValueSchema.parse(result),
-          changed: result.changed && !result.dryRun,
-          ...(result.changed && !result.dryRun ? { semanticRevision: String(result.revision) } : {})
-        }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomRefresh,
-      version: '1.0.0',
-      title: 'Refresh Biology Room assets',
-      description: 'Refreshes source-backed assets in the current Biology Room through the canonical service.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'resource',
-      resourceKinds: [BIOLOGY_ROOM_RESOURCE_KIND],
-      effect: 'workspace-write',
-      approval: 'none',
-      concurrency: { revision: 'optimistic', idempotency: 'required' },
-      tags: ['biology', 'room', 'refresh'],
-      inputSchema: biologyRoomRefreshWireSchema,
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const resource = context.resource
-        const result = await dependencies.biologyRoomService.refresh(
-          biologyRoomRefreshInputSchema.parse({
-            ...input,
-            workspaceRoot: workspaceId(resource),
-            roomId: resourceSessionId(resource)
-          })
-        )
-        return {
-          output: capabilityJsonValueSchema.parse(result),
-          changed: result.changed,
-          ...(result.changed ? { semanticRevision: String(result.revision) } : {})
-        }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.biologyRoomHistory,
-      version: '1.0.0',
-      title: 'Read Biology Room history',
-      description: 'Returns bounded revision history for the current Biology Room.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'resource',
-      resourceKinds: [BIOLOGY_ROOM_RESOURCE_KIND],
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['biology', 'room', 'history'],
-      inputSchema: biologyRoomHistoryInputSchema.omit({ workspaceRoot: true, roomId: true }),
-      outputSchema: capabilityOutputSchema,
-      handler: async (input, context) => {
-        const resource = context.resource
-        const request: BiologyRoomHistoryInput = {
-          ...input,
-          workspaceRoot: workspaceId(resource),
-          roomId: resourceSessionId(resource)
-        }
-        return { output: capabilityJsonValueSchema.parse(await dependencies.biologyRoomService.history(request)) }
-      }
     })
-  ])
+  ]
 }
 
-export function createCapabilityDocumentationRegistry(): CapabilityRegistry {
-  const unavailable = (): never => {
-    throw new Error('Capability documentation providers cannot execute actions.')
-  }
-  return createAppCapabilityRegistry({
-    workspacePreviewHost: new Proxy({}, { get: () => unavailable }) as AppCapabilityDependencies['workspacePreviewHost'],
-    biologyRoomService: new Proxy({}, { get: () => unavailable }) as AppCapabilityDependencies['biologyRoomService'],
-    visibleContextService: new Proxy({}, { get: () => unavailable }) as NonNullable<AppCapabilityDependencies['visibleContextService']>,
-    inspectArtifacts: unavailable
-  })
-}
+export const WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY =
+  defineAppCapabilityContribution<AppCapabilityDependencies>(
+    'sciforge.workspace-preview',
+    workspacePreviewCapabilities,
+    {
+      id: 'workspace-preview',
+      title: 'Workspace Preview',
+      directTransportPrefixes: ['workspacePreview:'],
+      allowedDirectTransports: []
+    }
+  )
+
+export const SURFACE_CAPABILITY_CONTRIBUTION_FACTORY =
+  defineAppCapabilityContribution<AppCapabilityDependencies>(
+    'sciforge.surface',
+    (dependencies) => surfaceCapabilities(dependencies.visibleContextService),
+    {
+      id: 'surface',
+      title: 'Surface Inspection',
+      directTransportPrefixes: [],
+      allowedDirectTransports: []
+    }
+  )
+
+export const ARTIFACT_CAPABILITY_CONTRIBUTION_FACTORY =
+  defineAppCapabilityContribution<AppCapabilityDependencies>(
+    'sciforge.artifact',
+    (dependencies) => artifactCapabilities(dependencies.inspectArtifacts),
+    {
+      id: 'artifact',
+      title: 'Artifact Inspection',
+      directTransportPrefixes: [],
+      allowedDirectTransports: []
+    }
+  )

@@ -11,7 +11,7 @@ import {
   canonicalPath,
   expandHomePath,
   resolveOpenTargetPath
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 type PreviewServerRecord = {
   root: string

@@ -17,7 +17,6 @@ export default defineConfig({
           'workspace-intel-mcp-node-entry': resolve('src/main/workspace-intel-mcp-node-entry.ts'),
           'remote-executor-mcp-node-entry': resolve('src/main/remote-executor-mcp-node-entry.ts'),
           'write-assist-mcp-node-entry': resolve('src/main/write-assist-mcp-node-entry.ts'),
-          'paper-radar-mcp-node-entry': resolve('src/main/paper-radar-mcp-node-entry.ts'),
           'runtime-inspector-mcp-node-entry': resolve('src/main/runtime-inspector-mcp-node-entry.ts'),
           'scientific-skills-mcp-node-entry': resolve('src/main/scientific-skills-mcp-node-entry.ts'),
           'scientific-plotting-mcp-node-entry': resolve('src/main/scientific-plotting-mcp-node-entry.ts'),
@@ -31,9 +30,8 @@ export default defineConfig({
     }
   },
   preload: {
-    // Capability facades validate broker payloads inside the sandboxed preload.
-    // Sandbox preloads cannot resolve arbitrary external packages at runtime,
-    // so bundle the contract validator instead of emitting require("zod").
+    // Sandbox preloads cannot resolve external zod at runtime; keep it bundled
+    // whenever shared preload code pulls it into this build graph.
     plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
       rollupOptions: {

@@ -1,17 +1,12 @@
 import type { FormEvent, ReactElement, ReactNode } from 'react'
 import { useId, useMemo, useState } from 'react'
 import {
-  Atom,
-  BarChart3,
-  Dna,
+  Box,
   ExternalLink,
-  ImageIcon,
   MessageSquareQuote,
-  Microscope,
   Plus,
   Tags,
   Trash2,
-  Waves,
   type LucideIcon
 } from 'lucide-react'
 import type {
@@ -69,7 +64,7 @@ export type ScientificObjectCardProps = {
 const DEFAULT_LABELS: ScientificObjectCardLabels = {
   openWorkspace: 'Open in workspace',
   askAboutSelection: 'Ask about current selection',
-  selectionRequired: 'Select a chain, residue, atom, or ligand first',
+  selectionRequired: 'Select an item or region first',
   annotations: 'Annotations',
   addAnnotation: 'Add annotation',
   annotationPlaceholder: 'Record an observation…',
@@ -80,79 +75,10 @@ const DEFAULT_LABELS: ScientificObjectCardLabels = {
   unknownValue: 'Not reported'
 }
 
-const MODALITY_META: Record<ScientificObjectModality, { label: string; icon: LucideIcon; tone: string }> = {
-  molecular: {
-    label: 'Molecular structure',
-    icon: Atom,
-    tone: 'border-violet-400/25 bg-violet-500/10 text-violet-700 dark:text-violet-300'
-  },
-  sequence: {
-    label: 'Sequence',
-    icon: Dna,
-    tone: 'border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-  },
-  spectra: {
-    label: 'Spectrum',
-    icon: Waves,
-    tone: 'border-amber-400/25 bg-amber-500/10 text-amber-800 dark:text-amber-200'
-  },
-  omics: {
-    label: 'Omics dataset',
-    icon: BarChart3,
-    tone: 'border-cyan-400/25 bg-cyan-500/10 text-cyan-800 dark:text-cyan-200'
-  },
-  bioimaging: {
-    label: 'Bioimage',
-    icon: Microscope,
-    tone: 'border-rose-400/25 bg-rose-500/10 text-rose-700 dark:text-rose-300'
-  }
-}
-
-type FactDefinition = {
+type ScientificObjectModalityMeta = {
   label: string
-  keys: string[]
-}
-
-const FACT_DEFINITIONS: Record<ScientificObjectModality, FactDefinition[]> = {
-  molecular: [
-    { label: 'Models', keys: ['modelCount', 'models'] },
-    { label: 'Chains', keys: ['chainCount', 'chains'] },
-    { label: 'Residues', keys: ['residueCount', 'residues'] },
-    { label: 'Atoms', keys: ['atomCount', 'atoms'] },
-    { label: 'Ligands', keys: ['ligandCount', 'ligands'] },
-    { label: 'Formula', keys: ['formula', 'molecularFormula'] }
-  ],
-  sequence: [
-    { label: 'Sequences', keys: ['sequenceCount', 'recordCount', 'records'] },
-    { label: 'Length', keys: ['totalLength', 'sequenceLength', 'length'] },
-    { label: 'Alphabet', keys: ['alphabet', 'moleculeType', 'sequenceType'] },
-    { label: 'Features', keys: ['featureCount', 'features'] },
-    { label: 'References', keys: ['referenceCount', 'references'] }
-  ],
-  spectra: [
-    { label: 'Spectra', keys: ['spectrumCount', 'spectra'] },
-    { label: 'Peaks', keys: ['peakCount', 'sampledPeaks', 'peaks'] },
-    { label: 'Scans', keys: ['scanCount', 'scanMarkers', 'scans'] },
-    { label: 'X axis', keys: ['xAxis', 'xUnit'] },
-    { label: 'm/z range', keys: ['mzRange', 'xRange'] },
-    { label: 'Intensity', keys: ['intensityRange', 'yRange'] }
-  ],
-  omics: [
-    { label: 'Format', keys: ['format', 'assay', 'assayType'] },
-    { label: 'Matrix', keys: ['matrixShape', 'dimensions', 'shape'] },
-    { label: 'Observations', keys: ['observationCount', 'sampleCount', 'nObs'] },
-    { label: 'Variables', keys: ['variableCount', 'featureCount', 'geneCount', 'nVars'] },
-    { label: 'Embeddings', keys: ['embeddingCount', 'embeddings'] },
-    { label: 'Matrices', keys: ['matrixCount', 'matrixIds'] }
-  ],
-  bioimaging: [
-    { label: 'Format', keys: ['format', 'imageFormat'] },
-    { label: 'Dimensions', keys: ['dimensions', 'imageDimensions', 'shape'] },
-    { label: 'Channels', keys: ['channelCount', 'channels'] },
-    { label: 'Z slices', keys: ['z', 'zCount', 'sliceCount'] },
-    { label: 'Time points', keys: ['t', 'frameCount', 'timepointCount'] },
-    { label: 'Resolution', keys: ['pixelSize', 'resolution', 'voxelSize'] }
-  ]
+  icon: LucideIcon
+  tone: string
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -229,8 +155,24 @@ export function formatScientificObjectFact(value: unknown): string | undefined {
 }
 
 function normalizeModality(value: unknown): ScientificObjectModality {
-  if (value === 'sequence' || value === 'spectra' || value === 'omics' || value === 'bioimaging') return value
-  return 'molecular'
+  return typeof value === 'string' && value.trim() ? value.trim() : 'unknown'
+}
+
+function formatModalityLabel(modality: ScientificObjectModality): string {
+  const leaf = modality.split('.').filter(Boolean).at(-1) ?? modality
+  return leaf
+    .split(/[._-]+/u)
+    .filter(Boolean)
+    .map((part) => `${part[0]?.toUpperCase() ?? ''}${part.slice(1)}`)
+    .join(' ') || 'Scientific object'
+}
+
+function modalityMeta(modality: ScientificObjectModality): ScientificObjectModalityMeta {
+  return {
+    label: formatModalityLabel(modality),
+    icon: Box,
+    tone: 'border-slate-400/25 bg-slate-500/10 text-slate-700 dark:text-slate-300'
+  }
 }
 
 function basename(path: string): string {
@@ -246,24 +188,61 @@ function clampText(value: string | undefined, max = 240): string | undefined {
 
 function objectScopes(record: Record<string, unknown>, modality: ScientificObjectModality): Array<Record<string, unknown> | undefined> {
   const facts = asRecord(record.facts)
+  const metadata = asRecord(record.metadata)
   const preview = asRecord(record.preview)
   const observation = asRecord(record.observation)
+  const modalityLeaf = modality.split('.').filter(Boolean).at(-1) ?? modality
+  const pluginMetadataScopes = pluginMetadataRecords(observation)
   return [
-    asRecord(record[modality]),
-    facts && asRecord(facts[modality]),
-    preview && asRecord(preview[modality]),
-    observation && asRecord(observation[modality]),
+    ownRecord(record, modality),
+    ownRecord(record, modalityLeaf),
+    facts && ownRecord(facts, modality),
+    facts && ownRecord(facts, modalityLeaf),
+    metadata && ownRecord(metadata, modality),
+    metadata && ownRecord(metadata, modalityLeaf),
+    preview && ownRecord(preview, modality),
+    preview && ownRecord(preview, modalityLeaf),
+    observation && ownRecord(observation, modality),
+    observation && ownRecord(observation, modalityLeaf),
+    ...pluginMetadataScopes.flatMap((scope) => [
+      ownRecord(scope, modality),
+      ownRecord(scope, modalityLeaf),
+      scope
+    ]),
     facts,
+    metadata,
     preview,
     observation,
     record
   ]
 }
 
+function pluginMetadataRecords(
+  observation: Record<string, unknown> | undefined
+): Record<string, unknown>[] {
+  const items = observation?.pluginMetadata
+  if (!Array.isArray(items)) return []
+  return items.flatMap((item) => {
+    const data = asRecord(asRecord(item)?.data)
+    if (!data) return []
+    return [
+      ...Object.values(data).map(asRecord).filter(
+        (value): value is Record<string, unknown> => Boolean(value)
+      ),
+      data
+    ]
+  })
+}
+
+function ownRecord(record: Record<string, unknown>, key: string): Record<string, unknown> | undefined {
+  return Object.prototype.hasOwnProperty.call(record, key) ? asRecord(record[key]) : undefined
+}
+
 function fallbackFacts(scopes: readonly (Record<string, unknown> | undefined)[]): ScientificObjectFact[] {
   const ignored = new Set([
     'id', 'kind', 'type', 'modality', 'title', 'name', 'label', 'description', 'summary', 'path',
-    'source', 'preview', 'observation', 'provenance', 'annotations', 'selection', 'actions', 'schemaVersion',
+    'source', 'facts', 'metadata', 'preview', 'observation', 'provenance', 'annotations', 'selection',
+    'actions', 'schemaVersion', 'wireVersion', 'pluginMetadata',
     'workspaceRoot', 'mimeType', 'hash', 'sessionId'
   ])
   const facts: ScientificObjectFact[] = []
@@ -280,7 +259,7 @@ function fallbackFacts(scopes: readonly (Record<string, unknown> | undefined)[])
         .replace(/^./, (character) => character.toUpperCase())
       facts.push({ label, value })
       seen.add(key)
-      if (facts.length === 4) return facts
+      if (facts.length === 6) return facts
     }
   }
   return facts
@@ -314,22 +293,20 @@ export function scientificObjectCardViewModel(object: ScientificObjectRef): Scie
   const observation = asRecord(record.observation)
   const view = observation && asRecord(observation.view)
   const modality = normalizeModality(record.modality ?? view?.modality)
+  const meta = modalityMeta(modality)
   const scopes = objectScopes(record, modality)
   const sourcePath = readNonEmptyString(record, 'path', 'relativePath', 'absolutePath', 'uri')
     ?? readNonEmptyString(asRecord(observation?.file), 'path')
   const title = readNonEmptyString(record, 'title', 'label', 'name')
     ?? readNonEmptyString(view, 'title')
-    ?? (sourcePath ? basename(sourcePath) : MODALITY_META[modality].label)
-  const facts = FACT_DEFINITIONS[modality].flatMap(({ label, keys }) => {
-    const value = formatScientificObjectFact(readFirstValue(scopes, keys))
-    return value ? [{ label, value }] : []
-  })
+    ?? (sourcePath ? basename(sourcePath) : meta.label)
+  const facts = fallbackFacts(scopes)
   const id = readNonEmptyString(record, 'id', 'objectId') ?? `${modality}:${sourcePath ?? title}`
 
   return {
     id,
     modality,
-    modalityLabel: MODALITY_META[modality].label,
+    modalityLabel: meta.label,
     title,
     description: clampText(
       readNonEmptyString(record, 'description', 'summary')
@@ -340,7 +317,7 @@ export function scientificObjectCardViewModel(object: ScientificObjectRef): Scie
     sourceLabel: sourcePath ? basename(sourcePath) : undefined,
     formatLabel: sourceFormat(record) ?? formatScientificObjectFact(readFirstValue(scopes, ['format'])),
     provenanceLabel: provenanceSummary(record),
-    facts: facts.length > 0 ? facts : fallbackFacts(scopes)
+    facts
   }
 }
 
@@ -379,8 +356,9 @@ function selectionFromObject(object: ScientificObjectRef): unknown {
 function selectionHasContent(selection: unknown): boolean {
   const record = asRecord(selection)
   if (!record) return false
-  return Object.entries(record).some(([key, value]) => {
-    if (key === 'kind') return false
+  const payload = selectionPayload(record)
+  return Object.entries(payload).some(([key, value]) => {
+    if (key === 'kind' || key === 'wireVersion') return false
     if (Array.isArray(value)) return value.length > 0
     return value !== undefined && value !== null && value !== ''
   })
@@ -389,15 +367,34 @@ function selectionHasContent(selection: unknown): boolean {
 export function summarizeScientificObjectSelection(selection: unknown): string | undefined {
   const record = asRecord(selection)
   if (!record || !selectionHasContent(selection)) return undefined
-  const kind = readNonEmptyString(record, 'kind')
+  const payload = selectionPayload(record)
+  const kind = selectionLabel(record, payload)
   const details: string[] = []
   for (const key of ['chains', 'residues', 'atoms', 'ligands', 'ranges', 'features', 'peaks', 'channels', 'regions', 'roiIds', 'obsKeys', 'varKeys']) {
-    const value = record[key]
+    const value = payload[key]
     if (!Array.isArray(value) || value.length === 0) continue
     details.push(`${value.length} ${key.replace(/([A-Z])/g, ' $1').toLowerCase()}`)
     if (details.length === 2) break
   }
   return [kind, ...details].filter(Boolean).join(' · ') || undefined
+}
+
+function selectionPayload(selection: Record<string, unknown>): Record<string, unknown> {
+  if (selection.kind !== 'domain') return selection
+  const data = asRecord(selection.data)
+  return asRecord(data?.selection) ?? data ?? selection
+}
+
+function selectionLabel(
+  selection: Record<string, unknown>,
+  payload: Record<string, unknown>
+): string | undefined {
+  if (selection.kind !== 'domain') return readNonEmptyString(payload, 'kind')
+  const selectionType = readNonEmptyString(selection, 'selectionType')
+  if (!selectionType) return readNonEmptyString(payload, 'kind') ?? 'domain'
+  const segments = selectionType.split('.').filter(Boolean)
+  const leafIndex = segments.at(-1) === 'selection' ? -2 : -1
+  return segments.at(leafIndex) ?? readNonEmptyString(payload, 'kind') ?? 'domain'
 }
 
 function mergeClassNames(...values: Array<string | undefined | false>): string {
@@ -474,7 +471,7 @@ export function ScientificObjectCard({
   const titleId = useId()
   const annotationInputId = useId()
   const resolvedAnnotations = annotations ?? annotationsFromObject(object)
-  const meta = MODALITY_META[model.modality]
+  const meta = modalityMeta(model.modality)
   const Icon = meta.icon
   const selectionSummary = summarizeScientificObjectSelection(currentSelection)
 
@@ -645,8 +642,8 @@ export function ScientificObjectCard({
 }
 
 export function ScientificObjectStaticPlaceholder({ modality }: { modality: ScientificObjectModality }): ReactElement {
-  const meta = MODALITY_META[modality]
-  const Icon = modality === 'bioimaging' ? ImageIcon : meta.icon
+  const meta = modalityMeta(modality)
+  const Icon = meta.icon
   return (
     <div className={mergeClassNames('flex h-28 items-center justify-center rounded-xl border', meta.tone)} aria-label={meta.label}>
       <Icon className="h-8 w-8" strokeWidth={1.5} aria-hidden="true" />
