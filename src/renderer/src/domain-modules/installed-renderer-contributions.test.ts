@@ -24,22 +24,35 @@ describe('installed renderer contributions', () => {
       title: contribution.title,
       resourceKind: contribution.resourceKind,
       available: contribution.isAvailable()
-    }))).toEqual([{
-      id: 'paper-radar.workbench-right-panel',
-      ownerId: 'sciforge.paper-radar',
-      mode: 'paper',
-      label: 'rightPanelPaperRadar',
-      title: 'Paper radar',
-      resourceKind: 'paper-radar',
-      available: true
-    }])
+    }))).toEqual([
+      {
+        id: 'paper-radar.workbench-right-panel',
+        ownerId: 'sciforge.paper-radar',
+        mode: 'paper',
+        label: 'rightPanelPaperRadar',
+        title: 'Paper radar',
+        resourceKind: 'paper-radar',
+        available: true
+      },
+      {
+        id: 'remote-ssh.workbench-right-panel',
+        ownerId: 'sciforge.remote-ssh',
+        mode: 'remote-ssh',
+        label: 'rightPanelRemoteSsh',
+        title: 'Remote targets',
+        resourceKind: 'remote-ssh-target',
+        available: true
+      }
+    ])
     expect(translations.bundle('en', 'common')).toMatchObject({
       coreTitle: 'Core',
-      paperRadarTitle: 'Paper Radar'
+      paperRadarTitle: 'Paper Radar',
+      remoteSshTitle: 'Remote Targets'
     })
     expect(translations.bundle('zh', 'common')).toMatchObject({
       coreTitle: '核心',
-      paperRadarTitle: '论文雷达'
+      paperRadarTitle: '论文雷达',
+      remoteSshTitle: '远程资源'
     })
 
     runtime.dispose()

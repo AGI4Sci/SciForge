@@ -11,6 +11,7 @@ import {
   CAPABILITY_AGENT_TOOL_NAMES,
   CapabilityAgentToolError,
   createCapabilityAgentToolSurface,
+  type CapabilityAgentApprovalRequest,
   type CapabilityAgentBroker,
   type CapabilityAgentToolRequestContext
 } from './agent-tools'
@@ -78,7 +79,16 @@ describe('CapabilityAgentToolSurface', () => {
       context
     })
     if (expanded.tool !== CAPABILITY_AGENT_TOOL_NAMES.discover) throw new Error('Expected discover result.')
-    expect(expanded.value[0]).toHaveProperty('inputShape')
+    expect(expanded.value[0]).toMatchObject({
+      inputShape: {
+        properties: {
+          query: {
+            pattern: '^query_[A-Za-z0-9_-]{4,32}$',
+            description: 'A caller-generated query identifier.'
+          }
+        }
+      }
+    })
   })
 
   it('keeps handles, revisions, action ids, and mutation ids inside the adapter', async () => {
@@ -86,7 +96,10 @@ describe('CapabilityAgentToolSurface', () => {
     const documentHandle = handle('document-revision', 'b')
     const open = descriptor('surface.current', 'Open current surface', 'global', 'read')
     const inspect = descriptor('surface.inspect', 'Inspect surface', 'resource', 'read')
-    const mutate = descriptor('document.update', 'Update document', 'resource', 'workspace-write')
+    const mutate = {
+      ...descriptor('document.update', 'Update document', 'resource', 'workspace-write'),
+      approval: 'confirmation' as const
+    }
     const surfaceObservation = observation(
       surfaceHandle,
       'res_surface_abcdefghijklmnopqrstuvwxyz',
@@ -117,6 +130,7 @@ describe('CapabilityAgentToolSurface', () => {
       replayed: false,
       completedAt: '2026-07-16T11:00:00.000Z'
     }))
+    const requestApproval = vi.fn(async (_request: CapabilityAgentApprovalRequest) => 'allowed' as const)
     const surface = createCapabilityAgentToolSurface({
       broker: {
         discover,
@@ -125,7 +139,8 @@ describe('CapabilityAgentToolSurface', () => {
         invoke,
         listEvents: vi.fn(async () => [])
       },
-      resolveCaller: () => caller
+      resolveCaller: () => caller,
+      requestApproval
     })
 
     const discovered = await surface.call({
@@ -159,13 +174,23 @@ describe('CapabilityAgentToolSurface', () => {
       context
     })
 
-    expect(invoke).toHaveBeenLastCalledWith(caller, expect.objectContaining({
+    const approvedInvocationId = requestApproval.mock.calls[0]?.[0].invocationId
+    expect(requestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      actionId: mutate.id,
+      resourceRef: documentRef,
+      resourceLabel: 'Paper',
+      input: { title: 'Updated' }
+    }), expect.any(Object))
+    expect(invoke).toHaveBeenLastCalledWith(expect.objectContaining({
+      ...caller,
+      approvals: [{ actionId: mutate.id, invocationId: approvedInvocationId, mode: 'confirmation' }]
+    }), expect.objectContaining({
       actionId: mutate.id,
       resource: documentHandle,
       expectedRevision: documentHandle.semanticRevision,
-      invocationId: expect.stringMatching(/^agent_inv_/u),
+      invocationId: approvedInvocationId,
       input: { title: 'Updated' }
-    }), { context })
+    }), { context, signal: expect.any(AbortSignal) })
     expect(JSON.stringify({ opened, observed })).not.toMatch(
       /cap_|semanticRevision|expiresAt|actionId|invocationId|expectedRevision|snapshotToken|componentId/u
     )
@@ -234,6 +259,127 @@ describe('CapabilityAgentToolSurface', () => {
       context
     })
     expect(renewed.value).toMatchObject({ resourceRef: transferred.resourceRef, state: { title: 'Paper' } })
+  })
+
+  it('waits for human confirmation and grants only the approved action invocation', async () => {
+    const handler = vi.fn(async () => ({ output: { ok: true } }))
+    const publish = defineCapability({
+      id: 'test.publish',
+      version: '1',
+      title: 'Publish result',
+      description: 'Publishes a result outside the workspace.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ value: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler
+    })
+    const broker = new CapabilityBroker(new CapabilityRegistry([publish]))
+    let nextDecision: 'allowed' | 'denied' | 'cancelled' = 'allowed'
+    const confirmation = vi.fn(async (
+      _request: CapabilityAgentApprovalRequest
+    ): Promise<'allowed' | 'denied' | 'cancelled'> => nextDecision)
+    const invoke = vi.spyOn(broker, 'invoke')
+    const cancelApprovalTurn = vi.fn(() => 1)
+    const surface = createCapabilityAgentToolSurface({
+      broker,
+      resolveCaller: () => caller,
+      requestApproval: confirmation,
+      cancelApprovalTurn
+    })
+    const approvalContext = { ...context, turnId: 'turn-1', callId: 'call-1' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: approvalContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'result' } },
+      context: approvalContext
+    })).resolves.toMatchObject({ value: { output: { ok: true } } })
+
+    const approvalRequest = confirmation.mock.calls[0]?.[0]
+    if (!approvalRequest) throw new Error('Expected a confirmation request.')
+    expect(approvalRequest).toMatchObject({
+      context: approvalContext,
+      actionId: 'test.publish',
+      invocationId: expect.stringMatching(/^agent_inv_/u),
+      mode: 'confirmation',
+      input: { value: 'result' }
+    })
+    expect(invoke.mock.calls[0]![0].approvals).toEqual([{
+      actionId: 'test.publish',
+      invocationId: approvalRequest.invocationId,
+      mode: 'confirmation'
+    }])
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    nextDecision = 'denied'
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { value: 'denied' } },
+      context: { ...approvalContext, callId: 'call-2' }
+    })).rejects.toMatchObject({ code: 'approval_denied' })
+    expect(handler).toHaveBeenCalledTimes(1)
+
+    expect(surface.abortTurn({ runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' }, 'user_stop')).toBe(1)
+    expect(cancelApprovalTurn).toHaveBeenCalledWith(
+      { runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-1' },
+      'user_stop'
+    )
+  })
+
+  it('aborts an active native broker invocation when its runtime turn stops', async () => {
+    const started = vi.fn()
+    let handlerSignal: AbortSignal | undefined
+    const execute = defineCapability({
+      id: 'test.long-native-write',
+      version: '1',
+      title: 'Long native write',
+      description: 'Runs until its host turn is stopped.',
+      audiences: ['agent'],
+      scope: 'global',
+      effect: 'external-write',
+      approval: 'confirmation',
+      concurrency: { revision: 'none', idempotency: 'required' },
+      inputSchema: z.object({ script: z.string() }).strict(),
+      outputSchema: z.object({ ok: z.boolean() }).strict(),
+      handler: async (_input, handlerContext) => new Promise((_, reject) => {
+        handlerSignal = handlerContext.signal
+        started()
+        const fail = (): void => reject(new Error('native invoke aborted'))
+        if (handlerContext.signal?.aborted) fail()
+        else handlerContext.signal?.addEventListener('abort', fail, { once: true })
+      })
+    })
+    const surface = createCapabilityAgentToolSurface({
+      broker: new CapabilityBroker(new CapabilityRegistry([execute])),
+      resolveCaller: () => caller,
+      requestApproval: async () => 'allowed' as const
+    })
+    const turnContext = { ...context, runtimeId: 'codex', turnId: 'turn-native', callId: 'call-native' }
+    const discovered = await surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {},
+      context: turnContext
+    })
+    const operationRef = (discovered.value as Array<{ operationRef: string }>)[0]!.operationRef
+    const invocation = surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+      arguments: { operationRef, input: { script: 'sleep 600' } },
+      context: turnContext
+    })
+    await vi.waitFor(() => expect(started).toHaveBeenCalledTimes(1))
+
+    expect(surface.abortTurn({ runtimeId: 'codex', threadId: 'thread-1', turnId: 'turn-native' })).toBe(1)
+    await expect(invocation).rejects.toThrow('Handler for test.long-native-write failed.')
+    expect(handlerSignal?.aborted).toBe(true)
   })
 
   it('derives caller identity from transport and rejects non-agent callers and unknown refs', async () => {
@@ -332,7 +478,12 @@ function readCapability(id: string) {
     effect: 'read',
     approval: 'none',
     concurrency: { revision: 'none', idempotency: 'none' },
-    inputSchema: z.object({ query: z.string().optional() }).strict(),
+    inputSchema: z.object({
+      query: z.string()
+        .regex(/^query_[A-Za-z0-9_-]{4,32}$/u)
+        .describe('A caller-generated query identifier.')
+        .optional()
+    }).strict(),
     outputSchema: z.object({ ok: z.boolean() }).strict(),
     handler: async () => ({ output: { ok: true } })
   })

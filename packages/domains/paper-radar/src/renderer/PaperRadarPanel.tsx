@@ -11,7 +11,14 @@ import {
   X
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { PaperRadarProfile, PaperRadarRecord, PaperRadarStatus, PaperRadarSyncResult } from '../contract'
+import type {
+  PaperRadarProfile,
+  PaperRadarRecord,
+  PaperRadarReviewInput,
+  PaperRadarReviewResult,
+  PaperRadarStatus,
+  PaperRadarSyncResult
+} from '../contract'
 import type {
   PaperRadarCapabilityClient,
   PaperRadarMutationConfirmation
@@ -34,6 +41,7 @@ const DEFAULT_ARXIV_CATEGORIES = ''
 const DEFAULT_BIORXIV_SUBJECTS = ''
 const DEFAULT_DAYS = 7
 const DEFAULT_TOP_K = 12
+const REVIEW_TIMEOUT_MS = 35_000
 const USER_CONFIRMED_MUTATION = Object.freeze({
   approval: Object.freeze({ mode: 'confirmation' as const })
 }) satisfies PaperRadarMutationConfirmation
@@ -131,21 +139,27 @@ export function PaperRadarPanel({
     setBusy(true)
     setMessage(null)
     try {
-      const result = await capabilityClient.review({
+      const outcome = await reviewPaperRadarWithFallback(capabilityClient, {
         profile: currentProfile(),
         days,
         topK: DEFAULT_TOP_K,
         maxRecords: 200
-      }, USER_CONFIRMED_MUTATION)
-      if (!result.ok) throw new Error(friendlyPaperRadarError(result.message, t))
-      setPapers(result.data.papers)
-      setLastDigestAt(result.data.generatedAt)
-      setLastSync(result.data.syncResults)
-      setMessage(`${syncMessage(result.data.syncResults, t)} ${t('paperRadarDigestDone', { count: result.data.count })}`)
+      }, USER_CONFIRMED_MUTATION, REVIEW_TIMEOUT_MS, (localData) => {
+        setPapers(localData.papers)
+        setLastDigestAt(localData.generatedAt)
+        setLastSync(null)
+        setMessage(`${t('paperRadarLocalWhileSyncing', { total: status?.stats?.papers ?? 0 })} ${t('paperRadarDigestDone', { count: localData.count })}`)
+      })
+      setPapers(outcome.data.papers)
+      setLastDigestAt(outcome.data.generatedAt)
+      setLastSync(outcome.usedLocalFallback ? null : outcome.data.syncResults)
+      setMessage(outcome.usedLocalFallback
+        ? `${t('paperRadarLocalFallback', { total: status?.stats?.papers ?? 0 })} ${t('paperRadarDigestDone', { count: outcome.data.count })}`
+        : `${syncMessage(outcome.data.syncResults, t)} ${t('paperRadarDigestDone', { count: outcome.data.count })}`)
       await loadProfiles(profileName || DEFAULT_PROFILE_NAME)
       await refreshStatus()
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : String(error))
+      setMessage(friendlyPaperRadarError(error instanceof Error ? error.message : String(error), t))
     } finally {
       setBusy(false)
     }
@@ -244,7 +258,7 @@ export function PaperRadarPanel({
             className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-55"
           >
             <Sparkles className={`h-4 w-4 ${busy ? 'animate-pulse' : ''}`} strokeWidth={1.9} />
-            {t('paperRadarReviewResults')}
+            {busy ? t('paperRadarReviewBusy') : t('paperRadarReviewResults')}
           </button>
           {lastSync ? (
             <div className="flex flex-wrap gap-1.5 text-[11px] text-ds-faint">
@@ -500,6 +514,78 @@ export function filterPapersByQuery(papers: PaperRadarRecord[], query: string): 
     ].join('\n').toLowerCase()
     return terms.every((term) => haystack.includes(term))
   })
+}
+
+export async function withPaperRadarTimeout<T>(
+  operation: Promise<T>,
+  timeoutMs = REVIEW_TIMEOUT_MS
+): Promise<T> {
+  const normalizedTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.floor(timeoutMs))
+    : REVIEW_TIMEOUT_MS
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => {
+          reject(new Error(`Paper Radar review timed out after ${normalizedTimeoutMs} ms.`))
+        }, normalizedTimeoutMs)
+      })
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+type PaperRadarReviewClient = Pick<PaperRadarCapabilityClient, 'review' | 'saveProfile' | 'digest'>
+
+export type PaperRadarReviewOutcome = Readonly<{
+  data: PaperRadarReviewResult
+  usedLocalFallback: boolean
+}>
+
+export async function reviewPaperRadarWithFallback(
+  capabilityClient: PaperRadarReviewClient,
+  input: PaperRadarReviewInput,
+  confirmation: PaperRadarMutationConfirmation,
+  timeoutMs = REVIEW_TIMEOUT_MS,
+  onLocalResults?: (data: PaperRadarReviewResult) => void
+): Promise<PaperRadarReviewOutcome> {
+  let localData: PaperRadarReviewResult | undefined
+  try {
+    const saved = await capabilityClient.saveProfile(input.profile, confirmation)
+    if (!saved.ok) throw new Error(saved.message)
+    const digest = await capabilityClient.digest({
+      profile: saved.data.profile.name,
+      keywords: input.profile.keywords,
+      excludeKeywords: input.profile.excludeKeywords,
+      days: input.days,
+      topK: input.topK
+    })
+    if (!digest.ok) throw new Error(digest.message)
+    localData = { ...digest.data, syncResults: [] }
+    onLocalResults?.(localData)
+  } catch {
+    // A failed local preview should not prevent the canonical review from succeeding.
+  }
+
+  try {
+    const result = await withPaperRadarTimeout(
+      capabilityClient.review(input, confirmation),
+      timeoutMs
+    )
+    if (!result.ok) throw new Error(result.message)
+    return { data: result.data, usedLocalFallback: false }
+  } catch (syncError) {
+    if (localData) {
+      return {
+        data: localData,
+        usedLocalFallback: true
+      }
+    }
+    throw syncError
+  }
 }
 
 function groupPapers(papers: PaperRadarRecord[]): Record<Relevance, PaperRadarRecord[]> {

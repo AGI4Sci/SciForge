@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, posix } from 'node:path'
+import { resolveElectronRunAsNodeExecutable } from '@sciforge/domain-sdk/node/electron-node-executable'
 
 export type JsonRecord = Record<string, unknown>
 
@@ -50,20 +51,7 @@ export function resolveManagedGuiMcpCommand(
   launch: ManagedGuiMcpLaunchConfig,
   platform: NodeJS.Platform = process.platform
 ): string {
-  if (platform !== 'darwin') return launch.execPath
-  if (!launch.execPath.includes('/Contents/MacOS/')) return launch.execPath
-
-  const appContentsDir = posix.dirname(posix.dirname(launch.execPath))
-  const appName = posix.basename(launch.execPath)
-  const helperName = `${appName} Helper`
-  return posix.join(
-    appContentsDir,
-    'Frameworks',
-    `${helperName}.app`,
-    'Contents',
-    'MacOS',
-    helperName
-  )
+  return resolveElectronRunAsNodeExecutable(launch.execPath, platform)
 }
 
 export function buildManagedGuiMcpJsonServerConfig(

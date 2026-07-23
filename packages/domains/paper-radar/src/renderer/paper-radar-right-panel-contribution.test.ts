@@ -16,6 +16,9 @@ import type { PaperRadarI18nResourceContribution } from './paper-radar-messages'
 test('creates declared Workbench and translation values without host side effects', () => {
   const host: DomainRendererHost = {
     capabilityInvoker: {
+      observe: async () => {
+        throw new Error('not observed while creating the panel contribution')
+      },
       invoke: async <TInput, TOutput>(): Promise<TOutput> => {
         throw new Error('not invoked while creating the panel contribution')
       }

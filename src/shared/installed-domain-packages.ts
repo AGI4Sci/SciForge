@@ -3,9 +3,11 @@ import { defineInstalledDomainPackageSet } from '@sciforge/domain-sdk'
 import { domainPackageDefinition as domainPackageDefinition0 } from '@sciforge/domain-biology-room/definition'
 import { domainPackageDefinition as domainPackageDefinition1 } from '@sciforge/domain-life-science-preview/definition'
 import { domainPackageDefinition as domainPackageDefinition2 } from '@sciforge/domain-paper-radar/definition'
+import { domainPackageDefinition as domainPackageDefinition3 } from '@sciforge/domain-remote-ssh/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
   domainPackageDefinition1,
-  domainPackageDefinition2
+  domainPackageDefinition2,
+  domainPackageDefinition3
 ])

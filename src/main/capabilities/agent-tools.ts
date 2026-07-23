@@ -52,6 +52,21 @@ export type CapabilityAgentToolCall = Readonly<{
   context: CapabilityAgentToolRequestContext
 }>
 
+export type CapabilityAgentApprovalRequest = Readonly<{
+  context: CapabilityAgentToolRequestContext
+  actionId: string
+  invocationId: string
+  mode: 'confirmation'
+  title: string
+  description: string
+  effect: CapabilityDescriptor['effect']
+  input: CapabilityJsonValue
+  resourceRef?: string
+  resourceLabel?: string
+}>
+
+export type CapabilityAgentApprovalDecision = 'allowed' | 'denied' | 'cancelled'
+
 const agentOperationRefSchema = z.string().regex(/^op_[A-Za-z0-9_-]{20,}$/u)
 const agentSchemaRefSchema = z.string().regex(/^schema_[A-Za-z0-9_-]{20,}$/u)
 const agentResourceRefSchema = z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/u)
@@ -70,6 +85,7 @@ const agentInvokeRequestSchema = z.object({
   resourceRef: agentResourceRefSchema.optional(),
   input: capabilityJsonValueSchema.default({})
 }).strict()
+type AgentInvokeRequest = z.infer<typeof agentInvokeRequestSchema>
 
 const agentEventsRequestSchema = z.object({
   afterEventId: z.string().regex(/^event_[A-Za-z0-9_-]{20,}$/u).optional(),
@@ -153,6 +169,11 @@ export type CapabilityAgentToolSurfaceOptions = Readonly<{
   resolveCaller: (
     context: CapabilityAgentToolRequestContext
   ) => CapabilityCallerContextInput | Promise<CapabilityCallerContextInput>
+  requestApproval?: (
+    request: CapabilityAgentApprovalRequest,
+    options?: { signal?: AbortSignal }
+  ) => CapabilityAgentApprovalDecision | Promise<CapabilityAgentApprovalDecision>
+  cancelApprovalTurn?: (identity: AgentRuntimeToolTurnIdentity, reason?: string) => number
 }>
 
 type CallerCache = {
@@ -160,6 +181,7 @@ type CallerCache = {
   operationRefsById: Map<string, string>
   schemaRefsById: Map<string, string>
   resources: Map<string, CapabilityResourceHandle>
+  resourceLabels: Map<string, string>
 }
 
 const toolDefinitions = Object.freeze([
@@ -175,7 +197,7 @@ const toolDefinitions = Object.freeze([
   ),
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.invoke,
-    'Invoke a discovered operation using its opaque operation reference and domain input. Revision and idempotency fields are managed internally.',
+    'Invoke a discovered operation using its opaque operation reference and domain input. Broker revision and idempotency fields are managed internally; supply any operation-specific IDs described by the domain schema.',
     agentInvokeRequestSchema
   ),
   defineTool(
@@ -188,11 +210,16 @@ const toolDefinitions = Object.freeze([
 export class CapabilityAgentToolSurface {
   readonly #broker: CapabilityAgentBroker
   readonly #resolveCaller: CapabilityAgentToolSurfaceOptions['resolveCaller']
+  readonly #requestApproval: CapabilityAgentToolSurfaceOptions['requestApproval']
+  readonly #cancelApprovalTurn: CapabilityAgentToolSurfaceOptions['cancelApprovalTurn']
   readonly #callerCaches = new Map<string, CallerCache>()
+  readonly #activeCalls = new Map<string, Set<AbortController>>()
 
   constructor(options: CapabilityAgentToolSurfaceOptions) {
     this.#broker = options.broker
     this.#resolveCaller = options.resolveCaller
+    this.#requestApproval = options.requestApproval
+    this.#cancelApprovalTurn = options.cancelApprovalTurn
   }
 
   tools(): readonly CapabilityAgentToolDefinition[] {
@@ -200,7 +227,20 @@ export class CapabilityAgentToolSurface {
   }
 
   abortTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'user_stop'): number {
-    return this.#broker.abortTurn?.(identity, reason) ?? 0
+    const key = activeTurnKey(identity)
+    const active = key ? this.#activeCalls.get(key) : undefined
+    let calls = 0
+    if (active && key) {
+      this.#activeCalls.delete(key)
+      for (const controller of active) {
+        if (controller.signal.aborted) continue
+        controller.abort(reason)
+        calls += 1
+      }
+    }
+    const approvals = this.#cancelApprovalTurn?.(identity, reason) ?? 0
+    const invocations = this.#broker.abortTurn?.(identity, reason) ?? 0
+    return calls + approvals + invocations
   }
 
   async call(request: CapabilityAgentToolCall, options: { signal?: AbortSignal } = {}): Promise<CapabilityAgentToolResult> {
@@ -242,52 +282,7 @@ export class CapabilityAgentToolSurface {
       }
       case CAPABILITY_AGENT_TOOL_NAMES.invoke: {
         const parsed = agentInvokeRequestSchema.parse(rawArguments)
-        const descriptor = this.#operation(cache, parsed.operationRef)
-        let handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
-        const invocationId = descriptor.effect === 'read' ? undefined : opaqueId('agent_inv')
-        const invoke = (resource: CapabilityResourceHandle | undefined) => this.#broker.invoke(caller, {
-          actionId: descriptor.id,
-          ...(resource ? { resource } : {}),
-          ...(descriptor.concurrency.revision === 'optimistic' && resource
-            ? { expectedRevision: resource.semanticRevision }
-            : {}),
-          ...(invocationId ? { invocationId } : {}),
-          input: parsed.input
-        }, { ...options, context: request.context })
-        let result: CapabilityInvocationResult
-        try {
-          result = await invoke(handle)
-        } catch (error) {
-          if (!parsed.resourceRef || !handle || !isExpiredResourceHandleError(error)) throw error
-          const renewed = await this.#bindResourceRef(caller, parsed.resourceRef)
-          if (renewed.semanticRevision !== handle.semanticRevision) {
-            throw new CapabilityAgentToolError(
-              'stale_resource_ref',
-              'The resource changed while its handle was expired. Observe the resource again before invoking an operation.'
-            )
-          }
-          handle = renewed
-          cache.resources.set(parsed.resourceRef, renewed)
-          result = await invoke(renewed)
-        }
-        const sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output)
-        let resourceRef = parsed.resourceRef
-        if (result.resource) {
-          const observed = await this.#broker.observe(caller, { resource: result.resource })
-          this.#rememberObservation(cache, observed)
-          resourceRef = observed.resourceRef
-        }
-        return {
-          tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
-          value: {
-            operationRef: parsed.operationRef,
-            output: sanitizedOutput,
-            ...(resourceRef ? { resourceRef } : {}),
-            changed: result.changed,
-            replayed: result.replayed,
-            completedAt: result.completedAt
-          }
-        }
+        return this.#invokeOperation(caller, cache, parsed, request.context, options.signal)
       }
       case CAPABILITY_AGENT_TOOL_NAMES.events: {
         const parsed = agentEventsRequestSchema.parse(rawArguments)
@@ -324,11 +319,159 @@ export class CapabilityAgentToolSurface {
         operationsByRef: new Map(),
         operationRefsById: new Map(),
         schemaRefsById: new Map(),
-        resources: new Map()
+        resources: new Map(),
+        resourceLabels: new Map()
       }
       this.#callerCaches.set(key, cache)
     }
     return cache
+  }
+
+  async #invokeOperation(
+    caller: CapabilityCallerContext,
+    cache: CallerCache,
+    parsed: AgentInvokeRequest,
+    context: CapabilityAgentToolRequestContext,
+    signal?: AbortSignal
+  ): Promise<CapabilityAgentToolResult> {
+    const active = this.#beginActiveCall(context, signal)
+    try {
+      const descriptor = this.#operation(cache, parsed.operationRef)
+      let handle = parsed.resourceRef ? this.#resource(cache, parsed.resourceRef) : undefined
+      const invocationId = descriptor.effect === 'read' ? undefined : opaqueId('agent_inv')
+      const invokeCaller = await this.#callerForInvocation(
+        caller,
+        descriptor,
+        invocationId,
+        context,
+        { signal: active.signal },
+        parsed.input,
+        parsed.resourceRef,
+        parsed.resourceRef ? cache.resourceLabels.get(parsed.resourceRef) : undefined
+      )
+      const invoke = (resource: CapabilityResourceHandle | undefined) => this.#broker.invoke(invokeCaller, {
+        actionId: descriptor.id,
+        ...(resource ? { resource } : {}),
+        ...(descriptor.concurrency.revision === 'optimistic' && resource
+          ? { expectedRevision: resource.semanticRevision }
+          : {}),
+        ...(invocationId ? { invocationId } : {}),
+        input: parsed.input
+      }, { signal: active.signal, context })
+      let result: CapabilityInvocationResult
+      try {
+        result = await invoke(handle)
+      } catch (error) {
+        if (!parsed.resourceRef || !handle || !isExpiredResourceHandleError(error)) throw error
+        const renewed = await this.#bindResourceRef(caller, parsed.resourceRef)
+        if (renewed.semanticRevision !== handle.semanticRevision) {
+          throw new CapabilityAgentToolError(
+            'stale_resource_ref',
+            'The resource changed while its handle was expired. Observe the resource again before invoking an operation.'
+          )
+        }
+        handle = renewed
+        cache.resources.set(parsed.resourceRef, renewed)
+        result = await invoke(renewed)
+      }
+      const sanitizedOutput = await this.#sanitizeOutput(caller, cache, result.output)
+      let resourceRef = parsed.resourceRef
+      if (result.resource) {
+        const observed = await this.#broker.observe(caller, { resource: result.resource })
+        this.#rememberObservation(cache, observed)
+        resourceRef = observed.resourceRef
+      }
+      return {
+        tool: CAPABILITY_AGENT_TOOL_NAMES.invoke,
+        value: {
+          operationRef: parsed.operationRef,
+          output: sanitizedOutput,
+          ...(resourceRef ? { resourceRef } : {}),
+          changed: result.changed,
+          replayed: result.replayed,
+          completedAt: result.completedAt
+        }
+      }
+    } finally {
+      active.close()
+    }
+  }
+
+  #beginActiveCall(
+    context: CapabilityAgentToolRequestContext,
+    sourceSignal?: AbortSignal
+  ): { signal: AbortSignal; close: () => void } {
+    const controller = new AbortController()
+    const onSourceAbort = (): void => controller.abort(sourceSignal?.reason)
+    if (sourceSignal?.aborted) controller.abort(sourceSignal.reason)
+    else sourceSignal?.addEventListener('abort', onSourceAbort, { once: true })
+
+    const key = activeTurnKey(context)
+    if (key) {
+      let active = this.#activeCalls.get(key)
+      if (!active) {
+        active = new Set()
+        this.#activeCalls.set(key, active)
+      }
+      active.add(controller)
+    }
+    return {
+      signal: controller.signal,
+      close: () => {
+        sourceSignal?.removeEventListener('abort', onSourceAbort)
+        if (!key) return
+        const active = this.#activeCalls.get(key)
+        active?.delete(controller)
+        if (active?.size === 0) this.#activeCalls.delete(key)
+      }
+    }
+  }
+
+  async #callerForInvocation(
+    caller: CapabilityCallerContext,
+    descriptor: CapabilityDescriptor,
+    invocationId: string | undefined,
+    context: CapabilityAgentToolRequestContext,
+    options: { signal?: AbortSignal },
+    input: CapabilityJsonValue,
+    resourceRef?: string,
+    resourceLabel?: string
+  ): Promise<CapabilityCallerContext> {
+    if (descriptor.approval === 'none') return caller
+    if (descriptor.approval !== 'confirmation' || !invocationId || !this.#requestApproval) {
+      throw new CapabilityAgentToolError(
+        'approval_denied',
+        `Capability ${descriptor.title} requires an unavailable human confirmation.`
+      )
+    }
+    const decision = await this.#requestApproval({
+      context,
+      actionId: descriptor.id,
+      invocationId,
+      mode: descriptor.approval,
+      title: descriptor.title,
+      description: descriptor.description,
+      effect: descriptor.effect,
+      input,
+      ...(resourceRef ? { resourceRef } : {}),
+      ...(resourceLabel ? { resourceLabel } : {})
+    }, options)
+    if (decision !== 'allowed') {
+      throw new CapabilityAgentToolError(
+        decision === 'cancelled' ? 'approval_cancelled' : 'approval_denied',
+        decision === 'cancelled'
+          ? `Confirmation for ${descriptor.title} was cancelled before execution.`
+          : `Confirmation for ${descriptor.title} was denied.`
+      )
+    }
+    return capabilityCallerContextSchema.parse({
+      ...caller,
+      approvals: [{
+        actionId: descriptor.id,
+        invocationId,
+        mode: descriptor.approval
+      }]
+    })
   }
 
   #agentOperation(cache: CallerCache, descriptor: CapabilityDescriptor, includeSchema: boolean): AgentOperationDescriptor {
@@ -423,6 +566,8 @@ export class CapabilityAgentToolSurface {
 
   #rememberObservation(cache: CallerCache, observation: CapabilityObservation): void {
     cache.resources.set(observation.resourceRef, observation.resource)
+    const label = capabilityResourceDisplayLabel(observation.state)
+    if (label) cache.resourceLabels.set(observation.resourceRef, label)
     for (const descriptor of observation.operations) this.#operationRef(cache, descriptor)
   }
 
@@ -475,6 +620,8 @@ export class CapabilityAgentToolError extends Error {
     | 'unknown_operation_ref'
     | 'unknown_resource_ref'
     | 'stale_resource_ref'
+    | 'approval_denied'
+    | 'approval_cancelled'
 
   constructor(code: CapabilityAgentToolError['code'], message: string) {
     super(message)
@@ -527,7 +674,21 @@ function compactInputShape(value: CapabilityJsonValue): CapabilityJsonValue {
         type: typeof property.type === 'string' ? property.type : inferSchemaType(property),
         required: required.has(name),
         ...(Array.isArray(property.enum) ? { enum: property.enum.slice(0, 32) as CapabilityJsonValue[] } : {}),
-        ...(typeof property.description === 'string' ? { description: property.description.slice(0, 500) } : {})
+        ...(typeof property.description === 'string' ? { description: property.description.slice(0, 500) } : {}),
+        ...(typeof property.pattern === 'string' ? { pattern: property.pattern.slice(0, 500) } : {}),
+        ...(typeof property.format === 'string' ? { format: property.format.slice(0, 100) } : {}),
+        ...(typeof property.minimum === 'number' && Number.isFinite(property.minimum)
+          ? { minimum: property.minimum }
+          : {}),
+        ...(typeof property.maximum === 'number' && Number.isFinite(property.maximum)
+          ? { maximum: property.maximum }
+          : {}),
+        ...(typeof property.minLength === 'number' && Number.isSafeInteger(property.minLength)
+          ? { minLength: property.minLength }
+          : {}),
+        ...(typeof property.maxLength === 'number' && Number.isSafeInteger(property.maxLength)
+          ? { maxLength: property.maxLength }
+          : {})
       }]
     }))
   }
@@ -542,6 +703,36 @@ function inferSchemaType(value: Record<string, unknown>): string {
 
 function opaqueId(prefix: string): string {
   return `${prefix}_${randomBytes(18).toString('base64url')}`
+}
+
+function activeTurnKey(
+  identity: Pick<CapabilityAgentToolRequestContext, 'runtimeId' | 'threadId' | 'turnId'>
+): string | undefined {
+  const runtimeId = identity.runtimeId.trim()
+  const threadId = identity.threadId?.trim()
+  const turnId = identity.turnId?.trim()
+  return runtimeId && threadId && turnId ? `${runtimeId}\u0000${threadId}\u0000${turnId}` : undefined
+}
+
+function capabilityResourceDisplayLabel(value: CapabilityJsonValue): string | undefined {
+  const queue: Array<{ value: CapabilityJsonValue; depth: number }> = [{ value, depth: 0 }]
+  const preferredKeys = ['displayName', 'title', 'name', 'label']
+  while (queue.length > 0) {
+    const current = queue.shift()
+    if (!current || current.depth > 3 || !isRecord(current.value)) continue
+    for (const key of preferredKeys) {
+      const candidate = current.value[key]
+      if (typeof candidate === 'string' && candidate.trim()) return candidate.trim().slice(0, 256)
+    }
+    for (const nested of Object.values(current.value)) {
+      if (Array.isArray(nested)) {
+        for (const entry of nested.slice(0, 16)) queue.push({ value: entry, depth: current.depth + 1 })
+      } else if (isRecord(nested)) {
+        queue.push({ value: nested, depth: current.depth + 1 })
+      }
+    }
+  }
+  return undefined
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

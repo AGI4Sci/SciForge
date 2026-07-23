@@ -22,6 +22,7 @@ export type WorkbenchRightPanelContribution = {
   render: (props: {
     className: string
     onCollapse: () => void
+    workspaceRoot: string
   }) => ReactElement
 }
 

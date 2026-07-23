@@ -57,7 +57,7 @@
     "domain-packages:check": "node ./scripts/domain-packages.mjs --check",
     "domain-packages:test": "node --test ./scripts/domain-packages.test.mjs && node ./scripts/domain-packages.mjs --run test",
     "domain-packages:typecheck": "node ./scripts/domain-packages.mjs --run typecheck",
-    "test:electron-smoke-support": "node --test ./scripts/electron-domain-smoke-support.test.mjs",
+    "test:electron-smoke-support": "node --test ./scripts/electron-domain-smoke-support.test.mjs ./scripts/native-runtime-dependencies.test.mjs",
     "smoke:electron:source": "node ./scripts/electron-domain-smoke.mjs",
     "smoke:electron:packaged": "node ./scripts/electron-domain-packaged-smoke.mjs",
     "smoke:electron:packaged:build": "npm run dist:dir && npm run smoke:electron:packaged",

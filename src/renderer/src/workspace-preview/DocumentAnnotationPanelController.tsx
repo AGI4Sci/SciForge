@@ -18,6 +18,7 @@ import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
+import type { WorkspacePreviewApplyEditResult } from '@shared/sciforge-api'
 import type { PdfReviewSelection } from '@shared/pdf-review'
 import {
   WritePdfAnnotationsPanel,
@@ -260,6 +261,7 @@ export function DocumentAnnotationPanelController({
 
   const locateThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
+    setDisplayMode((current) => current === 'hidden' ? 'current' : current)
     navigationSequenceRef.current += 1
     setNavigationRequest(createDocumentAnnotationNavigationRequest(
       sidecar,
@@ -330,17 +332,24 @@ export function DocumentAnnotationPanelController({
       await applyAnnotationOperation(operation, { revealThread: true })
       return
     }
+    let result: WorkspacePreviewApplyEditResult
     try {
-      const result = await context.host.applyEdit(operation)
-      if (!result.ok) {
-        setAnnotationNotice({ tone: 'error', message: result.message })
-        return
-      }
-      await context.host.observe(result.session.id)
-      setAnnotationNotice(null)
+      result = await context.host.applyEdit(operation)
     } catch (error) {
       setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      throw error
     }
+    if (!result.ok) {
+      setAnnotationNotice({ tone: 'error', message: result.message })
+      throw new Error(result.message)
+    }
+    try {
+      await context.host.observe(result.session.id)
+    } catch (error) {
+      setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
+    setAnnotationNotice(null)
   }, [applyAnnotationOperation, context.host])
 
   const questionReplies = useMemo<Record<string, WritePdfQuestionAssistantReply>>(() => {
@@ -633,7 +642,7 @@ export function DocumentAnnotationPanelController({
             jumpToRect,
             onApplyEdit: applyPreviewOperation,
             onSelectionChange: rememberPdfReviewSelection,
-            onAnnotationSelect: locateThread,
+            onAnnotationSelect: selectThread,
             onOpenAnnotations: openPanel,
             onToggleAnnotations: togglePanel
           },
@@ -642,7 +651,7 @@ export function DocumentAnnotationPanelController({
             activeAnnotationId: activeThreadId,
             navigationRequest,
             onApplyEdit: applyPreviewOperation,
-            onAnnotationSelect: locateThread,
+            onAnnotationSelect: selectThread,
             onOpenAnnotations: openPanel
           },
           sidecar,
@@ -660,7 +669,6 @@ export function DocumentAnnotationPanelController({
           reloadingSidecar={loadingSidecar}
           className="w-[360px] shrink-0"
           onAnnotationDisplayModeChange={setDisplayMode}
-          onSelectThread={selectThread}
           onLocateThread={locateThread}
           onHoverThread={(threadId) => setHoveredThreadId(threadId)}
           onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}

@@ -3,6 +3,7 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import { defineInstalledRendererDomainEntrySet } from '@sciforge/domain-sdk/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry0 } from '@sciforge/domain-life-science-preview/renderer'
 import { createDomainRendererEntry as createDomainRendererEntry1 } from '@sciforge/domain-paper-radar/renderer'
+import { createDomainRendererEntry as createDomainRendererEntry2 } from '@sciforge/domain-remote-ssh/renderer'
 import { installedDomainPackages } from '@shared/installed-domain-packages'
 import { rendererCapabilityClient } from '../lib/capability-client'
 import { openSafeExternalUrl } from '../lib/open-external'
@@ -18,6 +19,7 @@ export const installedRendererDomainEntrySet = defineInstalledRendererDomainEntr
   installedDomainPackages,
   [
     createDomainRendererEntry0(domainHost),
-    createDomainRendererEntry1(domainHost)
+    createDomainRendererEntry1(domainHost),
+    createDomainRendererEntry2(domainHost)
   ]
 )

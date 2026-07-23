@@ -8,6 +8,7 @@ export interface SyncOptions {
   maxRecords?: number;
   rateLimitDelayMs?: number;
   delayImpl?: (ms: number) => Promise<void>;
+  requestTimeoutMs?: number;
 }
 
 export interface ArxivSyncRequest {
@@ -26,6 +27,7 @@ export interface BiorxivSyncRequest {
 
 const ARXIV_OAI_URL = 'https://export.arxiv.org/oai2';
 const BIORXIV_API_URL = 'https://api.biorxiv.org/details';
+const DEFAULT_SOURCE_REQUEST_TIMEOUT_MS = 15_000;
 
 const xml = new XMLParser({
   ignoreAttributes: false,
@@ -61,7 +63,7 @@ export async function fetchArxivMetadata(req: ArxivSyncRequest, options: SyncOpt
             ...(until ? { until } : {}),
             set: root,
           });
-      const response = await fetchImpl(url);
+      const response = await fetchWithTimeout(fetchImpl, url, options.requestTimeoutMs);
       if (!response.ok) throw new Error(`arXiv OAI-PMH returned HTTP ${response.status}`);
       const parsed = xml.parse(await response.text()) as ArxivOaiResponse;
       const list = parsed['OAI-PMH']?.ListRecords;
@@ -99,7 +101,11 @@ export async function fetchBiorxivMetadata(
   let cursor = 0;
 
   while (papers.length < maxRecords) {
-    const response = await fetchImpl(`${BIORXIV_API_URL}/${server}/${from}/${to}/${cursor}`);
+    const response = await fetchWithTimeout(
+      fetchImpl,
+      `${BIORXIV_API_URL}/${server}/${from}/${to}/${cursor}`,
+      options.requestTimeoutMs,
+    );
     if (!response.ok) throw new Error(`bioRxiv API returned HTTP ${response.status}`);
     const payload = (await response.json()) as BiorxivResponse;
     const collection = payload.collection ?? [];
@@ -229,6 +235,32 @@ function normalizeDelayMs(value: number | undefined, fallbackMs: number): number
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchWithTimeout(
+  fetchImpl: typeof fetch,
+  input: string,
+  timeoutMs = DEFAULT_SOURCE_REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const normalizedTimeoutMs = Number.isFinite(timeoutMs)
+    ? Math.max(1, Math.floor(timeoutMs))
+    : DEFAULT_SOURCE_REQUEST_TIMEOUT_MS;
+  const controller = new AbortController();
+  const timer = setTimeout(() => {
+    controller.abort(new Error(`Paper Radar source request timed out after ${normalizedTimeoutMs} ms.`));
+  }, normalizedTimeoutMs);
+  try {
+    return await fetchImpl(input, { signal: controller.signal });
+  } catch (error) {
+    if (controller.signal.aborted) {
+      throw new Error(`Paper Radar source request timed out after ${normalizedTimeoutMs} ms.`, {
+        cause: error,
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 interface ArxivOaiResponse {

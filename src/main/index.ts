@@ -63,7 +63,7 @@ import {
   ensureProjectDagSidecar,
   stopProjectDagSidecar
 } from '../../packages/workers/project-dag/desktop/sidecar'
-import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
+import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   createRuntimeMcpToolGateway,
   type RuntimeMcpToolGateway
@@ -413,6 +413,7 @@ let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
@@ -722,6 +723,8 @@ async function stopManagedRuntimes(): Promise<void> {
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
+      agentRuntimeHostForShutdown?.dispose()
+      agentRuntimeHostForShutdown = null
       codeNavigationService?.shutdown()
       evidenceArtifactLifecycle?.stop()
       evidenceArtifactLifecycle = null
@@ -1178,13 +1181,20 @@ app.whenReady().then(async () => {
     managedTools: runtimeMcpToolGateway,
     isToolAvailable: (context, tool) => runtimeMayUseManagedTool(context.runtimeId, tool)
   })
+  const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = { current: null }
   capabilityAgentTools = createCapabilityAgentToolSurface({
     broker: runtimeCapabilityBroker,
     resolveCaller: (context) => ({
       audience: 'agent',
       callerId: capabilityAgentCallerId(context),
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
-    })
+    }),
+    requestApproval: (request, options) => (
+      agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled'
+    ),
+    cancelApprovalTurn: (identity, reason) => (
+      agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
+    )
   })
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
@@ -1210,6 +1220,8 @@ app.whenReady().then(async () => {
       goals: runtimeGoalService
     }
   })
+  agentRuntimeHostRef.current = agentRuntimeHost
+  agentRuntimeHostForShutdown = agentRuntimeHost
   configureEvidenceDagUpdateQueue({
     storagePath: evidenceDagQueuePath(app.getPath('userData')),
     isEnabled: async () => isEvidenceDagEnabled(await store.load()),

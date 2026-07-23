@@ -50,6 +50,9 @@ test('adapts reads and confirmed mutations through the injected generic capabili
     options?: { approval?: { mode: 'confirmation' } }
   }> = []
   const invoker: DomainRendererCapabilityInvoker = {
+    observe: async () => {
+      throw new Error('not observed by this capability client')
+    },
     invoke: async <TInput, TOutput>(
       contract: DomainRendererCapabilityContract<TInput, TOutput>,
       input: TInput,

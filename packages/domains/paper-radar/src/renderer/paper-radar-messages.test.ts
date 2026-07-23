@@ -9,7 +9,7 @@ test('keeps the package-owned English and Chinese Paper Radar catalogs aligned',
   const englishKeys = Object.keys(paperRadarMessages.en).sort()
   const chineseKeys = Object.keys(paperRadarMessages.zh).sort()
 
-  assert.equal(englishKeys.length, 41)
+  assert.equal(englishKeys.length, 44)
   assert.deepEqual(chineseKeys, englishKeys)
   assert.equal(englishKeys.includes('rightPanelPaperRadar'), true)
   assert.equal(englishKeys.includes('rightPanelCollapse'), false)

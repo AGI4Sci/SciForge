@@ -1,6 +1,6 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
   type WorkspaceObservation
@@ -9,6 +9,7 @@ import {
   TextWorkspaceViewer,
   buildTextWorkspaceViewerModel,
   createTextReplaceAllOperation,
+  saveTextWorkspaceViewerDraft,
   textWorkspaceSelectionOffsets,
   textWorkspaceViewerDraftSourceKey
 } from './TextWorkspaceViewer'
@@ -87,6 +88,57 @@ describe('TextWorkspaceViewer', () => {
     expect(html).not.toContain('data-text-agent-summary')
     expect(html).toContain('data-text-preview-editor')
     expect(html).toContain('This text preview is truncated.')
+  })
+
+  it('renders a clear save action that is disabled until the draft changes', () => {
+    const html = renderToStaticMarkup(createElement(TextWorkspaceViewer, {
+      observation: createTextObservation(),
+      onApplyEdit: () => undefined
+    }))
+
+    expect(html).toContain('data-text-save="true"')
+    expect(html).toContain('data-text-save-status="idle"')
+    expect(html).toContain('workspacePreviewTextNoUnsavedChanges')
+    expect(html).toContain('disabled=""')
+    expect(html).toContain('>workspacePreviewTextSave</button>')
+  })
+
+  it('awaits saves and reports rejected edit handlers as failures', async () => {
+    const observation = createTextObservation()
+    let finishSave: (() => void) | undefined
+    const onApplyEdit = vi.fn(() => new Promise<void>((resolve) => {
+      finishSave = resolve
+    }))
+    let settled = false
+    const saving = saveTextWorkspaceViewerDraft({
+      observation,
+      beforeText: observation.visibleText ?? '',
+      text: 'alpha\ngamma\n',
+      onApplyEdit
+    }).then((result) => {
+      settled = true
+      return result
+    })
+
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    expect(onApplyEdit).toHaveBeenCalledWith(createTextReplaceAllOperation({
+      observation,
+      beforeText: observation.visibleText ?? '',
+      text: 'alpha\ngamma\n'
+    }))
+
+    finishSave?.()
+    await expect(saving).resolves.toEqual({ ok: true })
+
+    await expect(saveTextWorkspaceViewerDraft({
+      observation,
+      beforeText: observation.visibleText ?? '',
+      text: 'not saved',
+      onApplyEdit: async () => {
+        throw new Error('disk is read-only')
+      }
+    })).resolves.toEqual({ ok: false, message: 'disk is read-only' })
   })
 
   it('changes the draft source key when async observations arrive or switch files', () => {

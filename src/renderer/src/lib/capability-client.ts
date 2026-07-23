@@ -6,11 +6,18 @@ import {
   capabilityInvocationRequestSchema,
   capabilityInvocationResultSchema,
   capabilityJsonValueSchema,
+  capabilityObservationSchema,
+  capabilityObserveRequestSchema,
   capabilityReadinessRequestSchema,
   capabilityReadinessSchema,
   type CapabilityEffect,
   type CapabilityReadiness
 } from '@shared/capability-broker'
+import type {
+  DomainCapabilityResourceHandle,
+  DomainRendererCapabilityObservation,
+  DomainRendererCapabilityObservationContract
+} from '@sciforge/domain-sdk/host'
 import type { SciForgeApi } from '@shared/sciforge-api'
 
 export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
@@ -22,10 +29,16 @@ export type RendererCapabilityContract<TInput, TOutput> = Readonly<{
 
 export type RendererCapabilityInvokeOptions = Readonly<{
   workspaceId?: string
+  resource?: DomainCapabilityResourceHandle
+  expectedRevision?: string
   approval?: { mode: 'confirmation' }
 }>
 
-type CapabilityTransport = Pick<SciForgeApi['capabilities'], 'readiness' | 'invoke'>
+export type RendererCapabilityObserveOptions = Readonly<{
+  workspaceId?: string
+}>
+
+type CapabilityTransport = Pick<SciForgeApi['capabilities'], 'readiness' | 'observe' | 'invoke'>
 
 export type RendererCapabilityClientOptions = Readonly<{
   getTransport?: () => CapabilityTransport
@@ -53,6 +66,32 @@ export class RendererCapabilityClient {
     return capabilityReadinessSchema.parse(await this.getTransport().readiness(request))
   }
 
+  async observe<TState>(
+    contract: DomainRendererCapabilityObservationContract<TState>,
+    resource: DomainCapabilityResourceHandle,
+    options: RendererCapabilityObserveOptions = {}
+  ): Promise<DomainRendererCapabilityObservation<TState>> {
+    const request = capabilityObserveRequestSchema.parse({ resource })
+    const observation = capabilityObservationSchema.parse(await this.getTransport().observe({
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
+      request
+    }))
+    if (observation.resourceKind !== contract.resourceKind) {
+      throw new Error(
+        `Capability observation resource kind mismatch: expected "${contract.resourceKind}", received "${observation.resourceKind}".`
+      )
+    }
+    return {
+      resource: observation.resource,
+      resourceRef: observation.resourceRef,
+      resourceKind: observation.resourceKind,
+      semanticRevision: observation.semanticRevision,
+      ...(observation.layoutRevision ? { layoutRevision: observation.layoutRevision } : {}),
+      observedAt: observation.observedAt,
+      state: contract.stateSchema.parse(observation.state)
+    }
+  }
+
   async invoke<TInput, TOutput>(
     contract: RendererCapabilityContract<TInput, TOutput>,
     input: TInput,
@@ -68,6 +107,10 @@ export class RendererCapabilityClient {
     const request = capabilityInvocationRequestSchema.parse({
       actionId,
       input: jsonInput,
+      ...(options.resource ? { resource: options.resource } : {}),
+      ...(options.expectedRevision === undefined
+        ? {}
+        : { expectedRevision: options.expectedRevision }),
       ...(effect === 'read' ? {} : { invocationId: this.createInvocationId() })
     })
     const result = capabilityInvocationResultSchema.parse(await this.getTransport().invoke({

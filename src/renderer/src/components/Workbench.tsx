@@ -3048,7 +3048,8 @@ export function Workbench(): ReactElement {
             ) : installedRightPanel ? (
               installedRightPanel.render({
                 className: 'h-full max-h-full w-full',
-                onCollapse: closeOwnerRightPanel
+                onCollapse: closeOwnerRightPanel,
+                workspaceRoot: ownerWorkspaceRoot
               })
             ) : workspaceMode === 'evidence' ? (
               <EvidenceDagPanel

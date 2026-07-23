@@ -28,9 +28,16 @@ After a process imports only its own package entrypoints, `defineInstalledMainDo
 by `kind:id`; missing, extra, duplicate, or mismatched entries fail before contributions are
 exposed. There is deliberately no cross-process runtime bundle and no dynamic package loader.
 
-Node-only domain services use the stable `@sciforge/domain-sdk/node/workspace-paths` subpath for
-workspace-confined path resolution and symlink-safe writes. Keeping this implementation in the SDK
-gives host services and domain packages one shared security boundary instead of copied path logic.
+Node-only domain services use stable SDK subpaths for shared host-independent runtime behavior:
+
+- `@sciforge/domain-sdk/node/workspace-paths` provides workspace-confined path resolution and
+  symlink-safe writes.
+- `@sciforge/domain-sdk/node/electron-node-executable` resolves the executable used with
+  `ELECTRON_RUN_AS_NODE`, including the packaged macOS Helper path and direct Windows/Linux
+  executable paths.
+
+Keeping these implementations in the SDK gives host services and domain packages one shared
+boundary instead of copied platform or security logic.
 
 Workspace Preview domains use `@sciforge/domain-sdk/workspace-preview` for the complete pure-data
 wire contract, canonical manifest schema and helpers, provider contract, contribution kind IDs, and

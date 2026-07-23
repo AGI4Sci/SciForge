@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
@@ -12,6 +13,16 @@ export type TextWorkspaceViewerReplaceOperation = Extract<
 export type TextWorkspaceViewerApplyEditHandler = (
   operation: TextWorkspaceViewerReplaceOperation
 ) => void | Promise<void>
+
+export type TextWorkspaceViewerSaveResult =
+  | { ok: true }
+  | { ok: false; message?: string }
+
+type TextWorkspaceViewerSaveState =
+  | { kind: 'idle' }
+  | { kind: 'saving' }
+  | { kind: 'saved' }
+  | { kind: 'error'; message?: string }
 
 export type TextWorkspaceViewerStatus =
   | {
@@ -129,6 +140,21 @@ export function createTextReplaceAllOperation(input: {
   }
 }
 
+export async function saveTextWorkspaceViewerDraft(input: {
+  observation: WorkspaceObservation
+  beforeText: string
+  text: string
+  onApplyEdit: TextWorkspaceViewerApplyEditHandler
+}): Promise<TextWorkspaceViewerSaveResult> {
+  try {
+    await input.onApplyEdit(createTextReplaceAllOperation(input))
+    return { ok: true }
+  } catch (error) {
+    const message = errorMessage(error)
+    return message ? { ok: false, message } : { ok: false }
+  }
+}
+
 export function textWorkspaceViewerDraftSourceKey(
   observation: WorkspaceObservation | null | undefined,
   model: TextWorkspaceViewerModel
@@ -164,18 +190,54 @@ export function TextWorkspaceViewer({
   className,
   onApplyEdit
 }: TextWorkspaceViewerProps): ReactNode {
+  const { t } = useTranslation('common')
   const resolvedModel = model ?? buildTextWorkspaceViewerModel(observation, Boolean(onApplyEdit))
   const draftSourceKey = textWorkspaceViewerDraftSourceKey(observation, resolvedModel)
   const [draft, setDraft] = useState(resolvedModel.text)
+  const [persistedText, setPersistedText] = useState(resolvedModel.text)
+  const [saveState, setSaveState] = useState<TextWorkspaceViewerSaveState>({ kind: 'idle' })
   const editorRef = useRef<HTMLTextAreaElement | null>(null)
+  const draftRef = useRef(draft)
+  const persistedTextRef = useRef(persistedText)
+  const draftSourceKeyRef = useRef(draftSourceKey)
+  const resolvedTextRef = useRef(resolvedModel.text)
+  const saveRequestIdRef = useRef(0)
+  const savingRef = useRef(false)
+  const savingTextRef = useRef<string | null>(null)
+  const pendingSaveSourceKeyRef = useRef<string | null>(null)
   const initialTextRange = observation?.selection?.kind === 'text'
     ? observation.selection.ranges[0]
     : undefined
   const initialTextRangeKey = JSON.stringify(initialTextRange ?? null)
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
+  const dirty = draft !== persistedText
+
+  if (
+    savingRef.current &&
+    savingTextRef.current !== null &&
+    resolvedModel.text === savingTextRef.current
+  ) {
+    pendingSaveSourceKeyRef.current = draftSourceKey
+  }
+
+  draftRef.current = draft
+  persistedTextRef.current = persistedText
+  draftSourceKeyRef.current = draftSourceKey
+  resolvedTextRef.current = resolvedModel.text
 
   useEffect(() => {
+    const sourceUpdateReflectsPendingSave = pendingSaveSourceKeyRef.current === draftSourceKey
+    pendingSaveSourceKeyRef.current = null
+    if (!sourceUpdateReflectsPendingSave) {
+      saveRequestIdRef.current += 1
+      savingRef.current = false
+      savingTextRef.current = null
+      setSaveState({ kind: 'idle' })
+    }
     setDraft(resolvedModel.text)
+    setPersistedText(resolvedModel.text)
+    draftRef.current = resolvedModel.text
+    persistedTextRef.current = resolvedModel.text
   }, [draftSourceKey, resolvedModel.text])
 
   useEffect(() => {
@@ -185,6 +247,58 @@ export function TextWorkspaceViewer({
     editor.setSelectionRange(offsets.start, offsets.end)
     editor.scrollTop = Math.max(0, initialTextRange.startLine - 1) * 20
   }, [draft, initialTextRange, initialTextRangeKey, resolvedModel.text])
+
+  const saveDraft = useCallback(async (): Promise<void> => {
+    if (!resolvedModel.editable || !observation || !onApplyEdit || savingRef.current) return
+    const text = draftRef.current
+    const beforeText = persistedTextRef.current
+    if (text === beforeText) return
+
+    const sourceKey = draftSourceKeyRef.current
+    const requestId = saveRequestIdRef.current + 1
+    saveRequestIdRef.current = requestId
+    savingRef.current = true
+    savingTextRef.current = text
+    setSaveState({ kind: 'saving' })
+    const result = await saveTextWorkspaceViewerDraft({
+      observation,
+      beforeText,
+      text,
+      onApplyEdit
+    })
+    if (
+      requestId !== saveRequestIdRef.current ||
+      (
+        sourceKey !== draftSourceKeyRef.current &&
+        resolvedTextRef.current !== text
+      )
+    ) return
+    savingRef.current = false
+    savingTextRef.current = null
+
+    if (!result.ok) {
+      setSaveState({ kind: 'error', ...(result.message ? { message: result.message } : {}) })
+      return
+    }
+
+    persistedTextRef.current = text
+    setPersistedText(text)
+    setSaveState(draftRef.current === text ? { kind: 'saved' } : { kind: 'idle' })
+  }, [observation, onApplyEdit, resolvedModel.editable])
+
+  const saveStatus = !resolvedModel.editable
+    ? resolvedModel.editUnavailableReason ?? resolvedModel.status.message
+    : saveState.kind === 'saving'
+      ? t('workspacePreviewTextSaving')
+      : saveState.kind === 'error'
+        ? t('workspacePreviewTextSaveFailed', {
+            message: saveState.message ?? t('workspacePreviewTextSaveUnknownError')
+          })
+        : saveState.kind === 'saved' && !dirty
+          ? t('workspacePreviewTextSaved')
+          : dirty
+            ? t('workspacePreviewTextUnsaved')
+            : t('workspacePreviewTextNoUnsavedChanges')
 
   return (
     <section
@@ -212,25 +326,50 @@ export function TextWorkspaceViewer({
             value={draft}
             readOnly={!resolvedModel.editable}
             spellCheck={false}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            onChange={(event) => {
+              const nextDraft = event.currentTarget.value
+              draftRef.current = nextDraft
+              setDraft(nextDraft)
+              if (saveState.kind === 'saved' || saveState.kind === 'error') {
+                setSaveState({ kind: 'idle' })
+              }
+            }}
+            onKeyDown={(event) => {
+              if (
+                resolvedModel.editable &&
+                (event.metaKey || event.ctrlKey) &&
+                event.key.toLowerCase() === 's'
+              ) {
+                event.preventDefault()
+                void saveDraft()
+              }
+            }}
           />
           <div className="flex items-center justify-between gap-3 text-xs">
-            <p className="text-ds-muted">{resolvedModel.editUnavailableReason ?? resolvedModel.status.message}</p>
+            <p
+              className={saveState.kind === 'error' ? 'text-ds-danger' : 'text-ds-muted'}
+              data-text-save-status={saveState.kind}
+              role={saveState.kind === 'error' ? 'alert' : 'status'}
+              aria-live="polite"
+            >
+              {saveStatus}
+            </p>
             <button
               type="button"
-              className="rounded-md border border-ds-border px-3 py-1.5 text-ds-text disabled:cursor-not-allowed disabled:opacity-50"
-              data-text-apply-edit
-              disabled={!resolvedModel.editable || !observation || !onApplyEdit}
-              onClick={() => {
-                if (!resolvedModel.editable || !observation || !onApplyEdit) return
-                onApplyEdit(createTextReplaceAllOperation({
-                  observation,
-                  beforeText: resolvedModel.text,
-                  text: draft
-                }))
-              }}
+              className="rounded-md border border-ds-border bg-ds-panel px-3 py-1.5 font-medium text-ds-text disabled:cursor-not-allowed disabled:opacity-50"
+              data-text-save
+              disabled={
+                !resolvedModel.editable ||
+                !observation ||
+                !onApplyEdit ||
+                !dirty ||
+                saveState.kind === 'saving'
+              }
+              onClick={() => void saveDraft()}
             >
-              Apply
+              {saveState.kind === 'saving'
+                ? t('workspacePreviewTextSavingButton')
+                : t('workspacePreviewTextSave')}
             </button>
           </div>
         </div>
@@ -309,4 +448,10 @@ function compactStrings(values: Array<string | undefined | null | false>): strin
 
 function compactClassName(...values: Array<string | undefined | null | false>): string {
   return compactStrings(values).join(' ')
+}
+
+function errorMessage(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message.trim() || undefined
+  if (typeof error === 'string') return error.trim() || undefined
+  return undefined
 }

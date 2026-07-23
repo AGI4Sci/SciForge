@@ -1,8 +1,9 @@
 const { execFileSync, spawnSync } = require('node:child_process')
-const { chmodSync, existsSync, readdirSync } = require('node:fs')
+const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { join } = require('node:path')
 const { pathToFileURL } = require('node:url')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
+const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
 
 const MCP_NODE_ENTRY_REQUIRED_PATHS = releaseWorkerManifest.mcpNodeEntryRequiredPaths
 
@@ -45,6 +46,31 @@ function validateBundledReleaseRuntime(context, runtimeEntry) {
 function validateBundledReleaseRuntimes(context) {
   for (const runtimeEntry of releaseWorkerManifest.runtimeEntries) {
     validateBundledReleaseRuntime(context, runtimeEntry)
+  }
+}
+
+function validateNativeRuntimeDependencies(context) {
+  const root = unpackedAppRoot(context)
+  const requiredPaths = nativeRuntimeDependencies.packagedNativeBindingRelativePaths(
+    context.electronPlatformName,
+    context.arch
+  )
+  for (const relativePath of requiredPaths) {
+    assertExists(join(root, relativePath), `native runtime dependency ${relativePath}`)
+  }
+}
+
+function pruneUnrelatedNativeRuntimeDependencies(context) {
+  const nativeModulesRoot = join(unpackedAppRoot(context), 'node_modules', '@napi-rs')
+  if (!existsSync(nativeModulesRoot)) return
+  const retainedPackages = new Set(nativeRuntimeDependencies.canvasPackagesForTarget(
+    context.electronPlatformName,
+    context.arch
+  ).map((packageName) => packageName.slice('@napi-rs/'.length)))
+  for (const entry of readdirSync(nativeModulesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('canvas-')) continue
+    if (retainedPackages.has(entry.name)) continue
+    rmSync(join(nativeModulesRoot, entry.name), { force: true, recursive: true })
   }
 }
 
@@ -122,6 +148,8 @@ function ensureNodePtyHelpersExecutable(context) {
 
 async function afterPack(context) {
   validateBundledReleaseRuntimes(context)
+  pruneUnrelatedNativeRuntimeDependencies(context)
+  validateNativeRuntimeDependencies(context)
   verifyBundledMultiAgentContract(context)
   validateBuiltMcpNodeEntries(context)
   ensureNodePtyHelpersExecutable(context)
@@ -141,6 +169,8 @@ exports._internals = {
   projectRoot,
   validateBundledReleaseRuntime,
   validateBundledReleaseRuntimes,
+  pruneUnrelatedNativeRuntimeDependencies,
+  validateNativeRuntimeDependencies,
   verifyBundledMultiAgentContract,
   validateBuiltMcpNodeEntries,
   ensureNodePtyHelpersExecutable
