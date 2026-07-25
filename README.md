@@ -17,13 +17,16 @@
   <a href="https://sciforge.ai">官网</a> ·
   <a href="https://github.com/AGI4Sci/SciForge/releases">下载</a> ·
   <a href="./paper/sciforge-report.pdf">论文</a> ·
-  <a href="./docs/wiki/README.md">使用 Wiki</a>
+  <a href="./docs/wiki/README.md">使用 Wiki</a> ·
+  <a href="https://agi4sci.github.io/SciForge/submit/">提交科研需求</a>
 </p>
 
 <p align="center">
   <a href="https://github.com/AGI4Sci/SciForge/releases"><img src="https://img.shields.io/github/v/release/AGI4Sci/SciForge?label=release" alt="GitHub release"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/github/license/AGI4Sci/SciForge" alt="License"></a>
 </p>
+
+> **遇到真实科研痛点？** 请通过[科研 Agent 需求采集网页](https://agi4sci.github.io/SciForge/submit/)说明需求、人类必须参与的环节和验收标准。提交内容将在 GitHub 确认后保存为公开 Issue。
 
 <p align="center">
   <a href="src/asset/img/code.gif">
