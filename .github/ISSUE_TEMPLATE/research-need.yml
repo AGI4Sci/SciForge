@@ -1,0 +1,90 @@
+name: 科研 Agent 真实需求
+description: 提交一个来自真实科学研究过程的 Agent 需求
+title: "[科研需求] "
+labels:
+  - research-need
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢你帮助我们发现真实科研需求。
+
+        这是一条公开 Issue。请勿填写未公开研究数据、个人信息、患者数据、账号密钥或保密材料。
+
+        ## 1. 需求
+
+  - type: input
+    id: context
+    attributes:
+      label: 当什么情况发生时
+      description: 描述触发这个需求的真实科研情境。
+      placeholder: 例如：当我拿到一篇只有论文和仓库链接的 AI 论文时
+    validations:
+      required: true
+
+  - type: textarea
+    id: agent_action
+    attributes:
+      label: 希望 Agent 帮我做什么
+      placeholder: 例如：准备环境、运行代码并定位复现差异
+    validations:
+      required: true
+
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 希望得到什么
+      placeholder: 例如：可检查的指标、日志和差异说明
+    validations:
+      required: true
+
+  - type: textarea
+    id: pain
+    attributes:
+      label: 当前痛点
+      description: 现在最耗时、最容易出错或最难交接的地方是什么？
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## 2. 人类参与
+        Agent 自动完成所有处理，仅以下环节需要人。
+
+  - type: textarea
+    id: must_confirm
+    attributes:
+      label: 必须由人确认
+      placeholder: 哪些结果或操作必须由人正式确认？
+    validations:
+      required: true
+
+  - type: textarea
+    id: human_judgment
+    attributes:
+      label: 需要人判断
+      placeholder: 哪些地方依赖研究者的专业判断？
+    validations:
+      required: true
+
+  - type: markdown
+    attributes:
+      value: |
+        ## 3. 验收标准
+
+  - type: textarea
+    id: done
+    attributes:
+      label: 怎样算完成
+      placeholder: 写出可以被检查的结果。
+    validations:
+      required: true
+
+  - type: textarea
+    id: hard_requirements
+    attributes:
+      label: 硬性要求
+      description: 包括不能做什么、时间限制、资源限制或合规边界等。
+    validations:
+      required: true
