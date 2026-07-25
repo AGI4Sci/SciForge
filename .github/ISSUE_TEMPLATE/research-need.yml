@@ -13,28 +13,12 @@ body:
 
         ## 1. 需求
 
-  - type: input
-    id: context
-    attributes:
-      label: 当什么情况发生时
-      description: 描述触发这个需求的真实科研情境。
-      placeholder: 例如：当我拿到一篇只有论文和仓库链接的 AI 论文时
-    validations:
-      required: true
-
   - type: textarea
-    id: agent_action
+    id: one_line_need
     attributes:
-      label: 希望 Agent 帮我做什么
-      placeholder: 例如：准备环境、运行代码并定位复现差异
-    validations:
-      required: true
-
-  - type: textarea
-    id: outcome
-    attributes:
-      label: 希望得到什么
-      placeholder: 例如：可检查的指标、日志和差异说明
+      label: 一句话需求
+      description: 请完整保留“当……时，希望 Agent 帮我……，得到……”的句式。
+      placeholder: 当 ______ 时，希望 Agent 帮我 ______，得到 ______。
     validations:
       required: true
 
