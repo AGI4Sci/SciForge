@@ -90,6 +90,37 @@ describe('Session right-panel workspaces', () => {
     expect(workspaces['session-2']).toMatchObject({ mode: thirdMode, width: 620 })
   })
 
+  it('restores contribution activation data with generic right-panel history', () => {
+    let workspaces = workspacesFor('session-1')
+    workspaces = updateSessionRightPanelWorkspace(workspaces, 'session-1', {
+      mode: 'fixture.first',
+      panelActivation: {
+        contributionId: 'fixture.first.panel',
+        revision: 1,
+        payload: { nodeId: 'node-1' }
+      }
+    })
+    workspaces = updateSessionRightPanelWorkspace(workspaces, 'session-1', {
+      mode: 'fixture.second',
+      panelActivation: {
+        contributionId: 'fixture.second.panel',
+        revision: 2,
+        payload: { nodeId: 'node-2' }
+      }
+    })
+
+    workspaces = navigateSessionRightPanelHistory(workspaces, 'session-1', -1)
+
+    expect(workspaces['session-1']).toMatchObject({
+      mode: 'fixture.first',
+      panelActivation: {
+        contributionId: 'fixture.first.panel',
+        revision: 1,
+        payload: { nodeId: 'node-1' }
+      }
+    })
+  })
+
   it('routes focused commands and hidden owner callbacks to exactly one Session', () => {
     const [focusedMode, ownerMode] = RIGHT_PANEL_MODES
     let workspaces = workspacesFor('session-1', 'session-2')
@@ -178,7 +209,9 @@ describe('Session right-panel workspaces', () => {
   it('preserves the canonical target workspace when a handoff collides', () => {
     let workspaces = workspacesFor('session-source', 'session-target')
     workspaces = updateSessionRightPanelWorkspace(workspaces, 'session-source', { mode: 'file' })
-    workspaces = updateSessionRightPanelWorkspace(workspaces, 'session-target', { mode: 'project-dag' })
+    workspaces = updateSessionRightPanelWorkspace(workspaces, 'session-target', {
+      mode: 'fixture.contributed'
+    })
     const target = workspaces['session-target']
 
     workspaces = moveSessionRightPanelWorkspaceOwner(
@@ -189,6 +222,6 @@ describe('Session right-panel workspaces', () => {
 
     expect(workspaces['session-source']).toBeUndefined()
     expect(workspaces['session-target']).toBe(target)
-    expect(workspaces['session-target'].mode).toBe('project-dag')
+    expect(workspaces['session-target'].mode).toBe('fixture.contributed')
   })
 })

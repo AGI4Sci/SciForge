@@ -97,6 +97,167 @@ test('fails closed when main and renderer preview slots do not share one contrib
   )
 })
 
+test('discovers package-owned bundled runtime metadata and installed dependencies', async (context) => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => rm(root, { recursive: true, force: true }))
+  await createFixture(root, 'foundation', {
+    packageName: '@fixture/foundation',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: ['python/foundation/server.py'],
+        dependencies: []
+      }
+    }
+  })
+  await createFixture(root, 'consumer', {
+    packageName: '@fixture/consumer',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: ['python/consumer/server.py', 'ui/index.html'],
+        dependencies: ['@fixture/foundation']
+      }
+    }
+  })
+
+  const packages = await discoverDomainPackages(root, {
+    parseDefinition: (definition) => definition
+  })
+  const consumer = packages.find(({ packageName }) => packageName === '@fixture/consumer')
+
+  assert.deepEqual(consumer?.definition.packaging, {
+    bundled: true,
+    runtime: {
+      requiredPaths: ['python/consumer/server.py', 'ui/index.html'],
+      dependencies: ['@fixture/foundation']
+    }
+  })
+})
+
+test('fails closed for escaping or missing packaged runtime paths', async (context) => {
+  const escapingRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  const missingRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  const implicitRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => Promise.all([
+    rm(escapingRoot, { recursive: true, force: true }),
+    rm(missingRoot, { recursive: true, force: true }),
+    rm(implicitRoot, { recursive: true, force: true })
+  ]))
+  await createFixture(escapingRoot, 'escaping', {
+    packageName: '@fixture/escaping',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: ['python/../outside.py'],
+        dependencies: []
+      }
+    },
+    createRequiredPaths: false
+  })
+  await createFixture(implicitRoot, 'implicit', {
+    packageName: '@fixture/implicit',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: ['package.json'],
+        dependencies: []
+      }
+    },
+    createRequiredPaths: false
+  })
+  await createFixture(missingRoot, 'missing', {
+    packageName: '@fixture/missing',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: ['python/missing/server.py'],
+        dependencies: []
+      }
+    },
+    createRequiredPaths: false
+  })
+
+  await assert.rejects(
+    discoverDomainPackages(escapingRoot, { parseDefinition: (definition) => definition }),
+    /runtime path must be package-relative/
+  )
+  await assert.rejects(
+    discoverDomainPackages(missingRoot, { parseDefinition: (definition) => definition }),
+    /is missing runtime path python\/missing\/server\.py/
+  )
+  await assert.rejects(
+    discoverDomainPackages(implicitRoot, { parseDefinition: (definition) => definition }),
+    /must not repeat implicit runtime path package\.json/
+  )
+})
+
+test('fails closed for uninstalled, non-bundled, and cyclic runtime dependencies', async (context) => {
+  const uninstalledRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  const nonBundledRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  const cyclicRoot = await mkdtemp(path.join(os.tmpdir(), 'sciforge-domain-generator-'))
+  context.after(() => Promise.all([
+    rm(uninstalledRoot, { recursive: true, force: true }),
+    rm(nonBundledRoot, { recursive: true, force: true }),
+    rm(cyclicRoot, { recursive: true, force: true })
+  ]))
+  await createFixture(uninstalledRoot, 'consumer', {
+    packageName: '@fixture/consumer',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: { dependencies: ['@fixture/missing'] }
+    }
+  })
+  await createFixture(nonBundledRoot, 'foundation', {
+    packageName: '@fixture/foundation',
+    process: 'main',
+    packaging: { bundled: false }
+  })
+  await createFixture(nonBundledRoot, 'consumer', {
+    packageName: '@fixture/consumer',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: { dependencies: ['@fixture/foundation'] }
+    }
+  })
+  await createFixture(cyclicRoot, 'a', {
+    packageName: '@fixture/domain-a',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: { dependencies: ['@fixture/domain-b'] }
+    }
+  })
+  await createFixture(cyclicRoot, 'b', {
+    packageName: '@fixture/domain-b',
+    process: 'main',
+    packaging: {
+      bundled: true,
+      runtime: { dependencies: ['@fixture/domain-a'] }
+    }
+  })
+
+  await assert.rejects(
+    discoverDomainPackages(uninstalledRoot, { parseDefinition: (definition) => definition }),
+    /depends on uninstalled domain @fixture\/missing/
+  )
+  await assert.rejects(
+    discoverDomainPackages(nonBundledRoot, { parseDefinition: (definition) => definition }),
+    /depends on non-bundled domain @fixture\/foundation/
+  )
+  await assert.rejects(
+    discoverDomainPackages(cyclicRoot, { parseDefinition: (definition) => definition }),
+    /Cyclic bundled domain runtime dependency/
+  )
+})
+
 async function createFixture(root, directoryName, options) {
   const packageRoot = path.join(root, 'packages/domains', directoryName)
   await mkdir(path.join(packageRoot, 'src'), { recursive: true })
@@ -118,6 +279,7 @@ async function createFixture(root, directoryName, options) {
       priority: 100
     },
     contributionContracts: options.contributionContracts ?? {},
+    ...(options.packaging ? { packaging: options.packaging } : {}),
     entrypoints
   }
   await writeFile(path.join(packageRoot, 'sciforge.domain.json'), JSON.stringify(manifest))
@@ -144,5 +306,12 @@ async function createFixture(root, directoryName, options) {
       path.join(packageRoot, `src/${processName}.ts`),
       `export function ${factoryName}() { return {} }\n`
     )
+  }
+  if (options.createRequiredPaths !== false) {
+    for (const requiredPath of options.packaging?.runtime?.requiredPaths ?? []) {
+      const target = path.join(packageRoot, ...requiredPath.split('/'))
+      await mkdir(path.dirname(target), { recursive: true })
+      await writeFile(target, '')
+    }
   }
 }

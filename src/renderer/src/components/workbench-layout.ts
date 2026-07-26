@@ -10,7 +10,6 @@ import {
   writeBrowserStorageItem
 } from '../lib/browser-storage'
 import {
-  normalizeProjectDagGraphNodeId,
   type WorkspaceFilePreviewReturnContext
 } from '../lib/workspace-file-preview'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
@@ -73,18 +72,6 @@ function readStoredBoolean(key: string, fallback: boolean): boolean {
 
 function persistBoolean(key: string, value: boolean): void {
   writeBrowserStorageItem(key, value ? '1' : '0')
-}
-
-export function projectDagReturnSelection(
-  context: WorkspaceFilePreviewReturnContext | null
-): { claimId?: string; nodeId?: string } | null {
-  if (context?.kind !== 'project-dag') return null
-  const claimId = context.claimId?.trim() || undefined
-  const nodeId = normalizeProjectDagGraphNodeId(context.nodeId)
-  return claimId || nodeId ? {
-    ...(claimId ? { claimId } : {}),
-    ...(nodeId ? { nodeId } : {})
-  } : null
 }
 
 export function fitWorkbenchWidths(

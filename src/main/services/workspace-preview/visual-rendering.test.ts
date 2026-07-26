@@ -191,6 +191,26 @@ describe('WorkspacePreviewHost visual rendering', () => {
     expect(bluePixels).toBeGreaterThan(1_000)
   })
 
+  it('directs non-frame resources to the canonical live-surface visual path', async () => {
+    const path = join(workspaceRoot, 'report.md')
+    await writeFile(path, '# Report\n\nRendered content.', 'utf8')
+    const host = new WorkspacePreviewHost({
+      createSessionId: () => 'session-markdown-visual'
+    })
+    const opened = await host.open({
+      workspaceRoot,
+      path,
+      mimeType: 'text/markdown',
+      now: '2026-07-26T10:25:00.000Z'
+    })
+    expect(opened.ok).toBe(true)
+    if (!opened.ok) return
+
+    await expect(host.renderVisual(opened.session.id)).rejects.toThrow(
+      /current SciForge surface.*targetRef/u
+    )
+  })
+
   it('rejects a visual render after the session source changes', async () => {
     const canvas = createCanvas(40, 30)
     const path = join(workspaceRoot, 'changing.png')

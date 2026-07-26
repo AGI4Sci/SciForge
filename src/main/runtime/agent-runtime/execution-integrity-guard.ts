@@ -10,15 +10,10 @@ import type {
   AgentRuntimeToolFactSource,
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
-import {
-  VISUAL_EXECUTION_PLAN_METADATA_KEY,
-  VISUAL_EXECUTION_REQUIRED_METADATA_KEY
-} from './visual-execution-guard'
 
 export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v3'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
-export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
-export const EXECUTION_INTENT_METADATA_KEY = 'sciforgeExecutionIntent'
+export const EXECUTION_PUBLICATION_PENDING_CODE = 'runtime_execution_publication_pending'
 export const EXECUTION_PUBLICATION_COMMITTED_CODE = 'runtime_execution_publication_committed'
 
 const EXECUTION_INTEGRITY_MARKER = 'Runtime-enforced execution integrity gate:'
@@ -35,7 +30,7 @@ export type ExecutionObligation = {
   requiresRegionRef?: boolean
   dependsOn?: string[]
   completion?: 'terminal' | 'success'
-  source: 'user' | 'metadata' | 'visual'
+  source: 'intent' | 'native_tool'
 }
 
 export type ExecutionIntent = AgentRuntimeExecutionIntent
@@ -153,7 +148,7 @@ export class RuntimeExecutionIntegrityGuard {
     return {
       requiresTerminalValidation: obligations.length > 0,
       nativeVisualObligationsPending: obligations.some(
-        (obligation) => obligation.source === 'visual'
+        isNativeVisualObligation
       )
     }
   }
@@ -184,7 +179,7 @@ export class RuntimeExecutionIntegrityGuard {
     return {
       requiresTerminalValidation: state.obligations.length > 0,
       nativeVisualObligationsPending: assessment.unsatisfied.some(
-        (obligation) => obligation.source === 'visual'
+        isNativeVisualObligation
       )
     }
   }
@@ -210,7 +205,10 @@ export class RuntimeExecutionIntegrityGuard {
     }
 
     const receipt = receiptFromEvent(event)
-    if (receipt) rememberReceipt(state, receipt)
+    if (receipt) {
+      rememberReceipt(state, receipt)
+      rememberNativeVisualPlan(state, event, receipt)
+    }
 
     if (event.kind === 'child_event') rememberChildReceipt(state, event)
     if (event.kind !== 'turn_lifecycle') return { event }
@@ -247,13 +245,9 @@ export function withExecutionIntegrityRequirement(
   if (!obligations.length) return input
   const metadata = {
     ...(input.metadata ?? {}),
-    [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION,
-    ...(obligations.length ? { [EXECUTION_OBLIGATIONS_METADATA_KEY]: obligations } : {})
+    [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
   }
-  if (
-    input.text.includes(EXECUTION_INTEGRITY_MARKER) ||
-    input.text.includes('Runtime-enforced visual completion gate:')
-  ) {
+  if (input.text.includes(EXECUTION_INTEGRITY_MARKER)) {
     return { ...input, metadata }
   }
   const marker = `${EXECUTION_INTEGRITY_MARKER} ${JSON.stringify(obligations)}`
@@ -274,66 +268,7 @@ export function requiresExecutionIntegrityValidation(text: string | undefined): 
 }
 
 function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionObligation[] {
-  const metadata = recordValue(input.metadata)
-  const explicit = normalizeObligations(metadata[EXECUTION_OBLIGATIONS_METADATA_KEY])
-  const intent = executionObligationsFromIntent(
-    input.executionIntent ?? metadata[EXECUTION_INTENT_METADATA_KEY]
-  )
-  const obligations = [...explicit, ...intent]
-  if (metadata[VISUAL_EXECUTION_REQUIRED_METADATA_KEY] === true) {
-    obligations.push(...visualPlanObligations(metadata[VISUAL_EXECUTION_PLAN_METADATA_KEY]))
-  }
-  return dedupeObligations(obligations)
-}
-
-function visualPlanObligations(value: unknown): ExecutionObligation[] {
-  const plan = stringValue(value)
-  if (plan !== 'capture' && plan !== 'capture-region' && plan !== 'capture-reference') {
-    return [{
-      id: 'visual-look',
-      kind: 'receipt',
-      receiptKind: 'visual.look',
-      completion: 'success',
-      source: 'visual'
-    }]
-  }
-  const obligations: ExecutionObligation[] = [
-    {
-      id: 'visual-look-locate',
-      kind: 'receipt',
-      receiptKind: 'visual.look',
-      completion: 'success',
-      source: 'visual'
-    },
-    {
-      id: 'visual-capture',
-      kind: 'receipt',
-      receiptKind: 'visual.capture',
-      ...(plan === 'capture-region' ? { requiresRegionRef: true } : {}),
-      dependsOn: ['visual-look-locate'],
-      completion: 'success',
-      source: 'visual'
-    },
-    {
-      id: 'visual-look-final',
-      kind: 'receipt',
-      receiptKind: 'visual.look',
-      dependsOn: ['visual-capture'],
-      completion: 'success',
-      source: 'visual'
-    }
-  ]
-  if (plan === 'capture-reference') {
-    obligations.push({
-      id: 'visual-reference-validation',
-      kind: 'receipt',
-      receiptKind: 'artifact.reference-validation',
-      dependsOn: ['visual-look-final'],
-      completion: 'success',
-      source: 'visual'
-    })
-  }
-  return obligations
+  return dedupeObligations(executionObligationsFromIntent(input.executionIntent))
 }
 
 /**
@@ -351,7 +286,7 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
       id: 'requested-execution',
       kind: 'any_success',
       completion: 'success',
-      source: 'metadata'
+      source: 'intent'
     }]
   }
   const obligations: ExecutionObligation[] = []
@@ -366,11 +301,12 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
       ? requirement.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
       : []
     const completion = requirement.completion === 'terminal' ? 'terminal' : 'success'
+    const requiresRegionRef = requirement.requiresRegionRef === true
     const id = stringValue(requirement.id) || (
       requirements.length === 1 ? 'requested-execution' : `requested-execution-${index + 1}`
     )
     if (toolNames.length > 0) {
-      obligations.push({ id, kind: 'tool', toolNames, completion, source: 'metadata' })
+      obligations.push({ id, kind: 'tool', toolNames, completion, source: 'intent' })
       return
     }
     if (receiptKind) {
@@ -378,29 +314,24 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
         id,
         kind: 'receipt',
         receiptKind,
+        ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
         ...(dependsOn.length ? { dependsOn } : {}),
         completion,
-        source: 'metadata'
+        source: 'intent'
       })
       return
     }
     if (effectClass) {
-      obligations.push({ id, kind: 'effect', effectClass, completion, source: 'metadata' })
+      obligations.push({ id, kind: 'effect', effectClass, completion, source: 'intent' })
       return
     }
-    obligations.push({ id, kind: 'any_success', completion, source: 'metadata' })
+    obligations.push({ id, kind: 'any_success', completion, source: 'intent' })
   })
   return obligations
 }
 
 function obligationsFromMarker(text: string): ExecutionObligation[] {
   const line = text.split(/\r?\n/u).find((value) => value.includes(EXECUTION_INTEGRITY_MARKER)) ?? ''
-  if (!line && text.includes('Runtime-enforced visual completion gate:')) {
-    const planLine = text.split(/\r?\n/u)
-      .find((value) => value.trim().startsWith('- Required visual plan:'))
-    const plan = planLine?.split(':').slice(1).join(':').replace(/\.$/u, '').trim()
-    return visualPlanObligations(plan)
-  }
   const start = line.indexOf('[', line.indexOf(EXECUTION_INTEGRITY_MARKER))
   if (start < 0) return []
   try {
@@ -416,7 +347,6 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
     const item = recordValue(entry)
     const kind = stringValue(item.kind)
     if (kind !== 'any_success' && kind !== 'tool' && kind !== 'effect' && kind !== 'receipt') return []
-    const source = stringValue(item.source)
     const effectClass = normalizedEffectClass(item.effectClass)
     const receiptKind = normalizedCompletionReceiptKind(item.receiptKind)
     const completion = item.completion === 'terminal' ? 'terminal' : 'success'
@@ -437,7 +367,7 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
       ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
       ...(dependsOn?.length ? { dependsOn } : {}),
       completion,
-      source: source === 'metadata' || source === 'visual' ? source : 'user'
+      source: 'intent'
     } satisfies ExecutionObligation]
   })
 }
@@ -585,6 +515,66 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
   closeCorrelatedAsyncReceipts(state, key, receipt)
 }
 
+function rememberNativeVisualPlan(
+  state: ExecutionIntegrityState,
+  event: AgentRuntimeEvent,
+  tool: ToolReceipt
+): void {
+  if (event.kind !== 'tool_event' && event.kind !== 'item_snapshot') return
+  const meta = recordValue(event.kind === 'tool_event' ? event.meta : event.item.meta)
+  const argumentsRecord = recordValue(meta.arguments)
+  const captureMode = stringValue(argumentsRecord.capture)
+  if (
+    tool.toolName !== 'sciforge_look' ||
+    (captureMode !== 'snapshot' && captureMode !== 'region') ||
+    state.obligations.some((obligation) => (
+      obligation.kind === 'receipt' && obligation.receiptKind === 'visual.capture'
+    ))
+  ) {
+    return
+  }
+  const locateId = `native-visual-locate:${tool.callId}`
+  const captureId = `native-visual-capture:${tool.callId}`
+  addObligations(state, [
+    {
+      id: locateId,
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
+      completion: 'success',
+      source: 'native_tool'
+    },
+    {
+      id: captureId,
+      kind: 'receipt',
+      receiptKind: 'visual.capture',
+      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
+      dependsOn: [locateId],
+      completion: 'success',
+      source: 'native_tool'
+    },
+    {
+      id: `native-visual-final-look:${tool.callId}`,
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      dependsOn: [captureId],
+      completion: 'success',
+      source: 'native_tool'
+    }
+  ])
+}
+
+function addObligations(
+  state: ExecutionIntegrityState,
+  obligations: ExecutionObligation[]
+): void {
+  for (const obligation of dedupeObligations(obligations)) {
+    if (state.obligationRefCounts.has(obligation.id)) continue
+    state.obligationRefCounts.set(obligation.id, 1)
+    state.obligations.push(obligation)
+  }
+}
+
 function mergeEffectClasses(
   existing: ExecutionEffectClass[],
   incoming: ExecutionEffectClass[]
@@ -693,7 +683,7 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
   const { open, unsatisfied } = assessCompletionState(state)
   if (!open.length && !unsatisfied.length) return null
 
-  const visualMissing = unsatisfied.some((item) => item.source === 'visual')
+  const visualMissing = unsatisfied.some(isNativeVisualObligation)
   const code = visualMissing ? 'runtime_visual_execution_missing' : 'runtime_execution_incomplete'
   const verdict = 'blocked'
   const openCallIds = open.map((item) => item.callId)
@@ -716,6 +706,13 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     openCallIds,
     unsatisfiedObligationIds
   }
+}
+
+function isNativeVisualObligation(obligation: ExecutionObligation): boolean {
+  return obligation.kind === 'receipt' && (
+    obligation.receiptKind === 'visual.look' ||
+    obligation.receiptKind === 'visual.capture'
+  )
 }
 
 function assessCompletionState(state: ExecutionIntegrityState): {
@@ -1001,7 +998,7 @@ function failedCompletion(
 }
 
 function isIntegrityMarker(text: string): boolean {
-  return text.includes(EXECUTION_INTEGRITY_MARKER) || text.includes('Runtime-enforced visual completion gate:')
+  return text.includes(EXECUTION_INTEGRITY_MARKER)
 }
 
 function executionKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {

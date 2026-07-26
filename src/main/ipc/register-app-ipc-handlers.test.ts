@@ -1,11 +1,7 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  configureEvidenceDagUpdateQueue,
-  evidenceDagQueueStatus
-} from '../runtime/evidence-dag-feed'
 import {
   mergeScheduleSettings,
   defaultConnectPhoneSettings,
@@ -20,7 +16,6 @@ import {
 } from '../../shared/app-settings'
 
 const handlers = new Map<string, (event: unknown, payload?: unknown) => Promise<unknown>>()
-const queueRoots: string[] = []
 const { showOpenDialog, showSaveDialog } = vi.hoisted(() => ({
   showOpenDialog: vi.fn(async () => ({ canceled: false, filePaths: ['/tmp/workspace/data.csv'] })),
   showSaveDialog: vi.fn()
@@ -74,7 +69,6 @@ function settings(): AppSettingsV1 {
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },
-    evidenceDag: { enabled: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
@@ -91,6 +85,9 @@ function registerOptions(overrides: Partial<Parameters<typeof import('./register
   const applySettingsPatch = vi.fn(async () => settings())
   return {
     store: { load: vi.fn(async () => settings()) } as never,
+    actionGuardEvaluator: {
+      evaluate: vi.fn(async () => ({ allowed: true }))
+    },
     getMainWindow: () => null,
     isTrustedIpcSender: () => true,
     applySettingsPatch,
@@ -168,187 +165,6 @@ function waitForAbortStream(signal: AbortSignal): AsyncIterable<unknown> {
   }
 }
 
-function stubEvidenceDagReady(status = 200) {
-  const fetchMock = vi.fn(async (_input?: string | URL | Request, _init?: RequestInit) => new Response(
-    JSON.stringify({ ok: status >= 200 && status < 300, data: { service: 'evidence-dag-engine' } }),
-    { status }
-  ))
-  vi.stubGlobal('fetch', fetchMock)
-  return fetchMock
-}
-
-function stubProjectDagReady(status = 200, compileData: Record<string, unknown> = {
-  id: 'run-1',
-  stats: {
-    claims_added: 2,
-    claims_merged: 1,
-    claims_invalidated: 0,
-    review_enqueued: 1
-  },
-  diff: { added: ['claim-1'] }
-}, statusData?: Record<string, unknown>) {
-  let committedVector: unknown[] = []
-  let committedScope = { excludedSessions: [] as string[], isolatedSessions: [] as string[] }
-  let autonomyMode = 'autonomous'
-  const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-    const href = String(input)
-    const method = init?.method ?? 'GET'
-    if (href.startsWith('http://127.0.0.1:4897') && href.endsWith('/updates') && method === 'POST') {
-      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
-      return new Response(JSON.stringify({ ok: true, data: { snapshot: {
-        threadId: body.threadId,
-        version: 1,
-        digest: `sha256:${body.threadId}:${body.targetWatermark}`,
-        inputWatermark: body.targetWatermark,
-        schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
-        createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
-      } } }), { status: 200 })
-    }
-    if (href.endsWith('/version')) {
-      return new Response(
-        JSON.stringify({
-          ok: status >= 200 && status < 300,
-          data: { service: 'project-dag-engine', version: '0.3.0' }
-        }),
-        { status }
-      )
-    }
-    if (href.includes('/goals') && method === 'GET') {
-      return new Response(JSON.stringify({ ok: true, data: [] }), { status: 200 })
-    }
-    if (href.endsWith('/goals') && method === 'POST') {
-      return new Response(JSON.stringify({ ok: true, data: { id: 'goal-1', root_id: 'goal-1' } }), { status: 200 })
-    }
-    if (/\/goals\/[^/]+\/update$/.test(new URL(href).pathname) && method === 'POST') {
-      return new Response(JSON.stringify({
-        ok: true, data: { id: 'goal-version-2', root_id: 'goal-1', version: 2 }
-      }), { status: 200 })
-    }
-    if (href.endsWith('/updates') && method === 'POST') {
-      const body = JSON.parse(String(init?.body)) as {
-        evidenceVector?: unknown[]
-        capturedScope?: { excludedSessions?: string[]; isolatedSessions?: string[] }
-        autonomyMode?: string
-      }
-      committedVector = body.evidenceVector ?? []
-      committedScope = {
-        excludedSessions: body.capturedScope?.excludedSessions ?? [],
-        isolatedSessions: body.capturedScope?.isolatedSessions ?? []
-      }
-      autonomyMode = body.autonomyMode ?? autonomyMode
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          id: String(compileData.id ?? 'project-job-1'),
-          status: 'queued',
-          desiredEvidenceVector: committedVector
-        }
-      }), { status: 200 })
-    }
-    if (href.includes('/updates/status') && method === 'GET') {
-      return new Response(JSON.stringify({ ok: true, data: statusData ?? {
-        state: 'fresh', pending: 0,
-        committedSnapshot: { digest: 'project-snapshot-1', evidenceVector: committedVector, ...committedScope },
-        autonomy: { autonomy_mode: autonomyMode }
-      } }), { status: 200 })
-    }
-    return new Response(JSON.stringify({ ok: false, error: { message: `unexpected ${method} ${href}` } }), {
-      status: 404
-    })
-  })
-  vi.stubGlobal('fetch', fetchMock)
-  return fetchMock
-}
-
-function projectDagAgentRuntime(projectThreadIds: string[] = ['thread-1']) {
-  return {
-    listThreads: vi.fn(async () => [
-      ...projectThreadIds.map((id) => ({
-        id,
-        runtimeId: 'codex',
-        title: `Project alpha ${id}`,
-        updatedAt: '2026-07-09T00:00:00.000Z',
-        workspace: '/tmp/project-alpha'
-      })),
-      {
-        id: 'other-thread',
-        runtimeId: 'codex',
-        title: 'Other project thread',
-        updatedAt: '2026-07-09T00:00:00.000Z',
-        workspace: '/tmp/other-project'
-      }
-    ]),
-    readThread: vi.fn(async ({ threadId }: { threadId: string }) => ({
-      id: threadId,
-      runtimeId: 'codex',
-      title: 'Project alpha thread',
-      updatedAt: '2026-07-09T00:00:00.000Z',
-      latestSeq: 7,
-      workspace: '/tmp/project-alpha',
-      items: [{ id: `${threadId}:answer`, kind: 'assistant_message', text: 'Evidence.' }]
-    }))
-  } as never
-}
-
-function evidenceDagRiskDigest(highestSeverity: 'blocker' | 'major' | 'minor' | 'info' | 'none') {
-  return {
-    status: highestSeverity === 'none' ? 'clean' : 'risks_found',
-    total_findings: highestSeverity === 'none' ? 0 : 1,
-    counts_by_severity: {
-      blocker: highestSeverity === 'blocker' ? 1 : 0,
-      major: highestSeverity === 'major' ? 1 : 0,
-      minor: highestSeverity === 'minor' ? 1 : 0,
-      info: highestSeverity === 'info' ? 1 : 0
-    },
-    highest_severity: highestSeverity,
-    recommendation: highestSeverity === 'major'
-      ? 'revise_or_accept_risk_before_commit'
-      : highestSeverity === 'blocker'
-        ? 'block_commit_until_resolved'
-        : highestSeverity === 'none'
-          ? 'no_action_needed'
-          : 'continue_with_attention'
-  }
-}
-
-function stubEvidenceDagExportAudit(highestSeverity: 'blocker' | 'major' | 'minor' | 'info' | 'none') {
-  vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-  vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-  const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-    const href = String(url)
-    if (href.endsWith('/version')) {
-      return new Response(JSON.stringify({
-        ok: true,
-        data: { service: 'evidence-dag-engine' }
-      }), { status: 200 })
-    }
-    if (href.endsWith('/updates')) {
-      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
-      return new Response(JSON.stringify({
-        ok: true,
-        data: { snapshot: {
-          threadId: body.threadId, version: 1, digest: 'sha256:export-evidence', inputWatermark: body.targetWatermark,
-          schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
-          createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
-        } }
-      }), { status: 200 })
-    }
-    if (href.endsWith('/audits')) {
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          id: 'audit:write-export',
-          completed_at: new Date().toISOString(),
-          risk_digest: evidenceDagRiskDigest(highestSeverity)
-        }
-      }), { status: 200 })
-    }
-    return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
-  })
-  vi.stubGlobal('fetch', fetchMock)
-  return fetchMock
-}
-
 function writeExportPayload(overrides: Record<string, unknown> = {}) {
   return {
     path: '/tmp/workspace/report.md',
@@ -358,25 +174,6 @@ function writeExportPayload(overrides: Record<string, unknown> = {}) {
     runtimeId: 'codex',
     threadId: 'thread-1',
     ...overrides
-  }
-}
-
-function writeExportAgentRuntime() {
-  return {
-    listThreads: vi.fn(async () => [{
-      id: 'thread-1', runtimeId: 'codex', title: 'Report', updatedAt: '2026-07-07T01:00:00.000Z', workspace: '/tmp/workspace'
-    }]),
-    readThread: vi.fn(async () => ({
-      id: 'thread-1',
-      runtimeId: 'codex',
-      title: 'Report',
-      updatedAt: '2026-07-07T01:00:00.000Z',
-      latestSeq: 2,
-      items: [
-        { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'Draft the report.' },
-        { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'Report content.' }
-      ]
-    }))
   }
 }
 
@@ -418,13 +215,6 @@ describe('registerAppIpcHandlers', () => {
     vi.clearAllMocks()
     vi.unstubAllEnvs()
     vi.unstubAllGlobals()
-    const root = mkdtempSync(join(tmpdir(), 'sciforge-ipc-dag-queue-'))
-    queueRoots.push(root)
-    configureEvidenceDagUpdateQueue({ storagePath: join(root, 'queue.json') })
-  })
-
-  afterEach(() => {
-    for (const root of queueRoots.splice(0)) rmSync(root, { recursive: true, force: true })
   })
 
   it('registers only canonical remote channel mirror IPC', async () => {
@@ -543,31 +333,6 @@ describe('registerAppIpcHandlers', () => {
     await expect(handlers.get('traces:read')?.({}, {
       kinds: ['not-a-trace-kind']
     })).rejects.toThrow(/payload for traces:read/i)
-  })
-
-  it('returns a paused Evidence view and rejects updates when Evidence DAG is disabled', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const disabled = { ...settings(), evidenceDag: { enabled: false } }
-    registerAppIpcHandlers(registerOptions({
-      store: { load: vi.fn(async () => disabled) } as never
-    }))
-
-    await expect(handlers.get('evidenceDag:view')?.({}, {
-      runtimeId: 'codex', threadId: 'thread-1'
-    })).resolves.toMatchObject({
-      url: '',
-      status: {
-        freshness: 'paused',
-        pendingCount: 0,
-        lastError: 'Evidence DAG is disabled in Settings.'
-      }
-    })
-    await expect(handlers.get('evidenceDag:update')?.({}, {
-      runtimeId: 'codex', threadId: 'thread-1'
-    })).rejects.toThrow('Evidence DAG is disabled in Settings.')
-    await expect(handlers.get('projectDag:view')?.({}, {
-      workspaceRoot: '/tmp/project'
-    })).rejects.toThrow('Evidence DAG is disabled in Settings.')
   })
 
   it('validates and routes managed visible capture preview requests', async () => {
@@ -699,7 +464,7 @@ describe('registerAppIpcHandlers', () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
 
-    expect(handlers.size).toBe(150)
+    expect(handlers.size).toBe(142)
     expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
   })
 
@@ -839,879 +604,62 @@ describe('registerAppIpcHandlers', () => {
     expect(handlers.has('pdfAnnotations:import')).toBe(false)
   })
 
-  it('returns an Evidence DAG view URL with a runtime-scoped thread id', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    const fetchMock = stubEvidenceDagReady()
+  it('rejects write export when an installed action guard denies it', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions())
-
-    const handler = handlers.get('evidenceDag:view')
-    expect(handler).toBeTypeOf('function')
-    await expect(handler?.({}, { runtimeId: 'codex', threadId: 'thread-1' })).resolves.toMatchObject({
-      threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
-    })
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/updates/status?threadId=codex%3Athread-1',
-      expect.objectContaining({
-        method: 'GET',
-        headers: expect.any(Headers)
-      })
-    )
-  })
-
-  it('returns the global Evidence DAG view without an active thread', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    stubEvidenceDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions())
-
-    await expect(handlers.get('evidenceDag:view')?.({}, {})).resolves.toMatchObject({
-      url: 'http://127.0.0.1:4897/#token=test-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
-    })
-  })
-
-  it('resolves Evidence DAG preview metadata only through the pinned snapshot endpoint', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    const workspace = mkdtempSync(join(tmpdir(), 'evidence-dag-ipc-preview-'))
-    queueRoots.push(workspace)
-    writeFileSync(join(workspace, 'source.txt'), 'source bytes')
-    const digest = `sha256:${'a'.repeat(64)}`
-    const snapshotDigest = `sha256:${'b'.repeat(64)}`
-    const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const url = new URL(String(input))
-      expect(init).toMatchObject({ method: 'GET', cache: 'no-store' })
-      expect(init?.headers).toBeInstanceOf(Headers)
-      expect(url.pathname).toBe('/threads/codex%3Athread-1/evidence-preview')
-      expect(Object.fromEntries(url.searchParams)).toEqual({
-        snapshotDigest,
-        sourceAssertionId: 'source_assertion:one',
-        artifactVersionId: 'artifact-version:one',
-        sourceAnchorId: 'anchor:one'
-      })
-      return new Response(JSON.stringify({
-        ok: true,
-        data: {
-          resolved: true,
-          threadId: 'codex:thread-1',
-          snapshotDigest,
-          workspaceRoot: workspace,
-          accessPolicy: {},
-          sourceAssertion: {
-            id: 'source_assertion:one', type: 'source_assertion', artifact_id: 'artifact:one',
-            artifact_version_id: 'artifact-version:one', source_anchor_id: 'anchor:one'
-          },
-          artifact: { artifactId: 'artifact:one', accessPolicy: {} },
-          artifactVersion: {
-            versionId: 'artifact-version:one', artifactId: 'artifact:one', locator: 'source.txt',
-            contentDigest: digest, availability: 'available', mediaType: 'text/plain'
-          },
-          sourceAnchor: {
-            anchorId: 'anchor:one', artifactId: 'artifact:one',
-            artifactVersionId: 'artifact-version:one',
-            selector: { type: 'text', lineRange: '1:1' },
-            anchorDigest: digest, accessPolicy: {}
-          }
-        }
-      }), { status: 200 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const agentRuntime = {
-      readThread: vi.fn(async () => ({
-        id: 'thread-1', runtimeId: 'codex', title: 'Evidence',
-        updatedAt: '2026-07-11T00:00:00.000Z', latestSeq: 1, workspace
-      }))
-    }
-    const ensureEvidenceDagReady = vi.fn(async () => undefined)
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({
-      agentRuntime: agentRuntime as never,
-      ensureEvidenceDagReady
+    const evaluate = vi.fn(async () => ({
+      allowed: false,
+      message: 'Publication is blocked.',
+      metadata: { 'evidence.guard': { highestSeverity: 'blocker' } }
     }))
 
-    await expect(handlers.get('evidenceDag:resolve-evidence-preview')?.({}, {
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      snapshotDigest,
-      sourceAssertionId: 'source_assertion:one',
-      artifactVersionId: 'artifact-version:one',
-      sourceAnchorId: 'anchor:one'
-    })).resolves.toMatchObject({
-      ok: true,
-      path: realpathSync(join(workspace, 'source.txt')),
-      workspaceRoot: workspace,
-      selector: { type: 'text', lineRange: '1:1' },
-      contentDigest: digest
-    })
-    expect(agentRuntime.readThread).toHaveBeenCalledWith({
-      runtimeId: 'codex', threadId: 'thread-1'
-    })
-    expect(ensureEvidenceDagReady).toHaveBeenCalledTimes(1)
-    expect(fetchMock).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects Evidence DAG view when the service is not configured', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions())
-
-    await expect(
-      handlers.get('evidenceDag:view')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
-    ).rejects.toThrow(/Evidence DAG is not ready/)
-  })
-
-  it('rejects Evidence DAG view when the service health check fails', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    stubEvidenceDagReady(503)
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions())
-
-    await expect(
-      handlers.get('evidenceDag:view')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
-    ).rejects.toThrow(/Evidence DAG returned HTTP 503/)
-  })
-
-  it('returns an embedded Project DAG view URL without opening an external browser', async () => {
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const ensureProjectDagReady = vi.fn(async () => undefined)
-    const { shell } = await import('electron')
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
     registerAppIpcHandlers(registerOptions({
-      ensureProjectDagReady,
-      agentRuntime: projectDagAgentRuntime()
+      actionGuardEvaluator: { evaluate }
     }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1#token=project-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
-    })
-    expect(ensureProjectDagReady).toHaveBeenCalledTimes(1)
-    expect(shell.openExternal).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:3898/version',
-      expect.objectContaining({
-        method: 'GET',
-        headers: { authorization: 'Bearer project-token' }
-      })
-    )
-  })
-
-  it('surfaces a failed Evidence dependency in the Project panel status', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dependency-'))
-    queueRoots.push(root)
-    const dependencyError = new Error('Evidence extractor unavailable')
-    const queue = configureEvidenceDagUpdateQueue({
-      storagePath: join(root, 'queue.json'),
-      env: {
-        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:4897',
-        SCIFORGE_EVIDENCE_DAG_API_KEY: 'evidence-token'
-      },
-      fetchImpl: vi.fn(async () => { throw dependencyError }),
-      maxAttempts: 1
-    })
-    await queue.enqueue({
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      targetWatermark: '7',
-      reason: 'turn_committed',
-      items: [{ id: 'answer-1', kind: 'assistant_message', text: 'Evidence.' }],
-      projectContext: {
-        projectKey: '/tmp/project-alpha',
-        workspaceRoot: '/tmp/project-alpha',
-        projectRoot: '/tmp/project-alpha'
-      }
-    })
-    await vi.waitFor(async () => {
-      expect((await queue.status('codex', 'thread-1')).state).toBe('failed')
-    })
-
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'failed',
-        pendingCount: 0,
-        lastError: 'Evidence extractor unavailable',
-        progress: { stage: 'failed', attempt: 1 }
-      }
-    })
-  })
-
-  it('keeps a scheduled Evidence dependency retry distinct from terminal failure', async () => {
-    const root = mkdtempSync(join(tmpdir(), 'sciforge-project-dependency-retry-'))
-    queueRoots.push(root)
-    const dependencyError = new Error('Evidence extractor temporarily unavailable')
-    const queue = configureEvidenceDagUpdateQueue({
-      storagePath: join(root, 'queue.json'),
-      env: {
-        SCIFORGE_EVIDENCE_DAG_SERVICE_URL: 'http://127.0.0.1:4897',
-        SCIFORGE_EVIDENCE_DAG_API_KEY: 'evidence-token'
-      },
-      fetchImpl: vi.fn(async () => { throw dependencyError }),
-      maxAttempts: 2,
-      retryBaseMs: 60_000
-    })
-    await queue.enqueue({
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      targetWatermark: '7',
-      reason: 'turn_committed',
-      items: [{ id: 'answer-1', kind: 'assistant_message', text: 'Evidence.' }],
-      projectContext: {
-        projectKey: '/tmp/project-alpha',
-        workspaceRoot: '/tmp/project-alpha',
-        projectRoot: '/tmp/project-alpha'
-      }
-    })
-    await vi.waitFor(async () => {
-      const status = await queue.status('codex', 'thread-1')
-      expect(status.state).toBe('failed')
-      expect(status.nextAttemptAt).toBeTruthy()
-    })
-
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'queued',
-        pendingCount: 1,
-        lastError: 'Evidence extractor temporarily unavailable',
-        nextAttemptAt: expect.any(String),
-        progress: { stage: 'retry_scheduled', attempt: 1 }
-      }
-    })
-  })
-
-  it('maps Project compiler retry deadlines without treating terminal failures as active', async () => {
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    stubProjectDagReady(200, {}, {
-      state: 'update_failed',
-      pending: 0,
-      jobs: [{
-        id: 'project-job-1',
-        status: 'retry_scheduled',
-        attempts: 2,
-        last_error: 'Compiler temporarily unavailable',
-        next_attempt_at: '2026-07-18T12:00:00.000Z',
-        updated_at: '2026-07-18T11:59:00.000Z'
-      }]
-    })
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'queued',
-        pendingCount: 1,
-        lastError: 'Compiler temporarily unavailable',
-        nextAttemptAt: '2026-07-18T12:00:00.000Z',
-        progress: { stage: 'retry_scheduled', attempt: 2 }
-      }
-    })
-  })
-
-  it('maps a Project compiler failure without a retry deadline to terminal failure', async () => {
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    stubProjectDagReady(200, {}, {
-      state: 'update_failed',
-      pending: 0,
-      jobs: [{
-        id: 'project-job-1',
-        status: 'failed',
-        attempts: 3,
-        last_error: 'Compiler rejected the snapshot',
-        next_attempt_at: null,
-        updated_at: '2026-07-18T11:59:00.000Z'
-      }]
-    })
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'failed',
-        pendingCount: 0,
-        lastError: 'Compiler rejected the snapshot',
-        progress: { stage: 'failed', attempt: 3 }
-      }
-    })
-  })
-
-  it('keeps the committed Project scope when currently listed runtime sessions differ', async () => {
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const originalFetch = fetchMock.getMockImplementation()!
-    await originalFetch('http://127.0.0.1:3898/updates', {
-      method: 'POST',
-      body: JSON.stringify({
-        evidenceVector: [
-          { threadId: 'codex:committed-thread', digest: 'sha256:committed' },
-          { threadId: 'sciforge:retired-thread', digest: 'sha256:retired' }
-        ],
-        capturedScope: { excludedSessions: [], isolatedSessions: [] }
-      })
-    })
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({
-      agentRuntime: projectDagAgentRuntime(['unrelated-current-thread'])
-    }))
-
-    await expect(handlers.get('projectDag:view')?.({}, {
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Acommitted-thread&session=sciforge%3Aretired-thread#token=project-token',
-      status: {
-        freshness: 'fresh',
-        pendingCount: 0,
-        scope: {
-          includedSessions: ['codex:committed-thread', 'sciforge:retired-thread']
-        }
-      }
-    })
-  })
-
-  it('returns after durable enqueue while Session Evidence and Project coordination continue', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const { shell } = await import('electron')
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: 'all',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      url: 'http://127.0.0.1:3898/?view=graph&embed=1&workspaceRoot=%2Ftmp%2Fproject-alpha&session=codex%3Athread-1#token=project-token',
-      status: {
-        freshness: 'queued',
-        pendingCount: 1,
-        progress: { stage: 'evidence', completedItems: 0, totalItems: 1 }
-      }
-    })
-    await vi.waitFor(async () => {
-      expect((await evidenceDagQueueStatus('codex', 'thread-1')).state).toBe('fresh')
-    })
-    expect(shell.openExternal).not.toHaveBeenCalled()
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/updates',
-      expect.objectContaining({
-        method: 'POST',
-      })
-    )
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://127.0.0.1:3898/updates',
-      expect.objectContaining({
-        method: 'POST'
-      })
-    )
-  })
-
-  it('normalizes a projectRoot-only update into the complete Evidence project identity', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: 'all',
-      projectRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'queued',
-        scope: { includedSessions: ['codex:thread-1'] }
-      }
-    })
-    await vi.waitFor(async () => {
-      expect((await evidenceDagQueueStatus('codex', 'thread-1')).state).toBe('fresh')
-    })
-    const evidenceCall = fetchMock.mock.calls.find(([input, init]) =>
-      String(input) === 'http://127.0.0.1:4897/updates' && init?.method === 'POST')
-    expect(JSON.parse(String(evidenceCall?.[1]?.body))).toMatchObject({
-      projectKey: '/tmp/project-alpha',
-      workspaceRoot: '/tmp/project-alpha',
-      projectRoot: '/tmp/project-alpha'
-    })
-  })
-
-  it('rejects an unbounded Project update before it can capture every runtime session', async () => {
-    const ensureProjectDagReady = vi.fn(async () => undefined)
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({
-      agentRuntime: projectDagAgentRuntime(),
-      ensureProjectDagReady
-    }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: 'all',
-      project: 'project-alpha'
-    })).rejects.toThrow(/requires workspaceRoot\/projectRoot unless an explicit session scope/)
-    expect(ensureProjectDagReady).not.toHaveBeenCalled()
-  })
-
-  it('rejects stale explicit sessions without a workspace root before durable Evidence enqueue', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: projectDagAgentRuntime() }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: ['codex:thread-1'],
-      project: 'project-alpha'
-    })).rejects.toThrow(/requires workspaceRoot\/projectRoot to refresh stale Evidence sessions/)
-    await expect(evidenceDagQueueStatus('codex', 'thread-1')).resolves.toMatchObject({
-      state: 'fresh',
-      pendingCount: 0
-    })
-  })
-
-  it('reuses unchanged committed Evidence snapshots without rereading full Session histories', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const originalFetch = fetchMock.getMockImplementation()!
-    await originalFetch('http://127.0.0.1:3898/updates', {
-      method: 'POST',
-      body: JSON.stringify({
-        evidenceVector: [
-          { threadId: 'codex:thread-1', digest: 'sha256:fresh:codex:thread-1' },
-          { threadId: 'sciforge:retired-thread', digest: 'sha256:fresh:sciforge:retired-thread' }
-        ],
-        capturedScope: { excludedSessions: [], isolatedSessions: [] }
-      })
-    })
-    fetchMock.mockImplementation(async (input: string | URL | Request, init?: RequestInit) => {
-      const href = String(input)
-      if (href.startsWith('http://127.0.0.1:4897/updates/status')) {
-        const threadId = new URL(href).searchParams.get('threadId') ?? ''
-        return new Response(JSON.stringify({ ok: true, data: {
-          state: 'fresh', pending: 0, snapshot: {
-            threadId,
-            version: 4,
-            digest: `sha256:fresh:${threadId}`,
-            inputWatermark: '7',
-            schemaVersion: '2', extractorVersion: '2', verifierVersion: '2',
-            artifactDigests: [],
-            createdAt: '2026-07-10T00:00:00.000Z',
-            status: 'committed'
-          }
-        } }), { status: 200 })
-      }
-      return originalFetch(input, init)
-    })
-    const agentRuntime = projectDagAgentRuntime() as unknown as {
-      readThread: ReturnType<typeof vi.fn>
-    }
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: 'all',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({ status: { freshness: 'fresh' } })
-
-    expect(agentRuntime.readThread).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/updates',
-      expect.objectContaining({ method: 'POST' })
-    )
-    const projectCall = fetchMock.mock.calls.find(([input, init]) =>
-      String(input) === 'http://127.0.0.1:3898/updates' && init?.method === 'POST')
-    const projectBody = JSON.parse(String(projectCall?.[1]?.body))
-    expect(projectBody).toMatchObject({
-      priority: 3,
-      evidenceVector: [
-        { threadId: 'codex:thread-1', digest: 'sha256:fresh:codex:thread-1' },
-        { threadId: 'sciforge:retired-thread', digest: 'sha256:fresh:sciforge:retired-thread' }
-      ],
-      capturedScope: { includedSessions: ['codex:thread-1', 'sciforge:retired-thread'] }
-    })
-    expect(projectBody).not.toHaveProperty('evidenceSnapshots')
-  })
-
-  it('applies excluded and isolated sessions through the same Project update command', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'evidence-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({
-      agentRuntime: projectDagAgentRuntime(['thread-1', 'thread-2', 'thread-3'])
-    }))
-
-    await expect(handlers.get('projectDag:update')?.({}, {
-      scope: 'all',
-      workspaceRoot: '/tmp/project-alpha',
-      excludedSessions: ['codex:thread-2'],
-      isolatedSessions: ['codex:thread-3'],
-      autonomyMode: 'checkpointed'
-    })).resolves.toMatchObject({
-      status: {
-        freshness: 'queued',
-        autonomyMode: 'checkpointed',
-        scope: {
-          includedSessions: ['codex:thread-1'],
-          excludedSessions: ['codex:thread-2'],
-          isolatedSessions: ['codex:thread-3']
-        }
-      }
-    })
-    await vi.waitFor(async () => {
-      expect((await evidenceDagQueueStatus('codex', 'thread-1')).state).toBe('fresh')
-    })
-    const projectCall = fetchMock.mock.calls.find(([input, init]) =>
-      String(input) === 'http://127.0.0.1:3898/updates' && init?.method === 'POST')
-    expect(JSON.parse(String(projectCall?.[1]?.body))).toMatchObject({
-      reason: 'manual_immediate',
-      autonomyMode: 'checkpointed',
-      evidenceVector: [{ threadId: 'codex:thread-1', digest: 'sha256:codex:thread-1:7' }],
-      capturedScope: {
-        includedSessions: ['codex:thread-1'],
-        excludedSessions: ['codex:thread-2'],
-        isolatedSessions: ['codex:thread-3']
-      }
-    })
-  })
-
-  it('saves new and existing Goals with an explicit human actor contract', async () => {
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = stubProjectDagReady()
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    registerAppIpcHandlers(registerOptions())
-    const handler = handlers.get('projectDag:save-goal')
-
-    await expect(handler?.({}, {
-      title: 'Project alpha', description: 'Initial intent', workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({ goalId: 'goal-1' })
-    await expect(handler?.({}, {
-      rootGoalId: 'goal-1', title: 'Project alpha revised', description: 'Visible revision',
-      workspaceRoot: '/tmp/project-alpha'
-    })).resolves.toMatchObject({ goalId: 'goal-1', version: 2 })
-
-    const goalCalls = fetchMock.mock.calls.filter(([input, init]) =>
-      String(input).includes('/goals') && init?.method === 'POST')
-    expect(goalCalls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
-      {
-        title: 'Project alpha', description: 'Initial intent', actorType: 'human',
-        actorId: 'sciforge-desktop:user', projectKey: '/tmp/project-alpha'
-      },
-      {
-        title: 'Project alpha revised', description: 'Visible revision', actorType: 'human',
-        actorId: 'sciforge-desktop:user', reframe: false, projectKey: '/tmp/project-alpha'
-      }
-    ])
-  })
-
-  it('does not register the removed direct Project compile IPC path', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions())
-    expect(handlers.has('projectDag:compile')).toBe(false)
-    expect(handlers.get('projectDag:update')).toBeTypeOf('function')
-  })
-
-  it('keeps Evidence DAG view read-only without backfilling the active thread', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    const fetchMock = stubEvidenceDagReady()
-    const agentRuntime = {
-      readThread: vi.fn(async () => ({
-        id: 'thread-1',
-        runtimeId: 'codex',
-        title: 'Thread',
-        updatedAt: '2026-06-26T00:00:00.000Z',
-        latestSeq: 1,
-        items: [
-          { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
-          { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
-        ]
-      }))
-    }
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(
-      handlers.get('evidenceDag:view')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
-    ).resolves.toMatchObject({
-      threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
-    })
-
-    expect(agentRuntime.readThread).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalledWith(
-      'http://127.0.0.1:4897/updates',
-      expect.anything()
-    )
-  })
-
-  it('updates the active thread Evidence DAG on demand', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'test-token')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_SERVICE_URL', 'http://127.0.0.1:3898/')
-    vi.stubEnv('SCIFORGE_PROJECT_DAG_API_KEY', 'project-token')
-    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
-      const href = String(url)
-      if (href === 'http://127.0.0.1:4897/version') {
-        return new Response(JSON.stringify({
-          ok: true,
-          data: { service: 'evidence-dag-engine' }
-        }), { status: 200 })
-      }
-      if (href === 'http://127.0.0.1:4897/updates') {
-        const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
-        return new Response(JSON.stringify({
-          ok: true,
-          data: { snapshot: {
-            threadId: body.threadId, version: 1, digest: 'sha256:evidence-1', inputWatermark: body.targetWatermark,
-            schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
-            createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
-          } }
-        }), { status: 200 })
-      }
-      if (href === 'http://127.0.0.1:3898/updates') {
-        return new Response(JSON.stringify({ ok: true, data: {
-          id: 'project-job-1',
-          status: 'queued',
-          desiredEvidenceVector: [{ threadId: 'codex:thread-1', digest: 'sha256:evidence-1' }]
-        } }), {
-          status: 200
-        })
-      }
-      if (href.startsWith('http://127.0.0.1:3898/updates/status')) {
-        return new Response(JSON.stringify({ ok: true, data: {
-          state: 'fresh',
-          pending: 0,
-          committedSnapshot: {
-            evidenceVector: [{ threadId: 'codex:thread-1', digest: 'sha256:evidence-1' }]
-          }
-        } }), { status: 200 })
-      }
-      return new Response(JSON.stringify({ ok: false, error: { message: href } }), { status: 404 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const agentRuntime = {
-      listThreads: vi.fn(async () => [{
-        id: 'thread-1', runtimeId: 'codex', title: 'Thread',
-        updatedAt: '2026-06-26T00:00:00.000Z', workspace: '/tmp/project-alpha'
-      }, {
-        id: 'thread-2', runtimeId: 'codex', title: 'Uncompiled sibling',
-        updatedAt: '2026-06-26T00:00:00.000Z', workspace: '/tmp/project-alpha'
-      }]),
-      readThread: vi.fn(async () => ({
-        id: 'thread-1',
-        runtimeId: 'codex',
-        title: 'Thread',
-        updatedAt: '2026-06-26T00:00:00.000Z',
-        latestSeq: 1,
-        items: [
-          { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
-          { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
-        ]
-      }))
-    }
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(
-      handlers.get('evidenceDag:update')?.({}, { runtimeId: 'codex', threadId: 'thread-1' })
-    ).resolves.toMatchObject({
-      threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=codex%3Athread-1&preview=trusted#token=test-token',
-      itemCount: 2,
-      status: { freshness: 'queued', pendingCount: 1 }
-    })
-    expect(agentRuntime.readThread).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: 'thread-1'
-    })
-    await vi.waitFor(async () => {
-      await expect(evidenceDagQueueStatus('codex', 'thread-1')).resolves.toMatchObject({ state: 'fresh' })
-    })
-    const evidenceCall = fetchMock.mock.calls.find(([url, init]) =>
-      String(url) === 'http://127.0.0.1:4897/updates' && init?.method === 'POST')
-    expect(JSON.parse(String(evidenceCall?.[1]?.body))).toMatchObject({
-      threadId: 'codex:thread-1',
-      targetWatermark: '1',
-      reason: 'manual_immediate',
-      priority: 'immediate',
-      projectKey: '/tmp/project-alpha',
-      workspaceRoot: '/tmp/project-alpha',
-      projectRoot: '/tmp/project-alpha',
-      trace: [
-        { id: 'u1', type: 'message', role: 'user', content: 'question' },
-        { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-      ]
-    })
-  })
-
-  it('rejects write export when Evidence DAG audit has blocker findings', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    stubEvidenceDagExportAudit('blocker')
-    const agentRuntime = writeExportAgentRuntime()
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
 
     await expect(
       handlers.get('write:export')?.({}, writeExportPayload())
-    ).rejects.toThrow(/blocker risks/)
-    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
-  })
-
-  it('rejects write export when Evidence DAG audit has major findings without confirmation', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    stubEvidenceDagExportAudit('major')
-    const agentRuntime = writeExportAgentRuntime()
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(
-      handlers.get('write:export')?.({}, writeExportPayload())
-    ).rejects.toThrow(/evidenceDagGateOverride/)
-    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
-  })
-
-  it('treats unavailable Evidence DAG audit as missing audit for write export', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    const agentRuntime = writeExportAgentRuntime()
-
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-    await expect(
-      handlers.get('write:export')?.({}, writeExportPayload())
-    ).rejects.toThrow(/audit is missing/)
-    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
-
-    await expect(
-      handlers.get('write:export')?.({}, writeExportPayload({ evidenceDagGateOverride: true }))
-    ).resolves.toMatchObject({
-      ok: true,
-      evidenceDagGate: {
-        auditState: 'missing',
-        requiresOverride: true,
-        overrideConfirmed: true,
-        advisory: true
-      }
+    ).rejects.toThrow('Publication is blocked.')
+    expect(evaluate).toHaveBeenCalledWith({
+      actionId: 'write.export',
+      payload: writeExportPayload()
     })
-    expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalledTimes(1)
+    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalled()
   })
 
-  it('allows write export when Evidence DAG audit has major findings with confirmation', async () => {
+  it('passes guard-only fields to action guards but not to the export service', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    stubEvidenceDagExportAudit('major')
-    const agentRuntime = writeExportAgentRuntime()
+    const evaluate = vi.fn(async () => ({
+      allowed: true,
+      metadata: { 'evidence.guard': { overrideConfirmed: true } }
+    }))
+    const payload = writeExportPayload({ overrideConfirmed: true })
 
-    registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
+    registerAppIpcHandlers(registerOptions({
+      actionGuardEvaluator: { evaluate }
+    }))
 
     await expect(
-      handlers.get('write:export')?.({}, writeExportPayload({ evidenceDagGateOverride: true }))
-    ).resolves.toMatchObject({
+      handlers.get('write:export')?.({}, payload)
+    ).resolves.toEqual({
       ok: true,
-      evidenceDagGate: {
-        policy: 'evidence-dag-high-impact-gate',
-        auditState: 'fresh',
-        highestSeverity: 'major',
-        requiresOverride: true,
-        overrideConfirmed: true,
-        advisory: true,
-        runtimeId: 'codex',
-        threadId: 'thread-1'
-      }
+      path: '/tmp/workspace/report.html',
+      format: 'html',
+      exportedAt: '2026-07-07T01:00:00.000Z'
+    })
+    expect(evaluate).toHaveBeenCalledWith({
+      actionId: 'write.export',
+      payload
     })
     expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalledWith(
-      expect.objectContaining({
+      {
         path: '/tmp/workspace/report.md',
+        workspaceRoot: '/tmp/workspace',
         format: 'html',
         content: '# Report'
-      }),
+      },
       { parentWindow: null }
     )
-    expect(writeExportServiceMock.exportWriteDocument).not.toHaveBeenCalledWith(
-      expect.objectContaining({ evidenceDagGateOverride: true }),
-      expect.anything()
-    )
   })
-
-  it.each(['minor', 'none'] as const)(
-    'allows write export when Evidence DAG audit highest severity is %s',
-    async (highestSeverity) => {
-      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-      stubEvidenceDagExportAudit(highestSeverity)
-      const agentRuntime = writeExportAgentRuntime()
-
-      registerAppIpcHandlers(registerOptions({ agentRuntime: agentRuntime as never }))
-
-      await expect(
-        handlers.get('write:export')?.({}, writeExportPayload())
-      ).resolves.toMatchObject({
-        ok: true,
-        evidenceDagGate: {
-          auditState: 'fresh',
-          highestSeverity,
-          requiresOverride: false,
-          overrideConfirmed: false,
-          advisory: highestSeverity !== 'none'
-        }
-      })
-      expect(writeExportServiceMock.exportWriteDocument).toHaveBeenCalled()
-    }
-  )
 
   it('returns a dispatcher for dev browser bridge calls that uses the same handlers', async () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
@@ -2027,7 +975,14 @@ describe('registerAppIpcHandlers', () => {
         runtimeId: 'codex',
         threadId: 'side-thread-1',
         text: ' hello ',
-        visibleContextOwnerThreadId: ' parent-thread-1 '
+        visibleContextOwnerThreadId: ' parent-thread-1 ',
+        executionIntent: {
+          mode: 'execute',
+          requirements: [{
+            receiptKind: 'visual.capture',
+            requiresRegionRef: true
+          }]
+        }
       })
     ).resolves.toEqual({ threadId: 'thread-1', turnId: 'turn-1' })
     await expect(
@@ -2043,7 +998,11 @@ describe('registerAppIpcHandlers', () => {
         runtimeId: 'codex',
         threadId: 'thread-1',
         turnId: ' turn-1 ',
-        text: ' keep going '
+        text: ' keep going ',
+        executionIntent: {
+          mode: 'inspect',
+          requirements: [{ receiptKind: 'visual.look' }]
+        }
       })
     ).resolves.toBeUndefined()
     await expect(
@@ -2144,7 +1103,14 @@ describe('registerAppIpcHandlers', () => {
       runtimeId: 'codex',
       threadId: 'side-thread-1',
       text: 'hello',
-      visibleContextOwnerThreadId: 'parent-thread-1'
+      visibleContextOwnerThreadId: 'parent-thread-1',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [{
+          receiptKind: 'visual.capture',
+          requiresRegionRef: true
+        }]
+      }
     })
     expect(agentRuntime.interruptTurn).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -2156,7 +1122,11 @@ describe('registerAppIpcHandlers', () => {
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      text: 'keep going'
+      text: 'keep going',
+      executionIntent: {
+        mode: 'inspect',
+        requirements: [{ receiptKind: 'visual.look' }]
+      }
     })
     expect(agentRuntime.resolveApproval).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -2685,25 +1655,5 @@ describe('registerAppIpcHandlers', () => {
     expect(webContents.setZoomLevel).toHaveBeenCalledWith(1)
     expect(mainWindow.maximize).toHaveBeenCalledTimes(1)
     expect(mainWindow.close).toHaveBeenCalledTimes(1)
-  })
-
-  it('returns Evidence DAG view with a runtime-scoped thread id from the main process environment', async () => {
-    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:4897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'main-process-token')
-    stubEvidenceDagReady()
-
-    registerAppIpcHandlers(registerOptions())
-
-    await expect(
-      handlers.get('evidenceDag:view')?.({}, {
-        runtimeId: 'claude',
-        threadId: ' thread-1 '
-      })
-    ).resolves.toMatchObject({
-      threadId: 'thread-1',
-      url: 'http://127.0.0.1:4897/?thread=claude%3Athread-1&preview=trusted#token=main-process-token',
-      status: { freshness: 'fresh', pendingCount: 0 }
-    })
   })
 })

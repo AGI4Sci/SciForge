@@ -53,8 +53,8 @@
 - [x] 4.2 Carry installed-domain source contributions through their standard
   manifest and generated process-specific composition path.
 - [x] 4.3 Register Host-built current-surface and Workspace Preview sources
-  through the same source registry; admit workspace image paths through the
-  same scoped Agent Visual Runtime.
+  through the same source registry; pass workspace files to Agent Visual Runtime
+  only as opaque Workspace Preview resource references.
 - [x] 4.4 Prove with a fixture contribution that adding or removing a visual
   source requires no Host feature-map, domain-ID switch, or central provider
   edit.
@@ -67,16 +67,17 @@
 - [x] 5.1 Move current Electron surface/target capture behind the Core surface
   `VisualSource`, preserving task binding, redaction, semantic/layout revision
   separation, and on-demand refresh.
-- [x] 5.2 Move workspace image loading behind the scoped Agent Visual Runtime,
-  preserving workspace confinement, symlink protection, media validation, size
-  limits, and digest evidence.
+- [x] 5.2 Move workspace image loading behind the canonical Workspace Preview
+  resource pipeline, preserving workspace confinement, symlink protection,
+  media validation, size limits, and digest evidence.
 - [x] 5.3 Move PDF page rendering and region cropping behind the canonical
   document/preview-owned `VisualSource` contribution, with no PDF branch in
   Agent Visual Runtime.
 - [x] 5.4 Add focused acceptance coverage that locates a method figure, captures
   only the selected region, and rejects a whole-page substitute.
 - [x] 5.5 Add non-PDF coverage for at least a visible UI target and a workspace
-  image to prove the public contracts are source-agnostic.
+  image opened as a Workspace Preview resource to prove the public contracts
+  are source-agnostic.
 
 ## 6. Typed completion and consumer references
 
@@ -160,3 +161,18 @@
 - [x] 9.7 Review the final diff for old entrypoints, private cross-boundary
   imports, domain hard-coding, duplicate providers, stale generated files,
   dead files, and transitional documentation.
+
+## 10. Visual reliability corrections
+
+- [x] 10.1 Normalize Chat content parts at the shared Responses conversion
+  boundary so visual translators receive `input_text` and `input_image`.
+- [x] 10.2 Fail closed when Model Router returns no artifact-grounded visual
+  claim; do not create snapshots, verified proofs, or completion receipts.
+- [x] 10.3 Remove the `sciforge_look.path` file-loading bypass and route every
+  workspace file through the canonical Workspace Preview `resourceRef`.
+- [x] 10.4 Replace natural-language and metadata visual-plan inference with
+  typed `executionIntent` requirements. A successful native look with a typed
+  `capture=snapshot|region` plan also activates the same receipt ledger
+  dynamically, requiring a linked capture, final artifact inspection, and
+  durable publication marker; region capture additionally requires
+  `intent=locate`.

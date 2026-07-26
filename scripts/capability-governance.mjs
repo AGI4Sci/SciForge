@@ -23,6 +23,14 @@ const REQUIRED_AGENT_TOOL_NAMES = [
   'sciforge_look',
   'sciforge_observe'
 ]
+const REQUIRED_LOOK_INPUT_FIELDS = [
+  'capture',
+  'frame',
+  'intent',
+  'sourceRef',
+  'targetRef',
+  'task'
+]
 const REMOVED_AGENT_PATHS = [
   'annotation.sidecar.read',
   'artifact.inspect',
@@ -306,6 +314,22 @@ async function loadApplicationCapabilityModel() {
       `The owned agent tool surface must contain only ${REQUIRED_AGENT_TOOL_NAMES.join(', ')}; ` +
         `received ${agentToolNames.join(', ') || '(none)'}. Product capabilities remain behind the broker; ` +
         'only the two Host Core visual primitives may extend the four broker meta-tools.'
+    )
+  }
+  const agentToolSurface = agentToolsModule.createCapabilityAgentToolSurface({
+    broker: {},
+    resolveCaller: () => ({ audience: 'agent', callerId: 'governance' })
+  })
+  const lookTool = agentToolSurface.tools().find((tool) => tool.name === 'sciforge_look')
+  const lookSchema = lookTool?.inputSchema
+  const lookInputFields = Object.keys(lookSchema?.properties ?? {}).sort()
+  if (
+    stableStringify(lookInputFields) !== stableStringify(REQUIRED_LOOK_INPUT_FIELDS) ||
+    stableStringify(lookSchema?.required ?? []) !== stableStringify(['task']) ||
+    lookSchema?.additionalProperties !== false
+  ) {
+    throw new GovernanceError(
+      'sciforge_look must expose only sourceRef, targetRef, frame, task, intent, and the typed capture plan with strict additional-property rejection. Workspace files enter through the canonical preview resourceRef pipeline.'
     )
   }
   return { descriptors, migratedDomains }

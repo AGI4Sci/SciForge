@@ -108,7 +108,6 @@ export const RESEARCH_CARD_ORIGINS = [
   'ppt_master',
   'write_assist',
   'scientific_plotting',
-  'evidence_dag',
   'model_router',
   'other'
 ] as const

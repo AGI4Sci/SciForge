@@ -9,13 +9,12 @@ import {
   agentVisualCaptureOutputSchema,
   agentVisualLookOutputSchema
 } from '../shared/agent-visual'
-import type { CapabilityAgentToolSurface } from './capabilities/agent-tools'
+import type {
+  CapabilityAgentToolRequestContext,
+  CapabilityAgentToolSurface
+} from './capabilities/agent-tools'
 import { nativeAgentToolExecutionMetadata } from './runtime/agent-runtime/agent-tool-surface'
 import { RuntimeExecutionIntegrityGuard } from './runtime/agent-runtime/execution-integrity-guard'
-import {
-  VISUAL_EXECUTION_PLAN_METADATA_KEY,
-  VISUAL_EXECUTION_REQUIRED_METADATA_KEY
-} from './runtime/agent-runtime/visual-execution-guard'
 import {
   createCodexPreToolUseHookDefinition,
   probeCodexPreToolUseHook,
@@ -113,6 +112,12 @@ async function runElectronDomainNativeVisualSmoke(
     turnId,
     workspaceId: workspaceDirectory
   }
+  const sourceRef = await openWorkspaceVisualSource(
+    agentTools,
+    fixtureRelativePath,
+    workspaceDirectory,
+    context
+  )
   const guard = new RuntimeExecutionIntegrityGuard()
   guard.rememberTurn(runtimeId, {
     runtimeId,
@@ -120,9 +125,25 @@ async function runElectronDomainNativeVisualSmoke(
     text: 'Capture the located fixture target and verify the persisted result.',
     displayText: 'Capture the located fixture target and verify the persisted result.',
     workspace: workspaceDirectory,
-    metadata: {
-      [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true,
-      [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'capture-region'
+    executionIntent: {
+      mode: 'execute',
+      requirements: [
+        {
+          id: 'visual-look-locate',
+          receiptKind: 'visual.look'
+        },
+        {
+          id: 'visual-capture',
+          receiptKind: 'visual.capture',
+          requiresRegionRef: true,
+          dependsOn: ['visual-look-locate']
+        },
+        {
+          id: 'visual-look-final',
+          receiptKind: 'visual.look',
+          dependsOn: ['visual-capture']
+        }
+      ]
     }
   }, threadId, turnId)
 
@@ -130,7 +151,7 @@ async function runElectronDomainNativeVisualSmoke(
   const lookedResult = await agentTools.call({
     name: 'sciforge_look',
     arguments: {
-      path: fixtureRelativePath,
+      sourceRef,
       task: 'Locate the colored fixture target.',
       intent: 'locate'
     },
@@ -206,7 +227,7 @@ async function runElectronDomainNativeVisualSmoke(
     await agentTools.call({
       name: 'sciforge_look',
       arguments: {
-        path: fixtureRelativePath,
+        sourceRef,
         task: 'electron-domain-smoke:fail-visible',
         intent: 'describe'
       },
@@ -239,6 +260,61 @@ async function runElectronDomainNativeVisualSmoke(
     proofChainValidated: true,
     unavailableRouteFailedVisibly
   }
+}
+
+async function openWorkspaceVisualSource(
+  agentTools: CapabilityAgentToolSurface,
+  path: string,
+  workspaceRoot: string,
+  context: Omit<CapabilityAgentToolRequestContext, 'requestId'>
+): Promise<string> {
+  const discovered = await agentTools.call({
+    name: 'sciforge_discover',
+    arguments: { text: 'open workspace preview' },
+    context: {
+      ...context,
+      requestId: 'electron-domain-smoke-discover-preview',
+      callId: 'electron-domain-smoke-discover-preview'
+    }
+  })
+  if (discovered.tool !== 'sciforge_discover') {
+    throw new Error('Native visual smoke did not receive a discovery result.')
+  }
+  const operationRef = discovered.value.find(
+    (operation) => operation.title === 'Open Workspace Preview'
+  )?.operationRef
+  if (!operationRef) {
+    throw new Error('Native visual smoke could not discover the canonical workspace preview operation.')
+  }
+  const opened = await agentTools.call({
+    name: 'sciforge_invoke',
+    arguments: {
+      operationRef,
+      input: {
+        path,
+        workspaceRoot,
+        mode: 'inspect'
+      }
+    },
+    context: {
+      ...context,
+      requestId: 'electron-domain-smoke-open-preview',
+      callId: 'electron-domain-smoke-open-preview'
+    }
+  })
+  if (opened.tool !== 'sciforge_invoke') {
+    throw new Error('Native visual smoke did not receive a workspace preview invocation result.')
+  }
+  const output = opened.value.output
+  const resourceRef = (
+    output && typeof output === 'object' && !Array.isArray(output)
+      ? (output as Record<string, unknown>).resourceRef
+      : undefined
+  )
+  if (typeof resourceRef !== 'string' || !/^res_[A-Za-z0-9_-]{20,}$/u.test(resourceRef)) {
+    throw new Error('Native visual smoke did not receive a workspace preview resource reference.')
+  }
+  return resourceRef
 }
 
 function observeToolResult(

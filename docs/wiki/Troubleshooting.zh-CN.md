@@ -42,12 +42,12 @@
 先运行最小服务并查看端口/日志，再从 GUI 重试：
 
 ```bash
-npm run evidence-dag:start
+npm --workspace @sciforge/domain-evidence-dag run start
 npm run scientific-plotting:start
 npm run model-router:start
 ```
 
-不同 worker 的 Python / Node 版本和环境变量要求见各自 `packages/workers/*/README.md` 或 `package.json`。
+Domain package 与 worker 的 Python / Node 版本和环境变量要求见各自包内的 `README.md` 或 `package.json`。
 
 ### macOS 阻止未公证应用
 

@@ -4,9 +4,15 @@ vi.mock('../workspace-preview/PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: 
 import { installedRendererDomainEntrySet } from './installed-domain-renderer'
 import {
   createInstalledRendererContributions,
+  RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND,
+  type RendererI18nResourceContribution,
   type RendererTranslationHost
 } from './installed-renderer-contributions'
 import { RENDERER_LIFECYCLE_CONTRIBUTION_KIND } from './renderer-lifecycle'
+import {
+  RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
+  type WorkbenchRightPanelContribution
+} from './workbench-right-panel-slot'
 
 describe('installed renderer contributions', () => {
   it('registers package-owned UI and translations and disposes both idempotently', () => {
@@ -15,6 +21,28 @@ describe('installed renderer contributions', () => {
       zh: { common: { coreTitle: '核心' } }
     })
     const runtime = createInstalledRendererContributions({ translations })
+    const expectedPanels = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND
+      )
+      .map((installed) => ({
+        installed,
+        contribution: installed.value as WorkbenchRightPanelContribution
+      }))
+      .sort((left, right) =>
+        left.installed.declaration.priority - right.installed.declaration.priority ||
+        left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
+        left.installed.declaration.id.localeCompare(right.installed.declaration.id)
+      )
+      .map(({ installed, contribution }) => ({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        mode: contribution.mode,
+        label: contribution.label,
+        title: contribution.title,
+        resourceKind: contribution.resourceKind,
+        available: contribution.isAvailable()
+      }))
 
     expect(runtime.rightPanels.list().map(({ id, ownerId, contribution }) => ({
       id,
@@ -24,46 +52,16 @@ describe('installed renderer contributions', () => {
       title: contribution.title,
       resourceKind: contribution.resourceKind,
       available: contribution.isAvailable()
-    }))).toEqual([
-      {
-        id: 'browser-preview.workbench-right-panel',
-        ownerId: 'sciforge.browser-preview',
-        mode: 'browser',
-        label: 'browserPreviewRightPanelBrowser',
-        title: 'Playwright browser',
-        resourceKind: 'browser-page',
-        available: true
-      },
-      {
-        id: 'paper-radar.workbench-right-panel',
-        ownerId: 'sciforge.paper-radar',
-        mode: 'paper',
-        label: 'rightPanelPaperRadar',
-        title: 'Paper radar',
-        resourceKind: 'paper-radar',
-        available: true
-      },
-      {
-        id: 'remote-ssh.workbench-right-panel',
-        ownerId: 'sciforge.remote-ssh',
-        mode: 'remote-ssh',
-        label: 'rightPanelRemoteSsh',
-        title: 'Remote targets',
-        resourceKind: 'remote-ssh-target',
-        available: true
-      }
-    ])
+    }))).toEqual(expectedPanels)
+    const expectedEnglish = installedMessages('en')
+    const expectedChinese = installedMessages('zh')
     expect(translations.bundle('en', 'common')).toMatchObject({
       coreTitle: 'Core',
-      browserPreviewTitle: 'Playwright browser',
-      paperRadarTitle: 'Paper Radar',
-      remoteSshTitle: 'Remote Targets'
+      ...expectedEnglish
     })
     expect(translations.bundle('zh', 'common')).toMatchObject({
       coreTitle: '核心',
-      browserPreviewTitle: 'Playwright 浏览器',
-      paperRadarTitle: '论文雷达',
-      remoteSshTitle: '远程资源'
+      ...expectedChinese
     })
 
     runtime.dispose()
@@ -137,6 +135,20 @@ describe('installed renderer contributions', () => {
     expect(dispose).toHaveBeenCalledOnce()
   })
 })
+
+function installedMessages(language: string): Record<string, string> {
+  return Object.assign(
+    {},
+    ...installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND
+      )
+      .map(({ value }) => {
+        const contribution = value as RendererI18nResourceContribution
+        return contribution.resources[language] ?? {}
+      })
+  )
+}
 
 class MemoryTranslationHost implements RendererTranslationHost {
   readonly mutations: string[] = []

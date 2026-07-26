@@ -14,10 +14,6 @@ export default defineConfig({
   test: {
     environment: 'node',
     setupFiles: [resolve(repositoryRoot, 'scripts/vitest.setup.ts')],
-    include: [
-      'src/**/*.test.{ts,tsx}',
-      'packages/workers/evidence-dag/desktop/**/*.test.ts',
-      'packages/workers/project-dag/desktop/**/*.test.ts'
-    ]
+    include: ['src/**/*.test.{ts,tsx}']
   }
 })

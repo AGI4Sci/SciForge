@@ -64,8 +64,8 @@ Codex 仍然可以是这些闭环中的规划者、执行者、代码生成者�
 
 参考：
 
-- [Evidence DAG worker](../packages/workers/evidence-dag/README.md)
-- [Project DAG worker](../packages/workers/project-dag/README.md)
+- [Evidence DAG domain](../packages/domains/evidence-dag/README.md)
+- [Project DAG domain](../packages/domains/project-dag/README.md)
 - [GUI-Owl Computer Use](../packages/workers/gui-owl-computer-use/README.md)
 - [SciForge 产品定位](../README.md)
 

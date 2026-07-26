@@ -12,6 +12,74 @@ const knownModuleRoots = [
 ] as const
 const ownerDirectoryNames = new Set(['app-contributions', 'domain-modules'])
 const privateWorkerSourceImportPattern = /['"][^'"]*packages\/workers\/[^/'"]+\/src(?:\/[^'"]*)?['"]/
+const generatedDomainCompositionPaths = new Set([
+  'src/shared/installed-domain-packages.ts',
+  'src/main/modules/installed-domain-main.ts',
+  'src/renderer/src/domain-modules/installed-domain-renderer.ts'
+])
+const dagDomainPackages = [
+  {
+    directory: 'evidence-dag',
+    packageName: '@sciforge/domain-evidence-dag',
+    moduleId: 'sciforge.evidence-dag',
+    directTransportPrefix: 'evidenceDag:',
+    contributionKinds: {
+      main: [
+        'main.capability-factory',
+        'main.runtime-lifecycle',
+        'main.agent-artifact-consumer'
+      ],
+      renderer: ['renderer.workbench-right-panel', 'renderer.i18n-resource']
+    }
+  },
+  {
+    directory: 'project-dag',
+    packageName: '@sciforge/domain-project-dag',
+    moduleId: 'sciforge.project-dag',
+    directTransportPrefix: 'projectDag:',
+    contributionKinds: {
+      main: [
+        'main.capability-factory',
+        'main.runtime-lifecycle',
+        'main.agent-artifact-consumer'
+      ],
+      renderer: ['renderer.workbench-right-panel', 'renderer.i18n-resource']
+    }
+  }
+] as const
+const forbiddenDagHostApiSymbols = [
+  'getEvidenceDagView',
+  'updateEvidenceDag',
+  'setEvidenceDagPriority',
+  'resolveEvidenceDagEvidencePreview',
+  'evidenceDagViewPayloadSchema',
+  'evidenceDagUpdatePayloadSchema',
+  'evidenceDagPriorityPayloadSchema',
+  'evidenceDagEvidencePreviewResolvePayloadSchema',
+  'ensureEvidenceDagSidecar',
+  'stopEvidenceDagSidecar',
+  'configureEvidenceDagUpdateQueue',
+  'syncEvidenceDagUpdateQueue',
+  'enqueueEvidenceDagUpdate',
+  'ensureEvidenceDagFresh',
+  'evidenceDagQueueStatus',
+  'prioritizeEvidenceDagUpdate',
+  'acknowledgeEvidenceDagSnapshot',
+  'getProjectDagView',
+  'updateProjectDag',
+  'saveProjectDagGoal',
+  'resolveProjectDagEvidencePreview',
+  'projectDagViewPayloadSchema',
+  'projectDagUpdatePayloadSchema',
+  'projectDagGoalSavePayloadSchema',
+  'projectDagEvidencePreviewResolvePayloadSchema',
+  'ensureProjectDagSidecar',
+  'stopProjectDagSidecar'
+] as const
+const forbiddenDagWorkbenchPattern =
+  /(?:EvidenceDag|ProjectDag|evidenceDag|projectDag|['"](?:evidence|project-dag)['"])/u
+const importSpecifierPattern =
+  /(?:\bfrom\s*|\b(?:import|tsImport)\s*\()\s*['"]([^'"]+)['"]|\bimport\s*['"]([^'"]+)['"]/gu
 
 function sourceFiles(root: string): string[] {
   const absoluteRoot = resolve(projectRoot, root)
@@ -19,8 +87,31 @@ function sourceFiles(root: string): string[] {
   return readdirSync(absoluteRoot, { withFileTypes: true }).flatMap((entry) => {
     const path = join(absoluteRoot, entry.name)
     if (entry.isDirectory()) return sourceFiles(relative(projectRoot, path))
-    return ['.ts', '.tsx'].includes(extname(entry.name)) ? [path] : []
+    return ['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(extname(entry.name))
+      ? [path]
+      : []
   })
+}
+
+function isTestSource(path: string): boolean {
+  return /(?:^|\/)(?:__tests__|fixtures)(?:\/|$)|\.(?:test|spec)\.[cm]?[jt]sx?$/u
+    .test(relative(projectRoot, path))
+}
+
+function productionSourceFiles(...roots: string[]): string[] {
+  return roots.flatMap(sourceFiles).filter((path) => !isTestSource(path))
+}
+
+function importSpecifiers(source: string): string[] {
+  importSpecifierPattern.lastIndex = 0
+  return [...source.matchAll(importSpecifierPattern)]
+    .map((match) => match[1] ?? match[2])
+    .filter((value): value is string => typeof value === 'string')
+}
+
+function isWithin(path: string, root: string): boolean {
+  const candidate = relative(root, path)
+  return candidate === '' || (!candidate.startsWith('..') && !candidate.startsWith('/'))
 }
 
 function directoriesNamed(root: string, names: ReadonlySet<string>): string[] {
@@ -90,6 +181,25 @@ describe('domain module boundaries', () => {
     )
 
     expect(privateImports).toEqual([])
+  })
+
+  it('keeps repository scripts on installed domain package public exports', () => {
+    const domainSourceRoots = filesNamed(packagesRoot, 'sciforge.domain.json')
+      .map((manifestPath) => resolve(dirname(manifestPath), 'src'))
+    const violations = productionSourceFiles('scripts').flatMap((path) =>
+      importSpecifiers(readFileSync(path, 'utf8')).flatMap((specifier) => {
+        if (/^@sciforge\/domain-[^/]+\/src(?:\/|$)/u.test(specifier)) {
+          return [`${relative(projectRoot, path)} -> ${specifier}`]
+        }
+        if (!specifier.startsWith('.') && !specifier.startsWith('/')) return []
+        const importedPath = resolve(dirname(path), specifier)
+        return domainSourceRoots.some((root) => isWithin(importedPath, root))
+          ? [`${relative(projectRoot, path)} -> ${specifier}`]
+          : []
+      })
+    )
+
+    expect(violations).toEqual([])
   })
 
   it('keeps renderer domain modules off main-process and domain-specific bridge paths', () => {
@@ -189,6 +299,224 @@ describe('domain module boundaries', () => {
       expect(mainSource).not.toMatch(/from\s+['"][^'"]*renderer/)
       expect(rendererSource).not.toMatch(/from\s+['"][^'"]*\/main(?:['"/])/)
       expect(rendererSource).not.toMatch(/@shared|@renderer|src\/main|src\/shared/)
+    }
+  })
+
+  it('installs Evidence DAG and Project DAG only through manifests and generated composition', () => {
+    const generatedSources = Object.fromEntries(
+      [...generatedDomainCompositionPaths].map((path) => [
+        path,
+        readFileSync(resolve(projectRoot, path), 'utf8')
+      ])
+    )
+    const hostProductionFiles = productionSourceFiles(
+      'src/main',
+      'src/renderer/src',
+      'src/shared',
+      'src/preload'
+    )
+
+    for (const domain of dagDomainPackages) {
+      const packageRoot = resolve(packagesRoot, 'domains', domain.directory)
+      const manifestPath = join(packageRoot, 'sciforge.domain.json')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
+        packageName: string
+        module: { id: string }
+        entrypoints: Array<{
+          process: 'main' | 'renderer'
+          export: string
+          contributions: Array<{ id: string; kind: string }>
+        }>
+      }
+      const entrypoint = (process: 'main' | 'renderer') =>
+        manifest.entrypoints.find((candidate) => candidate.process === process)
+
+      expect(manifest.packageName).toBe(domain.packageName)
+      expect(manifest.module.id).toBe(domain.moduleId)
+      expect(entrypoint('main')?.export).toBe('./main')
+      expect(entrypoint('renderer')?.export).toBe('./renderer')
+      expect(entrypoint('main')?.contributions.map(({ kind }) => kind)).toEqual(
+        expect.arrayContaining([...domain.contributionKinds.main])
+      )
+      expect(entrypoint('renderer')?.contributions.map(({ kind }) => kind)).toEqual(
+        expect.arrayContaining([...domain.contributionKinds.renderer])
+      )
+
+      expect(generatedSources['src/shared/installed-domain-packages.ts'])
+        .toContain(`${domain.packageName}/definition`)
+      expect(generatedSources['src/main/modules/installed-domain-main.ts'])
+        .toContain(`${domain.packageName}/main`)
+      expect(generatedSources['src/renderer/src/domain-modules/installed-domain-renderer.ts'])
+        .toContain(`${domain.packageName}/renderer`)
+
+      const reservedRegistrationIds = [
+        domain.packageName,
+        domain.moduleId,
+        domain.directory.replaceAll('-', '_'),
+        ...manifest.entrypoints.flatMap(({ contributions }) =>
+          contributions.map(({ id }) => id)
+        )
+      ]
+      const hardCodedHostRegistrations = hostProductionFiles.flatMap((path) => {
+        const relativePath = relative(projectRoot, path)
+        if (generatedDomainCompositionPaths.has(relativePath)) return []
+        const source = readFileSync(path, 'utf8')
+        return reservedRegistrationIds.some((id) => source.includes(id))
+          ? [relativePath]
+          : []
+      })
+      expect(hardCodedHostRegistrations).toEqual([])
+    }
+  })
+
+  it('keeps DAG package implementations off host-private and cross-process imports', () => {
+    const hostPrivateRoots = [
+      resolve(projectRoot, 'src/main'),
+      resolve(projectRoot, 'src/renderer'),
+      resolve(projectRoot, 'src/shared')
+    ]
+
+    for (const domain of dagDomainPackages) {
+      const packageRoot = resolve(packagesRoot, 'domains', domain.directory)
+      const packageFiles = productionSourceFiles(relative(projectRoot, join(packageRoot, 'src')))
+      const violations = packageFiles.flatMap((path) => {
+        const source = readFileSync(path, 'utf8')
+        return importSpecifiers(source).flatMap((specifier) => {
+          if (/^(?:@shared|@renderer|@main)(?:\/|$)/u.test(specifier)) {
+            return [`${relative(projectRoot, path)} -> ${specifier}`]
+          }
+          if (/^(?:src\/(?:main|renderer|shared))(?:\/|$)/u.test(specifier) ||
+            /@sciforge\/sciforge\/src\/(?:main|renderer|shared)(?:\/|$)/u.test(specifier)) {
+            return [`${relative(projectRoot, path)} -> ${specifier}`]
+          }
+          if (!specifier.startsWith('.') && !specifier.startsWith('/')) return []
+          const importedPath = resolve(dirname(path), specifier)
+          if (hostPrivateRoots.some((root) => isWithin(importedPath, root))) {
+            return [`${relative(projectRoot, path)} -> ${specifier}`]
+          }
+          const relativePackagePath = relative(packageRoot, path)
+          if (relativePackagePath.startsWith('src/main') &&
+            isWithin(importedPath, resolve(packageRoot, 'src/renderer'))) {
+            return [`${relative(projectRoot, path)} -> ${specifier}`]
+          }
+          if (relativePackagePath.startsWith('src/renderer') &&
+            isWithin(importedPath, resolve(packageRoot, 'src/main'))) {
+            return [`${relative(projectRoot, path)} -> ${specifier}`]
+          }
+          return []
+        })
+      })
+
+      expect(violations).toEqual([])
+    }
+  })
+
+  it('declares legacy DAG transport prefixes as broker-migrated with no exceptions', () => {
+    for (const domain of dagDomainPackages) {
+      const packageRoot = resolve(packagesRoot, 'domains', domain.directory)
+      const source = productionSourceFiles(relative(projectRoot, join(packageRoot, 'src')))
+        .map((path) => readFileSync(path, 'utf8'))
+        .join('\n')
+
+      expect(
+        source.includes('directTransportPrefixes'),
+        `${domain.directory} must publish a capability-governance transport policy`
+      ).toBe(true)
+      expect(
+        source.includes(domain.directTransportPrefix),
+        `${domain.directory} must declare ${domain.directTransportPrefix} as a retired direct transport`
+      ).toBe(true)
+      expect(
+        /allowedDirectTransports\s*:\s*(?:readonly\s*)?\[\]/u.test(source),
+        `${domain.directory} must not allow a direct DAG transport exception`
+      ).toBe(true)
+    }
+  })
+
+  it('routes legacy DAG transports through capability governance with no host DAG IPC', () => {
+    const hostProductionFiles = productionSourceFiles(
+      'src/main',
+      'src/renderer/src',
+      'src/shared',
+      'src/preload'
+    )
+    const violations = hostProductionFiles.flatMap((path) => {
+      const source = readFileSync(path, 'utf8')
+      const lines = source.split(/\r?\n/u)
+      return lines.flatMap((line, index) => {
+        const directTransport = dagDomainPackages.some(({ directTransportPrefix }) =>
+          line.includes(`'${directTransportPrefix}`) ||
+          line.includes(`"${directTransportPrefix}`) ||
+          line.includes(`\`${directTransportPrefix}`)
+        )
+        const directWorkerDesktopImport =
+          /packages\/workers\/(?:evidence-dag|project-dag)\/desktop(?:\/|['"])/u.test(line)
+        const retiredApi = forbiddenDagHostApiSymbols.some((symbol) => line.includes(symbol))
+        return directTransport || directWorkerDesktopImport || retiredApi
+          ? [`${relative(projectRoot, path)}:${index + 1}`]
+          : []
+      })
+    })
+
+    expect(violations).toEqual([])
+  })
+
+  it('keeps Evidence and Project DAG branches out of the host Workbench', () => {
+    const workbenchPaths = [
+      'src/renderer/src/components/Workbench.tsx',
+      'src/renderer/src/components/chat/WorkbenchTopBar.tsx',
+      'src/renderer/src/components/session-right-panel-workspaces.ts',
+      'src/renderer/src/components/workbench-layout.ts'
+    ]
+    const violations = workbenchPaths.flatMap((path) => {
+      const absolutePath = resolve(projectRoot, path)
+      if (!existsSync(absolutePath)) return []
+      return readFileSync(absolutePath, 'utf8').split(/\r?\n/u).flatMap((line, index) =>
+        forbiddenDagWorkbenchPattern.test(line) ? [`${path}:${index + 1}`] : []
+      )
+    })
+
+    expect(violations).toEqual([])
+  })
+
+  it('removes retired DAG host modules and worker desktop entrypoints', () => {
+    const retiredHostPaths = [
+      'src/main/runtime/evidence-dag-feed.ts',
+      'src/main/runtime/evidence-artifact-lifecycle.ts',
+      'src/main/services/evidence-dag-evidence-preview.ts',
+      'src/main/services/project-dag-evidence-preview.ts',
+      'src/main/services/trusted-evidence-preview.ts',
+      'src/renderer/src/components/dag-progressive-view.tsx',
+      'src/renderer/src/components/evidence',
+      'src/renderer/src/components/project-dag',
+      'src/renderer/src/lib/project-dag-setup.ts',
+      'src/shared/evidence-dag-gate.ts'
+    ].map((path) => resolve(projectRoot, path))
+    expect(retiredHostPaths.filter(existsSync)).toEqual([])
+
+    for (const domain of dagDomainPackages) {
+      const workerRoot = resolve(packagesRoot, 'workers', domain.directory)
+      if (!existsSync(workerRoot)) continue
+      const desktopEntrypoints = [
+        join(workerRoot, 'desktop'),
+        join(workerRoot, 'src', 'desktop.ts'),
+        join(workerRoot, 'src', 'desktop.tsx'),
+        join(workerRoot, 'src', 'main.ts'),
+        join(workerRoot, 'src', 'renderer.ts'),
+        join(workerRoot, 'src', 'renderer.tsx')
+      ]
+      expect(desktopEntrypoints.filter(existsSync)).toEqual([])
+
+      const packageJson = JSON.parse(readFileSync(join(workerRoot, 'package.json'), 'utf8')) as {
+        exports?: Record<string, unknown>
+        main?: unknown
+        browser?: unknown
+      }
+      expect(packageJson.main).toBeUndefined()
+      expect(packageJson.browser).toBeUndefined()
+      expect(Object.keys(packageJson.exports ?? {}).filter((name) =>
+        /(?:desktop|main|renderer)/u.test(name)
+      )).toEqual([])
     }
   })
 

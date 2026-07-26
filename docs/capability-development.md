@@ -142,8 +142,9 @@ npm test
   reference；视觉理解统一调用 `sciforge_look`。Provider 在执行时原子解析最新 layout，
   滚动、缩放、渲染和截图发布不能让语义 resource 失效。
 - 精确的整图或区域持久化统一调用 `sciforge_capture`，且只能使用同一 visual snapshot
-  签发的不透明 region reference。工作区图片也通过 `sciforge_look` 读取；最终持久化
-  artifact 必须再次视觉检查，并由输出格式自己的 validator 校验引用。
+  签发的不透明 region reference。工作区文件必须先通过 canonical Workspace Preview
+  operation 获得 resource reference，再交给 `sciforge_look`；`sciforge_look` 不接受文件
+  路径。最终持久化 artifact 必须再次视觉检查，并由输出格式自己的 validator 校验引用。
 - 禁止公开 token、原始坐标或目标路径协调式 GUI 工具。授权且可用的 owned
   `VisualSource` 能满足请求时，也禁止用 shell 截图或窗口脚本建立旁路。
 - 文档批注的 list/update/resolve/delete 是 Workspace Preview provider 的独立 operations。

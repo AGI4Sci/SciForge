@@ -17,7 +17,7 @@ type DirectCallHit = {
 }
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
-const sourceRoots = ['src', 'packages/workers', 'scripts']
+const sourceRoots = ['src', 'packages/workers', 'packages/domains', 'scripts']
 const guiRuntimeSourceRoots = ['src']
 const runtimeImageDirectEnvSourceRoots = ['src/main', 'src/renderer']
 const sourceExtensions = new Set([
@@ -41,9 +41,6 @@ const excludedFileNames = new Set(['package-lock.json'])
 const excludedPrefixes = ['packages/workers/model-router/']
 const testFilePattern = /(?:^|[/.-])(?:test|spec)\.[cm]?[jt]sx?$/
 const allowedLegacyImageDirectWorkerEnvFiles = new Set<string>()
-const allowedEvidenceDagLegacyLlmEnvFiles = new Set([
-  'packages/workers/evidence-dag/desktop/sidecar.ts'
-])
 
 const directCallMarkers: DirectCallMarker[] = [
   { label: 'DeepSeek API host', pattern: /api\.deepseek\.com/i },
@@ -206,10 +203,6 @@ function isAllowedLegacyImageDirectWorkerEnvMarker(hit: DirectCallHit): boolean 
   return allowedLegacyImageDirectWorkerEnvFiles.has(hit.file)
 }
 
-function isAllowedEvidenceDagLegacyLlmEnvMarker(hit: DirectCallHit): boolean {
-  return allowedEvidenceDagLegacyLlmEnvFiles.has(hit.file)
-}
-
 function isAllowedSciModalityBoundaryMarker(hit: DirectCallHit): boolean {
   if (
     hit.file === 'src/main/model-router-sidecar.ts' &&
@@ -264,13 +257,5 @@ describe('P7/P8 model router API boundary enforcement', () => {
     ).filter((hit) => !isAllowedLegacyImageDirectWorkerEnvMarker(hit))
 
     expect(formatHits(legacyImageEnvHits)).toBe('')
-  })
-
-  it('blocks Evidence DAG legacy direct LLM env outside the sidecar scrubber', () => {
-    const evidenceDagLegacyLlmHits = scanProductionText(
-      /\bEDAG_LLM_(?:BASE_URL|API_KEY|MODEL)\b/
-    ).filter((hit) => !isAllowedEvidenceDagLegacyLlmEnvMarker(hit))
-
-    expect(formatHits(evidenceDagLegacyLlmHits)).toBe('')
   })
 })

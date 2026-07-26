@@ -129,15 +129,16 @@ process-specific entrypoints and standard manifest/generated composition. The
 source registry is owner-aware, deterministic, duplicate-safe, staged, and
 disposable. Adding or removing a source provider changes no Host feature map.
 
-Host-built sources, such as an existing workspace image and the current
-SciForge surface, register through the same source-registry contract but are
-part of Core composition, not fake installed packages.
+Host-built sources, such as the current SciForge surface, register through the
+same source-registry contract but are part of Core composition, not fake
+installed packages. Existing workspace files enter through the canonical
+Workspace Preview capability and its resource-backed visual source.
 
 ### 4. Opaque refs bind semantic identity and visual layout
 
 The runtime recognizes opaque resource references issued by the Capability
-Broker, runtime-issued snapshot/artifact references, and workspace-confined
-image paths. Runtime-issued references are bound to:
+Broker and runtime-issued snapshot/artifact references. It never accepts a file
+path as a visual source. Runtime-issued references are bound to:
 
 - runtime and task caller;
 - workspace scope;
@@ -163,13 +164,17 @@ The public input remains compact:
 ```ts
 type LookInput = {
   sourceRef?: string
-  path?: string
   targetRef?: string
   frame?: number
   task: string
   intent?: 'describe' | 'ocr' | 'locate' | 'quality-review'
+  capture?: 'snapshot' | 'region'
 }
 ```
+
+An existing workspace file must first be opened through the canonical Workspace
+Preview operation. The returned `resourceRef` is the only file-to-visual handoff
+accepted by `sciforge_look`.
 
 The runtime:
 
@@ -247,6 +252,17 @@ captured
 referenced
 final-inspected
 ```
+
+Callers that already know the execution plan declare this chain through typed
+`executionIntent` requirements. When an agent discovers an extraction
+requirement later from a referenced template or resource, a successful
+`sciforge_look` call can declare `capture = "snapshot" | "region"` and activate
+the same receipt ledger from the native tool's typed arguments and attested
+result. Region capture additionally requires `intent = "locate"`. This does not
+reclassify prompt text. The dynamic plan requires the exact inspection receipt,
+a linked capture of the declared kind, and a final look at the persisted
+artifact; the Host persists a pending publication marker before accepting a
+final answer.
 
 The execution-integrity guard verifies proof existence, caller scope, proof
 links, artifact digests, and ordering. It does not accept:
@@ -398,7 +414,8 @@ stub. Smoke tests do not require external credentials.
    unit tests.
 2. Implement the Core source registry and Agent Visual Runtime without exposing
    tools.
-3. Move current-surface and workspace-image acquisition behind Core
+3. Move current-surface acquisition behind a Core `VisualSource` provider and
+   expose workspace files only through Workspace Preview resource-backed
    `VisualSource` providers.
 4. Add the Model Router structured inspection adapter, scoped reference stores,
    capture persistence, and proof validation.

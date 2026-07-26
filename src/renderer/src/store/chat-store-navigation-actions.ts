@@ -27,7 +27,6 @@ import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { onRemoteChannelActivityApi } from '../lib/remote-channel-api'
 import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
-import { requestProjectDagSetup } from '../lib/project-dag-setup'
 import {
   buildRemoteChannelRuntimePrompt,
   getActiveAgentApiKey,
@@ -526,9 +525,6 @@ export function createNavigationActions(
           : {})
       }))
       await get().refreshThreads()
-      if (ownerSessionId && get().threads.some((thread) => thread.id === ownerSessionId)) {
-        requestProjectDagSetup({ sessionId: ownerSessionId, workspaceRoot })
-      }
       if (workspaceRoot) {
         if (get().activeThreadId !== ownerSessionId) return workspaceRoot
         if (!selectThreadAfter) return workspaceRoot

@@ -532,12 +532,14 @@ describe('app behavior settings', () => {
   })
 })
 
-describe('Evidence DAG settings', () => {
-  it('defaults to disabled and only enables explicitly', () => {
-    const raw = { ...settings(), evidenceDag: undefined } as unknown as AppSettingsV1
-    expect(normalizeAppSettings(raw).evidenceDag).toEqual({ enabled: false })
-    expect(normalizeAppSettings({ ...settings(), evidenceDag: { enabled: true } }).evidenceDag)
-      .toEqual({ enabled: true })
+describe('obsolete settings fields', () => {
+  it('ignores legacy domain-owned fields without retaining them in normalized settings', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      evidenceDag: { enabled: false }
+    } as AppSettingsV1)
+
+    expect('evidenceDag' in normalized).toBe(false)
   })
 })
 

@@ -10,7 +10,7 @@ import {
   unlink,
   writeFile
 } from 'node:fs/promises'
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 import {
   VISUAL_SOURCE_MAX_FRAME_BYTES,
@@ -167,13 +167,7 @@ export class AgentVisualRuntime {
     if (sourceImage.width !== frame.width || sourceImage.height !== frame.height) {
       throw new Error('The visual source dimensions do not match its trusted frame metadata.')
     }
-    const snapshot = resolved.snapshot ?? this.createSnapshot(
-      scope,
-      frame,
-      sourceSha256,
-      input.sourceRef ?? (input.path ? `workspace-path:${input.path}` : undefined)
-    )
-    if (snapshot.sourceSha256 !== sourceSha256) {
+    if (resolved.snapshot && resolved.snapshot.sourceSha256 !== sourceSha256) {
       throw new Error('The visual snapshot changed after it was observed; call look again on the current source.')
     }
 
@@ -186,6 +180,15 @@ export class AgentVisualRuntime {
     if (!inspectedArtifact || inspectedArtifact.sha256 !== sourceSha256) {
       throw new Error('The visual inspector did not attest the immutable source snapshot.')
     }
+    if (!inspection.claims.some((claim) => claim.artifactId === 'source')) {
+      throw new Error('The visual inspector returned no grounded evidence for the immutable source snapshot.')
+    }
+    const snapshot = resolved.snapshot ?? this.createSnapshot(
+      scope,
+      frame,
+      sourceSha256,
+      input.sourceRef
+    )
 
     const proofRef = this.opaqueRef('visual_proof', [
       scopeKey(scope),
@@ -346,14 +349,6 @@ export class AgentVisualRuntime {
     scope: VisualScope,
     context: AgentVisualRuntimeCallContext
   ): Promise<{ frame: AgentVisualResolvedFrame; snapshot?: SnapshotRecord; parentProofRef?: string }> {
-    if (input.path) {
-      if (input.targetRef) {
-        throw new Error('A workspace image path cannot be combined with a live surface target.')
-      }
-      return {
-        frame: await resolveWorkspaceImageFrame(scope.workspaceRoot, input.path)
-      }
-    }
     const sourceRef = input.sourceRef
     if (!sourceRef) {
       const current = await this.options.visibleContext.currentSurface(scope.callerId)
@@ -627,63 +622,6 @@ async function prepareProviderFrame(
     mimeType: 'image/png',
     width: image.width,
     height: image.height
-  }
-}
-
-async function resolveWorkspaceImageFrame(
-  workspaceRoot: string,
-  inputPath: string
-): Promise<AgentVisualManagedFrame> {
-  const canonicalWorkspace = await canonicalWorkspaceRoot(workspaceRoot)
-  const normalizedPath = inputPath.replaceAll('\\', '/')
-  if (isAbsolute(normalizedPath)) {
-    throw new Error('Workspace visual sources require a relative path.')
-  }
-  const segments = normalizedPath.split('/')
-  if (
-    segments.length === 0 ||
-    segments.some((segment) => !segment || segment === '.' || segment === '..')
-  ) {
-    throw new Error('Workspace visual sources require a normalized relative path.')
-  }
-
-  let candidate = canonicalWorkspace
-  for (const [index, segment] of segments.entries()) {
-    candidate = join(candidate, segment)
-    if (!isWithinRoot(canonicalWorkspace, candidate)) {
-      throw new Error('The workspace visual source resolves outside the workspace.')
-    }
-    const info = await lstat(candidate)
-    if (info.isSymbolicLink()) {
-      throw new Error('The workspace visual source cannot traverse a symbolic link.')
-    }
-    const finalSegment = index === segments.length - 1
-    if (finalSegment ? !info.isFile() : !info.isDirectory()) {
-      throw new Error(
-        finalSegment
-          ? 'The workspace visual source is not a regular file.'
-          : 'The workspace visual source path contains a non-directory entry.'
-      )
-    }
-  }
-
-  const canonicalPath = await realpath(candidate)
-  if (!isWithinRoot(canonicalWorkspace, canonicalPath)) {
-    throw new Error('The workspace visual source resolves outside the workspace.')
-  }
-  const bytes = await readBoundedImage(canonicalPath)
-  const mimeType = detectSupportedImageMimeType(bytes)
-  const image = await loadImage(bytes)
-  if (!Number.isSafeInteger(image.width) || !Number.isSafeInteger(image.height) ||
-      image.width < 1 || image.height < 1) {
-    throw new Error('The workspace visual source has invalid decoded dimensions.')
-  }
-  return {
-    path: canonicalPath,
-    mimeType,
-    width: image.width,
-    height: image.height,
-    sourceRevision: `sha256:${sha256(bytes)}`
   }
 }
 

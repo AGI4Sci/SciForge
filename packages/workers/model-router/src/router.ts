@@ -3500,10 +3500,9 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     })
     .map((message) => {
       const role = stringField(message.role) ?? 'user';
-      const content = jsonValueField(message.content) ?? chatMessageContentText(message.content) ?? '';
       return compactObject({
         role,
-        content,
+        content: chatMessageContentToResponsesParts(message.content, role),
       });
     });
   const maxTokens = body.max_tokens ?? body.max_completion_tokens;
@@ -3520,6 +3519,47 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     ...(body.stop !== undefined ? { stop: body.stop } : {}),
     ...(body.stream !== undefined ? { stream: body.stream } : {}),
   };
+}
+
+function chatMessageContentToResponsesParts(content: unknown, role: string): JsonObject[] {
+  const parts = Array.isArray(content) ? content : [content];
+  const normalized = parts
+    .map((part) => chatContentPartToResponsesPart(part, role))
+    .filter((part): part is JsonObject => Boolean(part));
+  return normalized.length > 0
+    ? normalized
+    : [{ type: responsesTextPartType(role), text: '' }];
+}
+
+function chatContentPartToResponsesPart(part: unknown, role: string): JsonObject | undefined {
+  if (typeof part === 'string' || typeof part === 'number' || typeof part === 'boolean') {
+    return { type: responsesTextPartType(role), text: String(part) };
+  }
+  if (!isRecord(part)) return undefined;
+  const type = stringField(part.type);
+  if (type === 'text') {
+    return {
+      type: responsesTextPartType(role),
+      text: stringField(part.text) ?? stringField(part.content) ?? '',
+    };
+  }
+  if (type === 'image_url') {
+    const chatImage = isRecord(part.image_url) ? part.image_url : undefined;
+    const imageUrl = chatImage
+      ? stringField(chatImage.url)
+      : stringField(part.image_url);
+    if (!imageUrl) return undefined;
+    return compactObject({
+      type: 'input_image',
+      image_url: imageUrl,
+      detail: stringField(part.detail) ?? stringField(chatImage?.detail),
+    });
+  }
+  return jsonValueField(part) as JsonObject | undefined;
+}
+
+function responsesTextPartType(role: string): 'input_text' | 'output_text' {
+  return role === 'assistant' ? 'output_text' : 'input_text';
 }
 
 function chatMessageContentText(content: unknown): string {

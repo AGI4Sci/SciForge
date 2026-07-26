@@ -1,4 +1,5 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
+import type { DomainWorkbenchRightPanelActivation } from '@sciforge/domain-sdk/host'
 import type { WorkspaceFilePreviewReturnContext } from '../lib/workspace-file-preview'
 import type { RightPanelMode } from './chat/WorkbenchTopBar'
 
@@ -17,6 +18,7 @@ export type SessionRightPanelHistoryEntry = {
   filePreviewTarget: WorkspaceFileTarget | null
   filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
   visualReviewRequest: SessionVisualReviewRequest | null
+  panelActivation: DomainWorkbenchRightPanelActivation | null
 }
 
 export type SessionRightPanelHistory = {
@@ -32,9 +34,8 @@ export type SessionRightPanelWorkspace = {
   filePreviewTarget: WorkspaceFileTarget | null
   filePreviewReturnContext: WorkspaceFilePreviewReturnContext | null
   visualReviewRequest: SessionVisualReviewRequest | null
+  panelActivation: DomainWorkbenchRightPanelActivation | null
   childPanelFocusRequest: { childId: string | null; key: number }
-  projectDagReturnTarget: { claimId?: string; nodeId?: string } | null
-  evidenceDagReturnNode: { nodeId: string; threadId: string } | null
   fileTreeWorkspaceOverride: string | null
   fileTreeInitialDirectory: { workspaceRoot: string; path: string; nonce: number } | null
   history: SessionRightPanelHistory
@@ -74,9 +75,8 @@ export function createSessionRightPanelWorkspace(
     filePreviewTarget: null,
     filePreviewReturnContext: null,
     visualReviewRequest: null,
+    panelActivation: null,
     childPanelFocusRequest: { childId: null, key: 0 },
-    projectDagReturnTarget: null,
-    evidenceDagReturnNode: null,
     fileTreeWorkspaceOverride: null,
     fileTreeInitialDirectory: null,
     history: { entries: [], index: -1 }
@@ -145,7 +145,8 @@ function historyEntryFromWorkspace(
     mode: workspace.mode,
     filePreviewTarget: workspace.mode === 'file' ? workspace.filePreviewTarget : null,
     filePreviewReturnContext: workspace.mode === 'file' ? workspace.filePreviewReturnContext : null,
-    visualReviewRequest: workspace.mode === 'visual-review' ? workspace.visualReviewRequest : null
+    visualReviewRequest: workspace.mode === 'visual-review' ? workspace.visualReviewRequest : null,
+    panelActivation: workspace.panelActivation
   }
 }
 
@@ -201,6 +202,7 @@ export function navigateSessionRightPanelHistory(
       filePreviewTarget: entry.filePreviewTarget,
       filePreviewReturnContext: entry.filePreviewReturnContext,
       visualReviewRequest: entry.visualReviewRequest,
+      panelActivation: entry.panelActivation,
       history
     }
   }

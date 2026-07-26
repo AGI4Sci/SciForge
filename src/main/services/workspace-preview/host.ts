@@ -467,7 +467,7 @@ export class WorkspacePreviewHost {
     const provider = this.providers.get(record.manifest.id)
     if (!provider?.renderVisual) {
       throw new Error(
-        `Workspace preview plugin ${record.manifest.id} does not expose a visual frame provider.`
+        'This Workspace Preview resource does not publish visual frames. Inspect its rendered UI through the current SciForge surface and a broker-published targetRef.'
       )
     }
 

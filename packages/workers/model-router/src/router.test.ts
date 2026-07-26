@@ -1311,9 +1311,95 @@ test('chat completions compatibility route sends image_url inputs through vision
     assert.equal(body.choices?.[0]?.message?.content, 'The figure is readable.');
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
-    assert.match(JSON.stringify(calls[0]?.body), /data:image\/png;base64/);
+    const visionMessages = calls[0]?.body.messages as Array<Record<string, any>>;
+    assert.deepEqual(visionMessages[1]?.content?.map((part: Record<string, unknown>) => part.type), [
+      'text',
+      'image_url',
+    ]);
+    assert.equal(visionMessages[1]?.content?.[1]?.image_url?.url, pngDataUrl);
     assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
     assert.equal(calls[1]?.body.max_tokens, 1024);
+    assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('vision routing emits strict Responses content parts while retaining the canonical chat fallback', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-responses-vision-schema-'));
+  const config = testConfig();
+  config.profiles.default.translators.vision!.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const calls: CapturedFetch[] = [];
+  const responses = [
+    chatCompletion('vision-strict-responses', 'Observation: the diagram contains three labeled stages.'),
+    chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The diagram has three labeled stages.' })),
+  ];
+  let strictSchemaError: unknown;
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async (url, init) => {
+      const body = await capturedRequestBody(init?.body);
+      calls.push({
+        url: String(url),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        body,
+      });
+      if (new URL(String(url)).pathname.endsWith('/responses')) {
+        try {
+          const input = body.input as Array<Record<string, any>>;
+          const content = input[0]?.content as Array<Record<string, any>>;
+          assert.equal(input[0]?.role, 'user');
+          assert.deepEqual(content.map((part) => part.type), ['input_text', 'input_image']);
+          assert.match(content[0]?.text ?? '', /User request:/u);
+          assert.deepEqual(content[1], {
+            type: 'input_image',
+            image_url: pngDataUrl,
+          });
+          assert.doesNotMatch(JSON.stringify(content), /"type":"(?:text|image_url)"/u);
+        } catch (error) {
+          strictSchemaError = error;
+          return Response.json({ error: { message: 'strict Responses schema rejected the request' } }, { status: 400 });
+        }
+      }
+      const fixture = responses.shift();
+      assert.ok(fixture, `Unexpected fetch call to ${url}`);
+      return adaptChatFixtureToRequestedWire(fixture, String(url), body);
+    },
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'How many labeled stages are shown?' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    if (strictSchemaError) throw strictSchemaError;
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.output_text, 'The diagram has three labeled stages.');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
     assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
   } finally {
     await server.close();

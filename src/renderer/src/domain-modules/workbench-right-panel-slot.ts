@@ -1,5 +1,6 @@
 import type { ReactElement } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import type { DomainWorkbenchRightPanelRenderContext } from '@sciforge/domain-sdk/host'
 import type { RightPanelMode } from '../components/chat/WorkbenchTopBar'
 import {
   RendererSlotRegistry,
@@ -19,13 +20,7 @@ export type WorkbenchRightPanelContribution = {
   title: string
   resourceKind: string
   isAvailable: () => boolean
-  render: (props: {
-    active: boolean
-    className: string
-    onCollapse: () => void
-    sessionId: string
-    workspaceRoot: string
-  }) => ReactElement
+  render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
 }
 
 type WorkbenchRendererSlots = {
@@ -70,6 +65,12 @@ export class WorkbenchRightPanelContributionRegistry {
   resolve(mode: RightPanelMode): RegisteredWorkbenchRightPanelContribution | null {
     if (!mode) return null
     return this.list().find(({ contribution }) => contribution.mode === mode) ?? null
+  }
+
+  resolveById(contributionId: string): RegisteredWorkbenchRightPanelContribution | null {
+    const normalized = contributionId.trim()
+    if (!normalized) return null
+    return this.list().find(({ id }) => id === normalized) ?? null
   }
 
   dispose(): void {

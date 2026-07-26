@@ -3,6 +3,7 @@ import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } fro
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { ArrowLeft, ArrowRight, Bot, CircleAlert, Eye } from 'lucide-react'
+import type { DomainWorkbenchOpenRightPanelInput } from '@sciforge/domain-sdk/host'
 import { parseRemoteChannelCommand } from '@shared/remote-channel-commands'
 import { buildGuiPlanId, buildPlanRelativePath } from '@shared/gui-plan'
 import { sddDraftTraceRelativePath } from '@shared/sdd'
@@ -100,7 +101,6 @@ import { parseGuiPlanCommand } from '../plan/plan-command'
 import { RuntimeBanner } from './RuntimeBanner'
 import {
   CODE_PANEL_PREFERRED,
-  projectDagReturnSelection,
   useWorkbenchLayout
 } from './workbench-layout'
 import {
@@ -110,10 +110,6 @@ import {
 import { draftSessionRightPanelId } from '../lib/session-right-panel-owner'
 import { SessionRightPanelStack } from './SessionRightPanelStack'
 import { useWorkbenchPlanController } from './workbench-plan-controller'
-import {
-  PROJECT_DAG_SETUP_EVENT,
-  type ProjectDagSetupDetail
-} from '../lib/project-dag-setup'
 import { prepareImageAttachmentUpload } from '../lib/image-attachment-upload'
 import { isChatAttachmentUploadEnabled } from '../lib/attachment-upload-availability'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
@@ -163,15 +159,10 @@ import {
   subscribeSessionRightPanelRekeys
 } from '../lib/session-right-panel-lifecycle'
 import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
+import { DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT } from '../domain-modules/domain-renderer-navigation'
 
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
-)
-const EvidenceDagPanel = lazy(() =>
-  import('./evidence/EvidenceDagPanel').then((module) => ({ default: module.EvidenceDagPanel }))
-)
-const ProjectDagPanel = lazy(() =>
-  import('./project-dag/ProjectDagPanel').then((module) => ({ default: module.ProjectDagPanel }))
 )
 const GitCheckpointPanel = lazy(() =>
   import('./GitCheckpointPanel').then((module) => ({ default: module.GitCheckpointPanel }))
@@ -221,10 +212,6 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
       return 'Changes'
     case 'todo':
       return 'Todos'
-    case 'evidence':
-      return 'Evidence graph'
-    case 'project-dag':
-      return 'Project DAG'
     case 'workflow':
       return 'Create Loop'
     case 'checkpoints':
@@ -245,8 +232,6 @@ const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, nu
   'child-agents': 'child-agents',
   changes: 'session-changes',
   todo: 'session-todos',
-  evidence: 'evidence-graph',
-  'project-dag': 'project-dag',
   workflow: 'workflow-builder',
   checkpoints: 'git-checkpoints',
   'visual-review': 'visual-document',
@@ -267,9 +252,6 @@ export type RightPanelVisibleContextInput = {
   filePreviewTarget?: { path: string; workspaceRoot?: string } | null
   childAgentCount?: number
   childAgentRunningCount?: number
-  evidenceNodeId?: string | null
-  projectDagClaimId?: string | null
-  projectDagNodeId?: string | null
   visualDocumentId?: string | null
   planId?: string | null
   sddDraftId?: string | null
@@ -313,16 +295,6 @@ export function buildRightPanelVisibleContextComponent(
         ...baseResource,
         count: input.childAgentCount ?? 0,
         runningCount: input.childAgentRunningCount ?? 0
-      }
-      break
-    case 'evidence':
-      currentResource = { ...baseResource, selectedNodeId: input.evidenceNodeId || null }
-      break
-    case 'project-dag':
-      currentResource = {
-        ...baseResource,
-        selectedClaimId: input.projectDagClaimId || null,
-        selectedNodeId: input.projectDagNodeId || null
       }
       break
     case 'visual-review':
@@ -1257,26 +1229,6 @@ export function Workbench(): ReactElement {
     setChildPanelFocusRequest,
     setRightPanelMode
   ])
-  const setProjectDagReturnTarget = useCallback((
-    value: SetStateAction<{ claimId?: string; nodeId?: string } | null>
-  ): void => {
-    if (!activeThreadId) return
-    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
-      ?.projectDagReturnTarget ?? null
-    updateRightPanelWorkspace(activeThreadId, {
-      projectDagReturnTarget: typeof value === 'function' ? value(current) : value
-    })
-  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
-  const setEvidenceDagReturnNode = useCallback((
-    value: SetStateAction<{ nodeId: string; threadId: string } | null>
-  ): void => {
-    if (!activeThreadId) return
-    const current = rightPanelWorkspaces.find((workspace) => workspace.sessionId === activeThreadId)
-      ?.evidenceDagReturnNode ?? null
-    updateRightPanelWorkspace(activeThreadId, {
-      evidenceDagReturnNode: typeof value === 'function' ? value(current) : value
-    })
-  }, [activeThreadId, rightPanelWorkspaces, updateRightPanelWorkspace])
   const setFileTreeInitialDirectory = useCallback((
     value: SetStateAction<FileTreeInitialDirectory | null>
   ): void => {
@@ -1367,9 +1319,6 @@ export function Workbench(): ReactElement {
       filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
       childAgentCount,
       childAgentRunningCount,
-      evidenceNodeId: ownerWorkspace?.evidenceDagReturnNode?.nodeId,
-      projectDagClaimId: ownerWorkspace?.projectDagReturnTarget?.claimId,
-      projectDagNodeId: ownerWorkspace?.projectDagReturnTarget?.nodeId,
       visualDocumentId: ownerWorkspace?.visualReviewRequest?.documentId,
       planId: activeGuiPlan?.id,
       sddDraftId: activeSddDraft?.id
@@ -1527,15 +1476,28 @@ export function Workbench(): ReactElement {
   }, [rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
-    const openProjectDagPanel = (event: Event): void => {
-      const detail = (event as CustomEvent<ProjectDagSetupDetail>).detail
+    const openDomainRightPanel = (event: Event): void => {
+      const detail = (event as CustomEvent<DomainWorkbenchOpenRightPanelInput>).detail
       const sessionId = detail?.sessionId?.trim()
-      if (!sessionId) return
-      setRightSidebarWidthForSession(sessionId, (width) => Math.max(width, CODE_PANEL_PREFERRED))
-      updateRightPanelWorkspace(sessionId, { mode: 'project-dag' })
+      const contributionId = detail?.contributionId?.trim()
+      if (!sessionId || !contributionId) return
+      if (detail.activation && detail.activation.contributionId !== contributionId) return
+      const registered = installedRendererContributions.rightPanels.resolveById(contributionId)
+      if (!registered?.contribution.isAvailable()) return
+      setRightSidebarWidthForSession(
+        sessionId,
+        (width) => Math.max(width, CODE_PANEL_PREFERRED)
+      )
+      updateRightPanelWorkspace(sessionId, {
+        mode: registered.contribution.mode,
+        panelActivation: detail.activation ?? null
+      })
     }
-    window.addEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
-    return () => window.removeEventListener(PROJECT_DAG_SETUP_EVENT, openProjectDagPanel)
+    window.addEventListener(DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT, openDomainRightPanel)
+    return () => window.removeEventListener(
+      DOMAIN_WORKBENCH_OPEN_RIGHT_PANEL_EVENT,
+      openDomainRightPanel
+    )
   }, [setRightSidebarWidthForSession, updateRightPanelWorkspace])
 
   const activeTodoItemCount = activeThreadTodos?.items.length ?? 0
@@ -1759,9 +1721,15 @@ export function Workbench(): ReactElement {
         })
         return
       }
+      const {
+        sessionId: _sessionId,
+        kind: _kind,
+        returnTo: _returnTo,
+        ...fileTarget
+      } = detail
       updateRightPanelWorkspace(ownerSessionId, {
         filePreviewTarget: {
-          path: detail.path,
+          ...fileTarget,
           workspaceRoot: ownerWorkspaceRoot
         },
         filePreviewReturnContext: detail.returnTo ?? null,
@@ -1779,7 +1747,7 @@ export function Workbench(): ReactElement {
 
   const toggleTopBarRightPanelMode = (mode: Exclude<RightPanelMode, null>): void => {
     if (mode === 'file') setFileTreeWorkspaceOverride(null)
-    if (mode === 'evidence' || mode === 'project-dag' || mode === 'workflow') {
+    if (mode === 'workflow' || installedRendererContributions.rightPanels.resolve(mode)) {
       setRightSidebarWidth((width) => Math.max(width, CODE_PANEL_PREFERRED))
     }
     toggleRightPanelMode(mode)
@@ -2784,25 +2752,17 @@ export function Workbench(): ReactElement {
       })
     }
     const closeOwnerFilePreview = (): void => {
-      if (ownerFilePreviewReturnContext?.kind === 'project-dag') {
+      if (ownerFilePreviewReturnContext?.kind === 'domain-right-panel') {
+        const registered = installedRightPanels.find(
+          ({ id }) => id === ownerFilePreviewReturnContext.contributionId
+        )
         updateRightPanelWorkspace(ownerSessionId, {
-          projectDagReturnTarget: projectDagReturnSelection(ownerFilePreviewReturnContext),
           filePreviewTarget: null,
           filePreviewReturnContext: null,
-          mode: 'project-dag'
-        })
-        return
-      }
-      if (ownerFilePreviewReturnContext?.kind === 'evidence-dag') {
-        const returnThreadId = ownerFilePreviewReturnContext.threadId.trim()
-        const returnNodeId = ownerFilePreviewReturnContext.nodeId.trim()
-        updateRightPanelWorkspace(ownerSessionId, {
-          evidenceDagReturnNode: returnThreadId === ownerSessionId && returnNodeId
-            ? { threadId: returnThreadId, nodeId: returnNodeId }
+          mode: registered?.contribution.isAvailable()
+            ? registered.contribution.mode
             : null,
-          filePreviewTarget: null,
-          filePreviewReturnContext: null,
-          mode: returnThreadId === ownerSessionId ? 'evidence' : null
+          panelActivation: registered ? ownerFilePreviewReturnContext.activation ?? null : null
         })
         return
       }
@@ -2890,8 +2850,7 @@ export function Workbench(): ReactElement {
                 {ownerFilePreviewTarget ? (
                   <Suspense fallback={<div className="h-full w-full bg-ds-sidebar" />}>
                     <div className="flex h-full min-h-0 flex-col">
-                      {ownerFilePreviewReturnContext?.kind === 'project-dag' ||
-                      ownerFilePreviewReturnContext?.kind === 'evidence-dag' ? (
+                      {ownerFilePreviewReturnContext?.kind === 'domain-right-panel' ? (
                         <div className="shrink-0 border-b border-ds-border bg-ds-sidebar px-2 py-1.5">
                           <button
                             type="button"
@@ -2900,11 +2859,11 @@ export function Workbench(): ReactElement {
                           >
                             <ArrowLeft className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                             <span className="truncate">{t('workspacePreviewReturnToReview', {
-                              label: ownerFilePreviewReturnContext.label || (
-                                ownerFilePreviewReturnContext.kind === 'evidence-dag'
-                                  ? t('rightPanelEvidenceDag')
-                                  : t('projectDagPanelTitle')
-                              )
+                              label: ownerFilePreviewReturnContext.label ||
+                                installedRightPanels.find(
+                                  ({ id }) => id === ownerFilePreviewReturnContext.contributionId
+                                )?.contribution.title ||
+                                t('rightPanelFiles')
                             })}</span>
                           </button>
                         </div>
@@ -2991,43 +2950,15 @@ export function Workbench(): ReactElement {
                 active,
                 className: 'h-full max-h-full w-full',
                 onCollapse: closeOwnerRightPanel,
-                sessionId: ownerSessionId,
-                workspaceRoot: ownerWorkspaceRoot
+                session: {
+                  id: ownerSessionId,
+                  ...(ownerThread?.runtimeId ? { runtimeId: ownerThread.runtimeId } : {}),
+                  ...(ownerWorkspaceRoot ? { workspaceRoot: ownerWorkspaceRoot } : {})
+                },
+                ...(workspace.panelActivation?.contributionId === installedRightPanel.id
+                  ? { activation: workspace.panelActivation }
+                  : {})
               })
-            ) : workspaceMode === 'evidence' ? (
-              <EvidenceDagPanel
-                ownerSessionId={ownerSessionId}
-                runtimeId={ownerThread?.runtimeId}
-                initialNodeId={
-                  workspace.evidenceDagReturnNode?.threadId === ownerSessionId
-                    ? workspace.evidenceDagReturnNode.nodeId
-                    : undefined
-                }
-                className="h-full max-h-full w-full"
-                active={active}
-                onCollapse={closeOwnerRightPanel}
-                onInitialNodeConsumed={() => updateRightPanelWorkspace(ownerSessionId, { evidenceDagReturnNode: null })}
-              />
-            ) : workspaceMode === 'project-dag' ? (
-              <ProjectDagPanel
-                workspaceRoot={ownerWorkspaceRoot}
-                ownerSessionId={ownerSessionId}
-                initialClaimId={workspace.projectDagReturnTarget?.claimId}
-                initialNodeId={workspace.projectDagReturnTarget?.nodeId}
-                className="h-full max-h-full w-full"
-                active={active}
-                onCollapse={closeOwnerRightPanel}
-                onInitialClaimConsumed={() => updateRightPanelWorkspace(ownerSessionId, {
-                  projectDagReturnTarget: workspace.projectDagReturnTarget?.nodeId
-                    ? { nodeId: workspace.projectDagReturnTarget.nodeId }
-                    : null
-                })}
-                onInitialNodeConsumed={() => updateRightPanelWorkspace(ownerSessionId, {
-                  projectDagReturnTarget: workspace.projectDagReturnTarget?.claimId
-                    ? { claimId: workspace.projectDagReturnTarget.claimId }
-                    : null
-                })}
-              />
             ) : workspaceMode === 'workflow' ? (
               <WorkflowView onCollapse={closeOwnerRightPanel} />
             ) : workspaceMode === 'checkpoints' ? (

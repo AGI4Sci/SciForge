@@ -12,6 +12,10 @@ import { WorkbenchTopBar } from './WorkbenchTopBar'
 describe('WorkbenchTopBar right-panel contributions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    i18n.addResourceBundle('en', 'common', {
+      rightPanelEvidenceDag: 'Evidence DAG',
+      rightPanelProjectDag: 'Project DAG'
+    }, true, true)
     useAnchoredCommentStore.setState({
       commentMode: false,
       threads: [],
@@ -57,9 +61,22 @@ describe('WorkbenchTopBar right-panel contributions', () => {
   })
 
   it('shows Evidence DAG as a right panel item', () => {
+    const contribution = {
+      ...installedRendererContributions.rightPanels.list()[0]!,
+      id: 'evidence-dag.workbench-right-panel',
+      contribution: {
+        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
+        id: 'evidence-dag.workbench-right-panel',
+        mode: 'evidence-dag',
+        label: 'rightPanelEvidenceDag',
+        title: 'Evidence DAG',
+        resourceKind: 'evidence-dag'
+      }
+    }
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'evidence',
-      onToggleRightPanelMode: vi.fn()
+      rightPanelMode: 'evidence-dag',
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [contribution]
     }))
 
     expect(html).toContain('Evidence DAG')
@@ -67,9 +84,22 @@ describe('WorkbenchTopBar right-panel contributions', () => {
   })
 
   it('shows Project DAG as a right panel item', () => {
+    const contribution = {
+      ...installedRendererContributions.rightPanels.list()[0]!,
+      id: 'project-dag.workbench-right-panel',
+      contribution: {
+        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
+        id: 'project-dag.workbench-right-panel',
+        mode: 'project-dag',
+        label: 'rightPanelProjectDag',
+        title: 'Project DAG',
+        resourceKind: 'project-dag'
+      }
+    }
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'project-dag',
-      onToggleRightPanelMode: vi.fn()
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [contribution]
     }))
 
     expect(html).toContain('Project DAG')
@@ -110,7 +140,7 @@ describe('WorkbenchTopBar right-panel contributions', () => {
 
   it('keeps right-panel controls reachable in narrow workbench widths', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'project-dag',
+      rightPanelMode: 'workflow',
       onToggleRightPanelMode: vi.fn()
     }))
 

@@ -93,6 +93,7 @@ test('runs a multi-artifact visual task through Model Router with MIME-correct i
   assert.equal(body.model, 'sciforge-model-router')
   assert.match(content[0]?.text ?? '', /Compare the sample identity/u)
   assert.match(content[0]?.text ?? '', /Sample labels must be read verbatim/u)
+  assert.match(content[0]?.text ?? '', /at least one visibly grounded claim for every supplied artifact/u)
   assert.match(content[2]?.image_url ?? '', /^data:image\/png;base64,/u)
   assert.equal(content[2]?.mime_type, 'image/png')
   assert.match(content[4]?.image_url ?? '', /^data:image\/jpeg;base64,/u)
@@ -143,6 +144,35 @@ test('fails closed when Model Router returns no structured visual evidence', asy
     apiKey: 'runtime-test-key',
     model: 'sciforge-model-router',
     fetchImpl: async () => new Response(JSON.stringify({ output_text: 'looks fine' }), { status: 200 })
+  })
+
+  const result = await inspector({
+    task: 'Describe the image.',
+    artifacts: [{ id: 'capture', imagePath, mimeType: 'image/png' }]
+  })
+
+  assert.deepEqual(result, {
+    status: 'visual_inspection_invalid',
+    message: 'Model Router visual inspection returned an invalid evidence payload.'
+  })
+})
+
+test('fails closed when Model Router masks an upstream visual failure as structured text-only output', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-degraded-'))
+  t.after(async () => rm(root, { recursive: true, force: true }))
+  const imagePath = join(root, 'capture.png')
+  await writeFile(imagePath, PNG_BYTES)
+  const inspector = createModelRouterVisualInspector({
+    baseUrl: 'http://127.0.0.1:3892/v1',
+    apiKey: 'runtime-test-key',
+    model: 'sciforge-model-router',
+    fetchImpl: async () => new Response(JSON.stringify({
+      output_text: JSON.stringify({
+        summary: 'The image could not be inspected.',
+        claims: [],
+        uncertainties: ['The visual translator was unavailable.']
+      })
+    }), { status: 200 })
   })
 
   const result = await inspector({

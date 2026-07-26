@@ -48,7 +48,6 @@ import {
   normalizeKeyboardShortcuts,
   normalizeAppSettings,
   normalizeModelAccessSettings,
-  normalizeEvidenceDagSettings,
   normalizeAgentRuntimeId,
   reconcileScheduleWorkflows,
   type AppSettingsPatch,
@@ -271,7 +270,6 @@ const defaultSettings = (): AppSettingsV1 => ({
   agentCapabilities: defaultAgentCapabilitySettings(),
   computerUse: defaultComputerUseSettings(),
   runtimeGuards: defaultRuntimeGuardSettings(),
-  evidenceDag: normalizeEvidenceDagSettings(),
   activeAgentRuntime: 'codex',
   agents: {
     sciforge: defaultLocalRuntimeSettings(),
@@ -320,7 +318,6 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     agentCapabilities: mergeAgentCapabilitySettings(defaults.agentCapabilities, migrated.agentCapabilities),
     computerUse: mergeComputerUseSettings(defaults.computerUse, migrated.computerUse),
     runtimeGuards: mergeRuntimeGuardSettings(defaults.runtimeGuards, migrated.runtimeGuards),
-    evidenceDag: normalizeEvidenceDagSettings(migrated.evidenceDag),
     activeAgentRuntime: normalizeAgentRuntimeId(migrated.activeAgentRuntime ?? defaults.activeAgentRuntime),
     agents: {
       ...agentRuntimeSettingsEnvelope(
@@ -454,8 +451,7 @@ export class JsonSettingsStore {
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
       parsed.activeAgentRuntime !== normalized.activeAgentRuntime ||
       !('remoteExecutor' in parsed) ||
-      !('agentCapabilities' in parsed) ||
-      !('evidenceDag' in parsed)
+      !('agentCapabilities' in parsed)
     ) {
       await this.save(normalized)
     }
@@ -508,10 +504,6 @@ export class JsonSettingsStore {
       agentCapabilities: mergeAgentCapabilitySettings(cur.agentCapabilities, agentCapabilitiesPatch),
       computerUse: mergeComputerUseSettings(cur.computerUse, computerUsePatch),
       runtimeGuards: mergeRuntimeGuardSettings(cur.runtimeGuards, runtimeGuardsPatch),
-      evidenceDag: normalizeEvidenceDagSettings({
-        ...cur.evidenceDag,
-        ...(partial.evidenceDag ?? {})
-      }),
       log: { ...cur.log, ...(partial.log ?? {}) },
       notifications: { ...cur.notifications, ...(partial.notifications ?? {}) },
       appBehavior: normalizeAppBehaviorSettings({

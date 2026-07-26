@@ -1,86 +1,103 @@
 import { describe, expect, it } from 'vitest'
 
 import type { AgentRuntimeTurnStartInput } from '../../../shared/agent-runtime-contract'
-import {
-  requiresVerifiedVisualInspection,
-  VISUAL_EXECUTION_PLAN_METADATA_KEY,
-  VISUAL_EXECUTION_REQUIRED_METADATA_KEY,
-  visualExecutionPlanForText,
-  withVisualExecutionRequirement
-} from './visual-execution-guard'
+import { withVisualExecutionRequirement } from './visual-execution-guard'
 
 describe('visual execution request policy', () => {
-  it('detects explicit Chinese and English visual inspection requirements', () => {
-    expect(visualExecutionPlanForText('需要用视觉能力看一下排版后的表格图像，优化排版')).toBe('inspect')
-    expect(visualExecutionPlanForText('Visually inspect the rendered table and improve its layout.')).toBe('inspect')
-    expect(requiresVerifiedVisualInspection('Inspect the screenshot.')).toBe(true)
+  it('does not infer a visual requirement from task prose', () => {
+    const input = baseInput('准确截取论文中的方法总览图')
+
+    expect(withVisualExecutionRequirement(input)).toEqual(input)
   })
 
-  it.each([
-    '准确截取论文中的方法总览图',
-    '把图 2 摘录出来',
-    '裁剪这个区域，不要整页',
-    'Capture and crop the method overview figure.'
-  ])('requires the locate, capture, and final-look chain for %s', (text) => {
-    expect(visualExecutionPlanForText(text)).toBe('capture-region')
-  })
-
-  it.each([
-    '把方法总览图截取并插入 Markdown 报告',
-    '摘录这张图，写入文档',
-    'Crop the figure and embed it in the report.'
-  ])('does not invent an unsignable reference obligation from consumer prose: %s', (text) => {
-    expect(visualExecutionPlanForText(text)).toBe('capture-region')
-  })
-
-  it.each([
-    '给这个页面截图',
-    'Capture a screenshot of this page.'
-  ])('allows a full-snapshot capture for %s', (text) => {
-    expect(visualExecutionPlanForText(text)).toBe('capture')
-  })
-
-  it('does not turn visual-chain diagnostics into a new visual obligation', () => {
-    expect(visualExecutionPlanForText('只需要帮我排查视觉链路为什么失败')).toBeNull()
-  })
-
-  it('injects native visual instructions and a typed capture plan without changing display text', () => {
-    const input: AgentRuntimeTurnStartInput = {
-      runtimeId: 'claude',
-      threadId: 'claude-thread',
-      text: '把方法总览图截取并插入 Markdown 报告',
-      displayText: '把方法总览图截取并插入 Markdown 报告'
+  it('injects region-capture guidance from typed receipt requirements', () => {
+    const input = baseInput('按照任务模板生成报告')
+    input.executionIntent = {
+      mode: 'execute',
+      requirements: [
+        {
+          id: 'visual-look-locate',
+          receiptKind: 'visual.look'
+        },
+        {
+          id: 'visual-capture',
+          receiptKind: 'visual.capture',
+          requiresRegionRef: true,
+          dependsOn: ['visual-look-locate']
+        },
+        {
+          id: 'visual-look-final',
+          receiptKind: 'visual.look',
+          dependsOn: ['visual-capture']
+        }
+      ]
     }
 
-    const guarded = withVisualExecutionRequirement(input, true)
+    const guarded = withVisualExecutionRequirement(input)
 
     expect(guarded.text).toContain('Runtime-enforced visual completion gate')
     expect(guarded.text).toContain('sciforge_look')
     expect(guarded.text).toContain('sciforge_capture')
-    expect(guarded.text).not.toContain('typed artifact reference validation')
+    expect(guarded.text).toContain('Persist the located region, not the full snapshot')
     expect(guarded.displayText).toBe(input.displayText)
-    expect(guarded.metadata).toMatchObject({
-      [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true,
-      [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'capture-region'
-    })
+    expect(guarded.metadata).toBeUndefined()
+    expect(guarded.executionIntent).toEqual(input.executionIntent)
   })
 
-  it('accepts capture-reference only as an explicit upstream plan', () => {
-    const input: AgentRuntimeTurnStartInput = {
-      runtimeId: 'claude',
-      threadId: 'claude-thread',
-      text: '把图片插入报告',
-      metadata: {
-        [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'capture-reference'
-      }
+  it('adds reference guidance only for a typed consumer receipt', () => {
+    const input = baseInput('Apply the prepared task template.')
+    input.executionIntent = {
+      mode: 'execute',
+      requirements: [
+        { id: 'visual-look-locate', receiptKind: 'visual.look' },
+        {
+          id: 'visual-capture',
+          receiptKind: 'visual.capture',
+          dependsOn: ['visual-look-locate']
+        },
+        {
+          id: 'visual-look-final',
+          receiptKind: 'visual.look',
+          dependsOn: ['visual-capture']
+        },
+        {
+          id: 'consumer-reference',
+          receiptKind: 'artifact.reference-validation',
+          dependsOn: ['visual-look-final']
+        }
+      ]
     }
 
-    const guarded = withVisualExecutionRequirement(input, false)
+    expect(withVisualExecutionRequirement(input).text)
+      .toContain('typed artifact reference validation')
+  })
 
-    expect(guarded.text).toContain('typed artifact reference validation')
-    expect(guarded.metadata).toMatchObject({
-      [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true,
-      [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'capture-reference'
-    })
+  it('does not add visual guidance for unrelated typed execution requirements', () => {
+    const input = baseInput('Write the result.')
+    input.executionIntent = {
+      mode: 'execute',
+      requirements: [{ effectClass: 'local_write' }]
+    }
+
+    expect(withVisualExecutionRequirement(input)).toEqual(input)
+  })
+
+  it('does not execute requirements attached to an answer-only intent', () => {
+    const input = baseInput('Explain the planned visual workflow.')
+    input.executionIntent = {
+      mode: 'answer',
+      requirements: [{ receiptKind: 'visual.look' }]
+    }
+
+    expect(withVisualExecutionRequirement(input)).toEqual(input)
   })
 })
+
+function baseInput(text: string): AgentRuntimeTurnStartInput {
+  return {
+    runtimeId: 'codex',
+    threadId: 'codex-thread',
+    text,
+    displayText: text
+  }
+}

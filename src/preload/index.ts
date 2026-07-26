@@ -364,16 +364,6 @@ const api = {
   requestComputerUsePermission: (kind) =>
     ipcRenderer.invoke('computer-use:request-permission', kind),
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
-  getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
-  updateEvidenceDag: (input) => ipcRenderer.invoke('evidenceDag:update', input),
-  setEvidenceDagPriority: (input) => ipcRenderer.invoke('evidenceDag:priority', input),
-  resolveEvidenceDagEvidencePreview: (input) =>
-    ipcRenderer.invoke('evidenceDag:resolve-evidence-preview', input),
-  getProjectDagView: (input) => ipcRenderer.invoke('projectDag:view', input),
-  updateProjectDag: (input) => ipcRenderer.invoke('projectDag:update', input),
-  saveProjectDagGoal: (input) => ipcRenderer.invoke('projectDag:save-goal', input),
-  resolveProjectDagEvidencePreview: (input) =>
-    ipcRenderer.invoke('projectDag:resolve-evidence-preview', input),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

@@ -240,7 +240,7 @@ const toolDefinitions = Object.freeze([
   ),
   defineTool(
     CAPABILITY_AGENT_TOOL_NAMES.look,
-    'Visually inspect through the routed vision model. Omit sourceRef and path for the caller-bound current SciForge surface; otherwise pass an opaque resource/artifact/snapshot reference or a workspace-relative image path. For multi-frame resources such as documents, frame is a generic 1-based frame index. Returns structured evidence and opaque region references; use sciforge_capture to persist a verified snapshot or region.',
+    'Visually inspect through the routed vision model whenever the user request, a referenced template, or a discovered task requirement needs visual understanding or extraction. Omit sourceRef for the caller-bound current SciForge surface and optionally use a targetRef published by surface.current. For an existing workspace file, open it through the canonical Workspace Preview operation and pass the returned resourceRef; for a multi-frame resource, frame is a generic 1-based index. Artifact and snapshot refs may be reused for proof-linked inspection. This tool never accepts file paths. If a persisted visual is required, declare capture=snapshot or capture=region. A region capture also requires intent=locate; persist the returned regionRef with sciforge_capture instead of the full source, then inspect the persisted artifact.',
     agentVisualLookInputSchema
   ),
   defineTool(

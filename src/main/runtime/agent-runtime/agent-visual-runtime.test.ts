@@ -90,6 +90,30 @@ function inspectorWithRegion(): VisualInspector {
   })
 }
 
+function inspectedWithoutGroundedEvidence(): VisualInspector {
+  return vi.fn(async (request) => {
+    const bytes = await readFile(request.artifacts[0]!.imagePath)
+    return {
+      status: 'inspected' as const,
+      provider: 'model-router' as const,
+      model: 'vision-model',
+      inspectedAt: '2026-07-26T06:00:00.000Z',
+      task: request.task,
+      artifacts: [{
+        id: 'source',
+        mimeType: request.artifacts[0]!.mimeType,
+        sha256: createHash('sha256').update(bytes).digest('hex')
+      }],
+      requestSha256: 'a'.repeat(64),
+      evidenceSha256: 'b'.repeat(64),
+      attestation: `sha256:${'c'.repeat(64)}`,
+      summary: 'The image could not be inspected.',
+      claims: [],
+      uncertainties: ['The visual translator was unavailable.']
+    }
+  })
+}
+
 describe('AgentVisualRuntime', () => {
   it('looks at the current trusted surface and persists a verified region as a content-addressed PNG', async () => {
     const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-workspace-')
@@ -227,6 +251,54 @@ describe('AgentVisualRuntime', () => {
     }, context)).rejects.toThrow(/artifact cannot select another visual frame/u)
   })
 
+  it.each([
+    {
+      name: 'reported unavailable',
+      visualInspector: vi.fn<VisualInspector>(async () => ({
+        status: 'visual_inspection_unavailable',
+        message: 'Model Router visual inspection failed with HTTP 400.'
+      })),
+      expected: /failed with HTTP 400/u
+    },
+    {
+      name: 'masked as inspected without grounded evidence',
+      visualInspector: inspectedWithoutGroundedEvidence(),
+      expected: /no grounded evidence/u
+    }
+  ])('fails closed and signs no look proof when visual inspection is $name', async ({
+    visualInspector,
+    expected
+  }) => {
+    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-failed-inspection-')
+    const captureRoot = await temporaryDirectory('sciforge-agent-visual-failed-inspection-source-')
+    const sourcePath = join(captureRoot, 'surface.png')
+    await writeFile(sourcePath, testPng())
+    const runtime = new AgentVisualRuntime({
+      visibleContext: {
+        currentSurface: vi.fn(async () => ({
+          resourceId: 'surface',
+          workspaceId: workspaceRoot,
+          semanticRevision: 'surface-1',
+          layoutRevision: '1',
+          state: {}
+        })),
+        captureFrame: vi.fn(async () => ({
+          path: sourcePath,
+          mimeType: 'image/png' as const,
+          capturedAt: '2026-07-26T06:00:00.000Z',
+          width: 100,
+          height: 80
+        }))
+      },
+      visualInspector: () => visualInspector,
+      secret: Buffer.alloc(32, 17)
+    })
+
+    await expect(runtime.look({
+      task: 'Inspect the image.'
+    }, callContext(workspaceRoot))).rejects.toThrow(expected)
+  })
+
   it('rejects snapshot and region refs outside their caller, workspace, or turn', async () => {
     const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-scope-')
     const captureRoot = await temporaryDirectory('sciforge-agent-visual-scope-source-')
@@ -343,105 +415,6 @@ describe('AgentVisualRuntime', () => {
       frame: 2,
       task: 'Inspect another frame.'
     }, context)).rejects.toThrow(/snapshot cannot select another visual frame/u)
-  })
-
-  it('inspects a decoded workspace image path without using a domain-specific source', async () => {
-    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-workspace-image-')
-    const sourcePath = join(workspaceRoot, 'method-overview.data')
-    await writeFile(sourcePath, testPng())
-    const canonicalSourcePath = await realpath(sourcePath)
-    const inspector = inspectorWithRegion()
-    const runtime = new AgentVisualRuntime({
-      visibleContext: {
-        currentSurface: vi.fn(async () => {
-          throw new Error('A workspace image must not use the live surface.')
-        }),
-        captureFrame: vi.fn(async () => {
-          throw new Error('A workspace image must not capture the live surface.')
-        })
-      },
-      visualInspector: () => inspector,
-      secret: Buffer.alloc(32, 13)
-    })
-    const context = callContext(workspaceRoot)
-
-    const looked = await runtime.look({
-      path: 'method-overview.data',
-      task: 'Locate the method overview.'
-    }, context)
-
-    expect(inspector).toHaveBeenCalledWith({
-      task: 'Locate the method overview.',
-      artifacts: [{
-        id: 'source',
-        imagePath: canonicalSourcePath,
-        mimeType: 'image/png'
-      }]
-    })
-    expect(looked.proof).not.toHaveProperty('sourceRef')
-    const captured = await runtime.capture({
-      snapshotRef: looked.snapshotRef,
-      regionRef: looked.regions[0]!.regionRef
-    }, context)
-    expect(captured).toMatchObject({ width: 50, height: 40 })
-
-    await expect(runtime.look({
-      path: 'method-overview.data',
-      targetRef: `target_${'p'.repeat(24)}`,
-      task: 'Inspect the target.'
-    }, context)).rejects.toThrow(/cannot be combined/u)
-    expect(inspector).toHaveBeenCalledTimes(1)
-  })
-
-  it('rejects image paths that directly address another workspace', async () => {
-    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-workspace-a-')
-    const outsideRoot = await temporaryDirectory('sciforge-agent-visual-workspace-b-')
-    const outsidePath = join(outsideRoot, 'outside.png')
-    await writeFile(outsidePath, testPng())
-    const inspector = inspectorWithRegion()
-    const runtime = new AgentVisualRuntime({
-      visibleContext: {
-        currentSurface: vi.fn(async () => {
-          throw new Error('Unexpected live surface lookup.')
-        }),
-        captureFrame: vi.fn(async () => {
-          throw new Error('Unexpected live surface capture.')
-        })
-      },
-      visualInspector: () => inspector
-    })
-
-    await expect(runtime.look({
-      path: outsidePath,
-      task: 'Inspect an image outside the workspace.'
-    }, callContext(workspaceRoot))).rejects.toThrow(/workspace-relative|relative path/u)
-    expect(inspector).not.toHaveBeenCalled()
-  })
-
-  it('rejects workspace image paths that traverse a symbolic link', async () => {
-    const workspaceRoot = await temporaryDirectory('sciforge-agent-visual-workspace-link-')
-    const outsideRoot = await temporaryDirectory('sciforge-agent-visual-workspace-link-outside-')
-    const outsidePath = join(outsideRoot, 'outside.png')
-    await writeFile(outsidePath, testPng())
-    await symlink(outsidePath, join(workspaceRoot, 'linked.png'))
-    const inspector = inspectorWithRegion()
-    const runtime = new AgentVisualRuntime({
-      visibleContext: {
-        currentSurface: vi.fn(async () => {
-          throw new Error('Unexpected live surface lookup.')
-        }),
-        captureFrame: vi.fn(async () => {
-          throw new Error('Unexpected live surface capture.')
-        })
-      },
-      visualInspector: () => inspector
-    })
-
-    await expect(runtime.look({
-      path: 'linked.png',
-      task: 'Inspect a linked image.'
-    }, callContext(workspaceRoot))).rejects.toThrow(/symbolic link/u)
-    expect(inspector).not.toHaveBeenCalled()
   })
 
   it('materializes provider-owned frame bytes before inspection and preserves them for capture', async () => {

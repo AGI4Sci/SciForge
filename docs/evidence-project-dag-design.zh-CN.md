@@ -841,31 +841,18 @@ UI 必须区分：
 - [RO-Crate specification](https://www.researchobject.org/ro-crate/specification.html)
 - [DataCite Metadata Schema](https://schema.datacite.org/)
 
-## 当前实现基础与目标差距
+## 当前实现架构
 
-### 已有基础
+- Evidence DAG 与 Project DAG 分别由独立 domain package 完整拥有后端、公共合同、主进程 lifecycle 和可选 UI，并通过 manifest 与生成式 composition 接入宿主；宿主只依赖通用 SDK extension point。
+- Evidence DAG 的自动 feed 与手动更新进入同一个 package-owned durable queue。job 固化 workspace scope、目标 watermark、重试状态和真实错误；重启会恢复未完成 job，同时始终把最后 committed Snapshot 与 pending delta 分开呈现。
+- Evidence DAG 将结构化 SourceAnchor、Artifact Registry、ArtifactVersion、文件移动重绑定、语义 ID、字节 digest 和实验 run/environment lineage 保存在同一个不可变 Snapshot 合同中；verify 与 audit 是绑定 committed digest 的独立只读侧链。
+- Project DAG package-owned durable outbox 消费宿主广播的通用 completed-turn 事件，等待 Evidence capability 达到 committed coverage 后提交唯一 Project 更新入口。Project DAG 只消费经验证的 `threadId + digest` evidence vector，并以 durable receipt 表达 accepted、running、committed、covered、superseded 或 failed 状态。
+- Project 编译 actor、HTTP actor 和审计 actor 各自拥有 SQLite 连接；编译使用显式写事务原子提交 Snapshot 与 receipt，失败不会暴露半更新图，重启也不会把已提交 generation 误报为失败。
+- Goal、scope、policy 与 Decision 的变化复用同一个 Project 更新 lane；Goal 保存立即版本化并 enqueue，不等待后续 compile 才生效。
+- Project provenance resolver 从 Project Claim 一次解析到 session Claim、SourceAssertion、SourceAnchor、ArtifactVersion、Artifact 和 run，并在同一读取链路执行 fail-closed 访问控制。
+- Evidence 与 Project 面板显示 committed snapshot、新鲜度、pending watermark、receipt/job 状态、真实重试信息、溯源等级和审计 target digest；活动任务使用不确定进度，不合成百分比，也不把客户端等待超时当作后台任务失败。
 
-- Evidence DAG 已有 `source / reasoning / claim` 节点和 `supports / contradicts / refines / prerequisite` 关系。
-- Evidence DAG 已有内容寻址语义节点、PROV-JSON、provenance path、verify、analysis、reconcile 和 audit run。
-- agent turn 完成后已有 fail-open Evidence 自动 feed。
-- Project DAG 已有 per-session watermark、增量 compile、claim origin、source dedup、Goal、review queue 和局部 reconcile。
-- Project DAG 已按 workspace/project/session scope 工作。
-- Evidence DAG 和 Project DAG 已有显式手动更新入口。
-
-### 主要差距
-
-- Source 终点通常只有 DOI、URL、citation 或 agent 摘要，缺少统一 SourceAnchor。
-- 缺少 Artifact Registry、ArtifactVersion 和文件移动重绑定。
-- 语义 source hash 与原始 Artifact 字节 digest 尚未完整分离。
-- Project claim 虽保存 session/node origin，但缺少一站式跨层 provenance resolver。
-- Evidence 自动 feed 仍是进程内 best-effort，需要 durable queue 和恢复。
-- verify/audit 与 ingest 生命周期仍需彻底拆成可调度 job。
-- Project DAG 缺少由 Evidence Snapshot commit 驱动的自动编译协调器。
-- Goal 保存与后端版本更新需要成为同一个命令，而不是等到 compile 时才生效。
-- UI 缺少 snapshot、新鲜度、pending watermark、溯源等级和审计 digest 状态。
-- 当前 Artifact/file provenance 尚未覆盖数据、代码、实验 run 和环境。
-
-目标实现应直接收敛到统一链路。与目标设计冲突的旧入口、旧 schema 分支和兼容旁路应删除；数据迁移可以显式执行，但运行时不长期维护两套逻辑。
+实现保持单一正式链路；与该架构冲突的旧入口、旧 schema 分支和兼容旁路不在运行时保留。
 
 ## 分阶段落地
 
@@ -979,8 +966,8 @@ UI 必须区分：
 
 ## 相关实现
 
-- Evidence DAG worker：[`packages/workers/evidence-dag`](../packages/workers/evidence-dag/README.md)
-- Project DAG worker：[`packages/workers/project-dag`](../packages/workers/project-dag/README.md)
-- Evidence 自动 feed：[`src/main/runtime/evidence-dag-feed.ts`](../src/main/runtime/evidence-dag-feed.ts)
-- Evidence 面板：[`src/renderer/src/components/evidence/EvidenceDagPanel.tsx`](../src/renderer/src/components/evidence/EvidenceDagPanel.tsx)
-- Project 面板：[`src/renderer/src/components/project-dag/ProjectDagPanel.tsx`](../src/renderer/src/components/project-dag/ProjectDagPanel.tsx)
+- Evidence DAG domain：[`packages/domains/evidence-dag`](../packages/domains/evidence-dag/README.md)
+- Project DAG domain：[`packages/domains/project-dag`](../packages/domains/project-dag/README.md)
+- Evidence 自动 feed：[`packages/domains/evidence-dag/src/main/runtime.ts`](../packages/domains/evidence-dag/src/main/runtime.ts)
+- Evidence 面板：[`packages/domains/evidence-dag/src/renderer/EvidenceDagPanel.tsx`](../packages/domains/evidence-dag/src/renderer/EvidenceDagPanel.tsx)
+- Project 面板：[`packages/domains/project-dag/src/renderer/ProjectDagPanel.tsx`](../packages/domains/project-dag/src/renderer/ProjectDagPanel.tsx)

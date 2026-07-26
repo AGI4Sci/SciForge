@@ -164,9 +164,6 @@ describe('buildModelRouterSidecarLaunch', () => {
         MODEL_ROUTER_RUNTIME_API_KEY: 'generic-runtime-router-key',
         MODEL_ROUTER_BASE_URL: 'http://127.0.0.1:4999/v1',
         MODEL_ROUTER_MODEL: 'generic-router-model',
-        EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
-        EDAG_LLM_API_KEY: 'outer-edag-key',
-        EDAG_LLM_MODEL: 'outer-edag-model',
         EXPERT_PROVIDER_BASE_URL: 'http://127.0.0.1:8001/v1',
         EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
         SCIMODALITY_ROUTER_PORT: '3898',
@@ -243,9 +240,6 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.env.MODEL_ROUTER_RUNTIME_API_KEY).toBeUndefined()
     expect(result.launch.env.MODEL_ROUTER_BASE_URL).toBeUndefined()
     expect(result.launch.env.MODEL_ROUTER_MODEL).toBeUndefined()
-    expect(result.launch.env.EDAG_LLM_BASE_URL).toBeUndefined()
-    expect(result.launch.env.EDAG_LLM_API_KEY).toBeUndefined()
-    expect(result.launch.env.EDAG_LLM_MODEL).toBeUndefined()
     expect(result.launch.env.EXPERT_PROVIDER_BASE_URL).toBeUndefined()
     expect(result.launch.env.EXPERT_PROVIDER_API_KEY).toBeUndefined()
     expect(result.launch.env.SCIMODALITY_ROUTER_PORT).toBeUndefined()

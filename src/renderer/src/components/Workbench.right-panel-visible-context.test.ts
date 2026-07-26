@@ -48,12 +48,15 @@ describe('Workbench right-panel visible context', () => {
   })
 
   it('switches modes without retaining resource state from the previous panel', () => {
-    const evidence = buildRightPanelVisibleContextComponent({
-      mode: 'evidence',
+    const file = buildRightPanelVisibleContextComponent({
+      mode: 'file',
       sessionId: 'session-a',
       width: 420,
       workspaceRoot: '/workspace/a',
-      evidenceNodeId: 'claim:one',
+      filePreviewTarget: {
+        path: 'papers/current.pdf',
+        workspaceRoot: '/workspace/a'
+      },
       updatedAt: UPDATED_AT
     })
     const changes = buildRightPanelVisibleContextComponent({
@@ -64,7 +67,10 @@ describe('Workbench right-panel visible context', () => {
       updatedAt: UPDATED_AT
     })
 
-    expect(evidence.state?.currentResource).toMatchObject({ selectedNodeId: 'claim:one' })
+    expect(file.state?.currentResource).toMatchObject({
+      kind: 'workspace-file-preview',
+      path: 'papers/current.pdf'
+    })
     expect(changes.state).toMatchObject({
       mode: 'changes',
       width: 500,
@@ -72,7 +78,7 @@ describe('Workbench right-panel visible context', () => {
         kind: 'session-changes'
       }
     })
-    expect(changes.state?.currentResource).not.toHaveProperty('selectedNodeId')
+    expect(changes.state?.currentResource).not.toHaveProperty('path')
   })
 
   it('isolates otherwise identical panels by their owning session', () => {

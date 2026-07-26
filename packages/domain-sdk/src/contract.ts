@@ -2,6 +2,10 @@ import { z } from 'zod'
 
 export const DOMAIN_PACKAGE_CONTRACT_VERSION = 1
 export const DOMAIN_PACKAGE_HOST_API_VERSION = '1.0.0'
+export const DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS = Object.freeze([
+  'package.json',
+  'sciforge.domain.json'
+] as const)
 
 const stableSemanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/
 const semanticVersionPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
@@ -14,6 +18,32 @@ export const domainPackageNameSchema = z.string()
   .min(3)
   .max(214)
   .regex(/^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/, 'Use a scoped lowercase package name.')
+
+export const domainPackageRelativePathSchema = z.string()
+  .trim()
+  .min(1)
+  .max(1_024)
+  .superRefine((relativePath, context) => {
+    if (
+      relativePath.startsWith('/') ||
+      /^[A-Za-z]:\//.test(relativePath) ||
+      relativePath.includes('\\') ||
+      relativePath.includes('\0')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Use a package-relative POSIX path.'
+      })
+      return
+    }
+    const segments = relativePath.split('/')
+    if (segments.some((segment) => segment === '' || segment === '.' || segment === '..')) {
+      context.addIssue({
+        code: 'custom',
+        message: 'Package-relative paths cannot contain empty, current, or parent segments.'
+      })
+    }
+  })
 
 export const domainPackageModuleIdSchema = z.string()
   .trim()
@@ -102,6 +132,53 @@ export const domainPackageEntrypointSchema = z.discriminatedUnion('process', [
   rendererEntrypointSchema
 ])
 
+export const domainPackageRuntimePackagingSchema = z.object({
+  requiredPaths: z.array(domainPackageRelativePathSchema).max(1_000).default([]),
+  dependencies: z.array(domainPackageNameSchema).max(1_000).default([])
+}).strict().superRefine((runtime, context) => {
+  for (const [field, values] of [
+    ['requiredPaths', runtime.requiredPaths],
+    ['dependencies', runtime.dependencies]
+  ] as const) {
+    const seen = new Set<string>()
+    for (const [index, value] of values.entries()) {
+      if (seen.has(value)) {
+        context.addIssue({
+          code: 'custom',
+          path: [field, index],
+          message: `Duplicate ${field} value ${value}.`
+        })
+      }
+      seen.add(value)
+    }
+  }
+  for (const [index, requiredPath] of runtime.requiredPaths.entries()) {
+    if (!(DOMAIN_PACKAGE_IMPLICIT_RUNTIME_PATHS as readonly string[]).includes(requiredPath)) continue
+    context.addIssue({
+      code: 'custom',
+      path: ['requiredPaths', index],
+      message: `${requiredPath} is included implicitly for every bundled domain package.`
+    })
+  }
+})
+
+export const domainPackagePackagingSchema = z.object({
+  bundled: z.boolean(),
+  runtime: domainPackageRuntimePackagingSchema.optional()
+}).strict().superRefine((packaging, context) => {
+  if (
+    !packaging.bundled &&
+    packaging.runtime &&
+    (packaging.runtime.requiredPaths.length > 0 || packaging.runtime.dependencies.length > 0)
+  ) {
+    context.addIssue({
+      code: 'custom',
+      path: ['runtime'],
+      message: 'Non-bundled domain packages cannot declare packaged runtime requirements.'
+    })
+  }
+})
+
 export const trustedDomainPackageDefinitionSchema = z.object({
   contractVersion: z.literal(DOMAIN_PACKAGE_CONTRACT_VERSION),
   kind: z.literal('trusted-compile-time'),
@@ -117,6 +194,7 @@ export const trustedDomainPackageDefinitionSchema = z.object({
     domainPackageContributionIdSchema,
     domainPackageJsonValueSchema
   ).default({}),
+  packaging: domainPackagePackagingSchema.optional(),
   entrypoints: z.array(domainPackageEntrypointSchema).min(1).max(2)
 }).strict().superRefine((definition, context) => {
   const processes = new Set<DomainPackageProcess>()
@@ -153,6 +231,15 @@ export const trustedDomainPackageDefinitionSchema = z.object({
       message: `Contribution contract ${contractId} has no declared contribution.`
     })
   }
+  const dependencies = definition.packaging?.runtime?.dependencies ?? []
+  for (const [dependencyIndex, dependency] of dependencies.entries()) {
+    if (dependency !== definition.packageName) continue
+    context.addIssue({
+      code: 'custom',
+      path: ['packaging', 'runtime', 'dependencies', dependencyIndex],
+      message: `Domain package ${definition.packageName} cannot depend on itself at runtime.`
+    })
+  }
 })
 
 export type DomainPackageHostApiRange = z.infer<typeof domainPackageHostApiRangeSchema>
@@ -160,6 +247,8 @@ export type DomainPackageContributionDeclaration = z.infer<
   typeof domainPackageContributionDeclarationSchema
 >
 export type DomainPackageEntrypoint = z.infer<typeof domainPackageEntrypointSchema>
+export type DomainPackageRuntimePackaging = z.infer<typeof domainPackageRuntimePackagingSchema>
+export type DomainPackagePackaging = z.infer<typeof domainPackagePackagingSchema>
 export type TrustedDomainPackageDefinition = z.infer<typeof trustedDomainPackageDefinitionSchema>
 export type TrustedDomainPackageDefinitionInput = z.input<typeof trustedDomainPackageDefinitionSchema>
 

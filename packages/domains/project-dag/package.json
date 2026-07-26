@@ -1,0 +1,49 @@
+{
+  "name": "@sciforge/domain-project-dag",
+  "version": "1.0.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Trusted compile-time Project DAG domain package for SciForge.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main.ts",
+    "./renderer": "./src/renderer/index.ts"
+  },
+  "files": [
+    "src",
+    "python/**/*.py",
+    "ui",
+    "pyproject.toml",
+    "requirements.txt",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "start": "python -c \"import sys; sys.path[:0] = ['python', '../evidence-dag/python']; from project_dag.server import main; main()\"",
+    "serve": "npm run start",
+    "python:test": "PYTHONPATH=python:../evidence-dag/python python -m unittest discover -s tests -p 'test_*.py' -v",
+    "desktop:test": "node --import tsx --test \"src/**/*.test.ts\" \"src/**/*.test.tsx\"",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run desktop:test && npm run python:test"
+  },
+  "engines": {
+    "python": ">=3.10"
+  },
+  "dependencies": {
+    "@sciforge/domain-evidence-dag": "^1.0.0",
+    "@sciforge/domain-sdk": "^0.1.0",
+    "lucide-react": "^0.544.0",
+    "react": "^19.0.0",
+    "react-i18next": "^15.7.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.10",
+    "tsx": "^4.22.4",
+    "typescript": "^5.8.2"
+  }
+}

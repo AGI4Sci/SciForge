@@ -310,6 +310,7 @@ function visualInspectionInstruction(request: {
     `Truth locks: ${JSON.stringify(request.truthLocks ?? [])}`,
     `Output intent: ${JSON.stringify(request.outputIntent ?? { kind: 'description' })}`,
     'Use only evidence visibly supported by the supplied artifacts. Never invent an artifact id.',
+    'A successful inspection must include at least one visibly grounded claim for every supplied artifact. If an artifact could not be inspected, return no claim for it; the caller will reject the inspection.',
     'Regions use normalized image coordinates from 0 to 1. Omit a region when the claim applies to the whole artifact.',
     'Return JSON only with this schema:',
     '{"summary":string,"claims":[{"kind":"observation"|"issue"|"recommendation","text":string,"artifactId":string,"region"?:{"x":number,"y":number,"width":number,"height":number},"confidence":number}],"uncertainties":string[],"structuredResult"?:any}',
@@ -346,6 +347,7 @@ function parseVisualEvidence(text: string, artifactIds: Set<string>): {
   const summary = stringValue(parsed.summary)
   if (!summary || !Array.isArray(parsed.claims) || !Array.isArray(parsed.uncertainties)) return null
   const claims: VisualEvidenceClaim[] = []
+  const claimedArtifactIds = new Set<string>()
   for (const item of parsed.claims) {
     const record = asRecord(item)
     const kind = stringValue(record.kind)
@@ -363,7 +365,9 @@ function parseVisualEvidence(text: string, artifactIds: Set<string>): {
     const region = record.region === undefined ? undefined : normalizedRegion(record.region)
     if (record.region !== undefined && !region) return null
     claims.push({ kind, text: claimText, artifactId, ...(region ? { region } : {}), confidence })
+    claimedArtifactIds.add(artifactId)
   }
+  if ([...artifactIds].some((artifactId) => !claimedArtifactIds.has(artifactId))) return null
   const uncertainties = stringArray(parsed.uncertainties)
   if (uncertainties.length !== parsed.uncertainties.length) return null
   return {

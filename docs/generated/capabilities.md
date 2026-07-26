@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **65**
+Registered actions: **73**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -26,6 +26,10 @@ Registered actions: **65**
 | `browser-preview.read` | 1.0.0 | ui, agent | read | none | resource |
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `evidence-dag.priority` | 1.0.0 | ui, agent | compute | none | global |
+| `evidence-dag.resolve-evidence-preview` | 1.0.0 | ui, agent | read | none | global |
+| `evidence-dag.update` | 1.0.0 | ui, agent | compute | none | global |
+| `evidence-dag.view` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -36,6 +40,10 @@ Registered actions: **65**
 | `paper-radar.sync-arxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `project-dag.evidence-preview.resolve` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `project-dag.goal.save` | 1.0.0 | ui, agent, system | compute | none | workspace |
+| `project-dag.update` | 1.0.0 | ui, agent, system | compute | none | workspace |
+| `project-dag.view` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `remote-ssh.bindings.get` | 1.0.0 | ui | read | none | workspace |
 | `remote-ssh.bindings.save` | 1.0.0 | ui | external-write | confirmation | workspace |
 | `remote-ssh.command.cancel` | 1.0.0 | ui, agent | external-write | confirmation | workspace |
@@ -1642,6 +1650,1920 @@ Selects an option through a revision-bound target.
     "web-page"
   ],
   "title": "Select browser page option"
+}
+```
+
+## `evidence-dag.priority`
+
+Adjusts scheduling priority without creating another update path.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `compute`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "visible": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "runtimeId",
+      "threadId",
+      "visible"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "committed": {
+        "anyOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "artifactDigests": {
+                "items": {
+                  "pattern": "^sha256:[0-9a-f]{64}$",
+                  "type": "string"
+                },
+                "maxItems": 10000,
+                "type": "array"
+              },
+              "createdAt": {
+                "format": "date-time",
+                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                "type": "string"
+              },
+              "digest": {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "extractorVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "inputWatermark": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "schemaVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "threadId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "url": {
+                "format": "uri",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "verifierVersion": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "version": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": [
+              "threadId",
+              "version",
+              "digest",
+              "inputWatermark",
+              "schemaVersion",
+              "extractorVersion",
+              "verifierVersion",
+              "artifactDigests",
+              "createdAt"
+            ],
+            "type": "object"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "pending": {
+        "anyOf": [
+          {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "completedBatches": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "queued",
+                    "type": "string"
+                  },
+                  "targetWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "totalBatches": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "jobId",
+                  "targetWatermark",
+                  "attempt",
+                  "createdAt",
+                  "updatedAt",
+                  "state"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "completedBatches": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "phase": {
+                    "enum": [
+                      "capturing",
+                      "extracting",
+                      "verifying",
+                      "committing",
+                      "handoff"
+                    ],
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "running",
+                    "type": "string"
+                  },
+                  "targetWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "totalBatches": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "jobId",
+                  "targetWatermark",
+                  "attempt",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "phase"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "completedBatches": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "error": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempts": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 100,
+                        "type": "integer"
+                      },
+                      "code": {
+                        "enum": [
+                          "model_output_incomplete",
+                          "model_output_empty",
+                          "model_output_invalid_json",
+                          "upstream_timeout",
+                          "upstream_rate_limited",
+                          "upstream_unavailable",
+                          "snapshot_corrupt",
+                          "access_restricted",
+                          "internal_error"
+                        ],
+                        "type": "string"
+                      },
+                      "incompleteReason": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxOutputTokens": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 1000000,
+                        "type": "integer"
+                      },
+                      "message": {
+                        "maxLength": 4000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "occurredAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "requestId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "responseStatus": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "retryable": {
+                        "type": "boolean"
+                      },
+                      "upstreamStatus": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message",
+                      "retryable",
+                      "occurredAt"
+                    ],
+                    "type": "object"
+                  },
+                  "jobId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "nextAttemptAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "retrying",
+                    "type": "string"
+                  },
+                  "targetWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "totalBatches": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "jobId",
+                  "targetWatermark",
+                  "attempt",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "nextAttemptAt",
+                  "error"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attempt": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "completedBatches": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "error": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempts": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 100,
+                        "type": "integer"
+                      },
+                      "code": {
+                        "enum": [
+                          "model_output_incomplete",
+                          "model_output_empty",
+                          "model_output_invalid_json",
+                          "upstream_timeout",
+                          "upstream_rate_limited",
+                          "upstream_unavailable",
+                          "snapshot_corrupt",
+                          "access_restricted",
+                          "internal_error"
+                        ],
+                        "type": "string"
+                      },
+                      "incompleteReason": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxOutputTokens": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 1000000,
+                        "type": "integer"
+                      },
+                      "message": {
+                        "maxLength": 4000,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "occurredAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "requestId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "responseStatus": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "retryable": {
+                        "type": "boolean"
+                      },
+                      "upstreamStatus": {
+                        "maximum": 599,
+                        "minimum": 100,
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "code",
+                      "message",
+                      "retryable",
+                      "occurredAt"
+                    ],
+                    "type": "object"
+                  },
+                  "jobId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "const": "failed",
+                    "type": "string"
+                  },
+                  "targetWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "totalBatches": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "jobId",
+                  "targetWatermark",
+                  "attempt",
+                  "createdAt",
+                  "updatedAt",
+                  "state",
+                  "error"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "updatedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "committed",
+      "pending",
+      "updatedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "Set Evidence DAG priority"
+}
+```
+
+## `evidence-dag.resolve-evidence-preview`
+
+Resolves a pinned provenance tuple to a verified workspace-local file.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "artifactVersionId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "snapshotDigest": {
+        "pattern": "^sha256:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "sourceAnchorId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sourceAssertionId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "runtimeId",
+      "threadId",
+      "snapshotDigest",
+      "sourceAssertionId",
+      "artifactVersionId",
+      "sourceAnchorId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "anchorDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "artifactId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "artifactVersionId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "mediaType": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "path": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "runtimeId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "selector": {
+            "additionalProperties": false,
+            "properties": {
+              "columnNames": {
+                "items": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              "figure": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "lineRange": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "page": {
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "query": {
+                "additionalProperties": {},
+                "propertyNames": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "quote": {
+                "maxLength": 20000,
+                "type": "string"
+              },
+              "rowRange": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "section": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "table": {
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": {
+                "enum": [
+                  "pdf",
+                  "text",
+                  "table",
+                  "figure",
+                  "code",
+                  "dataset",
+                  "web"
+                ],
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "type": "object"
+          },
+          "snapshotDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "sourceAnchorId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sourceAssertionId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "threadId": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workspaceRoot": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "path",
+          "workspaceRoot",
+          "runtimeId",
+          "threadId",
+          "snapshotDigest",
+          "sourceAssertionId",
+          "artifactVersionId",
+          "sourceAnchorId",
+          "selector",
+          "contentDigest"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "enum": [
+              "snapshot_mismatch",
+              "provenance_mismatch",
+              "access_restricted",
+              "unsupported_locator",
+              "file_unavailable"
+            ],
+            "type": "string"
+          },
+          "message": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "code",
+          "message"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "Resolve Evidence preview"
+}
+```
+
+## `evidence-dag.update`
+
+Queues one durable Evidence-only update for a completed agent thread.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `compute`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "operation": {
+        "default": "update",
+        "enum": [
+          "update",
+          "rebuild"
+        ],
+        "type": "string"
+      },
+      "rebuildKind": {
+        "enum": [
+          "schema_upgrade",
+          "corruption_recovery",
+          "reinterpretation"
+        ],
+        "type": "string"
+      },
+      "rebuildRationale": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "runtimeId",
+      "threadId",
+      "operation"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "coalesced": {
+        "type": "boolean"
+      },
+      "itemCount": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "jobId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "status": {
+        "additionalProperties": false,
+        "properties": {
+          "committed": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "artifactDigests": {
+                    "items": {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10000,
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "extractorVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "inputWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "threadId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url": {
+                    "format": "uri",
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "verifierVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "version",
+                  "digest",
+                  "inputWatermark",
+                  "schemaVersion",
+                  "extractorVersion",
+                  "verifierVersion",
+                  "artifactDigests",
+                  "createdAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "queued",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "phase": {
+                        "enum": [
+                          "capturing",
+                          "extracting",
+                          "verifying",
+                          "committing",
+                          "handoff"
+                        ],
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "running",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "phase"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "error": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nextAttemptAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "retrying",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "nextAttemptAt",
+                      "error"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "error": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "failed",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "error"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "committed",
+          "pending",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "threadId",
+      "itemCount",
+      "jobId",
+      "coalesced",
+      "status"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "Update Evidence DAG"
+}
+```
+
+## `evidence-dag.view`
+
+Reads the last committed Evidence graph and its separate pending delta.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "runtimeId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "status": {
+        "additionalProperties": false,
+        "properties": {
+          "committed": {
+            "anyOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "artifactDigests": {
+                    "items": {
+                      "pattern": "^sha256:[0-9a-f]{64}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10000,
+                    "type": "array"
+                  },
+                  "createdAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "digest": {
+                    "pattern": "^sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "extractorVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "inputWatermark": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "schemaVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "threadId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "url": {
+                    "format": "uri",
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  "verifierVersion": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "threadId",
+                  "version",
+                  "digest",
+                  "inputWatermark",
+                  "schemaVersion",
+                  "extractorVersion",
+                  "verifierVersion",
+                  "artifactDigests",
+                  "createdAt"
+                ],
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "queued",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "phase": {
+                        "enum": [
+                          "capturing",
+                          "extracting",
+                          "verifying",
+                          "committing",
+                          "handoff"
+                        ],
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "running",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "phase"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "error": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "nextAttemptAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "retrying",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "nextAttemptAt",
+                      "error"
+                    ],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "attempt": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "completedBatches": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "createdAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      },
+                      "error": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 100,
+                            "type": "integer"
+                          },
+                          "code": {
+                            "enum": [
+                              "model_output_incomplete",
+                              "model_output_empty",
+                              "model_output_invalid_json",
+                              "upstream_timeout",
+                              "upstream_rate_limited",
+                              "upstream_unavailable",
+                              "snapshot_corrupt",
+                              "access_restricted",
+                              "internal_error"
+                            ],
+                            "type": "string"
+                          },
+                          "incompleteReason": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "maxOutputTokens": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1000000,
+                            "type": "integer"
+                          },
+                          "message": {
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "occurredAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "requestId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "responseStatus": {
+                            "maxLength": 256,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "retryable": {
+                            "type": "boolean"
+                          },
+                          "upstreamStatus": {
+                            "maximum": 599,
+                            "minimum": 100,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "code",
+                          "message",
+                          "retryable",
+                          "occurredAt"
+                        ],
+                        "type": "object"
+                      },
+                      "jobId": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "state": {
+                        "const": "failed",
+                        "type": "string"
+                      },
+                      "targetWatermark": {
+                        "maxLength": 512,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "totalBatches": {
+                        "exclusiveMinimum": 0,
+                        "maximum": 9007199254740991,
+                        "type": "integer"
+                      },
+                      "updatedAt": {
+                        "format": "date-time",
+                        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "jobId",
+                      "targetWatermark",
+                      "attempt",
+                      "createdAt",
+                      "updatedAt",
+                      "state",
+                      "error"
+                    ],
+                    "type": "object"
+                  }
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "committed",
+          "pending",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "threadId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "url": {
+        "format": "uri",
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "url",
+      "status"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "evidence",
+    "dag",
+    "provenance"
+  ],
+  "title": "View Evidence DAG"
 }
 ```
 
@@ -3445,6 +5367,2603 @@ Synchronizes papers matching one configured Paper Radar profile.
     "profile"
   ],
   "title": "Sync a Paper Radar profile"
+}
+```
+
+## `project-dag.evidence-preview.resolve`
+
+Resolves one provenance-verified Project Claim evidence file.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "artifactVersionId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "claimId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "project": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "snapshotDigest": {
+        "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+        "type": "string"
+      },
+      "sourceAnchorId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "workspaceRoot",
+      "snapshotDigest",
+      "claimId",
+      "artifactVersionId",
+      "sourceAnchorId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "anchorDigest": {
+                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "artifactId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "artifactVersionId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "claimId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "contentDigest": {
+                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "mediaType": {
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "path": {
+                "maxLength": 16384,
+                "minLength": 1,
+                "type": "string"
+              },
+              "selector": {
+                "additionalProperties": false,
+                "properties": {
+                  "columnNames": {
+                    "items": {
+                      "maxLength": 500,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "maxItems": 500,
+                    "type": "array"
+                  },
+                  "figure": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "lineRange": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "page": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "query": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "maxLength": 500,
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "quote": {
+                    "maxLength": 20000,
+                    "type": "string"
+                  },
+                  "rowRange": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "section": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "table": {
+                    "maxLength": 1000,
+                    "type": "string"
+                  },
+                  "type": {
+                    "enum": [
+                      "pdf",
+                      "text",
+                      "table",
+                      "figure",
+                      "code",
+                      "dataset",
+                      "web"
+                    ],
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ],
+                "type": "object"
+              },
+              "snapshotDigest": {
+                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              "sourceAnchorId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              },
+              "workspaceRoot": {
+                "maxLength": 16384,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "workspaceRoot",
+              "snapshotDigest",
+              "claimId",
+              "artifactVersionId",
+              "sourceAnchorId",
+              "selector"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_request",
+                  "project_not_found",
+                  "receipt_not_found",
+                  "receipt_fingerprint_mismatch",
+                  "evidence_vector_regression",
+                  "evidence_snapshot_unavailable",
+                  "project_compile_failed",
+                  "snapshot_mismatch",
+                  "claim_mismatch",
+                  "provenance_mismatch",
+                  "access_restricted",
+                  "unsupported_locator",
+                  "file_unavailable",
+                  "upstream_timeout",
+                  "upstream_unavailable",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project-dag",
+    "evidence",
+    "preview"
+  ],
+  "title": "Resolve Project DAG evidence preview"
+}
+```
+
+## `project-dag.goal.save`
+
+Creates or updates the Project research goal and schedules canonical recompilation.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `compute`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "autonomyMode": {
+        "enum": [
+          "autonomous",
+          "checkpointed",
+          "supervised"
+        ],
+        "type": "string"
+      },
+      "description": {
+        "maxLength": 4000,
+        "type": "string"
+      },
+      "project": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "rootGoalId": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "title": {
+        "maxLength": 500,
+        "minLength": 1,
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "title"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "goal": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "additionalProperties": false,
+                "properties": {
+                  "attentionCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "auditStale": {
+                    "type": "boolean"
+                  },
+                  "auditTargetDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "autonomyMode": {
+                    "enum": [
+                      "autonomous",
+                      "checkpointed",
+                      "supervised"
+                    ],
+                    "type": "string"
+                  },
+                  "committed": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "createdAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "digest": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "evidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "digest",
+                          "evidenceVector",
+                          "createdAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "latestReceipt": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acceptedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "acceptedRequestVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "capturedScope": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "excludedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "includedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "isolatedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "includedSessions",
+                              "excludedSessions",
+                              "isolatedSessions"
+                            ],
+                            "type": "object"
+                          },
+                          "desiredEvidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "jobId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "committed",
+                              "covered",
+                              "superseded",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "jobId",
+                          "acceptedRequestVersion",
+                          "desiredFingerprint",
+                          "desiredEvidenceVector",
+                          "capturedScope",
+                          "state",
+                          "acceptedAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pending": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "enum": [
+                                      "invalid_request",
+                                      "project_not_found",
+                                      "receipt_not_found",
+                                      "receipt_fingerprint_mismatch",
+                                      "evidence_vector_regression",
+                                      "evidence_snapshot_unavailable",
+                                      "project_compile_failed",
+                                      "snapshot_mismatch",
+                                      "claim_mismatch",
+                                      "provenance_mismatch",
+                                      "access_restricted",
+                                      "unsupported_locator",
+                                      "file_unavailable",
+                                      "upstream_timeout",
+                                      "upstream_unavailable",
+                                      "internal_error"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "details": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 4000,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "message": {
+                                    "maxLength": 4000,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "retryable": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "message",
+                                  "retryable"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "nextAttemptAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "receipt": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "acceptedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "acceptedRequestVersion": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "capturedScope": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "excludedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "includedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "isolatedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "includedSessions",
+                                  "excludedSessions",
+                                  "isolatedSessions"
+                                ],
+                                "type": "object"
+                              },
+                              "desiredEvidenceVector": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "digest": {
+                                      "pattern": "^sha256:[0-9a-f]{64}$",
+                                      "type": "string"
+                                    },
+                                    "threadId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "threadId",
+                                    "digest"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "desiredFingerprint": {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              "jobId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "projectKey": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "state": {
+                                "enum": [
+                                  "queued",
+                                  "running",
+                                  "committed",
+                                  "covered",
+                                  "superseded",
+                                  "failed"
+                                ],
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "projectKey",
+                              "jobId",
+                              "acceptedRequestVersion",
+                              "desiredFingerprint",
+                              "desiredEvidenceVector",
+                              "capturedScope",
+                              "state",
+                              "acceptedAt",
+                              "updatedAt"
+                            ],
+                            "type": "object"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "retry_scheduled",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "receipt",
+                          "attempts",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "projectKey": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "excludedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "includedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "isolatedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "includedSessions",
+                      "excludedSessions",
+                      "isolatedSessions"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "projectKey",
+                  "committed",
+                  "pending",
+                  "scope",
+                  "autonomyMode",
+                  "attentionCount"
+                ],
+                "type": "object"
+              }
+            },
+            "required": [
+              "goal",
+              "status"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_request",
+                  "project_not_found",
+                  "receipt_not_found",
+                  "receipt_fingerprint_mismatch",
+                  "evidence_vector_regression",
+                  "evidence_snapshot_unavailable",
+                  "project_compile_failed",
+                  "snapshot_mismatch",
+                  "claim_mismatch",
+                  "provenance_mismatch",
+                  "access_restricted",
+                  "unsupported_locator",
+                  "file_unavailable",
+                  "upstream_timeout",
+                  "upstream_unavailable",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project-dag",
+    "goal"
+  ],
+  "title": "Save Project DAG goal"
+}
+```
+
+## `project-dag.update`
+
+Submits one idempotent durable Project update from committed Evidence snapshots.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `compute`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "autonomyMode": {
+        "enum": [
+          "autonomous",
+          "checkpointed",
+          "supervised"
+        ],
+        "type": "string"
+      },
+      "excludedSessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "isolatedSessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "project": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "scope": {
+        "anyOf": [
+          {
+            "const": "all",
+            "type": "string"
+          },
+          {
+            "items": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "maxItems": 500,
+            "type": "array"
+          }
+        ]
+      },
+      "sessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "workspaceRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "receipt": {
+                "additionalProperties": false,
+                "properties": {
+                  "acceptedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  },
+                  "acceptedRequestVersion": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  },
+                  "capturedScope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "excludedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "includedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "isolatedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "includedSessions",
+                      "excludedSessions",
+                      "isolatedSessions"
+                    ],
+                    "type": "object"
+                  },
+                  "desiredEvidenceVector": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "digest": {
+                          "pattern": "^sha256:[0-9a-f]{64}$",
+                          "type": "string"
+                        },
+                        "threadId": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "threadId",
+                        "digest"
+                      ],
+                      "type": "object"
+                    },
+                    "maxItems": 500,
+                    "type": "array"
+                  },
+                  "desiredFingerprint": {
+                    "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
+                  "jobId": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "projectKey": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "state": {
+                    "enum": [
+                      "queued",
+                      "running",
+                      "committed",
+                      "covered",
+                      "superseded",
+                      "failed"
+                    ],
+                    "type": "string"
+                  },
+                  "updatedAt": {
+                    "format": "date-time",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "projectKey",
+                  "jobId",
+                  "acceptedRequestVersion",
+                  "desiredFingerprint",
+                  "desiredEvidenceVector",
+                  "capturedScope",
+                  "state",
+                  "acceptedAt",
+                  "updatedAt"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "additionalProperties": false,
+                "properties": {
+                  "attentionCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "auditStale": {
+                    "type": "boolean"
+                  },
+                  "auditTargetDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "autonomyMode": {
+                    "enum": [
+                      "autonomous",
+                      "checkpointed",
+                      "supervised"
+                    ],
+                    "type": "string"
+                  },
+                  "committed": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "createdAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "digest": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "evidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "digest",
+                          "evidenceVector",
+                          "createdAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "latestReceipt": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acceptedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "acceptedRequestVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "capturedScope": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "excludedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "includedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "isolatedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "includedSessions",
+                              "excludedSessions",
+                              "isolatedSessions"
+                            ],
+                            "type": "object"
+                          },
+                          "desiredEvidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "jobId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "committed",
+                              "covered",
+                              "superseded",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "jobId",
+                          "acceptedRequestVersion",
+                          "desiredFingerprint",
+                          "desiredEvidenceVector",
+                          "capturedScope",
+                          "state",
+                          "acceptedAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pending": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "enum": [
+                                      "invalid_request",
+                                      "project_not_found",
+                                      "receipt_not_found",
+                                      "receipt_fingerprint_mismatch",
+                                      "evidence_vector_regression",
+                                      "evidence_snapshot_unavailable",
+                                      "project_compile_failed",
+                                      "snapshot_mismatch",
+                                      "claim_mismatch",
+                                      "provenance_mismatch",
+                                      "access_restricted",
+                                      "unsupported_locator",
+                                      "file_unavailable",
+                                      "upstream_timeout",
+                                      "upstream_unavailable",
+                                      "internal_error"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "details": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 4000,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "message": {
+                                    "maxLength": 4000,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "retryable": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "message",
+                                  "retryable"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "nextAttemptAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "receipt": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "acceptedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "acceptedRequestVersion": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "capturedScope": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "excludedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "includedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "isolatedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "includedSessions",
+                                  "excludedSessions",
+                                  "isolatedSessions"
+                                ],
+                                "type": "object"
+                              },
+                              "desiredEvidenceVector": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "digest": {
+                                      "pattern": "^sha256:[0-9a-f]{64}$",
+                                      "type": "string"
+                                    },
+                                    "threadId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "threadId",
+                                    "digest"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "desiredFingerprint": {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              "jobId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "projectKey": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "state": {
+                                "enum": [
+                                  "queued",
+                                  "running",
+                                  "committed",
+                                  "covered",
+                                  "superseded",
+                                  "failed"
+                                ],
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "projectKey",
+                              "jobId",
+                              "acceptedRequestVersion",
+                              "desiredFingerprint",
+                              "desiredEvidenceVector",
+                              "capturedScope",
+                              "state",
+                              "acceptedAt",
+                              "updatedAt"
+                            ],
+                            "type": "object"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "retry_scheduled",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "receipt",
+                          "attempts",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "projectKey": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "excludedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "includedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "isolatedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "includedSessions",
+                      "excludedSessions",
+                      "isolatedSessions"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "projectKey",
+                  "committed",
+                  "pending",
+                  "scope",
+                  "autonomyMode",
+                  "attentionCount"
+                ],
+                "type": "object"
+              },
+              "url": {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "receipt",
+              "status"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_request",
+                  "project_not_found",
+                  "receipt_not_found",
+                  "receipt_fingerprint_mismatch",
+                  "evidence_vector_regression",
+                  "evidence_snapshot_unavailable",
+                  "project_compile_failed",
+                  "snapshot_mismatch",
+                  "claim_mismatch",
+                  "provenance_mismatch",
+                  "access_restricted",
+                  "unsupported_locator",
+                  "file_unavailable",
+                  "upstream_timeout",
+                  "upstream_unavailable",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project-dag",
+    "graph",
+    "compile"
+  ],
+  "title": "Update Project DAG"
+}
+```
+
+## `project-dag.view`
+
+Reads the canonical committed Project graph and current update state.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "project": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "projectRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sessions": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 500,
+        "type": "array"
+      },
+      "view": {
+        "enum": [
+          "home",
+          "goals",
+          "graph",
+          "attention"
+        ],
+        "type": "string"
+      },
+      "workspaceRoot": {
+        "maxLength": 16384,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "data": {
+            "additionalProperties": false,
+            "properties": {
+              "goal": {
+                "additionalProperties": false,
+                "properties": {
+                  "description": {
+                    "maxLength": 4000,
+                    "type": "string"
+                  },
+                  "id": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "title": {
+                    "maxLength": 500,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "version": {
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "id",
+                  "title",
+                  "version"
+                ],
+                "type": "object"
+              },
+              "status": {
+                "additionalProperties": false,
+                "properties": {
+                  "attentionCount": {
+                    "maximum": 9007199254740991,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "auditStale": {
+                    "type": "boolean"
+                  },
+                  "auditTargetDigest": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "autonomyMode": {
+                    "enum": [
+                      "autonomous",
+                      "checkpointed",
+                      "supervised"
+                    ],
+                    "type": "string"
+                  },
+                  "committed": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "createdAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "digest": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "evidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "version": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "version",
+                          "digest",
+                          "evidenceVector",
+                          "createdAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "latestReceipt": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "acceptedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          },
+                          "acceptedRequestVersion": {
+                            "exclusiveMinimum": 0,
+                            "maximum": 9007199254740991,
+                            "type": "integer"
+                          },
+                          "capturedScope": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "excludedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "includedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "isolatedSessions": {
+                                "items": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              }
+                            },
+                            "required": [
+                              "includedSessions",
+                              "excludedSessions",
+                              "isolatedSessions"
+                            ],
+                            "type": "object"
+                          },
+                          "desiredEvidenceVector": {
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "digest": {
+                                  "pattern": "^sha256:[0-9a-f]{64}$",
+                                  "type": "string"
+                                },
+                                "threadId": {
+                                  "maxLength": 512,
+                                  "minLength": 1,
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "threadId",
+                                "digest"
+                              ],
+                              "type": "object"
+                            },
+                            "maxItems": 500,
+                            "type": "array"
+                          },
+                          "desiredFingerprint": {
+                            "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                            "type": "string"
+                          },
+                          "jobId": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "projectKey": {
+                            "maxLength": 512,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "committed",
+                              "covered",
+                              "superseded",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "projectKey",
+                          "jobId",
+                          "acceptedRequestVersion",
+                          "desiredFingerprint",
+                          "desiredEvidenceVector",
+                          "capturedScope",
+                          "state",
+                          "acceptedAt",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "pending": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "properties": {
+                          "attempts": {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "error": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "enum": [
+                                      "invalid_request",
+                                      "project_not_found",
+                                      "receipt_not_found",
+                                      "receipt_fingerprint_mismatch",
+                                      "evidence_vector_regression",
+                                      "evidence_snapshot_unavailable",
+                                      "project_compile_failed",
+                                      "snapshot_mismatch",
+                                      "claim_mismatch",
+                                      "provenance_mismatch",
+                                      "access_restricted",
+                                      "unsupported_locator",
+                                      "file_unavailable",
+                                      "upstream_timeout",
+                                      "upstream_unavailable",
+                                      "internal_error"
+                                    ],
+                                    "type": "string"
+                                  },
+                                  "details": {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 4000,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "number"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "maxLength": 128,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "type": "object"
+                                  },
+                                  "message": {
+                                    "maxLength": 4000,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "retryable": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "code",
+                                  "message",
+                                  "retryable"
+                                ],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "nextAttemptAt": {
+                            "anyOf": [
+                              {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "receipt": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "acceptedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              },
+                              "acceptedRequestVersion": {
+                                "exclusiveMinimum": 0,
+                                "maximum": 9007199254740991,
+                                "type": "integer"
+                              },
+                              "capturedScope": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "excludedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "includedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  },
+                                  "isolatedSessions": {
+                                    "items": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    },
+                                    "maxItems": 500,
+                                    "type": "array"
+                                  }
+                                },
+                                "required": [
+                                  "includedSessions",
+                                  "excludedSessions",
+                                  "isolatedSessions"
+                                ],
+                                "type": "object"
+                              },
+                              "desiredEvidenceVector": {
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "digest": {
+                                      "pattern": "^sha256:[0-9a-f]{64}$",
+                                      "type": "string"
+                                    },
+                                    "threadId": {
+                                      "maxLength": 512,
+                                      "minLength": 1,
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "threadId",
+                                    "digest"
+                                  ],
+                                  "type": "object"
+                                },
+                                "maxItems": 500,
+                                "type": "array"
+                              },
+                              "desiredFingerprint": {
+                                "pattern": "^[a-z][a-z0-9-]*:[0-9a-f]{64}$",
+                                "type": "string"
+                              },
+                              "jobId": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "projectKey": {
+                                "maxLength": 512,
+                                "minLength": 1,
+                                "type": "string"
+                              },
+                              "state": {
+                                "enum": [
+                                  "queued",
+                                  "running",
+                                  "committed",
+                                  "covered",
+                                  "superseded",
+                                  "failed"
+                                ],
+                                "type": "string"
+                              },
+                              "updatedAt": {
+                                "format": "date-time",
+                                "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "projectKey",
+                              "jobId",
+                              "acceptedRequestVersion",
+                              "desiredFingerprint",
+                              "desiredEvidenceVector",
+                              "capturedScope",
+                              "state",
+                              "acceptedAt",
+                              "updatedAt"
+                            ],
+                            "type": "object"
+                          },
+                          "state": {
+                            "enum": [
+                              "queued",
+                              "running",
+                              "retry_scheduled",
+                              "failed"
+                            ],
+                            "type": "string"
+                          },
+                          "updatedAt": {
+                            "format": "date-time",
+                            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "state",
+                          "receipt",
+                          "attempts",
+                          "updatedAt"
+                        ],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "projectKey": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "scope": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "excludedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "includedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      },
+                      "isolatedSessions": {
+                        "items": {
+                          "maxLength": 512,
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "maxItems": 500,
+                        "type": "array"
+                      }
+                    },
+                    "required": [
+                      "includedSessions",
+                      "excludedSessions",
+                      "isolatedSessions"
+                    ],
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "projectKey",
+                  "committed",
+                  "pending",
+                  "scope",
+                  "autonomyMode",
+                  "attentionCount"
+                ],
+                "type": "object"
+              },
+              "url": {
+                "maxLength": 8192,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "url",
+              "status"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "data"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "invalid_request",
+                  "project_not_found",
+                  "receipt_not_found",
+                  "receipt_fingerprint_mismatch",
+                  "evidence_vector_regression",
+                  "evidence_snapshot_unavailable",
+                  "project_compile_failed",
+                  "snapshot_mismatch",
+                  "claim_mismatch",
+                  "provenance_mismatch",
+                  "access_restricted",
+                  "unsupported_locator",
+                  "file_unavailable",
+                  "upstream_timeout",
+                  "upstream_unavailable",
+                  "internal_error"
+                ],
+                "type": "string"
+              },
+              "details": {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4000,
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "propertyNames": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "message": {
+                "maxLength": 4000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "retryable": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "code",
+              "message",
+              "retryable"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "ok",
+          "error"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [],
+  "tags": [
+    "project-dag",
+    "graph",
+    "status"
+  ],
+  "title": "View Project DAG"
 }
 ```
 
@@ -8551,7 +13070,9 @@ Releases an open Workspace Preview session.
 | --- | --- | --- |
 | Biology Room | biologyRoom: |  |
 | Browser Preview | browserPreview: |  |
+| Evidence DAG | evidenceDag: |  |
 | Paper Radar | paperRadar: |  |
+| Project DAG | projectDag: |  |
 | Remote SSH |  |  |
 | Surface Context |  |  |
 | Workspace Preview | workspacePreview: |  |

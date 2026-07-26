@@ -15,7 +15,8 @@ Package metadata policy:
 | --- | --- | --- |
 | Root desktop app | `private: true`, `license: MIT` | Not published as a public npm package. Source release follows root `LICENSE`. |
 | `packages/full-trace` | package-local license field absent | Project-owned workspace package; source release follows root `LICENSE`. |
-| `packages/workers/*` | `license: MIT` | Project-owned worker packages. |
+| `packages/domains/*` | `license: MIT` | Independently owned domain packages; backend and optional UI ship at one version. |
+| `packages/workers/*` | `license: MIT` | Project-owned non-domain worker packages. |
 | `vendor/openclaw-shim` | `private: true`, `license: MIT` | Project-local compatibility shim for peer imports; not an upstream OpenClaw source distribution. |
 
 ## Reference-Only Upstream Inspiration
@@ -185,7 +186,6 @@ Python workers are not governed by npm lockfiles. Their dependency files are sep
 
 | Worker | Dependency file | Distribution note |
 | --- | --- | --- |
-| `packages/workers/evidence-dag` | `pyproject.toml`, `requirements.txt` | Depends on `networkx>=3.0`; Python package metadata must be captured during worker packaging. |
 | `packages/workers/gui-owl-computer-use` | `requirements.txt` | Depends on user/runtime environment packages such as `requests`, `pyautogui`, `mss`, `pyperclip`, `Pillow`, and `mcp`; audit Python package metadata before bundling. |
 | `packages/workers/sci-modality-router/provider` | `requirements.txt` | Server-side GPU/provider environment only. Not bundled into the desktop app by default. |
 

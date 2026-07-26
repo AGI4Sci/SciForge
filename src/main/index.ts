@@ -18,7 +18,6 @@ import {
   applyClaudeRuntimePatch,
   agentRuntimeSettingsEnvelope,
   getModelAccessSettings,
-  isEvidenceDagEnabled,
   mergeConnectPhoneSettings,
   mergeRemoteChannelSettings,
   mergeRemoteExecutorSettings,
@@ -53,14 +52,6 @@ import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
 import {
   stopDisallowedAgentRuntimes
 } from './model-access-runtime-lifecycle'
-import {
-  ensureEvidenceDagSidecar,
-  stopEvidenceDagSidecar
-} from '../../packages/workers/evidence-dag/desktop/sidecar'
-import {
-  ensureProjectDagSidecar,
-  stopProjectDagSidecar
-} from '../../packages/workers/project-dag/desktop/sidecar'
 import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   createRuntimeMcpToolGateway,
@@ -68,12 +59,6 @@ import {
 } from './runtime/agent-runtime/runtime-mcp-tool-gateway'
 import type { RuntimeToolDefinition } from './runtime/agent-runtime/runtime-tool-contract'
 import { createRuntimeCapabilityBroker } from './runtime/agent-runtime/runtime-capability-broker'
-import {
-  configureEvidenceDagUpdateQueue,
-  evidenceDagQueuePath,
-  syncEvidenceDagUpdateQueue
-} from './runtime/evidence-dag-feed'
-import { EvidenceArtifactLifecycle } from './runtime/evidence-artifact-lifecycle'
 import { createCodexAgentRuntimeAdapter } from './runtime/codex/codex-agent-runtime-adapter'
 import {
   ClaudeCodeRuntimeService,
@@ -115,7 +100,7 @@ import {
   configuredFeedbackGatewayUrl
 } from './services/feedback-gateway-client'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
-import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
+import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
@@ -157,11 +142,20 @@ import {
 import { registerCapabilityIpc } from './capabilities/ipc'
 import {
   DomainModuleCatalog,
+  activateMainRuntimeContributions,
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog,
+  createMainActionGuardEvaluator,
+  createMainSystemCapabilityInvoker,
+  listMainAgentArtifactConsumers,
   listMainVisualSourceContributions,
-  listMainWorkspacePreviewPluginContributions
+  listMainWorkspacePreviewPluginContributions,
+  type ActivatedMainRuntimeContributions
 } from './modules'
+import type {
+  AgentRuntimeThreadListInput,
+  AgentRuntimeThreadReadInput
+} from '../shared/agent-runtime-contract'
 import {
   createCapabilityAgentToolSurface,
   capabilityAgentCallerId,
@@ -426,7 +420,7 @@ let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
 let domainModuleCatalog: DomainModuleCatalog | null = null
-let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
+let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
@@ -736,16 +730,17 @@ async function stopManagedRuntimes(): Promise<void> {
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
+      const runtimeContributions = mainRuntimeContributions
+      mainRuntimeContributions = null
+      await runtimeContributions?.dispose().catch((error) => {
+        logWarn('domain-runtime', 'Failed to dispose domain runtime contributions.', error)
+      })
       agentRuntimeHostForShutdown?.dispose()
       agentRuntimeHostForShutdown = null
       codeNavigationService?.shutdown()
-      evidenceArtifactLifecycle?.stop()
-      evidenceArtifactLifecycle = null
       const catalog = domainModuleCatalog
       domainModuleCatalog = null
       catalog?.dispose()
-      await stopEvidenceDagSidecar()
-      await stopProjectDagSidecar()
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
@@ -1061,17 +1056,6 @@ app.whenReady().then(async () => {
     initial,
     'Failed to start the selected model access service.'
   )
-  if (isEvidenceDagEnabled(initial)) {
-    void ensureEvidenceDagSidecar(initial, {
-      userDataDir: app.getPath('userData'),
-      appRoot: app.getAppPath(),
-      log: (message) => logWarn('evidence-dag', message)
-    }).catch((error) => {
-      logWarn('evidence-dag', 'Failed to auto-start Evidence DAG.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-  }
   codeNavigationService = new LspCodeNavigationService()
   const contextStateService = new RuntimeContextStateService()
   const contextLedgerService = new RuntimeContextLedgerService(app.getPath('userData'))
@@ -1083,6 +1067,7 @@ app.whenReady().then(async () => {
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => app.getPath('userData')
   })
+  const actionGuardEvaluator = createMainActionGuardEvaluator(catalog)
   const workspacePreviewHost = new WorkspacePreviewHost({
     domainPlugins: listMainWorkspacePreviewPluginContributions(catalog),
     loadSettings: () => store.load()
@@ -1215,9 +1200,11 @@ app.whenReady().then(async () => {
   installElectronDomainNativeVisualSmoke(capabilityAgentTools)
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
+  const artifactConsumers = listMainAgentArtifactConsumers(catalog)
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
     nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
+    artifactConsumers,
     adapters: [
       createCodexAgentRuntimeAdapter(getCodexRuntime()),
       createClaudeCodeAgentRuntimeAdapter(getClaudeCodeRuntime())
@@ -1236,71 +1223,75 @@ app.whenReady().then(async () => {
   })
   agentRuntimeHostRef.current = agentRuntimeHost
   agentRuntimeHostForShutdown = agentRuntimeHost
-  configureEvidenceDagUpdateQueue({
-    storagePath: evidenceDagQueuePath(app.getPath('userData')),
-    isEnabled: async () => isEvidenceDagEnabled(await store.load()),
-    // Evidence extraction performs several LLM-backed verification passes.
-    // Serializing jobs avoids a startup recovery stampede against one Model Router.
-    maxConcurrency: 1,
-    maxAttempts: 5,
-    canRunBackground: () => !agentRuntimeHost.hasActiveTurns(),
-    resolveProjectContext: async ({ runtimeId, threadId }) => {
-      if (runtimeId !== 'codex' && runtimeId !== 'claude') return undefined
-      const detailWorkspace = await agentRuntimeHost.readThread({
-        runtimeId,
-        threadId
-      }).then((detail) => detail.workspace?.trim()).catch(() => undefined)
-      const workspaceRoot = detailWorkspace || await agentRuntimeHost.listThreads({
-        runtimeId,
-        limit: 1_000,
-        includeArchived: true,
-        includeSide: true
-      }).then((threads) => threads.find((thread) => thread.id === threadId)?.workspace?.trim())
-        .catch(() => undefined)
-      if (!workspaceRoot) return undefined
-      return {
-        projectKey: workspaceRoot,
-        workspaceRoot,
-        projectRoot: workspaceRoot,
-        includedSessions: [`${runtimeId}:${threadId}`]
+  mainRuntimeContributions = await activateMainRuntimeContributions(catalog, {
+    userDataDir: app.getPath('userData'),
+    appRoot: app.isPackaged
+      ? join(process.resourcesPath, 'app.asar.unpacked')
+      : app.getAppPath(),
+    environment: Object.freeze({ ...process.env }),
+    agentThreads: {
+      list: async (input = {}) => {
+        const threads = await agentRuntimeHost.listThreads(
+          input as AgentRuntimeThreadListInput
+        )
+        return Object.freeze(threads.map((thread) => Object.freeze({
+          id: thread.id,
+          runtimeId: thread.runtimeId,
+          ...(thread.workspace?.trim() ? { workspaceRoot: thread.workspace.trim() } : {}),
+          ...(thread.archived === undefined ? {} : { archived: thread.archived })
+        })))
+      },
+      read: async (input) => {
+        const detail = await agentRuntimeHost.readThread(
+          input as AgentRuntimeThreadReadInput
+        )
+        return Object.freeze({
+          id: detail.id,
+          runtimeId: detail.runtimeId,
+          ...(detail.workspace?.trim() ? { workspaceRoot: detail.workspace.trim() } : {}),
+          ...(detail.archived === undefined ? {} : { archived: detail.archived }),
+          watermark: String(detail.latestSeq),
+          turns: Object.freeze((detail.turns ?? []).map((turn) => Object.freeze({
+            id: turn.id,
+            status: turn.status,
+            ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
+            artifacts: Object.freeze([...(turn.items ?? [])])
+          }))),
+          artifacts: Object.freeze([...(detail.items ?? [])])
+        })
+      },
+      hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
+    },
+    capabilities: createMainSystemCapabilityInvoker(capabilityBroker),
+    modelAccess: {
+      textReasoner: async () => {
+        const settings = await store.load()
+        if (getModelAccessSettings(settings)?.mode !== 'api') return null
+        const reasoner = resolveRuntimeModelRouterSettings(settings)
+        if (!reasoner.baseUrl.trim() || !reasoner.apiKey.trim() || !reasoner.model.trim()) {
+          return null
+        }
+        return Object.freeze({
+          baseUrl: reasoner.baseUrl.trim(),
+          apiKey: reasoner.apiKey.trim(),
+          model: reasoner.model.trim()
+        })
       }
     },
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
+    enablement: {
+      isEnabled: (moduleId) => catalog.hasModule(moduleId),
+      subscribe: () => () => undefined
     },
-    ensureProjectDagReady: async () => {
-      const settings = await store.load()
-      await ensureProjectDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('project-dag', message)
-      })
+    log: (entry) => {
+      if (entry.level === 'error') {
+        logError('domain-runtime', entry.message, entry.detail)
+      } else if (entry.level === 'warn') {
+        logWarn('domain-runtime', entry.message, entry.detail)
+      } else {
+        logInfo('domain-runtime', entry.message)
+      }
     }
   })
-  evidenceArtifactLifecycle = new EvidenceArtifactLifecycle({
-    threads: agentRuntimeHost,
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
-    },
-    log: (message, details) => logWarn('evidence-artifact', message, details)
-  })
-  if (isEvidenceDagEnabled(initial)) {
-    void evidenceArtifactLifecycle.start().catch((error) => {
-      logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-  }
   workflowRuntime = createWorkflowRuntime({
     store,
     agentRuntime: agentRuntimeHost,
@@ -1499,18 +1490,6 @@ app.whenReady().then(async () => {
     if (runtimePolicyChanged) {
       await reconcileSelectedAgentRuntime(saved)
     }
-    if (isEvidenceDagEnabled(prev) !== isEvidenceDagEnabled(saved)) {
-      await syncEvidenceDagUpdateQueue(isEvidenceDagEnabled(saved))
-      if (isEvidenceDagEnabled(saved)) {
-        void evidenceArtifactLifecycle?.start().catch((error) => {
-          logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
-            message: error instanceof Error ? error.message : String(error)
-          })
-        })
-      } else {
-        evidenceArtifactLifecycle?.stop()
-      }
-    }
     if (partial.modelRouter || partial.modelAccess) {
       await synchronizeSelectedModelAccessSidecar(
         saved,
@@ -1524,22 +1503,6 @@ app.whenReady().then(async () => {
       await getCodexRuntime().synchronizeModelAccess()
     }
     scheduleCodexRuntimePrewarm(saved, 'settings-switch')
-    if (partial.evidenceDag && !isEvidenceDagEnabled(saved)) {
-      await Promise.all([
-        stopEvidenceDagSidecar(),
-        stopProjectDagSidecar()
-      ])
-    } else if (isEvidenceDagEnabled(saved) && (partial.modelRouter || partial.evidenceDag)) {
-      void ensureEvidenceDagSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      }).catch((error) => {
-        logWarn('evidence-dag', 'Failed to synchronize Evidence DAG after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-    }
     scheduleRuntime?.sync(saved)
     workflowRuntime?.sync(saved)
     remoteChannelRuntime?.sync(saved)
@@ -1579,6 +1542,7 @@ app.whenReady().then(async () => {
 
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
+    actionGuardEvaluator,
     getMainWindow: () => mainWindow,
     isTrustedIpcSender: (event) => {
       const window = mainWindow
@@ -1622,24 +1586,6 @@ app.whenReady().then(async () => {
     terminalPtyBridge,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
-    },
-    // Lazy: the Project DAG sidecar starts on first use (export button), not at
-    // boot — it is only needed when the user compiles the project graph.
-    ensureProjectDagReady: async () => {
-      const settings = await store.load()
-      await ensureProjectDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('project-dag', message)
-      })
-    },
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,

@@ -10,7 +10,7 @@ import {
 import { execFileSync } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 
 type BuilderFileSet = {
@@ -27,6 +27,25 @@ type RuntimeEntry = {
   executableNodeEntryPaths?: string[]
 }
 
+type BundledDomainPackage = {
+  packageName: string
+  moduleId: string
+  displayName: string
+  packageDir: string
+  bundleTo: string
+  dependencies: string[]
+  requiredRelativePaths: string[]
+}
+
+type DomainReleaseComposition = {
+  packages: BundledDomainPackage[]
+  packageDirs: string[]
+  bundleTargets: string[]
+  runtimeEntries: RuntimeEntry[]
+  bundledFileSets: BuilderFileSet[]
+  asarUnpackGlobs: string[]
+}
+
 type ReleaseWorkerManifest = {
   BUNDLED_FILE_FILTER: string[]
   BUILT_RUNTIME_UNPACK_GLOBS: string[]
@@ -38,6 +57,8 @@ type ReleaseWorkerManifest = {
   runtimeEntries: RuntimeEntry[]
   packagedExecutableNodeEntryRequiredPaths: string[]
   runtimeRequiredPathExports: Record<string, string[]>
+  discoverBundledDomainPackages: (root?: string) => BundledDomainPackage[]
+  createDomainReleaseComposition: (root?: string) => DomainReleaseComposition
   createAsarUnpackGlobs: () => string[]
   createBundledFileSets: () => BuilderFileSet[]
 }
@@ -78,6 +99,69 @@ function tempRoot(): string {
 function touch(path: string): void {
   mkdirSync(dirname(path), { recursive: true })
   writeFileSync(path, '{}\n', 'utf8')
+}
+
+function createBundledDomainFixture(
+  root: string,
+  directoryName: string,
+  packageName: string,
+  dependencies: string[] = []
+): void {
+  const packageRoot = join(root, 'packages', 'domains', directoryName)
+  const runtimeModule = directoryName.replace(/-/g, '_')
+  const runtimePath = `python/${runtimeModule}/server.py`
+  mkdirSync(join(packageRoot, 'python', runtimeModule), { recursive: true })
+  mkdirSync(join(packageRoot, 'src'), { recursive: true })
+  writeFileSync(join(packageRoot, runtimePath), '# fixture\n', 'utf8')
+  writeFileSync(
+    join(packageRoot, 'src', 'definition.ts'),
+    'export const domainPackageDefinition = {}\n',
+    'utf8'
+  )
+  writeFileSync(
+    join(packageRoot, 'src', 'main.ts'),
+    'export function createDomainMainEntry() { return {} }\n',
+    'utf8'
+  )
+  writeFileSync(join(packageRoot, 'package.json'), JSON.stringify({
+    name: packageName,
+    version: '1.0.0',
+    type: 'module',
+    exports: {
+      './definition': './src/definition.ts',
+      './main': './src/main.ts'
+    },
+    scripts: {
+      test: 'node --test',
+      typecheck: 'tsc --noEmit'
+    }
+  }), 'utf8')
+  writeFileSync(join(packageRoot, 'sciforge.domain.json'), JSON.stringify({
+    contractVersion: 1,
+    kind: 'trusted-compile-time',
+    packageName,
+    module: {
+      id: `fixture.${directoryName}`,
+      displayName: directoryName,
+      version: '1.0.0',
+      hostApi: {
+        minimum: '1.0.0',
+        maximumExclusive: '2.0.0'
+      }
+    },
+    entrypoints: [{
+      process: 'main',
+      export: './main',
+      contributions: []
+    }],
+    packaging: {
+      bundled: true,
+      runtime: {
+        requiredPaths: [runtimePath],
+        dependencies
+      }
+    }
+  }), 'utf8')
 }
 
 function escapeRegExp(value: string): string {
@@ -145,6 +229,12 @@ function isPathInside(candidate: string, root: string): boolean {
   return candidate === root || candidate.startsWith(`${root}/`)
 }
 
+function workspaceCoversPackage(workspace: string, packageDir: string): boolean {
+  if (workspace === packageDir) return true
+  return workspace.endsWith('/*') &&
+    dirname(packageDir) === workspace.slice(0, -2)
+}
+
 afterEach(() => {
   while (tempRoots.length > 0) {
     const root = tempRoots.pop()
@@ -190,6 +280,10 @@ describe('electron-builder release packaging', () => {
     expect(builderConfig.asarUnpack).toContain('**/out/main/**/*')
     expect(builderConfig.asarUnpack).toContain('**/packages/full-trace/**/*')
     expect(builderConfig.asarUnpack).toContain('**/node_modules/@sciforge/full-trace/**/*')
+    for (const domainPackage of releaseWorkerManifest.discoverBundledDomainPackages(projectRoot)) {
+      expect(builderConfig.asarUnpack).toContain(`**/${domainPackage.packageDir}/**/*`)
+      expect(builderConfig.asarUnpack).toContain(`**/${domainPackage.bundleTo}/**/*`)
+    }
     expect(fileSets.map((entry) => entry.to)).toEqual(releaseWorkerManifest.bundledPackageTargets)
   })
 
@@ -211,6 +305,7 @@ describe('electron-builder release packaging', () => {
       'plugins/**/*',
       'packages/workers/sci-modality-router/**/*',
       'packages/workers/evidence-dag/**/*',
+      'packages/workers/project-dag/**/*',
       'packages/workers/gui-owl-computer-use/**/*'
     ]) {
       expect(builderConfig.files).not.toContain(rawGlob)
@@ -309,15 +404,166 @@ describe('electron-builder release packaging', () => {
     }
   })
 
-  it('keeps compile-time domain dependencies in the app bundle instead of shipping source runtimes', () => {
+  it('bundles package-owned domain runtimes from source to app.asar.unpacked', () => {
+    const domainPackages = releaseWorkerManifest.discoverBundledDomainPackages(projectRoot)
+    const fileSets = releaseWorkerManifest.createBundledFileSets()
+    const root = tempRoot()
+    const unpackedRoot = afterPack._internals.unpackedAppRoot(createMacPackContext(root))
+
+    expect(domainPackages.map(({ packageName }) => packageName)).toEqual(expect.arrayContaining([
+      '@sciforge/domain-evidence-dag',
+      '@sciforge/domain-project-dag'
+    ]))
+    expect(
+      domainPackages.find(({ packageName }) =>
+        packageName === '@sciforge/domain-project-dag'
+      )?.dependencies
+    ).toContain('@sciforge/domain-evidence-dag')
+
+    for (const domainPackage of domainPackages) {
+      const entry = releaseWorkerManifest.runtimeEntries.find(
+        ({ id }) => id === domainPackage.moduleId
+      )
+      const requiredPaths = domainPackage.requiredRelativePaths.map(
+        (relativePath) => `${domainPackage.bundleTo}/${relativePath}`
+      )
+      if (!entry) throw new Error(`Missing ${domainPackage.moduleId} release runtime entry.`)
+
+      expect(entry).toMatchObject({
+        id: domainPackage.moduleId,
+        packageIds: [domainPackage.packageName, ...domainPackage.dependencies],
+        requiredPaths
+      })
+      expect(fileSets).toContainEqual({
+        from: domainPackage.packageDir,
+        to: domainPackage.bundleTo,
+        filter: releaseWorkerManifest.BUNDLED_FILE_FILTER
+      })
+      expect(releaseWorkerManifest.nonBundledPackageDirs).not.toContain(domainPackage.packageDir)
+      for (const relativePath of domainPackage.requiredRelativePaths) {
+        expect(() => statSync(
+          join(projectRoot, domainPackage.packageDir, relativePath)
+        )).not.toThrow()
+      }
+      for (const relativePath of requiredPaths) {
+        touch(join(unpackedRoot, relativePath))
+      }
+      expect(() => {
+        afterPack._internals.validateBundledReleaseRuntime(
+          createMacPackContext(root),
+          entry
+        )
+      }).not.toThrow()
+    }
+  })
+
+  it('recomposes bundled domains when a fixture package is added or removed', () => {
+    const root = tempRoot()
+    mkdirSync(join(root, 'packages', 'domains'), { recursive: true })
+
+    expect(releaseWorkerManifest.createDomainReleaseComposition(root).packages).toEqual([])
+
+    createBundledDomainFixture(root, 'runtime-base', '@fixture/runtime-base')
+    const baseOnly = releaseWorkerManifest.createDomainReleaseComposition(root)
+    expect(baseOnly.packageDirs).toEqual(['packages/domains/runtime-base'])
+    expect(baseOnly.bundleTargets).toEqual(['node_modules/@fixture/runtime-base'])
+    expect(baseOnly.asarUnpackGlobs).toEqual([
+      '**/packages/domains/runtime-base/**/*',
+      '**/node_modules/@fixture/runtime-base/**/*'
+    ])
+
+    createBundledDomainFixture(
+      root,
+      'runtime-consumer',
+      '@fixture/runtime-consumer',
+      ['@fixture/runtime-base']
+    )
+    const withConsumer = releaseWorkerManifest.createDomainReleaseComposition(root)
+    expect(withConsumer.packages.map(({ packageName }) => packageName)).toEqual([
+      '@fixture/runtime-base',
+      '@fixture/runtime-consumer'
+    ])
+    expect(withConsumer.runtimeEntries[1]?.packageIds).toEqual([
+      '@fixture/runtime-consumer',
+      '@fixture/runtime-base'
+    ])
+    expect(withConsumer.bundledFileSets).toHaveLength(2)
+
+    rmSync(join(root, 'packages', 'domains', 'runtime-consumer'), {
+      recursive: true,
+      force: true
+    })
+    expect(
+      releaseWorkerManifest.createDomainReleaseComposition(root).packages.map(
+        ({ packageName }) => packageName
+      )
+    ).toEqual(['@fixture/runtime-base'])
+
+    rmSync(join(root, 'packages', 'domains', 'runtime-base'), {
+      recursive: true,
+      force: true
+    })
+    expect(releaseWorkerManifest.createDomainReleaseComposition(root).packages).toEqual([])
+  })
+
+  it('loads packaged DAG Python entrypoints without global site packages on the host architecture', () => {
+    const root = tempRoot()
+    const context = createMacPackContext(root)
+    const unpackedRoot = afterPack._internals.unpackedAppRoot(context)
+    const packageNames = [
+      '@sciforge/domain-evidence-dag',
+      '@sciforge/domain-project-dag'
+    ]
+    const domainPackages = releaseWorkerManifest.discoverBundledDomainPackages(projectRoot)
+      .filter(({ packageName }) => packageNames.includes(packageName))
+
+    expect(domainPackages.map(({ packageName }) => packageName)).toEqual(packageNames)
+    const pythonPaths = domainPackages.map((domainPackage) => {
+      const source = join(projectRoot, domainPackage.packageDir, 'python')
+      const target = join(unpackedRoot, domainPackage.bundleTo, 'python')
+      cpSync(source, target, { recursive: true })
+      return target
+    })
+    const output = execFileSync(
+      process.platform === 'win32' ? 'python.exe' : 'python3',
+      [
+        '-S',
+        '-c',
+        [
+          'import platform',
+          'import evidence_dag.server',
+          'import project_dag.server',
+          'print(platform.machine())'
+        ].join(';')
+      ],
+      {
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          PYTHONPATH: pythonPaths.join(delimiter)
+        }
+      }
+    ).trim()
+
+    if (process.platform === 'darwin') {
+      expect(output.toLowerCase()).toBe(process.arch === 'arm64' ? 'arm64' : 'x86_64')
+    } else {
+      expect(output).not.toBe('')
+    }
+  })
+
+  it('keeps UI-only compile-time domains out of the release runtime manifest', () => {
     expect(releaseWorkerManifest.runtimeEntries.map((entry) => entry.id)).not.toContain('paper-radar')
     expect(releaseWorkerManifest.workspacePackageDirs).not.toContain('packages/workers/paper-radar')
     expect(releaseWorkerManifest.bundledPackageDirs).not.toContain('packages/workers/paper-radar')
     expect(releaseWorkerManifest.bundledPackageDirs.some((dir) => dir.startsWith('plugins/'))).toBe(false)
     expect(releaseWorkerManifest.nonBundledPackageDirs).toEqual(expect.arrayContaining([
       'packages/workers/sci-modality-router',
-      'packages/workers/evidence-dag',
       'packages/workers/gui-owl-computer-use'
+    ]))
+    expect(releaseWorkerManifest.bundledPackageDirs).toEqual(expect.arrayContaining([
+      'packages/domains/evidence-dag',
+      'packages/domains/project-dag'
     ]))
   })
 
@@ -486,12 +732,16 @@ describe('electron-builder release packaging', () => {
 
 describe('root package workspace contracts', () => {
   it('keeps package.json workspaces aligned with the release worker manifest', () => {
-    expect(rootPackage.workspaces).toEqual(expect.arrayContaining(releaseWorkerManifest.workspacePackageDirs))
+    for (const packageDir of releaseWorkerManifest.workspacePackageDirs) {
+      expect(
+        rootPackage.workspaces.some((workspace) => workspaceCoversPackage(workspace, packageDir))
+      ).toBe(true)
+    }
     expect(rootPackage.workspaces).toEqual(expect.arrayContaining([
       'packages/workers/model-router',
       'packages/workers/sci-modality-router',
-      'packages/workers/evidence-dag',
       'packages/workers/paper-radar',
+      'packages/domains/*',
       ...workspacePreviewWorkerPackageDirs
     ]))
     for (const workspacePreviewWorkerPackageDir of workspacePreviewWorkerPackageDirs) {

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
+import type { DomainAgentArtifactEvent } from '@sciforge/domain-sdk/host'
 import {
   sanitizeTraceTextChunks,
   type TraceEvent,
@@ -24,6 +25,7 @@ import type {
   AgentRuntimeAuxiliaryActiveScopedOperation,
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeEvent,
   AgentRuntimeGitCheckpoint,
   AgentRuntimeId,
@@ -43,9 +45,9 @@ import { createAgentRuntimeHost } from './host'
 import {
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_VERSION,
-  EXECUTION_PUBLICATION_COMMITTED_CODE
+  EXECUTION_PUBLICATION_COMMITTED_CODE,
+  EXECUTION_PUBLICATION_PENDING_CODE
 } from './execution-integrity-guard'
-import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
 import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import { RuntimeContextStateService } from '../../services/runtime-context-state-service'
@@ -63,6 +65,26 @@ import {
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
 
+function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
+  return {
+    mode: 'execute',
+    requirements: [
+      { id: 'visual-look-locate', receiptKind: 'visual.look' },
+      {
+        id: 'visual-capture',
+        receiptKind: 'visual.capture',
+        ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+        dependsOn: ['visual-look-locate']
+      },
+      {
+        id: 'visual-look-final',
+        receiptKind: 'visual.look',
+        dependsOn: ['visual-capture']
+      }
+    ]
+  }
+}
+
 function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'codex'): AppSettingsV1 {
   return {
     version: 1,
@@ -78,7 +100,6 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
     notifications: { turnComplete: true },
-    evidenceDag: { enabled: true },
     appBehavior: { openAtLogin: false, startMinimized: false, closeToTray: false },
     keyboardShortcuts: defaultKeyboardShortcuts(),
     write: defaultWriteSettings(),
@@ -1037,9 +1058,15 @@ describe('AgentRuntimeHost', () => {
         settings: async () => settings(runtimeId),
         adapters: [adapter]
       })
-      const text = '需要用视觉能力看一下排版后的表格图像，优化排版。'
+      const text = '按照任务模板生成报告。'
 
-      await host.startTurn({ runtimeId, threadId, text, displayText: text })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text,
+        displayText: text,
+        executionIntent: visualExecutionIntent()
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
       const replayedEvents: AgentRuntimeEvent[] = []
@@ -1052,7 +1079,7 @@ describe('AgentRuntimeHost', () => {
         expect.objectContaining({
           text: expect.stringContaining('Runtime-enforced visual completion gate'),
           displayText: text,
-          metadata: expect.objectContaining({ sciforgeVisualExecutionRequired: true })
+          executionIntent: visualExecutionIntent()
         })
       )
       expect(events).toContainEqual(expect.objectContaining({
@@ -1229,6 +1256,53 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
+  it('uses a durable pending marker when a native visual plan is declared after turn start', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-native-visual'
+    const pending = {
+      id: 'publication-pending',
+      turnId,
+      kind: 'system' as const,
+      text: 'Publication pending',
+      meta: { code: EXECUTION_PUBLICATION_PENDING_CODE },
+      createdAt: '2026-07-13T00:00:00.000Z'
+    }
+    const answer = {
+      id: 'answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Unverified visual answer',
+      createdAt: '2026-07-13T00:00:01.000Z'
+    }
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:01.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:01.000Z',
+      latestSeq: 2,
+      latestTurnId: turnId,
+      latestTurnStatus: 'completed',
+      turns: [{ id: turnId, threadId, status: 'completed', items: [pending, answer] }],
+      items: [pending, answer]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'failed',
+      turns: [{ id: turnId, status: 'failed', items: [] }],
+      items: []
+    })
+  })
+
   it('hides an adapter-persisted assistant candidate while its turn is still active', async () => {
     const threadId = 'codex-thread'
     const turnId = 'turn-running'
@@ -1357,6 +1431,7 @@ describe('AgentRuntimeHost', () => {
           factSource: 'executor_result',
           evidenceStrength: 'executor_receipt',
           effects: ['read'],
+          meta: { arguments: { intent: 'locate', capture: 'region' } },
           completionReceipts: [{
             contractVersion: 'completion-receipt.v1',
             receiptId: locateProofRef,
@@ -1464,7 +1539,12 @@ describe('AgentRuntimeHost', () => {
       })
       const text = '准确截取论文中的方法总览图。'
 
-      await host.startTurn({ runtimeId, threadId, text, displayText: text })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text,
+        displayText: text
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
@@ -1480,6 +1560,24 @@ describe('AgentRuntimeHost', () => {
       expect(events.filter((event) => (
         event.kind === 'assistant_delta' && event.itemId === 'verified-answer'
       ))).toHaveLength(1)
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          code: EXECUTION_PUBLICATION_PENDING_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          code: EXECUTION_PUBLICATION_COMMITTED_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
       expect(adapter.updateTurnGovernanceSnapshot).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -3954,12 +4052,7 @@ describe('AgentRuntimeHost', () => {
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
-  it('can explicitly pause the default automatic Evidence DAG feed', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'off')
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+  it('does not materialize completed turns when no artifact consumer is installed', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
@@ -3992,41 +4085,28 @@ describe('AgentRuntimeHost', () => {
 
     expect(events).toHaveLength(1)
     expect(claude.readThread).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('auto-enqueues completed turns from the neutral runtime event path into Evidence DAG when enabled', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'true')
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
-      return new Response(JSON.stringify({ ok: true, data: { snapshot: {
-        threadId: body.threadId, version: 1, digest: 'sha256:auto', inputWatermark: body.targetWatermark,
-        schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
-        createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
-      } } }), { status: 200 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const queueRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-dag-queue-'))
-    evidenceQueueRoots.push(queueRoot)
-    configureEvidenceDagUpdateQueue({ storagePath: join(queueRoot, 'queue.json') })
+  it('broadcasts each completed turn once to injected artifact consumers', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
       title: 'Claude',
+      workspace: '/workspace/thread',
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     vi.mocked(claude.readThread).mockResolvedValue({
       id: 'claude-thread',
       runtimeId: 'claude',
       title: 'Claude',
+      workspace: '/workspace/thread',
       updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 2,
+      latestSeq: 7,
       turns: [{
         id: 'turn-1',
         threadId: 'claude-thread',
         status: 'completed',
+        completedAt: '2026-07-26T09:00:00.000Z',
         items: [
           { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
           { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
@@ -4040,50 +4120,43 @@ describe('AgentRuntimeHost', () => {
         threadId: 'claude-thread',
         turnId: 'turn-1',
         state: 'completed',
-        seq: 2
+        seq: 7
       } satisfies AgentRuntimeEvent
     })
+    const consume = vi.fn(async (_event: DomainAgentArtifactEvent) => undefined)
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
-      adapters: [claude]
+      adapters: [claude],
+      artifactConsumers: [{ consume }]
     })
 
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of host.subscribeEvents({
-      runtimeId: 'claude',
-      threadId: 'claude-thread',
-      sinceSeq: 0
-    })) {
-      events.push(event)
+    for (let replay = 0; replay < 2; replay += 1) {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        sinceSeq: 0
+      })) {
+        // Drain the runtime stream so its completion event is recorded.
+      }
     }
 
-    expect(events).toHaveLength(1)
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(consume).toHaveBeenCalledOnce())
+    expect(claude.readThread).toHaveBeenCalledOnce()
+    expect(consume).toHaveBeenCalledWith({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-1',
+      targetWatermark: '7',
+      sequence: 7,
+      workspaceRoot: '/workspace/thread',
+      occurredAt: '2026-07-26T09:00:00.000Z',
+      artifacts: [
+        { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
+        { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
+      ]
     })
-    expect(claude.readThread).toHaveBeenCalledWith(
-      expect.anything(),
-      { runtimeId: 'claude', threadId: 'claude-thread' }
-    )
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0]!
-    expect(requestUrl).toBe('http://127.0.0.1:3897/updates')
-    expect(requestInit).toEqual(expect.objectContaining({
-      method: 'POST',
-      body: JSON.stringify({
-        threadId: 'claude:claude-thread',
-        targetWatermark: '2',
-        reason: 'turn_committed',
-        priority: 'background',
-        trace: [
-          { id: 'u1', type: 'message', role: 'user', content: 'question' },
-          { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-        ],
-        projectKey: '/tmp/workspace',
-        workspaceRoot: '/tmp/workspace',
-        projectRoot: '/tmp/workspace'
-      })
-    }))
-    expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')
   })
 
   it('steers repeated tool activity once before interrupting the next exact repeat', async () => {
@@ -4681,7 +4754,8 @@ describe('AgentRuntimeHost', () => {
     await host.startTurn({
       runtimeId: 'codex',
       threadId: 'codex-thread',
-      text: '准确截取页面中的目标图像。'
+      text: '按照任务模板处理当前页面。',
+      executionIntent: visualExecutionIntent()
     })
     for await (const _event of host.subscribeEvents({
       runtimeId: 'codex',
@@ -4865,7 +4939,8 @@ describe('AgentRuntimeHost', () => {
     await host.startTurn({
       runtimeId: 'codex',
       threadId: 'codex-thread',
-      text: '裁剪当前文档中的目标区域'
+      text: '按照任务模板生成报告',
+      executionIntent: visualExecutionIntent()
     })
 
     expect(codex.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
@@ -4907,7 +4982,8 @@ describe('AgentRuntimeHost', () => {
     await host.startTurn({
       runtimeId: 'codex',
       threadId: 'codex-thread',
-      text: '裁剪当前文档中的目标区域'
+      text: '按照任务模板生成报告',
+      executionIntent: visualExecutionIntent()
     })
 
     expect(dispatchedContext?.turnGovernanceSnapshot).toEqual({
@@ -4943,7 +5019,8 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread',
       turnId: 'turn-1',
-      text: '裁剪当前文档中的目标区域'
+      text: '按照任务模板继续生成报告',
+      executionIntent: visualExecutionIntent()
     })
 
     expect(codex.steerTurn).toHaveBeenCalledWith(
@@ -5002,7 +5079,8 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread',
       turnId: 'turn-1',
-      text: '裁剪当前文档中的目标区域'
+      text: '按照任务模板继续生成报告',
+      executionIntent: visualExecutionIntent()
     })).rejects.toThrow('steer rejected')
 
     const snapshots = vi.mocked(codex.updateTurnGovernanceSnapshot).mock.calls

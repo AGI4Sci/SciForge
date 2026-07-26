@@ -1,6 +1,9 @@
 import { lazy, type ReactElement } from 'react'
 import { Globe2 } from 'lucide-react'
-import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererHost,
+  DomainWorkbenchRightPanelRenderContext
+} from '@sciforge/domain-sdk/host'
 import {
   defineTrustedRendererDomainPackageEntry,
   type TrustedRendererDomainPackageEntry
@@ -30,13 +33,7 @@ export type BrowserPreviewRightPanelContribution = Readonly<{
   title: string
   resourceKind: string
   isAvailable: () => boolean
-  render: (props: Readonly<{
-    active: boolean
-    className: string
-    onCollapse: () => void
-    sessionId: string
-    workspaceRoot: string
-  }>) => ReactElement
+  render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
 }>
 
 type BrowserPreviewRendererContribution =
@@ -59,9 +56,13 @@ export function createBrowserPreviewRightPanelContribution(
     title: 'Playwright browser',
     resourceKind: 'browser-page',
     isAvailable: () => true,
-    render: (props) => (
+    render: ({ active, className, onCollapse, session }) => (
       <BrowserPreviewPanel
-        {...props}
+        active={active}
+        className={className}
+        onCollapse={onCollapse}
+        sessionId={session.id}
+        workspaceRoot={session.workspaceRoot ?? ''}
         client={client}
         visibleContext={visibleContext}
       />

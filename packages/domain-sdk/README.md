@@ -22,6 +22,26 @@ and, when declared, `createDomainRendererEntry`. The repository generator scans
 `packages/domains/*/sciforge.domain.json`, sorts by package name, and emits static imports. It never
 imports a process entry that the manifest does not declare.
 
+Packages that must ship runtime assets declare them in the same manifest:
+
+```json
+{
+  "packaging": {
+    "bundled": true,
+    "runtime": {
+      "requiredPaths": ["python/example/server.py", "ui/index.html"],
+      "dependencies": ["@sciforge/domain-foundation"]
+    }
+  }
+}
+```
+
+Every required path is a package-relative POSIX path and every dependency is the package name of
+another installed bundled domain. The generated release target is always
+`node_modules/<packageName>`; packages cannot override it. `package.json` and
+`sciforge.domain.json` are implicit runtime requirements and must not be repeated. Missing paths,
+uninstalled or non-bundled dependencies, self-dependencies, and dependency cycles fail discovery.
+
 `defineInstalledDomainPackageSet` is the single process-neutral source of installed definitions.
 After a process imports only its own package entrypoints, `defineInstalledMainDomainEntrySet` or
 `defineInstalledRendererDomainEntrySet` binds the declarations to runtime values. Pairing is exact

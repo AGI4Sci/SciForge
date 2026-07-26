@@ -75,13 +75,15 @@ describe('CapabilityAgentToolSurface', () => {
         required: ['task'],
         properties: {
           sourceRef: { type: 'string' },
-          path: { type: 'string' },
           targetRef: { type: 'string' },
           frame: { type: 'integer' },
           task: { type: 'string' },
-          intent: { enum: ['describe', 'ocr', 'locate', 'quality-review'] }
+          intent: { enum: ['describe', 'ocr', 'locate', 'quality-review'] },
+          capture: { enum: ['snapshot', 'region'] }
         }
       })
+    expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.look)?.inputSchema)
+      .not.toHaveProperty('properties.path')
     expect(surface.tools().find((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.capture)?.inputSchema)
       .toMatchObject({
         required: ['snapshotRef'],
@@ -148,6 +150,37 @@ describe('CapabilityAgentToolSurface', () => {
       request: turnContext,
       signal: expect.any(AbortSignal)
     })
+  })
+
+  it('rejects file paths so workspace visuals use the canonical resource pipeline', async () => {
+    const look = vi.fn<AgentVisualRuntime['look']>(async () => visualLookOutput())
+    const surface = createCapabilityAgentToolSurface({
+      broker: brokerStub(),
+      visualRuntime: {
+        look,
+        capture: async () => visualCaptureOutput()
+      },
+      resolveCaller: () => caller
+    })
+
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        path: 'paper.pdf',
+        task: 'Inspect the paper.'
+      },
+      context
+    })).rejects.toThrow()
+    await expect(surface.call({
+      name: CAPABILITY_AGENT_TOOL_NAMES.look,
+      arguments: {
+        task: 'Extract a figure.',
+        intent: 'describe',
+        capture: 'region'
+      },
+      context
+    })).rejects.toThrow(/intent=locate/u)
+    expect(look).not.toHaveBeenCalled()
   })
 
   it('fails closed when the visual runtime is missing or returns an invalid proof', async () => {

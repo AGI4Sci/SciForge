@@ -4,7 +4,10 @@ import {
   defineTrustedRendererDomainPackageEntry,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
-import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererHost,
+  DomainWorkbenchRightPanelRenderContext
+} from '@sciforge/domain-sdk/host'
 import {
   PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,
   PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
@@ -20,10 +23,7 @@ const PaperRadarPanel = lazy(() =>
   import('./PaperRadarPanel').then((module) => ({ default: module.PaperRadarPanel }))
 )
 
-export type PaperRadarRightPanelRenderProps = Readonly<{
-  className: string
-  onCollapse: () => void
-}>
+export type PaperRadarRightPanelRenderProps = DomainWorkbenchRightPanelRenderContext
 
 /** Structural renderer value consumed by the host Workbench right-panel slot. */
 export type PaperRadarRightPanelContribution = Readonly<{

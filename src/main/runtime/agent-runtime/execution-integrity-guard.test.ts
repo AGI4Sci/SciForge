@@ -8,19 +8,13 @@ import type {
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
 import {
-  EXECUTION_INTENT_METADATA_KEY,
   EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
-  EXECUTION_OBLIGATIONS_METADATA_KEY,
   RuntimeExecutionIntegrityGuard,
   type ExecutionEffectClass,
   type ExecutionObligation,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
-import {
-  VISUAL_EXECUTION_PLAN_METADATA_KEY,
-  VISUAL_EXECUTION_REQUIRED_METADATA_KEY,
-  withVisualExecutionRequirement
-} from './visual-execution-guard'
+import { withVisualExecutionRequirement } from './visual-execution-guard'
 
 const RUNTIME_IDS: AgentRuntimeId[] = ['sciforge', 'codex', 'claude']
 const ATTESTATION = `sha256:${'b'.repeat(64)}`
@@ -53,10 +47,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('reports native visual obligations pending until the receipt chain is complete', () => {
-    const input = withVisualExecutionRequirement(
-      baseInput('codex', '截取论文中的方法总览图'),
-      true
-    )
+    const input = visualCaptureInput('codex', '按照任务模板生成报告', true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
@@ -96,6 +87,126 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
       requiresTerminalValidation: false,
       nativeVisualObligationsPending: false
+    })
+  })
+
+  it.each(RUNTIME_IDS)(
+    'turns a native locate call into a region-capture and final-look obligation for %s',
+    (runtimeId) => {
+      const guard = new RuntimeExecutionIntegrityGuard()
+      guard.rememberTurn(
+        runtimeId,
+        baseInput(runtimeId, 'Apply every requirement in the referenced template.'),
+        `${runtimeId}-thread`,
+        `${runtimeId}-turn`
+      )
+
+      guard.observe(runtimeId, semanticTool(
+        runtimeId,
+        'look-call',
+        'sciforge_look',
+        semanticReceipt('visual.look', 'look-locate', 'look-call', [], [REGION_REF]),
+        { intent: 'locate', capture: 'region' }
+      ))
+      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`)).toEqual({
+        requiresTerminalValidation: true,
+        nativeVisualObligationsPending: true
+      })
+
+      guard.observe(runtimeId, semanticTool(
+        runtimeId,
+        'capture-call',
+        'sciforge_capture',
+        semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'], [REGION_REF])
+      ))
+      guard.observe(runtimeId, semanticTool(
+        runtimeId,
+        'final-look-call',
+        'sciforge_look',
+        semanticReceipt('visual.look', 'look-final', 'final-look-call', ['capture'])
+      ))
+
+      expect(guard.turnValidationState(runtimeId, `${runtimeId}-thread`, `${runtimeId}-turn`)).toEqual({
+        requiresTerminalValidation: true,
+        nativeVisualObligationsPending: false
+      })
+      expect(guard.observe(runtimeId, completed(runtimeId)).violation).toBeUndefined()
+    }
+  )
+
+  it('rejects a full-source substitute after a native locate call', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-locate', 'look-call', [], [REGION_REF]),
+      { intent: 'locate', capture: 'region' }
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'])
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'final-look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-final', 'final-look-call', ['capture'])
+    ))
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_visual_execution_missing',
+      unsatisfiedObligationIds: expect.arrayContaining([
+        expect.stringContaining('native-visual-capture:')
+      ])
+    })
+  })
+
+  it('activates the region-capture gate even when the declaring look returns no region', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-locate', 'look-call'),
+      { intent: 'locate', capture: 'region' }
+    ))
+
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: true
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_visual_execution_missing',
+      unsatisfiedObligationIds: expect.arrayContaining([
+        'native-visual-locate:look-call',
+        'native-visual-capture:look-call',
+        'native-visual-final-look:look-call'
+      ])
+    })
+  })
+
+  it('activates the declared capture gate even when the native look fails', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', baseInput('codex', 'Apply the referenced template.'), 'codex-thread', 'codex-turn')
+    guard.observe('codex', {
+      ...tool('codex', 'failed'),
+      toolName: 'sciforge_look',
+      meta: {
+        arguments: { intent: 'locate', capture: 'region' }
+      }
+    })
+
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: true
+    })
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_visual_execution_missing'
     })
   })
 
@@ -280,7 +391,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('does not promote visual claims from detail or structured output into completion receipts', () => {
-    const input = withVisualExecutionRequirement(baseInput('codex', 'Inspect the rendered image.'), true)
+    const input = visualInspectInput('codex', 'Run the planned review.')
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', {
@@ -300,7 +411,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('accepts an out-of-band typed receipt from the exact native look tool', () => {
-    const input = withVisualExecutionRequirement(baseInput('sciforge', 'Inspect the rendered image.'), true)
+    const input = visualInspectInput('sciforge', 'Run the planned review.')
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('sciforge', input, 'sciforge-thread', 'sciforge-turn')
     guard.observe('sciforge', {
@@ -313,10 +424,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('requires a linked look, capture, and final-look receipt chain', () => {
-    const input = withVisualExecutionRequirement(
-      baseInput('codex', '准确裁剪论文中的方法总览图'),
-      true
-    )
+    const input = visualCaptureInput('codex', '按照任务模板生成报告', true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', semanticTool(
@@ -361,10 +469,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('rejects a full-snapshot capture when an accurate region was requested', () => {
-    const input = withVisualExecutionRequirement(
-      baseInput('codex', '截取论文中的方法总览图'),
-      true
-    )
+    const input = visualCaptureInput('codex', '按照任务模板生成报告', true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', semanticTool(
@@ -392,10 +497,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('allows a full-snapshot capture for an ordinary screenshot request', () => {
-    const input = withVisualExecutionRequirement(
-      baseInput('codex', 'Capture a screenshot of this page.'),
-      true
-    )
+    const input = visualCaptureInput('codex', 'Execute the planned snapshot.', false)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', semanticTool(
@@ -421,10 +523,7 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   })
 
   it('rejects a native visual receipt whose parent chain is missing', () => {
-    const input = withVisualExecutionRequirement(
-      baseInput('codex', '把方法总览图裁剪出来'),
-      true
-    )
+    const input = visualCaptureInput('codex', '按照任务模板生成报告', true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', semanticTool(
@@ -760,20 +859,6 @@ describe('execution integrity input policy', () => {
     expect(guarded.text).toContain('"id":"consumer-reference"')
   })
 
-  it('keeps explicit obligation metadata backward compatible', () => {
-    const input = baseInput('codex', 'Apply the prepared operation.')
-    input.metadata = {
-      [EXECUTION_OBLIGATIONS_METADATA_KEY]: [obligation('external_mutation')]
-    }
-    expect(withExecutionIntegrityRequirement(input).text).toContain('"effectClass":"external_mutation"')
-  })
-
-  it('applies the same generic success rule to structured intent metadata', () => {
-    const input = baseInput('codex', 'Inspect the current file.')
-    input.metadata = { [EXECUTION_INTENT_METADATA_KEY]: { mode: 'inspect' } }
-    expect(withExecutionIntegrityRequirement(input).text).toContain('"kind":"any_success"')
-  })
-
   it('requires declared receipt effects instead of guessing from tool names', () => {
     const guard = rememberedGuard('codex', 'Publish the release.', 'external_mutation')
     guard.observe('codex', { ...tool('codex', 'succeeded'), toolName: 'publish_release' })
@@ -813,11 +898,7 @@ describe('execution integrity input policy', () => {
   })
 
   it('preserves the visual obligation in the unified policy', () => {
-    const input = baseInput('sciforge', 'Inspect the layout.')
-    input.metadata = {
-      [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true,
-      [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'inspect'
-    }
+    const input = visualInspectInput('sciforge', 'Run the planned review.')
     expect(withExecutionIntegrityRequirement(input).text).toContain('"receiptKind":"visual.look"')
   })
 })
@@ -847,13 +928,54 @@ function intentInput(
   return withExecutionIntegrityRequirement(input)
 }
 
+function visualInspectInput(
+  runtimeId: AgentRuntimeId,
+  text: string
+): AgentRuntimeTurnStartInput {
+  const input = baseInput(runtimeId, text)
+  input.executionIntent = {
+    mode: 'inspect',
+    requirements: [{ id: 'visual-look', receiptKind: 'visual.look' }]
+  }
+  return withVisualExecutionRequirement(input)
+}
+
+function visualCaptureInput(
+  runtimeId: AgentRuntimeId,
+  text: string,
+  requiresRegionRef: boolean
+): AgentRuntimeTurnStartInput {
+  const input = baseInput(runtimeId, text)
+  input.executionIntent = {
+    mode: 'execute',
+    requirements: [
+      {
+        id: 'visual-look-locate',
+        receiptKind: 'visual.look'
+      },
+      {
+        id: 'visual-capture',
+        receiptKind: 'visual.capture',
+        ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+        dependsOn: ['visual-look-locate']
+      },
+      {
+        id: 'visual-look-final',
+        receiptKind: 'visual.look',
+        dependsOn: ['visual-capture']
+      }
+    ]
+  }
+  return withVisualExecutionRequirement(input)
+}
+
 function obligation(effectClass: ExecutionEffectClass): ExecutionObligation {
   return {
     id: 'requested-execution',
     kind: 'effect',
     effectClass,
     completion: 'success',
-    source: 'metadata'
+    source: 'intent'
   }
 }
 
@@ -950,7 +1072,8 @@ function semanticTool(
   runtimeId: AgentRuntimeId,
   callId: string,
   toolName: 'sciforge_look' | 'sciforge_capture',
-  completionReceipt: AgentRuntimeCompletionReceipt
+  completionReceipt: AgentRuntimeCompletionReceipt,
+  argumentsRecord?: Record<string, unknown>
 ): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
   return {
     ...tool(runtimeId, 'succeeded'),
@@ -959,7 +1082,8 @@ function semanticTool(
     toolName,
     toolKind: 'tool_call',
     effects: toolName === 'sciforge_capture' ? ['local_write'] : ['read'],
-    completionReceipts: [completionReceipt]
+    completionReceipts: [completionReceipt],
+    ...(argumentsRecord ? { meta: { arguments: argumentsRecord } } : {})
   }
 }
 

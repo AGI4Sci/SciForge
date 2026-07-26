@@ -52,7 +52,12 @@ test('creates declared Workbench and translation values without host side effect
   assert.equal(typeof panel.icon, 'object')
   assert.equal(panel.isAvailable(), true)
 
-  const rendered = panel.render({ className: 'panel', onCollapse: () => undefined })
+  const rendered = panel.render({
+    active: true,
+    className: 'panel',
+    onCollapse: () => undefined,
+    session: { id: 'session-paper' }
+  })
   const props = (rendered as ReactElement<Record<string, unknown>>).props
   assert.equal(props.className, 'panel')
   assert.equal(typeof props.capabilityClient, 'object')

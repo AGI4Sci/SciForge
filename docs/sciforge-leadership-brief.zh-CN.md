@@ -112,7 +112,7 @@ SciForge 的本地工作区、worker 边界、MCP/Skill、Model Router 和 Evide
 | 本地 workspace 操作 | 会话和文件树绑定真实目录，可读写论文、Markdown、CSV、提取文本等。 |
 | 插件/worker 接入 | 插件页显示定时任务、K-Dense Skill、Scientific Plotting、Image Generation、Canvas、ppt-master 等入口。 |
 | 手机/IM 协作 | Connect Phone 弹窗显示飞书/Lark/微信/Discord/Zulip 授权入口。 |
-| 科学 worker 架构 | 代码中已有 `model-router`、`sci-modality-router`、`evidence-dag`、`paper-radar`、`scientific-plotting`、`ppt-master`、`canvas` 等 worker。 |
+| 科学扩展架构 | 代码中已有 `evidence-dag`、`project-dag`、`paper-radar` 等领域包，以及 `model-router`、`sci-modality-router`、`scientific-plotting`、`ppt-master`、`canvas` 等 worker。 |
 | 研究案例 | 报告中的 scenario-01 research sprint 记录了长周期研究闭环：132 stages、约 199 commits、文献、候选基因、结构验证、图表与手稿包。 |
 
 ## 需要诚实说明的短板

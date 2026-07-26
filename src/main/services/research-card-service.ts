@@ -18,6 +18,7 @@ import type {
   ResearchCardUpdatePatch
 } from '../../shared/research-cards'
 import {
+  RESEARCH_CARD_ORIGINS,
   RESEARCH_CARD_SCHEMA_VERSION,
   defaultResearchCardStage,
   isResearchCardStageForKind
@@ -322,19 +323,7 @@ function normalizeOrigin(value: unknown): ResearchCardOrigin {
 }
 
 function isKnownOrigin(value: string): value is ResearchCardOriginKind {
-  return (
-    value === 'manual' ||
-    value === 'chat' ||
-    value === 'paper_radar' ||
-    value === 'workflow' ||
-    value === 'canvas' ||
-    value === 'ppt_master' ||
-    value === 'write_assist' ||
-    value === 'scientific_plotting' ||
-    value === 'evidence_dag' ||
-    value === 'model_router' ||
-    value === 'other'
-  )
+  return (RESEARCH_CARD_ORIGINS as readonly string[]).includes(value)
 }
 
 function normalizeDecision(value: unknown): ResearchCardDecision | undefined {

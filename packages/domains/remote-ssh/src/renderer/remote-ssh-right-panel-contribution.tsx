@@ -4,7 +4,10 @@ import {
   defineTrustedRendererDomainPackageEntry,
   type TrustedRendererDomainPackageEntry
 } from '@sciforge/domain-sdk/renderer'
-import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
+import type {
+  DomainRendererHost,
+  DomainWorkbenchRightPanelRenderContext
+} from '@sciforge/domain-sdk/host'
 import { REMOTE_SSH_TARGET_RESOURCE_KIND } from '../contract'
 import {
   REMOTE_SSH_RENDERER_I18N_CONTRIBUTION,
@@ -21,11 +24,7 @@ const RemoteSshPanel = lazy(() =>
   import('./RemoteSshPanel').then((module) => ({ default: module.RemoteSshPanel }))
 )
 
-export type RemoteSshRightPanelRenderProps = Readonly<{
-  className: string
-  onCollapse: () => void
-  workspaceRoot: string
-}>
+export type RemoteSshRightPanelRenderProps = DomainWorkbenchRightPanelRenderContext
 
 /** Structural renderer value consumed by the host Workbench right-panel slot. */
 export type RemoteSshRightPanelContribution = Readonly<{
@@ -55,10 +54,10 @@ export function createRemoteSshRightPanelContribution(
     title: 'Remote targets',
     resourceKind: REMOTE_SSH_TARGET_RESOURCE_KIND,
     isAvailable: () => true,
-    render: ({ className, onCollapse, workspaceRoot }): ReactElement => (
+    render: ({ className, onCollapse, session }): ReactElement => (
       <RemoteSshPanel
         capabilityClient={capabilityClient}
-        workspaceId={workspaceRoot}
+        workspaceId={session.workspaceRoot ?? ''}
         className={className}
         onCollapse={onCollapse}
         openExternal={host.openExternal}

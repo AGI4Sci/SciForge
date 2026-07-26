@@ -54,6 +54,7 @@ export function nativeAgentToolExecutionMetadata(
     const parsed = agentVisualLookOutputSchema.safeParse(result.value)
     if (!parsed.success) return { effects: [], completionReceipts: [] }
     const output = parsed.data
+    if (!output.evidence.claims.length) return { effects: [], completionReceipts: [] }
     return {
       effects: ['read'],
       completionReceipts: [{

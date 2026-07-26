@@ -99,39 +99,6 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('traces:clear')
   })
 
-  it('exposes Evidence DAG update IPC', async () => {
-    const api = exposedApi as {
-      updateEvidenceDag(payload: unknown): Promise<unknown>
-      setEvidenceDagPriority(payload: unknown): Promise<unknown>
-    }
-    const payload = { runtimeId: 'codex', threadId: 'thread-1' }
-
-    await api.updateEvidenceDag(payload)
-    await api.setEvidenceDagPriority({ ...payload, visible: true })
-
-    expect(invoke).toHaveBeenCalledWith('evidenceDag:update', payload)
-    expect(invoke).toHaveBeenCalledWith('evidenceDag:priority', { ...payload, visible: true })
-  })
-
-  it('exposes Project DAG panel IPC', async () => {
-    const api = exposedApi as {
-      getProjectDagView(payload: unknown): Promise<unknown>
-      updateProjectDag(payload: unknown): Promise<unknown>
-      saveProjectDagGoal(payload: unknown): Promise<unknown>
-    }
-    const viewPayload = { view: 'graph', workspaceRoot: '/tmp/project-alpha' }
-    const updatePayload = { scope: 'all', workspaceRoot: '/tmp/project-alpha' }
-    const goalPayload = { title: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
-
-    await api.getProjectDagView(viewPayload)
-    await api.updateProjectDag(updatePayload)
-    await api.saveProjectDagGoal(goalPayload)
-
-    expect(invoke).toHaveBeenCalledWith('projectDag:view', viewPayload)
-    expect(invoke).toHaveBeenCalledWith('projectDag:update', updatePayload)
-    expect(invoke).toHaveBeenCalledWith('projectDag:save-goal', goalPayload)
-  })
-
   it('does not expose the removed draw.io runtime API', () => {
     expect(exposedApi).not.toHaveProperty('getLocalDrawioUrl')
   })

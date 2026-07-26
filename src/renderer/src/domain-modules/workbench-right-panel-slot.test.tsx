@@ -34,6 +34,11 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
       id: 'sciforge.paper-radar.workbench-right-panel',
       ownerId: 'sciforge.paper-radar'
     })
+    expect(registry.resolveById('sciforge.paper-radar.workbench-right-panel')).toMatchObject({
+      ownerId: 'sciforge.paper-radar',
+      contribution: { mode: 'paper' }
+    })
+    expect(registry.resolveById('missing.panel')).toBeNull()
   })
 
   it('rejects two contributions that claim the same panel mode', () => {
@@ -55,13 +60,13 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
     })).toThrow('Duplicate Workbench right-panel mode "paper"')
   })
 
-  it('passes the owning workspace root through the generic render contract', () => {
-    let renderedWorkspaceRoot: string | undefined
+  it('passes session and activation data through the generic render contract', () => {
+    let renderedContext: Parameters<WorkbenchRightPanelContribution['render']>[0] | undefined
     const registry = new WorkbenchRightPanelContributionRegistry()
     const panel = {
       ...contribution('paper'),
-      render: ({ workspaceRoot }: Parameters<WorkbenchRightPanelContribution['render']>[0]) => {
-        renderedWorkspaceRoot = workspaceRoot
+      render: (context: Parameters<WorkbenchRightPanelContribution['render']>[0]) => {
+        renderedContext = context
         return createElement('div')
       }
     }
@@ -71,10 +76,29 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
       active: true,
       className: 'h-full',
       onCollapse: () => undefined,
-      sessionId: 'session-owner',
-      workspaceRoot: '/workspace/owner'
+      session: {
+        id: 'session-owner',
+        runtimeId: 'codex',
+        workspaceRoot: '/workspace/owner'
+      },
+      activation: {
+        contributionId: 'example.paper.workbench-right-panel',
+        revision: 2,
+        payload: { nodeId: 'node-2' }
+      }
     })
 
-    expect(renderedWorkspaceRoot).toBe('/workspace/owner')
+    expect(renderedContext).toMatchObject({
+      session: {
+        id: 'session-owner',
+        runtimeId: 'codex',
+        workspaceRoot: '/workspace/owner'
+      },
+      activation: {
+        contributionId: 'example.paper.workbench-right-panel',
+        revision: 2,
+        payload: { nodeId: 'node-2' }
+      }
+    })
   })
 })

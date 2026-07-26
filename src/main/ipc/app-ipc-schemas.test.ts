@@ -26,14 +26,9 @@ import {
   agentRuntimeStartTurnPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
-  evidenceDagUpdatePayloadSchema,
-  evidenceDagViewPayloadSchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
-  projectDagGoalSavePayloadSchema,
-  projectDagUpdatePayloadSchema,
-  projectDagViewPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
@@ -118,6 +113,18 @@ describe('app-ipc-schemas', () => {
       threadId: ' thread-1 ',
       text: ' hello ',
       clientDirectiveId: ' directive-1 ',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [
+          { id: 'visual-look-locate', receiptKind: 'visual.look' },
+          {
+            id: 'visual-capture',
+            receiptKind: 'visual.capture',
+            requiresRegionRef: true,
+            dependsOn: ['visual-look-locate']
+          }
+        ]
+      },
       workspace: ' /tmp/workspace ',
       model: ' deepseek-v4-pro ',
       reasoningEffort: ' medium ',
@@ -139,6 +146,18 @@ describe('app-ipc-schemas', () => {
       threadId: 'thread-1',
       text: 'hello',
       clientDirectiveId: 'directive-1',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [
+          { id: 'visual-look-locate', receiptKind: 'visual.look' },
+          {
+            id: 'visual-capture',
+            receiptKind: 'visual.capture',
+            requiresRegionRef: true,
+            dependsOn: ['visual-look-locate']
+          }
+        ]
+      },
       workspace: '/tmp/workspace',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'medium',
@@ -162,13 +181,21 @@ describe('app-ipc-schemas', () => {
       threadId: ' thread-1 ',
       turnId: ' turn-1 ',
       text: ' use the current annotations ',
-      clientDirectiveId: ' correction-1 '
+      clientDirectiveId: ' correction-1 ',
+      executionIntent: {
+        mode: 'inspect',
+        requirements: [{ receiptKind: 'visual.look' }]
+      }
     })).toEqual({
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
       text: 'use the current annotations',
-      clientDirectiveId: 'correction-1'
+      clientDirectiveId: 'correction-1',
+      executionIntent: {
+        mode: 'inspect',
+        requirements: [{ receiptKind: 'visual.look' }]
+      }
     })
   })
 
@@ -180,68 +207,6 @@ describe('app-ipc-schemas', () => {
         text: ' '
       })
     ).toThrow()
-  })
-
-  it('accepts Evidence DAG view payloads for Claude runtime threads', () => {
-    expect(evidenceDagViewPayloadSchema.parse({
-      runtimeId: 'claude',
-      threadId: ' thread-1 '
-    })).toEqual({
-      runtimeId: 'claude',
-      threadId: 'thread-1'
-    })
-  })
-
-  it('accepts Evidence DAG update payloads', () => {
-    expect(evidenceDagUpdatePayloadSchema.parse({
-      runtimeId: 'codex',
-      threadId: ' thread-1 '
-    })).toEqual({
-      runtimeId: 'codex',
-      threadId: 'thread-1'
-    })
-    expect(() => evidenceDagUpdatePayloadSchema.parse({
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      operation: 'rebuild'
-    })).toThrow(/rebuildKind/)
-  })
-
-  it('accepts Project DAG panel payloads', () => {
-    expect(projectDagViewPayloadSchema.parse({
-      view: 'graph',
-      workspaceRoot: ' /tmp/project-alpha ',
-      projectRoot: ' /tmp/project-alpha ',
-      project: ' alpha ',
-      sessions: [' codex:thread-1 ']
-    })).toEqual({
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha',
-      projectRoot: '/tmp/project-alpha',
-      project: 'alpha',
-      sessions: ['codex:thread-1']
-    })
-    expect(projectDagUpdatePayloadSchema.parse({
-      workspaceRoot: ' /tmp/project-alpha ',
-      sessions: [' codex:thread-1 '],
-      scope: [' session-1 '],
-      excludedSessions: [' codex:thread-2 '],
-      isolatedSessions: [' codex:thread-3 '],
-      autonomyMode: 'autonomous'
-    })).toEqual({
-      workspaceRoot: '/tmp/project-alpha',
-      sessions: ['codex:thread-1'],
-      scope: ['session-1'],
-      excludedSessions: ['codex:thread-2'],
-      isolatedSessions: ['codex:thread-3'],
-      autonomyMode: 'autonomous'
-    })
-    expect(projectDagUpdatePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })
-    expect(projectDagGoalSavePayloadSchema.parse({
-      title: ' Project alpha ',
-      description: ' Find the answer. '
-    })).toEqual({ title: 'Project alpha', description: 'Find the answer.' })
-    expect(() => projectDagViewPayloadSchema.parse({ view: 'export' })).toThrow()
   })
 
   it('accepts strict VisualDocument artifacts and normalized review annotations', () => {
@@ -752,7 +717,6 @@ describe('app-ipc-schemas', () => {
     const payload = settingsPatchSchema.parse({
       theme: 'dark',
       activeAgentRuntime: 'claude',
-      evidenceDag: { enabled: true },
       agentCapabilities: {
         subagents: {
           enabled: true,
@@ -862,7 +826,6 @@ describe('app-ipc-schemas', () => {
     expect(payload.agents?.sciforge?.tokenEconomy?.enabled).toBe(true)
     expect(payload.agents?.sciforge?.tokenEconomy?.historyHygiene?.maxToolResultTokens).toBe(4000)
     expect(payload.activeAgentRuntime).toBe('claude')
-    expect(payload.evidenceDag).toEqual({ enabled: true })
     expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(3)
     expect(payload.agentCapabilities?.subagents?.maxChildRuns).toBe(4)
     expect(payload.modelAccess).toEqual({ mode: 'api', planAdapterId: '' })
@@ -873,6 +836,12 @@ describe('app-ipc-schemas', () => {
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
     expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
     expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
+  })
+
+  it('rejects obsolete host settings for installed domain packages', () => {
+    expect(() => settingsPatchSchema.parse({
+      evidenceDag: { enabled: false }
+    })).toThrow()
   })
 
   it('accepts normalized full settings snapshots with persisted remote-channel failures', () => {
@@ -1731,7 +1700,7 @@ describe('app-ipc-schemas', () => {
       content: '# Draft',
       runtimeId: 'codex',
       threadId: 'thread-1',
-      evidenceDagGateOverride: true
+      overrideConfirmed: true
     })
 
     expect(payload.path).toBe('/tmp/workspace/draft.md')
@@ -1739,7 +1708,13 @@ describe('app-ipc-schemas', () => {
     expect(payload.content).toBe('# Draft')
     expect(payload.runtimeId).toBe('codex')
     expect(payload.threadId).toBe('thread-1')
-    expect(payload.evidenceDagGateOverride).toBe(true)
+    expect(payload.overrideConfirmed).toBe(true)
+    expect(() => writeExportPayloadSchema.parse({
+      path: '/tmp/workspace/draft.md',
+      format: 'docx',
+      content: '# Draft',
+      evidenceDagGateOverride: true
+    })).toThrow()
 
     expect(writeExportPayloadSchema.parse({
       path: '/tmp/workspace/draft.md',

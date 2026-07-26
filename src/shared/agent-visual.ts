@@ -22,7 +22,7 @@ export const agentVisualProofRefSchema = z.string()
 
 export const agentVisualAttestationSchema = z.string().regex(/^sha256:[a-f0-9]{64}$/u)
 
-export const agentVisualWorkspaceRelativePathSchema = z.string()
+const agentVisualArtifactRelativePathSchema = z.string()
   .trim()
   .min(1)
   .max(4_096)
@@ -33,31 +33,24 @@ export const agentVisualWorkspaceRelativePathSchema = z.string()
 
 export const agentVisualLookInputSchema = z.object({
   sourceRef: agentVisualSourceRefSchema.optional(),
-  path: agentVisualWorkspaceRelativePathSchema.optional(),
   targetRef: agentVisualTargetRefSchema.optional(),
   frame: z.number().int().positive().max(1_000_000).optional(),
   task: z.string().trim().min(1).max(16_000),
-  intent: z.enum(['describe', 'ocr', 'locate', 'quality-review']).optional()
+  intent: z.enum(['describe', 'ocr', 'locate', 'quality-review']).optional(),
+  capture: z.enum(['snapshot', 'region']).optional()
 }).strict().superRefine((input, context) => {
-  if (input.sourceRef && input.path) {
-    context.addIssue({
-      code: 'custom',
-      path: ['path'],
-      message: 'Visual look accepts either sourceRef or path, not both.'
-    })
-  }
-  if (input.path && input.targetRef) {
-    context.addIssue({
-      code: 'custom',
-      path: ['targetRef'],
-      message: 'A workspace image path cannot be combined with a live surface target.'
-    })
-  }
   if (input.frame && !input.sourceRef) {
     context.addIssue({
       code: 'custom',
       path: ['frame'],
       message: 'A visual frame index requires an opaque sourceRef.'
+    })
+  }
+  if (input.capture === 'region' && input.intent !== 'locate') {
+    context.addIssue({
+      code: 'custom',
+      path: ['capture'],
+      message: 'A required region capture must use intent=locate.'
     })
   }
 })
@@ -144,7 +137,7 @@ export const agentVisualCaptureProofSchema = z.object({
 
 export const agentVisualCaptureOutputSchema = z.object({
   artifactRef: agentVisualArtifactRefSchema,
-  relativePath: agentVisualWorkspaceRelativePathSchema,
+  relativePath: agentVisualArtifactRelativePathSchema,
   mimeType: z.string().trim().regex(/^image\/[A-Za-z0-9.+-]+$/u),
   width: z.number().int().positive(),
   height: z.number().int().positive(),

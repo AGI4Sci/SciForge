@@ -567,6 +567,7 @@ export type AgentRuntimeExecutionIntent = {
     effectClass?: AgentRuntimeExecutionEffectClass
     toolNames?: string[]
     receiptKind?: AgentRuntimeCompletionReceiptKind
+    requiresRegionRef?: boolean
     dependsOn?: string[]
     completion?: 'terminal' | 'success'
   }>

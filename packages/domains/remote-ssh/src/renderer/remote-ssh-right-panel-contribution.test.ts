@@ -52,9 +52,13 @@ describe('Remote SSH right-panel contribution', () => {
     expect(panel.isAvailable()).toBe(true)
 
     const rendered = panel.render({
+      active: true,
       className: 'panel',
       onCollapse: () => undefined,
-      workspaceRoot: '/workspace'
+      session: {
+        id: 'session-remote',
+        workspaceRoot: '/workspace'
+      }
     })
     const props = (rendered as ReactElement<Record<string, unknown>>).props
     expect(props.className).toBe('panel')

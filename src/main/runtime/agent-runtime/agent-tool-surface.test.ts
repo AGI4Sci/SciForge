@@ -31,6 +31,19 @@ describe('nativeAgentToolExecutionMetadata', () => {
       tool: 'exec_command',
       value: lookOutput()
     }, 'shell-call')).toEqual({ effects: [], completionReceipts: [] })
+
+    expect(nativeAgentToolExecutionMetadata({
+      tool: 'sciforge_look',
+      value: {
+        ...lookOutput(),
+        regions: [],
+        evidence: {
+          summary: 'The image could not be inspected.',
+          claims: [],
+          uncertainties: ['The visual translator was unavailable.']
+        }
+      }
+    }, 'degraded-look-call')).toEqual({ effects: [], completionReceipts: [] })
   })
 
   it('mints a linked capture receipt and rejects malformed visual output', () => {

@@ -441,31 +441,6 @@ describe('dev browser bridge server', () => {
     expect(invoke).toHaveBeenCalledTimes(3)
   })
 
-  it('allows Evidence DAG view, update and trusted preview channels in browser dev mode', async () => {
-    const invoke = vi.fn(async (_channel, payload) => ({ ok: true, payload }))
-    const dispatcher: DevBrowserBridgeDispatcher = { invoke }
-
-    server = await startDevBrowserBridgeServer({
-      dispatcher,
-      port: 0
-    })
-
-    for (const channel of [
-      'evidenceDag:view',
-      'evidenceDag:update',
-      'evidenceDag:resolve-evidence-preview'
-    ] as const) {
-      const response = await postJson('/invoke', {
-        channel,
-        payload: { runtimeId: 'codex', threadId: 'thread-1' }
-      })
-
-      expect(response.status).toBe(200)
-      expect(JSON.parse(response.body).ok).toBe(true)
-    }
-    expect(invoke).toHaveBeenCalledTimes(3)
-  })
-
   it('allows callers to explicitly opt into mutating channels', async () => {
     const invoke = vi.fn(async (_channel, payload) => ({ ok: true, payload }))
     const dispatcher: DevBrowserBridgeDispatcher = { invoke }

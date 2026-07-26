@@ -172,6 +172,33 @@ const agentRuntimeFileReferenceSchema = z.object({
   modelRouterObject: z.boolean().optional()
 }).strict()
 
+const agentRuntimeExecutionRequirementSchema = z.object({
+  id: optionalTrimmedString(MAX_ID_LENGTH),
+  effectClass: z.enum([
+    'read',
+    'command_execution',
+    'local_write',
+    'external_mutation',
+    'async_job',
+    'child_agent',
+    'other'
+  ]).optional(),
+  toolNames: z.array(trimmedString(512)).max(100).optional(),
+  receiptKind: z.enum([
+    'visual.look',
+    'visual.capture',
+    'artifact.reference-validation'
+  ]).optional(),
+  requiresRegionRef: z.boolean().optional(),
+  dependsOn: z.array(trimmedString(MAX_ID_LENGTH)).max(100).optional(),
+  completion: z.enum(['terminal', 'success']).optional()
+}).strict()
+
+const agentRuntimeExecutionIntentSchema = z.object({
+  mode: z.enum(['answer', 'inspect', 'execute']),
+  requirements: z.array(agentRuntimeExecutionRequirementSchema).max(100).optional()
+}).strict()
+
 export const agentRuntimeConnectPayloadSchema = z.object({
   runtimeId: agentRuntimeIdSchema.optional()
 }).strict()
@@ -212,6 +239,7 @@ export const agentRuntimeStartTurnPayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
   clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
+  executionIntent: agentRuntimeExecutionIntentSchema.optional(),
   workspace: defaultPathSchema,
   mode: z.string().trim().max(64).optional(),
   model: z.string().trim().max(128).optional(),
@@ -244,7 +272,8 @@ export const agentRuntimeTurnSteerPayloadSchema = z.object({
   threadId: trimmedString(MAX_ID_LENGTH),
   turnId: trimmedString(MAX_ID_LENGTH),
   text: z.string().trim().min(1).max(MAX_CHANNEL_TEXT_LENGTH),
-  clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH)
+  clientDirectiveId: optionalTrimmedString(MAX_ID_LENGTH),
+  executionIntent: agentRuntimeExecutionIntentSchema.optional()
 }).strict()
 
 export const agentRuntimeEventSubscribePayloadSchema = z.object({
@@ -1430,9 +1459,6 @@ const settingsPatchObjectSchema = z.object({
   modelAccess: modelAccessPatchSchema.optional(),
   modelRouter: modelRouterPatchSchema.optional(),
   runtimeGuards: runtimeGuardPatchSchema.optional(),
-  evidenceDag: z.object({
-    enabled: z.boolean().optional()
-  }).strict().optional(),
   agentCapabilities: agentCapabilityPatchSchema.optional(),
   imageGeneration: imageGenerationPatchSchema.optional(),
   computerUse: computerUsePatchSchema.optional(),
@@ -1974,7 +2000,7 @@ export const writeExportPayloadSchema = z
     content: z.string().max(MAX_BODY_BYTES),
     threadId: optionalTrimmedString(MAX_ID_LENGTH),
     runtimeId: agentRuntimeIdSchema.optional(),
-    evidenceDagGateOverride: z.boolean().optional()
+    overrideConfirmed: z.boolean().optional()
   })
   .strict()
 
@@ -2116,103 +2142,6 @@ export const shellOpenExternalUrlSchema = trimmedString(MAX_URL_LENGTH).refine(
   isSafeOpenExternalUrl,
   { message: 'Only http, https, and mailto URLs are allowed.' }
 )
-
-export const evidenceDagViewPayloadSchema = z
-  .object({
-    threadId: optionalTrimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema.optional()
-  })
-  .strict()
-
-export const evidenceDagUpdatePayloadSchema = z
-  .object({
-    threadId: trimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema,
-    operation: z.enum(['update', 'rebuild']).optional(),
-    rebuildKind: z.enum(['schema_upgrade', 'corruption_recovery', 'reinterpretation']).optional(),
-    rebuildRationale: optionalTrimmedString(1000)
-  })
-  .strict()
-  .refine((payload) => payload.operation !== 'rebuild' || Boolean(payload.rebuildKind && payload.rebuildRationale), {
-    message: 'rebuildKind and rebuildRationale are required for an explicit rebuild'
-  })
-  .refine((payload) => payload.operation === 'rebuild' || (!payload.rebuildKind && !payload.rebuildRationale), {
-    message: 'rebuild fields are only valid for an explicit rebuild'
-  })
-
-export const evidenceDagPriorityPayloadSchema = z
-  .object({
-    threadId: trimmedString(MAX_ID_LENGTH),
-    runtimeId: agentRuntimeIdSchema,
-    visible: z.boolean()
-  })
-  .strict()
-
-export const evidenceDagEvidencePreviewResolvePayloadSchema = z
-  .object({
-    runtimeId: agentRuntimeIdSchema,
-    threadId: trimmedString(MAX_ID_LENGTH),
-    snapshotDigest: trimmedString(MAX_ID_LENGTH).regex(/^sha256:[0-9a-f]{64}$/i),
-    sourceAssertionId: trimmedString(MAX_ID_LENGTH),
-    artifactVersionId: trimmedString(MAX_ID_LENGTH),
-    sourceAnchorId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
-
-const projectDagViewNameSchema = z.enum(['home', 'goals', 'graph', 'attention'])
-
-export const projectDagViewPayloadSchema = z
-  .object({
-    view: projectDagViewNameSchema.optional(),
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    project: optionalTrimmedString(MAX_ID_LENGTH),
-    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional()
-  })
-  .strict()
-
-const dagAutonomyModeSchema = z.enum(['autonomous', 'checkpointed', 'supervised'])
-
-export const projectDagUpdatePayloadSchema = z
-  .object({
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    project: optionalTrimmedString(MAX_ID_LENGTH),
-    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
-    scope: z.union([
-      z.literal('all'),
-      z.array(trimmedString(MAX_ID_LENGTH)).max(500)
-    ]).optional(),
-    excludedSessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
-    isolatedSessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
-    autonomyMode: dagAutonomyModeSchema.optional()
-  })
-  .strict()
-
-export const projectDagGoalSavePayloadSchema = z
-  .object({
-    title: trimmedString(500),
-    description: optionalTrimmedString(4000),
-    rootGoalId: optionalTrimmedString(MAX_ID_LENGTH),
-    workspaceRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    project: optionalTrimmedString(MAX_ID_LENGTH),
-    sessions: z.array(trimmedString(MAX_ID_LENGTH)).max(500).optional(),
-    autonomyMode: dagAutonomyModeSchema.optional()
-  })
-  .strict()
-
-export const projectDagEvidencePreviewResolvePayloadSchema = z
-  .object({
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH),
-    projectRoot: optionalTrimmedString(MAX_PATH_LENGTH),
-    project: optionalTrimmedString(MAX_ID_LENGTH),
-    snapshotDigest: trimmedString(MAX_ID_LENGTH),
-    claimId: trimmedString(MAX_ID_LENGTH),
-    artifactVersionId: trimmedString(MAX_ID_LENGTH),
-    sourceAnchorId: trimmedString(MAX_ID_LENGTH)
-  })
-  .strict()
 
 export const notificationPayloadSchema = z
   .object({

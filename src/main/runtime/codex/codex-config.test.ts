@@ -310,9 +310,6 @@ describe('codex config launch helpers', () => {
         EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
         SCIMODALITY_ROUTER_PORT: '3898',
         SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token',
-        EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
-        EDAG_LLM_API_KEY: 'outer-edag-key',
-        EDAG_LLM_MODEL: 'outer-edag-model',
         SCIFORGE_RUNTIME_API_KEY: 'stale-runtime-key',
         PATH: '/bin',
         CODEX_USER_HOME: '/old',
@@ -371,9 +368,6 @@ describe('codex config launch helpers', () => {
     expect(launch.env.EXPERT_PROVIDER_API_KEY).toBeUndefined()
     expect(launch.env.SCIMODALITY_ROUTER_PORT).toBeUndefined()
     expect(launch.env.SCIMODALITY_ROUTER_RUNTIME_TOKEN).toBeUndefined()
-    expect(launch.env.EDAG_LLM_BASE_URL).toBeUndefined()
-    expect(launch.env.EDAG_LLM_API_KEY).toBeUndefined()
-    expect(launch.env.EDAG_LLM_MODEL).toBeUndefined()
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.NO_PROXY).toContain('127.0.0.1')

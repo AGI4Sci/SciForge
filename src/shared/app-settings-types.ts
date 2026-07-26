@@ -228,16 +228,6 @@ export type RuntimeGuardSettingsPatchV1 = {
   >>
 }
 
-export type EvidenceDagSettingsV1 = {
-  /**
-   * Evidence DAG is intentionally opt-in because its background extraction,
-   * verification, artifact watching, and retained snapshots can be expensive.
-   */
-  enabled: boolean
-}
-
-export type EvidenceDagSettingsPatchV1 = Partial<EvidenceDagSettingsV1>
-
 export type AgentSubagentSettingsV1 = {
   enabled: boolean
   maxParallel: number
@@ -1421,7 +1411,6 @@ export type AppSettingsV1 = {
   modelAccess?: ModelAccessSettingsV1
   modelRouter?: ModelRouterSettingsV1
   runtimeGuards?: RuntimeGuardSettingsV1
-  evidenceDag?: EvidenceDagSettingsV1
   agentCapabilities?: AgentCapabilitySettingsV1
   imageGeneration?: ImageGenerationSettingsV1
   computerUse?: ComputerUseSettingsV1
@@ -1444,12 +1433,11 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration' | 'evidenceDag'>
+  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
   modelAccess?: ModelAccessSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
   runtimeGuards?: RuntimeGuardSettingsPatchV1
-  evidenceDag?: EvidenceDagSettingsPatchV1
   agentCapabilities?: AgentCapabilitySettingsPatchV1
   imageGeneration?: ImageGenerationSettingsPatchV1
   computerUse?: ComputerUseSettingsPatchV1

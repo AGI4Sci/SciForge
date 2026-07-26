@@ -215,10 +215,7 @@ describe('claude-code config launch helpers', () => {
       EXPERT_PROVIDER_BASE_URL: 'http://127.0.0.1:8001/v1',
       EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
       SCIMODALITY_ROUTER_PORT: '3898',
-      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token',
-      EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
-      EDAG_LLM_API_KEY: 'outer-edag-key',
-      EDAG_LLM_MODEL: 'outer-edag-model'
+      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token'
     }, {
       configDir: '/tmp/claude-config',
       baseUrl: 'http://127.0.0.1:49876/v1',
@@ -261,9 +258,6 @@ describe('claude-code config launch helpers', () => {
     expect(env.EXPERT_PROVIDER_API_KEY).toBeUndefined()
     expect(env.SCIMODALITY_ROUTER_PORT).toBeUndefined()
     expect(env.SCIMODALITY_ROUTER_RUNTIME_TOKEN).toBeUndefined()
-    expect(env.EDAG_LLM_BASE_URL).toBeUndefined()
-    expect(env.EDAG_LLM_API_KEY).toBeUndefined()
-    expect(env.EDAG_LLM_MODEL).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:49876')
     expect(env.ANTHROPIC_API_KEY).toBe('local-runtime-router-key')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('local-runtime-router-key')

@@ -115,7 +115,12 @@ MCP/command lifecycle 构造相同 attempt/receipt，优先 steer，继续同类
 `owned_visual_policy_denied` 失败，并引导 agent 使用 `sciforge_look` 或
 `sciforge_capture`；这条政策由实际 source availability 驱动，不能靠 prompt。
 
-需要原生视觉证据的 turn 由 Host 的同一 receipt ledger 派生
+需要原生视觉证据的 turn 由 Host 的同一 receipt ledger 派生。调用方已知任务计划时通过
+typed `executionIntent` 声明；agent 在读取模板或资源后才发现区域提取要求时，以
+`sciforge_look(intent=locate, capture=region)` 的 typed 调用和 attested region 结果激活同一 ledger，
+随后必须完成关联的区域 capture 和最终 artifact look。两种入口不解析任务文本，也不使用
+metadata 旁路。Host 在动态激活时持久化 publication pending marker，避免刷新或重放暴露未
+验证的候选答案。
 `nativeVisualProofChainPending`，并推送给 runtime。Claude 和 Codex 的前置 hook 对每个受支持
 的工具调用执行同一个 `ExecutionGovernorCore`；shared governor 允许
 `sciforge_look/sciforge_capture`，拒绝非原生图像查看和命令执行。Runtime 不解析任务文本，也
