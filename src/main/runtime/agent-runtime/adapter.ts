@@ -22,6 +22,7 @@ import type {
 
 export type AgentRuntimeAdapterContext = {
   settings: AppSettingsV1
+  turnGovernanceSnapshot?: AgentRuntimeTurnGovernanceSnapshot
 }
 
 export type AgentRuntimeThreadRenameInput = {
@@ -90,6 +91,15 @@ export type AgentRuntimeThreadRelationInput = {
   relation: AgentRuntimeThreadRelation
 }
 
+export type AgentRuntimeTurnGovernanceSnapshot = {
+  ownedVisualToolsAvailable: boolean
+  nativeVisualProofChainPending: boolean
+}
+
+export type AgentRuntimeTurnGovernanceSnapshotInput = AgentRuntimeTurnTargetInput & {
+  snapshot: AgentRuntimeTurnGovernanceSnapshot
+}
+
 export type AgentRuntimeAdapter = {
   id: AgentRuntimeId
   transport: AgentRuntimeTransport
@@ -139,6 +149,10 @@ export type AgentRuntimeAdapter = {
     context: AgentRuntimeAdapterContext,
     event: AgentRuntimeEvent
   ): Promise<AgentRuntimeEvent>
+  updateTurnGovernanceSnapshot?(
+    context: AgentRuntimeAdapterContext,
+    input: AgentRuntimeTurnGovernanceSnapshotInput
+  ): Promise<void>
 
   resolveApproval?(
     context: AgentRuntimeAdapterContext,

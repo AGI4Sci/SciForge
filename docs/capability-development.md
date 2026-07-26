@@ -136,13 +136,16 @@ npm test
 
 不要先标记迁移完成再保留过渡旁路；也不要为旧任务或单个文件格式保留兼容分支。
 
-## Surface Inspection 与文档批注约束
+## Agent 原生视觉与文档批注约束
 
-- 当前界面由 `surface.current` 签发稳定 surface resource；视觉读取统一调用
-  `surface.inspect`。Provider 在执行时原子解析最新 layout，滚动、缩放、渲染和截图发布
-  不能让语义 resource 失效。
-- 工作区图片统一由 `artifact.inspect` 读取。禁止公开 token 协调式 GUI 工具，也禁止在
-  已注册 surface inspector 可用时用 shell 截图或窗口脚本建立旁路。
+- 当前界面由 `surface.current` 签发稳定 surface resource，并发布不透明 visual target
+  reference；视觉理解统一调用 `sciforge_look`。Provider 在执行时原子解析最新 layout，
+  滚动、缩放、渲染和截图发布不能让语义 resource 失效。
+- 精确的整图或区域持久化统一调用 `sciforge_capture`，且只能使用同一 visual snapshot
+  签发的不透明 region reference。工作区图片也通过 `sciforge_look` 读取；最终持久化
+  artifact 必须再次视觉检查，并由输出格式自己的 validator 校验引用。
+- 禁止公开 token、原始坐标或目标路径协调式 GUI 工具。授权且可用的 owned
+  `VisualSource` 能满足请求时，也禁止用 shell 截图或窗口脚本建立旁路。
 - 文档批注的 list/update/resolve/delete 是 Workspace Preview provider 的独立 operations。
   UI 和 agent 进入同一 provider；generic preview edit/action schema 必须排除批注变体。
 - 运行时只读取 workspace root 下唯一 canonical annotation store。旧文件扫描只能存在于
@@ -156,7 +159,8 @@ npm test
 - [ ] action 是否只在 app registry 注册一次且绑定唯一 handler？
 - [ ] UI、agent、system 是否全部走 broker？
 - [ ] agent audience 和 visible operation 是否完全由 registry 派生？
-- [ ] Codex 与 SciForge Runtime 是否复用同一个四元工具 surface 和同一个 main registry？
+- [ ] Codex 与 SciForge Runtime 是否复用四个 broker 元工具、两个原生视觉工具、同一个
+  Agent Visual Runtime 和同一个 main registry？
 - [ ] agent schema 是否没有泄漏 token、revision、coordinates 或 invocation ID？
 - [ ] provider contract suite 是否覆盖 discovery、policy、revision、idempotency、audit、event？
 - [ ] mutation 是否没有 direct IPC、sidecar/file write 或手动 refresh 旁路？

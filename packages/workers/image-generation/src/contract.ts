@@ -18,5 +18,5 @@ export const IMAGE_GENERATION_TOOL_SIDE_EFFECTS = {
   image_generation_segment_components: 'controlled-write',
   image_generation_edit_components: 'controlled-write',
   image_generation_edit_from_visual_review_packet: 'controlled-write',
-  visual_artifact_review: 'read'
+  image_generation_review_candidate: 'read'
 } as const

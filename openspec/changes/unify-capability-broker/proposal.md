@@ -6,9 +6,9 @@ SciForge exposes product capabilities through separate renderer IPC, main-proces
 
 - Add one authoritative capability registry and broker for UI, agent, and system callers.
 - Add schema-validated discovery, resource observation, action invocation, revisions, idempotency, approval metadata, audit events, and change subscriptions.
-- Expose only the stable `sciforge_discover`, `sciforge_observe`, `sciforge_invoke`, and `sciforge_events` agent tools for SciForge-owned capabilities.
+- Expose the stable `sciforge_discover`, `sciforge_observe`, `sciforge_invoke`, and `sciforge_events` tools for product/domain capabilities; Host Core separately owns the universal `sciforge_look` and `sciforge_capture` visual primitives.
 - Keep broker transport fields such as snapshot tokens, target coordinates, semantic revisions, and invocation IDs inside the adapter rather than asking the model to coordinate them.
-- Register surface inspection and document annotations as ordinary provider operations with compact observations and schema references.
+- Publish visible surfaces as generic visual sources for the native visual runtime, while document annotations remain ordinary provider operations with compact observations and schema references.
 - Separate semantic resource revision from layout epoch so rendering, scrolling, and resizing cannot invalidate an agent observation.
 - Add one shared execution governor for all agent runtimes using normalized semantic failure receipts and capability-aware policy denials.
 - Migrate Workspace Preview and Biology Room as the first complete vertical slice so their actions are discoverable and invoke the existing canonical providers.

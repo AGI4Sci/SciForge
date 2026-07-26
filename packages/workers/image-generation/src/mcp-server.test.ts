@@ -15,7 +15,10 @@ describe('image generation MCP', () => {
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)])
     try {
       const tools = await client.listTools()
-      expect(tools.tools.map((tool) => tool.name)).toContain('visual_generate')
+      const toolNames = tools.tools.map((tool) => tool.name)
+      expect(toolNames).toContain('visual_generate')
+      expect(toolNames).toContain('image_generation_review_candidate')
+      expect(toolNames).not.toContain('visual_artifact_review')
 
       const baseArguments = {
         task: 'Create a standards-aligned visual.',
@@ -61,7 +64,7 @@ describe('image generation MCP', () => {
           releaseCeiling: 'draft_ready'
         },
         execution: {
-          stages: expect.arrayContaining([expect.objectContaining({ tool: 'visual_artifact_review' })])
+          stages: expect.arrayContaining([expect.objectContaining({ tool: 'image_generation_review_candidate' })])
         }
       })
     } finally {

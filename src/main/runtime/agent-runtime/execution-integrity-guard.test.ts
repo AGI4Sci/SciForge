@@ -26,6 +26,79 @@ const RUNTIME_IDS: AgentRuntimeId[] = ['sciforge', 'codex', 'claude']
 const ATTESTATION = `sha256:${'b'.repeat(64)}`
 
 describe('RuntimeExecutionIntegrityGuard', () => {
+  it('queries turn validation state from the canonical receipt ledger', () => {
+    const guard = new RuntimeExecutionIntegrityGuard()
+    expect(guard.turnValidationState('codex', 'missing-thread', 'missing-turn')).toEqual({
+      requiresTerminalValidation: false,
+      nativeVisualObligationsPending: false
+    })
+
+    const textOnly = baseInput('codex', 'Explain the figure.')
+    guard.rememberTurn('codex', textOnly, 'text-thread', 'text-turn')
+    expect(guard.turnValidationState('codex', 'text-thread', 'text-turn')).toEqual({
+      requiresTerminalValidation: false,
+      nativeVisualObligationsPending: false
+    })
+
+    const executable = baseInput('codex', 'Write the file.')
+    executable.executionIntent = {
+      mode: 'execute',
+      requirements: [{ effectClass: 'local_write' }]
+    }
+    guard.rememberTurn('codex', executable, 'write-thread', 'write-turn')
+    expect(guard.turnValidationState('codex', 'write-thread', 'write-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: false
+    })
+  })
+
+  it('reports native visual obligations pending until the receipt chain is complete', () => {
+    const input = withVisualExecutionRequirement(
+      baseInput('codex', '截取论文中的方法总览图'),
+      true
+    )
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: true
+    })
+
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-locate', 'look-call')
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'], [REGION_REF])
+    ))
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: true
+    })
+
+    guard.observe('codex', semanticTool(
+      'codex',
+      'final-look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-final', 'final-look-call', ['capture'])
+    ))
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: true,
+      nativeVisualObligationsPending: false
+    })
+
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+    expect(guard.turnValidationState('codex', 'codex-thread', 'codex-turn')).toEqual({
+      requiresTerminalValidation: false,
+      nativeVisualObligationsPending: false
+    })
+  })
+
   it.each(RUNTIME_IDS)('blocks a requested execution with no receipt for %s', (runtimeId) => {
     const guard = rememberedGuard(runtimeId, 'Run the unit tests.', 'command_execution')
     const observation = guard.observe(runtimeId, completed(runtimeId))
@@ -53,6 +126,30 @@ describe('RuntimeExecutionIntegrityGuard', () => {
   it('adds only structured obligations when a user steers an active turn', () => {
     const guard = rememberedGuard('codex', 'Explain the current state.')
     guard.rememberSteer('codex', 'codex-thread', 'codex-turn', [obligation('local_write')])
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      code: 'runtime_execution_incomplete',
+      unsatisfiedObligationIds: ['requested-execution']
+    })
+  })
+
+  it('rolls back only one steer contribution when concurrent steers share an obligation', () => {
+    const guard = rememberedGuard('codex', 'Explain the current state.')
+    const rollbackFirst = guard.rememberSteer(
+      'codex',
+      'codex-thread',
+      'codex-turn',
+      [obligation('local_write')]
+    )
+    guard.rememberSteer(
+      'codex',
+      'codex-thread',
+      'codex-turn',
+      [obligation('local_write')]
+    )
+
+    rollbackFirst()
+    rollbackFirst()
 
     expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
       code: 'runtime_execution_incomplete',

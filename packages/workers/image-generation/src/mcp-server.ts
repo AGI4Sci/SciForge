@@ -9,7 +9,7 @@ import type {
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationSegmentComponentsRequest,
-  VisualArtifactReviewRequest
+  ImageGenerationCandidateReviewRequest
 } from './types'
 import {
   editFrameworkComponentsWithImage2,
@@ -17,7 +17,7 @@ import {
   getImageGenerationStatus,
   planImageGeneration,
   renderImageGeneration,
-  reviewVisualArtifact,
+  reviewImageGenerationCandidate,
   segmentImageGenerationComponents
 } from './image-generation-engine'
 import { planVisualProduction } from './visual-production-planner'
@@ -230,7 +230,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
 
   server.registerTool('visual_generate', {
     title: 'Plan Visual Generation',
-    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through visual_artifact_review.',
+    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through image_generation_review_candidate.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(16000),
@@ -393,7 +393,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
               }
             }
           : {
-              tool: 'visual_artifact_review',
+              tool: 'image_generation_review_candidate',
               arguments: {
                 workspaceRoot: request.workspaceRoot,
                 outputPath: result.outputPath,
@@ -532,9 +532,9 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
     }
   })
 
-  server.registerTool('visual_artifact_review', {
-    title: 'Review Visual Artifact',
-    description: 'Use Model Router vision understanding to semantically review any route-produced visual against its task and truth locks. File existence, dimensions, and non-empty pixels are only supporting checks and cannot pass a visibly broken artifact.',
+  server.registerTool('image_generation_review_candidate', {
+    title: 'Review Generated Image Candidate',
+    description: 'Run manifest-bound semantic QA for a candidate produced by the locked image-generation workflow. This determines candidate repair and release status; it is not a general visual-inspection tool or a native runtime completion receipt.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       outputPath: z.string().trim().min(1).max(4096),
@@ -546,7 +546,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
     annotations: READ_ONLY_ANNOTATIONS
   }, async (input) => {
     try {
-      const request: VisualArtifactReviewRequest = {
+      const request: ImageGenerationCandidateReviewRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         outputPath: input.outputPath,
         manifestPath: input.manifestPath,
@@ -554,10 +554,10 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
         ...(input.minOverall ? { minOverall: input.minOverall } : {})
       }
-      const review = await reviewVisualArtifact(request)
-      return textResult(jsonSummary('Semantic visual artifact review.', review), { review })
+      const review = await reviewImageGenerationCandidate(request)
+      return textResult(jsonSummary('Generated image candidate QA.', review), { review })
     } catch (error) {
-      return errorResult('Failed to review image: ' + (error instanceof Error ? error.message : String(error)))
+      return errorResult('Failed to review generated image candidate: ' + (error instanceof Error ? error.message : String(error)))
     }
   })
 

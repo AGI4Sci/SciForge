@@ -320,7 +320,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
               }
             }
           : {
-              tool: 'visual_artifact_review',
+              tool: 'image_generation_review_candidate',
               arguments: {
                 workspaceRoot: request.workspaceRoot,
                 outputPath: result.outputPath,
@@ -343,7 +343,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
 
   server.registerTool('scientific_plotting_composite', {
     title: 'Composite Hybrid Visual Layers',
-    description: 'Deterministically compose real model-owned and code-owned image files for a locked hybrid visual plan. Model layers are drawn first; code-owned truth layers are always drawn last at full opacity. The output and manifest record hashes for every consumed layer and must be reviewed with visual_artifact_review.',
+    description: 'Deterministically compose real model-owned and code-owned image files for a locked hybrid visual plan. Model layers are drawn first; code-owned truth layers are always drawn last at full opacity. The output and manifest record hashes for every consumed layer and must pass manifest-bound candidate release QA with image_generation_review_candidate.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       visualPlan: controlledPlottingPlanSchema.refine((plan) => plan.route === 'hybrid', {
@@ -392,7 +392,7 @@ export async function runScientificPlottingMcpServerFromArgv(argv: string[]): Pr
       const result = await compositeScientificPlotLayers(request)
       const nextCall = result.ok
         ? {
-            tool: 'visual_artifact_review',
+            tool: 'image_generation_review_candidate',
             arguments: {
               workspaceRoot: request.workspaceRoot,
               outputPath: result.outputPath,

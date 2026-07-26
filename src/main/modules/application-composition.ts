@@ -19,7 +19,7 @@ const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.f
   coreCapabilityEntry({
     packageName: '@sciforge/core-surface',
     moduleId: 'sciforge.surface',
-    displayName: 'Surface Inspection',
+    displayName: 'Surface Context',
     contributionId: 'sciforge.surface.capability-factory',
     priority: 10_000,
     value: SURFACE_CAPABILITY_CONTRIBUTION_FACTORY

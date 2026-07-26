@@ -64,15 +64,15 @@ Each migrated domain switches UI and agent adapters to the broker in one change,
 
 ### 8. Agent transport v2 hides infrastructure coordination
 
-The agent-facing contract contains only the four stable broker meta-tools. `observe` returns a compact resource state, opaque resource reference, operation references, schema references, artifacts, and optional surface target references. Full schemas are fetched only when explicitly requested. `invoke` accepts an operation reference and domain input; its adapter creates invocation IDs and supplies the revision from the observed handle.
+The agent-facing contract contains four stable broker meta-tools for product/domain capabilities plus the two Host Core native visual primitives. `observe` returns a compact resource state, opaque resource reference, operation references, schema references, artifacts, and optional surface target references. Full schemas are fetched only when explicitly requested. `invoke` accepts an operation reference and domain input; its adapter creates invocation IDs and supplies the revision from the observed handle. Native visual calls accept opaque source, target, snapshot, and region references; their adapter owns capture coordinates, authorized persistence paths, and proof issuance.
 
 Codex may call the in-process agent adapter directly. SciForge Runtime reaches the same adapter through a narrow request bridge owned by the main process. The bridge serializes only meta-tool name, arguments, caller scope, and structured result/error; it does not host a second registry, cache domain state, or execute provider logic. Runtime-specific flattened catalogs are not an alternative provider path for migrated capabilities.
 
 Snapshot tokens, component IDs, target coordinates, invocation IDs, and expected revisions are transport implementation details. They MUST NOT be required model inputs or emitted as instructions. This is a breaking replacement of the public `gui_visible_context` and `gui_visual_capture` tools.
 
-### 9. Surface inspection is an ordinary broker read
+### 9. Surface inspection uses the native visual runtime
 
-Visual inspection is registered as `surface.inspect` and resolved by the canonical surface provider. The provider converts a stable surface target reference to the latest layout atomically when the operation executes. Semantic content changes advance the resource revision; scroll, resize, rendering, target movement, and capture publication advance only a layout epoch. A layout change cannot make a semantic handle stale.
+Visible surfaces publish generic sources and opaque targets to Agent Visual Runtime. `sciforge_look` resolves a stable target reference to the latest layout atomically, captures an immutable snapshot, invokes the configured visual router, and returns typed proof. `sciforge_capture` persists only a snapshot or returned region through the authorized artifact store. Semantic content changes advance the resource revision; scroll, resize, rendering, target movement, and capture publication advance only a layout epoch. A layout change cannot make a semantic handle stale.
 
 Alternative considered: refresh a snapshot token before each capture. Rejected because result rendering can itself change layout and invalidate the refreshed token, leaving correctness dependent on timing.
 
@@ -90,7 +90,7 @@ The public `annotation.sidecar.read` action and sidecar path guidance are delete
 
 KUN pre-execution and the Codex adapter call one `ExecutionGovernorCore`. It consumes normalized attempts and receipts containing operation family, resource identity, failure class, stable error code, and evidence/state-change signals. Exact duplicate detection remains useful, but recovery escalates consecutive semantic failures across argument, token, or shell-command variants when they target the same blocked objective.
 
-Family alone is not a failure signal. Successful evidence-producing reads, paginated operations, and trusted `computer_use` screenshots remain valid. When an owned surface-inspection capability exists, shell-based OS screenshot/window automation is denied before execution with a structured recovery directing the runtime back to broker discovery.
+Family alone is not a failure signal. Successful evidence-producing reads, paginated operations, and trusted `computer_use` screenshots remain valid. When an authorized owned visual source can satisfy the request, shell-based OS screenshot/window automation is denied before execution with structured recovery directing the runtime to `sciforge_look` or `sciforge_capture`.
 
 Dynamic MCP errors are normalized before governance. Runtime adapters MUST NOT maintain separate fingerprint or recovery decision engines.
 
@@ -121,7 +121,7 @@ Stable opaque `resourceRef` values can be rebound to a fresh short-lived handle 
 5. Delete migrated direct action paths, false agent metadata, literal hints, ambiguous preview tooling, and sidecar guidance.
 6. Add generated capability reference and architecture-boundary CI tests.
 7. Migrate remaining domains one at a time, deleting each old path during its cutover.
-8. Cut the agent transport to v2, migrate Surface Inspection and PDF annotations, and delete their public legacy tools and dispatchers.
+8. Cut the agent transport to v2, migrate visual inspection to the native visual runtime and PDF annotations to broker operations, then delete their public legacy tools and dispatchers.
 9. Replace runtime-specific failure guards with the shared semantic execution governor.
 
 Rollback is code rollback of the atomic domain change; no runtime compatibility mode is retained.

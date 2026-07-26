@@ -31,6 +31,11 @@ import {
   type CodexThreadEventPayload
 } from './codex-runtime-api'
 import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  requiresExecutionIntegrityValidation
+} from '../agent-runtime/execution-integrity-guard'
 import type { CodexRuntimeService } from './codex-service'
 import {
   normalizeAgentCapabilitySettings,
@@ -94,7 +99,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
       })
     },
 
-    async startTurn(_context, input) {
+    async startTurn(context, input) {
       const result = await service.startTurn({
         threadId: input.threadId,
         text: input.text,
@@ -102,7 +107,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         workspace: input.workspace,
         model: input.model,
         reasoningEffort: input.reasoningEffort,
-        fileReferences: input.fileReferences
+        fileReferences: input.fileReferences,
+        ownedVisualToolsAvailable:
+          context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending:
+          context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
       })
       if (!result.ok) throw codexFailure(result)
       return {
@@ -151,6 +160,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
     async publishSyntheticEvent(_context, event) {
       const stored = await service.publishSyntheticEvent(event)
       return mapCodexStoredEvent(stored)[0] ?? event
+    },
+
+    async updateTurnGovernanceSnapshot(_context, input) {
+      const result = await service.updateTurnGovernanceSnapshot(input)
+      if (!result.ok) throw codexFailure(result)
     },
 
     async compactThread(_context, input) {
@@ -683,6 +697,14 @@ function mapCodexBlock(
         id: block.id,
         kind: 'user_message',
         text: block.displayText?.trim() || block.text,
+        ...(requiresExecutionIntegrityValidation(block.text)
+          ? {
+              meta: {
+                [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]:
+                  EXECUTION_INTEGRITY_POLICY_VERSION
+              }
+            }
+          : {}),
         ...(block.turnId ? { turnId: block.turnId } : {}),
         createdAt: block.createdAt
       }

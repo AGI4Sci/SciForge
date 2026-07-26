@@ -26,11 +26,11 @@ Dynamic MCP and native tool failures SHALL reach governance as structured receip
 - **THEN** the adapter records a failed normalized receipt rather than a successful generic tool result
 
 ### Requirement: Capability-aware policy denial
-SciForge SHALL deny shell-based OS capture and window automation when an owned broker surface-inspection capability can satisfy the objective.
+SciForge SHALL deny shell-based OS capture and window automation when an authorized owned visual source can satisfy the objective through Agent Visual Runtime.
 
 #### Scenario: Agent falls back to a shell screenshot
 - **WHEN** the runtime proposes a shell screenshot or window-enumeration command for an owned SciForge surface
-- **THEN** policy denies execution and returns structured guidance to rediscover and invoke `surface.inspect`
+- **THEN** policy denies execution and returns structured guidance to invoke `sciforge_look` or `sciforge_capture`
 
 #### Scenario: Trusted computer-use flow
 - **WHEN** a trusted computer-use operation captures a permitted external application and returns new evidence

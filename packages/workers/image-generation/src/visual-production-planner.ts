@@ -90,7 +90,7 @@ export type VisualProductionExecutionTool =
   | 'image_generation_prepare'
   | 'image_generation_render'
   | 'image_generation_edit_from_visual_review_packet'
-  | 'visual_artifact_review'
+  | 'image_generation_review_candidate'
 
 export type VisualProductionExecutionStage = {
   id: string
@@ -381,21 +381,21 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
   if (action === 'revision' && route !== 'code') {
     return [
       stage('edit_visual', 'image_generation_edit_from_visual_review_packet', 'Apply normalized review annotations without replacing the source.', ['reviewPacketPath', 'sourceArtifacts', 'handoff'], ['editedArtifact', 'editedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['editedArtifact', 'editedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['editedArtifact', 'editedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   if (route === 'code') {
     return [
       stage('map_data', 'scientific_plotting_map_data', 'Map reproducible files or inline structured data into a controlled code render request.', ['handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest']),
       stage('render_code', 'scientific_plotting_render', 'Render exact elements with the controlled code renderer.', ['controlledRenderRequest', 'handoff'], ['renderedArtifact', 'renderedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   if (route === 'model') {
     return [
       stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer from the locked handoff.', ['task', 'handoff'], ['imageRenderRecipe']),
       stage('render_model', 'image_generation_render', 'Render the model-owned visual layer without changing route or locked elements.', ['imageRenderRecipe', 'handoff'], ['renderedArtifact', 'renderedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   return [
@@ -404,7 +404,7 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
     stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer around controlled artifacts.', ['task', 'truthArtifact', 'truthManifest', 'handoff'], ['imageRenderRecipe']),
     stage('render_visual', 'image_generation_render', 'Render only the model-owned visual layer around controlled artifacts.', ['imageRenderRecipe', 'truthArtifact', 'truthManifest', 'handoff'], ['visualLayerArtifact', 'visualLayerManifest']),
     stage('deterministic_composite', 'scientific_plotting_composite', 'Composite the code-owned truth layer over the model-owned visual layer without redrawing locked elements.', ['truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeArtifact', 'compositeManifest']),
-    stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['compositeArtifact', 'compositeManifest', 'handoff'], ['reviewResult'])
+    stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['compositeArtifact', 'compositeManifest', 'handoff'], ['reviewResult'])
   ]
 }
 

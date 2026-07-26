@@ -229,7 +229,7 @@ describe('CapabilityAgentToolSurface', () => {
 
   it('preserves nested array items and discriminated union variants in compact schemas', async () => {
     const capability = defineCapability({
-      id: 'artifact.inspect-nested',
+      id: 'artifact.review-nested',
       version: '1',
       title: 'Inspect nested artifact input',
       description: 'Verifies compact nested schemas.',
@@ -313,7 +313,7 @@ describe('CapabilityAgentToolSurface', () => {
     const surfaceHandle = handle('surface-revision')
     const documentHandle = handle('document-revision', 'b')
     const open = descriptor('surface.current', 'Open current surface', 'global', 'read')
-    const inspect = descriptor('surface.inspect', 'Inspect surface', 'resource', 'read')
+    const inspect = descriptor('surface.describe', 'Describe surface', 'resource', 'read')
     const mutate = {
       ...descriptor('document.update', 'Update document', 'resource', 'workspace-write'),
       approval: 'confirmation' as const

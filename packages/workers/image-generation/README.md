@@ -8,7 +8,7 @@ the retained context answers every required question before selecting `code`,
 for `research_search`; callers merge the evidence and call the same tool again.
 Reaching a cost, round, token, elapsed-time, or no-progress limit locks a
 draft-only plan instead of bypassing review. Every terminal route ends in
-`visual_artifact_review`. Ready plans and execution stages return a complete
+`image_generation_review_candidate`. Ready plans and execution stages return a complete
 `nextCall`, so runtimes execute the locked handoff rather than reconstructing
 cross-tool arguments.
 
@@ -23,7 +23,7 @@ The first version mirrors the scientific plotting worker pattern:
 
 - plan without file writes
 - render controlled image artifacts
-- review image outputs
+- run manifest-bound candidate and release QA for generated image outputs
 - convert VisualDocument review packets into edit intents
 - write artifact manifests under `.sciforge/artifacts` for VisualDocument staging
 
@@ -35,10 +35,12 @@ The worker does not receive direct provider credentials. Managed launches pass o
 
 New image or multimodal capabilities must not bypass the router layer. The image worker should stay focused on MCP tools, artifact manifests, and VisualDocument handoff unless product ownership is explicitly changed.
 
-`visual_artifact_review` returns `publication_ready` or `draft_ready` only when
-semantic review passes. Repairable failures return `repair_required` with one
+`image_generation_review_candidate` is scoped to manifest-bound outputs from the
+locked generation workflow. It returns `publication_ready` or `draft_ready` only
+when candidate QA passes. Repairable failures return `repair_required` with one
 same-route repair action and a two-attempt ceiling; missing evidence returns
-`needs_context`. None of those failure states satisfy runtime completion.
+`needs_context`. These statuses govern image candidate/release handling only;
+they are not native runtime visual-completion receipts.
 
 `stageForVisualReview` is a handoff marker, not a direct VisualDocument mutation.
 When a render request includes `visualDocumentId` / `threadId`, the worker records
@@ -49,7 +51,7 @@ The unified revision path is: export a VisualDocument review packet, call
 `visual_generate` with `action="revision"`, execute
 `image_generation_edit_from_visual_review_packet` to create one non-destructive
 candidate from the packet's annotations and normalized masks, run
-`visual_artifact_review`, bind its artifact path,
+`image_generation_review_candidate`, bind its artifact path,
 SHA-256 hash, and timestamp to the candidate revision, then wait for explicit
 human acceptance before replacing the source.
 

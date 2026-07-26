@@ -37,8 +37,8 @@ import type {
   ImageGenerationRenderResult,
   ImageGenerationSegmentComponentsRequest,
   ImageGenerationSegmentComponentsResult,
-  VisualArtifactReviewRequest,
-  VisualArtifactReviewResult,
+  ImageGenerationCandidateReviewRequest,
+  ImageGenerationCandidateReviewResult,
   ImageGenerationStatus,
   ImageSize
 } from './types'
@@ -193,7 +193,7 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     task,
     recipe,
     suggestedRenderTool: 'image_generation_render',
-    suggestedReviewTool: 'visual_artifact_review',
+    suggestedReviewTool: 'image_generation_review_candidate',
     visualPlan: request.visualPlan,
     artifactPolicy: request.visualPlan.releaseCeiling === 'draft_ready'
         ? 'Render writes a draft-only PNG plus .sciforge/artifacts/*.generated-image.artifact.json for mandatory VisualDocument review.'
@@ -2329,7 +2329,7 @@ export async function editImageFromVisualReviewPacket(
   }
 }
 
-export async function reviewVisualArtifact(request: VisualArtifactReviewRequest): Promise<VisualArtifactReviewResult> {
+export async function reviewImageGenerationCandidate(request: ImageGenerationCandidateReviewRequest): Promise<ImageGenerationCandidateReviewResult> {
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const outputPath = await resolveWorkspacePath(workspaceRoot, request.outputPath)

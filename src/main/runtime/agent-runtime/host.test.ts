@@ -40,6 +40,11 @@ import {
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
 import { createAgentRuntimeHost } from './host'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  EXECUTION_PUBLICATION_COMMITTED_CODE
+} from './execution-integrity-guard'
 import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
 import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
@@ -979,11 +984,27 @@ describe('AgentRuntimeHost', () => {
       })
       adapter.subscribeEvents = vi.fn(async function* () {
         yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'unverified-answer',
+          text: '已完成并保存了准确裁剪的图片。'
+        } satisfies AgentRuntimeEvent
+        yield {
           kind: 'turn_lifecycle',
           runtimeId,
           threadId,
           turnId,
           state: 'completed'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'late-unverified-answer',
+          text: '这条终态后的成功消息也不应显示。'
         } satisfies AgentRuntimeEvent
       })
       adapter.readThread = vi.fn(async () => ({
@@ -994,8 +1015,23 @@ describe('AgentRuntimeHost', () => {
         latestTurnId: turnId,
         latestTurnStatus: 'completed',
         latestSeq: 1,
-        turns: [{ id: turnId, threadId, status: 'completed' }],
-        items: []
+        turns: [{
+          id: turnId,
+          threadId,
+          status: 'completed',
+          items: [{
+            id: 'unverified-answer',
+            turnId,
+            kind: 'assistant_message',
+            text: '已完成并保存了准确裁剪的图片。'
+          }]
+        }],
+        items: [{
+          id: 'unverified-answer',
+          turnId,
+          kind: 'assistant_message',
+          text: '已完成并保存了准确裁剪的图片。'
+        }]
       } satisfies AgentRuntimeThreadDetail))
       const host = createAgentRuntimeHost({
         settings: async () => settings(runtimeId),
@@ -1006,6 +1042,10 @@ describe('AgentRuntimeHost', () => {
       await host.startTurn({ runtimeId, threadId, text, displayText: text })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+      const replayedEvents: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) {
+        replayedEvents.push(event)
+      }
 
       expect(adapter.startTurn).toHaveBeenCalledWith(
         expect.anything(),
@@ -1020,6 +1060,12 @@ describe('AgentRuntimeHost', () => {
         state: 'failed',
         message: expect.stringContaining('verified visual inspection did not execute')
       }))
+      expect(events.some((event) => event.kind === 'assistant_delta')).toBe(false)
+      expect(replayedEvents.some((event) => event.kind === 'assistant_delta')).toBe(false)
+      expect(replayedEvents).toContainEqual(expect.objectContaining({
+        kind: 'turn_lifecycle',
+        state: 'failed'
+      }))
       expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
@@ -1031,10 +1077,203 @@ describe('AgentRuntimeHost', () => {
       )
       await expect(host.readThread({ runtimeId, threadId })).resolves.toMatchObject({
         latestTurnStatus: 'failed',
-        turns: [{ id: turnId, status: 'failed' }]
+        turns: [{ id: turnId, status: 'failed', items: [] }],
+        items: []
       })
     }
   )
+
+  it('filters persisted rejected and terminal-late assistant answers when a thread is refreshed', async () => {
+    const threadId = 'codex-thread'
+    const rejectedTurnId = 'turn-rejected'
+    const lateTurnId = 'turn-late'
+    const rejectedAnswer = {
+      id: 'rejected-answer',
+      turnId: rejectedTurnId,
+      kind: 'assistant_message' as const,
+      text: 'Unverified answer'
+    }
+    const violation = {
+      id: 'visual-violation',
+      turnId: rejectedTurnId,
+      kind: 'system' as const,
+      text: 'Visual execution missing',
+      meta: { code: 'runtime_visual_execution_missing' }
+    }
+    const lateAnswer = {
+      id: 'late-answer',
+      turnId: lateTurnId,
+      kind: 'assistant_message' as const,
+      text: 'Published after terminal',
+      createdAt: '2026-07-13T00:00:02.000Z'
+    }
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:02.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:02.000Z',
+      latestSeq: 4,
+      latestTurnId: lateTurnId,
+      latestTurnStatus: 'completed',
+      turns: [
+        {
+          id: rejectedTurnId,
+          threadId,
+          status: 'completed',
+          items: [rejectedAnswer, violation]
+        },
+        {
+          id: lateTurnId,
+          threadId,
+          status: 'completed',
+          completedAt: '2026-07-13T00:00:01.000Z',
+          items: [lateAnswer]
+        }
+      ],
+      items: [rejectedAnswer, violation, lateAnswer]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      turns: [
+        { id: rejectedTurnId, status: 'failed', items: [violation] },
+        { id: lateTurnId, status: 'completed', items: [] }
+      ],
+      items: [violation]
+    })
+  })
+
+  it('fails closed on a raw completed snapshot until its durable publication commit exists', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-validated'
+    const user = {
+      id: 'user',
+      turnId,
+      kind: 'user_message' as const,
+      text: 'Inspect the figure',
+      meta: {
+        [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+      },
+      createdAt: '2026-07-13T00:00:00.000Z'
+    }
+    const answer = {
+      id: 'answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Verified answer',
+      createdAt: '2026-07-13T00:00:01.000Z'
+    }
+    const commit = {
+      id: 'publication-commit',
+      turnId,
+      kind: 'system' as const,
+      text: 'Publication committed',
+      meta: { code: EXECUTION_PUBLICATION_COMMITTED_CODE },
+      createdAt: '2026-07-13T00:00:02.000Z'
+    }
+    const lateAnswer = {
+      id: 'late-answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Late answer',
+      createdAt: '2026-07-13T00:00:03.000Z'
+    }
+    let committed = false
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:03.000Z'
+    })
+    adapter.readThread = vi.fn(async () => {
+      const items = committed
+        ? [user, answer, commit, lateAnswer]
+        : [user, answer]
+      return {
+        id: threadId,
+        runtimeId: 'codex',
+        title: 'Codex',
+        updatedAt: '2026-07-13T00:00:03.000Z',
+        latestSeq: items.length,
+        latestTurnId: turnId,
+        latestTurnStatus: 'completed',
+        turns: [{ id: turnId, threadId, status: 'completed', items }],
+        items
+      } satisfies AgentRuntimeThreadDetail
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'failed',
+      turns: [{ id: turnId, status: 'failed', items: [user] }],
+      items: [user]
+    })
+
+    committed = true
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'completed',
+      turns: [{ id: turnId, status: 'completed', items: [user, answer] }],
+      items: [user, answer]
+    })
+  })
+
+  it('hides an adapter-persisted assistant candidate while its turn is still active', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-running'
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      latestSeq: 1,
+      latestTurnId: turnId,
+      latestTurnStatus: 'running',
+      turns: [{
+        id: turnId,
+        threadId,
+        status: 'running',
+        items: [{
+          id: 'candidate',
+          turnId,
+          kind: 'assistant_message',
+          text: 'Not committed yet'
+        }]
+      }],
+      items: [{
+        id: 'candidate',
+        turnId,
+        kind: 'assistant_message',
+        text: 'Not committed yet'
+      }]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      turns: [{ id: turnId, status: 'running', items: [] }],
+      items: []
+    })
+  })
 
   it.each(['sciforge', 'codex', 'claude'] as const)(
     'enforces executor receipts before explicit %s execution can complete',
@@ -1078,6 +1317,189 @@ describe('AgentRuntimeHost', () => {
         expect.anything(),
         expect.objectContaining({ code: 'runtime_execution_incomplete', threadId, turnId })
       )
+    }
+  )
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'publishes the verified %s visual answer only after the native receipt chain',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-visual-success-thread`
+      const turnId = `${runtimeId}-visual-success-turn`
+      const snapshotRef = 'snapshot_aaaaaaaaaaaaaaaaaaaa'
+      const finalSnapshotRef = 'snapshot_bbbbbbbbbbbbbbbbbbbb'
+      const regionRef = 'region_aaaaaaaaaaaaaaaaaaaa'
+      const artifactRef = 'artifact_aaaaaaaaaaaaaaaaaaaa'
+      const locateProofRef = 'visual_proof_aaaaaaaaaaaaaaaaaaaa'
+      const captureProofRef = 'visual_proof_bbbbbbbbbbbbbbbbbbbb'
+      const finalProofRef = 'visual_proof_cccccccccccccccccccc'
+      const createdAt = '2026-07-13T00:00:00.000Z'
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: createdAt
+      })
+      adapter.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+      vi.mocked(adapter.startTurn).mockResolvedValue({ threadId, turnId })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'look-locate',
+          seq: 1,
+          callId: 'look-locate',
+          toolName: 'sciforge_look',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['read'],
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: locateProofRef,
+            kind: 'visual.look',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'look-locate',
+            subjectRef: snapshotRef,
+            relatedRefs: [snapshotRef, regionRef],
+            attestation: `sha256:${'a'.repeat(64)}`,
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'capture-region',
+          seq: 2,
+          callId: 'capture-region',
+          toolName: 'sciforge_capture',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['local_write'],
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: captureProofRef,
+            kind: 'visual.capture',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'capture-region',
+            subjectRef: artifactRef,
+            relatedRefs: [artifactRef, regionRef],
+            parentReceiptIds: [locateProofRef],
+            sha256: 'b'.repeat(64),
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'look-final',
+          seq: 3,
+          callId: 'look-final',
+          toolName: 'sciforge_look',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['read'],
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: finalProofRef,
+            kind: 'visual.look',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'look-final',
+            subjectRef: artifactRef,
+            relatedRefs: [finalSnapshotRef],
+            parentReceiptIds: [captureProofRef],
+            attestation: `sha256:${'c'.repeat(64)}`,
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'verified-answer',
+          seq: 4,
+          text: '已准确裁剪并复核方法总览图。'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'usage',
+          runtimeId,
+          threadId,
+          turnId,
+          seq: 5,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 6,
+            totalTokens: 16
+          }
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId,
+          threadId,
+          turnId,
+          seq: 6,
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+      const text = '准确截取论文中的方法总览图。'
+
+      await host.startTurn({ runtimeId, threadId, text, displayText: text })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+
+      expect(events.map((event) => event.kind)).toEqual([
+        'tool_event',
+        'tool_event',
+        'tool_event',
+        'usage',
+        'assistant_delta',
+        'turn_lifecycle'
+      ])
+      expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 5, undefined, 6])
+      expect(events.filter((event) => (
+        event.kind === 'assistant_delta' && event.itemId === 'verified-answer'
+      ))).toHaveLength(1)
+      expect(adapter.updateTurnGovernanceSnapshot).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          runtimeId,
+          threadId,
+          turnId,
+          snapshot: expect.objectContaining({
+            nativeVisualProofChainPending: true
+          })
+        })
+      )
+      expect(adapter.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            nativeVisualProofChainPending: false
+          })
+        })
+      )
+      expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'completed' })
     }
   )
 
@@ -1148,7 +1570,16 @@ describe('AgentRuntimeHost', () => {
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
       expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'completed' })
-      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalled()
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          kind: 'error',
+          code: EXECUTION_PUBLICATION_COMMITTED_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
     }
   )
 
@@ -4217,6 +4648,61 @@ describe('AgentRuntimeHost', () => {
     expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('surface.inspect')
   })
 
+  it('denies command execution while the native visual proof chain is pending', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      yield commandToolEvent('python3 render_visual.py', 1)
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: {
+            enabled: true,
+            windowSize: 8,
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
+          }
+        }
+      }),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '准确截取页面中的目标图像。'
+    })
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(codex.interruptTurn).toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied',
+        detail: expect.stringContaining('sciforge_look')
+      })
+    )
+  })
+
   it('does not deny OS GUI automation when native visual tools are unavailable', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
@@ -4330,6 +4816,209 @@ describe('AgentRuntimeHost', () => {
         text: 'second'
       }
     )
+  })
+
+  it('publishes a pending native visual snapshot before steering a visual request into an active turn', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.capabilities).mockResolvedValue({
+      ...capabilities('codex'),
+      controls: {
+        ...capabilities('codex').controls,
+        steer: true
+      }
+    })
+    let runtimeStatus: 'idle' | 'running' = 'idle'
+    vi.mocked(codex.readThread).mockImplementation(async () => ({
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z',
+      latestSeq: 0,
+      latestTurnId: runtimeStatus === 'running' ? 'turn-1' : undefined,
+      latestTurnStatus: runtimeStatus,
+      turns: runtimeStatus === 'running'
+        ? [{ id: 'turn-1', threadId: 'codex-thread', status: 'running' }]
+        : []
+    }))
+    vi.mocked(codex.startTurn).mockResolvedValueOnce({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+    runtimeStatus = 'running'
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '裁剪当前文档中的目标区域'
+    })
+
+    expect(codex.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        snapshot: {
+          ownedVisualToolsAvailable: true,
+          nativeVisualProofChainPending: true
+        }
+      })
+    )
+    const snapshotOrder = vi.mocked(codex.updateTurnGovernanceSnapshot)
+      .mock.invocationCallOrder.at(-1) ?? 0
+    const steerOrder = vi.mocked(codex.steerTurn).mock.invocationCallOrder.at(-1) ?? 0
+    expect(snapshotOrder).toBeLessThan(steerOrder)
+  })
+
+  it('dispatches the canonical native visual snapshot with the first adapter start call', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    let dispatchedContext: AgentRuntimeAdapterContext | undefined
+    codex.startTurn = vi.fn(async (context, input) => {
+      dispatchedContext = context
+      return { threadId: input.threadId, turnId: 'turn-1' }
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '裁剪当前文档中的目标区域'
+    })
+
+    expect(dispatchedContext?.turnGovernanceSnapshot).toEqual({
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })
+  })
+
+  it('routes direct visual steer through the same execution requirement and snapshot path', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    codex.startTurn = vi.fn(async (_context, input) => ({
+      threadId: input.threadId,
+      turnId: 'turn-1'
+    }))
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+
+    await host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      text: '裁剪当前文档中的目标区域'
+    })
+
+    expect(codex.steerTurn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        text: expect.stringContaining('Runtime-enforced visual completion gate')
+      })
+    )
+    expect(codex.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        snapshot: {
+          ownedVisualToolsAvailable: true,
+          nativeVisualProofChainPending: true
+        }
+      })
+    )
+  })
+
+  it('rolls back visual obligations and their snapshot when direct steer delivery fails', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    codex.startTurn = vi.fn(async (_context, input) => ({
+      threadId: input.threadId,
+      turnId: 'turn-1'
+    }))
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    codex.steerTurn = vi.fn(async () => {
+      throw new Error('steer rejected')
+    })
+    codex.subscribeEvents = vi.fn(async function* () {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+
+    await expect(host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      text: '裁剪当前文档中的目标区域'
+    })).rejects.toThrow('steer rejected')
+
+    const snapshots = vi.mocked(codex.updateTurnGovernanceSnapshot).mock.calls
+      .map((call) => call[1].snapshot.nativeVisualProofChainPending)
+    expect(snapshots).toEqual([false, true, false])
+    const events: AgentRuntimeEvent[] = []
+    for await (const event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread'
+    })) {
+      events.push(event)
+    }
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'turn_lifecycle',
+      state: 'completed'
+    }))
   })
 
   it('starts a new turn when latestTurnId is terminal despite older stale running turns', async () => {
@@ -5170,7 +5859,10 @@ describe('createCodexAgentRuntimeAdapter', () => {
       displayText: 'Run it',
       model: 'gpt-5',
       reasoningEffort: 'high',
-      workspace: undefined
+      workspace: undefined,
+      fileReferences: undefined,
+      ownedVisualToolsAvailable: false,
+      nativeVisualProofChainPending: false
     })
     expect(service.resolveApproval).toHaveBeenCalledWith({
       requestId: 'server-request-1',

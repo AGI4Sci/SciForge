@@ -68,8 +68,11 @@ import {
   withVisualExecutionRequirement
 } from './visual-execution-guard'
 import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  EXECUTION_PUBLICATION_COMMITTED_CODE,
   RuntimeExecutionIntegrityGuard,
-  executionObligationsFromIntent,
+  requiresExecutionIntegrityValidation,
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
 import {
@@ -361,17 +364,31 @@ export class AgentRuntimeHost {
   async steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void> {
     await this.withUserDirectiveDelivery(input, async (clientDirectiveId) => {
       const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
-      const steerInput = await this.withDirectiveContinuity(adapter.id, {
+      const guardedInput = this.withSteerExecutionRequirements({
         ...input,
         ...(clientDirectiveId ? { clientDirectiveId } : {})
       })
-      this.executionIntegrity.rememberSteer(
+      const steerInput = await this.withDirectiveContinuity(adapter.id, {
+        runtimeId: guardedInput.runtimeId,
+        threadId: guardedInput.threadId,
+        turnId: input.turnId,
+        text: guardedInput.text,
+        ...(guardedInput.clientDirectiveId
+          ? { clientDirectiveId: guardedInput.clientDirectiveId }
+          : {}),
+        ...(guardedInput.executionIntent
+          ? { executionIntent: guardedInput.executionIntent }
+          : {})
+      })
+      await this.deliverGovernedSteer(
         adapter.id,
+        adapter,
+        context,
         input.threadId,
         input.turnId,
-        executionObligationsFromIntent(input.executionIntent)
+        guardedInput,
+        steerInput
       )
-      await adapter.steerTurn(context, steerInput)
       return { value: undefined, turnId: input.turnId }
     }, () => undefined)
   }
@@ -451,9 +468,67 @@ export class AgentRuntimeHost {
     const guardSettings = runtimeGuardSettings(context)
     const approvalSubscription = this.subscribeCapabilityApprovalEvents(input.runtimeId, input.threadId, input.signal)
     const source = mergeRuntimeEventStreams(adapter.subscribeEvents(context, input), approvalSubscription)
+    const candidateAssistantEvents = new Map<string, AgentRuntimeEvent[]>()
+    const terminalTurns = new Set<string>()
+    const recordVisibleEvent = async (event: AgentRuntimeEvent): Promise<void> => {
+      this.options.services?.contextState?.observeEvent(event)
+      await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
+      this.observeThreadTurnLifecycle(adapter.id, event)
+      this.createPostTurnCheckpoint(adapter.id, event)
+      this.enqueueEvidenceDagForCompletedTurn(adapter, context, event)
+    }
+    const governEvent = (
+      event: AgentRuntimeEvent,
+      nativeVisualProofChainPending: boolean
+    ): void => {
+      this.governance.observe(event, capabilities, guardSettings, {
+        governanceProfile: this.governanceProfileForEvent(capabilities.runtimeId, event),
+        ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
+        nativeVisualProofChainPending,
+        steerTurn: (payload) => this.steerControlTurn(payload),
+        interruptTurn: (payload) => this.interruptTurn(payload),
+        publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
+      })
+    }
     for await (const sourceEvent of source) {
+      if (isExecutionPublicationCommitEvent(sourceEvent)) continue
+      const turnId = sourceEvent.turnId?.trim() ?? ''
+      const publicationKey = turnId
+        ? turnGovernanceKey(adapter.id, sourceEvent.threadId, turnId)
+        : ''
+      const validationBeforeEvent = this.executionIntegrity.turnValidationState(
+        adapter.id,
+        sourceEvent.threadId,
+        turnId
+      )
+      const rejectedTurn = Boolean(
+        turnId &&
+        this.executionIntegrity.rejectedTurnIds(adapter.id, sourceEvent.threadId).includes(turnId)
+      )
+      if (
+        isAssistantPublicationEvent(sourceEvent) &&
+        (rejectedTurn || (publicationKey && terminalTurns.has(publicationKey)))
+      ) {
+        continue
+      }
       const integrityObservation = this.executionIntegrity.observe(adapter.id, sourceEvent)
       const event = integrityObservation.event
+      if (turnId) {
+        await this.updateTurnGovernanceSnapshot(
+          adapter,
+          context,
+          event.threadId,
+          turnId
+        ).catch(async (error) => {
+          await adapter.interruptTurn(context, {
+            runtimeId: adapter.id,
+            threadId: event.threadId,
+            turnId,
+            discard: false
+          }).catch(() => undefined)
+          throw error
+        })
+      }
       if (integrityObservation.violation) {
         await this.publishSyntheticEvent(adapter, context, {
           kind: 'error',
@@ -468,18 +543,54 @@ export class AgentRuntimeHost {
           detail: integrityObservation.violation.detail
         }).catch(() => null)
       }
-      this.options.services?.contextState?.observeEvent(event)
-      await this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
-      this.observeThreadTurnLifecycle(adapter.id, event)
-      this.createPostTurnCheckpoint(adapter.id, event)
-      this.governance.observe(event, capabilities, guardSettings, {
-        governanceProfile: this.governanceProfileForEvent(capabilities.runtimeId, event),
-        ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
-        steerTurn: (payload) => this.steerControlTurn(payload),
-        interruptTurn: (payload) => this.interruptTurn(payload),
-        publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
-      })
-      this.enqueueEvidenceDagForCompletedTurn(adapter, context, event)
+      const validationAfterEvent = this.executionIntegrity.turnValidationState(
+        adapter.id,
+        event.threadId,
+        event.turnId?.trim() ?? ''
+      )
+      governEvent(event, validationAfterEvent.nativeVisualObligationsPending)
+      const shouldDeferAssistant = Boolean(
+        publicationKey &&
+        validationBeforeEvent.requiresTerminalValidation &&
+        isAssistantPublicationEvent(event)
+      )
+      if (shouldDeferAssistant && publicationKey) {
+        const candidates = candidateAssistantEvents.get(publicationKey) ?? []
+        candidates.push(event)
+        candidateAssistantEvents.set(publicationKey, candidates)
+        continue
+      }
+      if (publicationKey && isTerminalTurnEvent(event)) {
+        terminalTurns.add(publicationKey)
+        const candidates = candidateAssistantEvents.get(publicationKey) ?? []
+        candidateAssistantEvents.delete(publicationKey)
+        if (isSuccessfulTurnEvent(event) && !integrityObservation.violation) {
+          if (validationBeforeEvent.requiresTerminalValidation) {
+            const committed = await this.publishSyntheticEvent(adapter, context, {
+              kind: 'error',
+              runtimeId: adapter.id,
+              threadId: event.threadId,
+              turnId: event.turnId,
+              itemId: `runtime-execution-publication-${event.turnId || event.threadId}`,
+              recoverable: true,
+              severity: 'info',
+              code: EXECUTION_PUBLICATION_COMMITTED_CODE,
+              message: 'Execution-integrity publication committed.'
+            })
+            if (!committed) {
+              throw new Error(
+                'The runtime cannot persist the execution-integrity publication commit.'
+              )
+            }
+          }
+          for (const candidate of candidates) {
+            const committedCandidate = committedAssistantEvent(candidate)
+            await recordVisibleEvent(committedCandidate)
+            yield committedCandidate
+          }
+        }
+      }
+      await recordVisibleEvent(event)
       yield event
     }
   }
@@ -1566,8 +1677,20 @@ export class AgentRuntimeHost {
         turnId: item.turnId ?? turn.id
       })))
     ]
+    const terminalValidationTurnIds = new Set(items
+      .filter((item) => item.kind === 'user_message' && (
+        recordPayload(item.meta)[EXECUTION_INTEGRITY_POLICY_METADATA_KEY] ===
+          EXECUTION_INTEGRITY_POLICY_VERSION ||
+        requiresExecutionIntegrityValidation(item.text)
+      ))
+      .map((item) => item.turnId)
+      .filter((turnId): turnId is string => Boolean(turnId)))
+    const publicationCommittedAtByTurn = new Map<string, string | undefined>()
     for (const item of items) {
       const code = recordPayload(item.meta).code
+      if (item.turnId && code === EXECUTION_PUBLICATION_COMMITTED_CODE) {
+        publicationCommittedAtByTurn.set(item.turnId, item.createdAt)
+      }
       if (item.turnId && (
         code === 'runtime_visual_execution_missing' ||
         code === 'runtime_execution_incomplete' ||
@@ -1576,14 +1699,90 @@ export class AgentRuntimeHost {
         rejectedTurnIds.add(item.turnId)
       }
     }
-    if (rejectedTurnIds.size === 0) return thread
+    const turnsById = new Map((detail.turns ?? []).map((turn) => [turn.id, turn]))
+    for (const turnId of terminalValidationTurnIds) {
+      const turn = turnsById.get(turnId)
+      if (
+        !publicationCommittedAtByTurn.has(turnId) &&
+        isAgentRuntimeTerminalTurnState(turn?.status)
+      ) {
+        rejectedTurnIds.add(turnId)
+      }
+    }
+    const hiddenAssistantTurnIds = new Set(rejectedTurnIds)
+    for (const turnId of terminalValidationTurnIds) {
+      if (!publicationCommittedAtByTurn.has(turnId)) hiddenAssistantTurnIds.add(turnId)
+    }
+    for (const turn of detail.turns ?? []) {
+      const state = normalizeAgentRuntimeTurnState(turn.status)
+      if (state && isAgentRuntimeActiveTurnState(state)) {
+        hiddenAssistantTurnIds.add(turn.id)
+      }
+    }
+    const rejectedAssistantItemIds = new Set(items
+      .filter((item) => (
+        item.kind === 'assistant_message' &&
+        Boolean(item.turnId && hiddenAssistantTurnIds.has(item.turnId))
+      ))
+      .map((item) => item.id))
+    const isHiddenAssistant = (item: AgentRuntimeItem, fallbackTurnId?: string): boolean => {
+      if (item.kind !== 'assistant_message') return false
+      const turnId = item.turnId ?? fallbackTurnId
+      if (!turnId) return false
+      if (hiddenAssistantTurnIds.has(turnId) || rejectedAssistantItemIds.has(item.id)) return true
+      if (terminalValidationTurnIds.has(turnId)) {
+        const committedAtValue = publicationCommittedAtByTurn.get(turnId)
+        if (!committedAtValue || !item.createdAt) return true
+        const committedAt = Date.parse(committedAtValue)
+        const createdAt = Date.parse(item.createdAt)
+        if (!Number.isFinite(committedAt) || !Number.isFinite(createdAt) || createdAt > committedAt) {
+          return true
+        }
+      }
+      const turn = turnsById.get(turnId)
+      if (!turn?.completedAt || !item.createdAt) return false
+      const completedAt = Date.parse(turn.completedAt)
+      const createdAt = Date.parse(item.createdAt)
+      return Number.isFinite(completedAt) &&
+        Number.isFinite(createdAt) &&
+        createdAt > completedAt
+    }
     const turns = detail.turns?.map((turn) => rejectedTurnIds.has(turn.id)
-      ? { ...turn, status: 'failed' as const }
-      : turn)
+      ? {
+          ...turn,
+          status: 'failed' as const,
+          ...(turn.items
+            ? {
+                items: turn.items.filter((item) => (
+                  !isExecutionPublicationCommitItem(item) &&
+                  !isHiddenAssistant(item, turn.id)
+                ))
+              }
+            : {})
+        }
+      : {
+          ...turn,
+          ...(turn.items
+            ? {
+                items: turn.items.filter((item) => (
+                  !isExecutionPublicationCommitItem(item) &&
+                  !isHiddenAssistant(item, turn.id)
+                ))
+              }
+            : {})
+        })
     const latestTurnId = thread.latestTurnId || turns?.at(-1)?.id
     return {
       ...thread,
       ...(turns ? { turns } : {}),
+      ...(detail.items
+        ? {
+            items: detail.items.filter((item) => (
+              !isExecutionPublicationCommitItem(item) &&
+              !isHiddenAssistant(item)
+            ))
+          }
+        : {}),
       ...(latestTurnId && rejectedTurnIds.has(latestTurnId)
         ? { latestTurnStatus: 'failed' }
         : {})
@@ -1647,7 +1846,15 @@ export class AgentRuntimeHost {
     context: AgentRuntimeAdapterContext,
     input: AgentRuntimeTurnStartInput
   ): Promise<AgentRuntimeTurnHandle> {
-    const handle = await adapter.startTurn(context, input)
+    const startValidation = this.executionIntegrity.turnStartValidationState(input)
+    const dispatchContext: AgentRuntimeAdapterContext = {
+      ...context,
+      turnGovernanceSnapshot: {
+        ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
+        nativeVisualProofChainPending: startValidation.nativeVisualObligationsPending
+      }
+    }
+    const handle = await adapter.startTurn(dispatchContext, input)
     this.rememberTurnGovernanceProfile(adapter.id, input, handle)
     this.executionIntegrity.rememberTurn(
       adapter.id,
@@ -1655,8 +1862,48 @@ export class AgentRuntimeHost {
       handle.threadId || input.threadId,
       handle.turnId
     )
+    await this.updateTurnGovernanceSnapshot(
+      adapter,
+      context,
+      handle.threadId || input.threadId,
+      handle.turnId
+    ).catch(async (error) => {
+      await adapter.interruptTurn(context, {
+        runtimeId: adapter.id,
+        threadId: handle.threadId || input.threadId,
+        turnId: handle.turnId,
+        discard: false
+      }).catch(() => undefined)
+      throw error
+    })
     this.rememberActiveThreadTurn(adapter.id, input, handle, 'running')
     return handle
+  }
+
+  private async updateTurnGovernanceSnapshot(
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    threadId: string,
+    turnId: string
+  ): Promise<void> {
+    if (!adapter.updateTurnGovernanceSnapshot) return
+    const normalizedThreadId = threadId.trim()
+    const normalizedTurnId = turnId.trim()
+    if (!normalizedThreadId || !normalizedTurnId) return
+    const validation = this.executionIntegrity.turnValidationState(
+      adapter.id,
+      normalizedThreadId,
+      normalizedTurnId
+    )
+    await adapter.updateTurnGovernanceSnapshot(context, {
+      runtimeId: adapter.id,
+      threadId: normalizedThreadId,
+      turnId: normalizedTurnId,
+      snapshot: {
+        ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
+        nativeVisualProofChainPending: validation.nativeVisualObligationsPending
+      }
+    })
   }
 
   private rememberActiveThreadTurn(
@@ -1997,20 +2244,22 @@ export class AgentRuntimeHost {
       return null
     }
     if (capabilities.controls.steer !== true) return null
-    this.executionIntegrity.rememberSteer(
+    await this.deliverGovernedSteer(
       adapter.id,
+      adapter,
+      context,
       threadId,
       activity.turnId,
-      executionObligationsFromIntent(input.executionIntent)
+      input,
+      {
+        runtimeId: adapter.id,
+        threadId,
+        turnId: activity.turnId,
+        text: input.text,
+        ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
+        ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
+      }
     )
-    await adapter.steerTurn(context, {
-      runtimeId: adapter.id,
-      threadId,
-      turnId: activity.turnId,
-      text: input.text,
-      ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
-      ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
-    })
     await this.publishSyntheticEvent(adapter, context, {
       kind: 'runtime_status',
       runtimeId: adapter.id,
@@ -2024,6 +2273,58 @@ export class AgentRuntimeHost {
       }
     }).catch(() => null)
     return { threadId, turnId: activity.turnId }
+  }
+
+  private withSteerExecutionRequirements(
+    input: AgentRuntimeTurnSteerInput
+  ): AgentRuntimeTurnStartInput {
+    const visualRequired = requiresVerifiedVisualInspection(input.text)
+    return withExecutionIntegrityRequirement(withVisualExecutionRequirement({
+      runtimeId: input.runtimeId,
+      threadId: input.threadId,
+      text: input.text,
+      displayText: input.text,
+      ...(input.clientDirectiveId ? { clientDirectiveId: input.clientDirectiveId } : {}),
+      ...(input.executionIntent ? { executionIntent: input.executionIntent } : {})
+    }, visualRequired))
+  }
+
+  private async deliverGovernedSteer(
+    runtimeId: AgentRuntimeId,
+    adapter: AgentRuntimeAdapter,
+    context: AgentRuntimeAdapterContext,
+    threadId: string,
+    turnId: string,
+    integrityInput: AgentRuntimeTurnStartInput,
+    steerInput: AgentRuntimeTurnSteerInput
+  ): Promise<void> {
+    const rollback = this.executionIntegrity.rememberSteerInput(
+      runtimeId,
+      threadId,
+      turnId,
+      integrityInput
+    )
+    try {
+      await this.updateTurnGovernanceSnapshot(adapter, context, threadId, turnId)
+      await adapter.steerTurn(context, steerInput)
+    } catch (error) {
+      rollback()
+      try {
+        await this.updateTurnGovernanceSnapshot(adapter, context, threadId, turnId)
+      } catch (rollbackError) {
+        await adapter.interruptTurn(context, {
+          runtimeId,
+          threadId,
+          turnId,
+          discard: false
+        }).catch(() => undefined)
+        throw new AggregateError(
+          [error, rollbackError],
+          'Failed to deliver a governed steer and restore its prior governance snapshot.'
+        )
+      }
+      throw error
+    }
   }
 
   private async recordNoopCompaction(
@@ -3342,6 +3643,35 @@ function escapeXmlText(value: string): string {
 
 function threadTurnKey(runtimeId: AgentRuntimeId, threadId: string): string {
   return `${runtimeId}:${threadId.trim()}`
+}
+
+function isAssistantPublicationEvent(event: AgentRuntimeEvent): boolean {
+  return event.kind === 'assistant_delta' ||
+    (event.kind === 'item_snapshot' && event.item.kind === 'assistant_message')
+}
+
+function isExecutionPublicationCommitEvent(event: AgentRuntimeEvent): boolean {
+  return event.kind === 'error' && event.code === EXECUTION_PUBLICATION_COMMITTED_CODE
+}
+
+function isExecutionPublicationCommitItem(item: AgentRuntimeItem): boolean {
+  return recordPayload(item.meta).code === EXECUTION_PUBLICATION_COMMITTED_CODE
+}
+
+function committedAssistantEvent(event: AgentRuntimeEvent): AgentRuntimeEvent {
+  const { seq: _sourceSeq, ...committed } = event
+  return committed as AgentRuntimeEvent
+}
+
+function isTerminalTurnEvent(
+  event: AgentRuntimeEvent
+): event is Extract<AgentRuntimeEvent, { kind: 'turn_lifecycle' }> {
+  return event.kind === 'turn_lifecycle' && isAgentRuntimeTerminalTurnState(event.state)
+}
+
+function isSuccessfulTurnEvent(event: AgentRuntimeEvent): boolean {
+  return event.kind === 'turn_lifecycle' &&
+    (event.state === 'completed' || event.state === 'success')
 }
 
 function capabilityApprovalRecordKey(record: CapabilityApprovalRecord): string {

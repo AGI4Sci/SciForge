@@ -1,4 +1,6 @@
 import { constants as fsConstants } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
 import {
   access,
   chmod,
@@ -12,7 +14,7 @@ import {
   writeFile
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const TEMPORARY_DIRECTORY_PREFIX = 'sciforge-electron-domain-smoke-'
@@ -47,6 +49,7 @@ export async function createSourceSmokeConfiguration(repositoryRoot) {
   const root = resolve(repositoryRoot)
   for (const path of [
     join(root, 'out/main/index.js'),
+    join(root, 'out/main/codex-pre-tool-use-governance-node-entry.js'),
     join(root, 'out/preload/index.cjs'),
     join(root, 'out/renderer/index.html')
   ]) {
@@ -119,10 +122,12 @@ export async function runElectronDomainSmoke({
   const userDataDirectory = join(temporaryDirectory, 'user-data')
   const workspaceDirectory = join(temporaryDirectory, 'workspace')
   const workspaceFile = join(workspaceDirectory, 'notes.md')
+  await mkdir(userDataDirectory, { recursive: true })
   await mkdir(workspaceDirectory, { recursive: true })
   await writeFile(workspaceFile, 'hello\nworld\n', 'utf8')
 
   let electronApp
+  let visualRouterStub
   let interruptedBy
   let phase = 'launch'
   const signalHandlers = new Map()
@@ -136,6 +141,21 @@ export async function runElectronDomainSmoke({
   }
 
   try {
+    visualRouterStub = await startDeterministicVisualRouterStub()
+    await writeFile(
+      join(userDataDirectory, 'sciforge-settings.json'),
+      JSON.stringify({
+        version: 1,
+        modelRouter: {
+          enabled: true,
+          autoStart: false,
+          baseUrl: visualRouterStub.baseUrl,
+          publicModelAlias: 'electron-smoke-vision',
+          runtimeApiKey: visualRouterStub.apiKey
+        }
+      }),
+      'utf8'
+    )
     const electron = await loadElectron()
     electronApp = await electron.launch({
       executablePath: resolve(executablePath),
@@ -186,12 +206,37 @@ export async function runElectronDomainSmoke({
         undefined,
         { timeout: timeoutMs }
       )
+      phase = 'native visual workflow'
+      const nativeVisual = await electronApp.evaluate(
+        async (_electron, { workspaceDirectory: smokeWorkspaceDirectory }) => {
+          const run = globalThis.__SCIFORGE_ELECTRON_DOMAIN_NATIVE_VISUAL_SMOKE__
+          if (typeof run !== 'function') {
+            throw new Error('The main process did not install the native visual smoke driver.')
+          }
+          return await run({ workspaceDirectory: smokeWorkspaceDirectory })
+        },
+        { workspaceDirectory }
+      )
+      phase = 'Codex PreToolUse hook probe'
+      const codexPreToolUseHook = await electronApp.evaluate(
+        async (_electron, { workspaceDirectory: smokeWorkspaceDirectory }) => {
+          const run = globalThis.__SCIFORGE_ELECTRON_DOMAIN_CODEX_HOOK_SMOKE__
+          if (typeof run !== 'function') {
+            throw new Error('The main process did not install the Codex hook smoke driver.')
+          }
+          return await run({ workspaceDirectory: smokeWorkspaceDirectory })
+        },
+        { workspaceDirectory }
+      )
       phase = 'capability workflow'
       const result = await window.evaluate(smokeRendererWorkflow, {
         requiredCapabilityIds: REQUIRED_CAPABILITY_IDS,
         workspaceDirectory
       })
-      validateSmokeResult(result, { expectedRendererUrl })
+      validateSmokeResult(
+        { ...result, nativeVisual, codexPreToolUseHook },
+        { expectedRendererUrl }
+      )
 
       phase = 'lifecycle diagnostics'
       const mainFailures = await readMainProcessDiagnostics(electronApp)
@@ -211,10 +256,13 @@ export async function runElectronDomainSmoke({
       if (!Array.isArray(storedProfiles) || !storedProfiles.some((profile) => profile?.name === 'electron_smoke')) {
         throw new Error('Paper Radar profile was not persisted inside the isolated userData directory.')
       }
+      await verifyPersistedNativeVisualArtifact(workspaceDirectory, nativeVisual)
       return {
         mode: label,
         executablePath: resolve(executablePath),
         ...result,
+        nativeVisual,
+        codexPreToolUseHook,
         workspaceEditPersisted: true,
         paperRadarProfilePersisted: true
       }
@@ -236,6 +284,7 @@ export async function runElectronDomainSmoke({
   } finally {
     for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler)
     await closeElectron(electronApp)
+    await visualRouterStub?.close()
     await removeTemporaryDirectory(temporaryDirectory)
   }
 }
@@ -429,6 +478,34 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
     throw new Error('Workspace Preview returned no registered plugins.')
   }
   if (result.platform === 'unknown' || !result.platform) throw new Error('Renderer platform initialization did not complete.')
+  const nativeVisual = result.nativeVisual
+  if (!nativeVisual || typeof nativeVisual !== 'object') {
+    throw new Error('Native visual smoke returned no result.')
+  }
+  if (
+    !Array.isArray(nativeVisual.toolNames) ||
+    !nativeVisual.toolNames.includes('sciforge_look') ||
+    !nativeVisual.toolNames.includes('sciforge_capture')
+  ) {
+    throw new Error('Native visual smoke did not discover both native visual tools.')
+  }
+  if (
+    nativeVisual.cropped !== true ||
+    nativeVisual.nativeImageBindingValidated !== true ||
+    nativeVisual.proofChainValidated !== true ||
+    nativeVisual.unavailableRouteFailedVisibly !== true
+  ) {
+    throw new Error('Native visual smoke did not validate capture, bindings, proofs, and failure behavior.')
+  }
+  const codexHook = result.codexPreToolUseHook
+  if (
+    !codexHook ||
+    codexHook.denied !== true ||
+    typeof codexHook.reason !== 'string' ||
+    !codexHook.reason.startsWith('sciforge_hook_deny_challenge:')
+  ) {
+    throw new Error('Codex PreToolUse hook did not pass the real deny challenge.')
+  }
   if (expectedRendererUrl) {
     if (result.url !== expectedRendererUrl) {
       throw new Error(`Renderer loaded ${result.url}; expected ${expectedRendererUrl}.`)
@@ -439,6 +516,103 @@ function validateSmokeResult(result, { expectedRendererUrl }) {
       throw new Error(`Packaged renderer loaded an unexpected URL: ${result.url}.`)
     }
   }
+}
+
+async function verifyPersistedNativeVisualArtifact(workspaceDirectory, nativeVisual) {
+  const artifactPath = resolve(workspaceDirectory, nativeVisual.artifactRelativePath)
+  const relativeArtifactPath = relative(workspaceDirectory, artifactPath)
+  if (!relativeArtifactPath || relativeArtifactPath.startsWith('..') || isAbsolute(relativeArtifactPath)) {
+    throw new Error('Native visual smoke returned an artifact outside the workspace.')
+  }
+  const bytes = await readFile(artifactPath)
+  if (!bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error('Native visual smoke persistence verification did not find a valid PNG.')
+  }
+  const digest = createHash('sha256').update(bytes).digest('hex')
+  if (digest !== nativeVisual.artifactSha256) {
+    throw new Error('Native visual smoke persistence verification found a digest mismatch.')
+  }
+}
+
+async function startDeterministicVisualRouterStub() {
+  const apiKey = 'electron-smoke-local-router'
+  const server = createServer(async (request, response) => {
+    if (request.method !== 'POST' || request.url !== '/v1/responses') {
+      response.writeHead(404, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'not found' } }))
+      return
+    }
+    if (request.headers.authorization !== `Bearer ${apiKey}`) {
+      response.writeHead(401, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'unauthorized' } }))
+      return
+    }
+    const body = await readBoundedRequestBody(request)
+    if (body.includes('electron-domain-smoke:fail-visible')) {
+      response.writeHead(503, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'deterministic visual route unavailable' } }))
+      return
+    }
+    let payload
+    try {
+      payload = JSON.parse(body)
+    } catch {
+      response.writeHead(400, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'invalid json' } }))
+      return
+    }
+    if (!JSON.stringify(payload).includes('"type":"input_image"')) {
+      response.writeHead(422, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: { message: 'visual input missing' } }))
+      return
+    }
+    response.writeHead(200, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({
+      output_text: JSON.stringify({
+        summary: 'The fixture target is visible and bounded.',
+        claims: [{
+          kind: 'observation',
+          text: 'Colored fixture target',
+          artifactId: 'source',
+          region: { x: 0.25, y: 0.2, width: 0.5, height: 0.6 },
+          confidence: 1
+        }],
+        uncertainties: []
+      })
+    }))
+  })
+  await new Promise((resolvePromise, reject) => {
+    server.once('error', reject)
+    server.listen(0, '127.0.0.1', () => {
+      server.removeListener('error', reject)
+      resolvePromise()
+    })
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') {
+    server.close()
+    throw new Error('Deterministic visual router did not bind a TCP port.')
+  }
+  return {
+    apiKey,
+    baseUrl: `http://127.0.0.1:${address.port}/v1`,
+    close: async () => {
+      server.closeAllConnections?.()
+      await new Promise((resolvePromise) => server.close(resolvePromise))
+    }
+  }
+}
+
+async function readBoundedRequestBody(request) {
+  const chunks = []
+  let size = 0
+  for await (const chunk of request) {
+    const bytes = Buffer.from(chunk)
+    size += bytes.byteLength
+    if (size > 4 * 1024 * 1024) throw new Error('Visual router smoke request exceeded 4 MiB.')
+    chunks.push(bytes)
+  }
+  return Buffer.concat(chunks).toString('utf8')
 }
 
 async function collectExecutableCandidates(root, { platform, productName }) {

@@ -10,7 +10,7 @@ import {
   getImageGenerationStatus,
   planImageGeneration as planImageGenerationEngine,
   renderImageGeneration as renderImageGenerationEngine,
-  reviewVisualArtifact,
+  reviewImageGenerationCandidate,
   segmentImageGenerationComponents
 } from './image-generation-engine'
 import type { ImageGenerationPlanRequest, ImageGenerationRenderRequest } from './types'
@@ -179,7 +179,7 @@ describe('image generation engine', () => {
     writeFileSync(outputPath, canvas.toBuffer('image/png'))
     const manifestPath = writeReviewManifest(outputPath)
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -213,7 +213,7 @@ describe('image generation engine', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     globalThis.fetch = fetchMock as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -266,7 +266,7 @@ describe('image generation engine', () => {
       })
     })) as unknown as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -308,7 +308,7 @@ describe('image generation engine', () => {
       })
     })) as unknown as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -325,7 +325,7 @@ describe('image generation engine', () => {
     const manifestPath = writeReviewManifest(outputPath)
     writeFileSync(outputPath, Buffer.concat([readFileSync(outputPath), Buffer.from('tampered')]))
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,

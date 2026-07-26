@@ -23,6 +23,7 @@ import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
 type RuntimeGovernanceControls = {
   governanceProfile?: AgentRuntimeGovernanceProfile
   ownedVisualToolsAvailable?: boolean
+  nativeVisualProofChainPending?: boolean
   steerTurn(input: AgentRuntimeTurnSteerInput): Promise<void>
   interruptTurn(input: AgentRuntimeTurnTargetInput): Promise<void>
   publishSyntheticEvent(event: AgentRuntimeEvent): Promise<AgentRuntimeEvent | null>
@@ -95,7 +96,10 @@ export class RuntimeGovernanceSupervisor {
     controls: RuntimeGovernanceControls
   ): void {
     if (decision.action === 'allow') return
-    const decisionKey = decision.code === 'owned_visual_policy_denied'
+    const decisionKey = (
+      decision.code === 'owned_visual_policy_denied' ||
+      decision.code === 'native_visual_proof_chain_required'
+    )
       ? `${decision.code}:${decision.attempt.family}:${decision.attempt.resourceIdentity}`
       : `${decision.code || 'governance'}:${decision.attempt.exactFingerprint}`
     if (state.actions.has(`${decisionKey}:${decision.action}`)) return
@@ -317,7 +321,8 @@ function governanceContext(
   controls: RuntimeGovernanceControls
 ): ExecutionGovernorContext {
   return {
-    ownedVisualToolsAvailable: controls.ownedVisualToolsAvailable === true
+    ownedVisualToolsAvailable: controls.ownedVisualToolsAvailable === true,
+    nativeVisualProofChainPending: controls.nativeVisualProofChainPending === true
   }
 }
 
@@ -392,7 +397,8 @@ async function publishGovernanceEvent(
       itemId: `execution-governance-${source.turnId || source.threadId}`,
       recoverable: true,
       severity: 'error',
-      code: decision.code === 'owned_visual_policy_denied'
+      code: decision.code === 'owned_visual_policy_denied' ||
+        decision.code === 'native_visual_proof_chain_required'
         ? 'runtime_execution_policy_denied'
         : 'runtime_execution_interrupted',
       message: decision.reason || `Execution governance stopped ${decision.attempt.family} activity.`,

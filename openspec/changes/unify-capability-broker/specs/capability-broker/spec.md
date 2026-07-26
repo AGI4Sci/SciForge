@@ -56,8 +56,8 @@ SciForge SHALL expose owned capabilities to agents only through stable broker me
 - **THEN** the adapter supplies the current handle revision and a generated invocation ID without requiring either from the model
 
 #### Scenario: Agent inspects a surface
-- **WHEN** an agent requests an available surface inspection operation
-- **THEN** it does not provide a snapshot token, component ID, raw target coordinate, or layout revision
+- **WHEN** an agent invokes `sciforge_look` for an available visual source
+- **THEN** it does not provide a snapshot token, component ID, raw target coordinate, layout revision, or capture path
 
 ### Requirement: Observations remain compact and actionable
 SciForge SHALL return current resource state before optional large metadata and SHALL represent operation schemas by fetchable references.

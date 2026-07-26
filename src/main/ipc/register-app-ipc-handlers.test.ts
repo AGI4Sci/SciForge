@@ -1776,7 +1776,7 @@ describe('registerAppIpcHandlers', () => {
         candidatePath: '/tmp/candidate.png',
         summary: 'Improved layout',
         reviewEvidence: {
-          tool: 'visual_artifact_review',
+          tool: 'image_generation_review_candidate',
           ok: true,
           reviewedArtifactPath: '/tmp/candidate.png',
           reviewedArtifactHash: 'a'.repeat(64),

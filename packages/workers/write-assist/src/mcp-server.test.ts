@@ -27,9 +27,6 @@ test('serves write-assist tools and resources over MCP', async (t) => {
     'Chlorophyll retrieval context for MCP structured content and resource stats.'
   ].join('\n'), 'utf8')
   await writeFile(join(workspaceRoot, 'paper.pdf'), minimalPdf('MCP PDF text about chlorophyll extraction.'))
-  await mkdir(join(workspaceRoot, 'assets'), { recursive: true })
-  await writeFile(join(workspaceRoot, 'assets', 'figure.png'), Buffer.from('png'))
-  await writeFile(join(workspaceRoot, 'report.md'), '![Method overview](assets/figure.png)\n', 'utf8')
   await writeFile(join(tempRoot, 'outside.pdf'), minimalPdf('outside PDF text'))
 
   const service = createWriteAssistService({ workspaceRoot })
@@ -48,13 +45,9 @@ test('serves write-assist tools and resources over MCP', async (t) => {
 
   const tools = await client.listTools()
   assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
-    'gui_markdown_validate_images',
     'gui_pdf_extract_text',
     'gui_write_retrieve_context'
   ])
-  const validationTool = tools.tools.find((tool) => tool.name === 'gui_markdown_validate_images')
-  assert.match(validationTool?.description ?? '', /expectedLocalImages/)
-  assert.match(validationTool?.description ?? '', /does not issue visual evidence receipts/)
 
   const retrieval = await client.callTool({
     name: 'gui_write_retrieve_context',
@@ -72,21 +65,6 @@ test('serves write-assist tools and resources over MCP', async (t) => {
   const structuredPdf = asRecord(pdf.structuredContent)
   assert.equal(structuredPdf.ok, true)
   assert.match(JSON.stringify(structuredPdf), /MCP PDF text/)
-
-  const validation = await client.callTool({
-    name: 'gui_markdown_validate_images',
-    arguments: {
-      workspaceRoot,
-      path: 'report.md',
-      minimumImages: 1,
-      minimumLocalImages: 1,
-      expectedLocalImages: ['assets/figure.png']
-    }
-  })
-  const structuredValidation = asRecord(validation.structuredContent)
-  assert.equal(structuredValidation.ok, true)
-  assert.equal(structuredValidation.valid, true)
-  assert.deepEqual(structuredValidation.matchedExpectedLocalImages, ['assets/figure.png'])
 
   const failure = await client.callTool({
     name: 'gui_pdf_extract_text',

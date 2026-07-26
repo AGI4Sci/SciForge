@@ -181,7 +181,9 @@ const RUNTIME_ENTRIES = [
         'src/trace-correlation/codex.ts',
         'src/trace-redaction.ts',
         'src/upstream-drivers.ts'
-      ]),
+      ])
+    ],
+    executableNodeEntryPaths: [
       'out/main/model-router-sidecar-node-entry.js'
     ]
   },
@@ -205,7 +207,9 @@ const RUNTIME_ENTRIES = [
         'src/manifest.ts',
         'src/trace-sink.ts'
       ]),
-      'node_modules/proxy-from-env/package.json',
+      'node_modules/proxy-from-env/package.json'
+    ],
+    executableNodeEntryPaths: [
       'out/main/plan-gateway-sidecar-node-entry.js'
     ]
   },
@@ -220,7 +224,7 @@ const RUNTIME_ENTRIES = [
       'src/research-service.ts',
       'src/types.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/research-search-mcp-node-entry.js'
     ]
   },
@@ -235,7 +239,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/schedule-mcp-node-entry.js'
     ]
   },
@@ -250,7 +254,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/workflow-mcp-node-entry.js'
     ]
   },
@@ -265,7 +269,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/workspace-intel-mcp-node-entry.js'
     ]
   },
@@ -281,7 +285,7 @@ const RUNTIME_ENTRIES = [
       'src/contract.ts',
       'remote_worker.py'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/remote-executor-mcp-node-entry.js'
     ]
   },
@@ -296,7 +300,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/write-assist-mcp-node-entry.js'
     ]
   },
@@ -311,7 +315,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/runtime-inspector-mcp-node-entry.js'
     ]
   },
@@ -328,7 +332,7 @@ const RUNTIME_ENTRIES = [
       'src/scientific-skills-index.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/scientific-skills-mcp-node-entry.js',
       'out/main/scientific-plotting-mcp-node-entry.js'
     ]
@@ -344,7 +348,7 @@ const RUNTIME_ENTRIES = [
       'src/service.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/bgc-discovery-mcp-node-entry.js'
     ]
   },
@@ -359,7 +363,7 @@ const RUNTIME_ENTRIES = [
       'src/image-generation-engine.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/image-generation-mcp-node-entry.js'
     ]
   },
@@ -389,7 +393,7 @@ const RUNTIME_ENTRIES = [
       'src/contract.ts',
       'ui-kit/sciforge_research/preset.json'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/ppt-master-mcp-node-entry.js'
     ]
   },
@@ -404,7 +408,7 @@ const RUNTIME_ENTRIES = [
       'src/visual-document-engine.ts',
       'src/contract.ts'
     ]),
-    mcpNodeEntryPaths: [
+    executableNodeEntryPaths: [
       'out/main/visual-document-mcp-node-entry.js'
     ]
   }
@@ -414,7 +418,10 @@ const workspacePackageDirs = WORKSPACE_PACKAGE_IDS.map(packageDir)
 const bundledPackageDirs = BUNDLED_PACKAGE_IDS.map(packageDir)
 const bundledPackageTargets = BUNDLED_PACKAGE_IDS.map(packageBundleDir)
 const nonBundledPackageDirs = NON_BUNDLED_PACKAGE_IDS.map(packageDir)
-const mcpNodeEntryRequiredPaths = RUNTIME_ENTRIES.flatMap((entry) => entry.mcpNodeEntryPaths || [])
+const packagedExecutableNodeEntryRequiredPaths = [
+  'out/main/codex-pre-tool-use-governance-node-entry.js',
+  ...RUNTIME_ENTRIES.flatMap((entry) => entry.executableNodeEntryPaths || [])
+]
 const runtimeRequiredPathExports = Object.fromEntries(
   RUNTIME_ENTRIES.map((entry) => [entry.requiredPathsExport, entry.requiredPaths])
 )
@@ -453,7 +460,7 @@ module.exports = {
   bundledPackageTargets,
   nonBundledPackageDirs,
   runtimeEntries: RUNTIME_ENTRIES,
-  mcpNodeEntryRequiredPaths,
+  packagedExecutableNodeEntryRequiredPaths,
   runtimeRequiredPathExports,
   createAsarUnpackGlobs,
   createBundledFileSets

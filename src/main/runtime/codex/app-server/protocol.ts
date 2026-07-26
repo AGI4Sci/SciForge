@@ -89,6 +89,13 @@ export type CodexAppServerInitializeParams = {
   [key: string]: unknown
 }
 
+export type CodexAppServerInitializeResponse = {
+  userAgent: string
+  codexHome: string
+  platformFamily: string
+  platformOs: string
+}
+
 export type CodexAppServerThreadStartParams = {
   cwd: string
   model?: string
@@ -155,6 +162,57 @@ export type CodexAppServerTurnSteerParams = {
   expectedTurnId: string
   input: CodexAppServerInputItem[]
   [key: string]: unknown
+}
+
+export type CodexAppServerHookTrustStatus =
+  | 'managed'
+  | 'untrusted'
+  | 'trusted'
+  | 'modified'
+
+export type CodexAppServerHookMetadata = {
+  key: string
+  eventName: string
+  handlerType: string
+  matcher: string | null
+  command: string | null
+  timeoutSec: number
+  statusMessage: string | null
+  sourcePath: string
+  source: string
+  pluginId: string | null
+  displayOrder: number
+  enabled: boolean
+  isManaged: boolean
+  currentHash: string
+  trustStatus: CodexAppServerHookTrustStatus
+}
+
+export type CodexAppServerHooksListResponse = {
+  data: Array<{
+    cwd: string
+    hooks: CodexAppServerHookMetadata[]
+    warnings: string[]
+    errors: Array<{ path: string; message: string }>
+  }>
+}
+
+export type CodexAppServerConfigBatchWriteParams = {
+  edits: Array<{
+    keyPath: string
+    value: unknown
+    mergeStrategy: 'replace' | 'upsert'
+  }>
+  filePath?: string | null
+  expectedVersion?: string | null
+  reloadUserConfig?: boolean
+}
+
+export type CodexAppServerConfigWriteResponse = {
+  status: string
+  version: string
+  filePath: string
+  overriddenMetadata: unknown | null
 }
 
 export type CodexAppServerPlanType =

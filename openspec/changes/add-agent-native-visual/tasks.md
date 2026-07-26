@@ -82,8 +82,9 @@
 
 - [x] 6.1 Implement runtime storage and resolution for inspection and capture
   proofs; callers cannot submit self-authored proof JSON.
-- [x] 6.2 Make Markdown image-reference validation consumer-owned and require
-  exact expected workspace-local image paths.
+- [x] 6.2 Remove the unused agent-visible Markdown image validator; reserve
+  reference-validation receipts for a real typed consumer rather than keeping a
+  parallel visual-completion tool.
 - [x] 6.3 Extend task completion obligations with typed look, capture,
   region-capture, final-look, and explicit reference-validation requirements.
 - [x] 6.4 Verify proof caller scope, order, artifact identity, parent links, and
@@ -93,6 +94,13 @@
   artifact references, pre-crop inspection, and self-reported completion.
 - [x] 6.6 Fail visibly when required Model Router inspection is unavailable;
   ordinary full-snapshot capture remains distinct from region extraction.
+- [x] 6.7 Add one Host-owned candidate-response publication barrier shared by
+  Codex and Claude.
+- [x] 6.8 Discard candidate assistant output on failed, cancelled, or rejected
+  completion and prevent thread reads or replay from reviving it.
+- [x] 6.9 Add cross-runtime tests proving unverified success text is hidden and
+  a valid native receipt chain publishes the final answer exactly once in event
+  order.
 
 ## 7. Governance and canonical-path cutover
 
@@ -114,6 +122,8 @@
   tests, and dead dependencies.
 - [x] 7.7 Add an architecture scan that fails if any retired public identifier
   or duplicate visual execution route remains in production source.
+- [x] 7.8 Enforce pending native visual proofs in Codex and Claude pre-tool
+  hooks using the Host-owned governance snapshot and shared execution governor.
 
 ## 8. Composition and generated artifacts
 
@@ -138,10 +148,10 @@
   package-boundary tests, Domain SDK tests/typecheck, installed-domain
   tests/typecheck, root typecheck, and changed-file lint.
 - [x] 9.3 Run the complete regression suite and production build.
-- [ ] 9.4 Extend source Electron smoke coverage to discover both native tools,
+- [x] 9.4 Extend source Electron smoke coverage to discover both native tools,
   capture a real fixture target, persist a valid cropped PNG, and validate its
   proof chain without external credentials.
-- [ ] 9.5 Build an unpacked distributable and run the same packaged smoke flow,
+- [x] 9.5 Build an unpacked distributable and run the same packaged smoke flow,
   including target-platform image/native binding validation and fail-visible
   Model Router behavior.
 - [x] 9.6 Audit the production build for retired visual MCP entrypoints,

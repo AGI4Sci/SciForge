@@ -1744,7 +1744,7 @@ describe('scientific plotting engine', () => {
           referencePath: result.croppedImagePath,
           suggestedPlanTool: 'visual_generate',
           suggestedRenderTool: 'scientific_plotting_render',
-          suggestedReviewTool: 'visual_artifact_review'
+          suggestedReviewTool: 'image_generation_review_candidate'
         }
       })
       const manifest = JSON.parse(await readFile(result.referenceManifestPath, 'utf8')) as {

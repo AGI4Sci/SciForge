@@ -26,6 +26,13 @@ import {
   isPrefixedEnv,
   isUpstreamProviderConfigEnv
 } from '../../upstream-provider-env'
+import { atomicWriteFile } from '../../atomic-write-file'
+import {
+  codexPreToolUseHooksJson,
+  createCodexPreToolUseHookDefinition,
+  type CodexPreToolUseHookDefinition
+} from './codex-pre-tool-use-hook'
+import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 
 const RUNTIME_API_KEY_ENV = 'SCIFORGE_RUNTIME_API_KEY'
 export const CODEX_PLAN_GATEWAY_PROVIDER_ID = CODEX_PLAN_PROVIDER_ID
@@ -44,6 +51,7 @@ export type CodexAppServerLaunchConfig = {
   env: NodeJS.ProcessEnv
   codexHome: string
   accessMode: 'api' | 'coding-plan'
+  preToolUseHook?: CodexPreToolUseHookDefinition
 }
 
 export type CodexPlanGatewayLaunchConfig = {
@@ -57,6 +65,7 @@ export async function prepareCodexAppServerLaunch(options: {
   managedCodexHome?: string
   standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
+  preToolUseHookLaunch?: ManagedGuiMcpLaunchConfig
 }): Promise<CodexAppServerLaunchConfig> {
   const runtime = getCodexRuntimeSettings(options.settings)
   const baseEnv = options.env ?? process.env
@@ -66,7 +75,18 @@ export async function prepareCodexAppServerLaunch(options: {
   const modelAccess = codexModelAccessConfig(options.settings, options.planGateway)
   const cwd = resolveCodexWorkspace(options.settings, options.workspace)
   if (!cwd) throw new Error('Codex workspace is required.')
-  await prepareManagedCodexHome(codexHome, modelAccess, options.standardCodexAuthPath)
+  const preToolUseHook = options.preToolUseHookLaunch
+    ? createCodexPreToolUseHookDefinition({
+        codexHome,
+        launch: options.preToolUseHookLaunch
+      })
+    : undefined
+  await prepareManagedCodexHome(
+    codexHome,
+    modelAccess,
+    options.standardCodexAuthPath,
+    preToolUseHook
+  )
   return {
     command,
     args: ['app-server', '--listen', 'stdio://', ...codexAppServerExtraArgs(runtime.extraArgs)],
@@ -77,7 +97,8 @@ export async function prepareCodexAppServerLaunch(options: {
       modelAccess.mode === 'api' ? modelAccess.apiKey : undefined
     ), command),
     codexHome,
-    accessMode: modelAccess.mode
+    accessMode: modelAccess.mode,
+    ...(preToolUseHook ? { preToolUseHook } : {})
   }
 }
 
@@ -443,7 +464,8 @@ function isLegacyDirectWorkerEnv(key: string): boolean {
 async function prepareManagedCodexHome(
   codexHome: string,
   modelAccess: CodexModelAccessConfig,
-  standardCodexAuthPath?: string
+  standardCodexAuthPath?: string,
+  preToolUseHook?: CodexPreToolUseHookDefinition
 ): Promise<void> {
   await mkdir(codexHome, { recursive: true })
   await assertManagedCodexHome(codexHome)
@@ -454,11 +476,18 @@ async function prepareManagedCodexHome(
     await importStandardCodexAuth(codexHome, standardCodexAuthPath)
     await assertManagedCodexAuth(codexHome)
   }
-  await writeFile(
+  await atomicWriteFile(
     join(codexHome, 'config.toml'),
-    codexConfigToml(modelAccess),
-    'utf8'
+    codexConfigToml(modelAccess, Boolean(preToolUseHook))
   )
+  if (preToolUseHook) {
+    await atomicWriteFile(
+      preToolUseHook.sourcePath,
+      codexPreToolUseHooksJson(preToolUseHook)
+    )
+  } else {
+    await rm(join(codexHome, 'hooks.json'), { force: true })
+  }
 }
 
 async function importStandardCodexAuth(codexHome: string, source?: string): Promise<void> {
@@ -575,7 +604,13 @@ function codexModelRouterConfig(settings: AppSettingsV1): CodexModelRouterConfig
   }
 }
 
-function codexConfigToml(modelAccess: CodexModelAccessConfig): string {
+function codexConfigToml(
+  modelAccess: CodexModelAccessConfig,
+  hooksEnabled: boolean
+): string {
+  const hookConfig = hooksEnabled
+    ? ['[features]', 'hooks = true', '']
+    : []
   if (modelAccess.mode === 'coding-plan') {
     return [
       'hide_agent_reasoning = false',
@@ -583,6 +618,7 @@ function codexConfigToml(modelAccess: CodexModelAccessConfig): string {
       'model_reasoning_summary = "detailed"',
       'model_supports_reasoning_summaries = true',
       '',
+      ...hookConfig,
       createCodexPlanRuntimeConfig(modelAccess.baseUrl)
     ].join('\n')
   }
@@ -594,6 +630,7 @@ function codexConfigToml(modelAccess: CodexModelAccessConfig): string {
     'model_reasoning_summary = "detailed"',
     'model_supports_reasoning_summaries = true',
     '',
+    ...hookConfig,
     `[model_providers.${DEFAULT_MODEL_ROUTER_PROVIDER_ID}]`,
     'name = "SciForge Model Router"',
     `base_url = "${tomlString(modelAccess.baseUrl)}"`,

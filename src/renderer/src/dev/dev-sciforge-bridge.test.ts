@@ -146,7 +146,7 @@ describe('dev sciforge browser bridge', () => {
       candidatePath: '/tmp/candidate.png',
       summary: 'Enlarged the label.',
       reviewEvidence: {
-        tool: 'visual_artifact_review',
+        tool: 'image_generation_review_candidate',
         ok: true,
         reviewedArtifactPath: '/tmp/candidate.png',
         reviewedArtifactHash: 'a'.repeat(64),

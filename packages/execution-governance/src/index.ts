@@ -41,6 +41,7 @@ export type ExecutionGovernorOptions = {
 export type ExecutionGovernorContext = {
   workspace?: string
   ownedVisualToolsAvailable?: boolean
+  nativeVisualProofChainPending?: boolean
 }
 
 export type ExecutionReceipt = {
@@ -157,6 +158,7 @@ export type ExecutionGovernorDecision = {
     | 'fatal_error'
     | 'redundant_read'
     | 'owned_visual_policy_denied'
+    | 'native_visual_proof_chain_required'
   reason?: string
   guidance?: string
   attempt: NormalizedExecutionAttempt
@@ -280,13 +282,17 @@ export class ExecutionGovernorCore {
       rawArguments: input.arguments,
       sequence
     })
-    if (GOVERNOR_EXEMPT_TOOL_NAMES.has(normalizedToolName(input.toolName)) || isSessionControlCall(input)) {
-      return { action: 'allow', attempt }
-    }
-
-    if (attempt.mutating) {
-      this.invalidateReadEvidence(input, context)
-      this.clearReadOnlyEntries()
+    if (
+      context.nativeVisualProofChainPending === true &&
+      isNativeVisualProofBypass(input, attempt)
+    ) {
+      return {
+        action: 'deny',
+        code: 'native_visual_proof_chain_required',
+        reason: 'The native visual proof chain is still incomplete, so non-native visual inspection and command execution cannot substitute for it.',
+        guidance: nativeVisualProofGuidance(),
+        attempt
+      }
     }
 
     if (
@@ -300,6 +306,15 @@ export class ExecutionGovernorCore {
         guidance: ownedVisualGuidance(),
         attempt
       }
+    }
+
+    if (GOVERNOR_EXEMPT_TOOL_NAMES.has(normalizedToolName(input.toolName)) || isSessionControlCall(input)) {
+      return { action: 'allow', attempt }
+    }
+
+    if (attempt.mutating) {
+      this.invalidateReadEvidence(input, context)
+      this.clearReadOnlyEntries()
     }
 
     const read = normalizedToolName(input.toolName) === 'read'
@@ -746,7 +761,10 @@ function isOsGuiAutomationCommand(command: string): boolean {
 
 function commandExecutionText(input: ExecutionAttemptInput): string {
   const args = input.arguments
-  const command = stringValue(args.command) || stringValue(args.cmd) || stringValue(input.metadata?.command)
+  const command = stringValue(args.command) ||
+    stringValue(args.cmd) ||
+    (sessionControlAction(input) === 'write' ? stringValue(args.chars) : '') ||
+    stringValue(input.metadata?.command)
   const argv = firstStringArray(args.args, args.argv)
   return shellScriptFromCommandAndArgs(command, argv) || command
 }
@@ -785,9 +803,22 @@ function isTrustedComputerUse(input: ExecutionAttemptInput): boolean {
 }
 
 function isSessionControlCall(input: ExecutionAttemptInput): boolean {
-  if (normalizedToolName(input.toolName) !== 'bash') return false
-  const action = stringValue(input.arguments.action)
-  return action === 'poll' || action === 'write' || action === 'stop'
+  return sessionControlAction(input) !== undefined
+}
+
+function sessionControlAction(
+  input: ExecutionAttemptInput
+): 'poll' | 'write' | 'stop' | undefined {
+  const name = normalizedToolName(input.toolName)
+  if (name === 'bash') {
+    const action = stringValue(input.arguments.action).toLowerCase()
+    if (action === 'poll' || action === 'write' || action === 'stop') return action
+    return undefined
+  }
+  if (name === 'write_stdin' || name.endsWith('_write_stdin')) {
+    return stringValue(input.arguments.chars) ? 'write' : 'poll'
+  }
+  return undefined
 }
 
 function isSessionControlFamily(family: string): boolean {
@@ -797,6 +828,21 @@ function isSessionControlFamily(family: string): boolean {
 function isMutatingToolCall(input: ExecutionAttemptInput): boolean {
   if (input.toolKind === 'file_change') return true
   return MUTATING_TOOL_NAMES.has(normalizedToolName(input.toolName))
+}
+
+function isNativeVisualProofBypass(
+  input: ExecutionAttemptInput,
+  attempt: NormalizedExecutionAttempt
+): boolean {
+  const name = normalizedToolName(input.toolName)
+  if (name === 'sciforge_look' || name === 'sciforge_capture') return false
+  const controlAction = sessionControlAction(input)
+  if (controlAction) return controlAction !== 'stop'
+  if (attempt.toolKind === 'command_execution') return true
+  return name === 'view_image' ||
+    name === 'viewimage' ||
+    name.endsWith('_view_image') ||
+    name.endsWith('_viewimage')
 }
 
 function semanticFailureScope(
@@ -845,6 +891,10 @@ function failureDescription(receipt: NormalizedExecutionReceipt): string {
 
 function ownedVisualGuidance(): string {
   return 'Use the native sciforge_look tool to inspect the owned visual source. If the task requires a persisted workspace image, pass the returned snapshotRef or regionRef to the native sciforge_capture tool. Do not use screencapture, osascript, window enumeration, or another OS-level GUI fallback.'
+}
+
+function nativeVisualProofGuidance(): string {
+  return 'Continue the required visual path with sciforge_look and, when persistence is required, sciforge_capture. view_image, shell commands, file metadata, and command output do not produce the typed native visual proofs required for completion.'
 }
 
 function failureClassFor(
@@ -902,7 +952,13 @@ function normalizeFailureToken(value: string): string {
 }
 
 function inferToolKind(toolName: string): ExecutionToolKind {
-  if (toolName === 'exec_command' || toolName === 'bash' || toolName === 'local_shell') return 'command_execution'
+  if (
+    toolName === 'exec_command' ||
+    toolName === 'bash' ||
+    toolName === 'local_shell' ||
+    toolName === 'write_stdin' ||
+    toolName.endsWith('_write_stdin')
+  ) return 'command_execution'
   if (toolName === 'apply_patch') return 'file_change'
   return 'tool_call'
 }

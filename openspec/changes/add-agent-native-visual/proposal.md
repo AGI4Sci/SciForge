@@ -46,13 +46,19 @@ but the Agent Runtime owns one perception, capture, proof, and completion path.
 - Add a typed completion-proof chain connecting visual inspection, capture, and
   final visual verification. Consumer-owned validators separately verify that
   persisted artifact paths are referenced by their output format.
+- Treat the model's final assistant text as a candidate until the Host has
+  validated every required terminal receipt. Commit it once on success; discard
+  it on failed, cancelled, or unverified completion.
+- Feed the Host-owned pending-proof state into runtime pre-tool hooks so
+  `view_image` and command execution are denied before dispatch while the native
+  visual proof chain is incomplete.
 - Re-home existing surface and PDF/image preview rendering behind
   `VisualSource` providers, then delete the old agent-visible inspection and
   PDF-render paths without aliases or fallbacks. Specialized generation release
   review keeps its independent production semantics.
-- Update execution governance to direct owned visual work to the native tools and
-  deny shell or OS screenshot fallbacks only when an authorized native visual
-  source can satisfy the request.
+- Update execution governance to direct owned visual work to the native tools,
+  deny non-native visual and command paths before dispatch while native proofs
+  are pending, and retain receipt observation only for recovery and audit.
 - Add architecture, source-build, packaged-build, type-safety, and regression
   coverage for the canonical visual path.
 
@@ -82,8 +88,8 @@ but the Agent Runtime owns one perception, capture, proof, and completion path.
 ## Impact
 
 - Agent Runtime: two stable native tools, shared runtime-neutral adapters,
-  scoped snapshot/region/proof stores, completion integration, and structured
-  failure receipts.
+  scoped snapshot/region/proof stores, pre-dispatch governance, a Host-owned
+  final-response publication barrier, and structured failure receipts.
 - Main process: one canonical Agent Visual Runtime, source registry, Model Router
   adapter, workspace artifact persistence, provenance, and lifecycle cleanup.
 - Domain SDK and composition: a process-safe `VisualSource` contribution contract

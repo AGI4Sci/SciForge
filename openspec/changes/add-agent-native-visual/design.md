@@ -232,12 +232,11 @@ FinalInspectionProof
 ```
 
 The consumer that persists an artifact reference owns reference validation.
-Markdown validation now accepts exact expected local image paths and fails
-unless each path is referenced and resolves to an existing workspace file. The
-Agent Visual Runtime does not parse every document format. A generic
-`artifact.reference-validation` receipt kind is reserved for typed consumer
-execution intents; ordinary free text is not blocked on a receipt no current
-consumer can issue.
+The Agent Visual Runtime does not parse every document format, and no
+agent-visible Markdown validator remains as a substitute visual-completion
+path. A generic `artifact.reference-validation` receipt kind is reserved for a
+real typed consumer execution intent; ordinary free text is not blocked on a
+receipt no current consumer can issue.
 
 A visual completion obligation specifies the required terminal state, for
 example:
@@ -290,8 +289,8 @@ After callers migrate, delete:
 
 - broker actions `surface.inspect` and `artifact.inspect`;
 - managed `gui_pdf_render_image`;
-- `gui_markdown_validate_images` as a visual-semantic proof path; it remains
-  only as the Markdown consumer's exact reference validator;
+- `gui_markdown_validate_images`, including its unused agent-visible validator,
+  registration, schemas, and dead implementation;
 - visual inspection use of generation-review paths; their independent
   release/candidate semantics remain outside Agent Visual Runtime;
 - legacy prompt instructions, execution-guard tool-name special cases, direct
@@ -299,13 +298,25 @@ After callers migrate, delete:
 
 No forwarding alias or permanent dual registration is retained.
 
-### 10. Governance understands native visual availability
+### 10. Governance enforces the pending native proof chain
 
-The shared execution governor receives typed native-tool attempts and results.
-It denies shell screenshot, window enumeration, or OS automation only when the
-requested source is owned, authorized, and supported by an available
-`VisualSource`. The denial directs the agent to `sciforge_look` or
-`sciforge_capture` and includes a stable failure code.
+The Host derives `nativeVisualProofChainPending` from the same receipt ledger
+that validates completion. It pushes that fact into each runtime's turn-scoped
+governance snapshot. Runtime pre-tool hooks submit every supported tool call to
+the shared execution governor before dispatch; the governor, rather than a
+runtime-specific matcher, decides whether the call is relevant. While the chain
+is pending it allows `sciforge_look` and `sciforge_capture`, and denies
+non-native visual inspection and command execution with a stable failure code.
+No runtime parses request text or maintains a second proof ledger.
+
+Claude installs that callback directly on the SDK query after seeding the typed
+turn state. Codex uses one SciForge-owned user hook inside its isolated managed
+`CODEX_HOME`: startup lists the discovered hook through app-server, verifies
+its exact source, command, event, and current hash, persists trust for only that
+hash, reloads, and verifies it again. It neither writes system requirements nor
+bypasses hook trust. Missing state, hook diagnostics, identity mismatch, or
+failed trust verification prevents governed execution instead of silently
+falling back.
 
 External application work may still use trusted computer use. Unavailable visual
 understanding is a visible failure, not permission to claim inspection. A
@@ -313,7 +324,29 @@ capture-only task may complete without Model Router evidence only when its
 obligation explicitly requires capture rather than semantic visual
 understanding.
 
-### 11. Source and packaged applications use the same composition
+### 11. The Host commits only validated final responses
+
+Assistant output from a turn with execution obligations is a candidate, not a
+committed user-visible result. The runtime-neutral Host delays candidate
+assistant events until the terminal lifecycle arrives and the canonical
+receipt ledger passes. On success it publishes the candidate exactly once
+before the successful lifecycle, after durably persisting a publication commit.
+The committed candidate does not reuse its earlier runtime sequence number,
+because receipts may already have advanced the visible stream.
+
+The persisted user item carries a typed pending marker. Thread-detail reads
+fail closed until the matching commit marker exists, and admit only assistant
+items created no later than that commit. On failure, cancellation, a refresh
+race, late post-terminal output, or an integrity violation the Host discards
+the candidate and exposes only non-assistant evidence plus the failed lifecycle
+and structured error.
+
+Rejected assistant items are also removed from thread-detail reads, and late or
+replay subscribers consult the remembered rejection before publishing events.
+Reasoning, tool receipts, and audit traces remain evidence; none can be promoted
+into a successful final answer.
+
+### 12. Source and packaged applications use the same composition
 
 The native tool definitions and Core source registrations compile into the
 Electron main output. Installed domains continue to come only from generated
@@ -352,6 +385,12 @@ stub. Smoke tests do not require external credentials.
   during packaging.
 - **Migration creates temporary duplicate paths.** Perform an atomic cutover and
   make architecture checks fail while any retired public path remains.
+- **A runtime executes a bypass before the observer can interrupt it.** Make the
+  hard deny a pre-tool hook driven by the Host snapshot; keep post-event
+  governance for recovery and audit only.
+- **An unverified success message reaches the user before terminal validation.**
+  Gate assistant publication in the Host and remove rejected assistant items
+  from history and replay.
 
 ## Migration Plan
 
@@ -367,8 +406,9 @@ stub. Smoke tests do not require external credentials.
    surface used by every owned runtime.
 6. Add generic Domain SDK source contributions and migrate PDF/document
    rendering through generated domain composition where ownership requires it.
-7. Integrate consumer reference proofs and the typed completion chain.
-8. Migrate callers and execution governance, then delete all superseded broker,
-   MCP, IPC, prompt, and guard paths in the same cutover.
+7. Integrate the typed completion chain and Host final-response publication
+   barrier.
+8. Add turn-scoped pre-dispatch runtime governance, migrate callers, then delete
+   all superseded broker, MCP, IPC, prompt, and guard paths in the same cutover.
 9. Regenerate capability documentation and run architecture, type, focused,
    full regression, source smoke, and packaged smoke verification.

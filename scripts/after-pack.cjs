@@ -5,7 +5,8 @@ const { pathToFileURL } = require('node:url')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
 const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
 
-const MCP_NODE_ENTRY_REQUIRED_PATHS = releaseWorkerManifest.mcpNodeEntryRequiredPaths
+const PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
+  releaseWorkerManifest.packagedExecutableNodeEntryRequiredPaths
 
 function normalizePlatform(platform) {
   return platform === 'win' ? 'win32' : platform
@@ -24,10 +25,6 @@ function packedResourcesDir(context) {
 
 function unpackedAppRoot(context) {
   return join(packedResourcesDir(context), 'app.asar.unpacked')
-}
-
-function projectRoot(context) {
-  return context.packager?.projectDir || process.cwd()
 }
 
 function assertExists(path, label) {
@@ -97,9 +94,9 @@ function verifyBundledMultiAgentContract(context, options = {}) {
   }
 }
 
-function validateBuiltMcpNodeEntries(context) {
-  const root = projectRoot(context)
-  for (const relativePath of MCP_NODE_ENTRY_REQUIRED_PATHS) {
+function validatePackagedExecutableNodeEntries(context) {
+  const root = unpackedAppRoot(context)
+  for (const relativePath of PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS) {
     assertExists(join(root, relativePath), relativePath)
   }
 }
@@ -151,7 +148,7 @@ async function afterPack(context) {
   pruneUnrelatedNativeRuntimeDependencies(context)
   validateNativeRuntimeDependencies(context)
   verifyBundledMultiAgentContract(context)
-  validateBuiltMcpNodeEntries(context)
+  validatePackagedExecutableNodeEntries(context)
   ensureNodePtyHelpersExecutable(context)
   maybeAdhocSignMacApp(context)
 }
@@ -161,18 +158,18 @@ for (const [exportName, requiredPaths] of Object.entries(
 )) {
   exports[exportName] = requiredPaths
 }
-exports.MCP_NODE_ENTRY_REQUIRED_PATHS = MCP_NODE_ENTRY_REQUIRED_PATHS
+exports.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
+  PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
   unpackedAppRoot,
-  projectRoot,
   validateBundledReleaseRuntime,
   validateBundledReleaseRuntimes,
   pruneUnrelatedNativeRuntimeDependencies,
   validateNativeRuntimeDependencies,
   verifyBundledMultiAgentContract,
-  validateBuiltMcpNodeEntries,
+  validatePackagedExecutableNodeEntries,
   ensureNodePtyHelpersExecutable
 }
 exports.default = afterPack

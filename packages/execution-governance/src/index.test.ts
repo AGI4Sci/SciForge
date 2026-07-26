@@ -566,6 +566,33 @@ describe('ExecutionGovernorCore', () => {
     expect(decision.action).toBe('allow')
   })
 
+  it('applies owned visual policy to commands written into an existing executor session', () => {
+    const governor = new ExecutionGovernorCore()
+
+    for (const call of [
+      attempt('write_stdin', {
+        session_id: 'session-1',
+        chars: 'screencapture -x /tmp/sciforge.png\n'
+      }),
+      attempt('Bash', {
+        action: 'write',
+        session_id: 'session-1',
+        chars: 'screencapture -x /tmp/sciforge.png\n'
+      })
+    ]) {
+      expect(governor.inspectAttempt(call, {
+        ownedVisualToolsAvailable: true
+      })).toMatchObject({
+        action: 'deny',
+        code: 'owned_visual_policy_denied',
+        attempt: {
+          family: 'command_execution:os-gui-automation',
+          toolKind: 'command_execution'
+        }
+      })
+    }
+  })
+
   it('classifies native look as a read and native capture as a mutating local-write family', () => {
     const look = normalizeExecutionAttempt(attempt('sciforge_look', {
       sourceRef: 'artifact_12345678901234567890',
@@ -594,6 +621,137 @@ describe('ExecutionGovernorCore', () => {
     })).toMatchObject({
       family: 'tool_call:visual.capture',
       stateChanged: true
+    })
+  })
+
+  it('allows only the native look and capture tools through the pending visual proof path', () => {
+    const governor = new ExecutionGovernorCore()
+    const context = { nativeVisualProofChainPending: true }
+    const look = attempt('sciforge_look', {
+      sourceRef: 'artifact_12345678901234567890',
+      task: 'Inspect this visual.'
+    })
+    const capture = attempt('sciforge_capture', {
+      snapshotRef: 'snapshot_12345678901234567890',
+      purpose: 'workspace-asset'
+    })
+
+    expect(governor.inspectAttempt(look, context)).toMatchObject({
+      action: 'allow',
+      attempt: {
+        family: 'tool_call:visual.look',
+        mutating: false
+      }
+    })
+    expect(governor.inspectAttempt(capture, context)).toMatchObject({
+      action: 'allow',
+      attempt: {
+        family: 'tool_call:visual.capture',
+        mutating: true
+      }
+    })
+  })
+
+  it.each(['view_image', 'functions.view_image', 'ViewImage'])(
+    'rejects %s while the native visual proof chain is pending',
+    (toolName) => {
+      const governor = new ExecutionGovernorCore()
+      const decision = governor.inspectAttempt(attempt(toolName, {
+        path: '/tmp/unattested.png'
+      }), {
+        nativeVisualProofChainPending: true
+      })
+
+      expect(decision).toMatchObject({
+        action: 'deny',
+        code: 'native_visual_proof_chain_required',
+        reason: expect.stringContaining('native visual proof chain')
+      })
+      expect(decision.guidance).toContain('sciforge_look')
+      expect(decision.guidance).toContain('sciforge_capture')
+      expect(decision.guidance).toContain('view_image')
+    }
+  )
+
+  it.each([
+    { toolName: 'exec_command', command: 'file .sciforge/visual-assets/figure.png' },
+    { toolName: 'local_shell', command: 'python3 inspect_pixels.py' }
+  ])(
+    'rejects command execution as a pending visual proof bypass: $toolName',
+    ({ toolName, command }) => {
+      const governor = new ExecutionGovernorCore()
+      const decision = governor.inspectAttempt(attempt(toolName, {
+        command
+      }, {
+        toolKind: 'command_execution'
+      }), {
+        nativeVisualProofChainPending: true
+      })
+
+      expect(decision).toMatchObject({
+        action: 'deny',
+        code: 'native_visual_proof_chain_required',
+        attempt: { toolKind: 'command_execution' }
+      })
+      expect(decision.guidance).toContain('typed native visual proofs')
+    }
+  )
+
+  it('routes existing executor session controls through the pending visual governor', () => {
+    const governor = new ExecutionGovernorCore()
+    const context = { nativeVisualProofChainPending: true }
+
+    for (const call of [
+      attempt('Bash', {
+        action: 'write',
+        session_id: 'session-1',
+        chars: 'python3 inspect_pixels.py\n'
+      }),
+      attempt('Bash', {
+        action: 'poll',
+        session_id: 'session-1'
+      }),
+      attempt('write_stdin', {
+        session_id: 'session-1',
+        chars: 'python3 inspect_pixels.py\n'
+      }),
+      attempt('functions.write_stdin', {
+        session_id: 'session-1'
+      })
+    ]) {
+      expect(governor.inspectAttempt(call, context)).toMatchObject({
+        action: 'deny',
+        code: 'native_visual_proof_chain_required',
+        attempt: { toolKind: 'command_execution' }
+      })
+    }
+
+    expect(governor.inspectAttempt(attempt('Bash', {
+      action: 'stop',
+      session_id: 'session-1'
+    }), context)).toMatchObject({
+      action: 'allow',
+      attempt: { toolKind: 'command_execution' }
+    })
+  })
+
+  it('preserves ordinary view_image and command execution behavior without a pending proof chain', () => {
+    const governor = new ExecutionGovernorCore()
+
+    expect(governor.inspectAttempt(attempt('view_image', {
+      path: '/tmp/reference.png'
+    })).action).toBe('allow')
+    expect(governor.inspectAttempt(attempt('exec_command', {
+      command: 'node --version'
+    }, {
+      toolKind: 'command_execution'
+    })).action).toBe('allow')
+    expect(governor.inspectAttempt(attempt('write_stdin', {
+      session_id: 'session-1',
+      chars: 'echo continue\n'
+    }))).toMatchObject({
+      action: 'allow',
+      attempt: { toolKind: 'command_execution' }
     })
   })
 

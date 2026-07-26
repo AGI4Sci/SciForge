@@ -35,11 +35,11 @@
 - [x] 6.1 Run focused capability, Surface Inspection, Workspace Preview, PDF annotation, Biology Room, IPC, runtime, governance, and architecture suites.
 - [x] 6.2 Run TypeScript typecheck and lint on affected modules, then resolve all regressions caused by this change.
 
-## 7. Surface Inspection Cutover
+## 7. Agent Visual Runtime Cutover
 
-- [x] 7.1 Register `surface.inspect` as a broker read and resolve stable target references to the latest layout atomically inside the provider.
+- [x] 7.1 Publish visible surfaces through generic visual sources; resolve stable target references to the latest layout atomically inside the native `sciforge_look` path.
 - [x] 7.2 Split semantic resource revision from layout epoch and prove scroll, resize, render, and capture publication cannot stale a semantic handle.
-- [x] 7.3 Delete public `gui_visible_context` and `gui_visual_capture` agent tools and their token-coordination guidance.
+- [x] 7.3 Delete broker and managed visual inspection/render operations, public token-coordination tools, their prompt guidance, and compatibility aliases.
 
 ## 8. Canonical Document Annotation Cutover
 

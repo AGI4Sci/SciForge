@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { realpath } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
@@ -53,6 +54,8 @@ import {
   type CodexAppServerAccountLoginCompletedNotification,
   type CodexAppServerAccountRateLimitsUpdatedNotification,
   type CodexAppServerAccountUpdatedNotification,
+  type CodexAppServerHookMetadata,
+  type CodexAppServerInitializeResponse,
   type CodexAppServerInputItem,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions,
@@ -78,12 +81,14 @@ import {
   CODEX_PLAN_GATEWAY_PROVIDER_ID,
   prepareCodexAppServerLaunch,
   resolveCodexWorkspace,
+  type CodexAppServerLaunchConfig,
   type CodexPlanGatewayLaunchConfig
 } from './codex-config'
 import {
   nativeAgentToolExecutionMetadata,
   type AgentRuntimeToolSurface
 } from '../agent-runtime/agent-tool-surface'
+import type { AgentRuntimeTurnGovernanceSnapshotInput } from '../agent-runtime/adapter'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured
@@ -106,8 +111,21 @@ import type {
   MultiAgentTranscriptEntry,
   MultiAgentUsage
 } from '../../../../packages/workers/multi-agent/src'
+import {
+  CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV,
+  CodexPreToolUseGovernanceBridge
+} from './codex-pre-tool-use-governance'
+import {
+  probeCodexPreToolUseHook,
+  type CodexPreToolUseHookDefinition
+} from './codex-pre-tool-use-hook'
+import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 
 class CodexCodingPlanLoginInProgressError extends Error {}
+
+const MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION = '0.141.0'
+const CODEX_USER_AGENT_VERSION_PATTERN =
+  /\bCodex(?: Desktop)?\/(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?=$|[\s(])/u
 
 export type CodexRuntimeEventSink = {
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.event, payload: CodexEventPayload): void
@@ -124,6 +142,7 @@ export type CodexRuntimeServiceOptions = {
   standardCodexAuthPath?: string
   planGateway?: CodexPlanGatewayLaunchConfig
   capabilityAgentTools?: AgentRuntimeToolSurface
+  preToolUseHookLaunch?: ManagedGuiMcpLaunchConfig
   createClient?: (options: CodexAppServerJsonRpcClientOptions) => CodexAppServerJsonRpcClient
 }
 
@@ -133,6 +152,20 @@ type CodexTurnTiming = {
   firstDeltaSeen: boolean
 }
 
+type CodexPreparedTurnGovernance = {
+  sessionId: string
+  parent?: {
+    threadId: string
+    turnId: string
+  }
+}
+
+type CodexTurnGovernanceBinding = {
+  sessionId: string
+  governanceThreadId: string
+  governanceTurnId: string
+}
+
 type CodexPendingTurnRecovery = {
   threadId: string
   text: string
@@ -140,6 +173,8 @@ type CodexPendingTurnRecovery = {
   model?: string
   reasoningEffort?: string
   fileReferences?: CodexTurnStartPayload['fileReferences']
+  ownedVisualToolsAvailable: boolean
+  nativeVisualProofChainPending: boolean
   runtime: ReturnType<typeof getCodexRuntimeSettings>
   recoveryAttempted: boolean
 }
@@ -221,12 +256,14 @@ export class CodexRuntimeService {
   private client: CodexAppServerJsonRpcClient | null = null
   private clientPromise: Promise<CodexAppServerJsonRpcClient> | null = null
   private clientConnected = false
-  private clientInfo: unknown = null
+  private clientInfo: CodexAppServerInitializeResponse | null = null
   private clientModelAccessKey: string | null = null
+  private clientLaunchConfig: CodexAppServerLaunchConfig | null = null
   private subscription: Promise<void> | null = null
   private readonly threadStore: CodexThreadStore | null
   private readonly eventStore: CodexEventStore | null
   private readonly usageStore: CodexUsageStore | null
+  private readonly preToolUseGovernanceBridge: CodexPreToolUseGovernanceBridge | null
   private multiAgentBridge: CodexMultiAgentToolBridge | null = null
   private readonly multiAgentChildThreadIds = new Set<string>()
   private usageBackfillPromise: Promise<void> | null = null
@@ -241,6 +278,8 @@ export class CodexRuntimeService {
   private readonly pendingToolItemsByTurn = new Map<string, Set<string>>()
   private readonly terminalToolItemsByTurn = new Map<string, Set<string>>()
   private readonly toolExecutionIdentityByCall = new Map<string, CodexToolExecutionIdentity>()
+  private readonly governanceBindingsByTurn =
+    new Map<string, CodexTurnGovernanceBinding>()
   private readonly deferredTurnCompleteEvents = new Map<string, CodexThreadEventPayload>()
   private readonly pendingToolBarrierTimers = new Map<string, ReturnType<typeof setTimeout>>()
   private codingPlanAccount: Extract<CodexCodingPlanAccountResult, { ok: true }> | null = null
@@ -257,6 +296,9 @@ export class CodexRuntimeService {
     this.threadStore = options.storageRoot ? new CodexThreadStore({ rootDir: options.storageRoot }) : null
     this.eventStore = options.storageRoot ? new CodexEventStore({ rootDir: options.storageRoot }) : null
     this.usageStore = options.storageRoot ? new CodexUsageStore({ rootDir: options.storageRoot }) : null
+    this.preToolUseGovernanceBridge = options.storageRoot
+      ? new CodexPreToolUseGovernanceBridge({ storageRoot: options.storageRoot })
+      : null
   }
 
   async connect(): Promise<CodexConnectResult> {
@@ -598,7 +640,7 @@ export class CodexRuntimeService {
       }
       const stored = await this.persistEvent(event.threadId, runtimeEvent)
       const published = stored?.event ?? runtimeEvent
-      this.noteRuntimeEvent(published)
+      await this.noteRuntimeEvent(published)
       this.broadcastEvent(published)
       this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
       return published
@@ -704,6 +746,7 @@ export class CodexRuntimeService {
   }
 
   async startTurn(payload: CodexTurnStartPayload): Promise<CodexTurnStartResult> {
+    let preparedGovernance: CodexPreparedTurnGovernance | null = null
     try {
       const startedAtMs = Date.now()
       const settings = await this.options.settings()
@@ -744,6 +787,12 @@ export class CodexRuntimeService {
         })
       }
       let response: unknown
+      preparedGovernance = await this.prepareCodexTurnGovernance({
+        sessionId: codexThreadId,
+        ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending:
+          payload.nativeVisualProofChainPending === true
+      })
       try {
         response = await client.startTurn(turnStartParams({
           threadId: codexThreadId,
@@ -766,7 +815,14 @@ export class CodexRuntimeService {
           storedThread,
           workspace
         })
+        await this.releasePreparedCodexTurnGovernance(preparedGovernance)
         codexThreadId = replacement.codexThreadId
+        preparedGovernance = await this.prepareCodexTurnGovernance({
+          sessionId: codexThreadId,
+          ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
+          nativeVisualProofChainPending:
+            payload.nativeVisualProofChainPending === true
+        })
         response = await client.startTurn(turnStartParams({
           threadId: codexThreadId,
           guiThreadId: payload.threadId,
@@ -786,6 +842,12 @@ export class CodexRuntimeService {
         startedAtMs,
         getModelAccessSettings(settings)?.mode !== 'api'
       )
+      await this.bindCodexTurnGovernance({
+        threadId: payload.threadId,
+        turnId,
+        prepared: preparedGovernance
+      })
+      preparedGovernance = null
       this.recordTurnModelHint(payload.threadId, turnId, runtimeModel)
       this.recordTurnRecovery(payload.threadId, turnId, {
         threadId: payload.threadId,
@@ -794,6 +856,10 @@ export class CodexRuntimeService {
         model: runtimeModel,
         reasoningEffort: payload.reasoningEffort,
         fileReferences: payload.fileReferences,
+        ownedVisualToolsAvailable:
+          payload.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending:
+          payload.nativeVisualProofChainPending === true,
         runtime,
         recoveryAttempted: false
       })
@@ -826,9 +892,103 @@ export class CodexRuntimeService {
         userMessageItemId
       }
     } catch (error) {
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
+        .catch(() => undefined)
       await this.discardClientAfterFailure(error)
       return failure(error)
     }
+  }
+
+  private async prepareCodexTurnGovernance(input: {
+    sessionId: string
+    ownedVisualToolsAvailable?: boolean
+    nativeVisualProofChainPending?: boolean
+    parent?: CodexPreparedTurnGovernance['parent']
+  }): Promise<CodexPreparedTurnGovernance> {
+    const sessionId = input.sessionId.trim()
+    if (!sessionId) throw new Error('Codex turn governance requires a session id.')
+    if (!this.preToolUseGovernanceBridge) {
+      if (input.nativeVisualProofChainPending || input.parent) {
+        throw new Error(
+          'Codex native visual execution requires the SciForge pre-tool governance bridge.'
+        )
+      }
+      return { sessionId }
+    }
+    if (input.parent) {
+      const parent = this.resolveParentCodexTurnGovernance(input.parent)
+      await this.preToolUseGovernanceBridge.seedSessionForGovernanceTurn(
+        sessionId,
+        parent.governanceTurnId
+      )
+      return {
+        sessionId,
+        parent: {
+          threadId: parent.governanceThreadId,
+          turnId: parent.governanceTurnId
+        }
+      }
+    }
+    await this.preToolUseGovernanceBridge.seedSession(sessionId, {
+      ownedVisualToolsAvailable: input.ownedVisualToolsAvailable === true,
+      nativeVisualProofChainPending:
+        input.nativeVisualProofChainPending === true
+    })
+    return { sessionId }
+  }
+
+  private resolveParentCodexTurnGovernance(parent: {
+    threadId: string
+    turnId: string
+  }): CodexTurnGovernanceBinding {
+    const binding = this.governanceBindingsByTurn.get(
+      turnTimingKey(parent.threadId, parent.turnId)
+    )
+    if (
+      this.activeTurns.get(parent.threadId) !== parent.turnId ||
+      !binding ||
+      binding.governanceThreadId !== parent.threadId ||
+      binding.governanceTurnId !== parent.turnId
+    ) {
+      throw new Error(
+        'Codex child governance requires the active parent Host turn governance key.'
+      )
+    }
+    return binding
+  }
+
+  private async bindCodexTurnGovernance(input: {
+    threadId: string
+    turnId: string
+    prepared: CodexPreparedTurnGovernance
+  }): Promise<void> {
+    const turnId = input.turnId.trim()
+    if (!turnId) throw new Error('Codex turn governance requires a turn id.')
+    if (this.preToolUseGovernanceBridge) {
+      await this.preToolUseGovernanceBridge.bindTurn({
+        threadId: input.threadId,
+        turnId,
+        sessionId: input.prepared.sessionId,
+        ...(input.prepared.parent
+          ? { governanceTurnId: input.prepared.parent.turnId }
+          : {})
+      })
+    }
+    this.governanceBindingsByTurn.set(
+      turnTimingKey(input.threadId, turnId),
+      {
+        sessionId: input.prepared.sessionId,
+        governanceThreadId: input.prepared.parent?.threadId ?? input.threadId,
+        governanceTurnId: input.prepared.parent?.turnId ?? turnId
+      }
+    )
+  }
+
+  private async releasePreparedCodexTurnGovernance(
+    prepared: CodexPreparedTurnGovernance | null
+  ): Promise<void> {
+    if (!prepared) return
+    await this.preToolUseGovernanceBridge?.deleteSessionSeed(prepared.sessionId)
   }
 
   async interruptTurn(
@@ -866,6 +1026,34 @@ export class CodexRuntimeService {
       return { ok: true }
     } catch (error) {
       await this.discardClientAfterFailure(error)
+      return failure(error)
+    }
+  }
+
+  async updateTurnGovernanceSnapshot(
+    input: AgentRuntimeTurnGovernanceSnapshotInput
+  ): Promise<CodexTurnMutationResult> {
+    try {
+      if (input.runtimeId !== 'codex') return { ok: true }
+      if (this.activeTurns.get(input.threadId) !== input.turnId) return { ok: true }
+      if (!this.preToolUseGovernanceBridge) {
+        return unsupportedFailure(
+          'Codex pre-tool governance requires a SciForge runtime storage root.'
+        )
+      }
+      const binding = this.governanceBindingsByTurn.get(
+        turnTimingKey(input.threadId, input.turnId)
+      )
+      if (!binding) {
+        throw new Error('Codex active turn governance binding is unavailable.')
+      }
+      await this.preToolUseGovernanceBridge.updateSnapshot({
+        ...input,
+        threadId: binding.governanceThreadId,
+        turnId: binding.governanceTurnId
+      })
+      return { ok: true }
+    } catch (error) {
       return failure(error)
     }
   }
@@ -948,6 +1136,9 @@ export class CodexRuntimeService {
 
   async stop(reason: RuntimeToolReleaseReason = 'service_shutdown'): Promise<void> {
     const client = this.client
+    const governanceTurnIds = [...this.activeTurns.values()]
+    const governanceSessionIds = [...this.governanceBindingsByTurn.values()]
+      .map((binding) => binding.sessionId)
     for (const [threadId, turnId] of this.activeTurns) {
       this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, reason)
     }
@@ -963,22 +1154,37 @@ export class CodexRuntimeService {
     this.clientConnected = false
     this.clientInfo = null
     this.clientModelAccessKey = null
+    this.clientLaunchConfig = null
     this.subscription = null
     this.activeTurns.clear()
     this.turnTimings.clear()
     this.turnModelHints.clear()
+    this.governanceBindingsByTurn.clear()
     this.turnsWithRecordedUsage.clear()
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
     this.clearCodingPlanAccountState('Codex runtime stopped before login completed.')
     this.closeAllEventSubscribers()
+    await Promise.all(
+      [
+        ...governanceTurnIds.map((turnId) =>
+          this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
+        ),
+        ...governanceSessionIds.map((sessionId) =>
+          this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
+        )
+      ]
+    )
     if (client) await client.stop()
   }
 
   private async discardClientAfterFailure(error?: unknown): Promise<void> {
     if (error instanceof CodexCodingPlanLoginInProgressError) return
     const client = this.client
+    const governanceTurnIds = [...this.activeTurns.values()]
+    const governanceSessionIds = [...this.governanceBindingsByTurn.values()]
+      .map((binding) => binding.sessionId)
     await this.finalizeActiveTurnsBeforeTeardown({
       code: 'runtime_disconnected',
       message: CODEX_TURN_DISCONNECTED_MESSAGE,
@@ -989,16 +1195,28 @@ export class CodexRuntimeService {
     this.clientConnected = false
     this.clientInfo = null
     this.clientModelAccessKey = null
+    this.clientLaunchConfig = null
     this.subscription = null
     this.activeTurns.clear()
     this.turnTimings.clear()
     this.turnModelHints.clear()
+    this.governanceBindingsByTurn.clear()
     this.turnsWithRecordedUsage.clear()
     this.clearAllFirstActivityTimers()
     this.seenModelDeltaKeys.clear()
     this.clearPendingToolBarrier()
     this.clearCodingPlanAccountState('Codex runtime disconnected before login completed.')
     this.closeAllEventSubscribers()
+    await Promise.all(
+      [
+        ...governanceTurnIds.map((turnId) =>
+          this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
+        ),
+        ...governanceSessionIds.map((sessionId) =>
+          this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
+        )
+      ]
+    )
     if (!client) return
     try {
       await client.stop()
@@ -1058,15 +1276,25 @@ export class CodexRuntimeService {
         settings: current,
         managedCodexHome: this.options.managedCodexHome,
         standardCodexAuthPath: this.options.standardCodexAuthPath,
-        planGateway: this.options.planGateway
+        planGateway: this.options.planGateway,
+        preToolUseHookLaunch: this.options.preToolUseHookLaunch
       })
+      this.clientLaunchConfig = launch
       this.ensureCodexMultiAgentBridge(current)
       const createClient = this.options.createClient ?? createCodexAppServerClient
       const client = createClient({
         command: launch.command,
         args: launch.args,
         cwd: launch.cwd,
-        env: launch.env,
+        env: {
+          ...launch.env,
+          ...(this.options.storageRoot
+            ? {
+                [CODEX_PRE_TOOL_USE_GOVERNANCE_STORAGE_ROOT_ENV]:
+                  this.options.storageRoot
+              }
+            : {})
+        },
         clientInfo: {
           name: 'sciforge',
           title: 'SciForge',
@@ -1104,7 +1332,7 @@ export class CodexRuntimeService {
     access: 'runtime' | 'account' = 'runtime'
   ): Promise<{
     client: CodexAppServerJsonRpcClient
-    info: unknown
+    info: CodexAppServerInitializeResponse
   }> {
     const current = settings ?? await this.options.settings()
     if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
@@ -1118,8 +1346,17 @@ export class CodexRuntimeService {
       throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
     }
     const client = await this.ensureClient(current, access)
-    if (this.clientConnected) return { client, info: this.clientInfo ?? {} }
+    if (this.clientConnected && this.clientInfo) {
+      if (access === 'runtime') {
+        this.assertCodexPreToolUseRuntimeVersion(this.clientInfo)
+      }
+      return { client, info: this.clientInfo }
+    }
     const info = await client.connect()
+    if (access === 'runtime') {
+      this.assertCodexPreToolUseRuntimeVersion(info)
+    }
+    await this.ensureCodexPreToolUseHookTrusted(client)
     this.clientConnected = true
     this.clientInfo = info
     return { client, info }
@@ -1127,7 +1364,7 @@ export class CodexRuntimeService {
 
   private async ensureModelUseClient(settings: AppSettingsV1): Promise<{
     client: CodexAppServerJsonRpcClient
-    info: unknown
+    info: CodexAppServerInitializeResponse
   }> {
     const connected = await this.ensureConnectedClient(settings)
     const access = getModelAccessSettings(settings)
@@ -1150,9 +1387,142 @@ export class CodexRuntimeService {
     return connected
   }
 
+  private async ensureCodexPreToolUseHookTrusted(
+    client: CodexAppServerJsonRpcClient
+  ): Promise<void> {
+    if (!this.options.preToolUseHookLaunch) return
+    const storageRoot = this.options.storageRoot
+    if (!this.preToolUseGovernanceBridge || !storageRoot) {
+      throw new Error(
+        'SciForge Codex PreToolUse governance requires a runtime storage root.'
+      )
+    }
+    const launch = this.clientLaunchConfig
+    if (!launch) throw new Error('SciForge Codex launch configuration is unavailable.')
+    const expected = launch.preToolUseHook
+    if (!expected) throw new Error('SciForge Codex PreToolUse hook was not prepared.')
+    const first = await this.readOwnedCodexPreToolUseHook(client, launch.cwd, expected)
+    await probeCodexPreToolUseHook({
+      definition: expected,
+      cwd: launch.cwd,
+      storageRoot
+    })
+    if (first.trustStatus === 'trusted') return
+    if (first.trustStatus !== 'untrusted' && first.trustStatus !== 'modified') {
+      throw new Error(
+        `SciForge Codex PreToolUse hook has unexpected trust status ${first.trustStatus}.`
+      )
+    }
+    const write = await client.writeConfigBatch({
+      edits: [{
+        keyPath: 'hooks.state',
+        value: {
+          [first.key]: {
+            enabled: true,
+            trusted_hash: first.currentHash
+          }
+        },
+        mergeStrategy: 'upsert'
+      }],
+      filePath: join(launch.codexHome, 'config.toml'),
+      reloadUserConfig: true
+    })
+    if (write.status !== 'ok' && write.status !== 'okOverridden') {
+      throw new Error(`Codex rejected SciForge hook trust update: ${write.status}.`)
+    }
+    const verified = await this.readOwnedCodexPreToolUseHook(
+      client,
+      launch.cwd,
+      expected
+    )
+    if (
+      verified.key !== first.key ||
+      verified.currentHash !== first.currentHash ||
+      verified.trustStatus !== 'trusted'
+    ) {
+      throw new Error('Codex did not verify the exact SciForge PreToolUse hook after trust reload.')
+    }
+  }
+
+  private assertCodexPreToolUseRuntimeVersion(
+    info: CodexAppServerInitializeResponse
+  ): void {
+    if (!this.options.preToolUseHookLaunch) return
+    const match = CODEX_USER_AGENT_VERSION_PATTERN.exec(info.userAgent)
+    if (!match) {
+      throw new Error(
+        'SciForge cannot verify matcher-free PreToolUse coverage because the Codex ' +
+        `app-server did not report a supported runtime version. Codex ${MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION} ` +
+        'or newer is required.'
+      )
+    }
+    const version = `${match[1]}.${match[2]}.${match[3]}${match[4] ?? ''}`
+    const core = [match[1], match[2], match[3]].map((part) => Number.parseInt(part, 10))
+    const minimumCore = MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION
+      .split('.')
+      .map((part) => Number.parseInt(part, 10))
+    const comparison = core.findIndex((part, index) => part !== minimumCore[index])
+    const meetsMinimum = comparison >= 0
+      ? core[comparison] > minimumCore[comparison]
+      : match[4] === undefined
+    if (!meetsMinimum) {
+      throw new Error(
+        `SciForge requires Codex ${MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION} or newer for ` +
+        `matcher-free PreToolUse coverage across local function tools; connected Codex is ${version}. ` +
+        'Update the configured Codex runtime before starting the agent.'
+      )
+    }
+  }
+
+  private async readOwnedCodexPreToolUseHook(
+    client: CodexAppServerJsonRpcClient,
+    cwd: string,
+    expected: CodexPreToolUseHookDefinition
+  ): Promise<CodexAppServerHookMetadata> {
+    const [canonicalCwd, canonicalSourcePath] = await Promise.all([
+      realpath(cwd),
+      realpath(expected.sourcePath)
+    ])
+    const response = await client.listHooks([canonicalCwd])
+    if (!Array.isArray(response.data) || response.data.length !== 1) {
+      throw new Error('Codex hooks/list did not return exactly one workspace result.')
+    }
+    const result = response.data[0]
+    if (
+      result.cwd !== canonicalCwd ||
+      result.errors.length > 0 ||
+      result.warnings.length > 0
+    ) {
+      throw new Error('Codex hooks/list returned a workspace mismatch or hook diagnostics.')
+    }
+    const owned = result.hooks.filter((hook) => hook.sourcePath === canonicalSourcePath)
+    if (owned.length !== 1) {
+      throw new Error('Codex did not discover exactly one SciForge-owned PreToolUse hook.')
+    }
+    const hook = owned[0]
+    const expectedCommand = process.platform === 'win32'
+      ? expected.commandWindows
+      : expected.command
+    if (
+      hook.source !== 'user' ||
+      hook.isManaged ||
+      hook.pluginId !== null ||
+      hook.eventName !== 'preToolUse' ||
+      hook.handlerType !== 'command' ||
+      hook.matcher !== null ||
+      hook.command !== expectedCommand ||
+      hook.enabled !== true ||
+      !hook.key.trim() ||
+      !/^sha256:[a-f0-9]+$/u.test(hook.currentHash)
+    ) {
+      throw new Error('Codex discovered hook identity does not match the SciForge-owned definition.')
+    }
+    return hook
+  }
+
   private async ensureCodingPlanAccountClient(): Promise<{
     client: CodexAppServerJsonRpcClient
-    info: unknown
+    info: CodexAppServerInitializeResponse
   }> {
     const settings = await this.options.settings()
     return this.ensureConnectedClient({
@@ -1400,6 +1770,10 @@ export class CodexRuntimeService {
   private async runCodexMultiAgentChild(input: MultiAgentExecutorInput): Promise<MultiAgentExecutorResult> {
     const settings = await this.options.settings()
     const { client } = await this.ensureModelUseClient(settings)
+    this.resolveParentCodexTurnGovernance({
+      threadId: input.parentThreadId,
+      turnId: input.parentTurnId
+    })
     const workspace = resolveCodexWorkspace(settings, input.workspace)
     const dynamicTools = await this.codexDynamicTools(settings, { includeMultiAgent: false })
     const threadResponse = await client.startThread({
@@ -1445,8 +1819,17 @@ export class CodexRuntimeService {
     this.multiAgentChildThreadIds.add(childCodexThreadId)
     const subscriber = this.addEventSubscriber(childGuiThreadId)
     const startedAtMs = Date.now()
+    let childTurnId = ''
+    let preparedGovernance: CodexPreparedTurnGovernance | null = null
     try {
       const modelAccess = codexModelAccessThreadParams(settings)
+      preparedGovernance = await this.prepareCodexTurnGovernance({
+        sessionId: childCodexThreadId,
+        parent: {
+          threadId: input.parentThreadId,
+          turnId: input.parentTurnId
+        }
+      })
       const turnResponse = await client.startTurn(turnStartParams({
         threadId: childCodexThreadId,
         guiThreadId: childGuiThreadId,
@@ -1456,7 +1839,7 @@ export class CodexRuntimeService {
         runtime: getCodexRuntimeSettings(settings)
       }))
       const turn = asRecord(asRecord(turnResponse)?.turn) ?? {}
-      const childTurnId = stringValue(turn.id) || ''
+      childTurnId = stringValue(turn.id) || ''
       if (!childTurnId) throw new Error('Codex child turn did not return a turn id.')
       this.recordActiveTurn(
         childGuiThreadId,
@@ -1464,6 +1847,12 @@ export class CodexRuntimeService {
         startedAtMs,
         getModelAccessSettings(settings)?.mode !== 'api'
       )
+      await this.bindCodexTurnGovernance({
+        threadId: childGuiThreadId,
+        turnId: childTurnId,
+        prepared: preparedGovernance
+      })
+      preparedGovernance = null
       this.recordTurnModelHint(childGuiThreadId, childTurnId, modelAccess.model)
       await input.appendTranscript({
         id: `${input.childId}-thread-start`,
@@ -1478,6 +1867,8 @@ export class CodexRuntimeService {
         threadId: childGuiThreadId,
         codexThreadId: childCodexThreadId,
         turnId: childTurnId,
+        parentThreadId: input.parentThreadId,
+        parentTurnId: input.parentTurnId,
         signal: input.signal
       })
       return {
@@ -1491,6 +1882,12 @@ export class CodexRuntimeService {
         }
       }
     } finally {
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
+        .catch(() => undefined)
+      if (childTurnId) {
+        await this.clearTurnTracking(childGuiThreadId, childTurnId)
+          .catch(() => undefined)
+      }
       this.closeEventSubscriber(subscriber)
     }
   }
@@ -1500,6 +1897,8 @@ export class CodexRuntimeService {
     threadId: string
     codexThreadId: string
     turnId: string
+    parentThreadId: string
+    parentTurnId: string
     signal: AbortSignal
   }): Promise<{
     summary: string
@@ -1528,6 +1927,12 @@ export class CodexRuntimeService {
           })
         }
         if (event.tool) {
+          await this.publishCodexChildToolFactToParent(event, {
+            parentThreadId: input.parentThreadId,
+            parentTurnId: input.parentTurnId,
+            childThreadId: input.threadId,
+            childTurnId: input.turnId
+          })
           transcript.push({
             id: event.tool.itemId,
             kind: 'tool',
@@ -1554,6 +1959,54 @@ export class CodexRuntimeService {
       }
     } finally {
       input.signal.removeEventListener('abort', onAbort)
+    }
+  }
+
+  private async publishCodexChildToolFactToParent(
+    event: CodexThreadEventPayload,
+    input: {
+      parentThreadId: string
+      parentTurnId: string
+      childThreadId: string
+      childTurnId: string
+    }
+  ): Promise<void> {
+    const tool = event.tool
+    if (!tool) return
+    if (this.activeTurns.get(input.parentThreadId) !== input.parentTurnId) {
+      throw new Error('Codex child receipt cannot target an inactive parent turn.')
+    }
+    const parentBinding = this.governanceBindingsByTurn.get(
+      turnTimingKey(input.parentThreadId, input.parentTurnId)
+    )
+    if (
+      !parentBinding ||
+      parentBinding.governanceThreadId !== input.parentThreadId ||
+      parentBinding.governanceTurnId !== input.parentTurnId
+    ) {
+      throw new Error('Codex child receipt cannot resolve the parent Host proof ledger.')
+    }
+    const callId = stringValue(tool.meta?.callId).trim() || tool.itemId.trim()
+    if (!callId) throw new Error('Codex child receipt requires a call id.')
+    const parentEvent = this.withCorrelatedToolExecutionFacts({
+      threadId: input.parentThreadId,
+      turnId: input.parentTurnId,
+      tool: {
+        ...tool,
+        itemId: `child-${input.childTurnId}-${tool.itemId}`,
+        meta: {
+          ...tool.meta,
+          callId,
+          childThreadId: input.childThreadId,
+          childTurnId: input.childTurnId,
+          governanceThreadId: parentBinding.governanceThreadId,
+          governanceTurnId: parentBinding.governanceTurnId,
+          receiptScope: 'parent_turn'
+        }
+      }
+    })
+    for (const runtimeEvent of this.eventsAfterPendingToolBarrier(parentEvent)) {
+      await this.publishClientEvent(runtimeEvent)
     }
   }
 
@@ -1912,7 +2365,7 @@ export class CodexRuntimeService {
     this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: runtimeEvent })
     await this.emitFirstDeltaIfNeeded(runtimeEvent)
     await this.emitTurnDoneIfNeeded(runtimeEvent)
-    this.noteRuntimeEvent(runtimeEvent)
+    await this.noteRuntimeEvent(runtimeEvent)
   }
 
   private async recoverModelRouterAliasFailure(event: CodexThreadEventPayload): Promise<boolean> {
@@ -1926,7 +2379,7 @@ export class CodexRuntimeService {
     if (getModelAccessSettings(settings)?.mode !== 'api') return false
     const storedThread = await this.findStoredThread(event.threadId)
     this.pendingTurnRecoveries.set(key, { ...recovery, recoveryAttempted: true })
-    this.clearTurnTracking(event.threadId, turnId)
+    await this.clearTurnTracking(event.threadId, turnId)
 
     await this.emitRuntimeStatus({
       threadId: event.threadId,
@@ -1935,6 +2388,7 @@ export class CodexRuntimeService {
       message: 'Codex thread used a stale Model Router alias; rebuilding the thread and retrying this turn.'
     })
 
+    let preparedGovernance: CodexPreparedTurnGovernance | null = null
     try {
       const { client } = await this.ensureConnectedClient(settings)
       const replacement = await this.rematerializeThread({
@@ -1943,6 +2397,12 @@ export class CodexRuntimeService {
         guiThreadId: event.threadId,
         storedThread,
         workspace: recovery.workspace
+      })
+      preparedGovernance = await this.prepareCodexTurnGovernance({
+        sessionId: replacement.codexThreadId,
+        ownedVisualToolsAvailable: recovery.ownedVisualToolsAvailable,
+        nativeVisualProofChainPending:
+          recovery.nativeVisualProofChainPending
       })
       const response = await client.startTurn(turnStartParams({
         threadId: replacement.codexThreadId,
@@ -1957,6 +2417,12 @@ export class CodexRuntimeService {
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const retryTurnId = stringValue(turn.id) || ''
       this.recordActiveTurn(event.threadId, retryTurnId, Date.now(), false)
+      await this.bindCodexTurnGovernance({
+        threadId: event.threadId,
+        turnId: retryTurnId,
+        prepared: preparedGovernance
+      })
+      preparedGovernance = null
       this.recordTurnModelHint(event.threadId, retryTurnId, recovery.model)
       this.recordTurnRecovery(event.threadId, retryTurnId, {
         ...recovery,
@@ -1971,6 +2437,8 @@ export class CodexRuntimeService {
       })
       return true
     } catch (error) {
+      await this.releasePreparedCodexTurnGovernance(preparedGovernance)
+        .catch(() => undefined)
       await this.emitRuntimeError({
         threadId: event.threadId,
         turnId,
@@ -2341,22 +2809,32 @@ export class CodexRuntimeService {
     return null
   }
 
-  private noteRuntimeEvent(event: CodexThreadEventPayload): void {
+  private async noteRuntimeEvent(event: CodexThreadEventPayload): Promise<void> {
     const turnId = event.turnId || event.userMessage?.turnId || ''
     if (!turnId || this.activeTurns.get(event.threadId) !== turnId) return
     if (event.turnComplete || isTerminalRuntimeError(event.runtimeError)) {
-      this.clearTurnTracking(event.threadId, turnId)
+      await this.clearTurnTracking(event.threadId, turnId)
     }
   }
 
-  private clearTurnTracking(threadId: string, turnId: string): void {
+  private async clearTurnTracking(threadId: string, turnId: string): Promise<void> {
     const key = turnTimingKey(threadId, turnId)
+    const governanceBinding = this.governanceBindingsByTurn.get(key)
     if (this.activeTurns.get(threadId) === turnId) this.activeTurns.delete(threadId)
     this.turnTimings.delete(key)
     this.turnModelHints.delete(key)
     this.pendingTurnRecoveries.delete(key)
+    this.governanceBindingsByTurn.delete(key)
     this.clearFirstActivityTimer(key)
     this.clearPendingToolBarrierForTurn(key)
+    await Promise.all([
+      this.preToolUseGovernanceBridge?.deleteTurnState(turnId),
+      governanceBinding
+        ? this.preToolUseGovernanceBridge?.deleteSessionSeed(
+            governanceBinding.sessionId
+          )
+        : undefined
+    ])
   }
 
   private noteFirstActivity(event: CodexThreadEventPayload): void {
@@ -2445,7 +2923,7 @@ export class CodexRuntimeService {
     const stored = await this.persistEvent(event.threadId, runtimeEvent)
     const published = stored?.event ?? runtimeEvent
     await this.emitTurnDoneIfNeeded(published, { force: options.forceTurnDone === true })
-    this.noteRuntimeEvent(published)
+    await this.noteRuntimeEvent(published)
     this.broadcastEvent(published)
     this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.event, { event: published })
     return published

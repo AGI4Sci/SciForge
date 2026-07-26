@@ -14,7 +14,7 @@ const VISUAL_INSPECTION_PATTERNS = [
   /\b(?:optimi[sz]e|improve|fix|evaluate|review)\b.{0,40}\b(?:layout|typesetting|rendered\s+(?:image|page)|visual\s+appearance)\b/iu,
   /(?:用|使用).{0,10}(?:视觉|图像).{0,12}(?:能力|工具|检查|复核|验证|看)/u,
   /(?:视觉|图像)(?:检查|复核|验收|验证|审查|能力看)/u,
-  /(?:看一下|查看|检查|复核).{0,16}(?:排版后的|渲染后的)?(?:表格|图片|图像|截图|页面|PDF|排版|布局)/iu,
+  /(?:看一下|查看|检查|复核).{0,16}(?:排版后的|渲染后的)?(?:表格|图片|图像|截图|页面|文档|排版|布局)/iu,
   /(?:优化|改进|修复|评估).{0,16}(?:排版|布局|视觉效果|渲染结果)/u
 ]
 
@@ -24,8 +24,8 @@ const VISUAL_CAPTURE_PATTERNS = [
 ]
 
 const VISUAL_REGION_CAPTURE_PATTERNS = [
-  /(?:截取|摘录|裁剪|方法总览图)/u,
-  /\b(?:crop|extract.{0,24}(?:figure|diagram|image)|method\s+overview(?:\s+(?:figure|diagram))?)\b/iu
+  /(?:截取|摘录|裁剪)/u,
+  /\b(?:crop|extract.{0,24}(?:figure|diagram|image|region))\b/iu
 ]
 
 export function visualExecutionPlanForText(text: string): VisualExecutionPlan | null {

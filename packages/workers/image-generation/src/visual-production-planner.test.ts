@@ -91,7 +91,7 @@ describe('visual production planner', () => {
       handoff: { contextStopReason: 'no_information_gain', releaseCeiling: 'draft_ready' }
     })
     if (!result.ok || result.status === 'needs_context') return
-    expect(result.execution.stages.at(-1)?.tool).toBe('visual_artifact_review')
+    expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
   })
 
   it('allows a closed context policy to create only a reviewable draft', () => {
@@ -114,12 +114,12 @@ describe('visual production planner', () => {
     {
       route: 'code',
       requirements: { lockedElements: ['numeric values'], modelOwnedElements: [], reproducibleInputs: ['results.csv'] },
-      tools: ['scientific_plotting_map_data', 'scientific_plotting_render', 'visual_artifact_review']
+      tools: ['scientific_plotting_map_data', 'scientific_plotting_render', 'image_generation_review_candidate']
     },
     {
       route: 'model',
       requirements: { lockedElements: [], modelOwnedElements: ['illustrative composition'], reproducibleInputs: [] },
-      tools: ['image_generation_prepare', 'image_generation_render', 'visual_artifact_review']
+      tools: ['image_generation_prepare', 'image_generation_render', 'image_generation_review_candidate']
     }
   ] as const)('locks the $route route without a cross-route fallback', ({ route, requirements, tools }) => {
     const result = planVisualProduction(request({ requirements: { ...requirements } }))
@@ -161,7 +161,7 @@ describe('visual production planner', () => {
       'deterministic_composite',
       'review_visual'
     ])
-    expect(result.execution.stages.at(-1)?.tool).toBe('visual_artifact_review')
+    expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
   })
 
   it('treats a self-contained exact brief as an inline reproducible specification', () => {

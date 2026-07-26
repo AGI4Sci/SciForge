@@ -76,7 +76,7 @@ export const visualDocumentCreateCandidateInputSchema = {
   candidatePath: z.string().trim().min(1).max(4096),
   summary: z.string().trim().min(1).max(4000),
   reviewEvidence: z.object({
-    tool: z.literal('visual_artifact_review'),
+    tool: z.literal('image_generation_review_candidate'),
     ok: z.literal(true),
     reviewedArtifactPath: z.string().trim().min(1).max(4096),
     reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),
@@ -252,7 +252,7 @@ export function createVisualDocumentMcpServer(
 
   server.registerTool('sciforge_visual_document_create_candidate', {
     title: 'Create Visual Candidate Revision',
-    description: 'Stage a generated revision for human comparison without changing the source artifact. Requires hash-bound evidence from a passing visual_artifact_review with no pending repairs. Raster dimensions are decoded from the candidate file; width and height hints apply only to non-raster artifacts.',
+    description: 'Stage a generated revision for human comparison without changing the source artifact. Requires hash-bound candidate QA from image_generation_review_candidate with no pending repairs. Raster dimensions are decoded from the candidate file; width and height hints apply only to non-raster artifacts.',
     inputSchema: visualDocumentCreateCandidateInputSchema,
     annotations: CONTROLLED_WRITE
   }, async (input) => {

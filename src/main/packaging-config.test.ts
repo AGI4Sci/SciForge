@@ -24,7 +24,7 @@ type RuntimeEntry = {
   packageIds: string[]
   requiredPathsExport: string
   requiredPaths: string[]
-  mcpNodeEntryPaths?: string[]
+  executableNodeEntryPaths?: string[]
 }
 
 type ReleaseWorkerManifest = {
@@ -36,7 +36,7 @@ type ReleaseWorkerManifest = {
   bundledPackageTargets: string[]
   nonBundledPackageDirs: string[]
   runtimeEntries: RuntimeEntry[]
-  mcpNodeEntryRequiredPaths: string[]
+  packagedExecutableNodeEntryRequiredPaths: string[]
   runtimeRequiredPathExports: Record<string, string[]>
   createAsarUnpackGlobs: () => string[]
   createBundledFileSets: () => BuilderFileSet[]
@@ -331,9 +331,11 @@ describe('electron-builder release packaging', () => {
       'packages/workers/model-router/src/manifest.ts',
       'packages/workers/model-router/src/trace-correlation.ts',
       'packages/workers/model-router/src/trace-correlation/codex.ts',
-      'packages/workers/model-router/src/upstream-drivers.ts',
-      'out/main/model-router-sidecar-node-entry.js'
+      'packages/workers/model-router/src/upstream-drivers.ts'
     ]))
+    expect(modelRouter?.executableNodeEntryPaths).toEqual([
+      'out/main/model-router-sidecar-node-entry.js'
+    ])
     expect(modelRouter?.packageIds).toEqual(['modelRouter', 'fullTrace'])
     expect(modelRouter?.requiredPaths).not.toEqual(expect.arrayContaining([
       'packages/workers/sci-modality-router/package.json'
@@ -350,9 +352,11 @@ describe('electron-builder release packaging', () => {
       'packages/workers/plan-gateway/src/adapters/codex.ts',
       'packages/workers/plan-gateway/src/manifest.ts',
       'packages/workers/plan-gateway/src/trace-sink.ts',
-      'node_modules/proxy-from-env/package.json',
-      'out/main/plan-gateway-sidecar-node-entry.js'
+      'node_modules/proxy-from-env/package.json'
     ]))
+    expect(planGateway?.executableNodeEntryPaths).toEqual([
+      'out/main/plan-gateway-sidecar-node-entry.js'
+    ])
     expect(planGateway?.packageIds).toEqual(['planGateway', 'fullTrace'])
     expect(releaseWorkerManifest.bundledPackageDirs).toContain('packages/workers/plan-gateway')
   })
@@ -390,11 +394,14 @@ describe('electron-builder release packaging', () => {
     ], { cwd: packagedRoot, encoding: 'utf8' })).toBe('function')
   })
 
-  it('validates built MCP node entries before release artifacts are created', () => {
-    expect(afterPack.MCP_NODE_ENTRY_REQUIRED_PATHS).toEqual(
-      releaseWorkerManifest.mcpNodeEntryRequiredPaths
+  it('validates executable node entries from the physical unpacked application', () => {
+    expect(afterPack.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS).toEqual(
+      releaseWorkerManifest.packagedExecutableNodeEntryRequiredPaths
     )
-    expect(afterPack.MCP_NODE_ENTRY_REQUIRED_PATHS).toEqual(expect.arrayContaining([
+    expect(afterPack.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS).toEqual(expect.arrayContaining([
+      'out/main/codex-pre-tool-use-governance-node-entry.js',
+      'out/main/model-router-sidecar-node-entry.js',
+      'out/main/plan-gateway-sidecar-node-entry.js',
       'out/main/schedule-mcp-node-entry.js',
       'out/main/research-search-mcp-node-entry.js',
       'out/main/workflow-mcp-node-entry.js',
@@ -403,18 +410,27 @@ describe('electron-builder release packaging', () => {
 
     const root = tempRoot()
     const context = createMacPackContext(root)
+    const unpackedRoot = afterPack._internals.unpackedAppRoot(context)
+    const hookEntry = 'out/main/codex-pre-tool-use-governance-node-entry.js'
 
-    for (const relativePath of afterPack.MCP_NODE_ENTRY_REQUIRED_PATHS) {
-      touch(join(root, relativePath))
+    touch(join(root, hookEntry))
+    expect(() => {
+      afterPack._internals.validatePackagedExecutableNodeEntries(context)
+    }).toThrow(/out\/main\/codex-pre-tool-use-governance-node-entry\.js/)
+
+    for (const relativePath of afterPack.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS) {
+      touch(join(unpackedRoot, relativePath))
     }
 
-    expect(() => afterPack._internals.validateBuiltMcpNodeEntries(context)).not.toThrow()
+    expect(() => {
+      afterPack._internals.validatePackagedExecutableNodeEntries(context)
+    }).not.toThrow()
 
-    rmSync(join(root, 'out/main/research-search-mcp-node-entry.js'), { recursive: true, force: true })
+    rmSync(join(unpackedRoot, hookEntry), { recursive: true, force: true })
 
-    expect(() => afterPack._internals.validateBuiltMcpNodeEntries(context)).toThrow(
-      /out\/main\/research-search-mcp-node-entry\.js/
-    )
+    expect(() => {
+      afterPack._internals.validatePackagedExecutableNodeEntries(context)
+    }).toThrow(/out\/main\/codex-pre-tool-use-governance-node-entry\.js/)
   })
 
   it('repairs node-pty spawn-helper execute bits in unpacked packages', () => {

@@ -399,6 +399,42 @@ describe('codex config launch helpers', () => {
     expect(config).not.toContain('OPENAI_API_KEY')
   })
 
+  it('materializes the canonical app-owned PreToolUse hook in the isolated Codex home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-codex-hook-home-'))
+    const codexHome = join(root, 'codex-home')
+    const appPath = join(root, 'SciForge App')
+    const launch = await prepareCodexAppServerLaunch({
+      settings: settings(codexHome),
+      preToolUseHookLaunch: {
+        appPath,
+        execPath: process.execPath,
+        isPackaged: false
+      }
+    })
+
+    expect(launch.preToolUseHook).toMatchObject({
+      sourcePath: join(codexHome, 'hooks.json')
+    })
+    await expect(readFile(join(codexHome, 'config.toml'), 'utf8')).resolves.toContain(
+      '[features]\nhooks = true'
+    )
+    const hooks = JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8'))
+    expect(hooks).toEqual({
+      hooks: {
+        PreToolUse: [{
+          hooks: [{
+            type: 'command',
+            command: launch.preToolUseHook?.command,
+            commandWindows: launch.preToolUseHook?.commandWindows,
+            timeout: 10,
+            async: false,
+            statusMessage: 'Checking SciForge visual execution policy'
+          }]
+        }]
+      }
+    })
+  })
+
   it('drops Codex runtime-only profile args before launching app-server', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
     const launch = await prepareCodexAppServerLaunch({

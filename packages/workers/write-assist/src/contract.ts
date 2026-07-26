@@ -13,8 +13,7 @@ export const WRITE_ASSIST_MAX_PDF_TEXT_CHARS = 200_000
 export const WRITE_ASSIST_MAX_QUERY_CHARS = 20_000
 export const WriteAssistToolNames = [
   'gui_write_retrieve_context',
-  'gui_pdf_extract_text',
-  'gui_markdown_validate_images'
+  'gui_pdf_extract_text'
 ] as const
 
 export type WriteAssistToolName = typeof WriteAssistToolNames[number]
@@ -28,7 +27,6 @@ export type WriteAssistErrorCode =
   | 'path_outside_workspace'
   | 'is_directory'
   | 'not_pdf'
-  | 'not_markdown'
   | 'binary_file'
   | 'file_too_large'
   | 'invalid_request'
@@ -154,76 +152,6 @@ export const WorkspaceRootInputSchema = z.object({
     .describe('Workspace root. Omit when the managed worker already has a configured workspace.')
     .optional()
 }).strict()
-
-const WorkspaceRelativeImagePathSchema = z.string().trim().min(1).max(4096)
-  .refine(
-    (path) => !path.includes('\0') && !/^(?:[\\/]|[A-Za-z]:|~(?:[\\/]|$))/u.test(path),
-    'Expected local image paths must be relative to the workspace.'
-  )
-  .refine(
-    (path) => path.split(/[\\/]/u).every((segment) => segment !== '' && segment !== '.' && segment !== '..'),
-    'Expected local image paths must not contain empty, current-directory, or parent-directory segments.'
-  )
-
-export const MarkdownValidateImagesInputSchema = WorkspaceRootInputSchema.extend({
-  path: z.string().trim().min(1).max(4096)
-    .describe('Workspace-relative or absolute path to the completed Markdown document.'),
-  minimumImages: z.number().int().min(0).max(128)
-    .describe('Minimum number of local or remote image references required for completion.')
-    .optional(),
-  minimumLocalImages: z.number().int().min(0).max(128)
-    .describe('Minimum number of existing workspace-local image files required for completion.')
-    .optional(),
-  expectedLocalImages: z.array(WorkspaceRelativeImagePathSchema).max(128)
-    .superRefine((paths, context) => {
-      const seen = new Set<string>()
-      paths.forEach((path, index) => {
-        const key = path.replaceAll('\\', '/')
-        if (seen.has(key)) {
-          context.addIssue({
-            code: 'custom',
-            path: [index],
-            message: 'Expected local image paths must be unique.'
-          })
-        }
-        seen.add(key)
-      })
-    })
-    .describe('Unique workspace-relative image paths that the completed Markdown must explicitly reference.')
-    .optional()
-}).strict()
-
-export type MarkdownValidateImagesInput = z.infer<typeof MarkdownValidateImagesInputSchema>
-
-export type MarkdownImageValidationIssueCode =
-  | 'image_required'
-  | 'local_image_required'
-  | 'expected_local_image_missing'
-  | 'empty_destination'
-  | 'missing_local_image'
-  | 'outside_workspace'
-  | 'not_file'
-  | 'invalid_destination'
-
-export type MarkdownImageValidationIssue = {
-  code: MarkdownImageValidationIssueCode
-  message: string
-  line?: number
-  column?: number
-  destination?: string
-}
-
-export type MarkdownValidateImagesResult = WriteAssistFailure | {
-  ok: true
-  valid: boolean
-  workspaceRoot: string
-  relativePath: string
-  imageCount: number
-  localImageCount: number
-  matchedExpectedLocalImages: string[]
-  issues: MarkdownImageValidationIssue[]
-  summary: string
-}
 
 export type WriteAssistWorkerDiagnostics = {
   version: typeof WRITE_ASSIST_WORKER_VERSION

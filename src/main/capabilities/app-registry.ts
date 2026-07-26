@@ -689,7 +689,7 @@ export const SURFACE_CAPABILITY_CONTRIBUTION_FACTORY =
     (dependencies) => surfaceCapabilities(dependencies.visibleContextService),
     {
       id: 'surface',
-      title: 'Surface Inspection',
+      title: 'Surface Context',
       directTransportPrefixes: [],
       allowedDirectTransports: []
     }

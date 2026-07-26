@@ -4,6 +4,64 @@ import type { ClaudeCodeRuntimeService } from './claude-code-service'
 import { createClaudeCodeAgentRuntimeAdapter } from './claude-code-agent-runtime-adapter'
 
 describe('createClaudeCodeAgentRuntimeAdapter', () => {
+  it('seeds Claude pre-dispatch governance from Host-owned typed turn metadata', async () => {
+    const received: unknown[] = []
+    const adapter = createClaudeCodeAgentRuntimeAdapter({
+      startTurn: async (input: unknown) => {
+        received.push(input)
+        return {
+          ok: true,
+          threadId: 'thread-seeded-governance',
+          turnId: 'turn-seeded-governance',
+          userMessageItemId: 'user-seeded-governance'
+        }
+      }
+    } as unknown as ClaudeCodeRuntimeService)
+    const ctx = {
+      settings: {},
+      turnGovernanceSnapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    } as AgentRuntimeAdapterContext
+
+    await adapter.startTurn(ctx, {
+      runtimeId: 'claude',
+      threadId: 'thread-seeded-governance',
+      text: 'Host prepared text',
+      workspace: '/tmp/workspace'
+    })
+
+    expect(received).toEqual([expect.objectContaining({
+      threadId: 'thread-seeded-governance',
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })])
+  })
+
+  it('forwards Host-owned turn governance snapshots without interpreting them', async () => {
+    const received: unknown[] = []
+    const adapter = createClaudeCodeAgentRuntimeAdapter({
+      updateTurnGovernanceSnapshot: (input: unknown) => {
+        received.push(input)
+      }
+    } as unknown as ClaudeCodeRuntimeService)
+    const ctx = { settings: {} } as AgentRuntimeAdapterContext
+    const input = {
+      runtimeId: 'claude' as const,
+      threadId: 'thread-governance',
+      turnId: 'turn-governance',
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    }
+
+    await adapter.updateTurnGovernanceSnapshot?.(ctx, input)
+
+    expect(received).toEqual([input])
+  })
+
   it('reports shared computer-use MCP capability for Claude Code', async () => {
     const adapter = createClaudeCodeAgentRuntimeAdapter({
       isComputerUseMcpConfigured: () => true,

@@ -10,6 +10,11 @@ import {
   atomicWriteAppDataJson,
   readAppDataStoreText
 } from '../../services/app-data-store'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  requiresExecutionIntegrityValidation
+} from '../agent-runtime/execution-integrity-guard'
 
 export type ClaudeCodeStoredThread = {
   guiThreadId: string
@@ -294,6 +299,14 @@ function itemsFromEvents(events: AgentRuntimeEvent[]): AgentRuntimeItem[] {
         turnId: event.turnId,
         kind: 'user_message',
         text: event.displayText?.trim() || event.text,
+        ...(requiresExecutionIntegrityValidation(event.text)
+          ? {
+              meta: {
+                [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]:
+                  EXECUTION_INTEGRITY_POLICY_VERSION
+              }
+            }
+          : {}),
         createdAt: event.createdAt
       })
       continue

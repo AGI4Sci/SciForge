@@ -3,12 +3,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 
 import {
-  MarkdownValidateImagesInputSchema,
   PDF_TEXT_RESOURCE_URI_TEMPLATE,
   PdfExtractTextInputSchema,
   WRITE_INDEX_STATS_RESOURCE_URI_TEMPLATE,
   WriteRetrieveContextInputSchema,
-  type MarkdownValidateImagesResult,
   type PdfExtractTextResult,
   type WriteAssistFailure,
   type WriteIndexStatsResult,
@@ -58,21 +56,6 @@ export function createWriteAssistMcpServer(
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
   }, async (args) => resultToToolResult(await service.extractPdfText(args), 'PDF text extraction'))
 
-  server.registerTool('gui_markdown_validate_images', {
-    description: [
-      'Validate Markdown image completion inside the workspace.',
-      'Rejects empty image destinations, missing or escaping local files, and unmet minimum image counts.',
-      'When expectedLocalImages is provided, every workspace-relative path must be explicitly referenced and resolve to an existing workspace file.',
-      'This validates exact references and files only; it does not inspect image semantics or crop quality and does not issue visual evidence receipts.',
-      'Do not report reference completion unless valid=true.'
-    ].join(' '),
-    inputSchema: MarkdownValidateImagesInputSchema,
-    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
-  }, async (args) => resultToToolResult(
-    await service.validateMarkdownImages(args),
-    'Markdown image validation'
-  ))
-
   server.registerResource('write-index-stats', new ResourceTemplate(WRITE_INDEX_STATS_RESOURCE_URI_TEMPLATE, {
     list: undefined
   }), {
@@ -108,7 +91,7 @@ export async function startWriteAssistMcpServer(
 }
 
 function resultToToolResult(
-  result: WriteRetrieveContextResult | PdfExtractTextResult | MarkdownValidateImagesResult,
+  result: WriteRetrieveContextResult | PdfExtractTextResult,
   label: string
 ): McpTextToolResult {
   if (!result.ok) return errorToolResult(result, label)

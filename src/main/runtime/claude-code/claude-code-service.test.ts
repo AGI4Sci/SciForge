@@ -309,6 +309,181 @@ afterEach(() => {
 })
 
 describe('ClaudeCodeRuntimeService', () => {
+  it('denies non-native visual bypasses before Claude dispatch while the Host snapshot is pending', async () => {
+    let releaseQuery: (() => void) | undefined
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      releaseQuery = () => resolve([
+        init('claude-session-pre-tool-governance'),
+        result('done', 'claude-session-pre-tool-governance')
+      ])
+    })
+    const { sdk, calls } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-pre-tool-governance',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'inspect this',
+      workspace: '/tmp/workspace',
+      nativeVisualProofChainPending: true
+    })
+    if (!turn.ok) throw new Error(turn.message)
+
+    const hook = calls[0]?.options?.hooks?.PreToolUse?.at(-1)?.hooks[0]
+    expect(hook).toBeTypeOf('function')
+    if (!hook) return
+    const signal = new AbortController().signal
+    const invoke = (toolName: string, toolInput: Record<string, unknown>) => hook({
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: `tool-${toolName}`
+    } as never, `tool-${toolName}`, { signal })
+
+    await expect(invoke('Bash', { command: 'echo hello' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
+      }
+    })
+    await expect(invoke('view_image', { path: '/tmp/workspace/page.png' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sciforge_look')
+      }
+    })
+    await expect(invoke('Read', { file_path: '/tmp/workspace/notes.md' })).resolves.toEqual({})
+    await expect(invoke('sciforge_look', { task: 'Locate the figure.' })).resolves.toEqual({})
+    await expect(invoke(
+      'mcp__sciforge_runtime_tools__sciforge_capture',
+      { snapshotRef: `snapshot_${'s'.repeat(24)}` }
+    )).resolves.toEqual({})
+
+    releaseQuery?.()
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.turnId === turn.turnId && event.state === 'completed'
+    ))
+    await expect(invoke('Read', { file_path: '/tmp/workspace/after-turn.md' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('native_visual_governance_unavailable')
+      }
+    })
+  })
+
+  it('uses the latest Host governance snapshot instead of a turn-start heuristic', async () => {
+    let releaseQuery: (() => void) | undefined
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      releaseQuery = () => resolve([
+        init('claude-session-governance-refresh'),
+        result('done', 'claude-session-governance-refresh')
+      ])
+    })
+    const { sdk, calls } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-governance-refresh',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'ordinary text with no visual keywords',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    const hook = calls[0]?.options?.hooks?.PreToolUse?.at(-1)?.hooks[0]
+    expect(hook).toBeTypeOf('function')
+    if (!hook) return
+    let bashCallIndex = 0
+    const invokeBash = (command = 'pwd') => {
+      const callId = `bash-refresh-${++bashCallIndex}`
+      return hook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command },
+        tool_use_id: callId
+      } as never, callId, { signal: new AbortController().signal })
+    }
+
+    await expect(invokeBash()).resolves.toEqual({})
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: false
+      }
+    })
+    await expect(invokeBash('screencapture /tmp/workspace/window.png')).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('owned_visual_policy_denied')
+      }
+    })
+    await expect(invokeBash('echo normal command')).resolves.toEqual({})
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    })
+    await expect(invokeBash()).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny'
+      }
+    })
+    await expect(hook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'write_stdin',
+      tool_input: {
+        session_id: 'executor-session-1',
+        chars: 'python3 inspect_pixels.py\n'
+      },
+      tool_use_id: 'write-stdin-refresh'
+    } as never, 'write-stdin-refresh', {
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_proof_chain_required'
+        )
+      }
+    })
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: false
+      }
+    })
+    await expect(invokeBash()).resolves.toEqual({})
+
+    releaseQuery?.()
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.turnId === turn.turnId && event.state === 'completed'
+    ))
+  })
+
   it('does not connect or create turns outside selected API mode', async () => {
     const planSettings = settings()
     planSettings.activeAgentRuntime = 'codex'

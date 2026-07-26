@@ -234,6 +234,8 @@ export type CodexTurnStartPayload = {
   model?: string
   reasoningEffort?: string
   fileReferences?: AgentRuntimeFileReference[]
+  ownedVisualToolsAvailable?: boolean
+  nativeVisualProofChainPending?: boolean
 }
 
 export type CodexTurnStartResult =

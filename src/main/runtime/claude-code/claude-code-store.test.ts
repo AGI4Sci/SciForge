@@ -3,8 +3,16 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import type { SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk'
-import { ClaudeCodeEventStore, ClaudeCodeThreadStore } from './claude-code-store'
+import {
+  ClaudeCodeEventStore,
+  ClaudeCodeThreadStore,
+  storedThreadDetail
+} from './claude-code-store'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION
+} from '../agent-runtime/execution-integrity-guard'
 
 async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-claude-code-store-'))
@@ -54,6 +62,38 @@ describe('ClaudeCodeThreadStore', () => {
 })
 
 describe('ClaudeCodeEventStore', () => {
+  it('preserves the hidden execution-integrity marker as typed thread metadata', async () => {
+    const rootDir = await tempRoot()
+    const eventStore = new ClaudeCodeEventStore({ rootDir })
+    const threadStore = new ClaudeCodeThreadStore({ rootDir })
+    const thread = await threadStore.upsert({
+      guiThreadId: 'thread-integrity',
+      workspace: '/tmp/workspace',
+      title: 'Integrity',
+      latestTurnId: 'turn-1',
+      latestTurnStatus: 'completed'
+    })
+    await eventStore.append('thread-integrity', {
+      kind: 'user_message',
+      runtimeId: 'claude',
+      threadId: 'thread-integrity',
+      turnId: 'turn-1',
+      itemId: 'user-1',
+      text: 'Runtime-enforced execution integrity gate: []\n\nshort user prompt',
+      displayText: 'short user prompt'
+    })
+
+    await expect(storedThreadDetail(thread, eventStore)).resolves.toMatchObject({
+      items: [{
+        id: 'user-1',
+        text: 'short user prompt',
+        meta: {
+          [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+        }
+      }]
+    })
+  })
+
   it('appends and replays multiple Claude event JSONL rows', async () => {
     const rootDir = await tempRoot()
     const store = new ClaudeCodeEventStore({

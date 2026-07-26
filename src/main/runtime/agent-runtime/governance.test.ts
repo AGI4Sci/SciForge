@@ -470,6 +470,29 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(published?.kind === 'error' ? published.detail : undefined).not.toContain('surface.inspect')
   })
 
+  it('denies ordinary command execution while the native visual proof chain is pending', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = {
+      ...controlsSpy(),
+      nativeVisualProofChainPending: true
+    }
+    const event = shellGuiFallbackEvent()
+    event.meta = {
+      ...event.meta,
+      arguments: { command: 'node --version' }
+    }
+
+    supervisor.observe(event, baseCapabilities, strictBudgetSettings, controls)
+    await Promise.resolve()
+
+    expect(controls.interruptTurn).toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      code: 'runtime_execution_policy_denied',
+      detail: expect.stringContaining('typed native visual proofs')
+    }))
+  })
+
   it('does not infer native visual availability from broker capability descriptors', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()

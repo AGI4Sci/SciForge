@@ -80,8 +80,8 @@ export function buildVisualRevisionRequest(input: {
     '审改包是人类确认的输入：禁止改写批注文字、几何区域或状态，也禁止为了重试而导出更改过的审改包。',
     '若锁定路线为 model 或 hybrid，必须直接调用 image_generation_edit_from_visual_review_packet 并传入上述审改包；禁止用 image_generation_prepare 或 image_generation_render 替代，因为它们会重新生成整张图而不是按标注局部修改。',
     '只修改批注目标；未标注区域、精确标签、数据、连线关系和 truth locks 必须保持不变。',
-    '生成后调用 visual_artifact_review 做语义视觉检查；发现重叠、裁切、不可读文字、错误关系或锁定事实变化时，应在同一路线内修复后重新检查。',
-    '禁止覆盖源 artifact，也禁止调用 accept 工具。检查通过且 repairable=false 后，调用 sciforge_visual_document_create_candidate；reviewEvidence 必须等于 { tool: "visual_artifact_review", ...review结果 }，系统会核验候选路径和文件哈希。',
+    '生成后调用 image_generation_review_candidate 做清单绑定的候选版本发布 QA；发现重叠、裁切、不可读文字、错误关系或锁定事实变化时，应在同一路线内修复后重新检查。',
+    '禁止覆盖源 artifact，也禁止调用 accept 工具。检查通过且 repairable=false 后，调用 sciforge_visual_document_create_candidate；reviewEvidence 必须等于 { tool: "image_generation_review_candidate", ...review结果 }，系统会核验候选路径和文件哈希。',
     '候选版本将由人类在修改前后对比页面中决定接受或拒绝。'
   ].join('\n')
 }

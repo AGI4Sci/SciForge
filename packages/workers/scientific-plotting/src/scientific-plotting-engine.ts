@@ -250,7 +250,7 @@ export async function listScientificPlottingStyleProfiles(
         'visual_generate',
         'scientific_plotting_map_data',
         'scientific_plotting_render',
-        'visual_artifact_review'
+        'image_generation_review_candidate'
       ],
       warnings
     }
@@ -276,7 +276,7 @@ export async function listScientificPlottingStyleProfiles(
         'visual_generate',
         'scientific_plotting_map_data',
         'scientific_plotting_render',
-        'visual_artifact_review'
+        'image_generation_review_candidate'
       ],
       warnings
     }
@@ -310,7 +310,7 @@ export async function listScientificPlottingStyleProfiles(
       'visual_generate',
       'scientific_plotting_map_data',
       'scientific_plotting_render',
-      'visual_artifact_review'
+      'image_generation_review_candidate'
     ],
     warnings
   }
@@ -655,7 +655,7 @@ export async function mapScientificPlottingData(
         'This tool maps data into a controlled render request; it does not render or write files.',
         'Mapping may reshape records into template JSON, but it must not execute user code.',
         'If duplicate summary rows are aggregated, review the mapping warning before rendering.',
-        'Use scientific_plotting_render for artifact creation and visual_artifact_review for semantic visual QA.'
+        'Use scientific_plotting_render for artifact creation and image_generation_review_candidate for manifest-bound candidate release QA.'
       ]
     }
   } catch (error) {
@@ -885,7 +885,7 @@ export async function prepareScientificPlottingReference(
         suggestedProfileTool: 'scientific_plotting_style_profiles',
         suggestedPlanTool: 'visual_generate',
         suggestedRenderTool: 'scientific_plotting_render',
-        suggestedReviewTool: 'visual_artifact_review',
+        suggestedReviewTool: 'image_generation_review_candidate',
         guardrails: [
           'Use the cropped PNG as the review reference, not the full paper page.',
           'Use StyleSpec as styling guidance only; do not execute third-party skill scripts.',
@@ -1764,7 +1764,7 @@ function buildReviewPacketRecommendedActions(input: {
 }): string[] {
   const actions: string[] = []
   if (!input.styleSimilarity) {
-    actions.push('Use visual_artifact_review with the task, truth locks, and reference image before treating this figure as complete.')
+    actions.push('Use image_generation_review_candidate with the task, truth locks, and reference image before staging or releasing this generated candidate.')
   } else {
     if (input.styleSimilarity.overall < 0.72) {
       actions.push('Inspect reference similarity before acceptance; style match is currently weak.')

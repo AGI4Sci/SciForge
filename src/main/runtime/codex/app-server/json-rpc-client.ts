@@ -19,7 +19,11 @@ import type {
   CodexAppServerLoginAccountParams,
   CodexAppServerLoginAccountResponse,
   CodexAppServerClientInfo,
+  CodexAppServerConfigBatchWriteParams,
+  CodexAppServerConfigWriteResponse,
+  CodexAppServerHooksListResponse,
   CodexAppServerInitializeParams,
+  CodexAppServerInitializeResponse,
   CodexAppServerJsonRpcNotification,
   CodexAppServerJsonRpcRequest,
   CodexAppServerJsonRpcResponse,
@@ -44,7 +48,10 @@ export type {
   CodexAppServerAccountUpdatedNotification,
   CodexAppServerApprovalPolicy,
   CodexAppServerClientInfo,
+  CodexAppServerConfigBatchWriteParams,
+  CodexAppServerConfigWriteResponse,
   CodexAppServerInitializeParams,
+  CodexAppServerInitializeResponse,
   CodexAppServerGetAccountParams,
   CodexAppServerGetAccountRateLimitsResponse,
   CodexAppServerGetAccountResponse,
@@ -54,6 +61,8 @@ export type {
   CodexAppServerJsonRpcResponse,
   CodexAppServerLoginAccountParams,
   CodexAppServerLoginAccountResponse,
+  CodexAppServerHookMetadata,
+  CodexAppServerHooksListResponse,
   CodexAppServerPlanType,
   CodexAppServerRateLimitSnapshot,
   CodexAppServerProcess,
@@ -151,7 +160,7 @@ export class CodexAppServerJsonRpcClient {
   private nextRequestId = 1
   private closed = false
   private stderrTail = ''
-  private initializePromise: Promise<unknown> | null = null
+  private initializePromise: Promise<CodexAppServerInitializeResponse> | null = null
   private readonly pendingServerRequestRegistry: CodexAppServerPendingRequestRegistry | null
 
   constructor(private readonly options: CodexAppServerJsonRpcClientOptions = {}) {
@@ -206,7 +215,7 @@ export class CodexAppServerJsonRpcClient {
   connect(
     params: CodexAppServerInitializeParams = {},
     abortSignal?: AbortSignal
-  ): Promise<unknown> {
+  ): Promise<CodexAppServerInitializeResponse> {
     if (!this.initializePromise) {
       this.initializePromise = this.initialize(params, abortSignal).catch((error) => {
         this.initializePromise = null
@@ -219,9 +228,9 @@ export class CodexAppServerJsonRpcClient {
   async initialize(
     params: CodexAppServerInitializeParams = {},
     abortSignal?: AbortSignal
-  ): Promise<unknown> {
+  ): Promise<CodexAppServerInitializeResponse> {
     const { clientInfo, capabilities, ...rest } = params
-    const result = await this.request('initialize', {
+    const result = await this.request<CodexAppServerInitializeResponse>('initialize', {
       ...rest,
       clientInfo: clientInfo ?? this.options.clientInfo ?? DEFAULT_CLIENT_INFO,
       capabilities: capabilities ?? DEFAULT_CAPABILITIES
@@ -280,6 +289,17 @@ export class CodexAppServerJsonRpcClient {
     abortSignal?: AbortSignal
   ): Promise<unknown> {
     return this.request('turn/start', params, abortSignal)
+  }
+
+  listHooks(cwds: string[], abortSignal?: AbortSignal): Promise<CodexAppServerHooksListResponse> {
+    return this.request('hooks/list', { cwds }, abortSignal)
+  }
+
+  writeConfigBatch(
+    params: CodexAppServerConfigBatchWriteParams,
+    abortSignal?: AbortSignal
+  ): Promise<CodexAppServerConfigWriteResponse> {
+    return this.request('config/batchWrite', params, abortSignal)
   }
 
   interruptTurn(

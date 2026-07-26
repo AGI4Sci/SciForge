@@ -19,6 +19,7 @@ export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v3'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
 export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
 export const EXECUTION_INTENT_METADATA_KEY = 'sciforgeExecutionIntent'
+export const EXECUTION_PUBLICATION_COMMITTED_CODE = 'runtime_execution_publication_committed'
 
 const EXECUTION_INTEGRITY_MARKER = 'Runtime-enforced execution integrity gate:'
 const MAX_REMEMBERED_VIOLATIONS = 2_048
@@ -60,6 +61,7 @@ type ToolReceipt = {
 
 type ExecutionIntegrityState = {
   obligations: ExecutionObligation[]
+  obligationRefCounts: Map<string, number>
   calls: Map<string, ToolReceipt>
   enabled: boolean
 }
@@ -81,6 +83,11 @@ export type ExecutionIntegrityObservation = {
   violation?: ExecutionIntegrityViolation
 }
 
+export type ExecutionIntegrityTurnValidationState = Readonly<{
+  requiresTerminalValidation: boolean
+  nativeVisualObligationsPending: boolean
+}>
+
 /**
  * Host-owned receipt ledger. It consumes events the runtimes already emit and
  * never invokes a model, tool, network endpoint, or filesystem operation.
@@ -93,7 +100,7 @@ export class RuntimeExecutionIntegrityGuard {
     const key = executionKey(runtimeId, threadId, turnId)
     if (!key) return
     this.states.set(key, {
-      obligations: obligationsFromInput(input),
+      ...obligationState(obligationsFromInput(input)),
       calls: new Map(),
       enabled: true
     })
@@ -104,11 +111,51 @@ export class RuntimeExecutionIntegrityGuard {
     threadId: string,
     turnId: string,
     obligations: ExecutionObligation[]
-  ): void {
+  ): () => void {
     const key = executionKey(runtimeId, threadId, turnId)
     const state = key ? this.states.get(key) : undefined
-    if (!state) return
-    state.obligations = dedupeObligations([...state.obligations, ...obligations])
+    if (!state) return () => undefined
+    const contribution = dedupeObligations(obligations)
+    for (const obligation of contribution) {
+      const count = state.obligationRefCounts.get(obligation.id) ?? 0
+      state.obligationRefCounts.set(obligation.id, count + 1)
+      if (count === 0) state.obligations.push(obligation)
+    }
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      for (const obligation of contribution) {
+        const count = state.obligationRefCounts.get(obligation.id) ?? 0
+        if (count <= 1) {
+          state.obligationRefCounts.delete(obligation.id)
+          state.obligations = state.obligations.filter((item) => item.id !== obligation.id)
+          continue
+        }
+        state.obligationRefCounts.set(obligation.id, count - 1)
+      }
+    }
+  }
+
+  rememberSteerInput(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string,
+    input: AgentRuntimeTurnStartInput
+  ): () => void {
+    return this.rememberSteer(runtimeId, threadId, turnId, obligationsFromInput(input))
+  }
+
+  turnStartValidationState(
+    input: AgentRuntimeTurnStartInput
+  ): ExecutionIntegrityTurnValidationState {
+    const obligations = obligationsFromInput(input)
+    return {
+      requiresTerminalValidation: obligations.length > 0,
+      nativeVisualObligationsPending: obligations.some(
+        (obligation) => obligation.source === 'visual'
+      )
+    }
   }
 
   rejectedTurnIds(runtimeId: AgentRuntimeId, threadId: string): string[] {
@@ -120,6 +167,28 @@ export class RuntimeExecutionIntegrityGuard {
       .filter(Boolean)
   }
 
+  turnValidationState(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string
+  ): ExecutionIntegrityTurnValidationState {
+    const key = executionKey(runtimeId, threadId, turnId)
+    const state = key ? this.states.get(key) : undefined
+    if (!state?.enabled) {
+      return {
+        requiresTerminalValidation: false,
+        nativeVisualObligationsPending: false
+      }
+    }
+    const assessment = assessCompletionState(state)
+    return {
+      requiresTerminalValidation: state.obligations.length > 0,
+      nativeVisualObligationsPending: assessment.unsatisfied.some(
+        (obligation) => obligation.source === 'visual'
+      )
+    }
+  }
+
   observe(runtimeId: AgentRuntimeId, event: AgentRuntimeEvent): ExecutionIntegrityObservation {
     const turnId = event.turnId?.trim() ?? ''
     const key = executionKey(runtimeId, event.threadId, turnId)
@@ -128,7 +197,7 @@ export class RuntimeExecutionIntegrityGuard {
     let state = this.states.get(key)
     if (!state && event.kind === 'user_message' && isIntegrityMarker(event.text)) {
       state = {
-        obligations: obligationsFromMarker(event.text),
+        ...obligationState(obligationsFromMarker(event.text)),
         calls: new Map(),
         enabled: true
       }
@@ -198,6 +267,10 @@ export function withExecutionIntegrityRequirement(
     displayText: input.displayText ?? input.text,
     metadata
   }
+}
+
+export function requiresExecutionIntegrityValidation(text: string | undefined): boolean {
+  return typeof text === 'string' && isIntegrityMarker(text)
 }
 
 function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionObligation[] {
@@ -376,6 +449,17 @@ function dedupeObligations(obligations: ExecutionObligation[]): ExecutionObligat
     seen.add(item.id)
     return true
   })
+}
+
+function obligationState(obligations: ExecutionObligation[]): Pick<
+  ExecutionIntegrityState,
+  'obligations' | 'obligationRefCounts'
+> {
+  const unique = dedupeObligations(obligations)
+  return {
+    obligations: unique,
+    obligationRefCounts: new Map(unique.map((obligation) => [obligation.id, 1]))
+  }
 }
 
 function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
@@ -606,23 +690,7 @@ function rememberChildReceipt(
 }
 
 function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrityViolation | null {
-  const receipts = [...state.calls.values()]
-  const open = receipts.filter((item) => !isTerminalPhase(item.phase))
-  const trustedTerminal = receipts.filter((item) => item.trustedTerminal)
-  const trustedSuccess = receipts.filter((item) => item.trustedSuccess)
-  const satisfiedSemantic = satisfiedReceiptObligations(state.obligations, trustedSuccess)
-  const unsatisfied = state.obligations.filter((obligation) => {
-    const trusted = obligation.completion === 'terminal' ? trustedTerminal : trustedSuccess
-    if (obligation.kind === 'receipt') return !satisfiedSemantic.has(obligation.id)
-    if (obligation.kind === 'tool') {
-      const names = new Set((obligation.toolNames ?? []).map(normalizedToolName))
-      return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
-    }
-    if (obligation.kind === 'effect') {
-      return !trusted.some((item) => obligation.effectClass !== undefined && item.effectClasses.includes(obligation.effectClass))
-    }
-    return trusted.length === 0
-  })
+  const { open, unsatisfied } = assessCompletionState(state)
   if (!open.length && !unsatisfied.length) return null
 
   const visualMissing = unsatisfied.some((item) => item.source === 'visual')
@@ -648,6 +716,30 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     openCallIds,
     unsatisfiedObligationIds
   }
+}
+
+function assessCompletionState(state: ExecutionIntegrityState): {
+  open: ToolReceipt[]
+  unsatisfied: ExecutionObligation[]
+} {
+  const receipts = [...state.calls.values()]
+  const open = receipts.filter((item) => !isTerminalPhase(item.phase))
+  const trustedTerminal = receipts.filter((item) => item.trustedTerminal)
+  const trustedSuccess = receipts.filter((item) => item.trustedSuccess)
+  const satisfiedSemantic = satisfiedReceiptObligations(state.obligations, trustedSuccess)
+  const unsatisfied = state.obligations.filter((obligation) => {
+    const trusted = obligation.completion === 'terminal' ? trustedTerminal : trustedSuccess
+    if (obligation.kind === 'receipt') return !satisfiedSemantic.has(obligation.id)
+    if (obligation.kind === 'tool') {
+      const names = new Set((obligation.toolNames ?? []).map(normalizedToolName))
+      return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
+    }
+    if (obligation.kind === 'effect') {
+      return !trusted.some((item) => obligation.effectClass !== undefined && item.effectClasses.includes(obligation.effectClass))
+    }
+    return trusted.length === 0
+  })
+  return { open, unsatisfied }
 }
 
 type IndexedCompletionReceipt = {

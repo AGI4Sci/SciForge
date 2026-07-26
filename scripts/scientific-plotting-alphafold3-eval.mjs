@@ -383,7 +383,7 @@ async function renderPolish(client, item, first) {
 }
 
 async function reviewPair(client, item, referencePath, outputPath, manifestPath) {
-  return callStructured(client, 'visual_artifact_review', {
+  return callStructured(client, 'image_generation_review_candidate', {
     workspaceRoot,
     referencePath: toWorkspaceRelative(referencePath),
     outputPath: toWorkspaceRelative(outputPath),

@@ -27,12 +27,12 @@ Workspace Preview UI and agent operations SHALL invoke the existing main-process
 - **WHEN** normal observation resolves the document annotation store
 - **THEN** it reads only the canonical workspace-root sidecar and does not scan, promote, or merge legacy or backup files
 
-### Requirement: Surface inspection uses the broker
-Workspace surfaces SHALL expose visual inspection as a registered read operation whose provider resolves the current layout at execution time.
+### Requirement: Surface inspection uses Agent Visual Runtime
+Workspace surfaces SHALL publish generic visual sources whose native look provider resolves the current layout at execution time.
 
 #### Scenario: Layout changes after observation
 - **WHEN** a surface scrolls, resizes, rerenders, or moves after an agent observes it
-- **THEN** `surface.inspect` uses the latest target layout and the semantic handle remains valid
+- **THEN** `sciforge_look` uses the latest target layout and the semantic handle remains valid
 
 #### Scenario: Semantic content changes after observation
 - **WHEN** the inspected resource content changes
@@ -43,11 +43,11 @@ Workspace surfaces SHALL expose visual inspection as a registered read operation
 - **THEN** annotation, document, and other semantic provider operations continue against that bound resource
 
 #### Scenario: Hidden session requests visual inspection
-- **WHEN** a hidden turn requests `surface.inspect` after another session becomes visible
+- **WHEN** a hidden turn requests `sciforge_look` after another session becomes visible
 - **THEN** inspection fails visibly as layout unavailable and never captures the foreground session as evidence for the hidden turn
 
 #### Scenario: Stale layout is refreshed on demand
-- **WHEN** a still-visible bound surface has exceeded its layout freshness threshold and `surface.inspect` is invoked
+- **WHEN** a still-visible bound surface has exceeded its layout freshness threshold and `sciforge_look` is invoked
 - **THEN** the main process requests a renderer publication and resolves the target against the refreshed layout before capture
 
 ### Requirement: Biology Room uses its canonical service

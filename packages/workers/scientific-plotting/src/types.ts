@@ -520,7 +520,7 @@ export type ScientificPlottingStyleProfilesResult =
         | 'visual_generate'
         | 'scientific_plotting_map_data'
         | 'scientific_plotting_render'
-        | 'visual_artifact_review'
+        | 'image_generation_review_candidate'
       >
       warnings: string[]
     }
@@ -580,7 +580,7 @@ export type ScientificPlottingReferenceManifest = {
     suggestedProfileTool: 'scientific_plotting_style_profiles'
     suggestedPlanTool: 'visual_generate'
     suggestedRenderTool: 'scientific_plotting_render'
-    suggestedReviewTool: 'visual_artifact_review'
+    suggestedReviewTool: 'image_generation_review_candidate'
     guardrails: string[]
   }
 }

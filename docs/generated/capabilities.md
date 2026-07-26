@@ -8553,5 +8553,5 @@ Releases an open Workspace Preview session.
 | Browser Preview | browserPreview: |  |
 | Paper Radar | paperRadar: |  |
 | Remote SSH |  |  |
-| Surface Inspection |  |  |
+| Surface Context |  |  |
 | Workspace Preview | workspacePreview: |  |

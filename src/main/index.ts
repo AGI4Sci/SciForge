@@ -167,6 +167,7 @@ import {
   capabilityAgentCallerId,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
+import { installElectronDomainNativeVisualSmoke } from './electron-domain-smoke'
 import { VisualSourceRegistry } from './runtime/agent-runtime/visual-source-registry'
 import {
   installCapabilityResourceContentProtocol,
@@ -639,6 +640,11 @@ function getCodexRuntime(): CodexRuntimeService {
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
     standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
     planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
+    preToolUseHookLaunch: {
+      appPath: app.getAppPath(),
+      execPath: process.execPath,
+      isPackaged: app.isPackaged
+    },
     capabilityAgentTools
   })
   return codexRuntime
@@ -1206,6 +1212,7 @@ app.whenReady().then(async () => {
       agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
     )
   })
+  installElectronDomainNativeVisualSmoke(capabilityAgentTools)
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({

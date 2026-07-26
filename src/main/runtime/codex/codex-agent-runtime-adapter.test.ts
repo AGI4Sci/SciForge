@@ -1,7 +1,66 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCodexAgentRuntimeAdapter } from './codex-agent-runtime-adapter'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION
+} from '../agent-runtime/execution-integrity-guard'
 
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('forwards turn governance snapshots to the Codex pre-tool bridge', async () => {
+    const updateTurnGovernanceSnapshot = vi.fn(async () => ({ ok: true as const }))
+    const adapter = createCodexAgentRuntimeAdapter({
+      updateTurnGovernanceSnapshot
+    } as never)
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    }
+
+    await expect(
+      adapter.updateTurnGovernanceSnapshot?.({ settings: {} as never }, input)
+    ).resolves.toBeUndefined()
+    expect(updateTurnGovernanceSnapshot).toHaveBeenCalledWith(input)
+  })
+
+  it('latches the typed native visual requirement into Codex before dispatch', async () => {
+    const startTurn = vi.fn(async () => ({
+      ok: true as const,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      userMessageItemId: 'user-1'
+    }))
+    const adapter = createCodexAgentRuntimeAdapter({ startTurn } as never)
+
+    await expect(adapter.startTurn({
+      settings: {} as never,
+      turnGovernanceSnapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    }, {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      text: 'capture the exact figure'
+    })).resolves.toMatchObject({ turnId: 'turn-1' })
+
+    expect(startTurn).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      text: 'capture the exact figure',
+      displayText: undefined,
+      workspace: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      fileReferences: undefined,
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })
+  })
+
   it('bridges neutral coding-plan auxiliary operations to the Codex account lifecycle', async () => {
     const service = {
       getCodingPlanAccount: vi.fn(async () => ({
@@ -701,6 +760,40 @@ describe('createCodexAgentRuntimeAdapter', () => {
         displayText: 'short user prompt'
       })
     ])
+  })
+
+  it('preserves the hidden execution-integrity marker as typed thread metadata', async () => {
+    const service = {
+      readThread: vi.fn(async () => ({
+        ok: true as const,
+        detail: {
+          latestSeq: 1,
+          latestTurnId: 'turn-1',
+          threadStatus: 'completed',
+          blocks: [{
+            kind: 'user' as const,
+            id: 'user-1',
+            turnId: 'turn-1',
+            text: 'Runtime-enforced execution integrity gate: []\n\nshort user prompt',
+            displayText: 'short user prompt'
+          }]
+        }
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+
+    const detail = await adapter.readThread(
+      { settings: {} as never },
+      { runtimeId: 'codex', threadId: 'thread-1' }
+    )
+
+    expect(detail.items).toContainEqual(expect.objectContaining({
+      id: 'user-1',
+      text: 'short user prompt',
+      meta: {
+        [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+      }
+    }))
   })
 
   it('maps Codex model output to sequence-stable item identities', async () => {

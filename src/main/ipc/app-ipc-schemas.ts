@@ -1603,7 +1603,7 @@ export const visualDocumentCreateCandidatePayloadSchema = z.object({
   candidatePath: trimmedString(MAX_PATH_LENGTH),
   summary: trimmedString(20_000),
   reviewEvidence: z.object({
-    tool: z.literal('visual_artifact_review'),
+    tool: z.literal('image_generation_review_candidate'),
     ok: z.literal(true),
     reviewedArtifactPath: trimmedString(MAX_PATH_LENGTH),
     reviewedArtifactHash: z.string().trim().regex(/^[a-f0-9]{64}$/i),

@@ -12,15 +12,11 @@ import {
   WRITE_ASSIST_WORKER_TRANSPORT,
   WRITE_ASSIST_WORKER_VERSION,
   WriteAssistToolNames,
-  MarkdownValidateImagesInputSchema,
   PdfExtractTextInputSchema,
   WriteIndexStatsInputSchema,
   WriteRetrieveContextInputSchema,
   pdfTextResourceUri,
   writeIndexStatsResourceUri,
-  type MarkdownImageValidationIssue,
-  type MarkdownValidateImagesInput,
-  type MarkdownValidateImagesResult,
   type PdfExtractTextInput,
   type PdfExtractTextResult,
   type PdfTextPage,
@@ -137,8 +133,6 @@ const MAX_QUERY_TERMS = 36
 const MAX_SNIPPET_CHARS = 520
 const MAX_PDF_TEXT_PAGES = 300
 const MAX_PDF_TEXT_CHARS = 1_000_000
-const MARKDOWN_EXTENSIONS = new Set(['.md', '.markdown', '.mdx'])
-
 const WRITE_TEXT_FILE_EXTENSIONS = new Set([
   '.md',
   '.markdown',
@@ -404,98 +398,6 @@ export class WriteAssistService {
         truncated,
         summary: renderPdfSummary(target.relativePath, pages, document.pageCount, truncated, request.summaryOnly === true),
         resourceUri: pdfTextResourceUri(target.relativePath)
-      }
-    })
-  }
-
-  async validateMarkdownImages(
-    input: MarkdownValidateImagesInput
-  ): Promise<MarkdownValidateImagesResult> {
-    const parsed = MarkdownValidateImagesInputSchema.safeParse(input)
-    if (!parsed.success) {
-      return failure('invalid_request', parsed.error.message, false, 'Fix the Markdown validation parameters and retry.')
-    }
-
-    return this.capture(async () => {
-      const request = parsed.data
-      const target = await this.resolveWorkspaceTarget(request.workspaceRoot, request.path)
-      if (target.stats.isDirectory()) {
-        throw serviceError('is_directory', 'Cannot validate a directory as Markdown.', 'Choose a Markdown file inside the workspace.')
-      }
-      if (!MARKDOWN_EXTENSIONS.has(extname(target.absolutePath).toLowerCase())) {
-        throw serviceError('not_markdown', 'This file is not a Markdown document.', 'Choose a .md, .markdown, or .mdx file.')
-      }
-      if (target.stats.size > this.maxTextFileBytes) {
-        throw serviceError('file_too_large', 'This Markdown file is too large to validate.', 'Validate a smaller Markdown document.')
-      }
-
-      const text = await readFile(target.absolutePath, 'utf8')
-      const imageReferences = markdownImageReferences(text)
-      const issues: MarkdownImageValidationIssue[] = []
-      const validLocalImageKeys = new Set<string>()
-      let localImageCount = 0
-      for (const image of imageReferences) {
-        const validation = await validateMarkdownImageDestination(
-          image.destination,
-          target.absolutePath,
-          target.workspaceRoot
-        )
-        if (validation.local) {
-          localImageCount += 1
-          if (validation.pathKey) validLocalImageKeys.add(validation.pathKey)
-        }
-        if (validation.issue) {
-          issues.push({
-            ...validation.issue,
-            line: image.line,
-            column: image.column,
-            destination: image.destination
-          })
-        }
-      }
-
-      const minimumImages = request.minimumImages ?? 0
-      const minimumLocalImages = request.minimumLocalImages ?? 0
-      const matchedExpectedLocalImages: string[] = []
-      for (const expectedPath of request.expectedLocalImages ?? []) {
-        const expectedAbsolutePath = resolve(target.workspaceRoot, normalizeUserPath(expectedPath))
-        const expectedKey = comparablePath(expectedAbsolutePath)
-        if (isWithinRoot(target.workspaceRoot, expectedAbsolutePath) && validLocalImageKeys.has(expectedKey)) {
-          matchedExpectedLocalImages.push(expectedPath)
-        } else {
-          issues.push({
-            code: 'expected_local_image_missing',
-            message: `Expected local image is not both referenced by the Markdown and present inside the workspace: ${expectedPath}.`,
-            destination: expectedPath
-          })
-        }
-      }
-      if (imageReferences.length < minimumImages) {
-        issues.push({
-          code: 'image_required',
-          message: `Expected at least ${minimumImages} Markdown image reference${minimumImages === 1 ? '' : 's'}, found ${imageReferences.length}.`
-        })
-      }
-      if (localImageCount < minimumLocalImages) {
-        issues.push({
-          code: 'local_image_required',
-          message: `Expected at least ${minimumLocalImages} valid local image reference${minimumLocalImages === 1 ? '' : 's'}, found ${localImageCount}.`
-        })
-      }
-
-      const valid = issues.length === 0
-      return {
-        ok: true,
-        valid,
-        workspaceRoot: target.workspaceRoot,
-        relativePath: target.relativePath,
-        imageCount: imageReferences.length,
-        localImageCount,
-        matchedExpectedLocalImages,
-        issues,
-        summary: valid
-          ? `Markdown image validation passed for ${target.relativePath}: ${imageReferences.length} image reference(s), ${localImageCount} valid local image(s), ${matchedExpectedLocalImages.length} expected local image(s) matched.`
-          : `Markdown image validation failed for ${target.relativePath}: ${issues.map((issue) => `${issue.code}${issue.line ? ` at line ${issue.line}` : ''}`).join(', ')}.`
       }
     })
   }
@@ -820,133 +722,6 @@ export function tokenizeWriteRetrievalText(text = ''): string[] {
   }
 
   return tokens
-}
-
-type MarkdownImageReference = {
-  destination: string
-  line: number
-  column: number
-}
-
-function markdownImageReferences(markdown: string): MarkdownImageReference[] {
-  const source = maskMarkdownCode(markdown)
-  const definitions = new Map<string, string>()
-  const definitionPattern = /^\s*\[([^\]\r\n]+)\]:\s*(?:<([^>\r\n]*)>|(\S*))\s*(?:["'(].*)?$/gmu
-  for (const match of source.matchAll(definitionPattern)) {
-    definitions.set(normalizeReferenceLabel(match[1] ?? ''), match[2] ?? match[3] ?? '')
-  }
-
-  const references: MarkdownImageReference[] = []
-  const inlinePattern = /!\[([^\]\r\n]*)\]\(\s*(?:<([^>\r\n]*)>|([^)\s]*))(?:\s+(?:"[^"\r\n]*"|'[^'\r\n]*'|\([^)\r\n]*\)))?\s*\)/gu
-  for (const match of source.matchAll(inlinePattern)) {
-    references.push(markdownImageReference(markdown, match.index, match[2] ?? match[3] ?? ''))
-  }
-  const referencePattern = /!\[([^\]\r\n]*)\]\[([^\]\r\n]*)\]/gu
-  for (const match of source.matchAll(referencePattern)) {
-    const label = normalizeReferenceLabel(match[2] || match[1] || '')
-    references.push(markdownImageReference(markdown, match.index, definitions.get(label) ?? ''))
-  }
-  const htmlPattern = /<img\b[^>]*\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>/giu
-  for (const match of source.matchAll(htmlPattern)) {
-    references.push(markdownImageReference(markdown, match.index, match[1] ?? match[2] ?? match[3] ?? ''))
-  }
-  return references.sort((left, right) => left.line - right.line || left.column - right.column)
-}
-
-function maskMarkdownCode(markdown: string): string {
-  return markdown
-    .replace(/(^|\n)([ \t]*)(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n\2\3[^\n]*(?=\n|$)|$)/gu, (value) => (
-      value.replace(/[^\n]/gu, ' ')
-    ))
-    .replace(/`[^`\r\n]*`/gu, (value) => ' '.repeat(value.length))
-}
-
-function normalizeReferenceLabel(value: string): string {
-  return value.trim().replace(/\s+/gu, ' ').toLowerCase()
-}
-
-function markdownImageReference(markdown: string, index: number, destination: string): MarkdownImageReference {
-  const before = markdown.slice(0, index)
-  const line = before.split(/\r?\n/u).length
-  const lastLineBreak = Math.max(before.lastIndexOf('\n'), before.lastIndexOf('\r'))
-  return {
-    destination: destination.trim(),
-    line,
-    column: index - lastLineBreak
-  }
-}
-
-async function validateMarkdownImageDestination(
-  destination: string,
-  markdownPath: string,
-  workspaceRoot: string
-): Promise<{
-  local: boolean
-  pathKey?: string
-  issue?: Pick<MarkdownImageValidationIssue, 'code' | 'message'>
-}> {
-  const trimmed = destination.trim()
-  if (!trimmed) {
-    return {
-      local: false,
-      issue: { code: 'empty_destination', message: 'Markdown image destination is empty.' }
-    }
-  }
-  if (/^(?:https?:|data:image\/)/iu.test(trimmed)) return { local: false }
-  if (/^[a-z][a-z0-9+.-]*:/iu.test(trimmed)) {
-    return {
-      local: false,
-      issue: { code: 'invalid_destination', message: 'Markdown image uses an unsupported URI scheme.' }
-    }
-  }
-
-  const withoutSuffix = trimmed.split(/[?#]/u, 1)[0] ?? ''
-  let decoded: string
-  try {
-    decoded = decodeURIComponent(withoutSuffix)
-  } catch {
-    return {
-      local: false,
-      issue: { code: 'invalid_destination', message: 'Markdown image path has invalid percent encoding.' }
-    }
-  }
-  if (!decoded) {
-    return {
-      local: false,
-      issue: { code: 'empty_destination', message: 'Markdown image destination is empty.' }
-    }
-  }
-  const candidate = isAbsolute(decoded)
-    ? resolve(decoded)
-    : resolve(dirname(markdownPath), normalizeUserPath(decoded))
-  if (!isWithinRoot(workspaceRoot, candidate)) {
-    return {
-      local: false,
-      issue: { code: 'outside_workspace', message: 'Markdown image path leaves the workspace.' }
-    }
-  }
-  try {
-    const canonical = await realpath(candidate)
-    if (!isWithinRoot(workspaceRoot, canonical)) {
-      return {
-        local: false,
-        issue: { code: 'outside_workspace', message: 'Markdown image resolves outside the workspace.' }
-      }
-    }
-    const info = await stat(candidate)
-    if (!info.isFile()) {
-      return {
-        local: false,
-        issue: { code: 'not_file', message: 'Markdown image destination is not a file.' }
-      }
-    }
-    return { local: true, pathKey: comparablePath(candidate) }
-  } catch {
-    return {
-      local: false,
-      issue: { code: 'missing_local_image', message: 'Markdown image file does not exist.' }
-    }
-  }
 }
 
 async function extractPdfDocumentText(targetPath: string, size: number, mtimeMs: number): Promise<PdfDocumentText> {

@@ -10,7 +10,7 @@ import {
   parseSmokeCliOptions
 } from './electron-domain-smoke-support.mjs'
 
-test('source smoke requires the three built Electron outputs', async () => {
+test('source smoke requires the app, hook, preload, and renderer outputs', async () => {
   const root = await mkdtemp(join(tmpdir(), 'sciforge-smoke-source-test-'))
   try {
     await mkdir(join(root, 'out/main'), { recursive: true })
@@ -18,6 +18,7 @@ test('source smoke requires the three built Electron outputs', async () => {
     await mkdir(join(root, 'out/renderer'), { recursive: true })
     await Promise.all([
       writeFile(join(root, 'out/main/index.js'), ''),
+      writeFile(join(root, 'out/main/codex-pre-tool-use-governance-node-entry.js'), ''),
       writeFile(join(root, 'out/preload/index.cjs'), ''),
       writeFile(join(root, 'out/renderer/index.html'), '')
     ])

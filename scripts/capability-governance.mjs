@@ -445,7 +445,7 @@ async function scanArchitecture(registeredIds = new Set(), migratedDomains = [])
         source,
         'removed-agent-path',
         new RegExp(`(?<![A-Za-z0-9_.-])${escapeRegExp(removedPath)}(?![A-Za-z0-9_.-])`, 'g'),
-        `Removed agent path "${removedPath}" must not remain in production source. Use the registered broker operation.`
+        `Removed agent path "${removedPath}" must not remain in production source. Use the canonical native or registered operation.`
       )
     }
     addRegexViolations(
