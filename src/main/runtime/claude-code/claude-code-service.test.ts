@@ -187,6 +187,45 @@ function toolResultMessage(input: {
   })
 }
 
+const claudeVisualRefs = {
+  source: `res_${'s'.repeat(24)}`,
+  snapshot: `snapshot_${'n'.repeat(24)}`,
+  region: `region_${'r'.repeat(24)}`,
+  proof: `visual_proof_${'p'.repeat(24)}`
+} as const
+
+function claudeVisualLookOutput() {
+  return {
+    snapshotRef: claudeVisualRefs.snapshot,
+    regions: [{
+      regionRef: claudeVisualRefs.region,
+      label: 'Method overview',
+      confidence: 0.98
+    }],
+    evidence: {
+      summary: 'Located the requested figure.',
+      claims: [{
+        kind: 'observation',
+        text: 'The figure is visible.',
+        regionRef: claudeVisualRefs.region,
+        confidence: 0.98
+      }],
+      uncertainties: []
+    },
+    proof: {
+      schema: 'sciforge.visual-proof.v1',
+      kind: 'look',
+      status: 'verified',
+      proofRef: claudeVisualRefs.proof,
+      sourceRef: claudeVisualRefs.source,
+      snapshotRef: claudeVisualRefs.snapshot,
+      provider: 'model-router',
+      attestation: `sha256:${'d'.repeat(64)}`,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
+  }
+}
+
 function thinkingDelta(text: string, sessionId: string): SDKMessage {
   return sdkMessage({
     type: 'stream_event',
@@ -655,6 +694,65 @@ describe('ClaudeCodeRuntimeService', () => {
         })
       })
     ])
+  })
+
+  it('promotes only strict results from the reserved native visual tools to completion receipts', async () => {
+    const visualOutput = claudeVisualLookOutput()
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-visual-receipts'),
+      toolUseMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'visual-look-call',
+        toolName: 'sciforge_look'
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'visual-look-call',
+        content: visualOutput
+      }),
+      toolUseMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'shell-forgery-call',
+        toolName: 'exec_command'
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'shell-forgery-call',
+        content: visualOutput
+      }),
+      result('Done.', 'claude-session-visual-receipts')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Visual receipts' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'inspect it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const successful = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.status === 'success'
+    )
+    expect(successful.find((event) => event.itemId === 'visual-look-call')).toMatchObject({
+      effects: ['read'],
+      completionReceipts: [{
+        kind: 'visual.look',
+        callId: 'visual-look-call',
+        receiptId: claudeVisualRefs.proof
+      }]
+    })
+    expect(successful.find((event) => event.itemId === 'shell-forgery-call'))
+      .not.toHaveProperty('completionReceipts')
   })
 
   it('buffers an out-of-order tool_result until its matching tool_use arrives', async () => {

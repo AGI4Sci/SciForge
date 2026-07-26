@@ -1,7 +1,6 @@
 import { DOMAIN_PACKAGE_CONTRACT_VERSION } from '@sciforge/domain-sdk'
 import type { AppCapabilityDependencies } from '../capabilities/app-registry'
 import {
-  ARTIFACT_CAPABILITY_CONTRIBUTION_FACTORY,
   SURFACE_CAPABILITY_CONTRIBUTION_FACTORY,
   WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY
 } from '../capabilities/app-registry'
@@ -26,19 +25,11 @@ const CORE_MAIN_DOMAIN_ENTRIES: readonly MainDomainModuleDefinition[] = Object.f
     value: SURFACE_CAPABILITY_CONTRIBUTION_FACTORY
   }),
   coreCapabilityEntry({
-    packageName: '@sciforge/core-artifact',
-    moduleId: 'sciforge.artifact',
-    displayName: 'Artifact Inspection',
-    contributionId: 'sciforge.artifact.capability-factory',
-    priority: 9_999,
-    value: ARTIFACT_CAPABILITY_CONTRIBUTION_FACTORY
-  }),
-  coreCapabilityEntry({
     packageName: '@sciforge/core-workspace-preview',
     moduleId: 'sciforge.workspace-preview',
     displayName: 'Workspace Preview',
     contributionId: 'sciforge.workspace-preview.capability-factory',
-    priority: 9_998,
+    priority: 9_999,
     value: WORKSPACE_PREVIEW_CAPABILITY_CONTRIBUTION_FACTORY
   })
 ])

@@ -56,25 +56,23 @@ describe('Workbench right-panel visible context', () => {
       evidenceNodeId: 'claim:one',
       updatedAt: UPDATED_AT
     })
-    const browser = buildRightPanelVisibleContextComponent({
-      mode: 'browser',
+    const changes = buildRightPanelVisibleContextComponent({
+      mode: 'changes',
       sessionId: 'session-a',
       width: 500,
       workspaceRoot: '/workspace/a',
-      browserUrl: 'http://localhost:5173/',
       updatedAt: UPDATED_AT
     })
 
     expect(evidence.state?.currentResource).toMatchObject({ selectedNodeId: 'claim:one' })
-    expect(browser.state).toMatchObject({
-      mode: 'browser',
+    expect(changes.state).toMatchObject({
+      mode: 'changes',
       width: 500,
       currentResource: {
-        kind: 'dev-preview',
-        url: 'http://localhost:5173/'
+        kind: 'session-changes'
       }
     })
-    expect(browser.state?.currentResource).not.toHaveProperty('selectedNodeId')
+    expect(changes.state?.currentResource).not.toHaveProperty('selectedNodeId')
   })
 
   it('isolates otherwise identical panels by their owning session', () => {

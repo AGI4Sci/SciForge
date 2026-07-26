@@ -54,6 +54,7 @@ export type MarkdownWorkspaceViewerApplyEditHandler = (
 
 export type MarkdownWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
+  documentContentKey?: string
   className?: string
   onApplyEdit?: MarkdownWorkspaceViewerApplyEditHandler
   loadWorkspaceImage?: WriteMarkdownWorkspaceImageLoader
@@ -139,6 +140,7 @@ export function buildMarkdownWorkspaceViewerModel(
 
 export function MarkdownWorkspaceViewer({
   observation,
+  documentContentKey,
   className,
   onApplyEdit,
   loadWorkspaceImage,
@@ -325,6 +327,7 @@ export function MarkdownWorkspaceViewer({
             )}>
               <TextWorkspaceViewer
                 observation={observation}
+                documentContentKey={documentContentKey}
                 className="h-full min-h-0"
                 onApplyEdit={onApplyEdit ? applyTextEdit : undefined}
               />

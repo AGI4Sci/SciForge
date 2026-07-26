@@ -39,6 +39,7 @@ export type WorkspacePreviewPluginRendererInput = {
   observation: WorkspaceObservation | null
   asset: WorkspacePreviewPanelShellContext['asset']
   transport: WorkspacePreviewPanelShellContext['transport']
+  contentKey: string
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   visualContextComponentId?: string

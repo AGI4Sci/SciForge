@@ -283,7 +283,9 @@ export class WorkspacePreviewHost {
       }
       return released
     } catch (error) {
-      this.patchState({ error: messageFromError(error) })
+      if (this.state.session?.id === resolvedSessionId) {
+        this.patchState({ error: messageFromError(error) })
+      }
       return false
     }
   }

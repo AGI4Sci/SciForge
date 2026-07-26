@@ -56,7 +56,6 @@ import {
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
   workspacePdfRenameSuggestionPayloadSchema,
-  workspaceNativeFileDragPayloadSchema,
   workspacePreviewOpenPayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
@@ -1574,16 +1573,6 @@ describe('app-ipc-schemas', () => {
     expect(payload.workspaceRoot).toBe('/tmp/workspace')
     expect(payload.targetDirectory).toBe('notes')
     expect(payload.conflictPolicy).toEqual({ strategy: 'skip' })
-  })
-
-  it('accepts workspace native file drag payloads', () => {
-    const payload = workspaceNativeFileDragPayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      path: ' notes/paper.pdf '
-    })
-
-    expect(payload.workspaceRoot).toBe('/tmp/workspace')
-    expect(payload.path).toBe('notes/paper.pdf')
   })
 
   it('accepts structured inline completion payloads', () => {

@@ -1102,6 +1102,86 @@ describe('thread event sink binding', () => {
     ])
   })
 
+  it('restores missed progress snapshots before the final answer after completion', async () => {
+    const progressOne = {
+      kind: 'assistant' as const,
+      id: 'agent_message-2-0',
+      createdAt: '2026-06-11T00:00:01.000Z',
+      text: 'Collecting the paper.'
+    }
+    const toolOne = {
+      kind: 'tool' as const,
+      id: 'tool-1',
+      createdAt: '2026-06-11T00:00:02.000Z',
+      summary: 'Read the paper',
+      status: 'success' as const,
+      toolKind: 'tool_call' as const
+    }
+    const progressTwo = {
+      kind: 'assistant' as const,
+      id: 'agent_message-4-0',
+      createdAt: '2026-06-11T00:00:03.000Z',
+      text: 'Writing the report.'
+    }
+    const toolTwo = {
+      kind: 'tool' as const,
+      id: 'tool-2',
+      createdAt: '2026-06-11T00:00:04.000Z',
+      summary: 'Write the report',
+      status: 'success' as const,
+      toolKind: 'file_change' as const
+    }
+    const finalAnswer = {
+      kind: 'assistant' as const,
+      id: 'agent_message-6-0',
+      createdAt: '2026-06-11T00:00:05.000Z',
+      text: 'The report is ready.'
+    }
+    const provider = {
+      rememberThreadRuntime: vi.fn(),
+      getThreadDetail: vi.fn(async () => ({
+        latestSeq: 7,
+        threadStatus: 'completed',
+        blocks: [
+          { kind: 'user' as const, id: 'user-current', text: 'Create a report.' },
+          progressOne,
+          toolOne,
+          progressTwo,
+          toolTwo,
+          finalAnswer
+        ]
+      }))
+    }
+    registryMock.getProvider.mockReturnValue(provider)
+    vi.stubGlobal('window', { sciforge: {} })
+    const { getState, set, get } = makeSinkHarness({
+      activeThreadId: 'thread-current',
+      busy: true,
+      currentTurnId: 'turn-current',
+      currentTurnUserId: 'user-current',
+      liveAssistant: finalAnswer.text,
+      blocks: [
+        { kind: 'user', id: 'user-current', text: 'Create a report.' },
+        toolOne,
+        progressTwo,
+        toolTwo
+      ]
+    })
+    const sink = buildThreadEventSink(set, get, { threadId: 'thread-current' })
+
+    sink.onTurnComplete()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(getState().blocks).toEqual([
+      { kind: 'user', id: 'user-current', text: 'Create a report.' },
+      progressOne,
+      toolOne,
+      progressTwo,
+      toolTwo,
+      finalAnswer
+    ])
+  })
+
   it('settles stale pending work when the turn completion signal arrives', () => {
     const { getState, set, get } = makeSinkHarness({
       activeThreadId: 'thread-current',

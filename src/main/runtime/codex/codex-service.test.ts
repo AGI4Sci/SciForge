@@ -37,6 +37,7 @@ import {
 } from '../../capabilities/agent-tools'
 import { CapabilityBroker } from '../../capabilities/broker'
 import { CapabilityRegistry } from '../../capabilities/registry'
+import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
 
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
@@ -74,6 +75,45 @@ function settings(): AppSettingsV1 {
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
+  }
+}
+
+const codexVisualRefs = {
+  source: `res_${'s'.repeat(24)}`,
+  snapshot: `snapshot_${'n'.repeat(24)}`,
+  region: `region_${'r'.repeat(24)}`,
+  proof: `visual_proof_${'p'.repeat(24)}`
+} as const
+
+function codexVisualLookOutput() {
+  return {
+    snapshotRef: codexVisualRefs.snapshot,
+    regions: [{
+      regionRef: codexVisualRefs.region,
+      label: 'Method overview',
+      confidence: 0.98
+    }],
+    evidence: {
+      summary: 'Located the requested figure.',
+      claims: [{
+        kind: 'observation',
+        text: 'The figure is visible.',
+        regionRef: codexVisualRefs.region,
+        confidence: 0.98
+      }],
+      uncertainties: []
+    },
+    proof: {
+      schema: 'sciforge.visual-proof.v1',
+      kind: 'look',
+      status: 'verified',
+      proofRef: codexVisualRefs.proof,
+      sourceRef: codexVisualRefs.source,
+      snapshotRef: codexVisualRefs.snapshot,
+      provider: 'model-router',
+      attestation: `sha256:${'d'.repeat(64)}`,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
   }
 }
 
@@ -156,6 +196,17 @@ function clientWithQueuedEvents(): {
       wakeReader()
     }
   }
+}
+
+function scheduleFirstActivityGuard(
+  service: CodexRuntimeService,
+  threadId = 'thread-1',
+  turnId = 'turn-1'
+): void {
+  const guarded = service as unknown as {
+    scheduleFirstActivityTimeout(threadId: string, turnId: string): void
+  }
+  guarded.scheduleFirstActivityTimeout(threadId, turnId)
 }
 
 async function tempRoot(): Promise<string> {
@@ -2048,6 +2099,74 @@ describe('CodexRuntimeService compatibility operations', () => {
     }, {}, { context: expect.objectContaining({ runtimeId: 'codex', threadId: 'thread-1' }) })
   })
 
+  it('mints completion receipts only for strict in-process native visual results', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const output = codexVisualLookOutput()
+    const surface: AgentRuntimeToolSurface = {
+      tools: () => [
+        {
+          type: 'function',
+          name: 'sciforge_look',
+          description: 'Look.',
+          inputSchema: { type: 'object', properties: {} }
+        },
+        {
+          type: 'function',
+          name: 'ordinary_structured_tool',
+          description: 'Return structured data.',
+          inputSchema: { type: 'object', properties: {} }
+        }
+      ],
+      call: async () => ({
+        tool: 'sciforge_look',
+        value: output
+      })
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      capabilityAgentTools: surface,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await service.startThread({
+      title: 'Native visual receipts',
+      workspace: '/tmp/capability-workspace'
+    })
+    const nativeResult = await pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'native-request',
+      callId: 'native-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'sciforge_look',
+      arguments: {}
+    })
+    const ordinaryResult = await pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'ordinary-request',
+      callId: 'ordinary-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'ordinary_structured_tool',
+      arguments: {}
+    })
+
+    expect(nativeResult).toMatchObject({
+      effects: ['read'],
+      completionReceipts: [{
+        kind: 'visual.look',
+        callId: 'native-call',
+        receiptId: codexVisualRefs.proof
+      }]
+    })
+    expect(ordinaryResult).not.toHaveProperty('completionReceipts')
+  })
+
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
     const queued = clientWithQueuedEvents()
     const storageRoot = await tempRoot()
@@ -3681,6 +3800,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
 
       await vi.advanceTimersByTimeAsync(75_000)
 
@@ -3710,6 +3830,35 @@ describe('CodexRuntimeService compatibility operations', () => {
     }
   })
 
+  it('leaves Model Router request deadlines to the API gateway', async () => {
+    vi.useFakeTimers()
+    const queued = clientWithQueuedEvents()
+    try {
+      const sink = { send: vi.fn() }
+      const service = new CodexRuntimeService({
+        settings: async () => settings(),
+        sink,
+        createClient: () => queued.client
+      })
+
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+        ok: true,
+        turnId: 'turn-1'
+      })
+
+      await vi.advanceTimersByTimeAsync(75_000)
+
+      expect(sink.send.mock.calls.some((call) =>
+        call[1]?.event?.runtimeError?.code === 'first_activity_timeout'
+      )).toBe(false)
+      expect(queued.client.interruptTurn).not.toHaveBeenCalled()
+      expect(queued.client.stop).not.toHaveBeenCalled()
+    } finally {
+      queued.close()
+      vi.useRealTimers()
+    }
+  })
+
   it('does not disconnect another active turn when one thread has no model activity', async () => {
     vi.useFakeTimers()
     const queued = clientWithQueuedEvents()
@@ -3733,6 +3882,8 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-2'
       })
+      scheduleFirstActivityGuard(service, 'thread-1', 'turn-1')
+      scheduleFirstActivityGuard(service, 'thread-2', 'turn-2')
       queued.push({
         type: 'event',
         channel: CODEX_MAIN_IPC_CHANNELS.event,
@@ -3801,6 +3952,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
       expect(onPendingRequest).toEqual(expect.any(Function))
       onPendingRequest?.({
         requestId: 'approval-1',
@@ -3937,6 +4089,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
       onPendingRequest?.({
         requestId: 'input-1',
         method: 'item/tool/requestUserInput',
@@ -4185,6 +4338,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
 
       queued.push({
         type: 'event',

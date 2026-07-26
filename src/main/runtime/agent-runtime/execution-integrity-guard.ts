@@ -1,4 +1,6 @@
 import type {
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeCompletionReceiptKind,
   AgentRuntimeEvent,
   AgentRuntimeExecutionEffectClass,
   AgentRuntimeExecutionIntent,
@@ -9,11 +11,11 @@ import type {
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
 import {
-  isVerifiedVisualExecutionEvent,
+  VISUAL_EXECUTION_PLAN_METADATA_KEY,
   VISUAL_EXECUTION_REQUIRED_METADATA_KEY
 } from './visual-execution-guard'
 
-export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v2'
+export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v3'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
 export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
 export const EXECUTION_INTENT_METADATA_KEY = 'sciforgeExecutionIntent'
@@ -25,9 +27,12 @@ export type ExecutionEffectClass = AgentRuntimeExecutionEffectClass
 
 export type ExecutionObligation = {
   id: string
-  kind: 'any_success' | 'visual_inspection' | 'tool' | 'effect'
+  kind: 'any_success' | 'tool' | 'effect' | 'receipt'
   toolNames?: string[]
   effectClass?: ExecutionEffectClass
+  receiptKind?: AgentRuntimeCompletionReceiptKind
+  requiresRegionRef?: boolean
+  dependsOn?: string[]
   completion?: 'terminal' | 'success'
   source: 'user' | 'metadata' | 'visual'
 }
@@ -42,6 +47,7 @@ type ToolReceipt = {
   evidenceStrength: AgentRuntimeToolEvidenceStrength
   attempt: number
   effectClasses: ExecutionEffectClass[]
+  completionReceipts: AgentRuntimeCompletionReceipt[]
   resultDigest?: string
   errorCode?: string
   /** Stable executor handle shared by an asynchronous launch and later poll calls. */
@@ -50,7 +56,6 @@ type ToolReceipt = {
   asyncTerminal?: boolean
   trustedTerminal: boolean
   trustedSuccess: boolean
-  visualSuccess: boolean
 }
 
 type ExecutionIntegrityState = {
@@ -203,9 +208,59 @@ function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionOblig
   )
   const obligations = [...explicit, ...intent]
   if (metadata[VISUAL_EXECUTION_REQUIRED_METADATA_KEY] === true) {
-    obligations.push({ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' })
+    obligations.push(...visualPlanObligations(metadata[VISUAL_EXECUTION_PLAN_METADATA_KEY]))
   }
   return dedupeObligations(obligations)
+}
+
+function visualPlanObligations(value: unknown): ExecutionObligation[] {
+  const plan = stringValue(value)
+  if (plan !== 'capture' && plan !== 'capture-region' && plan !== 'capture-reference') {
+    return [{
+      id: 'visual-look',
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      completion: 'success',
+      source: 'visual'
+    }]
+  }
+  const obligations: ExecutionObligation[] = [
+    {
+      id: 'visual-look-locate',
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      completion: 'success',
+      source: 'visual'
+    },
+    {
+      id: 'visual-capture',
+      kind: 'receipt',
+      receiptKind: 'visual.capture',
+      ...(plan === 'capture-region' ? { requiresRegionRef: true } : {}),
+      dependsOn: ['visual-look-locate'],
+      completion: 'success',
+      source: 'visual'
+    },
+    {
+      id: 'visual-look-final',
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      dependsOn: ['visual-capture'],
+      completion: 'success',
+      source: 'visual'
+    }
+  ]
+  if (plan === 'capture-reference') {
+    obligations.push({
+      id: 'visual-reference-validation',
+      kind: 'receipt',
+      receiptKind: 'artifact.reference-validation',
+      dependsOn: ['visual-look-final'],
+      completion: 'success',
+      source: 'visual'
+    })
+  }
+  return obligations
 }
 
 /**
@@ -230,6 +285,10 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
   requirements.forEach((entry, index) => {
     const requirement = recordValue(entry)
     const effectClass = normalizedEffectClass(requirement.effectClass)
+    const receiptKind = normalizedCompletionReceiptKind(requirement.receiptKind)
+    const dependsOn = Array.isArray(requirement.dependsOn)
+      ? requirement.dependsOn.map(stringValue).filter(Boolean)
+      : []
     const toolNames = Array.isArray(requirement.toolNames)
       ? requirement.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
       : []
@@ -239,6 +298,17 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
     )
     if (toolNames.length > 0) {
       obligations.push({ id, kind: 'tool', toolNames, completion, source: 'metadata' })
+      return
+    }
+    if (receiptKind) {
+      obligations.push({
+        id,
+        kind: 'receipt',
+        receiptKind,
+        ...(dependsOn.length ? { dependsOn } : {}),
+        completion,
+        source: 'metadata'
+      })
       return
     }
     if (effectClass) {
@@ -253,7 +323,10 @@ export function executionObligationsFromIntent(value: unknown): ExecutionObligat
 function obligationsFromMarker(text: string): ExecutionObligation[] {
   const line = text.split(/\r?\n/u).find((value) => value.includes(EXECUTION_INTEGRITY_MARKER)) ?? ''
   if (!line && text.includes('Runtime-enforced visual completion gate:')) {
-    return [{ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' }]
+    const planLine = text.split(/\r?\n/u)
+      .find((value) => value.trim().startsWith('- Required visual plan:'))
+    const plan = planLine?.split(':').slice(1).join(':').replace(/\.$/u, '').trim()
+    return visualPlanObligations(plan)
   }
   const start = line.indexOf('[', line.indexOf(EXECUTION_INTEGRITY_MARKER))
   if (start < 0) return []
@@ -269,18 +342,27 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
   return value.flatMap((entry, index) => {
     const item = recordValue(entry)
     const kind = stringValue(item.kind)
-    if (kind !== 'any_success' && kind !== 'visual_inspection' && kind !== 'tool' && kind !== 'effect') return []
+    if (kind !== 'any_success' && kind !== 'tool' && kind !== 'effect' && kind !== 'receipt') return []
     const source = stringValue(item.source)
     const effectClass = normalizedEffectClass(item.effectClass)
+    const receiptKind = normalizedCompletionReceiptKind(item.receiptKind)
     const completion = item.completion === 'terminal' ? 'terminal' : 'success'
     const toolNames = Array.isArray(item.toolNames)
       ? item.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
       : undefined
+    const dependsOn = Array.isArray(item.dependsOn)
+      ? item.dependsOn.map(stringValue).filter(Boolean)
+      : undefined
+    const requiresRegionRef = item.requiresRegionRef === true
+    if (kind === 'receipt' && !receiptKind) return []
     return [{
       id: stringValue(item.id) || `obligation-${index + 1}`,
       kind,
       ...(toolNames?.length ? { toolNames } : {}),
       ...(effectClass ? { effectClass } : {}),
+      ...(receiptKind ? { receiptKind } : {}),
+      ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+      ...(dependsOn?.length ? { dependsOn } : {}),
       completion,
       source: source === 'metadata' || source === 'visual' ? source : 'user'
     } satisfies ExecutionObligation]
@@ -327,9 +409,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
   const attempt = typeof attemptValue === 'number' && Number.isInteger(attemptValue) && attemptValue > 0
     ? attemptValue
     : 1
-  const visualSuccess = phase === 'succeeded' && isVerifiedVisualExecutionEvent(event)
   const trustedTerminal = (phase === 'succeeded' || phase === 'failed' || phase === 'cancelled') && (
-    visualSuccess ||
     factSource === 'executor_result' ||
     evidenceStrength === 'executor_receipt' ||
     evidenceStrength === 'attested'
@@ -344,6 +424,9 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     evidenceStrength,
     attempt,
     effectClasses: effectClassesFromEvent(event, meta),
+    completionReceipts: phase === 'succeeded'
+      ? completionReceiptsFromEvent(event, rawCallId.trim())
+      : [],
     ...(event.kind === 'tool_event'
       ? {
           ...(event.resultDigest || stringValue(meta.resultDigest)
@@ -360,8 +443,7 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     ...(asyncReceipt.handle ? { asyncHandle: asyncReceipt.handle } : {}),
     ...(asyncReceipt.terminal ? { asyncTerminal: true } : {}),
     trustedTerminal,
-    trustedSuccess,
-    visualSuccess
+    trustedSuccess
   }
 }
 
@@ -397,9 +479,9 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
       ...receipt,
       callId: existing.callId,
       phase: 'unresolved',
+      completionReceipts: [],
       trustedTerminal: false,
-      trustedSuccess: false,
-      visualSuccess: false
+      trustedSuccess: false
     })
     return
   }
@@ -409,6 +491,10 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
     callId: existing.callId,
     toolName: receipt.toolName || existing.toolName,
     effectClasses: mergeEffectClasses(existing.effectClasses, receipt.effectClasses),
+    completionReceipts: mergeCompletionReceipts(
+      existing.completionReceipts,
+      receipt.completionReceipts
+    ),
     asyncHandle: receipt.asyncHandle || existing.asyncHandle,
     asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal
   })
@@ -421,6 +507,24 @@ function mergeEffectClasses(
 ): ExecutionEffectClass[] {
   const concrete = new Set([...existing, ...incoming].filter((effect) => effect !== 'other'))
   return concrete.size > 0 ? [...concrete] : ['other']
+}
+
+function mergeCompletionReceipts(
+  existing: AgentRuntimeCompletionReceipt[],
+  incoming: AgentRuntimeCompletionReceipt[]
+): AgentRuntimeCompletionReceipt[] {
+  const byId = new Map(existing.map((receipt) => [receipt.receiptId, receipt]))
+  for (const receipt of incoming) {
+    const prior = byId.get(receipt.receiptId)
+    if (!prior) {
+      byId.set(receipt.receiptId, receipt)
+      continue
+    }
+    if (JSON.stringify(prior) !== JSON.stringify(receipt)) {
+      byId.delete(receipt.receiptId)
+    }
+  }
+  return [...byId.values()]
 }
 
 /**
@@ -495,9 +599,9 @@ function rememberChildReceipt(
     evidenceStrength: 'runtime_lifecycle',
     attempt: 1,
     effectClasses: ['child_agent'],
+    completionReceipts: [],
     trustedTerminal: phase === 'succeeded' || phase === 'failed' || phase === 'cancelled',
-    trustedSuccess: phase === 'succeeded',
-    visualSuccess: false
+    trustedSuccess: phase === 'succeeded'
   })
 }
 
@@ -506,9 +610,10 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
   const open = receipts.filter((item) => !isTerminalPhase(item.phase))
   const trustedTerminal = receipts.filter((item) => item.trustedTerminal)
   const trustedSuccess = receipts.filter((item) => item.trustedSuccess)
+  const satisfiedSemantic = satisfiedReceiptObligations(state.obligations, trustedSuccess)
   const unsatisfied = state.obligations.filter((obligation) => {
     const trusted = obligation.completion === 'terminal' ? trustedTerminal : trustedSuccess
-    if (obligation.kind === 'visual_inspection') return !trustedSuccess.some((item) => item.visualSuccess)
+    if (obligation.kind === 'receipt') return !satisfiedSemantic.has(obligation.id)
     if (obligation.kind === 'tool') {
       const names = new Set((obligation.toolNames ?? []).map(normalizedToolName))
       return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
@@ -520,7 +625,7 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
   })
   if (!open.length && !unsatisfied.length) return null
 
-  const visualMissing = unsatisfied.some((item) => item.kind === 'visual_inspection')
+  const visualMissing = unsatisfied.some((item) => item.source === 'visual')
   const code = visualMissing ? 'runtime_visual_execution_missing' : 'runtime_execution_incomplete'
   const verdict = 'blocked'
   const openCallIds = open.map((item) => item.callId)
@@ -543,6 +648,70 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     openCallIds,
     unsatisfiedObligationIds
   }
+}
+
+type IndexedCompletionReceipt = {
+  receipt: AgentRuntimeCompletionReceipt
+  order: number
+}
+
+function satisfiedReceiptObligations(
+  obligations: ExecutionObligation[],
+  trustedSuccess: ToolReceipt[]
+): Map<string, IndexedCompletionReceipt> {
+  const available = trustedSuccess.flatMap((tool, toolIndex) => (
+    tool.completionReceipts.map((receipt, receiptIndex) => ({
+      receipt,
+      order: toolIndex * 1_000 + receiptIndex
+    }))
+  ))
+  const satisfied = new Map<string, IndexedCompletionReceipt>()
+  const usedReceiptIds = new Set<string>()
+  const pending = obligations.filter((obligation) => (
+    obligation.kind === 'receipt' && Boolean(obligation.receiptKind)
+  ))
+  let progressed = true
+  while (pending.length > 0 && progressed) {
+    progressed = false
+    for (let index = 0; index < pending.length;) {
+      const obligation = pending[index]
+      if (!obligation.receiptKind) {
+        pending.splice(index, 1)
+        continue
+      }
+      const dependencies = (obligation.dependsOn ?? []).map((id) => satisfied.get(id))
+      if (dependencies.some((entry) => !entry)) {
+        index += 1
+        continue
+      }
+      const matched = available.find((candidate) => {
+        if (usedReceiptIds.has(candidate.receipt.receiptId)) return false
+        if (candidate.receipt.kind !== obligation.receiptKind) return false
+        if (
+          obligation.requiresRegionRef === true &&
+          !(candidate.receipt.relatedRefs ?? []).some((ref) => /^region_[A-Za-z0-9_-]{20,}$/u.test(ref))
+        ) {
+          return false
+        }
+        for (const dependency of dependencies) {
+          if (!dependency || candidate.order <= dependency.order) return false
+          if (!(candidate.receipt.parentReceiptIds ?? []).includes(dependency.receipt.receiptId)) {
+            return false
+          }
+        }
+        return true
+      })
+      if (!matched) {
+        index += 1
+        continue
+      }
+      usedReceiptIds.add(matched.receipt.receiptId)
+      satisfied.set(obligation.id, matched)
+      pending.splice(index, 1)
+      progressed = true
+    }
+  }
+  return satisfied
 }
 
 function normalizedPhase(value: unknown, status: unknown): AgentRuntimeToolExecutionPhase | null {
@@ -595,6 +764,87 @@ function effectClassesFromEvent(
   return effects.size > 0 ? [...effects] : ['other']
 }
 
+function completionReceiptsFromEvent(
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' | 'item_snapshot' }>,
+  callId: string
+): AgentRuntimeCompletionReceipt[] {
+  const value = event.kind === 'tool_event'
+    ? event.completionReceipts
+    : event.item.completionReceipts
+  if (!Array.isArray(value)) return []
+  const item = event.kind === 'tool_event' ? event : event.item
+  const meta = recordValue(item.meta)
+  const toolName = normalizedToolName(
+    event.kind === 'tool_event'
+      ? event.toolName || stringValue(meta.toolName) || stringValue(meta.name) || event.summary || ''
+      : stringValue(meta.toolName) || stringValue(meta.name) || item.summary || ''
+  )
+  const byId = new Map<string, AgentRuntimeCompletionReceipt>()
+  const conflicts = new Set<string>()
+  for (const candidate of value) {
+    const receipt = normalizedCompletionReceipt(candidate, callId)
+    if (!receipt || conflicts.has(receipt.receiptId)) continue
+    if (receipt.kind === 'visual.look' && toolName !== 'sciforge_look') continue
+    if (receipt.kind === 'visual.capture' && toolName !== 'sciforge_capture') continue
+    const prior = byId.get(receipt.receiptId)
+    if (prior && JSON.stringify(prior) !== JSON.stringify(receipt)) {
+      byId.delete(receipt.receiptId)
+      conflicts.add(receipt.receiptId)
+      continue
+    }
+    byId.set(receipt.receiptId, receipt)
+  }
+  return [...byId.values()]
+}
+
+function normalizedCompletionReceipt(
+  value: unknown,
+  callId: string
+): AgentRuntimeCompletionReceipt | undefined {
+  const receipt = recordValue(value)
+  const kind = normalizedCompletionReceiptKind(receipt.kind)
+  const receiptId = stringValue(receipt.receiptId)
+  const issuer = stringValue(receipt.issuer)
+  const subjectRef = stringValue(receipt.subjectRef)
+  const createdAt = stringValue(receipt.createdAt)
+  if (
+    receipt.contractVersion !== 'completion-receipt.v1' ||
+    receipt.status !== 'satisfied' ||
+    !kind ||
+    !/^[A-Za-z][A-Za-z0-9_-]{7,255}$/u.test(receiptId) ||
+    !issuer ||
+    stringValue(receipt.callId) !== callId ||
+    !subjectRef ||
+    !createdAt ||
+    !Number.isFinite(Date.parse(createdAt))
+  ) return undefined
+  const relatedRefs = normalizedStringArray(receipt.relatedRefs)
+  const parentReceiptIds = normalizedStringArray(receipt.parentReceiptIds)
+  const attestation = stringValue(receipt.attestation)
+  const sha256 = stringValue(receipt.sha256)
+  if (attestation && !/^sha256:[a-f0-9]{64}$/u.test(attestation)) return undefined
+  if (sha256 && !/^[a-f0-9]{64}$/u.test(sha256)) return undefined
+  return {
+    contractVersion: 'completion-receipt.v1',
+    receiptId,
+    kind,
+    status: 'satisfied',
+    issuer,
+    callId,
+    subjectRef,
+    ...(relatedRefs.length ? { relatedRefs } : {}),
+    ...(parentReceiptIds.length ? { parentReceiptIds } : {}),
+    ...(attestation ? { attestation } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    createdAt
+  }
+}
+
+function normalizedStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map(stringValue).filter(Boolean))].slice(0, 128)
+}
+
 function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined {
   const effect = stringValue(value)
   if (
@@ -608,6 +858,17 @@ function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined
   ) {
     return effect
   }
+  return undefined
+}
+
+function normalizedCompletionReceiptKind(
+  value: unknown
+): AgentRuntimeCompletionReceiptKind | undefined {
+  if (
+    value === 'visual.look' ||
+    value === 'visual.capture' ||
+    value === 'artifact.reference-validation'
+  ) return value
   return undefined
 }
 

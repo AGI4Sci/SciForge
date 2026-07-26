@@ -62,6 +62,7 @@ describe('Model Access gateway sidecar controller', () => {
   const roots: string[] = []
 
   afterEach(async () => {
+    vi.useRealTimers()
     await stopModelAccessGatewaySidecar({ userDataDir: roots[roots.length - 1] })
     await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })))
   })
@@ -186,7 +187,8 @@ describe('Model Access gateway sidecar controller', () => {
     expect(spawnImpl).toHaveBeenCalledTimes(1)
   })
 
-  it('clears ownership after an unexpected exit and allows a clean restart', async () => {
+  it('restarts an unexpectedly exited gateway without waiting for another settings sync', async () => {
+    vi.useFakeTimers()
     const root = await tempRoot()
     roots.push(root)
     const failed = fakeChild(4401)
@@ -203,17 +205,15 @@ describe('Model Access gateway sidecar controller', () => {
     })
     Object.defineProperty(failed, 'exitCode', { value: 1, configurable: true })
     failed.emit('exit', 1, null)
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    await synchronizeModelAccessGatewaySidecar(spec('model-router', 'one'), {
-      userDataDir: root,
-      spawnImpl: spawnImpl as never,
-      log
-    })
+    await vi.advanceTimersByTimeAsync(250)
 
-    expect(spawnImpl).toHaveBeenCalledTimes(2)
+    await vi.waitFor(() => expect(spawnImpl).toHaveBeenCalledTimes(2))
     expect(log).toHaveBeenCalledWith(
       'model-router sidecar exited unexpectedly (code=1, signal=null).'
     )
+    expect(log).toHaveBeenCalledWith('model-router sidecar will restart in 250ms.')
+    const state = JSON.parse(await readFile(modelAccessGatewayStatePath(root), 'utf8')) as Record<string, unknown>
+    expect(state.pid).toBe(4402)
   })
 
   it('reclaims both legacy state files when the current mode can prove ownership', async () => {

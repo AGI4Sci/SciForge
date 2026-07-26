@@ -16,7 +16,6 @@ import {
   FileEdit,
   GitMerge,
   FolderOpen,
-  Globe2,
   Loader2,
   MessageCircleMore,
   Network,
@@ -38,7 +37,6 @@ import type {
 export const RIGHT_PANEL_MODES = [
   'todo',
   'changes',
-  'browser',
   'evidence',
   'project-dag',
   'workflow',
@@ -122,8 +120,7 @@ export function WorkbenchTopBar({
     { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
-    { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw },
-    { mode: 'browser' as const, label: t('rightPanelBrowser'), icon: Globe2 }
+    { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw }
   ]
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],

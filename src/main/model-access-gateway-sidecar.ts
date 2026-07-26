@@ -40,6 +40,7 @@ type ManagedChild = {
   child: ChildProcess
   spec: ModelAccessGatewayLaunchSpec
   statePath: string
+  startedAt: number
 }
 
 type RecordedState = {
@@ -54,9 +55,15 @@ const STATE_DIRECTORY = 'model-access-gateway'
 const STATE_FILE = 'sidecar-state.json'
 const STOP_TIMEOUT_MS = 2_000
 const RECORDED_STOP_POLL_MS = 100
+const RESTART_BASE_DELAY_MS = 250
+const RESTART_MAX_DELAY_MS = 5_000
+const RESTART_ATTEMPTS_RESET_AFTER_MS = 30_000
 
 let managedChild: ManagedChild | null = null
 let operationQueue = Promise.resolve()
+let restartTimer: ReturnType<typeof setTimeout> | null = null
+let restartGeneration = 0
+let restartAttempts = 0
 
 export function modelAccessGatewayStatePath(userDataDir: string): string {
   return join(userDataDir, STATE_DIRECTORY, STATE_FILE)
@@ -71,6 +78,7 @@ export function synchronizeModelAccessGatewaySidecar(
   options: ModelAccessGatewaySidecarOptions & { userDataDir: string }
 ): Promise<void> {
   return enqueue(async () => {
+    cancelScheduledRestart()
     if (!spec) {
       await stopInternal(options)
       return
@@ -86,50 +94,8 @@ export function synchronizeModelAccessGatewaySidecar(
     }
 
     await stopRecordedSidecar(options, spec)
-    await spec.prepare?.()
-
-    const spawnImpl = options.spawnImpl ?? spawn
-    const useShell = spec.command.toLowerCase().endsWith('.cmd')
-    const spawnArgs = useShell ? spec.args.map(quoteWindowsShellArg) : spec.args
-    options.log?.(spec.startMessage)
-    const child = spawnImpl(spec.command, spawnArgs, {
-      cwd: spec.cwd,
-      env: spec.env,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      detached: false,
-      shell: useShell
-    })
-    const statePath = modelAccessGatewayStatePath(options.userDataDir)
-    managedChild = { child, spec, statePath }
-    try {
-      await writeManagedState(statePath, child, spec)
-    } catch (error) {
-      managedChild = null
-      if (isChildRunning(child)) await terminateChild(child)
-      throw error
-    }
-    attachChildLogging(child, spec.logLabel, options.log)
-    child.once('error', (error) => {
-      if (managedChild?.child !== child) return
-      managedChild = null
-      void rm(statePath, { force: true }).catch(() => undefined)
-      options.log?.(`${spec.logLabel} sidecar failed to start: ${error.message}`)
-    })
-    child.once('exit', (code, signal) => {
-      if (managedChild?.child !== child) return
-      managedChild = null
-      void rm(statePath, { force: true }).catch(() => undefined)
-      if (code !== 0 || signal) {
-        options.log?.(`${spec.logLabel} sidecar exited unexpectedly (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`)
-      }
-    })
-
-    try {
-      await spec.waitReady?.(options.fetchImpl ?? fetch)
-    } catch (error) {
-      if (managedChild?.child === child) await stopInternal(options)
-      throw error
-    }
+    restartAttempts = 0
+    await startManagedChild(spec, options)
   })
 }
 
@@ -148,11 +114,126 @@ function enqueue(task: () => Promise<void>): Promise<void> {
 async function stopInternal(
   options: ModelAccessGatewaySidecarOptions & { legacyStatePaths?: readonly string[] }
 ): Promise<void> {
+  cancelScheduledRestart()
+  restartAttempts = 0
   const current = managedChild
   managedChild = null
   if (current && isChildRunning(current.child)) await terminateChild(current.child)
   if (current) await rm(current.statePath, { force: true })
   await stopRecordedSidecar(options)
+}
+
+async function startManagedChild(
+  spec: ModelAccessGatewayLaunchSpec,
+  options: ModelAccessGatewaySidecarOptions & { userDataDir: string }
+): Promise<void> {
+  await spec.prepare?.()
+
+  const spawnImpl = options.spawnImpl ?? spawn
+  const useShell = spec.command.toLowerCase().endsWith('.cmd')
+  const spawnArgs = useShell ? spec.args.map(quoteWindowsShellArg) : spec.args
+  options.log?.(spec.startMessage)
+  const child = spawnImpl(spec.command, spawnArgs, {
+    cwd: spec.cwd,
+    env: spec.env,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    detached: false,
+    shell: useShell
+  })
+  const statePath = modelAccessGatewayStatePath(options.userDataDir)
+  managedChild = { child, spec, statePath, startedAt: Date.now() }
+  try {
+    await writeManagedState(statePath, child, spec)
+  } catch (error) {
+    managedChild = null
+    if (isChildRunning(child)) await terminateChild(child)
+    throw error
+  }
+  attachChildLogging(child, spec.logLabel, options.log)
+  child.once('error', (error) => {
+    if (managedChild?.child !== child) return
+    handleUnexpectedExit(
+      child,
+      spec,
+      statePath,
+      options,
+      `${spec.logLabel} sidecar failed to start: ${error.message}`
+    )
+  })
+  child.once('exit', (code, signal) => {
+    if (managedChild?.child !== child) return
+    handleUnexpectedExit(
+      child,
+      spec,
+      statePath,
+      options,
+      `${spec.logLabel} sidecar exited unexpectedly (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`
+    )
+  })
+
+  try {
+    await spec.waitReady?.(options.fetchImpl ?? fetch)
+  } catch (error) {
+    if (managedChild?.child === child) await stopInternal(options)
+    throw error
+  }
+}
+
+function handleUnexpectedExit(
+  child: ChildProcess,
+  spec: ModelAccessGatewayLaunchSpec,
+  statePath: string,
+  options: ModelAccessGatewaySidecarOptions & { userDataDir: string },
+  message: string
+): void {
+  const current = managedChild
+  if (current?.child !== child) return
+  managedChild = null
+  void rm(statePath, { force: true }).catch(() => undefined)
+  options.log?.(message)
+  if (Date.now() - current.startedAt >= RESTART_ATTEMPTS_RESET_AFTER_MS) {
+    restartAttempts = 0
+  }
+  scheduleUnexpectedRestart(spec, options)
+}
+
+function scheduleUnexpectedRestart(
+  spec: ModelAccessGatewayLaunchSpec,
+  options: ModelAccessGatewaySidecarOptions & { userDataDir: string }
+): void {
+  if (restartTimer) return
+  restartAttempts += 1
+  const delayMs = Math.min(
+    RESTART_BASE_DELAY_MS * (2 ** Math.max(0, restartAttempts - 1)),
+    RESTART_MAX_DELAY_MS
+  )
+  const generation = restartGeneration
+  options.log?.(`${spec.logLabel} sidecar will restart in ${delayMs}ms.`)
+  restartTimer = setTimeout(() => {
+    restartTimer = null
+    if (generation !== restartGeneration || managedChild) return
+    void enqueue(async () => {
+      if (generation !== restartGeneration || managedChild) return
+      try {
+        await rm(modelAccessGatewayStatePath(options.userDataDir), { force: true })
+        await startManagedChild(spec, options)
+      } catch (error) {
+        options.log?.(
+          `${spec.logLabel} sidecar restart failed: ${error instanceof Error ? error.message : String(error)}`
+        )
+        if (generation === restartGeneration && !managedChild) {
+          scheduleUnexpectedRestart(spec, options)
+        }
+      }
+    })
+  }, delayMs)
+}
+
+function cancelScheduledRestart(): void {
+  restartGeneration += 1
+  if (!restartTimer) return
+  clearTimeout(restartTimer)
+  restartTimer = null
 }
 
 async function stopRecordedSidecar(

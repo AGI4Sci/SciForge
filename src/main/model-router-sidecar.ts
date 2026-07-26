@@ -346,13 +346,7 @@ function memberConfig(
 function protocolCompatibility(
   protocol: ModelRouterProtocolPreference | undefined
 ): Pick<ModelRouterMemberConfig, 'compatibility'> | Record<string, never> {
-  if (!protocol || protocol === 'auto') {
-    return {
-      compatibility: {
-        probeBeforeUse: true
-      }
-    }
-  }
+  if (!protocol || protocol === 'auto') return {}
   return {
     compatibility: {
       preferredProtocol: protocol,

@@ -1,8 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, createReadStream, type Stats } from 'node:fs'
 import { copyFile, open, readFile, stat } from 'node:fs/promises'
-import { basename, relative } from 'node:path'
+import { basename, isAbsolute, relative } from 'node:path'
 import { TextDecoder } from 'node:util'
+import {
+  visualFrameSchema,
+  visualSourceRenderRequestSchema,
+  type VisualFrame
+} from '@sciforge/domain-sdk/visual-source'
 import {
   WORKSPACE_TABULAR_MAX_TEXT_CHARS,
   applyWorkspaceTabularDelimitedEdit,
@@ -65,6 +70,7 @@ import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+  WORKSPACE_PREVIEW_RESOURCE_KIND,
   extensionFromPreviewPath,
   fileNameFromPreviewPath,
   resolveWorkspacePreviewInitialSelection,
@@ -140,7 +146,9 @@ import type {
   WorkspacePreviewProviderActionInput,
   WorkspacePreviewProviderActionResult,
   WorkspacePreviewProviderObservationInput,
-  WorkspacePreviewProviderObservationResult
+  WorkspacePreviewProviderObservationResult,
+  WorkspacePreviewProviderRegistry,
+  WorkspacePreviewRenderVisualInput
 } from './provider-registry'
 
 export type WorkspacePreviewOpenInput = WorkspacePreviewApiOpenInput & {
@@ -329,6 +337,7 @@ function inferWorkspacePreviewMimeType(path: string, manifest: WorkspacePreviewP
 
 export class WorkspacePreviewHost {
   private readonly registry: WorkspacePreviewRegistry
+  private readonly providers: WorkspacePreviewProviderRegistry
   private readonly createSessionId: () => string
   private readonly workerClient: WorkspacePreviewWorkerClient
   private readonly htmlPreviewService: Pick<WorkspaceHtmlPreviewService, 'preview'>
@@ -347,6 +356,7 @@ export class WorkspacePreviewHost {
       domainPlugins: options.domainPlugins
     })
     this.registry = runtime.manifests
+    this.providers = runtime.providers
     this.workerClient = runtime.workerClient
   }
 
@@ -446,6 +456,62 @@ export class WorkspacePreviewHost {
 
   releaseSession(sessionId: string): boolean {
     return this.sessions.delete(sessionId)
+  }
+
+  async renderVisual(
+    sessionId: string,
+    input: WorkspacePreviewRenderVisualInput = {}
+  ): Promise<VisualFrame> {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('Workspace preview session was not found.')
+    const provider = this.providers.get(record.manifest.id)
+    if (!provider?.renderVisual) {
+      throw new Error(
+        `Workspace preview plugin ${record.manifest.id} does not expose a visual frame provider.`
+      )
+    }
+
+    const before = await validateVisualSourceFile(record)
+    const sourceRevision = workspacePreviewVisualSourceRevision(record.session)
+    const file: WorkspacePreviewFileState = {
+      ...record.file,
+      path: before.path,
+      workspaceRoot: before.workspaceRoot,
+      size: before.size,
+      mtimeMs: before.mtimeMs
+    }
+    const request = visualSourceRenderRequestSchema.parse({
+      resource: {
+        resourceId: sessionId,
+        resourceKind: WORKSPACE_PREVIEW_RESOURCE_KIND,
+        workspaceId: before.workspaceRoot,
+        semanticRevision: sourceRevision
+      },
+      ...(input.frameIndex === undefined ? {} : { frameIndex: input.frameIndex }),
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.maxDimension === undefined ? {} : { maxDimension: input.maxDimension })
+    })
+    const frame = visualFrameSchema.parse(await provider.renderVisual({
+      session: record.session,
+      manifest: record.manifest,
+      file,
+      request
+    }))
+    if (frame.sourceRevision !== sourceRevision) {
+      throw new Error(
+        `Workspace preview plugin ${record.manifest.id} rendered revision ${frame.sourceRevision}, ` +
+        `but the current session revision is ${sourceRevision}.`
+      )
+    }
+    const after = await validateVisualSourceFile(record)
+    if (
+      before.path !== after.path ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs
+    ) {
+      throw new Error('Workspace preview source changed while its visual frame was rendering.')
+    }
+    return frame
   }
 
   async open(input: WorkspacePreviewOpenInput): Promise<WorkspacePreviewOpenResult> {
@@ -771,7 +837,16 @@ export class WorkspacePreviewHost {
     record: WorkspacePreviewSessionRecord,
     observation: WorkspaceObservation
   ): Promise<WorkspaceObservation> {
-    const withSelection = this.withSessionSelection(record, observation)
+    const withContentIdentity = record.file.sha256 && observation.file.sha256 !== record.file.sha256
+      ? {
+          ...observation,
+          file: {
+            ...observation.file,
+            sha256: record.file.sha256
+          }
+        }
+      : observation
+    const withSelection = this.withSessionSelection(record, withContentIdentity)
     return await this.withSidecarAnnotations(record, withSelection)
   }
 
@@ -1639,6 +1714,7 @@ export class WorkspacePreviewHost {
       size: fileInfo.size,
       mtimeMs: fileInfo.mtimeMs
     }
+    delete file.sha256
     const session = workspacePreviewSessionSchema.parse({
       ...record.session,
       updatedAt: now,
@@ -3263,4 +3339,50 @@ function offsetForTextPosition(
 
   if (line === position.line && column === position.column) return content.length
   throw new Error(`Text position ${position.line}:${position.column} is outside the file.`)
+}
+
+function workspacePreviewVisualSourceRevision(session: WorkspacePreviewSession): string {
+  const revision = session.updatedAt.trim() || String(session.mtimeMs ?? session.openedAt)
+  if (!revision) throw new Error('Workspace preview session has no visual source revision.')
+  return revision
+}
+
+async function validateVisualSourceFile(
+  record: WorkspacePreviewSessionRecord
+): Promise<{
+  workspaceRoot: string
+  path: string
+  size: number
+  mtimeMs: number
+}> {
+  const workspaceRoot = await canonicalPath(record.file.workspaceRoot)
+  const path = await canonicalPath(record.file.path)
+  const relativePath = relative(workspaceRoot, path)
+  if (
+    !relativePath ||
+    isAbsolute(relativePath) ||
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    relativePath.startsWith('..\\')
+  ) {
+    throw new Error('Workspace preview visual source must remain inside the selected workspace.')
+  }
+  const fileInfo = await stat(path)
+  if (!fileInfo.isFile()) {
+    throw new Error('Workspace preview visual source is not a regular file.')
+  }
+  if (
+    (record.file.size !== undefined && record.file.size !== fileInfo.size) ||
+    (record.file.mtimeMs !== undefined && record.file.mtimeMs !== fileInfo.mtimeMs)
+  ) {
+    throw new Error(
+      'Workspace preview source changed after the session was opened; reopen the preview before rendering.'
+    )
+  }
+  return {
+    workspaceRoot,
+    path,
+    size: fileInfo.size,
+    mtimeMs: fileInfo.mtimeMs
+  }
 }

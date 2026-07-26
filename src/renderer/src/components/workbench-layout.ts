@@ -1,7 +1,6 @@
 import type { PointerEvent as ReactPointerEvent, SetStateAction } from 'react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
-import type { AppRoute } from '../store/chat-store-types'
 import {
   subscribeSessionRightPanelDisposals,
   subscribeSessionRightPanelRekeys
@@ -167,15 +166,9 @@ export function fitWorkbenchWidths(
 }
 
 export function useWorkbenchLayout({
-  activeSessionId,
-  latestAutoOpenDevPreviewUrl,
-  latestDevPreviewUrl,
-  route
+  activeSessionId
 }: {
   activeSessionId: string | null
-  latestAutoOpenDevPreviewUrl: string | null
-  latestDevPreviewUrl: string | null
-  route: AppRoute
 }) {
   const normalizedActiveSessionId = activeSessionId?.trim() || null
   const [rightPanelWorkspaceMap, setRightPanelWorkspaceMap] =
@@ -193,7 +186,6 @@ export function useWorkbenchLayout({
     readStoredWidth(TERMINAL_HEIGHT_KEY, TERMINAL_HEIGHT_DEFAULT)
   )
   const shellRef = useRef<HTMLDivElement | null>(null)
-  const autoOpenedPreviewUrlBySessionRef = useRef(new Map<string, string>())
   const disposedSessionIdsRef = useRef(new Set<string>())
   const activeRightPanelWorkspace = normalizedActiveSessionId
     ? rightPanelWorkspaceMap[normalizedActiveSessionId] ?? createSessionRightPanelWorkspace(normalizedActiveSessionId)
@@ -216,7 +208,6 @@ export function useWorkbenchLayout({
 
   useEffect(() => subscribeSessionRightPanelDisposals((sessionId) => {
     disposedSessionIdsRef.current.add(sessionId)
-    autoOpenedPreviewUrlBySessionRef.current.delete(sessionId)
     forgetRightPanelContextStateForSession(sessionId)
     setRightPanelWorkspaceMap((current) => {
       if (!current[sessionId]) return current
@@ -230,11 +221,6 @@ export function useWorkbenchLayout({
     const targetWorkspaceExists = Boolean(rightPanelWorkspaceMapRef.current[nextSessionId])
     disposedSessionIdsRef.current.add(previousSessionId)
     disposedSessionIdsRef.current.delete(nextSessionId)
-    const autoOpenedPreviewUrl = autoOpenedPreviewUrlBySessionRef.current.get(previousSessionId)
-    autoOpenedPreviewUrlBySessionRef.current.delete(previousSessionId)
-    if (autoOpenedPreviewUrl && !targetWorkspaceExists) {
-      autoOpenedPreviewUrlBySessionRef.current.set(nextSessionId, autoOpenedPreviewUrl)
-    }
     if (targetWorkspaceExists) {
       forgetRightPanelContextStateForSession(previousSessionId)
     } else {
@@ -325,13 +311,6 @@ export function useWorkbenchLayout({
     persistWidth(TERMINAL_HEIGHT_KEY, terminalHeight)
   }, [terminalHeight])
 
-  useEffect(() => {
-    if (!normalizedActiveSessionId || !latestAutoOpenDevPreviewUrl || route !== 'chat') return
-    if (autoOpenedPreviewUrlBySessionRef.current.get(normalizedActiveSessionId) === latestAutoOpenDevPreviewUrl) return
-    autoOpenedPreviewUrlBySessionRef.current.set(normalizedActiveSessionId, latestAutoOpenDevPreviewUrl)
-    setRightPanelModeForSession(normalizedActiveSessionId, 'browser')
-  }, [normalizedActiveSessionId, latestAutoOpenDevPreviewUrl, route, setRightPanelModeForSession])
-
   useLayoutEffect(() => {
     const sync = (): void => {
       const containerWidth = shellRef.current?.clientWidth ?? window.innerWidth
@@ -359,12 +338,6 @@ export function useWorkbenchLayout({
 
   const toggleLeftSidebar = (): void => {
     setLeftSidebarCollapsed((current) => !current)
-  }
-
-  const openDevPreview = (): void => {
-    if (!normalizedActiveSessionId || disposedSessionIdsRef.current.has(normalizedActiveSessionId)) return
-    if (latestDevPreviewUrl) autoOpenedPreviewUrlBySessionRef.current.set(normalizedActiveSessionId, latestDevPreviewUrl)
-    setRightPanelMode('browser')
   }
 
   const navigateRightPanelHistory = useCallback((offset: -1 | 1): void => {
@@ -557,7 +530,6 @@ export function useWorkbenchLayout({
     filePreviewTarget,
     leftSidebarCollapsed,
     leftSidebarWidth,
-    openDevPreview,
     canNavigateRightPanelBack: activeHistory.index > 0,
     canNavigateRightPanelForward:
       activeHistory.index >= 0 &&

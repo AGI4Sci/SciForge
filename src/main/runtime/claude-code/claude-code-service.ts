@@ -38,7 +38,10 @@ import {
 import {
   isComputerUseMcpConfigured,
 } from '../../computer-use-mcp-config'
-import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
+import {
+  nativeAgentToolExecutionMetadata,
+  type AgentRuntimeToolSurface
+} from '../agent-runtime/agent-tool-surface'
 import { createClaudeCodeAgentToolTransport } from './claude-code-agent-tool-transport'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
@@ -904,6 +907,12 @@ export class ClaudeCodeRuntimeService {
     state: ClaudeSdkTurnState
   }): Promise<void> {
     input.state.toolResultFingerprints.set(input.callId, input.result.fingerprint)
+    const nativeExecution = input.result.isError
+      ? { effects: [], completionReceipts: [] }
+      : nativeAgentToolExecutionMetadata({
+          tool: input.toolUse.name,
+          value: nativeAgentToolResultValue(input.result.payload, input.toolUse.name)
+        }, input.callId)
     const error = input.result.isError
       ? {
           code: 'claude_tool_error',
@@ -916,6 +925,10 @@ export class ClaudeCodeRuntimeService {
       kind: 'tool_event' as const,
       itemId: input.callId,
       toolKind: toolKindFromName(input.toolUse.name),
+      ...(nativeExecution.effects.length ? { effects: nativeExecution.effects } : {}),
+      ...(nativeExecution.completionReceipts.length
+        ? { completionReceipts: nativeExecution.completionReceipts }
+        : {}),
       summary: `Claude Code tool result: ${input.toolUse.name}`,
       detail: input.result.detail,
       meta: {
@@ -1662,6 +1675,16 @@ function parseToolResultPayload(content: unknown): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function nativeAgentToolResultValue(
+  payload: Record<string, unknown> | undefined,
+  toolName: string
+): unknown {
+  if (!payload) return undefined
+  return payload.tool === toolName && Object.prototype.hasOwnProperty.call(payload, 'value')
+    ? payload.value
+    : payload
 }
 
 function firstRecord(...records: Record<string, unknown>[]): Record<string, unknown> | null {

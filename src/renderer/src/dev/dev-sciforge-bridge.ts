@@ -269,7 +269,6 @@ function createApi(): SciForgeApi {
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
     readClipboardImage: () => invoke('clipboard:read-image'),
     pasteWorkspaceClipboard: (payload) => invoke('clipboard:paste-workspace', payload),
-    startWorkspaceNativeFileDrag: (payload) => invoke('file:start-workspace-native-drag', payload),
     renameWorkspaceEntry: (payload) => invoke('file:rename-workspace-entry', payload),
     suggestWorkspacePdfName: (payload) => invoke('file:suggest-workspace-pdf-name', payload),
     copyWorkspaceEntry: (payload) => invoke('file:copy-workspace-entry', payload),
@@ -283,6 +282,7 @@ function createApi(): SciForgeApi {
       readiness: (input) => invoke('capability:readiness', input),
       discover: (input = {}) => invoke('capability:discover', input),
       observe: (input) => invoke('capability:observe', input),
+      bind: (input) => invoke('capability:bind', input),
       invoke: (input) => invoke('capability:invoke', input),
       events: (input = {}) => invoke('capability:events', input),
       subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),
@@ -407,7 +407,7 @@ function isLocalBrowserHost(): boolean {
 }
 
 function hasElectronPreloadBridge(): boolean {
-  return typeof window.sciforge?.onDevPreviewNavigate === 'function'
+  return typeof window.sciforge?.getAppVersion === 'function'
 }
 
 export function installDevSciForgeBridge(): void {

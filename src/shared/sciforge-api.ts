@@ -47,8 +47,6 @@ import type {
   WorkspaceClipboardImageSaveResult,
   WorkspaceClipboardPastePayload,
   WorkspaceClipboardPasteResult,
-  WorkspaceNativeFileDragPayload,
-  WorkspaceNativeFileDragResult,
   WorkspaceFileReadResult,
   WorkspaceImageReadResult,
   WorkspaceDirectoryCreatePayload,
@@ -104,7 +102,9 @@ import type {
   CapabilityInvocationResult,
   CapabilityObservation,
   CapabilityObserveRequest,
+  CapabilityResourceBindRequest,
   CapabilityResourceContentAccess,
+  CapabilityResourceHandle,
   CapabilityResourceBinding as BrokerCapabilityResourceBinding,
   CapabilityResourceChangeEvent
 } from './capability-broker'
@@ -419,10 +419,6 @@ export type TurnCompleteNotificationPayload = {
 export type SystemNotificationResult =
   | { ok: true; shown: boolean; reason?: string }
   | { ok: false; message: string }
-export type DevPreviewNavigatePayload = {
-  url: string
-  webContentsId: number
-}
 export type RemoteChannelActivityPayload = {
   channelId: string
   threadId: string
@@ -1185,9 +1181,6 @@ export type SciForgeApi = {
   pasteWorkspaceClipboard: (
     payload: WorkspaceClipboardPastePayload
   ) => Promise<WorkspaceClipboardPasteResult>
-  startWorkspaceNativeFileDrag: (
-    payload: WorkspaceNativeFileDragPayload
-  ) => Promise<WorkspaceNativeFileDragResult>
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
@@ -1219,6 +1212,10 @@ export type SciForgeApi = {
       workspaceId?: string
       request: CapabilityObserveRequest
     }) => Promise<CapabilityObservation>
+    bind: (input: {
+      workspaceId?: string
+      request: CapabilityResourceBindRequest
+    }) => Promise<CapabilityResourceHandle>
     invoke: (input: {
       workspaceId?: string
       request: CapabilityInvocationRequest
@@ -1336,7 +1333,6 @@ export type SciForgeApi = {
   runDesktopCommand: (command: DesktopCommand) => Promise<void>
   getPerformanceSnapshot: () => Promise<PerformanceSnapshotResult>
   openExternal: (url: string) => Promise<void>
-  onDevPreviewNavigate?: (handler: (payload: DevPreviewNavigatePayload) => void) => () => void
   getComputerUsePermissions: () => Promise<ComputerUsePermissions>
   requestComputerUsePermission: (
     kind: ComputerUsePermissionKind

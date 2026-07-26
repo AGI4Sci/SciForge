@@ -12,31 +12,32 @@ import {
   type ApprovalPolicy,
   type SandboxMode
 } from '../../../shared/app-settings'
-import type {
-  CodexChatBlock,
-  CodexCodingPlanAccountResult,
-  CodexCodingPlanLoginCompletionResult,
-  CodexCodingPlanLoginMethod,
-  CodexCodingPlanLoginStartResult,
-  CodexCodingPlanRateLimitsResult,
-  CodexConnectResult,
-  CodexEventPayload,
-  CodexNormalizedThread,
-  CodexSessionResumeResult,
-  CodexThreadEventPayload,
-  CodexThreadDetail,
-  CodexThreadForkResult,
-  CodexThreadListResult,
-  CodexThreadListOptions,
-  CodexThreadMutationResult,
-  CodexThreadReadResult,
-  CodexThreadStartPayload,
-  CodexThreadStartResult,
-  CodexTurnInterruptOptions,
-  CodexTurnMutationResult,
-  CodexTurnStartPayload,
-  CodexTurnStartResult,
-  CodexTurnSteerPayload
+import {
+  codexModelDeltaItemId,
+  type CodexChatBlock,
+  type CodexCodingPlanAccountResult,
+  type CodexCodingPlanLoginCompletionResult,
+  type CodexCodingPlanLoginMethod,
+  type CodexCodingPlanLoginStartResult,
+  type CodexCodingPlanRateLimitsResult,
+  type CodexConnectResult,
+  type CodexEventPayload,
+  type CodexNormalizedThread,
+  type CodexSessionResumeResult,
+  type CodexThreadEventPayload,
+  type CodexThreadDetail,
+  type CodexThreadForkResult,
+  type CodexThreadListResult,
+  type CodexThreadListOptions,
+  type CodexThreadMutationResult,
+  type CodexThreadReadResult,
+  type CodexThreadStartPayload,
+  type CodexThreadStartResult,
+  type CodexTurnInterruptOptions,
+  type CodexTurnMutationResult,
+  type CodexTurnStartPayload,
+  type CodexTurnStartResult,
+  type CodexTurnSteerPayload
 } from './codex-runtime-api'
 import type {
   AgentRuntimeEvent,
@@ -79,7 +80,10 @@ import {
   resolveCodexWorkspace,
   type CodexPlanGatewayLaunchConfig
 } from './codex-config'
-import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
+import {
+  nativeAgentToolExecutionMetadata,
+  type AgentRuntimeToolSurface
+} from '../agent-runtime/agent-tool-surface'
 import {
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured
@@ -776,7 +780,12 @@ export class CodexRuntimeService {
       }
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const turnId = stringValue(turn.id) || ''
-      this.recordActiveTurn(payload.threadId, turnId, startedAtMs)
+      this.recordActiveTurn(
+        payload.threadId,
+        turnId,
+        startedAtMs,
+        getModelAccessSettings(settings)?.mode !== 'api'
+      )
       this.recordTurnModelHint(payload.threadId, turnId, runtimeModel)
       this.recordTurnRecovery(payload.threadId, turnId, {
         threadId: payload.threadId,
@@ -1269,10 +1278,18 @@ export class CodexRuntimeService {
         ...(request.callId ? { callId: request.callId } : {})
       }
     })
+    const execution = nativeAgentToolExecutionMetadata(
+      { tool: request.tool, value: result.value },
+      stringValue(request.callId).trim() || String(request.requestId)
+    )
     return {
       success: true,
       contentItems: [{ type: 'inputText', text: JSON.stringify(result.value, null, 2) }],
       structuredContent: result.value,
+      ...(execution.effects.length ? { effects: execution.effects } : {}),
+      ...(execution.completionReceipts.length
+        ? { completionReceipts: execution.completionReceipts }
+        : {}),
       evidenceDelta: true,
       ...(booleanValue(asRecord(result.value)?.changed) !== undefined
         ? { stateChanged: booleanValue(asRecord(result.value)?.changed) }
@@ -1302,6 +1319,10 @@ export class CodexRuntimeService {
         summary: toolName,
         status: phase === 'dispatched' ? 'running' : phase === 'succeeded' ? 'success' : 'error',
         toolKind: 'tool_call',
+        ...(response?.effects?.length ? { effects: response.effects } : {}),
+        ...(response?.completionReceipts?.length
+          ? { completionReceipts: response.completionReceipts }
+          : {}),
         ...(terminal && response ? { detail: dynamicToolResponseSummary(response) } : {}),
         meta: {
           callId,
@@ -1437,7 +1458,12 @@ export class CodexRuntimeService {
       const turn = asRecord(asRecord(turnResponse)?.turn) ?? {}
       const childTurnId = stringValue(turn.id) || ''
       if (!childTurnId) throw new Error('Codex child turn did not return a turn id.')
-      this.recordActiveTurn(childGuiThreadId, childTurnId, startedAtMs)
+      this.recordActiveTurn(
+        childGuiThreadId,
+        childTurnId,
+        startedAtMs,
+        getModelAccessSettings(settings)?.mode !== 'api'
+      )
       this.recordTurnModelHint(childGuiThreadId, childTurnId, modelAccess.model)
       await input.appendTranscript({
         id: `${input.childId}-thread-start`,
@@ -1930,7 +1956,7 @@ export class CodexRuntimeService {
       }))
       const turn = asRecord(asRecord(response)?.turn) ?? {}
       const retryTurnId = stringValue(turn.id) || ''
-      this.recordActiveTurn(event.threadId, retryTurnId)
+      this.recordActiveTurn(event.threadId, retryTurnId, Date.now(), false)
       this.recordTurnModelHint(event.threadId, retryTurnId, recovery.model)
       this.recordTurnRecovery(event.threadId, retryTurnId, {
         ...recovery,
@@ -2269,7 +2295,12 @@ export class CodexRuntimeService {
     return stored
   }
 
-  private recordActiveTurn(threadId: string, turnId: string, startedAtMs = Date.now()): void {
+  private recordActiveTurn(
+    threadId: string,
+    turnId: string,
+    startedAtMs = Date.now(),
+    guardFirstActivity = true
+  ): void {
     const normalizedThreadId = threadId.trim()
     const normalizedTurnId = turnId.trim()
     if (!normalizedThreadId || !normalizedTurnId) return
@@ -2279,7 +2310,9 @@ export class CodexRuntimeService {
       firstActivitySeen: false,
       firstDeltaSeen: false
     })
-    this.scheduleFirstActivityTimeout(normalizedThreadId, normalizedTurnId)
+    if (guardFirstActivity) {
+      this.scheduleFirstActivityTimeout(normalizedThreadId, normalizedTurnId)
+    }
   }
 
   private recordTurnModelHint(threadId: string, turnId: string, model?: string): void {
@@ -2736,7 +2769,7 @@ function appendStoredModelDelta(
     }
     blocks.push({
       kind: 'reasoning',
-      id: `${delta.kind}-${item.seq}-${index}`,
+      id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
       createdAt: item.createdAt,
       ...(turnId ? { turnId } : {}),
       text: delta.text,
@@ -2759,7 +2792,7 @@ function appendStoredModelDelta(
 
   blocks.push({
     kind: 'assistant',
-    id: `${delta.kind}-${item.seq}-${index}`,
+    id: codexModelDeltaItemId({ seq: item.seq, turnId }, delta, index),
     createdAt: item.createdAt,
     ...(turnId ? { turnId } : {}),
     text: delta.text,

@@ -277,6 +277,7 @@ export type WritePdfAnnotationOverlay = {
 
 export type WritePdfViewerProps = {
   filePath: string
+  documentContentKey?: string
   dataBase64?: string
   data?: Uint8Array | ArrayBuffer
   sourceUrl?: string
@@ -2182,6 +2183,7 @@ function WritePdfPage({
 
 export function WritePdfViewer({
   filePath,
+  documentContentKey,
   dataBase64,
   data,
   sourceUrl,
@@ -2229,6 +2231,16 @@ export function WritePdfViewer({
   const initialPageRef = useRef(initialPage)
   const activeFilePathRef = useRef(filePath)
   const activeViewStateKeyRef = useRef(viewStateKey)
+  const documentLoadInputRef = useRef({
+    data,
+    dataBase64,
+    sourceUrl,
+    filePath,
+    sourceTitle: relativeToWorkspace(workspaceRoot, filePath),
+    mimeType,
+    size,
+    mtimeMs
+  })
   const viewStateKeyChanged = activeViewStateKeyRef.current !== viewStateKey
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -2252,6 +2264,23 @@ export function WritePdfViewer({
   currentPageRef.current = currentPage
   initialPageRef.current = initialPage
   const sourceTitle = useMemo(() => relativeToWorkspace(workspaceRoot, filePath), [filePath, workspaceRoot])
+  documentLoadInputRef.current = {
+    data,
+    dataBase64,
+    sourceUrl,
+    filePath,
+    sourceTitle,
+    mimeType,
+    size,
+    mtimeMs
+  }
+  const resolvedDocumentContentKey = documentContentKey?.trim() ?? ''
+  const unkeyedDocumentMetadata = resolvedDocumentContentKey
+    ? null
+    : `${filePath}\u0000${mimeType}\u0000${mtimeMs ?? ''}\u0000${size ?? ''}`
+  const unkeyedData = resolvedDocumentContentKey ? null : data
+  const unkeyedDataBase64 = resolvedDocumentContentKey ? null : dataBase64
+  const unkeyedSourceUrl = resolvedDocumentContentKey ? null : sourceUrl
   const selectionContext = useMemo<PdfSelectionContext>(() => ({
     filePath,
     sourceTitle,
@@ -2300,8 +2329,9 @@ export function WritePdfViewer({
 
   useEffect(() => {
     let cancelled = false
+    const loadInput = documentLoadInputRef.current
     const currentScrollTop = scrollerRef.current?.scrollTop
-    const reloadingSameDocument = activeFilePathRef.current === filePath &&
+    const reloadingSameDocument = activeFilePathRef.current === loadInput.filePath &&
       activeViewStateKeyRef.current === viewStateKey
     if (pdfDocumentRef.current && currentScrollTop != null) {
       const currentView = {
@@ -2312,10 +2342,10 @@ export function WritePdfViewer({
       preservedReloadViewRef.current = reloadingSameDocument ? currentView : null
     }
     const rememberedView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
-    const pageToRestore = activeFilePathRef.current === filePath
+    const pageToRestore = activeFilePathRef.current === loadInput.filePath
       ? currentPageRef.current
       : rememberedView?.currentPage ?? initialPageRef.current
-    activeFilePathRef.current = filePath
+    activeFilePathRef.current = loadInput.filePath
     activeViewStateKeyRef.current = viewStateKey
     setLoading(true)
     setError('')
@@ -2329,16 +2359,16 @@ export function WritePdfViewer({
     setLiveSelection(false)
     setSearchQuery(rememberedView?.searchQuery ?? '')
     emitSelection(emptyPdfSelection({
-      filePath,
-      sourceTitle,
-      mimeType,
-      size,
-      mtimeMs
+      filePath: loadInput.filePath,
+      sourceTitle: loadInput.sourceTitle,
+      mimeType: loadInput.mimeType,
+      size: loadInput.size,
+      mtimeMs: loadInput.mtimeMs
     }))
 
     let task: ReturnType<typeof getDocument>
     try {
-      task = getDocument(documentSourceFromProps({ data, dataBase64, sourceUrl }))
+      task = getDocument(documentSourceFromProps(loadInput))
     } catch (reason) {
       if (!cancelled) {
         setError(reason instanceof Error ? reason.message : String(reason))
@@ -2380,7 +2410,15 @@ export function WritePdfViewer({
       cancelled = true
       void task.destroy()
     }
-  }, [data, dataBase64, emitSelection, filePath, mimeType, mtimeMs, size, sourceTitle, sourceUrl, viewStateKey])
+  }, [
+    emitSelection,
+    resolvedDocumentContentKey,
+    unkeyedData,
+    unkeyedDataBase64,
+    unkeyedDocumentMetadata,
+    unkeyedSourceUrl,
+    viewStateKey
+  ])
 
   useEffect(() => {
     if (!pdfDocument) return

@@ -333,6 +333,201 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
+  it('coordinates capability confirmations through neutral approval events and resolution', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-07-22T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+      if (!input.signal?.aborted) {
+        yield { kind: 'heartbeat', runtimeId: 'codex', threadId: input.threadId } satisfies AgentRuntimeEvent
+      }
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    const subscriptionAbort = new AbortController()
+    const events = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      signal: subscriptionAbort.signal
+    })[Symbol.asyncIterator]()
+    const remoteScript = `echo begin\n${'x'.repeat(6_000)}`
+    const decision = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-1',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        callId: 'call-1',
+        workspaceId: '/tmp/workspace'
+      },
+      actionId: 'remote-ssh.command.execute',
+      invocationId: 'agent_inv_abcdefghijklmnopqrstuvwxyz',
+      mode: 'confirmation',
+      title: 'Run remote command',
+      description: 'Runs a command on a registered SSH target.',
+      effect: 'external-write',
+      input: {
+        password: 'do-not-persist',
+        privateKey: '-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----',
+        script: remoteScript
+      },
+      resourceRef: 'res_remote_target_abcdefghijklmnop',
+      resourceLabel: 'Lab A GPU 01'
+    })
+
+    const requested = await events.next()
+    expect(requested.value).toMatchObject({
+      kind: 'approval_requested',
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      approvalId: expect.stringMatching(/^capability-approval-/u),
+      toolName: 'remote-ssh.command.execute',
+      meta: {
+        source: 'sciforge-capability-broker',
+        actionId: 'remote-ssh.command.execute',
+        invocationId: 'agent_inv_abcdefghijklmnopqrstuvwxyz',
+        callId: 'call-1',
+        effect: 'external-write',
+        approvalMode: 'confirmation',
+        inputPreviewBytes: expect.any(Number),
+        inputPreviewTruncated: true,
+        resourceRef: 'res_remote_target_abcdefghijklmnop'
+      }
+    })
+    const approvalSummary = String((requested.value as Extract<AgentRuntimeEvent, {
+      kind: 'approval_requested'
+    }>).summary)
+    const inputPreview = approvalSummary.split('Requested input:\n')[1] ?? ''
+    expect(Buffer.byteLength(inputPreview, 'utf8')).toBeLessThanOrEqual(4 * 1_024)
+    expect(approvalSummary).toContain('echo begin')
+    expect(approvalSummary).toContain('Lab A GPU 01')
+    expect(approvalSummary).toContain('<redacted>')
+    expect(approvalSummary).not.toContain('do-not-persist')
+    expect(approvalSummary).not.toContain('abc123')
+    expect((requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).meta)
+      .not.toHaveProperty('inputPreview')
+    const approvalId = (requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).approvalId
+    await host.resolveApproval({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      approvalId,
+      decision: 'allowed'
+    })
+    await expect(decision).resolves.toBe('allowed')
+    await expect(events.next()).resolves.toMatchObject({
+      value: { kind: 'approval_resolved', approvalId, decision: 'allowed' }
+    })
+
+    const replayAbort = new AbortController()
+    const replay = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      signal: replayAbort.signal
+    })[Symbol.asyncIterator]()
+    await expect(replay.next()).resolves.toMatchObject({
+      value: { kind: 'approval_requested', approvalId }
+    })
+    await expect(replay.next()).resolves.toMatchObject({
+      value: { kind: 'approval_resolved', approvalId, decision: 'allowed' }
+    })
+    subscriptionAbort.abort()
+    replayAbort.abort()
+    await Promise.all([events.return?.(), replay.return?.()])
+    host.dispose()
+  })
+
+  it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
+    const thread = {
+      id: 'claude-thread',
+      runtimeId: 'claude' as const,
+      title: 'Claude',
+      updatedAt: '2026-07-22T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('claude', thread)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        turnId: 'turn-terminal',
+        state: 'aborted'
+      } satisfies AgentRuntimeEvent
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('claude'), adapters: [adapter] })
+    const request = (turnId: string, callId: string, signal?: AbortSignal) => host.requestCapabilityApproval({
+      context: {
+        requestId: callId,
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        turnId,
+        callId
+      },
+      actionId: 'remote-ssh.command.execute',
+      invocationId: `agent_inv_${callId.padEnd(20, 'x')}`,
+      mode: 'confirmation',
+      title: 'Run remote command',
+      description: 'Runs a command on a registered SSH target.',
+      effect: 'external-write',
+      input: { script: callId }
+    }, signal ? { signal } : {})
+
+    const abort = new AbortController()
+    const aborted = request('turn-abort', 'abort-call', abort.signal)
+    abort.abort()
+    await expect(aborted).resolves.toBe('cancelled')
+
+    const surfaceCancelled = request('turn-surface', 'surface-call')
+    expect(host.cancelCapabilityApprovalTurn({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-surface'
+    }, 'user_stop')).toBe(1)
+    await expect(surfaceCancelled).resolves.toBe('cancelled')
+
+    const terminal = request('turn-terminal', 'terminal-call')
+    const subscriptionAbort = new AbortController()
+    const streamed: AgentRuntimeEvent[] = []
+    const events = host.subscribeEvents({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      signal: subscriptionAbort.signal
+    })[Symbol.asyncIterator]()
+    let terminalApprovalId = ''
+    while (true) {
+      const next = await events.next()
+      if (next.done) break
+      streamed.push(next.value)
+      if (next.value.kind === 'approval_requested' && next.value.turnId === 'turn-terminal') {
+        terminalApprovalId = next.value.approvalId
+      }
+      if (
+        next.value.kind === 'approval_resolved'
+        && terminalApprovalId
+        && next.value.approvalId === terminalApprovalId
+      ) break
+    }
+    subscriptionAbort.abort()
+    await events.return?.()
+    await expect(terminal).resolves.toBe('cancelled')
+    expect(streamed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'approval_resolved', approvalId: terminalApprovalId, decision: 'error' }),
+      expect.objectContaining({ kind: 'turn_lifecycle', state: 'aborted' })
+    ]))
+
+    const disposed = Array.from({ length: 64 }, (_, index) => (
+      request(`turn-dispose-${index}`, `dispose-call-${index}`)
+    ))
+    await expect(request('turn-overflow', 'overflow-call')).resolves.toBe('cancelled')
+    host.dispose()
+    await expect(Promise.all(disposed)).resolves.toEqual(Array.from({ length: 64 }, () => 'cancelled'))
+  })
+
   it('returns an empty list when the active runtime is healthy and an inactive runtime is unavailable', async () => {
     const thread = {
       id: 'unused-thread',
@@ -3953,7 +4148,7 @@ describe('AgentRuntimeHost', () => {
     expect(local.publishSyntheticEvent).not.toHaveBeenCalled()
   })
 
-  it('uses authoritative capability availability to deny Codex OS GUI automation', async () => {
+  it('uses native visual tool availability to deny Codex OS GUI automation', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -3977,7 +4172,7 @@ describe('AgentRuntimeHost', () => {
         }
       } satisfies AgentRuntimeEvent
     })
-    const capabilityAvailability = vi.fn(() => true)
+    const nativeVisualToolsAvailable = vi.fn(() => true)
     const host = createAgentRuntimeHost({
       settings: async () => ({
         ...settings('codex'),
@@ -3987,7 +4182,7 @@ describe('AgentRuntimeHost', () => {
         }
       }),
       adapters: [codex],
-      capabilityAvailability
+      nativeVisualToolsAvailable
     })
 
     for await (const _event of host.subscribeEvents({
@@ -3999,18 +4194,82 @@ describe('AgentRuntimeHost', () => {
     }
     await Promise.resolve()
 
-    expect(capabilityAvailability).toHaveBeenCalledWith(expect.objectContaining({
-      capabilityId: 'surface.inspect',
-      audience: 'agent',
-      runtimeId: 'codex'
-    }))
+    expect(nativeVisualToolsAvailable).toHaveBeenCalledWith()
     expect(codex.interruptTurn).toHaveBeenCalled()
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         kind: 'error',
         code: 'runtime_execution_policy_denied',
-        detail: expect.stringContaining('sciforge_discover')
+        detail: expect.stringContaining('sciforge_look')
+      })
+    )
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        detail: expect.stringContaining('sciforge_capture')
+      })
+    )
+    const policyEvent = vi.mocked(codex.publishSyntheticEvent!).mock.calls
+      .map(([, event]) => event)
+      .find((event) => event.kind === 'error' && event.code === 'runtime_execution_policy_denied')
+    expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('sciforge_discover')
+    expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('surface.inspect')
+  })
+
+  it('does not deny OS GUI automation when native visual tools are unavailable', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      yield {
+        kind: 'tool_event',
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        turnId: 'turn-1',
+        itemId: 'shell-gui-fallback',
+        status: 'running',
+        toolKind: 'command_execution',
+        toolName: 'exec_command',
+        meta: {
+          callId: 'shell-gui-fallback',
+          toolName: 'exec_command',
+          arguments: { command: 'screencapture -x /tmp/sciforge.png' }
+        }
+      } satisfies AgentRuntimeEvent
+    })
+    const nativeVisualToolsAvailable = vi.fn(() => false)
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2 }
+        }
+      }),
+      adapters: [codex],
+      nativeVisualToolsAvailable
+    })
+
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(nativeVisualToolsAvailable).toHaveBeenCalledWith()
+    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied'
       })
     )
   })
@@ -4930,7 +5189,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         runtimeId: 'codex',
         seq: 5,
         text: 'stored',
-        itemId: 'codex-delta-5-0'
+        itemId: 'agent_message-5-0'
       },
       {
         kind: 'approval_requested',

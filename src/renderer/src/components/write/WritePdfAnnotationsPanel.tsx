@@ -89,7 +89,6 @@ export type WritePdfAnnotationsPanelProps = {
   pdfReviewImprovingThreadId?: string | null
   pdfReviewNotice?: { tone: 'success' | 'error'; message: string } | null
   notice?: { tone: 'success' | 'error'; message: string } | null
-  onSelectThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onLocateThread?: (threadId: string, summary: PdfAnnotationThreadSummary) => void
   onHoverThread?: (threadId: string | null, summary?: PdfAnnotationThreadSummary) => void
   onAnnotationDisplayModeChange?: (mode: WritePdfAnnotationDisplayMode) => void
@@ -309,7 +308,6 @@ export function WritePdfAnnotationsPanel({
   pdfReviewImprovingThreadId = null,
   pdfReviewNotice = null,
   notice = null,
-  onSelectThread,
   onLocateThread,
   onHoverThread,
   onAnnotationDisplayModeChange,
@@ -906,9 +904,10 @@ export function WritePdfAnnotationsPanel({
                   <div className="flex min-w-0 items-start gap-2 p-2">
                     <button
                       type="button"
-                      onClick={() => onSelectThread?.(summary.thread.id, summary)}
+                      onClick={() => onLocateThread?.(summary.thread.id, summary)}
+                      disabled={!onLocateThread}
                       className="min-w-0 flex-1 rounded-md px-2 py-1 text-left transition hover:bg-ds-hover"
-                      aria-label={t('writePdfAnnotationsSelect')}
+                      aria-label={t('writePdfAnnotationsLocate', { defaultValue: 'Locate in document' })}
                     >
                       <div className="flex min-w-0 items-center gap-2">
                         <span className={`inline-flex h-6 max-w-[116px] shrink-0 items-center gap-1 rounded-md px-2 text-[11px] font-semibold ${kindAccent(summary.kind)}`}>

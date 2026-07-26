@@ -24,22 +24,46 @@ describe('installed renderer contributions', () => {
       title: contribution.title,
       resourceKind: contribution.resourceKind,
       available: contribution.isAvailable()
-    }))).toEqual([{
-      id: 'paper-radar.workbench-right-panel',
-      ownerId: 'sciforge.paper-radar',
-      mode: 'paper',
-      label: 'rightPanelPaperRadar',
-      title: 'Paper radar',
-      resourceKind: 'paper-radar',
-      available: true
-    }])
+    }))).toEqual([
+      {
+        id: 'browser-preview.workbench-right-panel',
+        ownerId: 'sciforge.browser-preview',
+        mode: 'browser',
+        label: 'browserPreviewRightPanelBrowser',
+        title: 'Playwright browser',
+        resourceKind: 'browser-page',
+        available: true
+      },
+      {
+        id: 'paper-radar.workbench-right-panel',
+        ownerId: 'sciforge.paper-radar',
+        mode: 'paper',
+        label: 'rightPanelPaperRadar',
+        title: 'Paper radar',
+        resourceKind: 'paper-radar',
+        available: true
+      },
+      {
+        id: 'remote-ssh.workbench-right-panel',
+        ownerId: 'sciforge.remote-ssh',
+        mode: 'remote-ssh',
+        label: 'rightPanelRemoteSsh',
+        title: 'Remote targets',
+        resourceKind: 'remote-ssh-target',
+        available: true
+      }
+    ])
     expect(translations.bundle('en', 'common')).toMatchObject({
       coreTitle: 'Core',
-      paperRadarTitle: 'Paper Radar'
+      browserPreviewTitle: 'Playwright browser',
+      paperRadarTitle: 'Paper Radar',
+      remoteSshTitle: 'Remote Targets'
     })
     expect(translations.bundle('zh', 'common')).toMatchObject({
       coreTitle: '核心',
-      paperRadarTitle: '论文雷达'
+      browserPreviewTitle: 'Playwright 浏览器',
+      paperRadarTitle: '论文雷达',
+      remoteSshTitle: '远程资源'
     })
 
     runtime.dispose()

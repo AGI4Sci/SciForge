@@ -2,11 +2,11 @@
 
 Read-only workspace and visible-GUI intelligence worker for SciForge runtimes.
 
-It exposes guarded workspace listing, tree, file read, bounded reference listing and preview, skill discovery, visible-context lookup, surface-bound visual understanding, and direct workspace-image understanding through a pure Node service and an MCP stdio server.
+It exposes guarded workspace listing, tree, file read, bounded reference listing and preview, skill discovery, and visible-context lookup through a pure Node service and an MCP stdio server. Its Model Router adapter is reused by SciForge's Host-owned agent visual runtime.
 
-Surface and artifact inspection are registered app capabilities. Agents discover and invoke `surface.inspect` or `artifact.inspect` through SciForge's stable discover/observe/invoke/events meta-tools; this worker does not expose a second GUI tool surface or snapshot-token protocol.
+Agents inspect and persist visuals through the native `sciforge_look` and `sciforge_capture` tools. This worker does not expose a second agent-visible inspection, screenshot, crop, or snapshot-token path.
 
-`surface.inspect` accepts an opaque stable target reference and resolves the latest layout atomically in the canonical provider. `artifact.inspect` accepts one to eight workspace-confined PNG, JPEG, or WebP artifacts with optional normalized regions. Both use Model Router visual inspection and return structured, attested evidence.
+Host Core resolves the current surface, an opaque visual resource, or a workspace-confined PNG, JPEG, or WebP image, then sends the immutable frame through the Model Router adapter here. Source providers own rendering; the adapter owns only structured visual understanding.
 
 Successful visual tasks return attested generic evidence:
 

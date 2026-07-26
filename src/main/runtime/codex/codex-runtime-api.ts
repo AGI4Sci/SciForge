@@ -1,5 +1,7 @@
 import type {
   AgentRuntimeChild,
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeExecutionEffectClass,
   AgentRuntimeFileReference,
   AgentRuntimePhase,
   AgentRuntimeThreadRelation,
@@ -92,6 +94,8 @@ export type CodexThreadEventPayload = {
     summary: string
     status: 'running' | 'success' | 'error'
     toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+    effects?: AgentRuntimeExecutionEffectClass[]
+    completionReceipts?: AgentRuntimeCompletionReceipt[]
     detail?: string
     filePath?: string
     meta?: Record<string, unknown>
@@ -121,6 +125,19 @@ export type CodexThreadEventPayload = {
   child?: AgentRuntimeChild
   usage?: AgentRuntimeUsage
   turnComplete?: boolean
+}
+
+export function codexModelDeltaItemId(
+  event: Pick<CodexThreadEventPayload, 'seq' | 'turnId'>,
+  delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
+  index: number
+): string {
+  const sequence = event.seq ?? delta.seq
+  const eventIdentity =
+    typeof sequence === 'number' && Number.isFinite(sequence)
+      ? Math.floor(sequence)
+      : event.turnId?.trim() || 'event'
+  return `${delta.kind}-${eventIdentity}-${Math.max(0, Math.floor(index))}`
 }
 
 export type CodexRuntimeFailure = {

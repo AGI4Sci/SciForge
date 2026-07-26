@@ -254,6 +254,13 @@ describe('WorkspacePreviewHost', () => {
         verified: true
       }
     })
+    if (!opened.ok) return
+    await expect(host.observe(opened.session.id)).resolves.toMatchObject({
+      ok: true,
+      observation: {
+        file: { sha256: expectedHex }
+      }
+    })
 
     await expect(host.open({
       workspaceRoot,
@@ -263,6 +270,46 @@ describe('WorkspacePreviewHost', () => {
       ok: false,
       message: expect.stringContaining('integrity mismatch')
     })
+  })
+
+  it('invalidates a verified content digest after a source file edit', async () => {
+    const contents = 'alpha\n'
+    await writeFile(join(workspaceRoot, 'verified.md'), contents, 'utf8')
+    const expectedHex = createHash('sha256').update(contents).digest('hex')
+    const host = new WorkspacePreviewHost({ createSessionId: () => 'session-verified-markdown' })
+    const opened = await host.open({
+      workspaceRoot,
+      path: 'verified.md',
+      integrity: { algorithm: 'sha256', expectedDigest: expectedHex }
+    })
+    expect(opened).toMatchObject({
+      ok: true,
+      file: { sha256: expectedHex }
+    })
+    if (!opened.ok) return
+
+    const edited = await host.applyEdit(opened.session.id, {
+      kind: 'text.replaceRange',
+      path: 'verified.md',
+      range: {
+        start: { line: 1, column: 1 },
+        end: { line: 2, column: 1 }
+      },
+      text: 'beta\n'
+    })
+    expect(edited).toMatchObject({
+      ok: true,
+      audit: { effect: 'file-write' }
+    })
+    if (!edited.ok) return
+    const observed = await host.observe(opened.session.id)
+    expect(observed).toMatchObject({
+      ok: true,
+      observation: {
+        visibleText: 'beta\n'
+      }
+    })
+    if (observed.ok) expect(observed.observation.file.sha256).toBeUndefined()
   })
 
   it('rejects paths outside the selected workspace', async () => {
@@ -1493,11 +1540,13 @@ describe('WorkspacePreviewHost', () => {
 
   it('uses the canonical document annotation provider for list, update, delete, and import', async () => {
     const sourcePdf = '%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n'
+    const sourceSha256 = createHash('sha256').update(sourcePdf).digest('hex')
     await writeFile(join(workspaceRoot, 'paper.pdf'), sourcePdf, 'utf8')
     const host = new WorkspacePreviewHost({ createSessionId: () => 'session-pdf-annotation' })
     const opened = await host.open({
       workspaceRoot,
       path: 'paper.pdf',
+      integrity: { algorithm: 'sha256', expectedDigest: sourceSha256 },
       now: '2026-07-08T00:00:00.000Z'
     })
     expect(opened.ok).toBe(true)
@@ -1543,6 +1592,9 @@ describe('WorkspacePreviewHost', () => {
       audit: {
         pluginId: 'pdf',
         effect: 'sidecar-write'
+      },
+      session: {
+        file: { sha256: sourceSha256 }
       },
       diffSummary: {
         summary: 'Created comment annotation ann-1.',
@@ -1622,6 +1674,7 @@ describe('WorkspacePreviewHost', () => {
     expect(observed).toMatchObject({
       ok: true,
       observation: {
+        file: { sha256: sourceSha256 },
         documentAnnotations: {
           threadCount: 1,
           annotationCount: 1,

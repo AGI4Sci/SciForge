@@ -1,7 +1,8 @@
 import type { ReactElement } from 'react'
-import type {
-  WorkspaceObservation,
-  WorkspacePreviewEditOperation
+import {
+  workspacePreviewContentKey,
+  type WorkspaceObservation,
+  type WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
 import type {
   DocumentAnnotationQuestionBridge
@@ -60,6 +61,10 @@ export function WorkspacePreviewPluginOutlet({
     observation,
     asset: context.asset,
     transport: context.transport,
+    contentKey: workspacePreviewContentKey({
+      observation,
+      asset: context.asset
+    }),
     applyEdit: (operation: WorkspacePreviewEditOperation) =>
       applyWorkspacePreviewOutletEdit(context, operation),
     annotationQuestionBridge,

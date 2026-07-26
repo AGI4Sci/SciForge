@@ -16,16 +16,21 @@ const EXCLUDED_SOURCE_SEGMENTS = new Set(['node_modules', 'dist', 'out', 'covera
 
 const DIRECT_TRANSPORT_ROOTS = ['src', 'packages']
 const REQUIRED_AGENT_TOOL_NAMES = [
+  'sciforge_capture',
   'sciforge_discover',
   'sciforge_events',
   'sciforge_invoke',
+  'sciforge_look',
   'sciforge_observe'
 ]
 const REMOVED_AGENT_PATHS = [
   'annotation.sidecar.read',
+  'artifact.inspect',
+  'gui_pdf_render_image',
   'gui_visible_context',
   'gui_visual_capture',
-  'gui_workspace_image_inspect'
+  'gui_workspace_image_inspect',
+  'surface.inspect'
 ]
 
 class GovernanceError extends Error {
@@ -299,7 +304,8 @@ async function loadApplicationCapabilityModel() {
   if (stableStringify(agentToolNames) !== stableStringify(REQUIRED_AGENT_TOOL_NAMES)) {
     throw new GovernanceError(
       `The owned agent tool surface must contain only ${REQUIRED_AGENT_TOOL_NAMES.join(', ')}; ` +
-        `received ${agentToolNames.join(', ') || '(none)'}. Register product capabilities behind the broker instead of adding tools.`
+        `received ${agentToolNames.join(', ') || '(none)'}. Product capabilities remain behind the broker; ` +
+        'only the two Host Core visual primitives may extend the four broker meta-tools.'
     )
   }
   return { descriptors, migratedDomains }

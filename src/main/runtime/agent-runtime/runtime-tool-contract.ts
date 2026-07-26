@@ -1,3 +1,8 @@
+import type {
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeExecutionEffectClass
+} from '../../../shared/agent-runtime-contract'
+
 export type RuntimeToolFunctionDefinition = {
   type: 'function'
   /** Stable internal provider namespace. Never exposed as a model tool name. */
@@ -39,6 +44,8 @@ export type RuntimeToolCallResponse = {
   contentItems: RuntimeToolOutputContentItem[]
   success: boolean
   structuredContent?: unknown
+  effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
   errorCode?: string
   failureClass?: string
   retryable?: boolean

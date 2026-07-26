@@ -80,10 +80,12 @@ module.exports = {
   asar: true,
   asarUnpack: [
     ...releaseWorkerManifest.createAsarUnpackGlobs(),
+    '**/node_modules/@napi-rs/canvas-*/**/*',
     '**/node_modules/node-pty/**/*',
     '**/node_modules/proxy-from-env/**/*',
     '**/node_modules/zod/**/*',
   ],
+  beforePack: './scripts/before-pack.cjs',
   npmRebuild: true,
   directories: {
     output: process.env.SCIFORGE_DIST_DIR || process.env.DEEPSEEK_GUI_DIST_DIR || 'dist'
@@ -91,6 +93,7 @@ module.exports = {
   files: [
     'out/**/*',
     'package.json',
+    'node_modules/playwright-core/**/*',
     'node_modules/zod/**/*',
     '!**/*.map',
     '!**/*.d.ts',

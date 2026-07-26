@@ -24,10 +24,11 @@ import {
   createDefaultAgentRuntimeCapabilities,
   filterAgentRuntimeThreadChildren
 } from '../../../shared/agent-runtime-contract'
-import type {
-  CodexChatBlock,
-  CodexNormalizedThread,
-  CodexThreadEventPayload
+import {
+  codexModelDeltaItemId,
+  type CodexChatBlock,
+  type CodexNormalizedThread,
+  type CodexThreadEventPayload
 } from './codex-runtime-api'
 import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
 import type { CodexRuntimeService } from './codex-service'
@@ -1254,17 +1255,17 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     })
   }
   for (const [index, delta] of (event.deltas ?? []).entries()) {
+    const itemId = codexModelDeltaItemId(event, delta, index)
     if (delta.kind === 'agent_reasoning') {
       mapped.push({
         ...common,
         kind: 'reasoning_delta',
-        itemId: `codex-reasoning-${event.seq ?? 'event'}-${index}`,
+        itemId,
         text: delta.text,
         visibility: 'summary',
         source: 'runtime_summary'
       })
     } else if (delta.snapshot) {
-      const itemId = `codex-assistant-${event.turnId || event.seq || 'event'}-${index}`
       mapped.push({
         ...common,
         kind: 'item_snapshot',
@@ -1279,7 +1280,7 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
       mapped.push({
         ...common,
         kind: 'assistant_delta',
-        itemId: `codex-delta-${event.seq ?? 'event'}-${index}`,
+        itemId,
         text: delta.text
       })
     }
@@ -1295,6 +1296,10 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
         kind: 'tool_event' as const,
         itemId: event.tool.itemId,
         toolKind: normalizeToolKind(event.tool.toolKind),
+        ...(event.tool.effects?.length ? { effects: event.tool.effects } : {}),
+        ...(event.tool.completionReceipts?.length
+          ? { completionReceipts: event.tool.completionReceipts }
+          : {}),
         ...execution,
         summary: event.tool.summary,
         detail: event.tool.detail,

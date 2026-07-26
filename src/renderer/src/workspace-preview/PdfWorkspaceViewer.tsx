@@ -10,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+  workspacePreviewContentKey,
   type WorkspaceObservation,
   type WorkspacePreviewEditOperation,
   type WorkspacePreviewAssetTransportDescriptor
@@ -93,6 +94,7 @@ export type PdfWorkspaceViewerProps = {
   maxBytes?: number
   model?: PdfWorkspaceViewerModel
   previewState?: PdfWorkspaceViewerPreviewState
+  documentContentKey?: string
   className?: string
   visualContextComponentId?: string
   onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void> | void
@@ -116,17 +118,10 @@ export function pdfWorkspaceDocumentRevisionKey(input: {
   asset?: WorkspacePreviewAssetTransportDescriptor | null
   transport?: WorkspacePreviewAssetTransportClient | null
 }): string {
-  const { observation, asset, transport } = input
-  return JSON.stringify([
-    resolvePdfFilePath(observation, asset),
-    asset?.assetId ?? '',
-    asset?.file.sha256 ?? '',
-    asset?.file.mtimeMs ?? observation?.file.mtimeMs ?? null,
-    resolvePdfFileSize(observation, asset) ?? null,
-    resolvePdfMimeType({ observation, asset }) ?? '',
-    transport?.sourceUrl ?? '',
-    Boolean(transport)
-  ])
+  return workspacePreviewContentKey({
+    observation: input.observation,
+    asset: input.asset
+  })
 }
 
 export function buildPdfWorkspaceViewerModel(input: {
@@ -275,6 +270,7 @@ export function PdfWorkspaceViewer({
   maxBytes = PDF_WORKSPACE_VIEWER_MAX_BYTES,
   model,
   previewState,
+  documentContentKey,
   className,
   visualContextComponentId,
   onApplyEdit,
@@ -295,7 +291,7 @@ export function PdfWorkspaceViewer({
     observation,
     asset: resolvedAsset
   }), [model, observation, resolvedAsset])
-  const documentRevisionKey = pdfWorkspaceDocumentRevisionKey({
+  const documentRevisionKey = documentContentKey?.trim() || pdfWorkspaceDocumentRevisionKey({
     observation,
     asset: resolvedAsset,
     transport
@@ -428,6 +424,7 @@ export function PdfWorkspaceViewer({
           <div className="min-h-0 flex-1 pr-20" data-pdf-preview-viewport>
             <StableWritePdfViewer
               filePath={resolvePdfFilePath(observation, resolvedAsset)}
+              documentContentKey={documentRevisionKey}
               workspaceRoot={observation?.file.workspaceRoot}
               data={activePreviewState.data}
               sourceUrl={activePreviewState.sourceUrl}

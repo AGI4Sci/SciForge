@@ -243,16 +243,7 @@ export class CapabilityBroker {
     resourceRef: string
   ): CapabilityResourceHandle {
     const caller = this.#parseCaller(rawCaller)
-    const state = this.#resourcesByRef.get(resourceRef)
-    if (!state) {
-      throw new CapabilityBrokerError('resource_unavailable', 'Resource reference is no longer available.')
-    }
-    if (state.workspaceId !== caller.workspaceId) {
-      throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
-    }
-    if (!state.allowedAudiences.includes(caller.audience)) {
-      throw new CapabilityBrokerError('resource_audience_denied', 'Resource reference is not transferable to this audience.')
-    }
+    const state = this.#authorizedResourceRef(caller, resourceRef)
     return this.issueResourceHandle(caller, {
       resourceId: state.resourceId,
       resourceKind: state.resourceKind,
@@ -263,6 +254,26 @@ export class CapabilityBroker {
       observe: state.observe,
       contentTransport: state.contentTransport
     })
+  }
+
+  /**
+   * Resolves an opaque resource reference for trusted Host composition without
+   * exposing the provider's internal identity to the agent tool result.
+   */
+  describeResourceRef(
+    rawCaller: CapabilityCallerContextInput,
+    resourceRef: string
+  ): ResolvedCapabilityResource {
+    const caller = this.#parseCaller(rawCaller)
+    const state = this.#authorizedResourceRef(caller, resourceRef)
+    return {
+      resourceId: state.resourceId,
+      resourceRef: state.resourceRef,
+      resourceKind: state.resourceKind,
+      ...(state.workspaceId ? { workspaceId: state.workspaceId } : {}),
+      semanticRevision: state.semanticRevision,
+      ...(state.layoutRevision ? { layoutRevision: state.layoutRevision } : {})
+    }
   }
 
   async observe(
@@ -753,6 +764,23 @@ export class CapabilityBroker {
           }).strict().parse(raw.contentTransport)
         : undefined
     }
+  }
+
+  #authorizedResourceRef(
+    caller: CapabilityCallerContext,
+    resourceRef: string
+  ): ResourceState {
+    const state = this.#resourcesByRef.get(resourceRef)
+    if (!state) {
+      throw new CapabilityBrokerError('resource_unavailable', 'Resource reference is no longer available.')
+    }
+    if (state.workspaceId !== caller.workspaceId) {
+      throw new CapabilityBrokerError('resource_scope_mismatch', 'Resource reference is outside the caller scope.')
+    }
+    if (!state.allowedAudiences.includes(caller.audience)) {
+      throw new CapabilityBrokerError('resource_audience_denied', 'Resource reference is not transferable to this audience.')
+    }
+    return state
   }
 
   #resolveHandle(

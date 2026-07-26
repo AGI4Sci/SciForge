@@ -85,24 +85,7 @@ function successfulSurfaceCaptureProvider(
   }
 }
 
-function inspectedEvidence(task: string) {
-  return {
-    status: 'inspected' as const,
-    provider: 'model-router' as const,
-    model: 'vision-model',
-    inspectedAt: '2026-07-11T03:00:02.000Z',
-    task,
-    artifacts: [{ id: 'surface', mimeType: 'image/png' as const, sha256: 'a'.repeat(64) }],
-    requestSha256: 'b'.repeat(64),
-    evidenceSha256: 'c'.repeat(64),
-    attestation: `sha256:${'d'.repeat(64)}`,
-    summary: 'Five PDF annotations are visible.',
-    claims: [],
-    uncertainties: []
-  }
-}
-
-describe('VisibleContextService surface inspection v2', () => {
+describe('VisibleContextService capture', () => {
   it('keeps semantic current resources available when only renderer layout is stale', async () => {
     const service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: successfulSurfaceCaptureProvider(vi.fn()),
@@ -176,10 +159,8 @@ describe('VisibleContextService surface inspection v2', () => {
       scaleFactor: 1,
       bounds: { x: 30, y: 40, width: 310, height: 410 }
     }))
-    const inspector = vi.fn(async (request: { task: string }) => inspectedEvidence(request.task))
     const service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
-      visualInspector: () => inspector,
       now: () => new Date('2026-07-11T03:00:03.000Z')
     })
     await service.publish(snapshot())
@@ -199,16 +180,49 @@ describe('VisibleContextService surface inspection v2', () => {
       }))
     }))
 
-    const result = await service.inspectSurface(observed.resourceId, {
-      targetRef,
-      task: 'Count the visible PDF annotations.'
-    })
+    const result = await service.captureFrame(observed.resourceId, { targetRef })
     expect(capture).toHaveBeenCalledWith({ x: 30, y: 40, width: 310, height: 410 })
-    expect(result).toMatchObject({
-      artifact: { artifactRef: expect.stringMatching(/^artifact_/u), targetRef },
-      evidence: { provider: 'model-router', summary: 'Five PDF annotations are visible.' }
+    expect(result).toEqual({
+      path: expect.stringMatching(/surface-[a-f0-9]{24}\.png$/u),
+      mimeType: 'image/png',
+      capturedAt: '2026-07-11T03:00:03.000Z',
+      width: 100,
+      height: 80,
+      targetRef
     })
-    expect(JSON.stringify(result)).not.toMatch(/path|snapshotToken|componentId|targetId|bounds|revision/iu)
+  })
+
+  it('captures a trusted target frame without requiring visual interpretation', async () => {
+    const capture = vi.fn(async () => ({
+      png: whitePng(310, 410),
+      width: 310,
+      height: 410,
+      scaleFactor: 1,
+      bounds: { x: 30, y: 40, width: 310, height: 410 }
+    }))
+    const service = new VisibleContextService(await temporaryUserData(), {
+      surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
+      now: () => new Date('2026-07-11T03:00:03.000Z')
+    })
+    await service.publish(snapshot())
+    const observed = await service.currentSurface()
+    const targetRef = (observed.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
+
+    const frame = await service.captureFrame(observed.resourceId, { targetRef })
+
+    expect(capture).toHaveBeenCalledWith({ x: 10, y: 20, width: 300, height: 400 })
+    expect(frame).toEqual({
+      path: expect.stringMatching(/surface-[a-f0-9]{24}\.png$/u),
+      mimeType: 'image/png',
+      capturedAt: '2026-07-11T03:00:03.000Z',
+      width: 310,
+      height: 410,
+      targetRef
+    })
+    expect(await service.readCapturePreview(frame.path)).toMatchObject({
+      ok: true,
+      mimeType: 'image/png'
+    })
   })
 
   it('keeps a running caller bound to its starting semantic surface after the foreground thread changes', async () => {
@@ -248,12 +262,12 @@ describe('VisibleContextService surface inspection v2', () => {
     expect(foreground.state).toMatchObject({
       resources: [expect.objectContaining({ title: 'Other.pdf', resourceRef: `res_${'c'.repeat(26)}` })]
     })
-    await expect(service.inspectSurface(bound.resourceId, { task: 'Inspect the bound PDF.' }))
+    await expect(service.captureFrame(bound.resourceId))
       .rejects.toThrow(/another session or resource is visible/u)
     expect(capture).not.toHaveBeenCalled()
   })
 
-  it('requests a renderer refresh only when a visual operation needs stale layout', async () => {
+  it('requests a renderer refresh only when capture needs stale layout', async () => {
     const capture = vi.fn(async () => ({
       png: whitePng(),
       width: 100,
@@ -261,7 +275,6 @@ describe('VisibleContextService surface inspection v2', () => {
       scaleFactor: 1,
       bounds: { x: 50, y: 70, width: 300, height: 400 }
     }))
-    const inspector = vi.fn(async (request: { task: string }) => inspectedEvidence(request.task))
     let service: VisibleContextService
     const requestSurfaceRefresh = vi.fn(() => {
       void service.publish(snapshot({
@@ -279,7 +292,6 @@ describe('VisibleContextService surface inspection v2', () => {
     })
     service = new VisibleContextService(await temporaryUserData(), {
       surfaceCaptureProvider: successfulSurfaceCaptureProvider(capture),
-      visualInspector: () => inspector,
       requestSurfaceRefresh,
       now: () => new Date('2026-07-11T03:00:06.000Z')
     })
@@ -288,10 +300,7 @@ describe('VisibleContextService surface inspection v2', () => {
     const bound = await service.currentSurface('codex:thread-a')
     const targetRef = (bound.state as { targets: Array<{ targetRef: string }> }).targets[0]?.targetRef
 
-    await service.inspectSurface(bound.resourceId, {
-      targetRef,
-      task: 'Inspect the bound PDF.'
-    })
+    await service.captureFrame(bound.resourceId, { targetRef })
 
     expect(requestSurfaceRefresh).toHaveBeenCalledWith('electron:1')
     expect(capture).toHaveBeenCalledWith({ x: 50, y: 70, width: 300, height: 400 })
@@ -304,9 +313,8 @@ describe('VisibleContextService surface inspection v2', () => {
       now: () => new Date('2026-07-11T03:00:03.000Z')
     })
     await service.publish(snapshot())
-    await expect(service.inspectSurface('electron:1', {
-      targetRef: `target_${'x'.repeat(26)}`,
-      task: 'Inspect the target.'
+    await expect(service.captureFrame('electron:1', {
+      targetRef: `target_${'x'.repeat(26)}`
     })).rejects.toThrow('no longer visible')
     expect(capture).not.toHaveBeenCalled()
   })

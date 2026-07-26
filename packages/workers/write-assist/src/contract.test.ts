@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import {
+  MarkdownValidateImagesInputSchema,
   PDF_TEXT_RESOURCE_URI_TEMPLATE,
   PdfExtractTextInputSchema,
   WRITE_INDEX_STATS_RESOURCE_URI_TEMPLATE,
@@ -15,6 +16,30 @@ test('write-assist schemas reject unbounded inputs', () => {
   assert.equal(WriteRetrieveContextInputSchema.safeParse({ query: 'cells', maxSnippets: 99 }).success, false)
   assert.equal(PdfExtractTextInputSchema.safeParse({ path: '', maxChars: 10 }).success, false)
   assert.equal(PdfExtractTextInputSchema.safeParse({ path: 'paper.pdf', pageStart: 5, pageEnd: 2 }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    minimumLocalImages: 129
+  }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    expectedLocalImages: ['assets/figure.png', 'assets\\figure.png']
+  }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    expectedLocalImages: ['/outside/figure.png']
+  }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    expectedLocalImages: ['C:\\outside\\figure.png']
+  }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    expectedLocalImages: ['../outside/figure.png']
+  }).success, false)
+  assert.equal(MarkdownValidateImagesInputSchema.safeParse({
+    path: 'report.md',
+    expectedLocalImages: Array.from({ length: 129 }, (_, index) => `assets/figure-${index}.png`)
+  }).success, false)
 })
 
 test('write-assist resource URI helpers keep path and workspace ids stable', () => {

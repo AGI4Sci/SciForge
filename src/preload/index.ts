@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
-import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
-import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
+import type { SciForgeApi } from '../shared/sciforge-api'
 import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-asset-url'
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
@@ -43,12 +42,6 @@ const createRemoteChannelTaskFromText = (
     modelHint: options?.modelHint,
     mode: options?.mode
   })
-
-function isDevPreviewNavigatePayload(value: unknown): value is DevPreviewNavigatePayload {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const payload = value as { url?: unknown; webContentsId?: unknown }
-  return typeof payload.url === 'string' && Number.isInteger(payload.webContentsId)
-}
 
 const api = {
   platform: process.platform,
@@ -215,8 +208,6 @@ const api = {
     ipcRenderer.invoke('clipboard:read-image'),
   pasteWorkspaceClipboard: (payload) =>
     ipcRenderer.invoke('clipboard:paste-workspace', payload),
-  startWorkspaceNativeFileDrag: (payload) =>
-    ipcRenderer.invoke('file:start-workspace-native-drag', payload),
   renameWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:rename-workspace-entry', payload),
   suggestWorkspacePdfName: (payload) =>
@@ -245,6 +236,7 @@ const api = {
     readiness: (input) => ipcRenderer.invoke('capability:readiness', input),
     discover: (input = {}) => ipcRenderer.invoke('capability:discover', input),
     observe: (input) => ipcRenderer.invoke('capability:observe', input),
+    bind: (input) => ipcRenderer.invoke('capability:bind', input),
     invoke: (input) => ipcRenderer.invoke('capability:invoke', input),
     events: (input = {}) => ipcRenderer.invoke('capability:events', input),
     subscribe: (workspaceId) => ipcRenderer.invoke('capability:subscribe', { workspaceId }),
@@ -368,13 +360,6 @@ const api = {
   getPerformanceSnapshot: () =>
     ipcRenderer.invoke('performance:snapshot'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
-  onDevPreviewNavigate: (handler) => {
-    const wrapped = (_: Electron.IpcRendererEvent, payload: unknown) => {
-      if (isDevPreviewNavigatePayload(payload)) handler(payload)
-    }
-    ipcRenderer.on(DEV_PREVIEW_NAVIGATE_CHANNEL, wrapped)
-    return () => ipcRenderer.removeListener(DEV_PREVIEW_NAVIGATE_CHANNEL, wrapped)
-  },
   getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
   requestComputerUsePermission: (kind) =>
     ipcRenderer.invoke('computer-use:request-permission', kind),

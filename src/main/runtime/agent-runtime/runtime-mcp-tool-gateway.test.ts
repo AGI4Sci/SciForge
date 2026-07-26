@@ -788,6 +788,26 @@ describe('runtime MCP tool gateway', () => {
     })
   })
 
+  it('forwards standard MCP images as runtime vision inputs', () => {
+    expect(runtimeToolResponseFromMcpResult({
+      content: [
+        { type: 'text', text: 'Inspect the persisted render.' },
+        { type: 'image', data: 'iVBORw0KGgo=', mimeType: 'image/png' }
+      ],
+      structuredContent: {
+        image: { relativePath: 'assets/paper-page.png' },
+        markdownReference: '![Method](assets/paper-page.png)'
+      }
+    })).toMatchObject({
+      contentItems: [
+        { type: 'inputText', text: 'Inspect the persisted render.' },
+        { type: 'inputImage', imageUrl: 'data:image/png;base64,iVBORw0KGgo=' },
+        { type: 'inputText', text: expect.stringContaining('assets/paper-page.png') }
+      ],
+      success: true
+    })
+  })
+
   it('preserves structured MCP failure receipts for execution governance', () => {
     expect(runtimeToolResponseFromMcpResult({
       structuredContent: {

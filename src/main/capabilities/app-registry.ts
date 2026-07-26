@@ -1,14 +1,7 @@
 import { z } from 'zod'
+import { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
 import { capabilityJsonValueSchema } from '../../shared/capability-broker'
-import {
-  SURFACE_RESOURCE_KIND,
-  artifactInspectInputSchema,
-  artifactInspectOutputSchema,
-  surfaceInspectInputSchema,
-  surfaceInspectOutputSchema,
-  type ArtifactInspectInput,
-  type ArtifactInspectOutput
-} from '../../shared/surface-inspection'
+import { SURFACE_RESOURCE_KIND } from '../../shared/visible-context'
 import {
   workspacePreviewAnnotationDeleteInputSchema,
   workspacePreviewAnnotationResolveInputSchema,
@@ -38,7 +31,7 @@ import {
 } from './app-contributions/composition'
 import { defineCapability, type CapabilityResourceRegistration } from './registry'
 
-export const WORKSPACE_PREVIEW_RESOURCE_KIND = 'workspace-preview'
+export { WORKSPACE_PREVIEW_RESOURCE_KIND } from '@sciforge/domain-sdk/workspace-preview'
 
 export const APP_CAPABILITY_IDS = {
   workspacePreviewList: 'workspace-preview.list',
@@ -58,9 +51,7 @@ export const APP_CAPABILITY_IDS = {
   workspacePreviewExport: 'workspace-preview.export',
   workspacePreviewInvokeAction: 'workspace-preview.invoke-action',
   workspacePreviewRelease: 'workspace-preview.release',
-  surfaceCurrent: 'surface.current',
-  surfaceInspect: 'surface.inspect',
-  artifactInspect: 'artifact.inspect'
+  surfaceCurrent: 'surface.current'
 } as const
 
 export type AppCapabilityDependencies = {
@@ -85,8 +76,7 @@ export type AppCapabilityDependencies = {
     | 'invokeAction'
     | 'releaseSession'
   >
-  visibleContextService?: Pick<VisibleContextService, 'currentSurface' | 'inspectSurface'>
-  inspectArtifacts?: (workspaceRoot: string, input: ArtifactInspectInput) => Promise<ArtifactInspectOutput>
+  visibleContextService?: Pick<VisibleContextService, 'currentSurface'>
 }
 
 const resourceActionInputSchema = z.object({}).strict()
@@ -226,7 +216,7 @@ function resourceSessionId(resource: { resourceId: string } | undefined): string
 type CurrentSurface = Awaited<ReturnType<VisibleContextService['currentSurface']>>
 
 function surfaceResource(
-  service: Pick<VisibleContextService, 'currentSurface' | 'inspectSurface'>,
+  service: Pick<VisibleContextService, 'currentSurface'>,
   current: CurrentSurface,
   callerId?: string
 ): CapabilityResourceRegistration {
@@ -246,83 +236,40 @@ function surfaceResource(
         semanticRevision: latest.semanticRevision,
         layoutRevision: latest.layoutRevision,
         state: latest.state,
-        operationIds: [APP_CAPABILITY_IDS.surfaceInspect]
+        operationIds: []
       }
     }
   }
 }
 
 function surfaceCapabilities(
-  service: Pick<VisibleContextService, 'currentSurface' | 'inspectSurface'> | undefined
+  service: Pick<VisibleContextService, 'currentSurface'> | undefined
 ) {
   if (!service) return []
-  return [
-    defineCapability({
-      id: APP_CAPABILITY_IDS.surfaceCurrent,
-      version: '2.0.0',
-      title: 'Open current SciForge surface',
-      description: 'Returns an opaque resource for the currently visible SciForge surface.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'global',
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['surface', 'visual', 'discovery'],
-      inputSchema: z.object({}).strict(),
-      outputSchema: capabilityOutputSchema,
-      handler: async (_, context) => {
-        const callerId = context.caller.audience === 'agent' ? context.caller.callerId : undefined
-        const current = await service.currentSurface(callerId)
-        const surface = context.issueResource(surfaceResource(service, current, callerId))
-        return {
-          output: capabilityJsonValueSchema.parse({
-            surface,
-            current: current.state
-          })
-        }
-      }
-    }),
-    defineCapability({
-      id: APP_CAPABILITY_IDS.surfaceInspect,
-      version: '2.0.0',
-      title: 'Inspect visible SciForge surface',
-      description: 'Captures and visually inspects the latest visible surface or an opaque target reference.',
-      audiences: ['ui', 'agent', 'system'],
-      scope: 'resource',
-      resourceKinds: [SURFACE_RESOURCE_KIND],
-      effect: 'read',
-      approval: 'none',
-      concurrency: { revision: 'none', idempotency: 'none' },
-      tags: ['surface', 'visual', 'inspection'],
-      inputSchema: surfaceInspectInputSchema,
-      outputSchema: surfaceInspectOutputSchema,
-      handler: async (input, context) => ({
-        output: await service.inspectSurface(resourceSessionId(context.resource), input)
-      })
-    })
-  ]
-}
-
-function artifactCapabilities(
-  inspectArtifacts: AppCapabilityDependencies['inspectArtifacts']
-) {
-  if (!inspectArtifacts) return []
   return [defineCapability({
-    id: APP_CAPABILITY_IDS.artifactInspect,
+    id: APP_CAPABILITY_IDS.surfaceCurrent,
     version: '2.0.0',
-    title: 'Inspect workspace image artifacts',
-    description: 'Visually inspects workspace-confined PNG, JPEG, or WebP artifacts through the Model Router.',
+    title: 'Open current SciForge surface',
+    description: 'Returns an opaque resource for the currently visible SciForge surface.',
     audiences: ['ui', 'agent', 'system'],
-    scope: 'workspace',
+    scope: 'global',
     effect: 'read',
     approval: 'none',
     concurrency: { revision: 'none', idempotency: 'none' },
-    tags: ['artifact', 'visual', 'inspection'],
-    inputSchema: artifactInspectInputSchema,
-    outputSchema: artifactInspectOutputSchema,
-    handler: async (input, context) => ({
-      output: await inspectArtifacts(context.caller.workspaceId ?? '', input)
-    })
+    tags: ['surface', 'visual', 'discovery'],
+    inputSchema: z.object({}).strict(),
+    outputSchema: capabilityOutputSchema,
+    handler: async (_, context) => {
+      const callerId = context.caller.audience === 'agent' ? context.caller.callerId : undefined
+      const current = await service.currentSurface(callerId)
+      const surface = context.issueResource(surfaceResource(service, current, callerId))
+      return {
+        output: capabilityJsonValueSchema.parse({
+          surface,
+          current: current.state
+        })
+      }
+    }
   })]
 }
 
@@ -743,18 +690,6 @@ export const SURFACE_CAPABILITY_CONTRIBUTION_FACTORY =
     {
       id: 'surface',
       title: 'Surface Inspection',
-      directTransportPrefixes: [],
-      allowedDirectTransports: []
-    }
-  )
-
-export const ARTIFACT_CAPABILITY_CONTRIBUTION_FACTORY =
-  defineAppCapabilityContribution<AppCapabilityDependencies>(
-    'sciforge.artifact',
-    (dependencies) => artifactCapabilities(dependencies.inspectArtifacts),
-    {
-      id: 'artifact',
-      title: 'Artifact Inspection',
       directTransportPrefixes: [],
       allowedDirectTransports: []
     }

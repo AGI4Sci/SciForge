@@ -209,6 +209,11 @@ export const capabilityObserveRequestSchema = z.object({
 }).strict()
 export type CapabilityObserveRequest = z.infer<typeof capabilityObserveRequestSchema>
 
+export const capabilityResourceBindRequestSchema = z.object({
+  resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/)
+}).strict()
+export type CapabilityResourceBindRequest = z.infer<typeof capabilityResourceBindRequestSchema>
+
 export const capabilityObservationSchema = z.object({
   resource: capabilityResourceHandleSchema,
   resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),

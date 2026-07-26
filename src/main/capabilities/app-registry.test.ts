@@ -126,10 +126,8 @@ describe('app capability registry', () => {
     const dependenciesWithOptionalProviders = {
       ...dependencies,
       visibleContextService: {
-        currentSurface: vi.fn(),
-        inspectSurface: vi.fn()
-      },
-      inspectArtifacts: vi.fn()
+        currentSurface: vi.fn()
+      }
     } as unknown as AppCapabilityDependencies
     const catalog = createApplicationDomainCatalog({ getUserDataDir: () => '/tmp/sciforge-test' })
     const contributions = catalog.listContributions(
@@ -144,9 +142,8 @@ describe('app capability registry', () => {
     expect(contributions).toEqual(expect.arrayContaining([
       {
         moduleId: 'sciforge.surface',
-        capabilityIds: [APP_CAPABILITY_IDS.surfaceCurrent, APP_CAPABILITY_IDS.surfaceInspect]
+        capabilityIds: [APP_CAPABILITY_IDS.surfaceCurrent]
       },
-      { moduleId: 'sciforge.artifact', capabilityIds: [APP_CAPABILITY_IDS.artifactInspect] },
       {
         moduleId: 'sciforge.workspace-preview',
         capabilityIds: [
@@ -189,11 +186,7 @@ describe('app capability registry', () => {
     const { dependencies } = createDependencies()
     const ids = createRegistry(dependencies).list().map((descriptor) => descriptor.id)
 
-    const optionalWithoutProviders = new Set<string>([
-      APP_CAPABILITY_IDS.surfaceCurrent,
-      APP_CAPABILITY_IDS.surfaceInspect,
-      APP_CAPABILITY_IDS.artifactInspect
-    ])
+    const optionalWithoutProviders = new Set<string>([APP_CAPABILITY_IDS.surfaceCurrent])
     expect(ids).toEqual(expect.arrayContaining(
       [
         ...Object.values(APP_CAPABILITY_IDS).filter((id) => !optionalWithoutProviders.has(id)),
@@ -203,28 +196,8 @@ describe('app capability registry', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  it('registers surface and artifact inspection as broker-native reads', async () => {
+  it('registers current-surface discovery without exposing legacy visual inspection operations', async () => {
     const { dependencies } = createDependencies()
-    const inspectSurface = vi.fn(async () => ({
-      artifact: {
-        artifactRef: `artifact_${'a'.repeat(26)}`,
-        mimeType: 'image/png' as const,
-        capturedAt: '2026-07-16T00:00:00.000Z',
-        width: 800,
-        height: 600
-      },
-      evidence: { provider: 'model-router', attestation: `sha256:${'b'.repeat(64)}` }
-    }))
-    const inspectArtifacts = vi.fn(async () => ({
-      artifacts: [{
-        id: 'render',
-        artifactRef: `artifact_${'c'.repeat(26)}`,
-        mimeType: 'image/png' as const,
-        size: 128,
-        sha256: 'd'.repeat(64)
-      }],
-      evidence: { provider: 'model-router', attestation: `sha256:${'e'.repeat(64)}` }
-    }))
     const broker = new CapabilityBroker(createRegistry({
       ...dependencies,
       visibleContextService: {
@@ -238,10 +211,8 @@ describe('app capability registry', () => {
             targets: [{ targetRef: `target_${'f'.repeat(26)}`, kind: 'window' }],
             resources: []
           }
-        })),
-        inspectSurface
-      },
-      inspectArtifacts
+        }))
+      }
     }))
     const caller = { audience: 'agent' as const, callerId: 'thread-1', workspaceId: '/workspace' }
 
@@ -252,22 +223,7 @@ describe('app capability registry', () => {
     })
     const surface = capabilityResourceHandleSchema.parse(record(opened.output).surface)
     const observed = await broker.observe(caller, { resource: surface })
-    expect(observed.operations.map((operation) => operation.id)).toContain(APP_CAPABILITY_IDS.surfaceInspect)
-    await broker.invoke(caller, {
-      actionId: APP_CAPABILITY_IDS.surfaceInspect,
-      resource: surface,
-      input: { task: 'Inspect the current PDF.' }
-    })
-    await broker.invoke(caller, {
-      actionId: APP_CAPABILITY_IDS.artifactInspect,
-      input: { task: 'Inspect the render.', artifacts: [{ id: 'render', path: 'render.png' }] }
-    })
-
-    expect(inspectSurface).toHaveBeenCalledWith('electron:1', { task: 'Inspect the current PDF.' })
-    expect(inspectArtifacts).toHaveBeenCalledWith('/workspace', {
-      task: 'Inspect the render.',
-      artifacts: [{ id: 'render', path: 'render.png' }]
-    })
+    expect(observed.operations).toEqual([])
   })
 
   it('uses the same Workspace Preview provider for UI and agent callers', async () => {

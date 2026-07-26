@@ -537,19 +537,64 @@ describe('ExecutionGovernorCore', () => {
     'screencapture -x /tmp/sciforge.png',
     "osascript -e 'tell application \"System Events\" to get the id of every window'",
     "python3 -c 'import Quartz; print(Quartz.CGWindowListCopyWindowInfo(1, 0))'"
-  ])('denies shell GUI fallback when the owned broker is available: %s', (command) => {
+  ])('denies shell GUI fallback when the owned native visual tools are available: %s', (command) => {
     const governor = new ExecutionGovernorCore()
     const decision = governor.inspectAttempt(attempt('exec_command', { command }, {
       toolKind: 'command_execution'
     }), {
-      ownedSurfaceInspectionAvailable: true
+      ownedVisualToolsAvailable: true
     })
 
     expect(decision).toMatchObject({
       action: 'deny',
-      code: 'owned_surface_policy_denied'
+      code: 'owned_visual_policy_denied'
     })
-    expect(decision.guidance).toContain('sciforge_discover')
+    expect(decision.guidance).toContain('sciforge_look')
+    expect(decision.guidance).toContain('sciforge_capture')
+    expect(decision.guidance).not.toContain('sciforge_discover')
+    expect(decision.guidance).not.toContain('surface.inspect')
+  })
+
+  it('allows shell GUI fallback policy evaluation when native visual tools are unavailable', () => {
+    const governor = new ExecutionGovernorCore()
+    const decision = governor.inspectAttempt(attempt('exec_command', {
+      command: 'screencapture -x /tmp/sciforge.png'
+    }, {
+      toolKind: 'command_execution'
+    }))
+
+    expect(decision.action).toBe('allow')
+  })
+
+  it('classifies native look as a read and native capture as a mutating local-write family', () => {
+    const look = normalizeExecutionAttempt(attempt('sciforge_look', {
+      sourceRef: 'artifact_12345678901234567890',
+      task: 'Inspect this image.'
+    }))
+    const capture = normalizeExecutionAttempt(attempt('sciforge_capture', {
+      snapshotRef: 'snapshot_12345678901234567890',
+      regionRef: 'region_12345678901234567890',
+      purpose: 'workspace-asset'
+    }))
+
+    expect(look).toMatchObject({
+      family: 'tool_call:visual.look',
+      resourceIdentity: 'visual:artifact_12345678901234567890',
+      mutating: false
+    })
+    expect(capture).toMatchObject({
+      family: 'tool_call:visual.capture',
+      resourceIdentity: 'visual:region_12345678901234567890',
+      mutating: true
+    })
+
+    expect(normalizeExecutionReceipt(capture, {
+      status: 'success',
+      outcome: 'progress'
+    })).toMatchObject({
+      family: 'tool_call:visual.capture',
+      stateChanged: true
+    })
   })
 
   it('permits legitimate multi-step reads that add new ranges', () => {

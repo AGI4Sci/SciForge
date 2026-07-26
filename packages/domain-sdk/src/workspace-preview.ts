@@ -1,4 +1,9 @@
 import { z } from 'zod'
+import type {
+  VisualFrame,
+  VisualSourceRenderRequest,
+  VisualSourceTarget
+} from './visual-source.js'
 
 export const WORKSPACE_PREVIEW_CONTRACT_VERSION = 1
 export const WORKSPACE_PREVIEW_MAX_EXTENSIONS = 64
@@ -23,6 +28,7 @@ export const WORKSPACE_PREVIEW_MAX_DOMAIN_JSON_DEPTH = 12
 export const WORKSPACE_PREVIEW_MAX_DOMAIN_JSON_NODES = 10_000
 export const WORKSPACE_PREVIEW_MAX_DOMAIN_JSON_OBJECT_KEYS = 1_000
 export const WORKSPACE_PREVIEW_DRAG_SOURCE_MIME = 'application/vnd.sciforge.workspace-preview.drag-source+json'
+export const WORKSPACE_PREVIEW_RESOURCE_KIND = 'workspace-preview'
 export const WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS = [
   '.txt',
   '.text',
@@ -211,6 +217,16 @@ export type WorkspacePreviewProviderActionInput = WorkspacePreviewProviderObserv
   action: WorkspacePreviewPluginActionInput
 }
 
+export type WorkspacePreviewRenderVisualInput = Readonly<{
+  frameIndex?: number
+  target?: VisualSourceTarget
+  maxDimension?: number
+}>
+
+export type WorkspacePreviewProviderVisualInput = WorkspacePreviewProviderObservationInput & Readonly<{
+  request: VisualSourceRenderRequest
+}>
+
 export type WorkspacePreviewProviderActionResult =
   | {
       ok: true
@@ -337,6 +353,9 @@ export type WorkspacePreviewProvider = Readonly<{
   prepareArtifact?: (
     input: WorkspacePreviewProviderArtifactInput
   ) => Promise<WorkspacePreviewProviderArtifactResult>
+  renderVisual?: (
+    input: WorkspacePreviewProviderVisualInput
+  ) => Promise<VisualFrame>
   applyEdit?: (
     input: WorkspacePreviewProviderApplyEditInput
   ) => Promise<WorkspacePreviewProviderApplyEditResult | null>
@@ -536,6 +555,7 @@ export type WorkspaceObservation = {
     mimeType?: string
     size?: number
     mtimeMs?: number
+    sha256?: string
   }
   view: {
     pluginId: string
@@ -956,7 +976,8 @@ export const workspaceObservationSchema = z.object({
     workspaceRoot: optionalPathSchema,
     mimeType: z.string().trim().max(128).optional(),
     size: z.number().finite().nonnegative().optional(),
-    mtimeMs: z.number().finite().nonnegative().optional()
+    mtimeMs: z.number().finite().nonnegative().optional(),
+    sha256: z.string().trim().regex(/^[a-f0-9]{64}$/).optional()
   }).strict(),
   view: z.object({
     pluginId: z.string().trim().min(1).max(128),
@@ -1545,7 +1566,7 @@ export function resolveWorkspacePreviewTransferCapabilities(
       runtime,
       nativeFileSystem: true,
       dragInActions: ['import-files', 'import-directory', 'move-workspace-items', 'paste-content', 'attach-to-session'],
-      dragOutActions: ['native-file', 'copy-path', 'copy-content', 'attach-to-session'],
+      dragOutActions: ['copy-path', 'copy-content', 'attach-to-session'],
       copyPayloadKinds: ['path', 'content', 'attachment'],
       pastePayloadKinds: ['text', 'files', 'screenshot', 'attachment'],
       conflictStrategies: ['ask', 'overwrite', 'rename', 'skip', 'merge'],
@@ -1756,6 +1777,55 @@ export const workspacePreviewAssetTransportDescriptorSchema = z.object({
 
 export type WorkspacePreviewAssetTransportDescriptor =
   z.infer<typeof workspacePreviewAssetTransportDescriptorSchema>
+
+export type WorkspacePreviewContentIdentity = Readonly<{
+  path: string
+  assetId: string
+  mimeType: string
+  sha256: string
+  size: number | null
+  mtimeMs: number | null
+}>
+
+export function workspacePreviewContentIdentity(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+}): WorkspacePreviewContentIdentity {
+  const observationFile = input.observation?.file
+  const assetFile = input.asset?.file
+  return {
+    path: normalizePreviewContentPath(
+      observationFile?.path ??
+      assetFile?.relativePath ??
+      assetFile?.name ??
+      ''
+    ),
+    assetId: input.asset?.assetId ?? '',
+    mimeType: (observationFile?.mimeType ?? assetFile?.mimeType ?? '').trim().toLowerCase(),
+    sha256: (observationFile?.sha256 ?? assetFile?.sha256 ?? '').trim().toLowerCase(),
+    size: observationFile?.size ?? assetFile?.size ?? null,
+    mtimeMs: observationFile?.mtimeMs ?? assetFile?.mtimeMs ?? null
+  }
+}
+
+export function workspacePreviewContentKey(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+}): string {
+  const identity = workspacePreviewContentIdentity(input)
+  return JSON.stringify([
+    identity.path,
+    identity.assetId,
+    identity.mimeType,
+    identity.sha256,
+    identity.size,
+    identity.mtimeMs
+  ])
+}
+
+function normalizePreviewContentPath(value: string): string {
+  return value.trim().replaceAll('\\', '/')
+}
 
 export function normalizePreviewExtension(value: string): string {
   const trimmed = value.trim().toLowerCase()

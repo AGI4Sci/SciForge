@@ -20,8 +20,11 @@ export type WorkbenchRightPanelContribution = {
   resourceKind: string
   isAvailable: () => boolean
   render: (props: {
+    active: boolean
     className: string
     onCollapse: () => void
+    sessionId: string
+    workspaceRoot: string
   }) => ReactElement
 }
 

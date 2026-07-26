@@ -332,6 +332,7 @@ describe('dev sciforge browser bridge', () => {
 
     installDevSciForgeBridge()
     expect('paperRadar' in window.sciforge).toBe(false)
+    expect(window.sciforge.capabilities.bind).toBeTypeOf('function')
     expect(window.sciforge.capabilities.invoke).toBeTypeOf('function')
   })
 
@@ -394,34 +395,6 @@ describe('dev sciforge browser bridge', () => {
         method: 'POST',
         body: JSON.stringify({
           channel: 'clipboard:paste-workspace',
-          payload
-        })
-      })
-    )
-  })
-
-  it('forwards workspace native file drag calls through the dev bridge', async () => {
-    installWindow()
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      ok: true,
-      payload: { ok: false, message: 'Native file dragging is not available in this environment.' }
-    })))
-    Object.defineProperty(globalThis, 'fetch', { value: fetchMock, configurable: true })
-    const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')
-    const payload = {
-      workspaceRoot: '/tmp/work',
-      path: 'notes/paper.pdf'
-    }
-
-    installDevSciForgeBridge()
-    await window.sciforge.startWorkspaceNativeFileDrag(payload)
-
-    expect(fetchMock).toHaveBeenCalledWith(
-      'http://localhost:5173/__sciforge-dev-bridge/invoke',
-      expect.objectContaining({
-        method: 'POST',
-        body: JSON.stringify({
-          channel: 'file:start-workspace-native-drag',
           payload
         })
       })
@@ -667,7 +640,7 @@ describe('dev sciforge browser bridge', () => {
   it('does not replace the real Electron preload bridge', async () => {
     const existing = {
       platform: 'darwin',
-      onDevPreviewNavigate: vi.fn()
+      getAppVersion: vi.fn()
     }
     installWindow(existing, '', 'Mozilla/5.0 Electron/38.0 Safari/537.36')
     const { installDevSciForgeBridge } = await import('./dev-sciforge-bridge')

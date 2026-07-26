@@ -533,12 +533,41 @@ export type AgentRuntimeExecutionEffectClass =
   | 'child_agent'
   | 'other'
 
+export type AgentRuntimeCompletionReceiptKind =
+  | 'visual.look'
+  | 'visual.capture'
+  | 'artifact.reference-validation'
+
+/**
+ * A semantic completion fact minted by trusted SciForge runtime code.
+ *
+ * This is intentionally separate from the generic executor receipt: a command
+ * can prove that bytes were written without proving that a visual was inspected,
+ * captured from that inspection, or referenced by a consumer.
+ */
+export type AgentRuntimeCompletionReceipt = Readonly<{
+  contractVersion: 'completion-receipt.v1'
+  receiptId: string
+  kind: AgentRuntimeCompletionReceiptKind
+  status: 'satisfied'
+  issuer: string
+  callId: string
+  subjectRef: string
+  relatedRefs?: string[]
+  parentReceiptIds?: string[]
+  attestation?: string
+  sha256?: string
+  createdAt: string
+}>
+
 export type AgentRuntimeExecutionIntent = {
   mode: 'answer' | 'inspect' | 'execute'
   requirements?: Array<{
     id?: string
     effectClass?: AgentRuntimeExecutionEffectClass
     toolNames?: string[]
+    receiptKind?: AgentRuntimeCompletionReceiptKind
+    dependsOn?: string[]
     completion?: 'terminal' | 'success'
   }>
 }
@@ -941,6 +970,7 @@ export type AgentRuntimeItem = {
   status?: 'pending' | 'running' | 'success' | 'error' | 'completed' | 'failed' | 'aborted'
   toolKind?: AgentRuntimeToolKind
   effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
   detail?: string
   meta?: Record<string, unknown>
   createdAt?: string
@@ -999,6 +1029,7 @@ type AgentRuntimeToolEventBase = AgentRuntimeBaseEvent & {
   itemId: string
   toolKind?: AgentRuntimeToolKind
   effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
   callId?: string
   toolName?: string
   phase?: AgentRuntimeToolExecutionPhase

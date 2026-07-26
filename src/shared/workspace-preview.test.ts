@@ -15,6 +15,7 @@ import {
   resolveWorkspacePreviewInitialSelection,
   resolveWorkspacePreviewPlugin,
   resolveWorkspacePreviewTransferCapabilities,
+  workspacePreviewContentKey,
   workspacePreviewEditOperationSchema,
   workspacePreviewAnchorSchema,
   workspacePreviewIntegrityExpectationSchema,
@@ -897,13 +898,102 @@ describe('workspace preview contract', () => {
     })
   })
 
+  it.each([
+    ['PDF', '/workspace/paper.pdf', 'application/pdf'],
+    ['Word', '/workspace/report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['Markdown', '/workspace/notes.md', 'text/markdown']
+  ])('keeps %s content identity independent from annotation observation state', (
+    _label,
+    path,
+    mimeType
+  ) => {
+    const observation: WorkspaceObservation = {
+      schemaVersion: 1,
+      file: {
+        path,
+        workspaceRoot: '/workspace',
+        mimeType,
+        size: 1024,
+        mtimeMs: 1783468800000,
+        sha256: 'a'.repeat(64)
+      },
+      view: {
+        pluginId: 'document-fixture',
+        modality: 'document',
+        mode: 'preview',
+        title: path.split('/').at(-1) ?? path
+      },
+      actions: ['observe']
+    }
+    const asset = workspacePreviewAssetTransportDescriptorSchema.parse({
+      schemaVersion: 1,
+      sessionId: 'session-document',
+      assetId: 'asset:session-document',
+      pluginId: 'document-fixture',
+      modality: 'document',
+      file: {
+        name: path.split('/').at(-1) ?? path,
+        relativePath: path.replace('/workspace/', ''),
+        mimeType,
+        size: 1024,
+        mtimeMs: 1783468800000,
+        sha256: 'a'.repeat(64)
+      },
+      primary: 'byte-range',
+      eagerRead: {
+        allowed: false,
+        reason: 'Use bounded reads.'
+      },
+      range: {
+        available: true,
+        maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+        recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+        size: 1024
+      },
+      strategies: [{
+        kind: 'byte-range',
+        status: 'available',
+        reason: 'Bounded reads are available.'
+      }]
+    })
+    const contentKey = workspacePreviewContentKey({ observation, asset })
+
+    expect(workspacePreviewContentKey({
+      observation: {
+        ...observation,
+        documentAnnotations: {
+          threadCount: 2,
+          annotationCount: 4,
+          openThreadCount: 2,
+          truncated: false,
+          threads: []
+        }
+      },
+      asset: {
+        ...asset,
+        strategies: asset.strategies.map((strategy) => ({ ...strategy }))
+      }
+    })).toBe(contentKey)
+    expect(workspacePreviewContentKey({
+      observation: {
+        ...observation,
+        file: {
+          ...observation.file,
+          mtimeMs: 1783468800001
+        }
+      },
+      asset
+    })).not.toBe(contentKey)
+  })
+
   it('resolves desktop transfer capabilities and web preview fallbacks', () => {
     const desktop = resolveWorkspacePreviewTransferCapabilities('desktop')
     const web = resolveWorkspacePreviewTransferCapabilities({ runtime: 'web' })
 
     expect(desktop.nativeFileSystem).toBe(true)
     expect(desktop.dragInActions).toEqual(expect.arrayContaining(['import-files', 'move-workspace-items']))
-    expect(desktop.dragOutActions).toContain('native-file')
+    expect(desktop.dragOutActions).not.toContain('native-file')
+    expect(desktop.dragOutActions).toEqual(expect.arrayContaining(['copy-path', 'copy-content', 'attach-to-session']))
     expect(desktop.pastePayloadKinds).toEqual(expect.arrayContaining(['files', 'screenshot']))
 
     expect(web.nativeFileSystem).toBe(false)

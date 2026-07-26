@@ -99,9 +99,10 @@ readonly RendererWorkspacePreviewPluginContribution[] {
       inspectSelection: (selection) => buildTextSelectionSection(
         selection as Extract<WorkspaceStructuredSelection, { kind: 'text' }>
       ),
-      render: ({ observation, applyEdit }) => (
+      render: ({ observation, contentKey, applyEdit }) => (
         <TextWorkspaceViewer
           observation={observation}
+          documentContentKey={contentKey}
           className="h-full min-h-0"
           onApplyEdit={applyEdit}
         />
@@ -114,7 +115,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
       inspectSelection: (selection) => buildDocumentSelectionSection(
         selection as Extract<WorkspaceStructuredSelection, { kind: 'document' }>
       ),
-      render: ({ context, observation, annotationQuestionBridge }) => (
+      render: ({ context, observation, contentKey, annotationQuestionBridge }) => (
         <DocumentAnnotationPanelController
           context={context}
           observation={observation}
@@ -125,6 +126,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
             <MarkdownWorkspaceViewerHost
               context={context}
               observation={observation}
+              documentContentKey={contentKey}
               applyEdit={text.onApplyEdit}
               annotationOverlays={text.annotationOverlays}
               activeAnnotationId={text.activeAnnotationId}
@@ -171,7 +173,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
     },
     {
       manifest: manifest('pdf'),
-      render: ({ context, observation, asset, transport, annotationQuestionBridge, visualContextComponentId, onPresentationStateChange }) => (
+      render: ({ context, observation, asset, transport, contentKey, annotationQuestionBridge, visualContextComponentId, onPresentationStateChange }) => (
         <DocumentAnnotationPanelController
           context={context}
           observation={observation}
@@ -183,6 +185,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
               observation={observation}
               asset={asset}
               transport={transport}
+              documentContentKey={contentKey}
               className="h-full min-h-0"
               onApplyEdit={pdf.onApplyEdit}
               annotationOverlays={pdf.annotationOverlays}
@@ -202,7 +205,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
     },
     {
       manifest: manifest('docx'),
-      render: ({ context, observation, annotationQuestionBridge }) => (
+      render: ({ context, observation, contentKey, annotationQuestionBridge }) => (
         <DocumentAnnotationPanelController
           context={context}
           observation={observation}
@@ -212,6 +215,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
           renderDocument={({ text }) => (
             <DocxWorkspaceViewer
               observation={observation}
+              documentContentKey={contentKey}
               className="h-full min-h-0"
               onApplyEdit={text.onApplyEdit}
               annotationOverlays={text.annotationOverlays}
@@ -261,6 +265,7 @@ readonly RendererWorkspacePreviewPluginContribution[] {
 function MarkdownWorkspaceViewerHost({
   context,
   observation,
+  documentContentKey,
   applyEdit,
   annotationOverlays,
   activeAnnotationId,
@@ -270,6 +275,7 @@ function MarkdownWorkspaceViewerHost({
 }: {
   context: WorkspacePreviewPanelShellContext
   observation: WorkspaceObservation | null
+  documentContentKey: string
   applyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationOverlays: NonNullable<MarkdownWorkspaceViewerProps['annotationOverlays']>
   activeAnnotationId: string | null
@@ -315,6 +321,7 @@ function MarkdownWorkspaceViewerHost({
   return (
     <MarkdownWorkspaceViewer
       observation={observation}
+      documentContentKey={documentContentKey}
       className="h-full min-h-0"
       onApplyEdit={applyMarkdownEdit}
       loadWorkspaceImage={loadWorkspaceImage}

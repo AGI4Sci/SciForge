@@ -385,6 +385,33 @@ describe('WorkspacePreviewHost', () => {
     expect(host.getState().observation).toBeNull()
   })
 
+  it('does not expose a stale session release failure on the active preview', async () => {
+    const registry = createRendererWorkspacePreviewRegistry()
+    const descriptor = requireDescriptor(registry, 'protein.pdb')
+    const bridge = createMockBridge({
+      open: vi.fn<WorkspacePreviewBridgeAdapter['open']>(async (input) => ({
+        ok: true,
+        session: createSession(descriptor, {
+          id: input.path === 'protein-2.pdb' ? 'session-2' : 'session-1',
+          path: input.path
+        }),
+        manifest: descriptor.manifest,
+        route: 'matched',
+        file: createFileState({ path: input.path, relativePath: input.path })
+      })),
+      releaseSession: vi.fn<WorkspacePreviewBridgeAdapter['releaseSession']>(async () => {
+        throw new Error('Resource handle has expired.')
+      })
+    })
+    const host = createWorkspacePreviewHost({ registry, bridge })
+    await host.open({ path: 'protein.pdb', workspaceRoot: '/tmp/work' })
+    await host.open({ path: 'protein-2.pdb', workspaceRoot: '/tmp/work' })
+
+    await expect(host.releaseSession('session-1')).resolves.toBe(false)
+    expect(host.getState().session?.id).toBe('session-2')
+    expect(host.getState().error).toBeNull()
+  })
+
   it('forwards initial selection, anchor, and integrity fields without renderer-side loss', async () => {
     const registry = createRendererWorkspacePreviewRegistry()
     const descriptor = requireDescriptor(registry, 'protein.pdb')

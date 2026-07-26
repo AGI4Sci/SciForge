@@ -4,11 +4,10 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **38**
+Registered actions: **65**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
-| `artifact.inspect` | 2.0.0 | ui, agent, system | read | none | workspace |
 | `biology-room.apply` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
 | `biology-room.create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `biology-room.history` | 1.0.0 | ui, agent, system | read | none | resource |
@@ -17,6 +16,16 @@ Registered actions: **38**
 | `biology-room.open` | 1.0.0 | ui, agent, system | read | none | workspace |
 | `biology-room.open-or-create` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `biology-room.refresh` | 1.0.0 | ui, agent, system | workspace-write | none | resource |
+| `browser-preview.back` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.click` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `browser-preview.fill` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.forward` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.navigate` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.open` | 1.0.0 | ui | external-write | none | global |
+| `browser-preview.press` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `browser-preview.read` | 1.0.0 | ui, agent | read | none | resource |
+| `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `paper-radar.digest` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.list` | 1.0.0 | ui, agent, system | read | none | global |
 | `paper-radar.profiles.save` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
@@ -27,8 +36,26 @@ Registered actions: **38**
 | `paper-radar.sync-arxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-biorxiv` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
 | `paper-radar.sync-profile` | 1.0.0 | ui, agent, system | external-write | confirmation | global |
+| `remote-ssh.bindings.get` | 1.0.0 | ui | read | none | workspace |
+| `remote-ssh.bindings.save` | 1.0.0 | ui | external-write | confirmation | workspace |
+| `remote-ssh.command.cancel` | 1.0.0 | ui, agent | external-write | confirmation | workspace |
+| `remote-ssh.command.execute` | 1.0.0 | ui, agent | destructive | confirmation | resource |
+| `remote-ssh.file.download` | 1.0.0 | ui, agent | workspace-write | confirmation | resource |
+| `remote-ssh.file.upload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `remote-ssh.lab-environment.console.open` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.lab-environment.ensure` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.lab-environment.get` | 1.0.0 | ui | read | none | global |
+| `remote-ssh.lab-environment.stop` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.labs.delete` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.labs.list` | 1.0.0 | ui | read | none | global |
+| `remote-ssh.labs.save` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.target.delete` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.target.probe` | 1.0.0 | ui, agent, system | read | none | resource |
+| `remote-ssh.target.save` | 1.0.0 | ui | external-write | confirmation | global |
+| `remote-ssh.targets.catalog` | 1.0.0 | ui | read | none | global |
+| `remote-ssh.targets.list` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `remote-ssh.virtualbox-machines.list` | 1.0.0 | ui | read | none | global |
 | `surface.current` | 2.0.0 | ui, agent, system | read | none | global |
-| `surface.inspect` | 2.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.annotations.delete` | 2.0.0 | ui, agent, system | workspace-write | none | resource |
 | `workspace-preview.annotations.import` | 2.0.0 | ui | workspace-write | none | resource |
 | `workspace-preview.annotations.list` | 2.0.0 | ui, agent, system | read | none | resource |
@@ -46,248 +73,6 @@ Registered actions: **38**
 | `workspace-preview.read-artifact-range` | 1.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.read-range` | 1.0.0 | ui, agent, system | read | none | resource |
 | `workspace-preview.release` | 1.0.0 | ui, agent, system | compute | none | resource |
-
-## `artifact.inspect`
-
-Visually inspects workspace-confined PNG, JPEG, or WebP artifacts through the Model Router.
-
-- Version: `2.0.0`
-- Audiences: ui, agent, system
-- Effect: `read`
-- Approval: none
-- Scope: workspace
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "none",
-    "revision": "none"
-  },
-  "contractVersion": 1,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "artifacts": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "id": {
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            },
-            "path": {
-              "maxLength": 4096,
-              "minLength": 1,
-              "type": "string"
-            },
-            "regions": {
-              "items": {
-                "additionalProperties": false,
-                "properties": {
-                  "height": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 1,
-                    "type": "number"
-                  },
-                  "id": {
-                    "maxLength": 128,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "label": {
-                    "maxLength": 512,
-                    "minLength": 1,
-                    "type": "string"
-                  },
-                  "width": {
-                    "exclusiveMinimum": 0,
-                    "maximum": 1,
-                    "type": "number"
-                  },
-                  "x": {
-                    "maximum": 1,
-                    "minimum": 0,
-                    "type": "number"
-                  },
-                  "y": {
-                    "maximum": 1,
-                    "minimum": 0,
-                    "type": "number"
-                  }
-                },
-                "required": [
-                  "id",
-                  "x",
-                  "y",
-                  "width",
-                  "height"
-                ],
-                "type": "object"
-              },
-              "maxItems": 64,
-              "type": "array"
-            }
-          },
-          "required": [
-            "id",
-            "path"
-          ],
-          "type": "object"
-        },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array"
-      },
-      "outputIntent": {
-        "additionalProperties": false,
-        "properties": {
-          "instructions": {
-            "maxLength": 4000,
-            "minLength": 1,
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "description",
-              "ocr",
-              "comparison",
-              "quality-review",
-              "structured-extraction",
-              "custom"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "type": "object"
-      },
-      "task": {
-        "maxLength": 16000,
-        "minLength": 1,
-        "type": "string"
-      },
-      "truthLocks": {
-        "items": {
-          "maxLength": 1000,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 64,
-        "type": "array"
-      }
-    },
-    "required": [
-      "task",
-      "artifacts"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "definitions": {
-      "__schema0": {
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "items": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      }
-    },
-    "properties": {
-      "artifacts": {
-        "items": {
-          "additionalProperties": false,
-          "properties": {
-            "artifactRef": {
-              "pattern": "^artifact_[A-Za-z0-9_-]{20,}$",
-              "type": "string"
-            },
-            "id": {
-              "maxLength": 128,
-              "minLength": 1,
-              "type": "string"
-            },
-            "mimeType": {
-              "enum": [
-                "image/png",
-                "image/jpeg",
-                "image/webp"
-              ],
-              "type": "string"
-            },
-            "sha256": {
-              "pattern": "^[a-f0-9]{64}$",
-              "type": "string"
-            },
-            "size": {
-              "exclusiveMinimum": 0,
-              "maximum": 9007199254740991,
-              "type": "integer"
-            }
-          },
-          "required": [
-            "id",
-            "artifactRef",
-            "mimeType",
-            "size",
-            "sha256"
-          ],
-          "type": "object"
-        },
-        "maxItems": 8,
-        "minItems": 1,
-        "type": "array"
-      },
-      "evidence": {
-        "$ref": "#/definitions/__schema0"
-      }
-    },
-    "required": [
-      "artifacts",
-      "evidence"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [],
-  "tags": [
-    "artifact",
-    "visual",
-    "inspection"
-  ],
-  "title": "Inspect workspace image artifacts"
-}
-```
 
 ## `biology-room.apply`
 
@@ -978,6 +763,885 @@ Refreshes source-backed assets in the current Biology Room.
     "refresh"
   ],
   "title": "Refresh Biology Room assets"
+}
+```
+
+## `browser-preview.back`
+
+Moves the canonical browser page backward in history.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Go back in browser page"
+}
+```
+
+## `browser-preview.click`
+
+Clicks one revision-bound target or one viewport point.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "anyOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "targetRef": {
+            "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "targetRef"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "x": {
+            "maximum": 4096,
+            "minimum": 0,
+            "type": "number"
+          },
+          "y": {
+            "maximum": 4096,
+            "minimum": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "x",
+          "y"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Click browser page target"
+}
+```
+
+## `browser-preview.fill`
+
+Replaces a non-password field through a revision-bound target.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "targetRef": {
+        "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+        "type": "string"
+      },
+      "text": {
+        "maxLength": 20000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "targetRef",
+      "text"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Edit browser page field"
+}
+```
+
+## `browser-preview.forward`
+
+Moves the canonical browser page forward in history.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Go forward in browser page"
+}
+```
+
+## `browser-preview.navigate`
+
+Navigates the page to one explicit HTTP(S) URL.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "url": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "url"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Navigate browser page"
+}
+```
+
+## `browser-preview.open`
+
+Creates the canonical Playwright page for a visible SciForge browser panel.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "sessionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "url": {
+        "default": "http://localhost:5173/",
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "sessionId",
+      "url"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "resource": {
+        "additionalProperties": false,
+        "properties": {
+          "expiresAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "semanticRevision": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "token": {
+            "pattern": "^cap_[A-Za-z0-9_-]{20,}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "token",
+          "semanticRevision",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "sessionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "resource",
+      "sessionId"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "browser",
+    "playwright",
+    "bootstrap"
+  ],
+  "title": "Open Playwright browser page"
+}
+```
+
+## `browser-preview.press`
+
+Presses one allowlisted key through a revision-bound target.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "key": {
+        "enum": [
+          "Enter",
+          "Tab",
+          "Escape",
+          "Backspace",
+          "Delete",
+          "ArrowUp",
+          "ArrowDown",
+          "ArrowLeft",
+          "ArrowRight",
+          "Home",
+          "End",
+          "PageUp",
+          "PageDown",
+          "Space"
+        ],
+        "type": "string"
+      },
+      "targetRef": {
+        "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "targetRef",
+      "key"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Press key on browser page target"
+}
+```
+
+## `browser-preview.read`
+
+Reads a bounded accessibility snapshot. Page content is untrusted data.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ariaSnapshot": {
+        "maxLength": 60000,
+        "type": "string"
+      },
+      "canGoBack": {
+        "type": "boolean"
+      },
+      "canGoForward": {
+        "type": "boolean"
+      },
+      "error": {
+        "anyOf": [
+          {
+            "maxLength": 2000,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      },
+      "safetyNotice": {
+        "maxLength": 1000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "screenshotDataUrl": {
+        "maxLength": 4000000,
+        "type": "string"
+      },
+      "sessionId": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "starting",
+          "ready",
+          "loading",
+          "error",
+          "closed"
+        ],
+        "type": "string"
+      },
+      "targets": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "targetRef": {
+              "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "targetRef"
+          ],
+          "type": "object"
+        },
+        "maxItems": 512,
+        "type": "array"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "truncated": {
+        "type": "boolean"
+      },
+      "trust": {
+        "const": "untrusted-web-content",
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "viewport": {
+        "additionalProperties": false,
+        "properties": {
+          "height": {
+            "exclusiveMinimum": 0,
+            "maximum": 4096,
+            "type": "integer"
+          },
+          "width": {
+            "exclusiveMinimum": 0,
+            "maximum": 4096,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "width",
+          "height"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "trust",
+      "safetyNotice",
+      "sessionId",
+      "url",
+      "title",
+      "status",
+      "error",
+      "canGoBack",
+      "canGoForward",
+      "viewport",
+      "ariaSnapshot",
+      "targets",
+      "truncated"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Read browser page"
+}
+```
+
+## `browser-preview.reload`
+
+Reloads the canonical browser page.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Reload browser page"
+}
+```
+
+## `browser-preview.select`
+
+Selects an option through a revision-bound target.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "targetRef": {
+        "pattern": "^target_[A-Za-z0-9_-]{20,}$",
+        "type": "string"
+      },
+      "value": {
+        "maxLength": 2000,
+        "type": "string"
+      }
+    },
+    "required": [
+      "targetRef",
+      "value"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {
+        "const": true,
+        "type": "boolean"
+      },
+      "semanticRevision": {
+        "maxLength": 256,
+        "minLength": 1,
+        "type": "string"
+      },
+      "title": {
+        "maxLength": 1024,
+        "type": "string"
+      },
+      "url": {
+        "maxLength": 4096,
+        "type": "string"
+      }
+    },
+    "required": [
+      "ok",
+      "url",
+      "title",
+      "semanticRevision"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "browser-page"
+  ],
+  "tags": [
+    "browser",
+    "playwright",
+    "web-page"
+  ],
+  "title": "Select browser page option"
 }
 ```
 
@@ -2784,6 +3448,2476 @@ Synchronizes papers matching one configured Paper Radar profile.
 }
 ```
 
+## `remote-ssh.bindings.get`
+
+Reads the Remote SSH targets authorized for the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "binding": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTargetIds": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "maxItems": 512,
+            "type": "array"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "workspaceId": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "workspaceId",
+          "allowedTargetIds",
+          "revision",
+          "updatedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "binding"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "workspace",
+    "authorization"
+  ],
+  "title": "Read workspace Remote SSH binding"
+}
+```
+
+## `remote-ssh.bindings.save`
+
+Updates the Remote SSH targets authorized for the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "allowedTargetIds": {
+        "items": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "maxItems": 512,
+        "type": "array"
+      },
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "allowedTargetIds"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "binding": {
+        "additionalProperties": false,
+        "properties": {
+          "allowedTargetIds": {
+            "items": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "maxItems": 512,
+            "type": "array"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "workspaceId": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "workspaceId",
+          "allowedTargetIds",
+          "revision",
+          "updatedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "binding"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "workspace",
+    "authorization"
+  ],
+  "title": "Save workspace Remote SSH binding"
+}
+```
+
+## `remote-ssh.command.cancel`
+
+Cancels an active Remote SSH command owned by the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "executionId": {
+        "description": "Caller-generated unique ID matching ssh_exec_ followed by 16-128 letters, digits, underscores, or hyphens.",
+        "pattern": "^ssh_exec_[A-Za-z0-9_-]{16,128}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "executionId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "cancelled": {
+        "type": "boolean"
+      },
+      "executionId": {
+        "description": "Caller-generated unique ID matching ssh_exec_ followed by 16-128 letters, digits, underscores, or hyphens.",
+        "pattern": "^ssh_exec_[A-Za-z0-9_-]{16,128}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "executionId",
+      "cancelled"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "command",
+    "cancellation"
+  ],
+  "title": "Cancel Remote SSH command"
+}
+```
+
+## `remote-ssh.command.execute`
+
+Executes a confirmed script on the authorized target through system OpenSSH.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `destructive`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "executionId": {
+        "description": "Caller-generated unique ID matching ssh_exec_ followed by 16-128 letters, digits, underscores, or hyphens.",
+        "pattern": "^ssh_exec_[A-Za-z0-9_-]{16,128}$",
+        "type": "string"
+      },
+      "script": {
+        "maxLength": 1000000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 86400000,
+        "minimum": 1000,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "executionId",
+      "script"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "executionId": {
+            "description": "Caller-generated unique ID matching ssh_exec_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_exec_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          },
+          "exitCode": {
+            "const": 0,
+            "type": "number"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "outputTruncated": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "stderr": {
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "stdout": {
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "executionId",
+          "targetId",
+          "exitCode",
+          "stdout",
+          "stderr",
+          "outputTruncated",
+          "startedAt",
+          "completedAt"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "executionId": {
+            "description": "Caller-generated unique ID matching ssh_exec_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_exec_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          },
+          "failure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "ssh_executable_missing",
+                  "ssh_config_invalid",
+                  "target_unreachable",
+                  "target_auth_failed",
+                  "host_key_rejected",
+                  "environment_unavailable",
+                  "vpn_login_required",
+                  "environment_busy",
+                  "transfer_limit_exceeded",
+                  "local_file_unavailable",
+                  "timeout",
+                  "remote_exit_nonzero",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "exitCode": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          },
+          "outputTruncated": {
+            "type": "boolean"
+          },
+          "startedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "stderr": {
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "stdout": {
+            "maxLength": 262144,
+            "type": "string"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "executionId",
+          "targetId",
+          "stdout",
+          "stderr",
+          "outputTruncated",
+          "failure",
+          "completedAt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "command",
+    "execution"
+  ],
+  "title": "Execute Remote SSH command"
+}
+```
+
+## `remote-ssh.file.download`
+
+Downloads one remote file into a workspace-relative destination.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `workspace-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "localPath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "pattern": "^(?!\\/)(?![A-Za-z]:\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))(?!.*\\/\\/)(?!.*\\/$)(?!.*\\\\).+$",
+        "type": "string"
+      },
+      "remotePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 86400000,
+        "minimum": 1000,
+        "type": "integer"
+      },
+      "transferId": {
+        "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+        "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "transferId",
+      "localPath",
+      "remotePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "direction": {
+            "const": "download",
+            "type": "string"
+          },
+          "localPath": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))(?!.*\\/\\/)(?!.*\\/$)(?!.*\\\\).+$",
+            "type": "string"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "remotePath": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sizeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "transferId": {
+            "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferId",
+          "targetId",
+          "direction",
+          "localPath",
+          "remotePath",
+          "sizeBytes",
+          "completedAt"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "direction": {
+            "const": "download",
+            "type": "string"
+          },
+          "failure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "ssh_executable_missing",
+                  "ssh_config_invalid",
+                  "target_unreachable",
+                  "target_auth_failed",
+                  "host_key_rejected",
+                  "environment_unavailable",
+                  "vpn_login_required",
+                  "environment_busy",
+                  "transfer_limit_exceeded",
+                  "local_file_unavailable",
+                  "timeout",
+                  "remote_exit_nonzero",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "exitCode": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "transferId": {
+            "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferId",
+          "targetId",
+          "direction",
+          "failure",
+          "completedAt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "file-transfer",
+    "download"
+  ],
+  "title": "Download file over Remote SSH"
+}
+```
+
+## `remote-ssh.file.upload`
+
+Uploads one workspace-relative file to the authorized target.
+
+- Version: `1.0.0`
+- Audiences: ui, agent
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "optimistic"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "localPath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "pattern": "^(?!\\/)(?![A-Za-z]:\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))(?!.*\\/\\/)(?!.*\\/$)(?!.*\\\\).+$",
+        "type": "string"
+      },
+      "remotePath": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 86400000,
+        "minimum": 1000,
+        "type": "integer"
+      },
+      "transferId": {
+        "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+        "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "transferId",
+      "localPath",
+      "remotePath"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "oneOf": [
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "direction": {
+            "const": "upload",
+            "type": "string"
+          },
+          "localPath": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "pattern": "^(?!\\/)(?![A-Za-z]:\\/)(?!.*(?:^|\\/)\\.\\.?(?:\\/|$))(?!.*\\/\\/)(?!.*\\/$)(?!.*\\\\).+$",
+            "type": "string"
+          },
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          },
+          "remotePath": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "type": "string"
+          },
+          "sizeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "transferId": {
+            "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferId",
+          "targetId",
+          "direction",
+          "localPath",
+          "remotePath",
+          "sizeBytes",
+          "completedAt"
+        ],
+        "type": "object"
+      },
+      {
+        "additionalProperties": false,
+        "properties": {
+          "completedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "direction": {
+            "const": "upload",
+            "type": "string"
+          },
+          "failure": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "enum": [
+                  "ssh_executable_missing",
+                  "ssh_config_invalid",
+                  "target_unreachable",
+                  "target_auth_failed",
+                  "host_key_rejected",
+                  "environment_unavailable",
+                  "vpn_login_required",
+                  "environment_busy",
+                  "transfer_limit_exceeded",
+                  "local_file_unavailable",
+                  "timeout",
+                  "remote_exit_nonzero",
+                  "cancelled"
+                ],
+                "type": "string"
+              },
+              "exitCode": {
+                "maximum": 255,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "message": {
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "type": "object"
+          },
+          "ok": {
+            "const": false,
+            "type": "boolean"
+          },
+          "targetId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "transferId": {
+            "description": "Caller-generated unique ID matching ssh_xfer_ followed by 16-128 letters, digits, underscores, or hyphens.",
+            "pattern": "^ssh_xfer_[A-Za-z0-9_-]{16,128}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "ok",
+          "transferId",
+          "targetId",
+          "direction",
+          "failure",
+          "completedAt"
+        ],
+        "type": "object"
+      }
+    ]
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "file-transfer",
+    "upload"
+  ],
+  "title": "Upload file over Remote SSH"
+}
+```
+
+## `remote-ssh.lab-environment.console.open`
+
+Opens the configured VPN environment console for interactive sign-in.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "expectedRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "presentation": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "opened",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "const": "external-url",
+                "type": "string"
+              },
+              "url": {
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "url"
+            ],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "required": [
+      "labId",
+      "presentation"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "environment",
+    "vpn",
+    "console"
+  ],
+  "title": "Open laboratory VPN console"
+}
+```
+
+## `remote-ssh.lab-environment.ensure`
+
+Ensures the configured VPN environment is available and running.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "expectedRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "consoleAvailable": {
+        "type": "boolean"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "message": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "provider": {
+        "enum": [
+          "vm",
+          "docker"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "provider-unavailable",
+          "configuration-required",
+          "stopped",
+          "starting",
+          "login-required",
+          "ready",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "provider",
+      "state",
+      "consoleAvailable",
+      "checkedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "environment",
+    "vpn",
+    "lifecycle"
+  ],
+  "title": "Ensure laboratory VPN environment"
+}
+```
+
+## `remote-ssh.lab-environment.get`
+
+Reads the configured VPN environment provider and connection state for one laboratory.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "consoleAvailable": {
+        "type": "boolean"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "message": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "provider": {
+        "enum": [
+          "vm",
+          "docker"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "provider-unavailable",
+          "configuration-required",
+          "stopped",
+          "starting",
+          "login-required",
+          "ready",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "provider",
+      "state",
+      "consoleAvailable",
+      "checkedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "environment",
+    "vpn",
+    "diagnostics"
+  ],
+  "title": "Inspect laboratory VPN environment"
+}
+```
+
+## `remote-ssh.lab-environment.stop`
+
+Stops the configured VPN environment while retaining its persistent state.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "expectedRevision"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "consoleAvailable": {
+        "type": "boolean"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "message": {
+        "maxLength": 2000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "provider": {
+        "enum": [
+          "vm",
+          "docker"
+        ],
+        "type": "string"
+      },
+      "state": {
+        "enum": [
+          "provider-unavailable",
+          "configuration-required",
+          "stopped",
+          "starting",
+          "login-required",
+          "ready",
+          "failed"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "provider",
+      "state",
+      "consoleAvailable",
+      "checkedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "environment",
+    "vpn",
+    "lifecycle"
+  ],
+  "title": "Stop laboratory VPN environment"
+}
+```
+
+## `remote-ssh.labs.delete`
+
+Deletes one Remote SSH laboratory group.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deletedLabId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "deletedLabId"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "configuration"
+  ],
+  "title": "Delete Remote SSH lab"
+}
+```
+
+## `remote-ssh.labs.list`
+
+Lists the laboratory groups configured for Remote SSH.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "labs": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            "environment": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "driver": {
+                      "const": "virtualbox",
+                      "type": "string"
+                    },
+                    "gatewaySshAlias": {
+                      "maxLength": 253,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                      "type": "string"
+                    },
+                    "provider": {
+                      "const": "vm",
+                      "type": "string"
+                    },
+                    "vmId": {
+                      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "driver",
+                    "vmId",
+                    "gatewaySshAlias"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "image": {
+                      "maxLength": 512,
+                      "minLength": 1,
+                      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$",
+                      "type": "string"
+                    },
+                    "provider": {
+                      "const": "docker",
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "provider",
+                    "image"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "maxConcurrentExecutions": {
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "revision": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "id",
+            "displayName",
+            "environment",
+            "maxConcurrentExecutions",
+            "revision",
+            "createdAt",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 512,
+        "type": "array"
+      }
+    },
+    "required": [
+      "labs"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "discovery"
+  ],
+  "title": "List Remote SSH labs"
+}
+```
+
+## `remote-ssh.labs.save`
+
+Creates or updates one Remote SSH laboratory group.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "displayName": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "environment": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "driver": {
+                "const": "virtualbox",
+                "type": "string"
+              },
+              "gatewaySshAlias": {
+                "maxLength": 253,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "provider": {
+                "const": "vm",
+                "type": "string"
+              },
+              "vmId": {
+                "maxLength": 512,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "driver",
+              "vmId",
+              "gatewaySshAlias"
+            ],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "image": {
+                "maxLength": 512,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$",
+                "type": "string"
+              },
+              "provider": {
+                "const": "docker",
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "image"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "maxConcurrentExecutions": {
+        "maximum": 128,
+        "minimum": 1,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "displayName",
+      "environment",
+      "maxConcurrentExecutions"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "lab": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "environment": {
+            "oneOf": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "driver": {
+                    "const": "virtualbox",
+                    "type": "string"
+                  },
+                  "gatewaySshAlias": {
+                    "maxLength": 253,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "const": "vm",
+                    "type": "string"
+                  },
+                  "vmId": {
+                    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "driver",
+                  "vmId",
+                  "gatewaySshAlias"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "image": {
+                    "maxLength": 512,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$",
+                    "type": "string"
+                  },
+                  "provider": {
+                    "const": "docker",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "provider",
+                  "image"
+                ],
+                "type": "object"
+              }
+            ]
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "maxConcurrentExecutions": {
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "id",
+          "displayName",
+          "environment",
+          "maxConcurrentExecutions",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "lab"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "lab",
+    "configuration"
+  ],
+  "title": "Save Remote SSH lab"
+}
+```
+
+## `remote-ssh.target.delete`
+
+Deletes one logical OpenSSH target.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "targetId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "targetId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deletedTargetId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "deletedTargetId"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "target",
+    "configuration"
+  ],
+  "title": "Delete Remote SSH target"
+}
+```
+
+## `remote-ssh.target.probe`
+
+Tests final-target reachability through the canonical OpenSSH alias.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: resource
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "checkedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+        "type": "string"
+      },
+      "ready": {
+        "type": "boolean"
+      },
+      "target": {
+        "additionalProperties": false,
+        "properties": {
+          "latencyMs": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "message": {
+            "maxLength": 2000,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "reachable",
+              "unreachable",
+              "auth-failed",
+              "host-key-rejected",
+              "not-configured",
+              "not-tested"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "targetId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "targetId",
+      "target",
+      "ready",
+      "checkedAt"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [
+    "remote-ssh-target"
+  ],
+  "tags": [
+    "remote-ssh",
+    "target",
+    "diagnostics"
+  ],
+  "title": "Probe Remote SSH target"
+}
+```
+
+## `remote-ssh.target.save`
+
+Creates or updates one logical OpenSSH target.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `external-write`
+- Approval: confirmation
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "capabilities": {
+        "items": {
+          "enum": [
+            "shell",
+            "file-transfer"
+          ],
+          "type": "string"
+        },
+        "maxItems": 2,
+        "minItems": 1,
+        "type": "array"
+      },
+      "displayName": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "expectedRevision": {
+        "maxLength": 128,
+        "minLength": 1,
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "labId": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      },
+      "labels": {
+        "additionalProperties": {
+          "maxLength": 256,
+          "type": "string"
+        },
+        "propertyNames": {
+          "maxLength": 64,
+          "minLength": 1,
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "maxConcurrentExecutions": {
+        "maximum": 128,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "sshAlias": {
+        "maxLength": 253,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "labId",
+      "displayName",
+      "sshAlias",
+      "labels",
+      "capabilities",
+      "maxConcurrentExecutions"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "target": {
+        "additionalProperties": false,
+        "properties": {
+          "capabilities": {
+            "items": {
+              "enum": [
+                "shell",
+                "file-transfer"
+              ],
+              "type": "string"
+            },
+            "maxItems": 2,
+            "minItems": 1,
+            "type": "array"
+          },
+          "createdAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          },
+          "displayName": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "labId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "labels": {
+            "additionalProperties": {
+              "maxLength": 256,
+              "type": "string"
+            },
+            "propertyNames": {
+              "maxLength": 64,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "maxConcurrentExecutions": {
+            "maximum": 128,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revision": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "schemaVersion": {
+            "const": 2,
+            "type": "number"
+          },
+          "sshAlias": {
+            "maxLength": 253,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+            "type": "string"
+          },
+          "updatedAt": {
+            "format": "date-time",
+            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "id",
+          "labId",
+          "displayName",
+          "sshAlias",
+          "labels",
+          "capabilities",
+          "maxConcurrentExecutions",
+          "revision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "target"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "target",
+    "configuration"
+  ],
+  "title": "Save Remote SSH target"
+}
+```
+
+## `remote-ssh.targets.catalog`
+
+Lists full Remote SSH target configuration for the management UI.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "targets": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "capabilities": {
+              "items": {
+                "enum": [
+                  "shell",
+                  "file-transfer"
+                ],
+                "type": "string"
+              },
+              "maxItems": 2,
+              "minItems": 1,
+              "type": "array"
+            },
+            "createdAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            },
+            "displayName": {
+              "maxLength": 160,
+              "minLength": 1,
+              "type": "string"
+            },
+            "id": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "labId": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "labels": {
+              "additionalProperties": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "propertyNames": {
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "maxConcurrentExecutions": {
+              "maximum": 128,
+              "minimum": 1,
+              "type": "integer"
+            },
+            "revision": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "schemaVersion": {
+              "const": 2,
+              "type": "number"
+            },
+            "sshAlias": {
+              "maxLength": 253,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+              "type": "string"
+            },
+            "updatedAt": {
+              "format": "date-time",
+              "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "schemaVersion",
+            "id",
+            "labId",
+            "displayName",
+            "sshAlias",
+            "labels",
+            "capabilities",
+            "maxConcurrentExecutions",
+            "revision",
+            "createdAt",
+            "updatedAt"
+          ],
+          "type": "object"
+        },
+        "maxItems": 512,
+        "type": "array"
+      }
+    },
+    "required": [
+      "targets"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "target",
+    "configuration"
+  ],
+  "title": "List Remote SSH target catalog"
+}
+```
+
+## `remote-ssh.targets.list`
+
+Lists Remote SSH targets authorized for the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "targets": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "resource": {
+              "additionalProperties": false,
+              "properties": {
+                "expiresAt": {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                },
+                "semanticRevision": {
+                  "maxLength": 256,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "token": {
+                  "pattern": "^cap_[A-Za-z0-9_-]{20,}$",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token",
+                "semanticRevision",
+                "expiresAt"
+              ],
+              "type": "object"
+            },
+            "target": {
+              "additionalProperties": false,
+              "properties": {
+                "capabilities": {
+                  "items": {
+                    "enum": [
+                      "shell",
+                      "file-transfer"
+                    ],
+                    "type": "string"
+                  },
+                  "maxItems": 2,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "displayName": {
+                  "maxLength": 160,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "id": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                "labId": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                  "type": "string"
+                },
+                "labels": {
+                  "additionalProperties": {
+                    "maxLength": 256,
+                    "type": "string"
+                  },
+                  "propertyNames": {
+                    "maxLength": 64,
+                    "minLength": 1,
+                    "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$",
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "maxConcurrentExecutions": {
+                  "maximum": 128,
+                  "minimum": 1,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "labId",
+                "displayName",
+                "labels",
+                "capabilities",
+                "maxConcurrentExecutions"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "target",
+            "resource"
+          ],
+          "type": "object"
+        },
+        "maxItems": 512,
+        "type": "array"
+      }
+    },
+    "required": [
+      "targets"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "target",
+    "discovery"
+  ],
+  "title": "List Remote SSH targets"
+}
+```
+
+## `remote-ssh.virtualbox-machines.list`
+
+Lists VirtualBox virtual machines available for Remote SSH laboratory isolation.
+
+- Version: `1.0.0`
+- Audiences: ui
+- Effect: `read`
+- Approval: none
+- Scope: global
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "available": {
+        "type": "boolean"
+      },
+      "machines": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "architecture": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "osType": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+            },
+            "state": {
+              "maxLength": 128,
+              "minLength": 1,
+              "type": "string"
+            },
+            "uuid": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+              "type": "string"
+            }
+          },
+          "required": [
+            "uuid",
+            "name",
+            "state"
+          ],
+          "type": "object"
+        },
+        "maxItems": 512,
+        "type": "array"
+      }
+    },
+    "required": [
+      "available",
+      "machines"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "remote-ssh",
+    "virtualbox",
+    "vm",
+    "discovery"
+  ],
+  "title": "List VirtualBox machines"
+}
+```
+
 ## `surface.current`
 
 Returns an opaque resource for the currently visible SciForge surface.
@@ -2848,177 +5982,6 @@ Returns an opaque resource for the currently visible SciForge surface.
     "discovery"
   ],
   "title": "Open current SciForge surface"
-}
-```
-
-## `surface.inspect`
-
-Captures and visually inspects the latest visible surface or an opaque target reference.
-
-- Version: `2.0.0`
-- Audiences: ui, agent, system
-- Effect: `read`
-- Approval: none
-- Scope: resource
-
-### Contract
-
-```json
-{
-  "concurrency": {
-    "idempotency": "none",
-    "revision": "none"
-  },
-  "contractVersion": 1,
-  "inputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "properties": {
-      "outputIntent": {
-        "additionalProperties": false,
-        "properties": {
-          "instructions": {
-            "maxLength": 8000,
-            "minLength": 1,
-            "type": "string"
-          },
-          "kind": {
-            "enum": [
-              "description",
-              "ocr",
-              "comparison",
-              "quality-review",
-              "structured-extraction",
-              "custom"
-            ],
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind"
-        ],
-        "type": "object"
-      },
-      "targetRef": {
-        "pattern": "^target_[A-Za-z0-9_-]{20,}$",
-        "type": "string"
-      },
-      "task": {
-        "maxLength": 16000,
-        "minLength": 1,
-        "type": "string"
-      },
-      "truthLocks": {
-        "items": {
-          "maxLength": 4000,
-          "minLength": 1,
-          "type": "string"
-        },
-        "maxItems": 64,
-        "type": "array"
-      }
-    },
-    "required": [
-      "task"
-    ],
-    "type": "object"
-  },
-  "outputSchema": {
-    "$schema": "http://json-schema.org/draft-07/schema#",
-    "additionalProperties": false,
-    "definitions": {
-      "__schema0": {
-        "anyOf": [
-          {
-            "type": "null"
-          },
-          {
-            "type": "boolean"
-          },
-          {
-            "type": "number"
-          },
-          {
-            "type": "string"
-          },
-          {
-            "items": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "type": "array"
-          },
-          {
-            "additionalProperties": {
-              "$ref": "#/definitions/__schema0"
-            },
-            "propertyNames": {
-              "type": "string"
-            },
-            "type": "object"
-          }
-        ]
-      }
-    },
-    "properties": {
-      "artifact": {
-        "additionalProperties": false,
-        "properties": {
-          "artifactRef": {
-            "pattern": "^artifact_[A-Za-z0-9_-]{20,}$",
-            "type": "string"
-          },
-          "capturedAt": {
-            "format": "date-time",
-            "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
-            "type": "string"
-          },
-          "height": {
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991,
-            "type": "integer"
-          },
-          "mimeType": {
-            "const": "image/png",
-            "type": "string"
-          },
-          "targetRef": {
-            "pattern": "^target_[A-Za-z0-9_-]{20,}$",
-            "type": "string"
-          },
-          "width": {
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991,
-            "type": "integer"
-          }
-        },
-        "required": [
-          "artifactRef",
-          "mimeType",
-          "capturedAt",
-          "width",
-          "height"
-        ],
-        "type": "object"
-      },
-      "evidence": {
-        "$ref": "#/definitions/__schema0"
-      }
-    },
-    "required": [
-      "artifact",
-      "evidence"
-    ],
-    "type": "object"
-  },
-  "resourceKinds": [
-    "surface"
-  ],
-  "tags": [
-    "surface",
-    "visual",
-    "inspection"
-  ],
-  "title": "Inspect visible SciForge surface"
 }
 ```
 
@@ -5586,8 +8549,9 @@ Releases an open Workspace Preview session.
 
 | Domain | Forbidden direct transport prefixes | Explicit UI-only transports |
 | --- | --- | --- |
-| Artifact Inspection |  |  |
 | Biology Room | biologyRoom: |  |
+| Browser Preview | browserPreview: |  |
 | Paper Radar | paperRadar: |  |
+| Remote SSH |  |  |
 | Surface Inspection |  |  |
 | Workspace Preview | workspacePreview: |  |

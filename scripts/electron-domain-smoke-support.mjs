@@ -18,6 +18,16 @@ import { pathToFileURL } from 'node:url'
 const TEMPORARY_DIRECTORY_PREFIX = 'sciforge-electron-domain-smoke-'
 const DEFAULT_TIMEOUT_MS = 45_000
 const REQUIRED_CAPABILITY_IDS = Object.freeze([
+  'browser-preview.open',
+  'browser-preview.read',
+  'browser-preview.navigate',
+  'browser-preview.back',
+  'browser-preview.forward',
+  'browser-preview.reload',
+  'browser-preview.click',
+  'browser-preview.fill',
+  'browser-preview.select',
+  'browser-preview.press',
   'paper-radar.status',
   'paper-radar.profiles.list',
   'paper-radar.profiles.save',

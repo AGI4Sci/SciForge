@@ -212,40 +212,6 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('clipboard:paste-workspace', payload)
   })
 
-  it('exposes workspace native file drag IPC', async () => {
-    const api = exposedApi as {
-      startWorkspaceNativeFileDrag(payload: unknown): Promise<unknown>
-    }
-    const payload = {
-      workspaceRoot: '/tmp/workspace',
-      path: 'notes/paper.pdf'
-    }
-
-    await api.startWorkspaceNativeFileDrag(payload)
-
-    expect(invoke).toHaveBeenCalledWith('file:start-workspace-native-drag', payload)
-  })
-
-  it('exposes filtered dev preview navigation notifications', () => {
-    const api = exposedApi as {
-      onDevPreviewNavigate(handler: (payload: unknown) => void): () => void
-    }
-    const handler = vi.fn()
-
-    const unsubscribe = api.onDevPreviewNavigate(handler)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'dev-preview:navigate')?.[1]
-    wrapped?.({}, { url: 'http://127.0.0.1:5173/docs', webContentsId: 42 })
-    wrapped?.({}, { url: 'http://127.0.0.1:5173/docs', webContentsId: '42' })
-    unsubscribe()
-
-    expect(handler).toHaveBeenCalledTimes(1)
-    expect(handler).toHaveBeenCalledWith({
-      url: 'http://127.0.0.1:5173/docs',
-      webContentsId: 42
-    })
-    expect(removeListener).toHaveBeenCalledWith('dev-preview:navigate', wrapped)
-  })
-
   it('keeps preview-specific HTML and DOCX writes off the renderer-facing file IPC surface', async () => {
     const api = exposedApi as {
       readWorkspaceFile(options: unknown): Promise<unknown>
@@ -269,6 +235,7 @@ describe('preload agentRuntime bridge', () => {
       unwatchWorkspaceFile(watchId: string): Promise<unknown>
       onWorkspaceFileChanged(handler: (payload: unknown) => void): () => void
       capabilities: {
+        bind(input: unknown): Promise<unknown>
         invoke(input: unknown): Promise<unknown>
         resourceContentUrl(access: unknown): string | null
       }
@@ -289,6 +256,11 @@ describe('preload agentRuntime bridge', () => {
     const capabilityRequest = {
       request: { actionId: 'workspace-preview.list', input: {} }
     }
+    const bindRequest = {
+      workspaceId: '/tmp/workspace',
+      request: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' }
+    }
+    await api.capabilities.bind(bindRequest)
     await api.capabilities.invoke(capabilityRequest)
     await api.watchWorkspaceFile({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
     await api.unwatchWorkspaceFile('watch-1')
@@ -302,6 +274,7 @@ describe('preload agentRuntime bridge', () => {
     wrapped?.({}, { ok: true, watchId: 'watch-1' })
     unsubscribe()
 
+    expect(invoke).toHaveBeenCalledWith('capability:bind', bindRequest)
     expect(invoke).toHaveBeenCalledWith('capability:invoke', capabilityRequest)
     expect(invoke).toHaveBeenCalledWith('file:watch-workspace', {
       path: 'protein.pdb',

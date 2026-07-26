@@ -64,13 +64,14 @@ const WORKSPACE_PREVIEW_CAPABILITY_IDS = Object.freeze({
   release: 'workspace-preview.release'
 } as const)
 
-type CapabilityTransport = Pick<SciForgeApi['capabilities'], 'readiness' | 'invoke' | 'observe'>
+type CapabilityTransport = Pick<SciForgeApi['capabilities'], 'readiness' | 'invoke' | 'observe' | 'bind'>
 
 type ResourceBinding = {
   resource: CapabilityResourceHandle
   workspaceId: string
   operations: CapabilityDescriptor[]
   resourceRef?: string
+  operationQueue: Promise<void>
 }
 
 type InvocationOptions = {
@@ -135,7 +136,10 @@ type WorkspacePreviewCapabilityAdapterOptions = {
   transport?: CapabilityTransport
   getTransport?: () => CapabilityTransport | null | undefined
   createInvocationId?: () => string
+  now?: () => number
 }
+
+const RESOURCE_HANDLE_RENEWAL_WINDOW_MS = 60_000
 
 export function createWorkspacePreviewCapabilityAdapter(
   options: WorkspacePreviewCapabilityAdapterOptions = {}
@@ -144,6 +148,7 @@ export function createWorkspacePreviewCapabilityAdapter(
     ? () => options.transport
     : options.getTransport ?? defaultTransport
   const createInvocationId = options.createInvocationId ?? defaultInvocationId
+  const now = options.now ?? Date.now
   const resources = new Map<string, ResourceBinding>()
   const readinessCache = new Map<string, Awaited<ReturnType<CapabilityTransport['readiness']>>>()
 
@@ -169,13 +174,14 @@ export function createWorkspacePreviewCapabilityAdapter(
   const invokeCapability = async (input: InvocationOptions): Promise<CapabilityInvocationResult> => {
     const workspaceId = input.workspaceId ?? input.binding?.workspaceId
     await requireReadiness(input.actionId, workspaceId)
+    const requestResource = input.binding?.resource
     const request: CapabilityInvocationRequest = {
       actionId: input.actionId,
       input: input.input as CapabilityInvocationRequest['input'],
-      ...(input.binding ? { resource: input.binding.resource } : {}),
+      ...(requestResource ? { resource: requestResource } : {}),
       ...(input.invocationId ? { invocationId: input.invocationId } : {}),
-      ...(input.expectedRevision && input.binding
-        ? { expectedRevision: input.binding.resource.semanticRevision }
+      ...(input.expectedRevision && requestResource
+        ? { expectedRevision: requestResource.semanticRevision }
         : {})
     }
     const result = capabilityInvocationResultSchema.parse(await requireTransport().invoke({
@@ -186,7 +192,7 @@ export function createWorkspacePreviewCapabilityAdapter(
     if (result.actionId !== input.actionId) {
       throw new Error(`Capability result action mismatch: expected "${input.actionId}", received "${result.actionId}".`)
     }
-    updateBinding(input.binding, result)
+    updateBinding(input.binding, requestResource, result)
     return result
   }
 
@@ -195,7 +201,10 @@ export function createWorkspacePreviewCapabilityAdapter(
     input: Omit<InvocationOptions, 'binding' | 'workspaceId'>
   ): Promise<Output> => {
     const binding = requireBinding(resources, sessionId)
-    return (await invokeCapability({ ...input, binding })).output as Output
+    return enqueueBindingOperation(binding, async () => {
+      await renewBindingResourceIfNeeded(binding)
+      return (await invokeCapability({ ...input, binding })).output as Output
+    })
   }
 
   return {
@@ -211,25 +220,33 @@ export function createWorkspacePreviewCapabilityAdapter(
       if (!isSuccessfulResult(result.output)) return result.output as WorkspacePreviewOpenResult
       const { value, resource } = takeResource(result.output, WORKSPACE_PREVIEW_CAPABILITY_IDS.open)
       const sessionId = requireNestedString(value, ['session', 'id'], WORKSPACE_PREVIEW_CAPABILITY_IDS.open)
-      const binding: ResourceBinding = { resource, workspaceId: input.workspaceRoot, operations: [] }
+      const binding: ResourceBinding = {
+        resource,
+        workspaceId: input.workspaceRoot,
+        operations: [],
+        operationQueue: Promise.resolve()
+      }
       resources.set(sessionId, binding)
       return { ...value, capability: capabilityBinding(binding) } as WorkspacePreviewOpenResult
     },
     observe: async (sessionId) => {
       const binding = requireBinding(resources, sessionId)
-      const observation = capabilityObservationSchema.parse(await requireTransport().observe({
-        workspaceId: binding.workspaceId,
-        request: { resource: binding.resource }
-      }))
-      binding.resource = observation.resource
-      binding.resourceRef = observation.resourceRef
-      binding.operations = observation.operations
-      const state = requireRecord(observation.state, WORKSPACE_PREVIEW_CAPABILITY_IDS.open)
-      return {
-        ok: true,
-        observation: state.observation,
-        capability: capabilityBinding(binding)
-      } as WorkspacePreviewObserveResult
+      return enqueueBindingOperation(binding, async () => {
+        await renewBindingResourceIfNeeded(binding)
+        const observation = capabilityObservationSchema.parse(await requireTransport().observe({
+          workspaceId: binding.workspaceId,
+          request: { resource: binding.resource }
+        }))
+        binding.resource = observation.resource
+        binding.resourceRef = observation.resourceRef
+        binding.operations = observation.operations
+        const state = requireRecord(observation.state, WORKSPACE_PREVIEW_CAPABILITY_IDS.open)
+        return {
+          ok: true,
+          observation: state.observation,
+          capability: capabilityBinding(binding)
+        } as WorkspacePreviewObserveResult
+      })
     },
     describeAsset: (sessionId) => invokeSession(sessionId, {
       actionId: WORKSPACE_PREVIEW_CAPABILITY_IDS.describeAsset,
@@ -319,6 +336,16 @@ export function createWorkspacePreviewCapabilityAdapter(
     }
   }
 
+  async function renewBindingResourceIfNeeded(binding: ResourceBinding): Promise<void> {
+    if (!binding.resourceRef) return
+    const expiresAt = Date.parse(binding.resource.expiresAt)
+    if (Number.isFinite(expiresAt) && expiresAt - now() > RESOURCE_HANDLE_RENEWAL_WINDOW_MS) return
+    binding.resource = capabilityResourceHandleSchema.parse(await requireTransport().bind({
+      workspaceId: binding.workspaceId,
+      request: { resourceRef: binding.resourceRef }
+    }))
+  }
+
   async function invokeAndAttach<Output>(
     sessionId: string,
     input: Omit<InvocationOptions, 'binding' | 'workspaceId'>
@@ -339,8 +366,26 @@ function requireBinding(bindings: Map<string, ResourceBinding>, sessionId: strin
   return binding
 }
 
-function updateBinding(binding: ResourceBinding | undefined, result: CapabilityInvocationResult): void {
-  if (binding && result.resource) binding.resource = result.resource
+function enqueueBindingOperation<Output>(
+  binding: ResourceBinding,
+  operation: () => Promise<Output>
+): Promise<Output> {
+  const result = binding.operationQueue.then(operation, operation)
+  binding.operationQueue = result.then(
+    () => undefined,
+    () => undefined
+  )
+  return result
+}
+
+function updateBinding(
+  binding: ResourceBinding | undefined,
+  requestResource: CapabilityResourceHandle | undefined,
+  result: CapabilityInvocationResult
+): void {
+  if (!binding || !result.resource) return
+  if (requestResource && binding.resource !== requestResource) return
+  binding.resource = result.resource
 }
 
 function capabilityBinding(binding: ResourceBinding) {

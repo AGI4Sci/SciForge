@@ -15,17 +15,7 @@ import {
   type VisibleContextVisualSnapshotResource,
   type VisualContextTarget
 } from '../../shared/visible-context'
-import {
-  surfaceInspectInputSchema,
-  surfaceInspectOutputSchema,
-  type SurfaceInspectInput,
-  type SurfaceInspectOutput
-} from '../../shared/surface-inspection'
 import type { CapabilityJsonValue } from '../../shared/capability-broker'
-import type {
-  VisualInspectionRequest,
-  VisualInspector
-} from '../../../packages/workers/workspace-intel/src/visual-inspection'
 import {
   atomicWriteAppDataJson,
   atomicWriteAppDataText,
@@ -77,13 +67,21 @@ export type SurfaceCaptureProvider = {
 
 export type VisibleContextServiceOptions = {
   surfaceCaptureProvider: SurfaceCaptureProvider
-  visualInspector?: () => VisualInspector | undefined | Promise<VisualInspector | undefined>
   onCaptureState?: (windowId: string, active: boolean) => void
   requestSurfaceRefresh?: (windowId: string) => void
   now?: () => Date
   captureRetentionLimit?: number
   captureMaxAgeMs?: number
 }
+
+export type VisibleContextCapturedFrame = Readonly<{
+  path: string
+  mimeType: 'image/png'
+  capturedAt: string
+  width: number
+  height: number
+  targetRef?: string
+}>
 
 type BoundSurface = {
   callerId: string
@@ -259,11 +257,15 @@ export class VisibleContextService {
     }
   }
 
-  async inspectSurface(
+  /**
+   * Captures one trusted, redacted visual frame without interpreting it.
+   * Callers receive only the managed frame path and pixel metadata; semantic
+   * inspection and workspace persistence remain owned by AgentVisualRuntime.
+   */
+  async captureFrame(
     resourceId: string,
-    rawInput: SurfaceInspectInput
-  ): Promise<SurfaceInspectOutput> {
-    const input = surfaceInspectInputSchema.parse(rawInput)
+    input: Readonly<{ targetRef?: string }> = {}
+  ): Promise<VisibleContextCapturedFrame> {
     const captured = await this.enqueueCapture(async () => {
       const binding = this.boundSurfacesByResource.get(resourceId)
       let snapshot = await this.get()
@@ -297,29 +299,14 @@ export class VisibleContextService {
       })
     })
     if (!captured.ok) throw new Error(captured.error.message)
-    const inspector = await this.options.visualInspector?.()
-    if (!inspector) throw new Error('Visual understanding is unavailable.')
-    const request: VisualInspectionRequest = {
-      task: input.task,
-      artifacts: [{ id: 'surface', imagePath: captured.resource.path, mimeType: 'image/png' }],
-      ...(input.truthLocks ? { truthLocks: input.truthLocks } : {}),
-      ...(input.outputIntent ? { outputIntent: input.outputIntent } : {})
+    return {
+      path: captured.resource.path,
+      mimeType: 'image/png',
+      capturedAt: captured.resource.capturedAt,
+      width: captured.resource.width,
+      height: captured.resource.height,
+      ...(input.targetRef ? { targetRef: input.targetRef } : {})
     }
-    const evidence = await inspector(request)
-    if (evidence.status !== 'inspected') throw new Error(evidence.message)
-    return surfaceInspectOutputSchema.parse({
-      artifact: {
-        artifactRef: `artifact_${createHmac('sha256', this.surfaceRefSecret)
-          .update(captured.resource.path)
-          .digest('base64url')}`,
-        mimeType: 'image/png',
-        capturedAt: captured.resource.capturedAt,
-        width: captured.resource.width,
-        height: captured.resource.height,
-        ...(input.targetRef ? { targetRef: input.targetRef } : {})
-      },
-      evidence
-    })
   }
 
   private async captureSurfaceSnapshot(

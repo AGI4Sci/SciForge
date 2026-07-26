@@ -106,7 +106,7 @@ test('probes protocols before the first automatic request and caches the support
         code: 'convert_request_failed',
       },
     }, { status: 500 }),
-    Response.json({ error: { message: 'max_tokens must be greater than zero' } }, { status: 400 }),
+    chatResult('chat-probe'),
     chatResult('chat-first'),
     chatResult('chat-cached'),
   ]);
@@ -138,10 +138,34 @@ test('probes protocols before the first automatic request and caches the support
     '/v1/chat/completions',
     '/v1/chat/completions',
   ]);
-  assert.equal(calls[0]?.body.max_output_tokens, 0);
-  assert.equal(calls[1]?.body.max_tokens, 0);
+  assert.equal(calls[0]?.body.max_output_tokens, 1);
+  assert.equal(calls[1]?.body.max_tokens, 1);
   assert.equal(calls[2]?.body.max_tokens, 128);
   assert.doesNotMatch(JSON.stringify(calls.slice(0, 2).map((call) => call.body)), /hello/u);
+});
+
+test('times out an upstream request at the protocol boundary', async () => {
+  const negotiator = new UpstreamProtocolNegotiator();
+  const fetchImpl: typeof fetch = async (_url, init) => new Promise<Response>((_resolve, reject) => {
+    init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+  });
+  const keepAlive = setTimeout(() => undefined, 100);
+  try {
+    await assert.rejects(
+      negotiator.request({
+        request,
+        baseUrl: 'https://models.example/v1',
+        apiKey: 'secret',
+        model: 'configured-model',
+        fetchImpl,
+        preferredProtocol: 'responses',
+        timeoutMs: 10,
+      }),
+      (error: unknown) => error instanceof UpstreamRequestError && error.code === 'upstream_timeout',
+    );
+  } finally {
+    clearTimeout(keepAlive);
+  }
 });
 
 test('falls back after a structured conversion failure before model output', async () => {

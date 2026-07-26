@@ -54,4 +54,27 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
       }
     })).toThrow('Duplicate Workbench right-panel mode "paper"')
   })
+
+  it('passes the owning workspace root through the generic render contract', () => {
+    let renderedWorkspaceRoot: string | undefined
+    const registry = new WorkbenchRightPanelContributionRegistry()
+    const panel = {
+      ...contribution('paper'),
+      render: ({ workspaceRoot }: Parameters<WorkbenchRightPanelContribution['render']>[0]) => {
+        renderedWorkspaceRoot = workspaceRoot
+        return createElement('div')
+      }
+    }
+    registry.register({ ownerId: 'example.panel', contribution: panel })
+
+    registry.resolve('paper')?.contribution.render({
+      active: true,
+      className: 'h-full',
+      onCollapse: () => undefined,
+      sessionId: 'session-owner',
+      workspaceRoot: '/workspace/owner'
+    })
+
+    expect(renderedWorkspaceRoot).toBe('/workspace/owner')
+  })
 })

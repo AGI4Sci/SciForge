@@ -40,7 +40,7 @@ export type ExecutionGovernorOptions = {
 
 export type ExecutionGovernorContext = {
   workspace?: string
-  ownedSurfaceInspectionAvailable?: boolean
+  ownedVisualToolsAvailable?: boolean
 }
 
 export type ExecutionReceipt = {
@@ -156,7 +156,7 @@ export type ExecutionGovernorDecision = {
     | 'semantic_failure_exhausted'
     | 'fatal_error'
     | 'redundant_read'
-    | 'owned_surface_policy_denied'
+    | 'owned_visual_policy_denied'
   reason?: string
   guidance?: string
   attempt: NormalizedExecutionAttempt
@@ -209,7 +209,8 @@ const MUTATING_TOOL_NAMES = new Set([
   'edit_diff',
   'apply_patch',
   'delete',
-  'move'
+  'move',
+  'sciforge_capture'
 ])
 const GOVERNOR_EXEMPT_TOOL_NAMES = new Set(['request_user_input', 'user_input'])
 const VOLATILE_ARGUMENT_KEYS = new Set([
@@ -290,13 +291,13 @@ export class ExecutionGovernorCore {
 
     if (
       attempt.family === 'command_execution:os-gui-automation' &&
-      context.ownedSurfaceInspectionAvailable === true
+      context.ownedVisualToolsAvailable === true
     ) {
       return {
         action: 'deny',
-        code: 'owned_surface_policy_denied',
-        reason: 'Shell-based OS screenshots and window automation are blocked while an owned surface-inspection capability is available.',
-        guidance: ownedSurfaceGuidance(),
+        code: 'owned_visual_policy_denied',
+        reason: 'Shell-based OS screenshots and window automation are blocked while the owned native visual tools are available.',
+        guidance: ownedVisualGuidance(),
         attempt
       }
     }
@@ -677,6 +678,8 @@ function executionFamily(
     return `tool_call:${operationFamily || 'capability.invoke'}`
   }
   if (name === 'sciforge_events') return 'tool_call:capability.events'
+  if (name === 'sciforge_look') return 'tool_call:visual.look'
+  if (name === 'sciforge_capture') return 'tool_call:visual.capture'
   if (/(search|grep|find|rg|query)/u.test(name)) return 'tool_call:search-read'
   if (/(read|open|cat|fetch|get|list)/u.test(name)) return 'tool_call:read'
   if (/(write|create|update|delete|patch|edit)/u.test(name)) return 'tool_call:write'
@@ -696,6 +699,19 @@ function executionResourceIdentity(
   const resource = asRecord(args.resource)
   const resourceId = stringValue(resource?.id) || stringValue(resource?.resourceRef) || stringValue(args.resourceRef)
   if (resourceId) return `resource:${resourceId}`
+  const visualRef = firstNonEmptyString(
+    args.regionRef,
+    args.region_ref,
+    args.snapshotRef,
+    args.snapshot_ref,
+    args.sourceRef,
+    args.source_ref,
+    args.targetRef,
+    args.target_ref,
+    args.artifactRef,
+    args.artifact_ref
+  )
+  if (visualRef) return `visual:${visualRef}`
   const query = stringValue(args.query)
   if (query) return `query:${canonicalText(query)}`
   return ''
@@ -827,8 +843,8 @@ function failureDescription(receipt: NormalizedExecutionReceipt): string {
     : errorCode || failureClass || 'execution_error'
 }
 
-function ownedSurfaceGuidance(): string {
-  return 'Use the owned broker: call sciforge_discover for surface.inspect, then call sciforge_invoke with the returned operation and resource references. Do not use screencapture, osascript, window enumeration, or another OS-level GUI fallback.'
+function ownedVisualGuidance(): string {
+  return 'Use the native sciforge_look tool to inspect the owned visual source. If the task requires a persisted workspace image, pass the returned snapshotRef or regionRef to the native sciforge_capture tool. Do not use screencapture, osascript, window enumeration, or another OS-level GUI fallback.'
 }
 
 function failureClassFor(

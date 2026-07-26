@@ -36,10 +36,6 @@ import {
   isRemoteChannelThread
 } from '../store/chat-store-helpers'
 import { hasPendingRuntimeWork } from '../store/chat-store-runtime-helpers'
-import {
-  extractLatestTurnAutoOpenDevPreviewUrls,
-  extractLatestTurnDevPreviewUrls
-} from '../lib/dev-preview-detection'
 import { Sidebar } from './chat/Sidebar'
 import { WorkbenchTopBar, type RightPanelMode } from './chat/WorkbenchTopBar'
 import { ActiveRemoteBindingDetails } from './chat/RemoteBindingDetailsPill'
@@ -101,7 +97,6 @@ import {
   sddDraftRefForThreadId
 } from '../sdd/sdd-thread-registry'
 import { parseGuiPlanCommand } from '../plan/plan-command'
-import { DevPreviewLaunchCard } from './DevPreviewLaunchCard'
 import { RuntimeBanner } from './RuntimeBanner'
 import {
   CODE_PANEL_PREFERRED,
@@ -172,9 +167,6 @@ import { installedRendererContributions } from '../domain-modules/installed-rend
 const ChangeInspector = lazy(() =>
   import('./ChangeInspector').then((module) => ({ default: module.ChangeInspector }))
 )
-const DevBrowserPanel = lazy(() =>
-  import('./DevBrowserPanel').then((module) => ({ default: module.DevBrowserPanel }))
-)
 const EvidenceDagPanel = lazy(() =>
   import('./evidence/EvidenceDagPanel').then((module) => ({ default: module.EvidenceDagPanel }))
 )
@@ -223,8 +215,6 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
   switch (mode) {
     case 'file':
       return 'File preview'
-    case 'browser':
-      return 'Dev browser'
     case 'child-agents':
       return 'Child agents'
     case 'changes':
@@ -252,7 +242,6 @@ function rightPanelVisibleContextTitle(mode: Exclude<RightPanelMode, null>): str
 
 const CORE_RIGHT_PANEL_RESOURCE_KINDS: Partial<Record<Exclude<RightPanelMode, null>, string>> = {
   file: 'workspace-files',
-  browser: 'dev-preview',
   'child-agents': 'child-agents',
   changes: 'session-changes',
   todo: 'session-todos',
@@ -276,7 +265,6 @@ export type RightPanelVisibleContextInput = {
   width: number
   workspaceRoot?: string
   filePreviewTarget?: { path: string; workspaceRoot?: string } | null
-  browserUrl?: string | null
   childAgentCount?: number
   childAgentRunningCount?: number
   evidenceNodeId?: string | null
@@ -319,9 +307,6 @@ export function buildRightPanelVisibleContextComponent(
           canonicalComponentId: 'right-sidebar.file-preview'
         }
       }
-      break
-    case 'browser':
-      currentResource = { ...baseResource, url: input.browserUrl || null }
       break
     case 'child-agents':
       currentResource = {
@@ -699,8 +684,6 @@ type SessionRightPanelRenderer = (
 type SessionRightPanelRenderSnapshot = {
   thread: NormalizedThread | null
   blocks: ChatBlock[]
-  devPreviewBlocks: ChatBlock[]
-  latestDevPreviewUrl: string | null
   workspaceRoot: string
   workspaceReferenceGroups: WorkspaceReferenceGroup[]
   composerFileReferences: ComposerFileReference[]
@@ -983,26 +966,6 @@ export function Workbench(): ReactElement {
   const timelineBlocks = blocks
   const timelineLiveReasoning = liveReasoning
   const timelineLiveAssistant = liveAssistant
-  const devPreviewBlocks = useMemo<ChatBlock[]>(() => {
-    const liveText = timelineLiveAssistant.trim()
-    if (!liveText) return timelineBlocks
-    return [
-      ...timelineBlocks,
-      {
-        kind: 'assistant',
-        id: '__live-assistant-dev-preview',
-        text: timelineLiveAssistant
-      }
-    ]
-  }, [timelineBlocks, timelineLiveAssistant])
-  const detectedDevPreviewUrls = useMemo(
-    () => extractLatestTurnDevPreviewUrls(devPreviewBlocks),
-    [devPreviewBlocks]
-  )
-  const autoOpenDevPreviewUrls = useMemo(
-    () => extractLatestTurnAutoOpenDevPreviewUrls(devPreviewBlocks),
-    [devPreviewBlocks]
-  )
   const activeRemoteChannel = useMemo(
     () => remoteChannels.find((channel) => channel.id === activeRemoteChannelId) ?? null,
     [activeRemoteChannelId, remoteChannels]
@@ -1130,8 +1093,6 @@ export function Workbench(): ReactElement {
     () => collectComposerChangeSummary(timelineBlocks, activeSkillWorkspace),
     [activeSkillWorkspace, timelineBlocks]
   )
-  const latestDevPreviewUrl = detectedDevPreviewUrls[0] ?? null
-  const latestAutoOpenDevPreviewUrl = autoOpenDevPreviewUrls[0] ?? null
   const currentSideConversations = useMemo(
     () =>
       Object.values(sideConversations)
@@ -1191,7 +1152,6 @@ export function Workbench(): ReactElement {
     leftSidebarWidth,
     navigateRightPanelBack,
     navigateRightPanelForward,
-    openDevPreview,
     rightPanelMode,
     rightPanelWorkspaces,
     rightPanelVisible,
@@ -1209,10 +1169,7 @@ export function Workbench(): ReactElement {
     toggleTerminal,
     updateRightPanelWorkspace,
   } = useWorkbenchLayout({
-    activeSessionId: rightPanelOwnerId,
-    latestAutoOpenDevPreviewUrl,
-    latestDevPreviewUrl,
-    route
+    activeSessionId: rightPanelOwnerId
   })
   const sessionRightPanelSnapshotsRef = useRef(new Map<string, SessionRightPanelRenderSnapshot>())
   const setFileTreeWorkspaceOverride = useCallback((value: string | null): void => {
@@ -1408,7 +1365,6 @@ export function Workbench(): ReactElement {
       width: rightSidebarWidth,
       workspaceRoot,
       filePreviewTarget: rightPanelMode === 'file' ? filePreviewTarget : null,
-      browserUrl: rightPanelMode === 'browser' ? latestDevPreviewUrl : null,
       childAgentCount,
       childAgentRunningCount,
       evidenceNodeId: ownerWorkspace?.evidenceDagReturnNode?.nodeId,
@@ -1424,7 +1380,6 @@ export function Workbench(): ReactElement {
     childAgentCount,
     childAgentRunningCount,
     filePreviewTarget,
-    latestDevPreviewUrl,
     rightPanelMode,
     rightPanelOwnerId,
     rightPanelWorkspaces,
@@ -1489,20 +1444,6 @@ export function Workbench(): ReactElement {
     setMode,
     toggleTerminal
   ])
-  const showDevPreviewCard =
-    route === 'chat' &&
-    latestDevPreviewUrl !== null
-  const timelineDevPreviewCard = useMemo(
-    () => showDevPreviewCard ? (
-      <DevPreviewLaunchCard
-        url={latestDevPreviewUrl}
-        opened={rightPanelMode === 'browser'}
-        onOpen={openDevPreview}
-      />
-    ) : null,
-    [latestDevPreviewUrl, openDevPreview, rightPanelMode, showDevPreviewCard]
-  )
-
   useEffect(() => {
     if (typeof window === 'undefined' || typeof window.sciforge?.getLogPath !== 'function') return
     let cancelled = false
@@ -3047,8 +2988,11 @@ export function Workbench(): ReactElement {
               />
             ) : installedRightPanel ? (
               installedRightPanel.render({
+                active,
                 className: 'h-full max-h-full w-full',
-                onCollapse: closeOwnerRightPanel
+                onCollapse: closeOwnerRightPanel,
+                sessionId: ownerSessionId,
+                workspaceRoot: ownerWorkspaceRoot
               })
             ) : workspaceMode === 'evidence' ? (
               <EvidenceDagPanel
@@ -3086,13 +3030,6 @@ export function Workbench(): ReactElement {
               />
             ) : workspaceMode === 'workflow' ? (
               <WorkflowView onCollapse={closeOwnerRightPanel} />
-            ) : workspaceMode === 'browser' ? (
-              <DevBrowserPanel
-                blocks={snapshot.devPreviewBlocks}
-                preferredUrl={snapshot.latestDevPreviewUrl}
-                className="h-full max-h-full w-full flex-col"
-                onCollapse={closeOwnerRightPanel}
-              />
             ) : workspaceMode === 'checkpoints' ? (
               <GitCheckpointPanel
                 threadId={ownerSessionId}
@@ -3147,14 +3084,9 @@ export function Workbench(): ReactElement {
     const ownerBlocks = active
       ? blocks
       : threadBlocksById[workspace.sessionId] ?? previousSnapshot?.blocks ?? []
-    const ownerDevPreviewBlocks = active ? devPreviewBlocks : ownerBlocks
     const snapshot: SessionRightPanelRenderSnapshot = {
       thread: liveThread ?? (active ? activeThread : previousSnapshot?.thread ?? null),
       blocks: ownerBlocks,
-      devPreviewBlocks: ownerDevPreviewBlocks,
-      latestDevPreviewUrl: active
-        ? latestDevPreviewUrl
-        : extractLatestTurnDevPreviewUrls(ownerDevPreviewBlocks)[0] ?? null,
       workspaceRoot: active
         ? workspaceRoot
         : liveThread?.workspace || previousSnapshot?.workspaceRoot || '',
@@ -3456,7 +3388,6 @@ export function Workbench(): ReactElement {
                   onBuildPlan={() => void buildGuiPlan()}
                   onOpenPlan={openGuiPlanPanel}
                   onOpenImageArtifactInVisualReview={openImageArtifactInVisualReview}
-                  devPreviewCard={timelineDevPreviewCard}
                 />
                 <div className="ds-no-drag flex shrink-0 justify-center px-2 pb-3 pt-0 sm:px-4 md:px-6 lg:px-8">
                   <FloatingComposer

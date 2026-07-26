@@ -3,10 +3,12 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
 
 import {
+  MarkdownValidateImagesInputSchema,
   PDF_TEXT_RESOURCE_URI_TEMPLATE,
   PdfExtractTextInputSchema,
   WRITE_INDEX_STATS_RESOURCE_URI_TEMPLATE,
   WriteRetrieveContextInputSchema,
+  type MarkdownValidateImagesResult,
   type PdfExtractTextResult,
   type WriteAssistFailure,
   type WriteIndexStatsResult,
@@ -49,11 +51,27 @@ export function createWriteAssistMcpServer(
   server.registerTool('gui_pdf_extract_text', {
     description: [
       'Extract bounded text from a workspace PDF with path guard, page filters, cursor pagination, and maxChars.',
-      'Use pdf://{path}/text resources for repeat reads of the same bounded PDF text surface.'
+      'Use pdf://{path}/text resources for repeat reads of the same bounded PDF text surface.',
+      'This tool is text-only: extracted text is not evidence for figures, charts, equations, or page layout.'
     ].join(' '),
     inputSchema: PdfExtractTextInputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
   }, async (args) => resultToToolResult(await service.extractPdfText(args), 'PDF text extraction'))
+
+  server.registerTool('gui_markdown_validate_images', {
+    description: [
+      'Validate Markdown image completion inside the workspace.',
+      'Rejects empty image destinations, missing or escaping local files, and unmet minimum image counts.',
+      'When expectedLocalImages is provided, every workspace-relative path must be explicitly referenced and resolve to an existing workspace file.',
+      'This validates exact references and files only; it does not inspect image semantics or crop quality and does not issue visual evidence receipts.',
+      'Do not report reference completion unless valid=true.'
+    ].join(' '),
+    inputSchema: MarkdownValidateImagesInputSchema,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
+  }, async (args) => resultToToolResult(
+    await service.validateMarkdownImages(args),
+    'Markdown image validation'
+  ))
 
   server.registerResource('write-index-stats', new ResourceTemplate(WRITE_INDEX_STATS_RESOURCE_URI_TEMPLATE, {
     list: undefined
@@ -89,7 +107,10 @@ export async function startWriteAssistMcpServer(
   await server.connect(transport)
 }
 
-function resultToToolResult(result: WriteRetrieveContextResult | PdfExtractTextResult, label: string): McpTextToolResult {
+function resultToToolResult(
+  result: WriteRetrieveContextResult | PdfExtractTextResult | MarkdownValidateImagesResult,
+  label: string
+): McpTextToolResult {
   if (!result.ok) return errorToolResult(result, label)
   return {
     content: [{ type: 'text', text: result.summary }],

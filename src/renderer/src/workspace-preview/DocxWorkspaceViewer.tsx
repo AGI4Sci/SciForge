@@ -27,6 +27,7 @@ import {
 
 export type DocxWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
+  documentContentKey?: string
   className?: string
   onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void>
   annotationOverlays?: readonly DocumentTextAnnotationOverlay[]
@@ -126,6 +127,7 @@ export async function saveDocxWorkspaceParagraphs(input: {
 
 export function DocxWorkspaceViewer({
   observation,
+  documentContentKey,
   className,
   onApplyEdit,
   annotationOverlays = [],
@@ -173,6 +175,7 @@ export function DocxWorkspaceViewer({
     >
       <WriteDocxViewer
         filePath={observation.file.path}
+        documentContentKey={documentContentKey}
         paragraphs={model.paragraphs}
         content={model.content}
         size={model.size}

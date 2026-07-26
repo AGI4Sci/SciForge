@@ -699,7 +699,7 @@ describe('registerAppIpcHandlers', () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
 
-    expect(handlers.size).toBe(151)
+    expect(handlers.size).toBe(150)
     expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
   })
 
@@ -1800,60 +1800,6 @@ describe('registerAppIpcHandlers', () => {
       workspaceRoot: '/tmp/project',
       revisionId: 'revision-1'
     })
-  })
-
-  it('returns a native file drag fallback when the sender cannot start desktop drags', async () => {
-    const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
-    const filePath = join(workspaceRoot, 'notes.txt')
-    writeFileSync(filePath, 'notes')
-    try {
-      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-      const dispatcher = registerAppIpcHandlers(registerOptions())
-
-      const result = await dispatcher.invoke(
-        'file:start-workspace-native-drag',
-        { path: 'notes.txt', workspaceRoot },
-        createSender(903)
-      )
-
-      expect(result).toEqual({
-        ok: false,
-        message: 'Native file dragging is not available in this environment.'
-      })
-    } finally {
-      rmSync(workspaceRoot, { recursive: true, force: true })
-    }
-  })
-
-  it('starts native file drags with a resolved workspace path', async () => {
-    const workspaceRoot = mkdtempSync(join(tmpdir(), 'sciforge-native-drag-ipc-'))
-    const filePath = join(workspaceRoot, 'notes.txt')
-    writeFileSync(filePath, 'notes')
-    try {
-      const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
-      const sender = {
-        ...createSender(904),
-        startDrag: vi.fn()
-      }
-
-      const dispatcher = registerAppIpcHandlers(registerOptions())
-      const result = await dispatcher.invoke(
-        'file:start-workspace-native-drag',
-        { path: 'notes.txt', workspaceRoot },
-        sender
-      )
-
-      expect(result).toMatchObject({
-        ok: true,
-        path: realpathSync(filePath)
-      })
-      expect(sender.startDrag).toHaveBeenCalledWith(expect.objectContaining({
-        file: realpathSync(filePath),
-        icon: expect.anything()
-      }))
-    } finally {
-      rmSync(workspaceRoot, { recursive: true, force: true })
-    }
   })
 
   it('does not register retired workspace surface business channels', async () => {

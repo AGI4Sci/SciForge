@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Read-only SciForge write assistance MCP worker for context retrieval and PDF text extraction.",
+  "description": "SciForge writing support for bounded retrieval, PDF text extraction, and Markdown image-reference validation.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,

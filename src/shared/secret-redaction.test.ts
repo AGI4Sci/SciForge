@@ -52,4 +52,23 @@ describe('secret redaction', () => {
       self: '[Circular]'
     })
   })
+
+  it('redacts private-key fields, passphrases, and PEM blocks', () => {
+    expect(redactSecrets({
+      privateKey: 'raw-key',
+      passphrase: 'open-sesame',
+      script: [
+        'export AWS_ACCESS_KEY_ID=AKIAEXAMPLE',
+        'cat <<EOF',
+        '-----BEGIN PRIVATE KEY-----',
+        'abc123',
+        '-----END PRIVATE KEY-----',
+        'EOF'
+      ].join('\n')
+    })).toEqual({
+      privateKey: '<redacted>',
+      passphrase: '<redacted>',
+      script: 'export AWS_ACCESS_KEY_ID=<redacted>\ncat <<EOF\n<redacted>\nEOF'
+    })
+  })
 })

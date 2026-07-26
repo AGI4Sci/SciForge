@@ -1908,13 +1908,6 @@ export const workspaceClipboardPastePayloadSchema = z
   })
   .strict()
 
-export const workspaceNativeFileDragPayloadSchema = z
-  .object({
-    path: trimmedString(MAX_PATH_LENGTH),
-    workspaceRoot: trimmedString(MAX_PATH_LENGTH)
-  })
-  .strict()
-
 export const workspaceEntryRenamePayloadSchema = z
   .object({
     path: trimmedString(MAX_PATH_LENGTH),

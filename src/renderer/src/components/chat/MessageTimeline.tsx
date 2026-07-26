@@ -45,7 +45,6 @@ type Props = {
   onOpenSettings: () => void
   autoScrollEnabled?: boolean
   onSelectSuggestion?: (prompt: string) => void
-  devPreviewCard?: ReactElement | null
   /** Disables the inline Review Plan card's Build action while a turn runs. */
   planActionsBusy?: boolean
   /** Runs the active plan (Build button on the inline Review Plan card). */
@@ -199,7 +198,6 @@ function MessageTimelineComponent({
   onOpenSettings,
   autoScrollEnabled = true,
   onSelectSuggestion,
-  devPreviewCard,
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
@@ -397,7 +395,6 @@ function MessageTimelineComponent({
                 durationMs={durationMs}
                 liveStartedAtMs={liveStartedAtMs}
                 reasoningDurationMs={reasoningDurationMs}
-                devPreviewCard={isLatestTurn ? devPreviewCard : null}
                 planActionsBusy={planActionsBusy}
                 onBuildPlan={stableOnBuildPlan}
                 onOpenPlan={stableOnOpenPlan}
@@ -436,7 +433,6 @@ function MessageTimelineComponent({
             liveReasoning={liveReasoning}
             liveReasoningMeta={liveReasoningMeta}
             live={live}
-            devPreviewCard={devPreviewCard}
             onOpenImageArtifactInVisualReview={stableOnOpenImageArtifactInVisualReview}
             onContinueScientificObject={stableOnContinueScientificObject}
             viewportRef={containerRef}
@@ -472,7 +468,6 @@ function MessageTurn({
   durationMs,
   liveStartedAtMs,
   reasoningDurationMs,
-  devPreviewCard,
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
@@ -489,7 +484,6 @@ function MessageTurn({
   durationMs?: number
   liveStartedAtMs?: number
   reasoningDurationMs?: number
-  devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
   onBuildPlan?: () => void
   onOpenPlan?: () => void
@@ -653,8 +647,6 @@ function MessageTurn({
 
       {isProcessing ? <LiveTurnProgressRow /> : null}
 
-      {!isProcessing && devPreviewCard ? devPreviewCard : null}
-
       {planResult ? (
         <ReviewPlanCard
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
@@ -695,7 +687,6 @@ const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   prev.durationMs === next.durationMs &&
   prev.liveStartedAtMs === next.liveStartedAtMs &&
   prev.reasoningDurationMs === next.reasoningDurationMs &&
-  prev.devPreviewCard === next.devPreviewCard &&
   prev.planActionsBusy === next.planActionsBusy &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&

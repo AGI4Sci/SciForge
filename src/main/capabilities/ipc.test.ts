@@ -81,6 +81,16 @@ describe('capability IPC adapter', () => {
     })
     expect(ready.registryFingerprint).toMatch(/^[a-f0-9]{64}$/)
 
+    const observed = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.observe)?.(event, {
+      workspaceId: '/workspace',
+      request: { resource }
+    }) as { resourceRef: string }
+    const rebound = await ipcHandlers.get(CAPABILITY_IPC_CHANNELS.bind)?.(event, {
+      workspaceId: '/workspace',
+      request: { resourceRef: observed.resourceRef }
+    }) as { semanticRevision: string }
+    expect(rebound.semanticRevision).toBe('1')
+
     await expect(registration.invoke(CAPABILITY_IPC_CHANNELS.readiness, {
       expectedContractVersion: CAPABILITY_BROKER_CONTRACT_VERSION + 1,
       requiredCapabilityIds: ['test-resource.missing']
@@ -119,6 +129,7 @@ describe('capability IPC adapter', () => {
     }))
 
     expect(registration.handles(CAPABILITY_IPC_CHANNELS.discover)).toBe(true)
+    expect(registration.handles(CAPABILITY_IPC_CHANNELS.bind)).toBe(true)
     expect(registration.handles('workspacePreview:open')).toBe(false)
     await expect(registration.invoke(CAPABILITY_IPC_CHANNELS.discover, {
       workspaceId: '/workspace'

@@ -141,6 +141,7 @@ describe('dev browser bridge server', () => {
     expect(allowedChannels).toEqual(preloadChannels)
     expect(allowedChannels.some((channel) => channel.startsWith('paperRadar:'))).toBe(false)
     expect(allowedChannels).toEqual(expect.arrayContaining([
+      'capability:bind',
       'capability:readiness',
       'capability:discover',
       'capability:events',

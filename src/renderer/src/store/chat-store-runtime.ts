@@ -408,10 +408,24 @@ function turnBoundsForUserBlock(blocks: ChatBlock[], userBlockId: string): { sta
   return { start, end }
 }
 
+function blockIndexWithinTurn(
+  blocks: ChatBlock[],
+  blockId: string,
+  bounds: { start: number; end: number } | null
+): number {
+  const searchStart = bounds ? bounds.start + 1 : 0
+  const searchEnd = bounds ? bounds.end : blocks.length
+  for (let index = searchStart; index < searchEnd; index += 1) {
+    if (blocks[index].id === blockId) return index
+  }
+  return -1
+}
+
 function insertCanonicalAssistantBlock(
   blocks: ChatBlock[],
   assistant: Extract<ChatBlock, { kind: 'assistant' }>,
-  userBlockId: string | null
+  userBlockId: string | null,
+  beforeBlockId: string | null = null
 ): ChatBlock[] {
   const existingIndex = blocks.findIndex((block) => block.kind === 'assistant' && block.id === assistant.id)
   if (existingIndex >= 0) {
@@ -457,21 +471,46 @@ function insertCanonicalAssistantBlock(
   }
 
   const next = [...blocks]
-  next.splice(bounds?.end ?? blocks.length, 0, assistant)
+  const anchorIndex = beforeBlockId
+    ? blockIndexWithinTurn(next, beforeBlockId, bounds)
+    : -1
+  next.splice(anchorIndex < 0 ? (bounds?.end ?? blocks.length) : anchorIndex, 0, assistant)
   return dedupeChatBlocksById(next)
 }
 
 function mergeCanonicalAssistantBlocks(current: ChatBlock[], canonical: ChatBlock[]): ChatBlock[] {
   let next = current
-  let currentUserBlockId: string | null = null
-
+  const turns: Array<{ userBlockId: string | null; blocks: ChatBlock[] }> = []
+  let currentTurn = { userBlockId: null as string | null, blocks: [] as ChatBlock[] }
   for (const block of canonical) {
     if (block.kind === 'user') {
-      currentUserBlockId = block.id
+      if (currentTurn.blocks.length > 0) turns.push(currentTurn)
+      currentTurn = { userBlockId: block.id, blocks: [] }
       continue
     }
-    if (block.kind !== 'assistant' || !block.text.trim()) continue
-    next = insertCanonicalAssistantBlock(next, block, currentUserBlockId)
+    currentTurn.blocks.push(block)
+  }
+  if (currentTurn.blocks.length > 0) turns.push(currentTurn)
+
+  for (const turn of turns) {
+    let nextCanonicalBlockId: string | null = null
+    for (let index = turn.blocks.length - 1; index >= 0; index -= 1) {
+      const block = turn.blocks[index]
+      if (block.kind === 'assistant' && block.text.trim()) {
+        next = insertCanonicalAssistantBlock(
+          next,
+          block,
+          turn.userBlockId,
+          nextCanonicalBlockId
+        )
+        nextCanonicalBlockId = block.id
+        continue
+      }
+      const bounds = turn.userBlockId ? turnBoundsForUserBlock(next, turn.userBlockId) : null
+      if (blockIndexWithinTurn(next, block.id, bounds) >= 0) {
+        nextCanonicalBlockId = block.id
+      }
+    }
   }
 
   return dedupeChatBlocksById(next)

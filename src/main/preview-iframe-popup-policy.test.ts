@@ -4,15 +4,16 @@ import { describe, expect, it } from 'vitest'
 
 function readSandboxTokens(relativePath: string): string[][] {
   const source = readFileSync(resolve(relativePath), 'utf8')
-  return [...source.matchAll(/sandbox="([^"]+)"/g)].map((match) => match[1]?.split(/\s+/) ?? [])
+  return [...source.matchAll(/sandbox="([^"]*)"/g)].map((match) =>
+    match[1] ? match[1].split(/\s+/) : []
+  )
 }
 
 describe('preview iframe popup policy', () => {
-  it('does not grant popup permission to dev or workspace preview iframes', () => {
-    const sandboxes = [
-      ...readSandboxTokens('src/renderer/src/components/DevBrowserPanel.tsx'),
-      ...readSandboxTokens('src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx')
-    ]
+  it('does not grant popup permission to workspace preview iframes', () => {
+    const sandboxes = readSandboxTokens(
+      'src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx'
+    )
 
     expect(sandboxes.length).toBeGreaterThan(0)
     for (const tokens of sandboxes) {
@@ -20,11 +21,10 @@ describe('preview iframe popup policy', () => {
     }
   })
 
-  it('does not grant same-origin permission to dev or workspace preview iframes', () => {
-    const sandboxes = [
-      ...readSandboxTokens('src/renderer/src/components/DevBrowserPanel.tsx'),
-      ...readSandboxTokens('src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx')
-    ]
+  it('does not grant same-origin permission to workspace preview iframes', () => {
+    const sandboxes = readSandboxTokens(
+      'src/renderer/src/workspace-preview/HtmlWorkspaceViewer.tsx'
+    )
 
     expect(sandboxes.length).toBeGreaterThan(0)
     for (const tokens of sandboxes) {

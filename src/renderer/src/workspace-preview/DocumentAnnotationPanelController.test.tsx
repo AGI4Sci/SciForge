@@ -173,6 +173,18 @@ function createContext(observation: WorkspaceObservation): WorkspacePreviewPanel
   }
 }
 
+function textEditOperation(): WorkspacePreviewEditOperation {
+  return {
+    kind: 'text.replaceRange',
+    path: '/workspace/lab/notes.md',
+    range: {
+      start: { line: 1, column: 1 },
+      end: { line: 1, column: 5 }
+    },
+    text: 'updated'
+  }
+}
+
 describe('DocumentAnnotationPanelController', () => {
   it('uses the user-visible side message instead of the internal runtime prompt', () => {
     expect(documentAnnotationSideBlockText({
@@ -291,5 +303,70 @@ describe('DocumentAnnotationPanelController', () => {
       body: '',
       target: operation.target
     })
+  })
+
+  it('propagates host edit failures so document editors can keep the failed save visible', async () => {
+    const observation = createObservation()
+    const context = createContext(observation)
+    vi.mocked(context.host.applyEdit).mockResolvedValue({ ok: false, message: 'Document write failed.' })
+    let renderInput: DocumentAnnotationPanelRenderInput | null = null
+
+    renderToStaticMarkup(createElement(DocumentAnnotationPanelController, {
+      context,
+      observation,
+      documentKind: 'markdown',
+      renderDocument: (input) => {
+        renderInput = input
+        return createElement('div')
+      }
+    }))
+
+    const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
+    if (!capturedInput) throw new Error('Document render input was not captured.')
+    await expect(capturedInput.text.onApplyEdit(textEditOperation())).rejects.toThrow('Document write failed.')
+    expect(context.host.observe).not.toHaveBeenCalled()
+  })
+
+  it('observes the updated session after a successful document save', async () => {
+    const observation = createObservation()
+    const context = createContext(observation)
+    let renderInput: DocumentAnnotationPanelRenderInput | null = null
+
+    renderToStaticMarkup(createElement(DocumentAnnotationPanelController, {
+      context,
+      observation,
+      documentKind: 'markdown',
+      renderDocument: (input) => {
+        renderInput = input
+        return createElement('div')
+      }
+    }))
+
+    const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
+    if (!capturedInput) throw new Error('Document render input was not captured.')
+    await capturedInput.text.onApplyEdit(textEditOperation())
+    expect(context.host.observe).toHaveBeenCalledWith('session-pdf')
+  })
+
+  it('propagates thrown host edit errors without observing a failed save', async () => {
+    const observation = createObservation()
+    const context = createContext(observation)
+    vi.mocked(context.host.applyEdit).mockRejectedValue(new Error('Storage unavailable.'))
+    let renderInput: DocumentAnnotationPanelRenderInput | null = null
+
+    renderToStaticMarkup(createElement(DocumentAnnotationPanelController, {
+      context,
+      observation,
+      documentKind: 'docx',
+      renderDocument: (input) => {
+        renderInput = input
+        return createElement('div')
+      }
+    }))
+
+    const capturedInput = renderInput as DocumentAnnotationPanelRenderInput | null
+    if (!capturedInput) throw new Error('Document render input was not captured.')
+    await expect(capturedInput.text.onApplyEdit(textEditOperation())).rejects.toThrow('Storage unavailable.')
+    expect(context.host.observe).not.toHaveBeenCalled()
   })
 })

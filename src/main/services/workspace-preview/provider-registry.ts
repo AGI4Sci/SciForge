@@ -20,6 +20,8 @@ export type {
   WorkspacePreviewProviderInvokeActionResult,
   WorkspacePreviewProviderObservationInput,
   WorkspacePreviewProviderObservationResult,
+  WorkspacePreviewProviderVisualInput,
+  WorkspacePreviewRenderVisualInput,
   WorkspacePreviewProviderRegistration,
   WorkspacePreviewProviderRegistrationDisposable,
   WorkspacePreviewProviderRegistrationInput

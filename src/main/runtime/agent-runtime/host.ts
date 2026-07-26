@@ -86,7 +86,11 @@ import type { GitCheckpointService } from '../../services/git-checkpoint-service
 import type { SharedMemoryService } from '../../services/shared-memory-service'
 import type { WorkspaceReferenceService } from '../../services/workspace-reference-service'
 import type { VisibleContextService } from '../../services/visible-context-service'
-import { capabilityAgentCallerId } from '../../capabilities/agent-tools'
+import {
+  capabilityAgentCallerId,
+  type CapabilityAgentApprovalDecision,
+  type CapabilityAgentApprovalRequest
+} from '../../capabilities/agent-tools'
 import type { RuntimeGoalPatch, RuntimeGoalService } from '../../services/runtime-goal-service'
 import type {
   RuntimeContextLedgerPatch,
@@ -95,6 +99,8 @@ import type {
 import type {
   VisibleContextSnapshot
 } from '../../../shared/visible-context'
+import { redactSecrets } from '../../../shared/secret-redaction'
+import type { AgentRuntimeToolTurnIdentity } from './agent-tool-surface'
 
 export type AgentRuntimeHostSettingsProvider = () => AppSettingsV1 | Promise<AppSettingsV1>
 
@@ -116,13 +122,7 @@ export type AgentRuntimeHostOptions = {
     | AgentRuntimeAdapter[]
     | Partial<Record<AgentRuntimeId, AgentRuntimeAdapter>>
   services?: AgentRuntimeHostServices
-  capabilityAvailability?: (input: {
-    capabilityId: string
-    audience: 'agent'
-    runtimeId: AgentRuntimeId
-    threadId: string
-    turnId: string
-  }) => boolean
+  nativeVisualToolsAvailable?: () => boolean
 }
 
 export function createAgentRuntimeHost(options: AgentRuntimeHostOptions): AgentRuntimeHost {
@@ -153,6 +153,30 @@ type ThreadTurnActivity = {
   state?: AgentRuntimeTurnState
 }
 
+type CapabilityApprovalRecord = {
+  runtimeId: AgentRuntimeId
+  threadId: string
+  turnId: string
+  callId: string
+  actionId: string
+  invocationId: string
+  approvalId: string
+  requestedEvent: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>
+  event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' | 'approval_resolved' }>
+  resolve?: (decision: CapabilityAgentApprovalDecision) => void
+  removeAbortListener?: () => void
+}
+
+type CapabilityApprovalSubscriber = {
+  push: (event: AgentRuntimeEvent) => void
+  next: () => Promise<IteratorResult<AgentRuntimeEvent>>
+  close: () => void
+}
+
+const CAPABILITY_APPROVAL_HISTORY_LIMIT = 256
+const CAPABILITY_APPROVAL_PENDING_LIMIT = 64
+const CAPABILITY_APPROVAL_PREVIEW_MAX_BYTES = 4 * 1_024
+
 export class AgentRuntimeHost {
   private readonly adapters: Map<AgentRuntimeId, AgentRuntimeAdapter>
   private readonly turnQueues = new Map<string, Promise<unknown>>()
@@ -165,8 +189,12 @@ export class AgentRuntimeHost {
   private readonly turnWorkspaces = new Map<string, string>()
   private readonly postTurnCheckpoints = new Set<string>()
   private readonly traceCaptureTasks = new Map<string, Promise<void>>()
+  private readonly capabilityApprovals = new Map<string, CapabilityApprovalRecord>()
+  private readonly capabilityApprovalOrder: string[] = []
+  private readonly capabilityApprovalSubscribers = new Map<string, Set<CapabilityApprovalSubscriber>>()
   private readonly governance = new RuntimeGovernanceSupervisor()
   private readonly executionIntegrity = new RuntimeExecutionIntegrityGuard()
+  private disposed = false
 
   constructor(private readonly options: AgentRuntimeHostOptions) {
     this.adapters = normalizeAdapters(options.adapters)
@@ -305,6 +333,12 @@ export class AgentRuntimeHost {
           event.turnId === handle.turnId &&
           isAgentRuntimeTerminalTurnState(event.state)
         ) {
+          this.cancelCapabilityApprovalsForTurn(
+            adapter.id,
+            event.threadId,
+            event.turnId,
+            `Turn ${event.state}.`
+          )
           return
         }
       }
@@ -320,6 +354,7 @@ export class AgentRuntimeHost {
 
   async interruptTurn(input: AgentRuntimeTurnTargetInput): Promise<void> {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
+    this.cancelCapabilityApprovalsForTurn(input.runtimeId, input.threadId, input.turnId, 'Turn interrupted.')
     await adapter.interruptTurn(context, input)
   }
 
@@ -414,7 +449,9 @@ export class AgentRuntimeHost {
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     const capabilities = await adapter.capabilities(context)
     const guardSettings = runtimeGuardSettings(context)
-    for await (const sourceEvent of adapter.subscribeEvents(context, input)) {
+    const approvalSubscription = this.subscribeCapabilityApprovalEvents(input.runtimeId, input.threadId, input.signal)
+    const source = mergeRuntimeEventStreams(adapter.subscribeEvents(context, input), approvalSubscription)
+    for await (const sourceEvent of source) {
       const integrityObservation = this.executionIntegrity.observe(adapter.id, sourceEvent)
       const event = integrityObservation.event
       if (integrityObservation.violation) {
@@ -437,15 +474,7 @@ export class AgentRuntimeHost {
       this.createPostTurnCheckpoint(adapter.id, event)
       this.governance.observe(event, capabilities, guardSettings, {
         governanceProfile: this.governanceProfileForEvent(capabilities.runtimeId, event),
-        ownedSurfaceInspectionAvailable: Boolean(
-          event.turnId && this.options.capabilityAvailability?.({
-            capabilityId: 'surface.inspect',
-            audience: 'agent',
-            runtimeId: capabilities.runtimeId,
-            threadId: event.threadId,
-            turnId: event.turnId
-          })
-        ),
+        ownedVisualToolsAvailable: this.options.nativeVisualToolsAvailable?.() === true,
         steerTurn: (payload) => this.steerControlTurn(payload),
         interruptTurn: (payload) => this.interruptTurn(payload),
         publishSyntheticEvent: (payload) => this.publishSyntheticEvent(adapter, context, payload)
@@ -456,9 +485,117 @@ export class AgentRuntimeHost {
   }
 
   async resolveApproval(input: AgentRuntimeApprovalResolveInput): Promise<void> {
+    const capabilityApproval = this.capabilityApprovals.get(input.approvalId)
+    if (capabilityApproval) {
+      if (
+        capabilityApproval.runtimeId !== input.runtimeId
+        || capabilityApproval.threadId !== input.threadId
+      ) {
+        throw new Error('The approval does not belong to this runtime thread.')
+      }
+      if (!capabilityApproval.resolve) throw new Error(`Approval ${input.approvalId} is no longer pending.`)
+      this.settleCapabilityApproval(
+        capabilityApproval,
+        input.decision,
+        input.message ?? `Capability confirmation ${input.decision}.`
+      )
+      return
+    }
     const { adapter, context } = await this.resolveRequiredRuntime(input.runtimeId)
     if (!adapter.resolveApproval) throw unsupported(adapter.id, 'approval')
     await adapter.resolveApproval(context, input)
+  }
+
+  requestCapabilityApproval(
+    request: CapabilityAgentApprovalRequest,
+    options: { signal?: AbortSignal } = {}
+  ): Promise<CapabilityAgentApprovalDecision> {
+    if (this.disposed) return Promise.resolve('cancelled')
+    const runtimeId = this.runtimeIdForCapabilityApproval(request.context.runtimeId)
+    const threadId = request.context.threadId?.trim()
+    const turnId = request.context.turnId?.trim()
+    const callId = request.context.callId?.trim()
+    if (!threadId || !turnId || !callId) {
+      return Promise.resolve('cancelled')
+    }
+    if (options.signal?.aborted) return Promise.resolve('cancelled')
+    const pendingCount = [...this.capabilityApprovals.values()].filter((record) => Boolean(record.resolve)).length
+    if (pendingCount >= CAPABILITY_APPROVAL_PENDING_LIMIT) return Promise.resolve('cancelled')
+
+    const approvalId = `capability-approval-${randomUUID()}`
+    const createdAt = new Date().toISOString()
+    const inputPreview = capabilityApprovalInputPreview(request)
+    const event: Extract<AgentRuntimeEvent, { kind: 'approval_requested' }> = {
+      kind: 'approval_requested',
+      runtimeId,
+      threadId,
+      turnId,
+      itemId: approvalId,
+      approvalId,
+      summary: `${request.title}\n\n${request.description}\n\nRequested input:\n${inputPreview.text}`,
+      toolName: request.actionId,
+      createdAt,
+      meta: {
+        source: 'sciforge-capability-broker',
+        actionId: request.actionId,
+        invocationId: request.invocationId,
+        callId,
+        effect: request.effect,
+        approvalMode: request.mode,
+        inputPreviewBytes: Buffer.byteLength(inputPreview.text, 'utf8'),
+        inputPreviewTruncated: inputPreview.truncated,
+        ...(request.resourceRef ? { resourceRef: request.resourceRef } : {})
+      }
+    }
+
+    return new Promise<CapabilityAgentApprovalDecision>((resolve) => {
+      const record: CapabilityApprovalRecord = {
+        runtimeId,
+        threadId,
+        turnId,
+        callId,
+        actionId: request.actionId,
+        invocationId: request.invocationId,
+        approvalId,
+        requestedEvent: event,
+        event,
+        resolve
+      }
+      if (options.signal) {
+        const onAbort = (): void => {
+          this.settleCapabilityApproval(record, 'cancelled', 'Capability confirmation was cancelled.')
+        }
+        options.signal.addEventListener('abort', onAbort, { once: true })
+        record.removeAbortListener = () => options.signal?.removeEventListener('abort', onAbort)
+      }
+      this.capabilityApprovals.set(approvalId, record)
+      this.capabilityApprovalOrder.push(approvalId)
+      this.publishCapabilityApprovalEvent(record, event)
+      this.pruneCapabilityApprovalHistory()
+    })
+  }
+
+  cancelCapabilityApprovalTurn(identity: AgentRuntimeToolTurnIdentity, reason = 'turn_cancelled'): number {
+    return this.cancelCapabilityApprovalsForTurn(
+      this.runtimeIdForCapabilityApproval(identity.runtimeId),
+      identity.threadId,
+      identity.turnId,
+      `Turn cancelled: ${reason}.`
+    )
+  }
+
+  dispose(): void {
+    if (this.disposed) return
+    this.disposed = true
+    for (const record of this.capabilityApprovals.values()) {
+      if (record.resolve) this.settleCapabilityApproval(record, 'cancelled', 'Agent runtime host stopped.')
+    }
+    for (const subscribers of this.capabilityApprovalSubscribers.values()) {
+      for (const subscriber of subscribers) subscriber.close()
+    }
+    this.capabilityApprovalSubscribers.clear()
+    this.capabilityApprovals.clear()
+    this.capabilityApprovalOrder.splice(0)
   }
 
   async resolveUserInput(input: AgentRuntimeUserInputResolveInput): Promise<void> {
@@ -1547,6 +1684,12 @@ export class AgentRuntimeHost {
     const key = threadTurnKey(runtimeId, threadId)
     const turnId = event.turnId?.trim()
     if (state === 'idle' || isAgentRuntimeTerminalTurnState(state)) {
+      this.cancelCapabilityApprovalsForTurn(
+        runtimeId,
+        threadId,
+        turnId,
+        state === 'idle' ? 'Turn became idle.' : `Turn ${state}.`
+      )
       this.clearActiveThreadTurn(key, turnId)
       return
     }
@@ -1563,6 +1706,125 @@ export class AgentRuntimeHost {
       this.activeThreadTurns.delete(key)
     }
     this.notifyThreadTerminal(key)
+  }
+
+  private runtimeIdForCapabilityApproval(runtimeId: string): AgentRuntimeId {
+    const adapter = [...this.adapters.values()].find((candidate) => candidate.id === runtimeId)
+    if (!adapter) throw new Error(`Agent runtime adapter not registered: ${runtimeId}`)
+    return adapter.id
+  }
+
+  private subscribeCapabilityApprovalEvents(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    signal?: AbortSignal
+  ): AsyncIterable<AgentRuntimeEvent> {
+    const key = threadTurnKey(runtimeId, threadId)
+    const subscriber = createCapabilityApprovalSubscriber()
+    let subscribers = this.capabilityApprovalSubscribers.get(key)
+    if (!subscribers) {
+      subscribers = new Set()
+      this.capabilityApprovalSubscribers.set(key, subscribers)
+    }
+    subscribers.add(subscriber)
+    for (const approvalId of this.capabilityApprovalOrder) {
+      const record = this.capabilityApprovals.get(approvalId)
+      if (!record || capabilityApprovalRecordKey(record) !== key) continue
+      subscriber.push(record.requestedEvent)
+      if (record.event.kind === 'approval_resolved') subscriber.push(record.event)
+    }
+    const close = (): void => {
+      subscriber.close()
+      const current = this.capabilityApprovalSubscribers.get(key)
+      current?.delete(subscriber)
+      if (current?.size === 0) this.capabilityApprovalSubscribers.delete(key)
+    }
+    signal?.addEventListener('abort', close, { once: true })
+    return {
+      [Symbol.asyncIterator]() {
+        return {
+          next: () => signal?.aborted
+            ? Promise.resolve({ done: true as const, value: undefined })
+            : subscriber.next(),
+          return: async () => {
+            signal?.removeEventListener('abort', close)
+            close()
+            return { done: true as const, value: undefined }
+          }
+        }
+      }
+    }
+  }
+
+  private publishCapabilityApprovalEvent(
+    record: CapabilityApprovalRecord,
+    event: CapabilityApprovalRecord['event']
+  ): void {
+    record.event = event
+    const subscribers = this.capabilityApprovalSubscribers.get(capabilityApprovalRecordKey(record))
+    if (subscribers) {
+      for (const subscriber of subscribers) subscriber.push(event)
+    }
+    this.options.services?.contextState?.observeEvent(event)
+    void this.options.services?.contextLedger?.observeEvent(event).catch(() => undefined)
+    void this.options.services?.trace?.observeEvent(record.runtimeId, event).catch(() => undefined)
+  }
+
+  private settleCapabilityApproval(
+    record: CapabilityApprovalRecord,
+    decision: CapabilityAgentApprovalDecision,
+    message: string
+  ): void {
+    const resolve = record.resolve
+    if (!resolve) return
+    record.resolve = undefined
+    record.removeAbortListener?.()
+    record.removeAbortListener = undefined
+    const resolvedDecision = decision === 'cancelled' ? 'error' : decision
+    this.publishCapabilityApprovalEvent(record, {
+      kind: 'approval_resolved',
+      runtimeId: record.runtimeId,
+      threadId: record.threadId,
+      turnId: record.turnId,
+      itemId: record.approvalId,
+      approvalId: record.approvalId,
+      decision: resolvedDecision,
+      message,
+      createdAt: new Date().toISOString()
+    })
+    resolve(decision)
+    this.pruneCapabilityApprovalHistory()
+  }
+
+  private cancelCapabilityApprovalsForTurn(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string | undefined,
+    message: string
+  ): number {
+    let cancelled = 0
+    for (const record of this.capabilityApprovals.values()) {
+      if (!record.resolve) continue
+      if (record.runtimeId !== runtimeId) continue
+      if (record.threadId !== threadId) continue
+      if (turnId && record.turnId !== turnId) continue
+      this.settleCapabilityApproval(record, 'cancelled', message)
+      cancelled += 1
+    }
+    return cancelled
+  }
+
+  private pruneCapabilityApprovalHistory(): void {
+    if (this.capabilityApprovalOrder.length <= CAPABILITY_APPROVAL_HISTORY_LIMIT) return
+    for (let index = 0; index < this.capabilityApprovalOrder.length; index += 1) {
+      if (this.capabilityApprovalOrder.length <= CAPABILITY_APPROVAL_HISTORY_LIMIT) break
+      const approvalId = this.capabilityApprovalOrder[index]
+      const record = approvalId ? this.capabilityApprovals.get(approvalId) : undefined
+      if (!record || record.resolve) continue
+      this.capabilityApprovals.delete(approvalId)
+      this.capabilityApprovalOrder.splice(index, 1)
+      index -= 1
+    }
   }
 
   private notifyThreadTerminal(key: string): void {
@@ -3080,6 +3342,88 @@ function escapeXmlText(value: string): string {
 
 function threadTurnKey(runtimeId: AgentRuntimeId, threadId: string): string {
   return `${runtimeId}:${threadId.trim()}`
+}
+
+function capabilityApprovalRecordKey(record: CapabilityApprovalRecord): string {
+  return threadTurnKey(record.runtimeId, record.threadId)
+}
+
+function capabilityApprovalInputPreview(
+  request: CapabilityAgentApprovalRequest
+): { text: string; truncated: boolean } {
+  const serialized = JSON.stringify({
+    ...(request.resourceRef
+      ? { resource: { resourceRef: request.resourceRef, ...(request.resourceLabel ? { label: request.resourceLabel } : {}) } }
+      : {}),
+    input: redactSecrets(request.input)
+  }, null, 2)
+  if (Buffer.byteLength(serialized, 'utf8') <= CAPABILITY_APPROVAL_PREVIEW_MAX_BYTES) {
+    return { text: serialized, truncated: false }
+  }
+  const suffix = '\n… [truncated]'
+  return {
+    text: `${truncateUtf8Text(
+      serialized,
+      CAPABILITY_APPROVAL_PREVIEW_MAX_BYTES - Buffer.byteLength(suffix, 'utf8')
+    )}${suffix}`,
+    truncated: true
+  }
+}
+
+function createCapabilityApprovalSubscriber(): CapabilityApprovalSubscriber {
+  const values: AgentRuntimeEvent[] = []
+  const waiters: Array<(result: IteratorResult<AgentRuntimeEvent>) => void> = []
+  let closed = false
+  return {
+    push(event) {
+      if (closed) return
+      const waiter = waiters.shift()
+      if (waiter) waiter({ done: false, value: event })
+      else values.push(event)
+    },
+    next() {
+      const value = values.shift()
+      if (value) return Promise.resolve({ done: false, value })
+      if (closed) return Promise.resolve({ done: true, value: undefined })
+      return new Promise((resolve) => waiters.push(resolve))
+    },
+    close() {
+      if (closed) return
+      closed = true
+      for (const waiter of waiters.splice(0)) waiter({ done: true, value: undefined })
+      values.splice(0)
+    }
+  }
+}
+
+async function* mergeRuntimeEventStreams(
+  runtimeEvents: AsyncIterable<AgentRuntimeEvent>,
+  approvalEvents: AsyncIterable<AgentRuntimeEvent>
+): AsyncIterable<AgentRuntimeEvent> {
+  const runtime = runtimeEvents[Symbol.asyncIterator]()
+  const approvals = approvalEvents[Symbol.asyncIterator]()
+  let runtimeNext: Promise<{ source: 'runtime'; result: IteratorResult<AgentRuntimeEvent> }> | null =
+    runtime.next().then((result) => ({ source: 'runtime', result }))
+  let approvalNext: Promise<{ source: 'approval'; result: IteratorResult<AgentRuntimeEvent> }> | null =
+    approvals.next().then((result) => ({ source: 'approval', result }))
+  try {
+    while (runtimeNext) {
+      const next = await Promise.race(approvalNext ? [runtimeNext, approvalNext] : [runtimeNext])
+      if (next.source === 'runtime') {
+        if (next.result.done) return
+        runtimeNext = runtime.next().then((result) => ({ source: 'runtime' as const, result }))
+      } else {
+        if (next.result.done) {
+          approvalNext = null
+          continue
+        }
+        approvalNext = approvals.next().then((result) => ({ source: 'approval' as const, result }))
+      }
+      yield next.result.value
+    }
+  } finally {
+    await Promise.allSettled([runtime.return?.(), approvals.return?.()])
+  }
 }
 
 function turnGovernanceKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {

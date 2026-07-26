@@ -310,6 +310,13 @@ describe('CapabilityBroker', () => {
     now = new Date('2026-07-16T00:00:02.000Z')
 
     const renewed = broker.bindResourceRef(agent, shared.resourceRef)
+    expect(broker.describeResourceRef(agent, shared.resourceRef)).toMatchObject({
+      resourceId: 'internal/path/paper.pdf',
+      resourceRef: shared.resourceRef,
+      resourceKind: 'document',
+      workspaceId: 'workspace-1',
+      semanticRevision: '1'
+    })
     await expect(broker.observe(agent, { resource: renewed })).resolves.toMatchObject({
       resourceRef: shared.resourceRef,
       resourceKind: 'document'
@@ -318,11 +325,17 @@ describe('CapabilityBroker', () => {
       { ...agent, workspaceId: 'workspace-2' },
       shared.resourceRef
     ))).rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_scope_mismatch'))
+    expect(() => broker.describeResourceRef(
+      { ...agent, workspaceId: 'workspace-2' },
+      shared.resourceRef
+    )).toThrow(expect.objectContaining({ code: 'resource_scope_mismatch' }))
 
     const privateHandle = issueDocument(broker, ui, { expiresInMs: 1_000 })
     const privateObservation = await broker.observe(ui, { resource: privateHandle })
     await expect(Promise.resolve().then(() => broker.bindResourceRef(agent, privateObservation.resourceRef)))
       .rejects.toSatisfy((error) => expectBrokerCode(error, 'resource_audience_denied'))
+    expect(() => broker.describeResourceRef(agent, privateObservation.resourceRef))
+      .toThrow(expect.objectContaining({ code: 'resource_audience_denied' }))
   })
 
   it('observes current semantic state, keeps layout revisions separate, and returns executable operations', async () => {

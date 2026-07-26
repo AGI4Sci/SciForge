@@ -142,7 +142,7 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.interruptTurn).not.toHaveBeenCalled()
   })
 
-  it('does not interrupt until the same failure recurs in an actually executed recovery', async () => {
+  it('uses the failure receipt to steer an actually executed recovery onto a different strategy', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = controlsSpy()
 
@@ -166,16 +166,23 @@ describe('RuntimeGovernanceSupervisor', () => {
     )
     await Promise.resolve()
 
-    expect(controls.interruptTurn).toHaveBeenCalledWith(expect.objectContaining({
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.steerTurn).toHaveBeenLastCalledWith(expect.objectContaining({
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      discard: false
+      text: expect.stringMatching(
+        /Runtime recovery attempt 2\..*diagnostic detail.*lookup command failed.*Abandon the failed semantic operation.*different capability, tool family, or evidence path.*continue the original task/u
+      )
     }))
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
-      kind: 'error',
-      code: 'runtime_execution_interrupted',
-      message: expect.stringContaining('failed after a recovery steer')
+      kind: 'runtime_status',
+      metadata: expect.objectContaining({
+        level: 'recovery',
+        recoveryAttempt: 2,
+        errorCode: 'command_failed'
+      })
     }))
   })
 
@@ -230,7 +237,48 @@ describe('RuntimeGovernanceSupervisor', () => {
       controls
     )
 
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+  })
+
+  it('interrupts only after the structured semantic recovery budget is exhausted', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+    const semanticOnlySettings: RuntimeGuardSettingsV1 = {
+      execution: {
+        ...recoverySettings.execution,
+        exactRepeatThreshold: 99
+      }
+    }
+
+    for (let index = 1; index <= 5; index += 1) {
+      supervisor.observe(
+        lookupEvent(index, 'same query'),
+        baseCapabilities,
+        semanticOnlySettings,
+        controls
+      )
+      supervisor.observe(
+        lookupReceiptEvent(index),
+        baseCapabilities,
+        semanticOnlySettings,
+        controls
+      )
+    }
+    await Promise.resolve()
+
+    expect(controls.steerTurn).toHaveBeenCalledTimes(3)
+    const recoveryInputs = controls.steerTurn.mock.calls as unknown as Array<[{ text: string }]>
+    expect(recoveryInputs.map(([input]) => input.text)).toEqual([
+      expect.stringContaining('Runtime recovery attempt 1.'),
+      expect.stringContaining('Runtime recovery attempt 2.'),
+      expect.stringContaining('Runtime recovery attempt 3.')
+    ])
     expect(controls.interruptTurn).toHaveBeenCalledTimes(1)
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      kind: 'error',
+      code: 'runtime_execution_interrupted'
+    }))
   })
 
   it('allows a semantically different recovery action after steering', async () => {
@@ -387,14 +435,20 @@ describe('RuntimeGovernanceSupervisor', () => {
 
     supervisor.observe(capabilityInvokeReceipt(3), baseCapabilities, strictBudgetSettings, controls)
     await Promise.resolve()
-    expect(controls.interruptTurn).toHaveBeenCalled()
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.steerTurn).toHaveBeenCalledTimes(2)
+    expect(controls.steerTurn).toHaveBeenLastCalledWith(expect.objectContaining({
+      text: expect.stringMatching(
+        /unknown_resource_ref.*Abandon the failed semantic operation.*different capability, tool family, or evidence path/u
+      )
+    }))
   })
 
-  it('denies OS GUI automation when the capability registry advertises surface.inspect', async () => {
+  it('denies OS GUI automation when the native visual tools are available', async () => {
     const supervisor = new RuntimeGovernanceSupervisor()
     const controls = {
       ...controlsSpy(),
-      ownedSurfaceInspectionAvailable: true
+      ownedVisualToolsAvailable: true
     }
 
     supervisor.observe(shellGuiFallbackEvent(), baseCapabilities, strictBudgetSettings, controls)
@@ -404,8 +458,34 @@ describe('RuntimeGovernanceSupervisor', () => {
     expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
       kind: 'error',
       code: 'runtime_execution_policy_denied',
-      detail: expect.stringContaining('sciforge_discover')
+      detail: expect.stringContaining('sciforge_look')
     }))
+    expect(controls.publishSyntheticEvent).toHaveBeenCalledWith(expect.objectContaining({
+      detail: expect.stringContaining('sciforge_capture')
+    }))
+    const published = controls.publishSyntheticEvent.mock.calls
+      .map(([event]) => event)
+      .find((event) => event.kind === 'error' && event.code === 'runtime_execution_policy_denied')
+    expect(published?.kind === 'error' ? published.detail : undefined).not.toContain('sciforge_discover')
+    expect(published?.kind === 'error' ? published.detail : undefined).not.toContain('surface.inspect')
+  })
+
+  it('does not infer native visual availability from broker capability descriptors', async () => {
+    const supervisor = new RuntimeGovernanceSupervisor()
+    const controls = controlsSpy()
+
+    supervisor.observe(shellGuiFallbackEvent(), {
+      ...baseCapabilities,
+      capabilityDescriptors: [{
+        id: 'ui.visibleContext',
+        channel: 'host_service',
+        available: true
+      }]
+    }, strictBudgetSettings, controls)
+    await Promise.resolve()
+
+    expect(controls.interruptTurn).not.toHaveBeenCalled()
+    expect(controls.publishSyntheticEvent).not.toHaveBeenCalled()
   })
 })
 

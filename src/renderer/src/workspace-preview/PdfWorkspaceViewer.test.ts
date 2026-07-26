@@ -13,6 +13,7 @@ import type { WorkspacePreviewAssetTransportClient } from './host'
 vi.mock('../components/write/WritePdfViewer', () => ({
   WritePdfViewer: (props: {
     filePath: string
+    documentContentKey?: string
     dataBase64?: string
     data?: Uint8Array | ArrayBuffer
     sourceUrl?: string
@@ -32,6 +33,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
   }) => createElement('div', {
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
+    'data-document-content-key': props.documentContentKey,
     'data-pdf-data-base64': props.dataBase64,
     'data-pdf-data-length': props.data instanceof Uint8Array ? props.data.length : props.data?.byteLength,
     'data-pdf-mime-type': props.mimeType,
@@ -179,7 +181,10 @@ describe('PdfWorkspaceViewer', () => {
     const first = pdfWorkspaceDocumentRevisionKey({
       observation,
       asset,
-      transport: createPdfTransportClient({ asset })
+      transport: createPdfTransportClient({
+        asset,
+        sourceUrl: 'sciforge-resource://content?access=revision-1'
+      })
     })
     const refreshedObservation = createPdfObservation({
       file: { ...observation.file },
@@ -195,7 +200,10 @@ describe('PdfWorkspaceViewer', () => {
     expect(pdfWorkspaceDocumentRevisionKey({
       observation: refreshedObservation,
       asset: refreshedAsset,
-      transport: createPdfTransportClient({ asset: refreshedAsset })
+      transport: createPdfTransportClient({
+        asset: refreshedAsset,
+        sourceUrl: 'sciforge-resource://content?access=revision-2'
+      })
     })).toBe(first)
     expect(pdfWorkspaceDocumentRevisionKey({
       observation: createPdfObservation({
@@ -245,6 +253,7 @@ describe('PdfWorkspaceViewer', () => {
     expect(html).toContain('data-pdf-data-length="4"')
     expect(html).not.toContain('data-pdf-data-base64')
     expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
+    expect(html).toContain('data-document-content-key=')
     expect(html).not.toContain('data-source-url')
     expect(html).not.toContain('file://')
   })

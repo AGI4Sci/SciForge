@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { createExecutionReceipt } from '@sciforge/execution-governance'
 
 import type {
+  AgentRuntimeCompletionReceipt,
   AgentRuntimeEvent,
   AgentRuntimeId,
   AgentRuntimeTurnStartInput
@@ -16,6 +17,7 @@ import {
   withExecutionIntegrityRequirement
 } from './execution-integrity-guard'
 import {
+  VISUAL_EXECUTION_PLAN_METADATA_KEY,
   VISUAL_EXECUTION_REQUIRED_METADATA_KEY,
   withVisualExecutionRequirement
 } from './visual-execution-guard'
@@ -180,15 +182,19 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
   })
 
-  it('requires attested semantic evidence for a visual obligation', () => {
+  it('does not promote visual claims from detail or structured output into completion receipts', () => {
     const input = withVisualExecutionRequirement(baseInput('codex', 'Inspect the rendered image.'), true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
     guard.observe('codex', {
       ...tool('codex', 'succeeded'),
-      toolName: 'sciforge_invoke',
-      summary: 'sciforge_invoke',
-      detail: JSON.stringify({ ok: true })
+      toolName: 'local_shell',
+      detail: JSON.stringify({ completionReceipts: [semanticReceipt('visual.look', 'look-fake', 'codex-call')] }),
+      meta: {
+        output: {
+          completionReceipts: [semanticReceipt('visual.look', 'look-fake', 'codex-call')]
+        }
+      }
     })
 
     expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
@@ -196,21 +202,150 @@ describe('RuntimeExecutionIntegrityGuard', () => {
     })
   })
 
-  it('accepts an attested semantic visual result', () => {
+  it('accepts an out-of-band typed receipt from the exact native look tool', () => {
     const input = withVisualExecutionRequirement(baseInput('sciforge', 'Inspect the rendered image.'), true)
     const guard = new RuntimeExecutionIntegrityGuard()
     guard.rememberTurn('sciforge', input, 'sciforge-thread', 'sciforge-turn')
     guard.observe('sciforge', {
       ...tool('sciforge', 'succeeded'),
-      toolName: 'sciforge_invoke',
-      summary: 'sciforge_invoke',
-      detail: JSON.stringify({
-        ok: true,
-        evidence: { provider: 'model-router', attestation: ATTESTATION }
-      })
+      toolName: 'sciforge_look',
+      completionReceipts: [semanticReceipt('visual.look', 'look-native', 'sciforge-call')]
     })
 
     expect(guard.observe('sciforge', completed('sciforge')).violation).toBeUndefined()
+  })
+
+  it('requires a linked look, capture, and final-look receipt chain', () => {
+    const input = withVisualExecutionRequirement(
+      baseInput('codex', '准确裁剪论文中的方法总览图'),
+      true
+    )
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-locate-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-locate', 'look-locate-call')
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'], [REGION_REF])
+    ))
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['visual-look-final']
+    })
+
+    const completedGuard = new RuntimeExecutionIntegrityGuard()
+    completedGuard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    completedGuard.observe('codex', semanticTool(
+      'codex',
+      'look-locate-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-locate', 'look-locate-call')
+    ))
+    completedGuard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture', 'capture-call', ['look-locate'], [REGION_REF])
+    ))
+    completedGuard.observe('codex', semanticTool(
+      'codex',
+      'look-final-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-final', 'look-final-call', ['capture'])
+    ))
+
+    expect(completedGuard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
+  it('rejects a full-snapshot capture when an accurate region was requested', () => {
+    const input = withVisualExecutionRequirement(
+      baseInput('codex', '截取论文中的方法总览图'),
+      true
+    )
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-region', 'look-call')
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture-full-page', 'capture-call', ['look-region'])
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'final-look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-final-page', 'final-look-call', ['capture-full-page'])
+    ))
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['visual-capture', 'visual-look-final']
+    })
+  })
+
+  it('allows a full-snapshot capture for an ordinary screenshot request', () => {
+    const input = withVisualExecutionRequirement(
+      baseInput('codex', 'Capture a screenshot of this page.'),
+      true
+    )
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-page', 'look-call')
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture-page', 'capture-call', ['look-page'])
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'final-look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-final-page', 'final-look-call', ['capture-page'])
+    ))
+
+    expect(guard.observe('codex', completed('codex')).violation).toBeUndefined()
+  })
+
+  it('rejects a native visual receipt whose parent chain is missing', () => {
+    const input = withVisualExecutionRequirement(
+      baseInput('codex', '把方法总览图裁剪出来'),
+      true
+    )
+    const guard = new RuntimeExecutionIntegrityGuard()
+    guard.rememberTurn('codex', input, 'codex-thread', 'codex-turn')
+    guard.observe('codex', semanticTool(
+      'codex',
+      'look-call',
+      'sciforge_look',
+      semanticReceipt('visual.look', 'look-root', 'look-call')
+    ))
+    guard.observe('codex', semanticTool(
+      'codex',
+      'capture-call',
+      'sciforge_capture',
+      semanticReceipt('visual.capture', 'capture-unlinked', 'capture-call', [], [REGION_REF])
+    ))
+
+    expect(guard.observe('codex', completed('codex')).violation).toMatchObject({
+      unsatisfiedObligationIds: ['visual-capture', 'visual-look-final']
+    })
   })
 
   it('does not confuse child dispatch with child completion', () => {
@@ -475,7 +610,7 @@ describe('execution integrity input policy', () => {
     expect(guarded.text).toContain('"effectClass":"local_write"')
     expect(guarded.text).toContain('Runtime-enforced execution integrity gate:')
     expect(guarded.displayText).toBe('Please patch the module.')
-    expect(guarded.metadata?.[EXECUTION_INTEGRITY_POLICY_METADATA_KEY]).toBe('execution-integrity.v2')
+    expect(guarded.metadata?.[EXECUTION_INTEGRITY_POLICY_METADATA_KEY]).toBe('execution-integrity.v3')
   })
 
   it('creates a generic success obligation from an inspect intent without requirements', () => {
@@ -509,6 +644,23 @@ describe('execution integrity input policy', () => {
     const guarded = withExecutionIntegrityRequirement(input)
     expect(guarded.text).toContain('"toolNames":["exec_command"]')
     expect(guarded.text).toContain('"completion":"terminal"')
+  })
+
+  it('accepts reference validation only as an explicit typed execution intent', () => {
+    const input = baseInput('codex', 'Insert the prepared artifact.')
+    input.executionIntent = {
+      mode: 'execute',
+      requirements: [{
+        id: 'consumer-reference',
+        receiptKind: 'artifact.reference-validation',
+        completion: 'success'
+      }]
+    }
+
+    const guarded = withExecutionIntegrityRequirement(input)
+
+    expect(guarded.text).toContain('"receiptKind":"artifact.reference-validation"')
+    expect(guarded.text).toContain('"id":"consumer-reference"')
   })
 
   it('keeps explicit obligation metadata backward compatible', () => {
@@ -565,8 +717,11 @@ describe('execution integrity input policy', () => {
 
   it('preserves the visual obligation in the unified policy', () => {
     const input = baseInput('sciforge', 'Inspect the layout.')
-    input.metadata = { [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true }
-    expect(withExecutionIntegrityRequirement(input).text).toContain('visual_inspection')
+    input.metadata = {
+      [VISUAL_EXECUTION_REQUIRED_METADATA_KEY]: true,
+      [VISUAL_EXECUTION_PLAN_METADATA_KEY]: 'inspect'
+    }
+    expect(withExecutionIntegrityRequirement(input).text).toContain('"receiptKind":"visual.look"')
   })
 })
 
@@ -664,6 +819,50 @@ function tool(
     phase,
     factSource: 'executor_result',
     evidenceStrength: 'executor_receipt'
+  }
+}
+
+function semanticReceipt(
+  kind: AgentRuntimeCompletionReceipt['kind'],
+  id: string,
+  callId: string,
+  parents: string[] = [],
+  relatedRefs: string[] = []
+): AgentRuntimeCompletionReceipt {
+  return {
+    contractVersion: 'completion-receipt.v1',
+    receiptId: `proof_${id}`,
+    kind,
+    status: 'satisfied',
+    issuer: 'sciforge.agent-visual',
+    callId,
+    subjectRef: kind === 'visual.look' && id.includes('locate')
+      ? 'res_source_abcdefghijklmnopqrstuvwxyz'
+      : 'artifact_output_abcdefghijklmnopqrstuvwxyz',
+    ...(relatedRefs.length ? { relatedRefs } : {}),
+    ...(parents.length ? { parentReceiptIds: parents.map((parent) => `proof_${parent}`) } : {}),
+    ...(kind === 'visual.look' ? { attestation: ATTESTATION } : {}),
+    ...(kind === 'visual.capture' ? { sha256: 'c'.repeat(64) } : {}),
+    createdAt: '2026-07-26T00:00:00.000Z'
+  }
+}
+
+const REGION_REF = `region_${'r'.repeat(24)}`
+
+function semanticTool(
+  runtimeId: AgentRuntimeId,
+  callId: string,
+  toolName: 'sciforge_look' | 'sciforge_capture',
+  completionReceipt: AgentRuntimeCompletionReceipt
+): Extract<AgentRuntimeEvent, { kind: 'tool_event' }> {
+  return {
+    ...tool(runtimeId, 'succeeded'),
+    itemId: callId,
+    callId,
+    toolName,
+    toolKind: 'tool_call',
+    effects: toolName === 'sciforge_capture' ? ['local_write'] : ['read'],
+    completionReceipts: [completionReceipt]
   }
 }
 

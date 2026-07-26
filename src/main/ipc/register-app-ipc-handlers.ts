@@ -1,4 +1,4 @@
-import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type IpcMainInvokeEvent, type NativeImage, type WebContents } from 'electron'
+import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
@@ -136,7 +136,6 @@ import {
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
   workspacePdfRenameSuggestionPayloadSchema,
-  workspaceNativeFileDragPayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -1279,14 +1278,6 @@ function runDesktopCommand(
       app.quit()
       return
   }
-}
-
-type NativeFileDragSender = AppBridgeSender & {
-  startDrag: (item: { file: string; icon: NativeImage }) => void
-}
-
-function isNativeFileDragSender(sender: AppBridgeSender): sender is NativeFileDragSender {
-  return typeof (sender as { startDrag?: unknown }).startDrag === 'function'
 }
 
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): AppBridgeDispatcher {
@@ -2635,25 +2626,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:resolve-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('file:start-workspace-native-drag', async (event, payload: unknown) => {
-    const request = parseIpcPayload(
-      'file:start-workspace-native-drag',
-      workspaceNativeFileDragPayloadSchema,
-      payload
-    )
-    const resolved = await resolveWorkspaceFile(request)
-    if (!resolved.ok) return resolved
-    if (!isNativeFileDragSender(event.sender)) {
-      return { ok: false, message: 'Native file dragging is not available in this environment.' }
-    }
-    const icon = await app.getFileIcon(resolved.path).catch(() => nativeImage.createEmpty())
-    event.sender.startDrag({ file: resolved.path, icon })
-    return {
-      ok: true,
-      path: resolved.path,
-      startedAt: new Date().toISOString()
-    }
-  })
   handleInvoke('file:list-workspace-directory', async (_, payload: unknown) =>
     listWorkspaceDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)

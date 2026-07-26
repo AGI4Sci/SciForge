@@ -703,7 +703,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
     ])
   })
 
-  it('maps completed Codex assistant snapshots to authoritative item snapshots', async () => {
+  it('maps Codex model output to sequence-stable item identities', async () => {
     const service = {
       readStoredEvents: vi.fn(async () => [
         {
@@ -716,6 +716,12 @@ describe('createCodexAgentRuntimeAdapter', () => {
           threadId: 'thread-1',
           turnId: 'turn-1',
           seq: 2,
+          deltas: [{ kind: 'agent_message' as const, text: 'Still working.', snapshot: true }]
+        },
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 3,
           deltas: [{ kind: 'agent_message' as const, text: 'Hello.', snapshot: true }]
         }
       ])
@@ -731,10 +737,24 @@ describe('createCodexAgentRuntimeAdapter', () => {
     }
 
     expect(events).toEqual([
-      expect.objectContaining({ kind: 'assistant_delta', text: 'Hello' }),
+      expect.objectContaining({
+        kind: 'assistant_delta',
+        itemId: 'agent_message-1-0',
+        text: 'Hello'
+      }),
       expect.objectContaining({
         kind: 'item_snapshot',
         item: expect.objectContaining({
+          id: 'agent_message-2-0',
+          kind: 'assistant_message',
+          turnId: 'turn-1',
+          text: 'Still working.'
+        })
+      }),
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        item: expect.objectContaining({
+          id: 'agent_message-3-0',
           kind: 'assistant_message',
           turnId: 'turn-1',
           text: 'Hello.'
@@ -754,6 +774,17 @@ describe('createCodexAgentRuntimeAdapter', () => {
           summary: 'exec_command',
           status: 'success' as const,
           toolKind: 'command_execution' as const,
+          effects: ['read'] as const,
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1' as const,
+            receiptId: 'visual_proof_abcdefghijklmnopqrstuvwxyz',
+            kind: 'visual.look' as const,
+            status: 'satisfied' as const,
+            issuer: 'sciforge.agent-visual',
+            callId: 'call-1',
+            subjectRef: 'res_abcdefghijklmnopqrstuvwxyz',
+            createdAt: '2026-07-26T00:00:00.000Z'
+          }],
           detail: 'no matches',
           meta: {
             callId: 'call-1',
@@ -787,6 +818,12 @@ describe('createCodexAgentRuntimeAdapter', () => {
     expect(events).toEqual([expect.objectContaining({
       kind: 'tool_event',
       itemId: 'call-1',
+      effects: ['read'],
+      completionReceipts: [expect.objectContaining({
+        receiptId: 'visual_proof_abcdefghijklmnopqrstuvwxyz',
+        kind: 'visual.look',
+        callId: 'call-1'
+      })],
       callId: 'call-1',
       toolName: 'exec_command',
       phase: 'succeeded',

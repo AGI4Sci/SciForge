@@ -125,11 +125,6 @@ export type WorkspaceClipboardPastePayload = {
   conflictPolicy?: WorkspaceFileConflictPolicy
 }
 
-export type WorkspaceNativeFileDragPayload = {
-  path: string
-  workspaceRoot: string
-}
-
 export type WorkspaceFileWatchPayload = {
   path: string
   workspaceRoot: string
@@ -379,14 +374,6 @@ export type WorkspaceClipboardPasteResult =
       kind: 'files'
       imported: WorkspaceEntryImportItemResult[]
       pastedAt: string
-    }
-  | { ok: false; message: string }
-
-export type WorkspaceNativeFileDragResult =
-  | {
-      ok: true
-      path: string
-      startedAt: string
     }
   | { ok: false; message: string }
 

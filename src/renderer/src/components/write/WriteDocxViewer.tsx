@@ -44,6 +44,7 @@ import {
 
 type Props = {
   filePath: string
+  documentContentKey?: string
   paragraphs: WorkspaceDocxParagraph[]
   content: string
   size: number
@@ -261,6 +262,7 @@ function paragraphTextSpans(
 
 export function WriteDocxViewer({
   filePath,
+  documentContentKey,
   paragraphs,
   content,
   size,
@@ -291,7 +293,8 @@ export function WriteDocxViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const sourceTitle = fileNameFromPath(filePath)
-  const documentIdentity = `${filePath}\u0000${mtimeMs}\u0000${size}`
+  const documentIdentity = documentContentKey?.trim() ||
+    `${filePath}\u0000${mtimeMs}\u0000${size}`
   const visibleOverlays = useMemo(
     () => annotationOverlays.filter((overlay) => overlay.quote.trim()),
     [annotationOverlays]

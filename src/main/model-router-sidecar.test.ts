@@ -261,10 +261,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.config?.profiles.default.textReasoner).toEqual({
       baseUrl: 'https://text-provider.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY',
-      model: 'text-model',
-      compatibility: {
-        probeBeforeUse: true
-      }
+      model: 'text-model'
     })
     expect(JSON.stringify(result.launch.config)).not.toContain('"provider"')
     expect(JSON.stringify(result.launch.config)).not.toContain('text-secret')
@@ -272,10 +269,7 @@ describe('buildModelRouterSidecarLaunch', () => {
     expect(result.launch.config?.profiles.default.translators.vision).toEqual({
       baseUrl: 'https://vision-provider.example/v1',
       apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_VISION_API_KEY',
-      model: 'vision-model',
-      compatibility: {
-        probeBeforeUse: true
-      }
+      model: 'vision-model'
     })
     expect(result.launch.config?.profiles.default.translators.scientific).toEqual({
       baseUrl: 'http://127.0.0.1:3898',

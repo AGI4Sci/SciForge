@@ -5,6 +5,7 @@ import {
 } from './capability-broker'
 
 export const VISIBLE_CONTEXT_SCHEMA_VERSION = 3
+export const SURFACE_RESOURCE_KIND = 'surface'
 export const VISIBLE_CONTEXT_MAX_COMPONENTS = 64
 export const VISIBLE_CONTEXT_MAX_RESOURCES = 64
 export const VISIBLE_CONTEXT_MAX_VISUAL_TARGETS = 64

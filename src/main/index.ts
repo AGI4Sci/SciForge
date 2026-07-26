@@ -1,6 +1,6 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, shell, Tray, webContents, type WebContents } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, Tray, webContents, type WebContents } from 'electron'
 import { existsSync } from 'node:fs'
-import { randomBytes } from 'node:crypto'
+import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -41,9 +41,7 @@ import {
   type AppSettingsV1
 } from '../shared/app-settings'
 import type { GuiUpdateState } from '../shared/gui-update'
-import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
-import { decideDevPreviewPopup } from './dev-preview-popup-policy'
 import { isTrustedRendererUrl } from './renderer-trust'
 import {
   codingPlanCredentialStateForAdapter,
@@ -63,7 +61,7 @@ import {
   ensureProjectDagSidecar,
   stopProjectDagSidecar
 } from '../../packages/workers/project-dag/desktop/sidecar'
-import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
+import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
   createRuntimeMcpToolGateway,
   type RuntimeMcpToolGateway
@@ -83,6 +81,11 @@ import {
 } from './runtime/claude-code'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
 import { LocalTraceStore } from '@sciforge/full-trace'
+import {
+  VISUAL_SOURCE_CONTRACT_VERSION,
+  defineVisualSourceProvider,
+  renderVisualSource
+} from '@sciforge/domain-sdk/visual-source'
 import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-service'
 import { CurrentTraceSensitiveSettings } from './trace-sensitive-settings'
 import { RuntimeContextStateService } from './services/runtime-context-state-service'
@@ -101,9 +104,8 @@ import {
   type SurfaceCaptureResult
 } from './services/visible-context-service'
 import type { VisibleContextBounds } from '../shared/visible-context'
-import { artifactInspectOutputSchema } from '../shared/surface-inspection'
 import { createModelRouterVisualInspector } from '../../packages/workers/workspace-intel/src/visual-inspection'
-import { createWorkspaceIntelService } from '../../packages/workers/workspace-intel/src/service'
+import { AgentVisualRuntime } from './runtime/agent-runtime/agent-visual-runtime'
 import { AnchoredCommentService } from './services/anchored-comment-service'
 import { AnchoredCommentScreenshotService } from './services/anchored-comment-screenshot-service'
 import { AnchoredCommentFeedbackService } from './services/anchored-comment-feedback-service'
@@ -148,12 +150,16 @@ import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import { WorkspacePreviewHost } from './services/workspace-preview'
 import { CapabilityBroker } from './capabilities/broker'
-import type { AppCapabilityDependencies } from './capabilities/app-registry'
+import {
+  WORKSPACE_PREVIEW_RESOURCE_KIND,
+  type AppCapabilityDependencies
+} from './capabilities/app-registry'
 import { registerCapabilityIpc } from './capabilities/ipc'
 import {
   DomainModuleCatalog,
   createApplicationCapabilityRegistry,
   createApplicationDomainCatalog,
+  listMainVisualSourceContributions,
   listMainWorkspacePreviewPluginContributions
 } from './modules'
 import {
@@ -161,6 +167,7 @@ import {
   capabilityAgentCallerId,
   type CapabilityAgentToolSurface
 } from './capabilities/agent-tools'
+import { VisualSourceRegistry } from './runtime/agent-runtime/visual-source-registry'
 import {
   installCapabilityResourceContentProtocol,
   registerCapabilityResourceContentScheme
@@ -413,6 +420,7 @@ let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
 let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
 let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
@@ -722,6 +730,8 @@ async function stopManagedRuntimes(): Promise<void> {
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
+      agentRuntimeHostForShutdown?.dispose()
+      agentRuntimeHostForShutdown = null
       codeNavigationService?.shutdown()
       evidenceArtifactLifecycle?.stop()
       evidenceArtifactLifecycle = null
@@ -782,54 +792,6 @@ async function readGuiUpdateState(): Promise<GuiUpdateState> {
       code: 'unknown'
     }
   }
-}
-
-
-function installDevPreviewWebviewGuards(): void {
-  app.on('web-contents-created', (_, contents) => {
-    contents.on('will-attach-webview', (event, webPreferences, params) => {
-      const src = typeof params.src === 'string' ? params.src : ''
-      if (!isAllowedDevPreviewUrl(src)) {
-        event.preventDefault()
-        return
-      }
-
-      delete webPreferences.preload
-      delete (webPreferences as { preloadURL?: string }).preloadURL
-      webPreferences.nodeIntegration = false
-      webPreferences.contextIsolation = true
-      webPreferences.sandbox = true
-      webPreferences.webSecurity = true
-      webPreferences.allowRunningInsecureContent = false
-    })
-
-    contents.on('will-navigate', (event, navigationUrl) => {
-      if (contents.getType() !== 'webview') return
-      if (!isAllowedDevPreviewUrl(navigationUrl)) event.preventDefault()
-    })
-
-    contents.setWindowOpenHandler(({ url }) => {
-      const decision = decideDevPreviewPopup(url, { fromWebview: contents.getType() === 'webview' })
-      if (decision.action === 'navigate-preview') {
-        try {
-          const hostContents = contents.hostWebContents
-          if (hostContents && !hostContents.isDestroyed()) {
-            hostContents.send(DEV_PREVIEW_NAVIGATE_CHANNEL, {
-              url: decision.url,
-              webContentsId: contents.id
-            })
-          }
-        } catch {
-          /* host webContents may be unavailable while the guest is being torn down */
-        }
-        return { action: 'deny' }
-      }
-      if (decision.action === 'open-external') {
-        void shell.openExternal(decision.url).catch(() => undefined)
-      }
-      return { action: 'deny' }
-    })
-  })
 }
 
 
@@ -993,8 +955,7 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
-      sandbox: true,
-      webviewTag: true
+      sandbox: true
     }
   })
   if (usesDesktopTitleBar) {
@@ -1054,10 +1015,6 @@ app.whenReady().then(async () => {
     app.quit()
     return
   }
-
-  traceStartup('install webview guards:start')
-  installDevPreviewWebviewGuards()
-  traceStartup('install webview guards:done')
 
   if (process.platform === 'darwin' && !appIcon.isEmpty()) {
     app.dock?.setIcon(appIcon)
@@ -1135,7 +1092,6 @@ app.whenReady().then(async () => {
   }
   const visibleContextService = new VisibleContextService(app.getPath('userData'), {
     surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
-    visualInspector: resolveVisualInspector,
     requestSurfaceRefresh: (windowId) => {
       emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
     },
@@ -1145,30 +1101,63 @@ app.whenReady().then(async () => {
   })
   const appCapabilityDependencies: AppCapabilityDependencies = {
     workspacePreviewHost,
-    visibleContextService,
-    inspectArtifacts: async (workspaceRoot, input) => {
-      if (!workspaceRoot.trim()) throw new Error('Artifact inspection requires a workspace.')
-      const service = createWorkspaceIntelService({
-        workspaceRoot,
-        visualInspector: await resolveVisualInspector()
-      })
-      const result = await service.inspectWorkspaceImages({ ...input, workspaceRoot })
-      if (!result.ok) throw new Error(result.error.message)
-      return artifactInspectOutputSchema.parse({
-        artifacts: result.artifacts.map((artifact) => ({
-          id: artifact.id,
-          artifactRef: `artifact_${randomBytes(18).toString('base64url')}`,
-          mimeType: artifact.mimeType,
-          size: artifact.size,
-          sha256: artifact.sha256
-        })),
-        evidence: result.evidence
-      })
-    }
+    visibleContextService
   }
   const capabilityBroker = new CapabilityBroker(
     createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
   )
+  const visualSourceRegistry = new VisualSourceRegistry([
+    {
+      ownerId: 'sciforge.agent-runtime',
+      provider: defineVisualSourceProvider({
+        contract: {
+          contractVersion: VISUAL_SOURCE_CONTRACT_VERSION,
+          id: 'sciforge.core.surface-visual-source',
+          resourceKinds: ['surface']
+        },
+        render: async (request) => {
+          const targetRef = request.target?.kind === 'target-ref'
+            ? request.target.targetRef
+            : undefined
+          if (request.target && !targetRef) {
+            throw new Error('The current surface source accepts only an opaque target reference.')
+          }
+          const frame = await visibleContextService.captureFrame(request.resource.resourceId, {
+            ...(targetRef ? { targetRef } : {})
+          })
+          return {
+            bytes: new Uint8Array(await readFile(frame.path)),
+            mimeType: frame.mimeType,
+            width: frame.width,
+            height: frame.height,
+            sourceRevision: request.resource.semanticRevision,
+            anchor: {
+              kind: targetRef ? 'surface-target' : 'surface'
+            }
+          }
+        }
+      })
+    },
+    {
+      ownerId: 'sciforge.workspace-preview',
+      provider: defineVisualSourceProvider({
+        contract: {
+          contractVersion: VISUAL_SOURCE_CONTRACT_VERSION,
+          id: 'sciforge.core.workspace-preview-visual-source',
+          resourceKinds: [WORKSPACE_PREVIEW_RESOURCE_KIND]
+        },
+        render: (request) => workspacePreviewHost.renderVisual(
+          request.resource.resourceId,
+          {
+            ...(request.frameIndex ? { frameIndex: request.frameIndex } : {}),
+            ...(request.target ? { target: request.target } : {}),
+            ...(request.maxDimension ? { maxDimension: request.maxDimension } : {})
+          }
+        )
+      })
+    },
+    ...listMainVisualSourceContributions(catalog)
+  ])
   domainModuleCatalog = catalog
   runtimeMcpToolGateway = createRuntimeMcpToolGateway({
     servers: managedGuiMcpServers(initial)
@@ -1178,22 +1167,50 @@ app.whenReady().then(async () => {
     managedTools: runtimeMcpToolGateway,
     isToolAvailable: (context, tool) => runtimeMayUseManagedTool(context.runtimeId, tool)
   })
+  const agentVisualRuntime = new AgentVisualRuntime({
+    visibleContext: visibleContextService,
+    visualInspector: resolveVisualInspector,
+    frameDirectory: join(app.getPath('userData'), 'agent-visual', 'frames'),
+    resolveResourceFrame: async ({ sourceRef, targetRef, frame, caller, signal }) => {
+      const resource = capabilityBroker.describeResourceRef(caller, sourceRef)
+      const provider = visualSourceRegistry.resolve(resource.resourceKind)
+      if (!provider) {
+        throw new Error(`No visual source provider owns resource kind ${resource.resourceKind}.`)
+      }
+      return renderVisualSource(provider, {
+        resource: {
+          resourceId: resource.resourceId,
+          resourceKind: resource.resourceKind,
+          ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
+          semanticRevision: resource.semanticRevision,
+          ...(resource.layoutRevision ? { layoutRevision: resource.layoutRevision } : {})
+        },
+        ...(targetRef ? { target: { kind: 'target-ref', targetRef } } : {}),
+        ...(frame ? { frameIndex: frame } : {})
+      }, { signal })
+    }
+  })
+  const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = { current: null }
   capabilityAgentTools = createCapabilityAgentToolSurface({
     broker: runtimeCapabilityBroker,
+    visualRuntime: agentVisualRuntime,
     resolveCaller: (context) => ({
       audience: 'agent',
       callerId: capabilityAgentCallerId(context),
       ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
-    })
+    }),
+    requestApproval: (request, options) => (
+      agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled'
+    ),
+    cancelApprovalTurn: (identity, reason) => (
+      agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
+    )
   })
   const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
-    capabilityAvailability: ({ capabilityId, audience }) => {
-      const definition = capabilityBroker.registry.get(capabilityId)
-      return Boolean(definition?.descriptor.audiences.includes(audience))
-    },
+    nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
     adapters: [
       createCodexAgentRuntimeAdapter(getCodexRuntime()),
       createClaudeCodeAgentRuntimeAdapter(getClaudeCodeRuntime())
@@ -1210,6 +1227,8 @@ app.whenReady().then(async () => {
       goals: runtimeGoalService
     }
   })
+  agentRuntimeHostRef.current = agentRuntimeHost
+  agentRuntimeHostForShutdown = agentRuntimeHost
   configureEvidenceDagUpdateQueue({
     storagePath: evidenceDagQueuePath(app.getPath('userData')),
     isEnabled: async () => isEvidenceDagEnabled(await store.load()),

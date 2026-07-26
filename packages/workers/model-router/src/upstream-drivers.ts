@@ -58,6 +58,7 @@ type DriverRequest = {
   baseUrl: string;
   apiKey: string;
   model: string;
+  timeoutMs?: number;
   compatibility?: ProviderCompatibilityConfig;
   fetchImpl: typeof fetch;
   signal?: AbortSignal;
@@ -82,6 +83,7 @@ const STABLE_PROTOCOL_ORDER: readonly UpstreamWireProtocol[] = [
   'chat-completions',
   'anthropic-messages',
 ];
+const DEFAULT_UPSTREAM_REQUEST_TIMEOUT_MS = 300_000;
 
 export class UpstreamRequestError extends Error {
   readonly code: string;
@@ -195,17 +197,21 @@ export class UpstreamProtocolNegotiator {
         body: prepared.body,
         retry,
       });
+      const timeoutSignal = AbortSignal.timeout(upstreamRequestTimeoutMs(options.timeoutMs));
+      const requestSignal = options.signal
+        ? AbortSignal.any([options.signal, timeoutSignal])
+        : timeoutSignal;
       let response: Response;
       try {
         response = await options.fetchImpl(prepared.url, {
           method: 'POST',
           headers: prepared.headers,
           body: JSON.stringify(prepared.body),
-          signal: options.signal,
+          signal: requestSignal,
         });
       } catch (error) {
         const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error);
+        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
         traceObserver?.error?.(requestError);
         traceObserver?.end?.({ durationMs: latencyMs });
         options.onAttempt?.({
@@ -229,7 +235,7 @@ export class UpstreamProtocolNegotiator {
         });
       } catch (error) {
         const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error);
+        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
         traceObserver?.error?.(requestError);
         traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
         options.onAttempt?.({
@@ -367,17 +373,21 @@ export class UpstreamProtocolNegotiator {
         body: prepared.body,
         retry,
       });
+      const timeoutSignal = AbortSignal.timeout(upstreamRequestTimeoutMs(options.timeoutMs));
+      const requestSignal = options.signal
+        ? AbortSignal.any([options.signal, timeoutSignal])
+        : timeoutSignal;
       let response: Response;
       try {
         response = await options.fetchImpl(prepared.url, {
           method: 'POST',
           headers: prepared.headers,
           body: JSON.stringify(prepared.body),
-          signal: options.signal,
+          signal: requestSignal,
         });
       } catch (error) {
         const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error);
+        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
         traceObserver?.error?.(requestError);
         traceObserver?.end?.({ durationMs: latencyMs });
         options.onAttempt?.({
@@ -401,7 +411,7 @@ export class UpstreamProtocolNegotiator {
         });
       } catch (error) {
         const latencyMs = Date.now() - startedAt;
-        const requestError = requestException(error);
+        const requestError = requestException(error, { timedOut: timeoutSignal.aborted });
         traceObserver?.error?.(requestError);
         traceObserver?.end?.({ status: response.status, durationMs: latencyMs });
         options.onAttempt?.({
@@ -469,7 +479,7 @@ function prepareProtocolProbe(
   options: Pick<DriverRequest, 'baseUrl' | 'apiKey' | 'model'>,
   protocol: UpstreamWireProtocol,
 ): Omit<PreparedRequest, 'parse'> {
-  const prompt = 'SciForge protocol capability probe. Do not generate output.';
+  const prompt = 'SciForge protocol capability probe. Reply with one period.';
   if (protocol === 'responses') {
     return {
       url: buildUpstreamEndpointUrl(options.baseUrl, 'responses'),
@@ -477,7 +487,7 @@ function prepareProtocolProbe(
       body: {
         model: options.model,
         input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }] }],
-        max_output_tokens: 0,
+        max_output_tokens: 1,
         stream: false,
       },
     };
@@ -489,7 +499,7 @@ function prepareProtocolProbe(
       body: {
         model: options.model,
         messages: [{ role: 'user', content: prompt }],
-        max_tokens: 0,
+        max_tokens: 1,
         stream: false,
       },
     };
@@ -504,7 +514,7 @@ function prepareProtocolProbe(
     body: {
       model: options.model,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 0,
+      max_tokens: 1,
       stream: false,
     },
   };
@@ -996,10 +1006,23 @@ async function parseAnthropicMessagesResponse(response: Response): Promise<JsonO
   return payload;
 }
 
-function requestException(error: unknown): UpstreamRequestError {
+function upstreamRequestTimeoutMs(timeoutMs: number | undefined): number {
+  if (typeof timeoutMs !== 'number' || !Number.isFinite(timeoutMs)) {
+    return DEFAULT_UPSTREAM_REQUEST_TIMEOUT_MS;
+  }
+  return Math.max(1, Math.floor(timeoutMs));
+}
+
+function requestException(
+  error: unknown,
+  state: { timedOut?: boolean } = {},
+): UpstreamRequestError {
   const name = error instanceof Error ? error.name.toLowerCase() : '';
   const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
-  const timeout = name.includes('abort') || message.includes('timeout') || message.includes('timed out');
+  const timeout = state.timedOut === true
+    || name.includes('abort')
+    || message.includes('timeout')
+    || message.includes('timed out');
   return new UpstreamRequestError({
     code: timeout ? 'upstream_timeout' : 'upstream_network_error',
     message: timeout ? 'Upstream request timed out.' : 'Upstream request failed before a response was received.',

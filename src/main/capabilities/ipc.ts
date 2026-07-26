@@ -9,6 +9,7 @@ import {
   capabilityObserveRequestSchema,
   capabilityReadinessRequestSchema,
   capabilityReadinessSchema,
+  capabilityResourceBindRequestSchema,
   capabilityResourceHandleSchema,
   type CapabilityApprovalGrant,
   type CapabilityCallerContextInput,
@@ -20,6 +21,7 @@ export const CAPABILITY_IPC_CHANNELS = Object.freeze({
   readiness: 'capability:readiness',
   discover: 'capability:discover',
   observe: 'capability:observe',
+  bind: 'capability:bind',
   invoke: 'capability:invoke',
   events: 'capability:events',
   subscribe: 'capability:subscribe',
@@ -35,6 +37,10 @@ const capabilityDiscoverIpcSchema = z.object({
 const capabilityObserveIpcSchema = z.object({
   workspaceId: workspaceIdSchema.optional(),
   request: capabilityObserveRequestSchema
+}).strict()
+const capabilityBindIpcSchema = z.object({
+  workspaceId: workspaceIdSchema.optional(),
+  request: capabilityResourceBindRequestSchema
 }).strict()
 const capabilityInvokeIpcSchema = z.object({
   workspaceId: workspaceIdSchema.optional(),
@@ -155,6 +161,13 @@ export function registerCapabilityIpc(options: RegisterCapabilityIpcOptions): Ca
   handle(CAPABILITY_IPC_CHANNELS.observe, (event, payload) => {
     const input = parse(capabilityObserveIpcSchema, payload)
     return options.broker.observe(uiCaller(event.sender, input.workspaceId), input.request)
+  })
+  handle(CAPABILITY_IPC_CHANNELS.bind, (event, payload) => {
+    const input = parse(capabilityBindIpcSchema, payload)
+    return options.broker.bindResourceRef(
+      uiCaller(event.sender, input.workspaceId),
+      input.request.resourceRef
+    )
   })
   handle(CAPABILITY_IPC_CHANNELS.invoke, (event, payload) => {
     const input = parse(capabilityInvokeIpcSchema, payload)

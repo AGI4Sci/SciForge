@@ -1,3 +1,16 @@
+import { readFile } from 'node:fs/promises'
+import {
+  DOMMatrix,
+  ImageData,
+  Path2D,
+  createCanvas,
+  loadImage
+} from '@napi-rs/canvas'
+import {
+  VISUAL_SOURCE_MAX_FRAME_BYTES,
+  type NormalizedVisualRegion,
+  type VisualFrame
+} from '@sciforge/domain-sdk/visual-source'
 import { createWorkspaceTabularService } from '@sciforge/workspace-tabular/service'
 import type { WorkspaceTabularPreviewResult } from '@sciforge/workspace-tabular/contract'
 import { createWorkspaceDeckService } from '@sciforge/workspace-deck/service'
@@ -23,11 +36,16 @@ import {
   type WorkspacePreviewProviderActionResult,
   type WorkspacePreviewProviderObservationInput,
   type WorkspacePreviewProviderObservationResult,
+  type WorkspacePreviewProviderVisualInput,
   type WorkspacePreviewProvider,
   type WorkspacePreviewProviderRegistrationInput
 } from './provider-registry'
 
 export const BUILT_IN_WORKSPACE_PREVIEW_PROVIDER_OWNER_ID = 'sciforge.workspace-preview'
+const DEFAULT_VISUAL_MAX_DIMENSION = 4_096
+const MAX_VISUAL_MAX_DIMENSION = 8_192
+const MAX_VISUAL_PIXELS = 40_000_000
+const PDF_JS_MODULE_SPECIFIER: string = 'pdfjs-dist/legacy/build/pdf.mjs'
 
 export type BuiltInWorkspaceTabularPreviewResult = WorkspaceTabularPreviewResult
 export type BuiltInWorkspaceDeckPreviewResult = WorkspaceDeckPreviewResult
@@ -165,6 +183,7 @@ export function createBuiltInWorkspacePreviewProviderRegistrations(
     }),
     registration(ownerId, 5, {
       pluginId: PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
+      renderVisual: renderPdfVisual,
       ...hostOperations({
         applyEdit: chainEdits(...annotationEdits),
         exportPreview: pdfExport
@@ -180,6 +199,7 @@ export function createBuiltInWorkspacePreviewProviderRegistrations(
     }),
     registration(ownerId, 7, {
       pluginId: IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
+      renderVisual: renderImageVisual,
       ...hostOperations({ exportPreview: sourceExport })
     })
   ]
@@ -225,4 +245,279 @@ function chainEdits(...handlers: readonly (EditHandler | undefined)[]): EditHand
     }
     return null
   }
+}
+
+async function renderImageVisual(
+  input: WorkspacePreviewProviderVisualInput
+): Promise<VisualFrame> {
+  const bytes = await readVisualSourceBytes(input.file.path)
+  const mimeType = detectVisualImageMimeType(bytes)
+  const image = await loadImage(bytes)
+  assertDecodedDimensions(image.width, image.height)
+  const region = normalizedRegion(input)
+  const crop = region
+    ? pixelRegion(region, image.width, image.height)
+    : { x: 0, y: 0, width: image.width, height: image.height }
+  const output = boundedRasterDimensions(
+    crop.width,
+    crop.height,
+    requestedMaxDimension(input),
+    false
+  )
+
+  if (
+    !region &&
+    output.width === image.width &&
+    output.height === image.height
+  ) {
+    return {
+      bytes: new Uint8Array(bytes),
+      mimeType,
+      width: image.width,
+      height: image.height,
+      sourceRevision: input.request.resource.semanticRevision,
+      anchor: {
+        kind: 'workspace-preview-image'
+      }
+    }
+  }
+
+  const canvas = createCanvas(output.width, output.height)
+  canvas.getContext('2d').drawImage(
+    image,
+    crop.x,
+    crop.y,
+    crop.width,
+    crop.height,
+    0,
+    0,
+    output.width,
+    output.height
+  )
+  return {
+    bytes: new Uint8Array(canvas.encodeSync('png')),
+    mimeType: 'image/png',
+    width: output.width,
+    height: output.height,
+    sourceRevision: input.request.resource.semanticRevision,
+    anchor: {
+      kind: region ? 'workspace-preview-image-region' : 'workspace-preview-image',
+      ...(region ? { metadata: { region } } : {})
+    }
+  }
+}
+
+async function renderPdfVisual(
+  input: WorkspacePreviewProviderVisualInput
+): Promise<VisualFrame> {
+  const bytes = await readVisualSourceBytes(input.file.path)
+  ensurePdfJsNodePrimitives()
+  const pdfjs = await import(PDF_JS_MODULE_SPECIFIER) as unknown as {
+    getDocument(options: unknown): {
+      promise: Promise<{
+        numPages: number
+        getPage(pageNumber: number): Promise<{
+          getViewport(options: { scale: number }): {
+            width: number
+            height: number
+          }
+          render(options: unknown): { promise: Promise<unknown> }
+          cleanup(): void
+        }>
+        destroy(): Promise<void>
+      }>
+    }
+  }
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(bytes),
+    disableFontFace: true,
+    disableWorker: true,
+    isEvalSupported: false,
+    useSystemFonts: true
+  })
+  const document = await loadingTask.promise
+  const frameIndex = input.request.frameIndex ?? 1
+  if (frameIndex > document.numPages) {
+    await document.destroy()
+    throw new Error(
+      `Workspace preview visual frame ${frameIndex} exceeds the PDF page count ${document.numPages}.`
+    )
+  }
+
+  try {
+    const page = await document.getPage(frameIndex)
+    try {
+      const baseViewport = page.getViewport({ scale: 1 })
+      assertDecodedDimensions(baseViewport.width, baseViewport.height)
+      const region = normalizedRegion(input)
+      const regionWidth = baseViewport.width * (region?.width ?? 1)
+      const regionHeight = baseViewport.height * (region?.height ?? 1)
+      const output = boundedRasterDimensions(
+        regionWidth,
+        regionHeight,
+        requestedMaxDimension(input),
+        true
+      )
+      const scale = Math.min(
+        output.width / regionWidth,
+        output.height / regionHeight
+      )
+      const viewport = page.getViewport({ scale })
+      const crop = region
+        ? pixelRegion(region, viewport.width, viewport.height)
+        : {
+            x: 0,
+            y: 0,
+            width: Math.max(1, Math.ceil(viewport.width)),
+            height: Math.max(1, Math.ceil(viewport.height))
+          }
+      const canvas = createCanvas(crop.width, crop.height)
+      await page.render({
+        canvasContext: canvas.getContext('2d'),
+        viewport,
+        ...(region
+          ? { transform: [1, 0, 0, 1, -crop.x, -crop.y] }
+          : {})
+      }).promise
+      return {
+        bytes: new Uint8Array(canvas.encodeSync('png')),
+        mimeType: 'image/png',
+        width: crop.width,
+        height: crop.height,
+        sourceRevision: input.request.resource.semanticRevision,
+        anchor: {
+          kind: region ? 'workspace-preview-document-region' : 'workspace-preview-document-frame',
+          metadata: {
+            frameIndex,
+            ...(region ? { region } : {})
+          }
+        }
+      }
+    } finally {
+      page.cleanup()
+    }
+  } finally {
+    await document.destroy()
+  }
+}
+
+async function readVisualSourceBytes(path: string): Promise<Buffer> {
+  const bytes = await readFile(path)
+  if (bytes.byteLength < 1) {
+    throw new Error('Workspace preview visual source is empty.')
+  }
+  if (bytes.byteLength > VISUAL_SOURCE_MAX_FRAME_BYTES) {
+    throw new Error(
+      `Workspace preview visual source exceeds the ${VISUAL_SOURCE_MAX_FRAME_BYTES} byte limit.`
+    )
+  }
+  return bytes
+}
+
+function requestedMaxDimension(input: WorkspacePreviewProviderVisualInput): number {
+  return Math.min(
+    input.request.maxDimension ?? DEFAULT_VISUAL_MAX_DIMENSION,
+    MAX_VISUAL_MAX_DIMENSION
+  )
+}
+
+function normalizedRegion(
+  input: WorkspacePreviewProviderVisualInput
+): NormalizedVisualRegion | undefined {
+  const target = input.request.target
+  if (!target) return undefined
+  if (target.kind !== 'region') {
+    throw new Error(
+      `Workspace preview provider ${input.manifest.id} does not resolve opaque visual targets.`
+    )
+  }
+  return target.region
+}
+
+function boundedRasterDimensions(
+  width: number,
+  height: number,
+  maxDimension: number,
+  allowUpscale: boolean
+): { width: number; height: number } {
+  assertDecodedDimensions(width, height)
+  let scale = Math.min(
+    maxDimension / Math.max(width, height),
+    Math.sqrt(MAX_VISUAL_PIXELS / (width * height))
+  )
+  if (!allowUpscale) scale = Math.min(1, scale)
+  const outputWidth = Math.max(1, Math.floor(width * scale))
+  const outputHeight = Math.max(1, Math.floor(height * scale))
+  if (
+    outputWidth > MAX_VISUAL_MAX_DIMENSION ||
+    outputHeight > MAX_VISUAL_MAX_DIMENSION ||
+    outputWidth * outputHeight > MAX_VISUAL_PIXELS
+  ) {
+    throw new Error('Workspace preview visual output exceeds the raster safety limit.')
+  }
+  return { width: outputWidth, height: outputHeight }
+}
+
+function assertDecodedDimensions(width: number, height: number): void {
+  if (
+    !Number.isFinite(width) ||
+    !Number.isFinite(height) ||
+    width <= 0 ||
+    height <= 0
+  ) {
+    throw new Error('Workspace preview visual source has invalid decoded dimensions.')
+  }
+}
+
+function pixelRegion(
+  region: NormalizedVisualRegion,
+  width: number,
+  height: number
+): { x: number; y: number; width: number; height: number } {
+  const x = Math.max(0, Math.min(Math.ceil(width) - 1, Math.floor(region.x * width)))
+  const y = Math.max(0, Math.min(Math.ceil(height) - 1, Math.floor(region.y * height)))
+  const right = Math.max(x + 1, Math.min(Math.ceil(width), Math.ceil((region.x + region.width) * width)))
+  const bottom = Math.max(y + 1, Math.min(Math.ceil(height), Math.ceil((region.y + region.height) * height)))
+  return { x, y, width: right - x, height: bottom - y }
+}
+
+function detectVisualImageMimeType(
+  bytes: Uint8Array
+): 'image/png' | 'image/jpeg' | 'image/webp' {
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png'
+  }
+  if (
+    bytes.length >= 3 &&
+    bytes[0] === 0xff &&
+    bytes[1] === 0xd8 &&
+    bytes[2] === 0xff
+  ) {
+    return 'image/jpeg'
+  }
+  if (
+    bytes.length >= 12 &&
+    String.fromCharCode(...bytes.subarray(0, 4)) === 'RIFF' &&
+    String.fromCharCode(...bytes.subarray(8, 12)) === 'WEBP'
+  ) {
+    return 'image/webp'
+  }
+  throw new Error('Workspace preview image provider supports only PNG, JPEG, and WebP sources.')
+}
+
+function ensurePdfJsNodePrimitives(): void {
+  const target = globalThis as unknown as Record<string, unknown>
+  target.DOMMatrix ??= DOMMatrix
+  target.ImageData ??= ImageData
+  target.Path2D ??= Path2D
 }
