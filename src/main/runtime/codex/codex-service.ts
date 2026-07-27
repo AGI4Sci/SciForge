@@ -166,6 +166,23 @@ type CodexTurnGovernanceBinding = {
   governanceTurnId: string
 }
 
+type CodexConnectedClient = {
+  client: CodexAppServerJsonRpcClient
+  info: CodexAppServerInitializeResponse
+}
+
+type CodexClientSession = {
+  accessKey: string
+  client: CodexAppServerJsonRpcClient | null
+  launch: CodexAppServerLaunchConfig | null
+  info: CodexAppServerInitializeResponse | null
+  ready: boolean
+  cancelled: boolean
+  readiness: Promise<CodexConnectedClient>
+  subscription: Promise<void> | null
+  cleanupPromise: Promise<void> | null
+}
+
 type CodexPendingTurnRecovery = {
   threadId: string
   text: string
@@ -254,12 +271,7 @@ type CodexRuntimeEventSubscriber = {
 
 export class CodexRuntimeService {
   private client: CodexAppServerJsonRpcClient | null = null
-  private clientPromise: Promise<CodexAppServerJsonRpcClient> | null = null
-  private clientConnected = false
-  private clientInfo: CodexAppServerInitializeResponse | null = null
-  private clientModelAccessKey: string | null = null
-  private clientLaunchConfig: CodexAppServerLaunchConfig | null = null
-  private subscription: Promise<void> | null = null
+  private clientSession: CodexClientSession | null = null
   private readonly threadStore: CodexThreadStore | null
   private readonly eventStore: CodexEventStore | null
   private readonly usageStore: CodexUsageStore | null
@@ -306,7 +318,6 @@ export class CodexRuntimeService {
       const { info } = await this.ensureConnectedClient()
       return { ok: true, info: asRecord(info) ?? {} }
     } catch (error) {
-      await this.discardClientAfterFailure(error)
       return failure(error)
     }
   }
@@ -314,10 +325,13 @@ export class CodexRuntimeService {
   async synchronizeModelAccess(): Promise<void> {
     const settings = await this.options.settings()
     const nextKey = codexModelAccessKey(settings, this.options.planGateway)
-    if ((this.client || this.clientPromise) && this.clientModelAccessKey !== nextKey) {
+    const session = this.clientSession
+    if (session && session.accessKey !== nextKey) {
       if (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) return
-      if (this.clientPromise) await this.clientPromise.catch(() => undefined)
-      await this.stop('service_shutdown')
+      await this.cleanupClientSession(session, {
+        reason: 'service_shutdown',
+        failure: false
+      })
     }
   }
 
@@ -1135,94 +1149,104 @@ export class CodexRuntimeService {
   }
 
   async stop(reason: RuntimeToolReleaseReason = 'service_shutdown'): Promise<void> {
-    const client = this.client
-    const governanceTurnIds = [...this.activeTurns.values()]
-    const governanceSessionIds = [...this.governanceBindingsByTurn.values()]
-      .map((binding) => binding.sessionId)
-    for (const [threadId, turnId] of this.activeTurns) {
-      this.options.capabilityAgentTools?.abortTurn?.({ runtimeId: 'codex', threadId, turnId }, reason)
-    }
-    await this.finalizeActiveTurnsBeforeTeardown({
-      code: reason === 'user_stop' ? 'aborted' : 'runtime_stopped',
-      message: reason === 'user_stop'
-        ? 'Codex turn was stopped before it completed.'
-        : CODEX_TURN_STOPPED_MESSAGE,
-      details: { reason }
+    const session = this.clientSession
+    if (!session) return
+    await this.cleanupClientSession(session, {
+      reason,
+      failure: false
     })
-    this.client = null
-    this.clientPromise = null
-    this.clientConnected = false
-    this.clientInfo = null
-    this.clientModelAccessKey = null
-    this.clientLaunchConfig = null
-    this.subscription = null
-    this.activeTurns.clear()
-    this.turnTimings.clear()
-    this.turnModelHints.clear()
-    this.governanceBindingsByTurn.clear()
-    this.turnsWithRecordedUsage.clear()
-    this.clearAllFirstActivityTimers()
-    this.seenModelDeltaKeys.clear()
-    this.clearPendingToolBarrier()
-    this.clearCodingPlanAccountState('Codex runtime stopped before login completed.')
-    this.closeAllEventSubscribers()
-    await Promise.all(
-      [
-        ...governanceTurnIds.map((turnId) =>
-          this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
-        ),
-        ...governanceSessionIds.map((sessionId) =>
-          this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
-        )
-      ]
-    )
-    if (client) await client.stop()
+    await session.readiness.catch(() => undefined)
   }
 
-  private async discardClientAfterFailure(error?: unknown): Promise<void> {
+  private async discardClientAfterFailure(
+    error?: unknown,
+    session: CodexClientSession | null = this.clientSession
+  ): Promise<void> {
     if (error instanceof CodexCodingPlanLoginInProgressError) return
-    const client = this.client
+    if (!session) return
+    await this.cleanupClientSession(session, {
+      reason: 'runtime_disconnected',
+      failure: true
+    })
+  }
+
+  private cleanupClientSession(
+    session: CodexClientSession,
+    input: {
+      reason: RuntimeToolReleaseReason | 'runtime_disconnected'
+      failure: boolean
+    }
+  ): Promise<void> {
+    if (session.cleanupPromise) return session.cleanupPromise
+    session.cancelled = true
+    const current = this.clientSession === session
     const governanceTurnIds = [...this.activeTurns.values()]
     const governanceSessionIds = [...this.governanceBindingsByTurn.values()]
       .map((binding) => binding.sessionId)
-    await this.finalizeActiveTurnsBeforeTeardown({
-      code: 'runtime_disconnected',
-      message: CODEX_TURN_DISCONNECTED_MESSAGE,
-      details: { reason: 'runtime_disconnected' }
-    })
-    this.client = null
-    this.clientPromise = null
-    this.clientConnected = false
-    this.clientInfo = null
-    this.clientModelAccessKey = null
-    this.clientLaunchConfig = null
-    this.subscription = null
-    this.activeTurns.clear()
-    this.turnTimings.clear()
-    this.turnModelHints.clear()
-    this.governanceBindingsByTurn.clear()
-    this.turnsWithRecordedUsage.clear()
-    this.clearAllFirstActivityTimers()
-    this.seenModelDeltaKeys.clear()
-    this.clearPendingToolBarrier()
-    this.clearCodingPlanAccountState('Codex runtime disconnected before login completed.')
-    this.closeAllEventSubscribers()
-    await Promise.all(
-      [
-        ...governanceTurnIds.map((turnId) =>
-          this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
-        ),
-        ...governanceSessionIds.map((sessionId) =>
-          this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
+    const cleanup = (async () => {
+      if (current) {
+        const releaseReason = input.failure ? 'runtime_disconnected' : input.reason
+        for (const [threadId, turnId] of this.activeTurns) {
+          this.options.capabilityAgentTools?.abortTurn?.(
+            { runtimeId: 'codex', threadId, turnId },
+            releaseReason
+          )
+        }
+        await this.finalizeActiveTurnsBeforeTeardown({
+          code: input.failure
+            ? 'runtime_disconnected'
+            : input.reason === 'user_stop'
+              ? 'aborted'
+              : 'runtime_stopped',
+          message: input.failure
+            ? CODEX_TURN_DISCONNECTED_MESSAGE
+            : input.reason === 'user_stop'
+              ? 'Codex turn was stopped before it completed.'
+              : CODEX_TURN_STOPPED_MESSAGE,
+          details: { reason: releaseReason }
+        })
+        if (this.clientSession === session) {
+          this.activeTurns.clear()
+          this.turnTimings.clear()
+          this.turnModelHints.clear()
+          this.governanceBindingsByTurn.clear()
+          this.turnsWithRecordedUsage.clear()
+          this.clearAllFirstActivityTimers()
+          this.seenModelDeltaKeys.clear()
+          this.clearPendingToolBarrier()
+          this.clearCodingPlanAccountState(
+            input.failure
+              ? 'Codex runtime disconnected before login completed.'
+              : 'Codex runtime stopped before login completed.'
+          )
+          this.closeAllEventSubscribers()
+        }
+        await Promise.all(
+          [
+            ...governanceTurnIds.map((turnId) =>
+              this.preToolUseGovernanceBridge?.deleteTurnState(turnId)
+            ),
+            ...governanceSessionIds.map((sessionId) =>
+              this.preToolUseGovernanceBridge?.deleteSessionSeed(sessionId)
+            )
+          ]
         )
-      ]
-    )
-    if (!client) return
-    try {
-      await client.stop()
-    } catch {
-      // The request path already has the meaningful failure. Cleanup is best-effort.
-    }
+      }
+      const client = session.client
+      if (client) {
+        try {
+          await client.stop()
+        } catch {
+          // The request path already has the meaningful failure. Cleanup is best-effort.
+        }
+      }
+      if (this.clientSession === session) {
+        this.clientSession = null
+        if (this.client === session.client) this.client = null
+      }
+    })()
+    session.cleanupPromise = cleanup
+    return cleanup
   }
 
   private async finalizeActiveTurnsBeforeTeardown(input: {
@@ -1251,16 +1275,31 @@ export class CodexRuntimeService {
     }
   }
 
-  private async ensureClient(
+  private async ensureConnectedClient(
     settings?: AppSettingsV1,
     access: 'runtime' | 'account' = 'runtime'
-  ): Promise<CodexAppServerJsonRpcClient> {
+  ): Promise<CodexConnectedClient> {
     const current = settings ?? await this.options.settings()
+    if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
+      const modelAccess = getModelAccessSettings(current)
+      if (!modelAccess) {
+        throw new Error('Model access setup is required. Choose Model API or Coding Plan in Settings before connecting Codex.')
+      }
+      if (modelAccess.mode === 'coding-plan' && !modelAccess.planAdapterId.trim()) {
+        throw new Error('Select a Coding Plan in Settings before connecting Codex.')
+      }
+      throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
+    }
     const nextAccessKey = codexModelAccessKey(current, this.options.planGateway)
-    if (this.client && this.clientModelAccessKey === nextAccessKey) return this.client
-    if (this.clientPromise && this.clientModelAccessKey === nextAccessKey) return this.clientPromise
-    if (this.clientPromise) await this.clientPromise.catch(() => undefined)
-    if (this.client && this.clientModelAccessKey !== nextAccessKey) {
+    const existing = this.clientSession
+    if (existing) {
+      if (existing.accessKey === nextAccessKey && !existing.cancelled) {
+        const connected = await existing.readiness
+        if (access === 'runtime') {
+          this.assertCodexPreToolUseRuntimeVersion(connected.info)
+        }
+        return connected
+      }
       if (
         (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) &&
         access === 'runtime'
@@ -1269,18 +1308,47 @@ export class CodexRuntimeService {
           'Codex ChatGPT sign-in is still in progress. Complete or retry sign-in before starting the runtime.'
         )
       }
-      await this.stop('service_shutdown')
+      await this.cleanupClientSession(existing, {
+        reason: 'service_shutdown',
+        failure: false
+      })
+      return this.ensureConnectedClient(current, access)
     }
-    const promise = (async () => {
+
+    const session = {
+      accessKey: nextAccessKey,
+      client: null,
+      launch: null,
+      info: null,
+      ready: false,
+      cancelled: false,
+      readiness: Promise.resolve(null as unknown as CodexConnectedClient),
+      subscription: null,
+      cleanupPromise: null
+    } satisfies CodexClientSession
+    this.clientSession = session
+    session.readiness = this.startClientSession(session, current, access)
+    return session.readiness
+  }
+
+  private async startClientSession(
+    session: CodexClientSession,
+    settings: AppSettingsV1,
+    access: 'runtime' | 'account'
+  ): Promise<CodexConnectedClient> {
+    try {
       const launch = await prepareCodexAppServerLaunch({
-        settings: current,
+        settings,
         managedCodexHome: this.options.managedCodexHome,
         standardCodexAuthPath: this.options.standardCodexAuthPath,
         planGateway: this.options.planGateway,
         preToolUseHookLaunch: this.options.preToolUseHookLaunch
       })
-      this.clientLaunchConfig = launch
-      this.ensureCodexMultiAgentBridge(current)
+      if (session.cancelled || this.clientSession !== session) {
+        throw new Error('Codex app-server startup was superseded.')
+      }
+      session.launch = launch
+      this.ensureCodexMultiAgentBridge(settings)
       const createClient = this.options.createClient ?? createCodexAppServerClient
       const client = createClient({
         command: launch.command,
@@ -1312,54 +1380,29 @@ export class CodexRuntimeService {
           onToolCallRequest: (request) => this.handleDynamicToolCall(request)
         }
       })
+      session.client = client
+      if (session.cancelled || this.clientSession !== session) {
+        await client.stop().catch(() => undefined)
+        throw new Error('Codex app-server startup was superseded.')
+      }
       this.client = client
-      this.clientModelAccessKey = nextAccessKey
-      this.subscription = this.forwardEvents(client)
-      void this.subscription.catch(() => undefined)
-      return client
-    })()
-    this.clientModelAccessKey = nextAccessKey
-    this.clientPromise = promise
-    try {
-      return await promise
-    } finally {
-      if (this.clientPromise === promise) this.clientPromise = null
-    }
-  }
-
-  private async ensureConnectedClient(
-    settings?: AppSettingsV1,
-    access: 'runtime' | 'account' = 'runtime'
-  ): Promise<{
-    client: CodexAppServerJsonRpcClient
-    info: CodexAppServerInitializeResponse
-  }> {
-    const current = settings ?? await this.options.settings()
-    if (access === 'runtime' && !resolveModelAccessRuntimePolicy(current).codex) {
-      const modelAccess = getModelAccessSettings(current)
-      if (!modelAccess) {
-        throw new Error('Model access setup is required. Choose Model API or Coding Plan in Settings before connecting Codex.')
-      }
-      if (modelAccess.mode === 'coding-plan' && !modelAccess.planAdapterId.trim()) {
-        throw new Error('Select a Coding Plan in Settings before connecting Codex.')
-      }
-      throw new Error('Codex must be the selected Agent runtime for the configured model access mode.')
-    }
-    const client = await this.ensureClient(current, access)
-    if (this.clientConnected && this.clientInfo) {
+      session.subscription = this.forwardEvents(client, session)
+      void session.subscription.catch(() => undefined)
+      const info = await client.connect()
       if (access === 'runtime') {
-        this.assertCodexPreToolUseRuntimeVersion(this.clientInfo)
+        this.assertCodexPreToolUseRuntimeVersion(info)
       }
-      return { client, info: this.clientInfo }
+      await this.ensureCodexPreToolUseHookTrusted(client, launch)
+      if (session.cancelled || this.clientSession !== session) {
+        throw new Error('Codex app-server startup was superseded.')
+      }
+      session.info = info
+      session.ready = true
+      return { client, info }
+    } catch (error) {
+      await this.discardClientAfterFailure(error, session)
+      throw error
     }
-    const info = await client.connect()
-    if (access === 'runtime') {
-      this.assertCodexPreToolUseRuntimeVersion(info)
-    }
-    await this.ensureCodexPreToolUseHookTrusted(client)
-    this.clientConnected = true
-    this.clientInfo = info
-    return { client, info }
   }
 
   private async ensureModelUseClient(settings: AppSettingsV1): Promise<{
@@ -1388,7 +1431,8 @@ export class CodexRuntimeService {
   }
 
   private async ensureCodexPreToolUseHookTrusted(
-    client: CodexAppServerJsonRpcClient
+    client: CodexAppServerJsonRpcClient,
+    launch: CodexAppServerLaunchConfig
   ): Promise<void> {
     if (!this.options.preToolUseHookLaunch) return
     const storageRoot = this.options.storageRoot
@@ -1397,8 +1441,6 @@ export class CodexRuntimeService {
         'SciForge Codex PreToolUse governance requires a runtime storage root.'
       )
     }
-    const launch = this.clientLaunchConfig
-    if (!launch) throw new Error('SciForge Codex launch configuration is unavailable.')
     const expected = launch.preToolUseHook
     if (!expected) throw new Error('SciForge Codex PreToolUse hook was not prepared.')
     const first = await this.readOwnedCodexPreToolUseHook(client, launch.cwd, expected)
@@ -1450,10 +1492,13 @@ export class CodexRuntimeService {
     if (!this.options.preToolUseHookLaunch) return
     const match = CODEX_USER_AGENT_VERSION_PATTERN.exec(info.userAgent)
     if (!match) {
+      const reportedUserAgent = typeof info.userAgent === 'string' && info.userAgent.trim()
+        ? JSON.stringify(info.userAgent)
+        : '<missing>'
       throw new Error(
         'SciForge cannot verify matcher-free PreToolUse coverage because the Codex ' +
         `app-server did not report a supported runtime version. Codex ${MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION} ` +
-        'or newer is required.'
+        `or newer is required. Reported user agent: ${reportedUserAgent}.`
       )
     }
     const version = `${match[1]}.${match[2]}.${match[3]}${match[4] ?? ''}`
@@ -1532,7 +1577,13 @@ export class CodexRuntimeService {
   }
 
   isClientWarm(): boolean {
-    return this.client !== null && this.clientConnected
+    const session = this.clientSession
+    return Boolean(
+      session?.ready &&
+      !session.cancelled &&
+      session.client &&
+      this.client === session.client
+    )
   }
 
   isResearchMcpConfigured(): boolean {
@@ -2126,8 +2177,12 @@ export class CodexRuntimeService {
     this.codingPlanLoginWaiters.clear()
   }
 
-  private async forwardEvents(client: CodexAppServerJsonRpcClient): Promise<void> {
+  private async forwardEvents(
+    client: CodexAppServerJsonRpcClient,
+    session: CodexClientSession
+  ): Promise<void> {
     for await (const event of client.subscribe()) {
+      if (this.clientSession !== session || session.cancelled) return
       if (event.type === 'event') {
         if (await this.handleCodingPlanNotification(event.payload, client)) continue
         const normalized = this.normalizeClientEvent(event.payload)
@@ -2149,21 +2204,23 @@ export class CodexRuntimeService {
         'runtime_disconnected',
         { reason: event.reason }
       )
+      if (this.clientSession !== session || session.cancelled) return
       this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.closed, { reason: event.reason })
-      if (this.client === client) {
-        await this.discardClientAfterFailure()
-      }
+      await this.discardClientAfterFailure(undefined, session)
       return
     }
-    if (this.activeTurns.size > 0) {
+    if (
+      this.clientSession === session &&
+      !session.cancelled &&
+      this.activeTurns.size > 0
+    ) {
       await this.failActiveTurns(
         'Codex app-server event stream ended unexpectedly.',
         'runtime_disconnected'
       )
+      if (this.clientSession !== session || session.cancelled) return
       this.options.sink.send(CODEX_MAIN_IPC_CHANNELS.closed, { reason: 'event_stream_ended' })
-      if (this.client === client) {
-        await this.discardClientAfterFailure()
-      }
+      await this.discardClientAfterFailure(undefined, session)
     }
   }
 

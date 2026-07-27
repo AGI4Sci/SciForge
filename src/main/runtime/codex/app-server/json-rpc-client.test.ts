@@ -142,7 +142,7 @@ describe('createCodexAppServerClient', () => {
     fake.emitStdout({
       id: 1,
       result: {
-        userAgent: 'Codex Desktop/0.141.0 (test)',
+        userAgent: 'Codex Desktop/0.141.0 (Mac OS 15.7.4; arm64) dumb (sciforge; 0.1.0)',
         codexHome: '/tmp/codex-home',
         platformFamily: 'unix',
         platformOs: 'linux'
@@ -150,7 +150,7 @@ describe('createCodexAppServerClient', () => {
     })
 
     await expect(initialize).resolves.toEqual({
-      userAgent: 'Codex Desktop/0.141.0 (test)',
+      userAgent: 'Codex Desktop/0.141.0 (Mac OS 15.7.4; arm64) dumb (sciforge; 0.1.0)',
       codexHome: '/tmp/codex-home',
       platformFamily: 'unix',
       platformOs: 'linux'
