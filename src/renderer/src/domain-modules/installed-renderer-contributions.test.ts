@@ -71,6 +71,15 @@ describe('installed renderer contributions', () => {
       ownerId,
       contributionId: contribution.id
     }))).toEqual(expectedChatPanels)
+    expect(runtime.chatResultPanels.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      contributionId: contribution.id
+    }))).toContainEqual({
+      id: 'dataset-api.timeline-results',
+      ownerId: 'sciforge.dataset-api',
+      contributionId: 'dataset-api.timeline-results'
+    })
     const expectedEnglish = installedMessages('en')
     const expectedChinese = installedMessages('zh')
     expect(translations.bundle('en', 'common')).toMatchObject({

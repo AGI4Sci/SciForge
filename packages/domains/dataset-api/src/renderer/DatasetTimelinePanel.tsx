@@ -65,7 +65,7 @@ function datasetResultFromToolBlock(block: DatasetToolBlock): TimelineDatasetRes
 }
 
 function datasetToolNameFromValue(value: unknown, depth = 0): string | null {
-  if (depth > 5 || value === undefined || value === null) return null
+  if (depth > 10 || value === undefined || value === null) return null
   if (typeof value === 'string') {
     const direct = normalizeDatasetToolName(value)
     if (direct) return direct
@@ -94,11 +94,14 @@ function datasetToolNameFromValue(value: unknown, depth = 0): string | null {
     const found = datasetToolNameFromValue(record[key], depth + 1)
     if (found) return found
   }
+  if (record.type === 'text' || record.type === 'inputText' || record.type === 'outputText') {
+    return datasetToolNameFromValue(record.text, depth + 1)
+  }
   return null
 }
 
 function structuredDatasetContent(value: unknown, depth = 0): Record<string, unknown> | null {
-  if (depth > 4 || value === undefined || value === null) return null
+  if (depth > 10 || value === undefined || value === null) return null
   if (typeof value === 'string') {
     const marker = 'structuredContent:\n'
     const markerIndex = value.indexOf(marker)
