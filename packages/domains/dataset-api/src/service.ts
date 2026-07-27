@@ -309,6 +309,9 @@ export function createDatasetApiService(options: {
         origins: [{ source: sourceRecord, request: requestRecord, response: responseRecord }],
         createdAt: new Date().toISOString()
       })
+      const preview = expectedFormat === 'fasta' || expectedFormat === 'json' || expectedFormat === 'text'
+        ? await readArtifactPreview(finalArtifactPath, 16 * 1024)
+        : undefined
       return {
         source: sourceRecord,
         request: requestRecord,
@@ -320,10 +323,31 @@ export function createDatasetApiService(options: {
           bytes: streamed.bytes,
           fileName: basename(finalArtifactPath),
           format: expectedFormat,
-          reused
+          reused,
+          ...(preview ? {
+            preview: preview.content,
+            previewTruncated: preview.truncated
+          } : {})
         }
       }
     }
+  }
+}
+
+async function readArtifactPreview(
+  path: string,
+  maxBytes: number
+): Promise<{ content: string; truncated: boolean }> {
+  const handle = await open(path, 'r')
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1)
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0)
+    return {
+      content: buffer.subarray(0, Math.min(bytesRead, maxBytes)).toString('utf8'),
+      truncated: bytesRead > maxBytes
+    }
+  } finally {
+    await handle.close()
   }
 }
 

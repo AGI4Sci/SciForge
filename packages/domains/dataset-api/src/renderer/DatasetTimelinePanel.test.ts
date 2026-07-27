@@ -1,15 +1,50 @@
 import { describe, expect, it } from 'vitest'
-import type { ChatBlock } from '../../agent/types'
 import {
   datasetResultsFromTimelineBlocks,
   datasetTextPreview,
   metadataHighlights,
-  publicationReleaseFiles
-} from './TimelineDatasetResultsPanel'
+  publicationReleaseFiles,
+  type DatasetTimelineBlock
+} from './DatasetTimelinePanel'
 
 describe('TimelineDatasetResultsPanel', () => {
+  it('extracts governed Dataset API capability output from sciforge_invoke', () => {
+    const blocks: DatasetTimelineBlock[] = [{
+      kind: 'tool',
+      id: 'capability-metadata',
+      summary: 'sciforge_invoke',
+      status: 'success',
+      meta: {
+        toolName: 'sciforge_invoke',
+        structuredContent: {
+          operationRef: 'op_opaque',
+          output: {
+            datasetApi: {
+              actionId: 'dataset-api.metadata',
+              success: true,
+              result: {
+                source: { id: 'uniprot', name: 'UniProt REST' },
+                response: { status: 200, bytes: 490 },
+                metadata: { primaryAccession: 'P04637' }
+              }
+            }
+          }
+        }
+      }
+    }]
+
+    expect(datasetResultsFromTimelineBlocks(blocks)).toMatchObject([{
+      toolName: 'dataset_metadata',
+      kind: 'metadata',
+      success: true,
+      result: {
+        metadata: { primaryAccession: 'P04637' }
+      }
+    }])
+  })
+
   it('extracts bounded Dataset API metadata persisted by the Codex runtime', () => {
-    const blocks: ChatBlock[] = [{
+    const blocks: DatasetTimelineBlock[] = [{
       kind: 'tool',
       id: 'metadata-1',
       summary: 'mcp__sciforge_dataset_api__dataset_api_metadata',
@@ -46,7 +81,7 @@ describe('TimelineDatasetResultsPanel', () => {
         artifact: { path: '/workspace/tp53.fasta', format: 'fasta', sha256: 'abc' }
       }
     }
-    const blocks: ChatBlock[] = [{
+    const blocks: DatasetTimelineBlock[] = [{
       kind: 'tool',
       id: 'raw-1',
       summary: 'dataset_api_raw_data',
@@ -62,7 +97,7 @@ describe('TimelineDatasetResultsPanel', () => {
   })
 
   it('extracts persisted MCP inputText content blocks', () => {
-    const blocks: ChatBlock[] = [{
+    const blocks: DatasetTimelineBlock[] = [{
       kind: 'tool',
       id: 'persisted-uniprot',
       summary: 'dataset_api_metadata',
@@ -87,7 +122,7 @@ describe('TimelineDatasetResultsPanel', () => {
   })
 
   it('unwraps local-runtime mcp_call receipts into Dataset plan cards', () => {
-    const blocks: ChatBlock[] = [{
+    const blocks: DatasetTimelineBlock[] = [{
       kind: 'tool',
       id: 'wrapped-plan',
       summary: 'mcp_call',
@@ -121,7 +156,7 @@ describe('TimelineDatasetResultsPanel', () => {
   })
 
   it('extracts checkpointed plan execution progress for the conversation card', () => {
-    const blocks: ChatBlock[] = [{
+    const blocks: DatasetTimelineBlock[] = [{
       kind: 'tool',
       id: 'execute-plan',
       summary: 'dataset_execute_plan',
@@ -166,7 +201,7 @@ describe('TimelineDatasetResultsPanel', () => {
   })
 
   it('surfaces structured Dataset API failures and ignores unrelated tools', () => {
-    const blocks: ChatBlock[] = [
+    const blocks: DatasetTimelineBlock[] = [
       {
         kind: 'tool',
         id: 'error-1',
@@ -241,7 +276,7 @@ describe('TimelineDatasetResultsPanel', () => {
   })
 
   it('extracts processing, validation, and publication results with row-count evidence', () => {
-    const blocks: ChatBlock[] = [
+    const blocks: DatasetTimelineBlock[] = [
       {
         kind: 'tool', id: 'filter-1', summary: 'dataset_filter', status: 'success',
         meta: { datasetApi: {

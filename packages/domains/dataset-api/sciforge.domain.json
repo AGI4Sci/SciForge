@@ -1,0 +1,31 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-dataset-api",
+  "module": {
+    "id": "sciforge.dataset-api",
+    "displayName": "Dataset API",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 100
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        { "kind": "main.capability-factory", "id": "dataset-api.capabilities" }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        { "kind": "renderer.chat-result-panel", "id": "dataset-api.timeline-results" }
+      ]
+    }
+  ]
+}

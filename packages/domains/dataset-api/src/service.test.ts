@@ -157,6 +157,8 @@ test('registers and accesses executable biology provider presets', async () => {
       outputFileName: 'P04637.fasta'
     })
     assert.equal(await readFile(raw.artifact.path, 'utf8'), '>sp|P04637|P53_HUMAN\nMEEPQSDPSV\n')
+    assert.equal(raw.artifact.preview, '>sp|P04637|P53_HUMAN\nMEEPQSDPSV\n')
+    assert.equal(raw.artifact.previewTruncated, false)
     assert.deepEqual(requestedUrls, [
       'https://rest.uniprot.org/uniprotkb/P04637.json',
       'https://rest.uniprot.org/uniprotkb/P04637.fasta'

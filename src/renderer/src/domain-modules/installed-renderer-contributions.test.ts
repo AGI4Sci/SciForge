@@ -13,6 +13,10 @@ import {
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   type WorkbenchRightPanelContribution
 } from './workbench-right-panel-slot'
+import {
+  RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  type ChatResultPanelContribution
+} from './chat-result-panel-slot'
 
 describe('installed renderer contributions', () => {
   it('registers package-owned UI and translations and disposes both idempotently', () => {
@@ -53,6 +57,20 @@ describe('installed renderer contributions', () => {
       resourceKind: contribution.resourceKind,
       available: contribution.isAvailable()
     }))).toEqual(expectedPanels)
+    const expectedChatPanels = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND
+      )
+      .map(({ declaration, owner, value }) => ({
+        id: declaration.id,
+        ownerId: owner.moduleId,
+        contributionId: (value as ChatResultPanelContribution).id
+      }))
+    expect(runtime.chatResultPanels.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      contributionId: contribution.id
+    }))).toEqual(expectedChatPanels)
     const expectedEnglish = installedMessages('en')
     const expectedChinese = installedMessages('zh')
     expect(translations.bundle('en', 'common')).toMatchObject({
@@ -68,6 +86,7 @@ describe('installed renderer contributions', () => {
     runtime.dispose()
     expect(runtime.disposed).toBe(true)
     expect(runtime.rightPanels.list()).toEqual([])
+    expect(runtime.chatResultPanels.list()).toEqual([])
     expect(translations.bundle('en', 'common')).toEqual({ coreTitle: 'Core' })
     expect(translations.bundle('zh', 'common')).toEqual({ coreTitle: '核心' })
   })

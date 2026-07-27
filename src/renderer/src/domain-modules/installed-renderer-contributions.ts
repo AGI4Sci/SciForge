@@ -24,6 +24,11 @@ import {
   isRendererLifecycleContribution,
   type RendererLifecycleContribution
 } from './renderer-lifecycle'
+import {
+  ChatResultPanelContributionRegistry,
+  RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND,
+  type ChatResultPanelContribution
+} from './chat-result-panel-slot'
 
 export const RENDERER_I18N_RESOURCE_CONTRIBUTION_KIND = 'renderer.i18n-resource' as const
 
@@ -47,6 +52,7 @@ export type RendererTranslationHost = Readonly<{
 
 export type InstalledRendererContributions = Readonly<{
   rightPanels: WorkbenchRightPanelContributionRegistry
+  chatResultPanels: ChatResultPanelContributionRegistry
   workspacePreviews: RendererWorkspacePreviewRegistry
   readonly disposed: boolean
   dispose(): void
@@ -67,6 +73,11 @@ export function createInstalledRendererContributions(
     ownerId: string
     order: number
     contribution: WorkbenchRightPanelContribution
+  }> = []
+  const chatResultPanels: Array<{
+    ownerId: string
+    order: number
+    contribution: ChatResultPanelContribution
   }> = []
   const resources: RendererI18nResourceContribution[] = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
@@ -89,6 +100,17 @@ export function createInstalledRendererContributions(
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
       resources.push(installed.value)
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_CHAT_RESULT_PANEL_CONTRIBUTION_KIND) {
+      if (!isChatResultPanelContribution(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      chatResultPanels.push({
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contribution: installed.value
+      })
       continue
     }
     if (installed.declaration.kind === RENDERER_WORKSPACE_PREVIEW_PLUGIN_CONTRIBUTION_KIND) {
@@ -114,6 +136,7 @@ export function createInstalledRendererContributions(
   }
 
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
+  const chatResultPanelRegistry = new ChatResultPanelContributionRegistry()
   const workspacePreviews = createRendererWorkspacePreviewRegistry({
     registrations: [
       ...createBuiltInWorkspacePreviewPluginRegistrations(),
@@ -127,6 +150,7 @@ export function createInstalledRendererContributions(
       translationDisposers.push(installTranslationResource(translations, resource))
     }
     for (const panel of panels) rightPanels.register(panel)
+    for (const panel of chatResultPanels) chatResultPanelRegistry.register(panel)
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -137,6 +161,7 @@ export function createInstalledRendererContributions(
   } catch (error) {
     for (const dispose of lifecycleDisposers.reverse()) dispose()
     rightPanels.dispose()
+    chatResultPanelRegistry.dispose()
     workspacePreviews.dispose()
     for (const dispose of translationDisposers.reverse()) dispose()
     throw error
@@ -145,6 +170,7 @@ export function createInstalledRendererContributions(
   let disposed = false
   return Object.freeze({
     rightPanels,
+    chatResultPanels: chatResultPanelRegistry,
     workspacePreviews,
     get disposed() {
       return disposed
@@ -154,6 +180,7 @@ export function createInstalledRendererContributions(
       disposed = true
       for (const dispose of lifecycleDisposers.reverse()) dispose()
       rightPanels.dispose()
+      chatResultPanelRegistry.dispose()
       workspacePreviews.dispose()
       for (const dispose of translationDisposers.reverse()) dispose()
     }
@@ -224,6 +251,14 @@ function isRendererI18nResourceContribution(
   return Object.values(candidate.resources).every((messages) =>
     isRecord(messages) && Object.values(messages).every((message) => typeof message === 'string')
   )
+}
+
+function isChatResultPanelContribution(
+  value: unknown
+): value is ChatResultPanelContribution {
+  if (!value || typeof value !== 'object') return false
+  const candidate = value as Partial<ChatResultPanelContribution>
+  return typeof candidate.id === 'string' && typeof candidate.render === 'function'
 }
 
 function invalidContribution(id: string, ownerId: string): Error {

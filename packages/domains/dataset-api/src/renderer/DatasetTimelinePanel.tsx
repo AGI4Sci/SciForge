@@ -1,8 +1,18 @@
-import { useEffect, useMemo, useState, type ReactElement } from 'react'
+import { useMemo, useState, type ReactElement } from 'react'
 import { Braces, CheckCircle2, ChevronDown, ChevronRight, Circle, CircleX, Database, Download, ExternalLink, RotateCcw, TriangleAlert } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
-import type { ChatBlock, ToolBlock } from '../../agent/types'
-import { previewWorkspaceFile } from '../../lib/workspace-file-preview'
+
+export type DatasetTimelineBlock = Readonly<{
+  kind: string
+  id: string
+  status?: string
+  summary?: string
+  detail?: unknown
+  meta?: unknown
+}>
+
+type DatasetToolBlock = DatasetTimelineBlock & Readonly<{ kind: 'tool' }>
+type OpenDatasetArtifact = (path: string) => void
 
 type DatasetResultKind = 'metadata' | 'raw-data' | 'catalog' | 'sources' | 'plan' | 'execution' | 'profile' | 'processing' | 'validation' | 'publication' | 'other'
 
@@ -16,26 +26,31 @@ export type TimelineDatasetResult = {
 }
 
 export function datasetResultsFromTimelineBlocks(
-  blocks: readonly ChatBlock[]
+  blocks: readonly DatasetTimelineBlock[]
 ): TimelineDatasetResult[] {
   const results: TimelineDatasetResult[] = []
   for (const block of blocks) {
     if (block.kind !== 'tool' || block.status === 'running') continue
-    const parsed = datasetResultFromToolBlock(block)
+    const parsed = datasetResultFromToolBlock(block as DatasetToolBlock)
     if (parsed) results.push(parsed)
   }
   return results
 }
 
-function datasetResultFromToolBlock(block: ToolBlock): TimelineDatasetResult | null {
+function datasetResultFromToolBlock(block: DatasetToolBlock): TimelineDatasetResult | null {
   const meta = asRecord(block.meta)
   const explicit = asRecord(meta?.datasetApi)
   const toolName = normalizeDatasetToolName(
-    stringValue(explicit?.toolName) || stringValue(meta?.toolName) || block.summary
-  ) ?? datasetToolNameFromValue(meta?.output) ?? datasetToolNameFromValue(block.detail)
+    stringValue(explicit?.toolName) || stringValue(meta?.toolName) || block.summary || ''
+  ) ?? datasetToolNameFromValue(meta?.structuredContent)
+    ?? datasetToolNameFromValue(meta?.output)
+    ?? datasetToolNameFromValue(block.detail)
   if (!toolName) return null
 
-  const structured = explicit ?? structuredDatasetContent(meta?.output) ?? structuredDatasetContent(block.detail)
+  const structured = explicit
+    ?? structuredDatasetContent(meta?.structuredContent)
+    ?? structuredDatasetContent(meta?.output)
+    ?? structuredDatasetContent(block.detail)
   const result = asRecord(structured?.result)
   const error = asRecord(structured?.error)
   if (!result && !error) return null
@@ -71,7 +86,7 @@ function datasetToolNameFromValue(value: unknown, depth = 0): string | null {
   }
   const record = asRecord(value)
   if (!record) return null
-  for (const key of ['toolName', 'toolId', 'normalizedName']) {
+  for (const key of ['toolName', 'toolId', 'normalizedName', 'actionId', 'operation']) {
     const found = normalizeDatasetToolName(stringValue(record[key]))
     if (found) return found
   }
@@ -121,6 +136,10 @@ function structuredDatasetContent(value: unknown, depth = 0): Record<string, unk
 }
 
 function normalizeDatasetToolName(value: string): string | null {
+  const capabilityMatch = value.match(/dataset-api[.:/]([a-z-]+)/i)
+  if (capabilityMatch) {
+    return `dataset_${capabilityMatch[1].toLowerCase().replaceAll('-', '_')}`
+  }
   const match = value.match(/dataset_(api_(?:catalog|register_provider|list|register|metadata|raw_data)|prepare_plan|execute_plan|resume_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)/i)
   return match ? `dataset_${match[1].toLowerCase()}` : null
 }
@@ -142,11 +161,13 @@ function datasetKind(toolName: string, result: Record<string, unknown> | null): 
 export function TimelineDatasetResultsPanel({
   blocks,
   workspaceRoot,
-  onContinuePrompt
+  onContinuePrompt,
+  onOpenArtifact
 }: {
-  blocks: ChatBlock[]
+  blocks: readonly DatasetTimelineBlock[]
   workspaceRoot?: string
   onContinuePrompt?: (prompt: string) => void
+  onOpenArtifact?: OpenDatasetArtifact
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const items = useMemo(() => datasetResultsFromTimelineBlocks(blocks), [blocks])
@@ -159,7 +180,13 @@ export function TimelineDatasetResultsPanel({
       data-timeline-dataset-results
     >
       {items.map((item) => (
-        <DatasetResultCard key={item.id} item={item} workspaceRoot={workspaceRoot} onContinuePrompt={onContinuePrompt} />
+        <DatasetResultCard
+          key={item.id}
+          item={item}
+          workspaceRoot={workspaceRoot}
+          onContinuePrompt={onContinuePrompt}
+          onOpenArtifact={onOpenArtifact}
+        />
       ))}
     </section>
   )
@@ -168,11 +195,13 @@ export function TimelineDatasetResultsPanel({
 function DatasetResultCard({
   item,
   workspaceRoot,
-  onContinuePrompt
+  onContinuePrompt,
+  onOpenArtifact
 }: {
   item: TimelineDatasetResult
   workspaceRoot?: string
   onContinuePrompt?: (prompt: string) => void
+  onOpenArtifact?: OpenDatasetArtifact
 }): ReactElement {
   const { t } = useTranslation('common')
   const [expanded, setExpanded] = useState(false)
@@ -233,30 +262,30 @@ function DatasetResultCard({
             </dl>
           ) : null}
         </div>
-        {rawPath ? (
+        {rawPath && onOpenArtifact ? (
           <button
             type="button"
-            onClick={() => previewWorkspaceFile({ path: rawPath, workspaceRoot })}
+            onClick={() => onOpenArtifact(rawPath)}
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <ExternalLink className="h-3.5 w-3.5" />
             {t('datasetResultOpenFile')}
           </button>
         ) : null}
-        {excludedPath ? (
+        {excludedPath && onOpenArtifact ? (
           <button
             type="button"
-            onClick={() => previewWorkspaceFile({ path: excludedPath, workspaceRoot })}
+            onClick={() => onOpenArtifact(excludedPath)}
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <ExternalLink className="h-3.5 w-3.5" />
             {t('datasetResultOpenExcluded')}
           </button>
         ) : null}
-        {duplicatesPath ? (
+        {duplicatesPath && onOpenArtifact ? (
           <button
             type="button"
-            onClick={() => previewWorkspaceFile({ path: duplicatesPath, workspaceRoot })}
+            onClick={() => onOpenArtifact(duplicatesPath)}
             className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
           >
             <ExternalLink className="h-3.5 w-3.5" />
@@ -276,6 +305,7 @@ function DatasetResultCard({
           format={format}
           contentType={contentType}
           sha256={sha256}
+          preview={stringValue(artifact?.preview)}
         />
       ) : null}
 
@@ -288,11 +318,16 @@ function DatasetResultCard({
           result={result}
           workspaceRoot={workspaceRoot}
           onContinuePrompt={onContinuePrompt}
+          onOpenArtifact={onOpenArtifact}
         />
       ) : null}
 
       {item.success && item.kind === 'publication' && publication ? (
-        <DatasetPublicationFiles publication={publication} workspaceRoot={workspaceRoot} />
+        <DatasetPublicationFiles
+          publication={publication}
+          workspaceRoot={workspaceRoot}
+          onOpenArtifact={onOpenArtifact}
+        />
       ) : null}
 
       {details !== undefined ? (
@@ -321,11 +356,13 @@ function DatasetResultCard({
 function DatasetExecutionProgress({
   result,
   workspaceRoot,
-  onContinuePrompt
+  onContinuePrompt,
+  onOpenArtifact
 }: {
   result?: Record<string, unknown>
   workspaceRoot?: string
   onContinuePrompt?: (prompt: string) => void
+  onOpenArtifact?: OpenDatasetArtifact
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const execution = asRecord(result?.execution)
@@ -334,7 +371,7 @@ function DatasetExecutionProgress({
   const status = stringValue(execution.status)
   const planId = stringValue(execution.planId)
   const runId = stringValue(execution.runId)
-  const resumePrompt = `继续执行已确认 Dataset 计划。严格只调用 Dataset MCP 的 dataset_resume_plan，参数 planId="${planId}", runId="${runId}"。等待工具终端回执后报告执行结果。`
+  const resumePrompt = `继续执行已确认的 Dataset 计划。请通过 Dataset API 的“Resume a dataset plan”能力恢复 planId="${planId}", runId="${runId}"，等待终端回执后报告结果。`
   return (
     <div data-dataset-execution-progress className="border-t border-ds-border-muted/70 bg-violet-500/[0.025] px-5 py-4">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -374,7 +411,7 @@ function DatasetExecutionProgress({
                   </div>
                   {stringValue(step.error) ? <p className="mt-1 text-[11px] text-red-600 dark:text-red-300">{stringValue(step.error)}</p> : null}
                   {counts ? <p className="mt-1 text-[11px] text-ds-muted">{executionCountsSummary(counts, t)}</p> : null}
-                  {artifacts.length > 0 ? (
+                  {artifacts.length > 0 && onOpenArtifact ? (
                     <div className="mt-2 flex flex-wrap gap-1.5">
                       {artifacts.slice(0, 4).map((artifact, artifactIndex) => {
                         const path = stringValue(artifact.path)
@@ -382,7 +419,7 @@ function DatasetExecutionProgress({
                           <button
                             key={`${path}-${artifactIndex}`}
                             type="button"
-                            onClick={() => previewWorkspaceFile({ path, workspaceRoot })}
+                            onClick={() => onOpenArtifact(path)}
                             className="inline-flex max-w-[240px] items-center gap-1 rounded-md border border-ds-border px-2 py-1 text-[10.5px] text-ds-muted hover:bg-ds-hover"
                             title={path}
                           >
@@ -417,21 +454,23 @@ function executionCountsSummary(
 
 function DatasetPublicationFiles({
   publication,
-  workspaceRoot
+  workspaceRoot,
+  onOpenArtifact
 }: {
   publication: Record<string, unknown>
   workspaceRoot?: string
+  onOpenArtifact?: OpenDatasetArtifact
 }): ReactElement | null {
   const { t } = useTranslation('common')
   const files = publicationReleaseFiles(publication)
-  if (files.length === 0) return null
+  if (files.length === 0 || !onOpenArtifact) return null
   return (
     <div data-dataset-publication-files className="flex flex-wrap gap-2 border-t border-ds-border-muted/70 px-5 py-3">
       {files.map((file) => (
         <button
           key={file.path}
           type="button"
-          onClick={() => previewWorkspaceFile({ path: file.path, workspaceRoot })}
+          onClick={() => onOpenArtifact(file.path)}
           className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-ds-border bg-ds-card px-2.5 text-[12px] font-semibold text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
         >
           <ExternalLink className="h-3.5 w-3.5" />
@@ -522,39 +561,20 @@ function DatasetRawDataPreview({
   workspaceRoot,
   format,
   contentType,
-  sha256
+  sha256,
+  preview
 }: {
   path: string
   workspaceRoot?: string
   format: string
   contentType: string
   sha256: string
+  preview: string
 }): ReactElement | null {
-  const { t } = useTranslation('common')
-  const [preview, setPreview] = useState<string>('')
-  const [previewError, setPreviewError] = useState<string>('')
   const supported = isTextDatasetFormat(format, contentType, path)
-
-  useEffect(() => {
-    let cancelled = false
-    setPreview('')
-    setPreviewError('')
-    if (!supported || typeof window.sciforge?.readWorkspaceFile !== 'function') return () => { cancelled = true }
-    void window.sciforge.readWorkspaceFile({ path, workspaceRoot })
-      .then((read) => {
-        if (cancelled) return
-        if (!read.ok) {
-          setPreviewError(read.message)
-          return
-        }
-        if (read.kind !== 'text') return
-        setPreview(datasetTextPreview(read.content, format, path))
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setPreviewError(error instanceof Error ? error.message : String(error))
-      })
-    return () => { cancelled = true }
-  }, [contentType, format, path, supported, workspaceRoot])
+  const renderedPreview = supported && preview
+    ? datasetTextPreview(preview, format, path)
+    : ''
 
   if (!supported && !sha256) return null
   return (
@@ -563,12 +583,10 @@ function DatasetRawDataPreview({
         {sha256 ? <span className="font-mono" title={sha256}>SHA-256 {shortHash(sha256)}</span> : null}
         <span className="min-w-0 truncate font-mono" title={path}>{path}</span>
       </div>
-      {preview ? (
+      {renderedPreview ? (
         <pre data-dataset-raw-preview className="mt-3 max-h-52 overflow-auto whitespace-pre-wrap break-all rounded-xl border border-ds-border-muted bg-ds-card/70 px-3.5 py-3 font-mono text-[11px] leading-5 text-ds-muted">
-          {preview}
+          {renderedPreview}
         </pre>
-      ) : previewError ? (
-        <p className="mt-2 text-[11px] text-amber-600 dark:text-amber-300">{t('datasetResultPreviewUnavailable')}: {previewError}</p>
       ) : null}
     </div>
   )

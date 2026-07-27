@@ -336,9 +336,6 @@ export type ScientificPlottingMcpConfigResult =
 export type BgcDiscoveryMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
-export type DatasetApiMcpConfigResult =
-  | { ok: true; config: Record<string, unknown> }
-  | { ok: false; message: string }
 export type ImageGenerationMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -925,7 +922,6 @@ export type SciForgeApi = {
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
-  buildDatasetApiMcpConfig: (workspaceRoot?: string) => Promise<DatasetApiMcpConfigResult>
   buildImageGenerationMcpConfig: (workspaceRoot?: string) => Promise<ImageGenerationMcpConfigResult>
   buildPptMasterMcpConfig: (workspaceRoot?: string) => Promise<PptMasterMcpConfigResult>
   getScientificSkillsStatus: (workspaceRoot?: string) => Promise<ScientificSkillsStatusResult>

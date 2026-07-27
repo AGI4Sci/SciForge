@@ -1,35 +1,44 @@
 import { z } from 'zod'
 
-export const DATASET_API_MCP_FLAG = '--dataset-api-mcp-server'
-export const DATASET_API_MCP_SERVER_NAME = 'sciforge-dataset-api'
-export const DATASET_API_MCP_SERVER_VERSION = '0.7.0'
+export const DATASET_API_CAPABILITY_IDS = Object.freeze({
+  catalog: 'dataset-api.catalog',
+  registerProvider: 'dataset-api.register-provider',
+  list: 'dataset-api.list',
+  register: 'dataset-api.register',
+  metadata: 'dataset-api.metadata',
+  rawData: 'dataset-api.raw-data',
+  preparePlan: 'dataset-api.prepare-plan',
+  executePlan: 'dataset-api.execute-plan',
+  resumePlan: 'dataset-api.resume-plan',
+  profile: 'dataset-api.profile',
+  filter: 'dataset-api.filter',
+  selectColumns: 'dataset-api.select-columns',
+  transform: 'dataset-api.transform',
+  deduplicate: 'dataset-api.deduplicate',
+  idMap: 'dataset-api.id-map',
+  idMapProvider: 'dataset-api.id-map-provider',
+  join: 'dataset-api.join',
+  structureProfile: 'dataset-api.structure-profile',
+  structureValidate: 'dataset-api.structure-validate',
+  graphOrganize: 'dataset-api.graph-organize',
+  validate: 'dataset-api.validate',
+  publish: 'dataset-api.publish'
+})
 
-export const DATASET_API_TOOL_SIDE_EFFECTS = {
-  dataset_api_catalog: 'read',
-  dataset_api_register_provider: 'controlled-write',
-  dataset_api_list: 'read',
-  dataset_api_register: 'controlled-write',
-  dataset_api_metadata: 'network-read',
-  dataset_api_raw_data: 'network-read-controlled-write',
-  dataset_prepare_plan: 'controlled-write',
-  dataset_execute_plan: 'network-read-controlled-write',
-  dataset_resume_plan: 'network-read-controlled-write',
-  dataset_profile: 'controlled-write',
-  dataset_filter: 'controlled-write',
-  dataset_select_columns: 'controlled-write',
-  dataset_transform: 'controlled-write',
-  dataset_deduplicate: 'controlled-write',
-  dataset_id_map: 'controlled-write',
-  dataset_id_map_provider: 'network-read-controlled-write',
-  dataset_join: 'controlled-write',
-  dataset_structure_profile: 'controlled-write',
-  dataset_structure_validate: 'controlled-write',
-  dataset_graph_organize: 'controlled-write',
-  dataset_validate: 'controlled-write',
-  dataset_publish: 'controlled-write'
-} as const
+export const datasetApiCapabilityIdSchema = z.enum(
+  Object.values(DATASET_API_CAPABILITY_IDS) as [
+    string,
+    ...string[]
+  ]
+)
 
-export type DatasetApiToolName = keyof typeof DATASET_API_TOOL_SIDE_EFFECTS
+export const datasetApiCapabilityOutputSchema = z.object({
+  datasetApi: z.object({
+    actionId: datasetApiCapabilityIdSchema,
+    success: z.literal(true),
+    result: z.json()
+  }).strict()
+}).strict()
 
 const optionalWorkspaceRootSchema = z.string().trim().min(1).max(4096).optional()
 const datasetIdSchema = z.string().trim().min(1).max(80).regex(/^[a-z0-9][a-z0-9_-]*$/)
@@ -91,8 +100,7 @@ const datasetPlanOutputSchema = z.object({
   description: z.string().trim().min(1).max(1000).optional()
 }).strict()
 
-export const datasetPreparePlanInputSchema = z.object({
-  workspaceRoot: optionalWorkspaceRootSchema,
+export const datasetPreparePlanWireSchema = z.object({
   draftPlanId: z.string().regex(/^plan-[a-f0-9]{16}$/).optional(),
   objective: z.string().trim().min(1).max(8000).optional(),
   sources: z.array(datasetPlanSourceSchema).max(50).optional(),
@@ -116,6 +124,10 @@ export const datasetPreparePlanInputSchema = z.object({
   if (!input.objective) context.addIssue({ code: 'custom', path: ['objective'], message: 'A plan objective is required.' })
   if (!input.operations) context.addIssue({ code: 'custom', path: ['operations'], message: 'At least one plan operation is required.' })
   if (!input.outputs) context.addIssue({ code: 'custom', path: ['outputs'], message: 'At least one plan output is required.' })
+})
+
+export const datasetPreparePlanInputSchema = datasetPreparePlanWireSchema.safeExtend({
+  workspaceRoot: optionalWorkspaceRootSchema
 })
 
 export const datasetExecutePlanInputSchema = z.object({

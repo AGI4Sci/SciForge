@@ -3,11 +3,12 @@ import type { DomainMainHost } from '@sciforge/domain-sdk/host'
 import { defineInstalledMainDomainEntrySet } from '@sciforge/domain-sdk/main'
 import { createDomainMainEntry as createDomainMainEntry0 } from '@sciforge/domain-biology-room/main'
 import { createDomainMainEntry as createDomainMainEntry1 } from '@sciforge/domain-browser-preview/main'
-import { createDomainMainEntry as createDomainMainEntry2 } from '@sciforge/domain-evidence-dag/main'
-import { createDomainMainEntry as createDomainMainEntry3 } from '@sciforge/domain-life-science-preview/main'
-import { createDomainMainEntry as createDomainMainEntry4 } from '@sciforge/domain-paper-radar/main'
-import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-project-dag/main'
-import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-remote-ssh/main'
+import { createDomainMainEntry as createDomainMainEntry2 } from '@sciforge/domain-dataset-api/main'
+import { createDomainMainEntry as createDomainMainEntry3 } from '@sciforge/domain-evidence-dag/main'
+import { createDomainMainEntry as createDomainMainEntry4 } from '@sciforge/domain-life-science-preview/main'
+import { createDomainMainEntry as createDomainMainEntry5 } from '@sciforge/domain-paper-radar/main'
+import { createDomainMainEntry as createDomainMainEntry6 } from '@sciforge/domain-project-dag/main'
+import { createDomainMainEntry as createDomainMainEntry7 } from '@sciforge/domain-remote-ssh/main'
 import type { z } from 'zod'
 import { installedDomainPackages } from '../../shared/installed-domain-packages'
 import { defineCapability, type DefineCapabilityOptions } from '../capabilities/registry'
@@ -30,7 +31,8 @@ export function createInstalledMainDomainEntries(host: InstalledMainDomainHost) 
       createDomainMainEntry3(domainHost),
       createDomainMainEntry4(domainHost),
       createDomainMainEntry5(domainHost),
-      createDomainMainEntry6(domainHost)
+      createDomainMainEntry6(domainHost),
+      createDomainMainEntry7(domainHost)
     ]
   ).entries
 }

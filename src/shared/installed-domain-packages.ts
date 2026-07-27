@@ -2,11 +2,12 @@
 import { defineInstalledDomainPackageSet } from '@sciforge/domain-sdk'
 import { domainPackageDefinition as domainPackageDefinition0 } from '@sciforge/domain-biology-room/definition'
 import { domainPackageDefinition as domainPackageDefinition1 } from '@sciforge/domain-browser-preview/definition'
-import { domainPackageDefinition as domainPackageDefinition2 } from '@sciforge/domain-evidence-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition3 } from '@sciforge/domain-life-science-preview/definition'
-import { domainPackageDefinition as domainPackageDefinition4 } from '@sciforge/domain-paper-radar/definition'
-import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-project-dag/definition'
-import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-remote-ssh/definition'
+import { domainPackageDefinition as domainPackageDefinition2 } from '@sciforge/domain-dataset-api/definition'
+import { domainPackageDefinition as domainPackageDefinition3 } from '@sciforge/domain-evidence-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition4 } from '@sciforge/domain-life-science-preview/definition'
+import { domainPackageDefinition as domainPackageDefinition5 } from '@sciforge/domain-paper-radar/definition'
+import { domainPackageDefinition as domainPackageDefinition6 } from '@sciforge/domain-project-dag/definition'
+import { domainPackageDefinition as domainPackageDefinition7 } from '@sciforge/domain-remote-ssh/definition'
 
 export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition0,
@@ -15,5 +16,6 @@ export const installedDomainPackages = defineInstalledDomainPackageSet([
   domainPackageDefinition3,
   domainPackageDefinition4,
   domainPackageDefinition5,
-  domainPackageDefinition6
+  domainPackageDefinition6,
+  domainPackageDefinition7
 ])

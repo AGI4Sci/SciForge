@@ -4,7 +4,7 @@
 
 Authoritative source: `src/main/modules/index.ts`
 
-Registered actions: **73**
+Registered actions: **95**
 
 | Action ID | Version | Audiences | Effect | Approval | Scope |
 | --- | --- | --- | --- | --- | --- |
@@ -26,6 +26,28 @@ Registered actions: **73**
 | `browser-preview.read` | 1.0.0 | ui, agent | read | none | resource |
 | `browser-preview.reload` | 1.0.0 | ui, agent | external-write | confirmation | resource |
 | `browser-preview.select` | 1.0.0 | ui, agent | external-write | confirmation | resource |
+| `dataset-api.catalog` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.deduplicate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.execute-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.filter` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.graph-organize` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.id-map` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.id-map-provider` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.join` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.list` | 1.0.0 | ui, agent, system | read | none | workspace |
+| `dataset-api.metadata` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.prepare-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.profile` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.publish` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.raw-data` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.register` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.register-provider` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.resume-plan` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.select-columns` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.structure-profile` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.structure-validate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.transform` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
+| `dataset-api.validate` | 1.0.0 | ui, agent, system | workspace-write | none | workspace |
 | `evidence-dag.priority` | 1.0.0 | ui, agent | compute | none | global |
 | `evidence-dag.resolve-evidence-preview` | 1.0.0 | ui, agent | read | none | global |
 | `evidence-dag.update` | 1.0.0 | ui, agent | compute | none | global |
@@ -1650,6 +1672,4687 @@ Selects an option through a revision-bound target.
     "web-page"
   ],
   "title": "Select browser page option"
+}
+```
+
+## `dataset-api.catalog`
+
+Lists built-in public biology data providers, transports, metadata access, raw-data access, and adapter requirements.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "category": {
+        "enum": [
+          "core",
+          "drug-and-small-molecule",
+          "pathway-and-network",
+          "structure-and-single-cell"
+        ],
+        "type": "string"
+      },
+      "query": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "transport": {
+        "enum": [
+          "rest",
+          "graphql",
+          "rest-and-graphql",
+          "sdk-object-store"
+        ],
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-access"
+  ],
+  "title": "Browse biology dataset providers"
+}
+```
+
+## `dataset-api.deduplicate`
+
+Deduplicates records by explicit structured keys and preserves removed duplicates separately.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "keep": {
+        "enum": [
+          "first",
+          "last"
+        ],
+        "type": "string"
+      },
+      "keys": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "planId",
+      "keys",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Deduplicate a dataset"
+}
+```
+
+## `dataset-api.execute-plan`
+
+Executes every operation in a confirmed plan with durable step checkpoints.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "planId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Execute a confirmed dataset plan"
+}
+```
+
+## `dataset-api.filter`
+
+Applies structured filter conditions and writes deterministic included and excluded artifacts.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "combine": {
+        "enum": [
+          "all",
+          "any"
+        ],
+        "type": "string"
+      },
+      "conditions": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "caseSensitive": {
+              "type": "boolean"
+            },
+            "field": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "operator": {
+              "enum": [
+                "equals",
+                "not_equals",
+                "contains",
+                "starts_with",
+                "ends_with",
+                "in",
+                "not_in",
+                "gt",
+                "gte",
+                "lt",
+                "lte",
+                "between",
+                "exists"
+              ],
+              "type": "string"
+            },
+            "value": {}
+          },
+          "required": [
+            "field",
+            "operator"
+          ],
+          "type": "object"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "planId",
+      "conditions",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Filter a dataset artifact"
+}
+```
+
+## `dataset-api.graph-organize`
+
+Converts explicit edge records into deterministic node, edge, graph-summary, and invalid-record artifacts.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "deduplicateEdges": {
+        "type": "boolean"
+      },
+      "directed": {
+        "type": "boolean"
+      },
+      "edgeTypeField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "graphType": {
+        "enum": [
+          "pathway",
+          "network"
+        ],
+        "type": "string"
+      },
+      "includeFields": {
+        "items": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxOutputEdges": {
+        "maximum": 5000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "onInvalid": {
+        "enum": [
+          "drop",
+          "fail"
+        ],
+        "type": "string"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "sourceField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "targetField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "weightField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "planId",
+      "graphType",
+      "sourceField",
+      "targetField",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Organize pathway or network data"
+}
+```
+
+## `dataset-api.id-map`
+
+Maps identifiers using a workspace mapping artifact with explicit cardinality and unmatched policies.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "cardinality": {
+        "enum": [
+          "first",
+          "all",
+          "explode"
+        ],
+        "type": "string"
+      },
+      "caseSensitive": {
+        "type": "boolean"
+      },
+      "deduplicateTargets": {
+        "type": "boolean"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "inputField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "inputFormat": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputRecordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "mappingArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "mappingFormat": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "mappingFromField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "mappingRecordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "mappingToField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxOutputRecords": {
+        "maximum": 5000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "onUnmapped": {
+        "enum": [
+          "keep",
+          "null",
+          "drop",
+          "fail"
+        ],
+        "type": "string"
+      },
+      "outputField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFormat": {
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "planId",
+      "inputArtifact",
+      "mappingArtifact",
+      "inputField",
+      "mappingFromField",
+      "mappingToField",
+      "outputField",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Map biomedical identifiers"
+}
+```
+
+## `dataset-api.id-map-provider`
+
+Runs a bounded UniProt mapping job, persists provenance, and applies the mapping deterministically.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "cardinality": {
+        "enum": [
+          "first",
+          "all",
+          "explode"
+        ],
+        "type": "string"
+      },
+      "caseSensitive": {
+        "type": "boolean"
+      },
+      "deduplicateTargets": {
+        "type": "boolean"
+      },
+      "fromDatabase": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9_.:/-]+$",
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "inputField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "inputFormat": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputRecordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxIds": {
+        "maximum": 100000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "maxOutputRecords": {
+        "maximum": 5000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "maxPollAttempts": {
+        "maximum": 300,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "maxRetries": {
+        "maximum": 3,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "onUnmapped": {
+        "enum": [
+          "keep",
+          "null",
+          "drop",
+          "fail"
+        ],
+        "type": "string"
+      },
+      "outputField": {
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFormat": {
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "pollIntervalMs": {
+        "maximum": 10000,
+        "minimum": 100,
+        "type": "integer"
+      },
+      "provider": {
+        "const": "uniprot",
+        "type": "string"
+      },
+      "taxId": {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer"
+      },
+      "timeoutMs": {
+        "maximum": 120000,
+        "minimum": 1000,
+        "type": "integer"
+      },
+      "toDatabase": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9_.:/-]+$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "planId",
+      "inputArtifact",
+      "inputField",
+      "provider",
+      "fromDatabase",
+      "toDatabase",
+      "outputField",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "id-mapping",
+    "network"
+  ],
+  "title": "Map biomedical identifiers with UniProt"
+}
+```
+
+## `dataset-api.join`
+
+Joins two structured artifacts with explicit key mappings and deterministic unmatched outputs.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "joinType": {
+        "enum": [
+          "inner",
+          "left",
+          "right",
+          "full"
+        ],
+        "type": "string"
+      },
+      "keys": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "left": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "right": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "left",
+            "right"
+          ],
+          "type": "object"
+        },
+        "maxItems": 50,
+        "minItems": 1,
+        "type": "array"
+      },
+      "leftArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "leftFormat": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "leftRecordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxOutputRecords": {
+        "maximum": 5000000,
+        "minimum": 1,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFormat": {
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "rightArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "rightFormat": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv"
+        ],
+        "type": "string"
+      },
+      "rightPrefix": {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^[A-Za-z_][A-Za-z0-9_.-]*$",
+        "type": "string"
+      },
+      "rightRecordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "planId",
+      "leftArtifact",
+      "rightArtifact",
+      "keys",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Join dataset artifacts"
+}
+```
+
+## `dataset-api.list`
+
+Lists API-backed dataset databases registered in the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `read`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "none",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-access"
+  ],
+  "title": "List registered dataset databases"
+}
+```
+
+## `dataset-api.metadata`
+
+Reads structured metadata from a registered dataset database and can persist the complete response as a checksummed artifact.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "maxBytes": {
+        "maximum": 10485760,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxRetries": {
+        "maximum": 3,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "pathParameters": {
+        "additionalProperties": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "query": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxItems": 100,
+              "type": "array"
+            }
+          ]
+        },
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "responseMode": {
+        "enum": [
+          "auto",
+          "summary",
+          "full"
+        ],
+        "type": "string"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 60000,
+        "minimum": 100,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "sourceId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "metadata",
+    "network"
+  ],
+  "title": "Read dataset metadata"
+}
+```
+
+## `dataset-api.prepare-plan`
+
+Creates a reviewable data-preparation plan or confirms an immutable draft after user agreement.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "confirmationNotes": {
+        "items": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "confirmedByUser": {
+        "type": "boolean"
+      },
+      "draftPlanId": {
+        "pattern": "^plan-[a-f0-9]{16}$",
+        "type": "string"
+      },
+      "exclusions": {
+        "items": {
+          "maxLength": 1000,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+      },
+      "objective": {
+        "maxLength": 8000,
+        "minLength": 1,
+        "type": "string"
+      },
+      "operations": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "parameters": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "tool": {
+              "enum": [
+                "dataset_api_metadata",
+                "dataset_api_raw_data",
+                "dataset_profile",
+                "dataset_filter",
+                "dataset_select_columns",
+                "dataset_transform",
+                "dataset_deduplicate",
+                "dataset_id_map",
+                "dataset_id_map_provider",
+                "dataset_join",
+                "dataset_structure_profile",
+                "dataset_structure_validate",
+                "dataset_graph_organize",
+                "dataset_validate",
+                "dataset_publish"
+              ],
+              "type": "string"
+            }
+          },
+          "required": [
+            "tool",
+            "description"
+          ],
+          "type": "object"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "outputs": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "description": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "format": {
+              "enum": [
+                "json",
+                "jsonl",
+                "csv",
+                "tsv",
+                "fasta"
+              ],
+              "type": "string"
+            },
+            "name": {
+              "maxLength": 255,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "format"
+          ],
+          "type": "object"
+        },
+        "maxItems": 20,
+        "minItems": 1,
+        "type": "array"
+      },
+      "sources": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "metadataRequest": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "providerId": {
+              "maxLength": 80,
+              "minLength": 1,
+              "type": "string"
+            },
+            "purpose": {
+              "maxLength": 1000,
+              "minLength": 1,
+              "type": "string"
+            },
+            "rawDataRequest": {
+              "additionalProperties": {},
+              "propertyNames": {
+                "type": "string"
+              },
+              "type": "object"
+            }
+          },
+          "required": [
+            "providerId",
+            "purpose"
+          ],
+          "type": "object"
+        },
+        "maxItems": 50,
+        "type": "array"
+      }
+    },
+    "required": [
+      "confirmedByUser"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Prepare a dataset processing plan"
+}
+```
+
+## `dataset-api.profile`
+
+Profiles JSON, JSONL, CSV, TSV, or FASTA data and persists a bounded report.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Profile a dataset artifact"
+}
+```
+
+## `dataset-api.publish`
+
+Publishes confirmed-plan artifacts with manifest, schema, quality report, checksums, and provenance.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "allowInvalid": {
+        "type": "boolean"
+      },
+      "artifacts": {
+        "items": {
+          "maxLength": 4096,
+          "minLength": 1,
+          "type": "string"
+        },
+        "maxItems": 100,
+        "minItems": 1,
+        "type": "array"
+      },
+      "description": {
+        "maxLength": 4000,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "outputDirectoryName": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "requireValidation": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "planId",
+      "name",
+      "artifacts"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Publish a prepared dataset"
+}
+```
+
+## `dataset-api.raw-data`
+
+Downloads validated raw data from a registered database into a checksummed workspace artifact.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "expectedFormat": {
+        "enum": [
+          "auto",
+          "fasta",
+          "json",
+          "text",
+          "binary"
+        ],
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 1073741824,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxRetries": {
+        "maximum": 3,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "pathParameters": {
+        "additionalProperties": {
+          "maxLength": 1024,
+          "minLength": 1,
+          "type": "string"
+        },
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[A-Za-z][A-Za-z0-9_]*$",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "query": {
+        "additionalProperties": {
+          "anyOf": [
+            {
+              "maxLength": 4096,
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "items": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  }
+                ]
+              },
+              "maxItems": 100,
+              "type": "array"
+            }
+          ]
+        },
+        "propertyNames": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "range": {
+        "additionalProperties": false,
+        "properties": {
+          "end": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "start": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "start"
+        ],
+        "type": "object"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "timeoutMs": {
+        "maximum": 600000,
+        "minimum": 100,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "sourceId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "raw-data",
+    "network"
+  ],
+  "title": "Download dataset raw data"
+}
+```
+
+## `dataset-api.register`
+
+Registers an API-backed database with separate metadata and raw-data endpoint templates.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "auth": {
+        "additionalProperties": false,
+        "properties": {
+          "envVar": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+            "type": "string"
+          },
+          "headerName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+            "type": "string"
+          },
+          "queryName": {
+            "maxLength": 128,
+            "minLength": 1,
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "enum": [
+              "bearer",
+              "header",
+              "query"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "envVar"
+        ],
+        "type": "object"
+      },
+      "baseUrl": {
+        "format": "uri",
+        "maxLength": 4096,
+        "type": "string"
+      },
+      "defaultHeaders": {
+        "additionalProperties": {
+          "maxLength": 4096,
+          "type": "string"
+        },
+        "propertyNames": {
+          "maxLength": 128,
+          "minLength": 1,
+          "pattern": "^[!#$%&'*+.^_`|~0-9A-Za-z-]+$",
+          "type": "string"
+        },
+        "type": "object"
+      },
+      "description": {
+        "maxLength": 2000,
+        "type": "string"
+      },
+      "id": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "metadataEndpoint": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 160,
+        "minLength": 1,
+        "type": "string"
+      },
+      "overwrite": {
+        "type": "boolean"
+      },
+      "rawDataEndpoint": {
+        "maxLength": 2048,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "id",
+      "baseUrl",
+      "metadataEndpoint",
+      "rawDataEndpoint"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Register a dataset database"
+}
+```
+
+## `dataset-api.register-provider`
+
+Registers an executable built-in biology provider preset in the caller workspace.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "overwrite": {
+        "type": "boolean"
+      },
+      "providerId": {
+        "enum": [
+          "ncbi-eutils",
+          "ensembl",
+          "uniprot",
+          "ucsc-genome-browser",
+          "pubchem-pug-rest",
+          "clinicaltrials-gov",
+          "kegg",
+          "reactome",
+          "quickgo",
+          "string",
+          "alphafold-db"
+        ],
+        "type": "string"
+      },
+      "sourceId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "providerId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Register a built-in dataset provider"
+}
+```
+
+## `dataset-api.resume-plan`
+
+Resumes a failed or interrupted confirmed plan from its checksum-verified checkpoint.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "runId": {
+        "pattern": "^run-[a-f0-9]{16}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "planId"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Resume a dataset plan"
+}
+```
+
+## `dataset-api.select-columns`
+
+Selects, renames, defaults, and requires structured fields without arbitrary code.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "columns": {
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "defaultValue": {},
+            "required": {
+              "type": "boolean"
+            },
+            "source": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "target": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "source"
+          ],
+          "type": "object"
+        },
+        "maxItems": 500,
+        "minItems": 1,
+        "type": "array"
+      },
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFormat": {
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "planId",
+      "columns",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Select and rename dataset fields"
+}
+```
+
+## `dataset-api.structure-profile`
+
+Profiles SDF or mmCIF structure data with format-aware parsers.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "enum": [
+          "auto",
+          "sdf",
+          "mmcif"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Profile structure data"
+}
+```
+
+## `dataset-api.structure-validate`
+
+Validates SDF or mmCIF records and persists a quality report.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "failOnInvalid": {
+        "type": "boolean"
+      },
+      "format": {
+        "enum": [
+          "auto",
+          "sdf",
+          "mmcif"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "minRecords": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "requireCoordinates": {
+        "type": "boolean"
+      }
+    },
+    "required": [
+      "inputArtifact"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Validate structure data"
+}
+```
+
+## `dataset-api.transform`
+
+Applies allow-listed deterministic normalization and scalar transformations.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "operations": {
+        "items": {
+          "oneOf": [
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "trim",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "lowercase",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "uppercase",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "normalize_whitespace",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "onError": {
+                  "enum": [
+                    "fail",
+                    "null",
+                    "keep"
+                  ],
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "to_number",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "falseValues": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "onError": {
+                  "enum": [
+                    "fail",
+                    "null",
+                    "keep"
+                  ],
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "to_boolean",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "trueValues": {
+                  "items": {
+                    "anyOf": [
+                      {
+                        "maxLength": 4096,
+                        "type": "string"
+                      },
+                      {
+                        "type": "number"
+                      },
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxItems": 50,
+                  "minItems": 1,
+                  "type": "array"
+                }
+              },
+              "required": [
+                "operation",
+                "field"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "replace_literal",
+                  "type": "string"
+                },
+                "replaceAll": {
+                  "type": "boolean"
+                },
+                "replacement": {
+                  "maxLength": 4096,
+                  "type": "string"
+                },
+                "search": {
+                  "maxLength": 1024,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field",
+                "search",
+                "replacement"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "caseSensitive": {
+                  "type": "boolean"
+                },
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "mappings": {
+                  "items": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "from": {
+                        "anyOf": [
+                          {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "to": {
+                        "anyOf": [
+                          {
+                            "maxLength": 4096,
+                            "type": "string"
+                          },
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "boolean"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "from",
+                      "to"
+                    ],
+                    "type": "object"
+                  },
+                  "maxItems": 1000,
+                  "minItems": 1,
+                  "type": "array"
+                },
+                "onUnmapped": {
+                  "enum": [
+                    "keep",
+                    "null",
+                    "fail"
+                  ],
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "map_values",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "operation",
+                "field",
+                "mappings"
+              ],
+              "type": "object"
+            },
+            {
+              "additionalProperties": false,
+              "properties": {
+                "field": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "operation": {
+                  "const": "set_default",
+                  "type": "string"
+                },
+                "target": {
+                  "maxLength": 512,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "maxLength": 4096,
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "operation",
+                "field",
+                "value"
+              ],
+              "type": "object"
+            }
+          ]
+        },
+        "maxItems": 500,
+        "minItems": 1,
+        "type": "array"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "outputFormat": {
+        "enum": [
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "planId",
+      "operations",
+      "outputFileName"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Transform dataset fields"
+}
+```
+
+## `dataset-api.validate`
+
+Validates schema, record, range, uniqueness, missingness, and FASTA integrity constraints.
+
+- Version: `1.0.0`
+- Audiences: ui, agent, system
+- Effect: `workspace-write`
+- Approval: none
+- Scope: workspace
+
+### Contract
+
+```json
+{
+  "concurrency": {
+    "idempotency": "required",
+    "revision": "none"
+  },
+  "contractVersion": 1,
+  "inputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+      "failOnInvalid": {
+        "type": "boolean"
+      },
+      "format": {
+        "enum": [
+          "auto",
+          "json",
+          "jsonl",
+          "csv",
+          "tsv",
+          "fasta"
+        ],
+        "type": "string"
+      },
+      "inputArtifact": {
+        "maxLength": 4096,
+        "minLength": 1,
+        "type": "string"
+      },
+      "maxBytes": {
+        "maximum": 268435456,
+        "minimum": 1024,
+        "type": "integer"
+      },
+      "maxMissingFraction": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+      },
+      "minRecords": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "outputFileName": {
+        "maxLength": 255,
+        "minLength": 1,
+        "type": "string"
+      },
+      "planId": {
+        "maxLength": 80,
+        "minLength": 1,
+        "pattern": "^[a-z0-9][a-z0-9_-]*$",
+        "type": "string"
+      },
+      "recordPath": {
+        "maxLength": 1024,
+        "minLength": 1,
+        "type": "string"
+      },
+      "rules": {
+        "default": [],
+        "items": {
+          "additionalProperties": false,
+          "properties": {
+            "allowedValues": {
+              "items": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "maxItems": 1000,
+              "type": "array"
+            },
+            "field": {
+              "maxLength": 512,
+              "minLength": 1,
+              "type": "string"
+            },
+            "max": {
+              "type": "number"
+            },
+            "min": {
+              "type": "number"
+            },
+            "required": {
+              "type": "boolean"
+            },
+            "type": {
+              "enum": [
+                "string",
+                "number",
+                "boolean",
+                "object",
+                "array"
+              ],
+              "type": "string"
+            },
+            "unique": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "field"
+          ],
+          "type": "object"
+        },
+        "maxItems": 500,
+        "type": "array"
+      }
+    },
+    "required": [
+      "inputArtifact",
+      "rules"
+    ],
+    "type": "object"
+  },
+  "outputSchema": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "definitions": {
+      "__schema0": {
+        "anyOf": [
+          {
+            "type": "string"
+          },
+          {
+            "type": "number"
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "type": "null"
+          },
+          {
+            "items": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "type": "array"
+          },
+          {
+            "additionalProperties": {
+              "$ref": "#/definitions/__schema0"
+            },
+            "propertyNames": {
+              "type": "string"
+            },
+            "type": "object"
+          }
+        ]
+      }
+    },
+    "properties": {
+      "datasetApi": {
+        "additionalProperties": false,
+        "properties": {
+          "actionId": {
+            "enum": [
+              "dataset-api.catalog",
+              "dataset-api.register-provider",
+              "dataset-api.list",
+              "dataset-api.register",
+              "dataset-api.metadata",
+              "dataset-api.raw-data",
+              "dataset-api.prepare-plan",
+              "dataset-api.execute-plan",
+              "dataset-api.resume-plan",
+              "dataset-api.profile",
+              "dataset-api.filter",
+              "dataset-api.select-columns",
+              "dataset-api.transform",
+              "dataset-api.deduplicate",
+              "dataset-api.id-map",
+              "dataset-api.id-map-provider",
+              "dataset-api.join",
+              "dataset-api.structure-profile",
+              "dataset-api.structure-validate",
+              "dataset-api.graph-organize",
+              "dataset-api.validate",
+              "dataset-api.publish"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/definitions/__schema0"
+          },
+          "success": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "actionId",
+          "success",
+          "result"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "datasetApi"
+    ],
+    "type": "object"
+  },
+  "resourceKinds": [],
+  "tags": [
+    "dataset",
+    "biology",
+    "data-preparation"
+  ],
+  "title": "Validate a dataset artifact"
 }
 ```
 
@@ -13070,6 +17773,7 @@ Releases an open Workspace Preview session.
 | --- | --- | --- |
 | Biology Room | biologyRoom: |  |
 | Browser Preview | browserPreview: |  |
+| Dataset API |  |  |
 | Evidence DAG | evidenceDag: |  |
 | Paper Radar | paperRadar: |  |
 | Project DAG | projectDag: |  |

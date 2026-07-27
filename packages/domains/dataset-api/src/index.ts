@@ -1,5 +1,6 @@
 export * from './contract.js'
-export * from './mcp-server.js'
+export * from './definition.js'
+export * from './main.js'
 export * from './provider-presets.js'
 export * from './providers.js'
 export * from './processing.js'
