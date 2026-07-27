@@ -1,3 +1,5 @@
+import type { ExecutionReceipt } from '@sciforge/execution-governance'
+
 export type AgentRuntimeId = 'sciforge' | 'codex' | 'claude'
 
 export type AgentRuntimeTransport = 'http_sse' | 'jsonrpc_stdio' | 'cli_process'
@@ -131,7 +133,7 @@ export type AgentRuntimeControlSupport =
 
 export type AgentRuntimeCompactSupport = 'unsupported' | 'native' | 'noop'
 
-export type AgentRuntimeToolStormGuardSupport = 'native' | 'observe' | 'unsupported'
+export type AgentRuntimeExecutionGuardSupport = 'native' | 'observe' | 'unsupported'
 
 export type AgentRuntimeModality = 'text' | 'image'
 
@@ -181,7 +183,7 @@ export type CapabilityState = {
 
 export type AgentRuntimeCapabilityId =
   | 'codeNavigation.lsp'
-  | 'modelAudit.runtimeRequests'
+  | 'fullTrace.agentEvents'
   | 'context.state'
   | 'context.ledger'
   | 'context.handoff'
@@ -226,99 +228,6 @@ export type AgentRuntimeCodeNavigationOutput = {
   filePath?: string
   result: unknown
   degraded?: boolean
-}
-
-export type AgentRuntimeModelAuditToolCall = {
-  callId?: string
-  toolName: string
-  arguments?: unknown
-  result?: unknown
-  status?: 'running' | 'success' | 'error'
-  phase?: AgentRuntimeToolExecutionPhase
-  factSource?: AgentRuntimeToolFactSource
-  evidenceStrength?: AgentRuntimeToolEvidenceStrength
-  attempt?: number
-  resultDigest?: string
-  errorCode?: string
-}
-
-export type AgentRuntimeModelAuditRequestBodySummary = {
-  schema: 'agent-runtime.turnStart'
-  keys: string[]
-  textChars: number
-  displayTextChars?: number
-  attachmentCount: number
-  fileReferenceCount: number
-  inlineContextReferenceCount: number
-  modelRouterObjectReferenceCount: number
-  hasGuiPlan: boolean
-  estimatedJsonChars: number
-}
-
-export type AgentRuntimeModelAuditModelRouterBodySummary = {
-  schema: 'model-router.responses.runtime'
-  keys: string[]
-  inputTextChars: number
-  displayTextChars?: number
-  metadataKeys: string[]
-  attachmentCount: number
-  fileReferenceCount: number
-  inlineContextReferenceCount: number
-  modelRouterObjectReferenceCount: number
-  hasGuiPlan: boolean
-  estimatedJsonChars: number
-}
-
-export type AgentRuntimeModelAuditModelRouterSummary = {
-  providerAlias: 'model-router'
-  modelAlias: string
-  requestUrl: string
-  endpointRoute: 'responses'
-  requestBodySummary: AgentRuntimeModelAuditModelRouterBodySummary
-}
-
-export type AgentRuntimeModelAuditRequestSummary = {
-  text?: string
-  displayText?: string
-  workspace?: string
-  mode?: string
-  model?: string
-  reasoningEffort?: string
-  attachmentIds?: string[]
-  fileReferences?: Array<{
-    relativePath: string
-    name: string
-    kind?: AgentRuntimeWorkspaceReferenceKind
-    mimeType?: string
-    delivery?: AgentRuntimeFileReference['delivery']
-    modelRouterObject?: boolean
-  }>
-  bodySummary: AgentRuntimeModelAuditRequestBodySummary
-}
-
-export type AgentRuntimeModelAuditRecord = {
-  id: string
-  runtimeId: AgentRuntimeId
-  threadId: string
-  turnId?: string
-  provider?: string
-  model?: string
-  modelRouterUrl?: string
-  providerAlias?: string
-  modelAlias?: string
-  modelRouter?: AgentRuntimeModelAuditModelRouterSummary
-  startedAt: string
-  finishedAt?: string
-  durationMs?: number
-  request: AgentRuntimeModelAuditRequestSummary
-  streamOutput: {
-    text: string
-    reasoning: string
-    toolCalls: AgentRuntimeModelAuditToolCall[]
-    usage?: AgentRuntimeUsage
-    stopReason?: string
-    error?: string
-  }
 }
 
 export type AgentRuntimeContextState = {
@@ -375,6 +284,22 @@ export type AgentRuntimeContextLedgerMemory = {
   createdAt?: string
 }
 
+export type AgentRuntimeDirectiveDeliveryState =
+  | 'accepted'
+  | 'delivering'
+  | 'delivered'
+  | 'rejected'
+  | 'uncertain'
+
+export type AgentRuntimeContextDirective = {
+  id: string
+  text: string
+  acceptedAt: string
+  delivery: AgentRuntimeDirectiveDeliveryState
+  turnId?: string
+  error?: string
+}
+
 export type AgentRuntimeContextLedger = {
   runtimeId: AgentRuntimeId
   threadId: string
@@ -386,6 +311,7 @@ export type AgentRuntimeContextLedger = {
   evidence: AgentRuntimeContextLedgerEvidence[]
   fileReferences: AgentRuntimeWorkspaceReference[]
   explicitMemories: AgentRuntimeContextLedgerMemory[]
+  directives: AgentRuntimeContextDirective[]
   recentTailDigest?: string
   compactionDigest?: string
   sourceMarker?: string
@@ -406,6 +332,7 @@ export type AgentRuntimeHandoffPacket = {
   evidence: AgentRuntimeContextLedgerEvidence[]
   fileReferences: AgentRuntimeWorkspaceReference[]
   explicitMemories: AgentRuntimeContextLedgerMemory[]
+  directives: AgentRuntimeContextDirective[]
   recentTailDigest?: string
   compactionDigest?: string
   sourceMarker?: string
@@ -597,10 +524,61 @@ export type AgentRuntimeThreadSidebarProbe = {
   text: string | null
 }
 
+export type AgentRuntimeExecutionEffectClass =
+  | 'read'
+  | 'command_execution'
+  | 'local_write'
+  | 'external_mutation'
+  | 'async_job'
+  | 'child_agent'
+  | 'other'
+
+export type AgentRuntimeCompletionReceiptKind =
+  | 'visual.look'
+  | 'visual.capture'
+  | 'artifact.reference-validation'
+
+/**
+ * A semantic completion fact minted by trusted SciForge runtime code.
+ *
+ * This is intentionally separate from the generic executor receipt: a command
+ * can prove that bytes were written without proving that a visual was inspected,
+ * captured from that inspection, or referenced by a consumer.
+ */
+export type AgentRuntimeCompletionReceipt = Readonly<{
+  contractVersion: 'completion-receipt.v1'
+  receiptId: string
+  kind: AgentRuntimeCompletionReceiptKind
+  status: 'satisfied'
+  issuer: string
+  callId: string
+  subjectRef: string
+  relatedRefs?: string[]
+  parentReceiptIds?: string[]
+  attestation?: string
+  sha256?: string
+  createdAt: string
+}>
+
+export type AgentRuntimeExecutionIntent = {
+  mode: 'answer' | 'inspect' | 'execute'
+  requirements?: Array<{
+    id?: string
+    effectClass?: AgentRuntimeExecutionEffectClass
+    toolNames?: string[]
+    receiptKind?: AgentRuntimeCompletionReceiptKind
+    requiresRegionRef?: boolean
+    dependsOn?: string[]
+    completion?: 'terminal' | 'success'
+  }>
+}
+
 export type AgentRuntimeTurnStartInput = {
   runtimeId: AgentRuntimeId
   threadId: string
   text: string
+  clientDirectiveId?: string
+  executionIntent?: AgentRuntimeExecutionIntent
   metadata?: Record<string, unknown>
   workspace?: string
   mode?: string
@@ -609,6 +587,7 @@ export type AgentRuntimeTurnStartInput = {
   remoteTargetId?: string
   governanceProfile?: AgentRuntimeGovernanceProfile
   displayText?: string
+  visibleContextOwnerThreadId?: string
   guiPlan?: AgentRuntimeThreadGuiPlan
   attachmentIds?: string[]
   fileReferences?: AgentRuntimeFileReference[]
@@ -641,6 +620,8 @@ export type AgentRuntimeTurnSteerInput = {
   threadId: string
   turnId: string
   text: string
+  clientDirectiveId?: string
+  executionIntent?: AgentRuntimeExecutionIntent
 }
 
 export type AgentRuntimeUsage = {
@@ -866,14 +847,17 @@ export function directAgentRuntimeChildrenForThread(
 }
 
 export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
+  'getCodingPlanAccount',
+  'startCodingPlanLogin',
+  'waitForCodingPlanLogin',
+  'logoutCodingPlanAccount',
+  'getCodingPlanRateLimits',
   'reviewThread',
   'listThreadChildren',
   'readChildTranscript',
   'getRuntimeInfo',
   'getToolDiagnostics',
   'runCodeNavigation',
-  'listModelAuditRecords',
-  'clearModelAuditRecords',
   'getContextState',
   'getRuntimeContextLedger',
   'recordRuntimeContextLedger',
@@ -909,6 +893,11 @@ export const AGENT_RUNTIME_AUXILIARY_OPERATIONS = [
 export type AgentRuntimeAuxiliaryOperation = typeof AGENT_RUNTIME_AUXILIARY_OPERATIONS[number]
 
 export const AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS = [
+  'getCodingPlanAccount',
+  'startCodingPlanLogin',
+  'waitForCodingPlanLogin',
+  'logoutCodingPlanAccount',
+  'getCodingPlanRateLimits',
   'reviewThread',
   'listThreadChildren',
   'readChildTranscript',
@@ -981,6 +970,8 @@ export type AgentRuntimeItem = {
   summary?: string
   status?: 'pending' | 'running' | 'success' | 'error' | 'completed' | 'failed' | 'aborted'
   toolKind?: AgentRuntimeToolKind
+  effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
   detail?: string
   meta?: Record<string, unknown>
   createdAt?: string
@@ -1032,6 +1023,42 @@ export type AgentRuntimeBaseEvent = {
   createdAt?: string
 }
 
+export type AgentRuntimeExecutionReceipt = ExecutionReceipt
+
+type AgentRuntimeToolEventBase = AgentRuntimeBaseEvent & {
+  kind: 'tool_event'
+  itemId: string
+  toolKind?: AgentRuntimeToolKind
+  effects?: AgentRuntimeExecutionEffectClass[]
+  completionReceipts?: AgentRuntimeCompletionReceipt[]
+  callId?: string
+  toolName?: string
+  phase?: AgentRuntimeToolExecutionPhase
+  factSource?: AgentRuntimeToolFactSource
+  evidenceStrength?: AgentRuntimeToolEvidenceStrength
+  attempt?: number
+  resultDigest?: string
+  errorCode?: string
+  summary?: string
+  detail?: string
+  filePath?: string
+  meta?: Record<string, unknown>
+}
+
+export type AgentRuntimeToolEvent =
+  | (AgentRuntimeToolEventBase & {
+      status: 'running'
+      receipt?: never
+    })
+  | (AgentRuntimeToolEventBase & {
+      status: 'success'
+      receipt: ExecutionReceipt & { status: 'success' }
+    })
+  | (AgentRuntimeToolEventBase & {
+      status: 'error'
+      receipt: ExecutionReceipt & { status: 'error' }
+    })
+
 export type AgentRuntimeEvent =
   | (AgentRuntimeBaseEvent & {
       kind: 'thread_lifecycle'
@@ -1072,24 +1099,7 @@ export type AgentRuntimeEvent =
       kind: 'item_snapshot'
       item: AgentRuntimeItem
     })
-  | (AgentRuntimeBaseEvent & {
-      kind: 'tool_event'
-      itemId: string
-      status: 'running' | 'success' | 'error'
-      toolKind?: AgentRuntimeToolKind
-      callId?: string
-      toolName?: string
-      phase?: AgentRuntimeToolExecutionPhase
-      factSource?: AgentRuntimeToolFactSource
-      evidenceStrength?: AgentRuntimeToolEvidenceStrength
-      attempt?: number
-      resultDigest?: string
-      errorCode?: string
-      summary?: string
-      detail?: string
-      filePath?: string
-      meta?: Record<string, unknown>
-    })
+  | AgentRuntimeToolEvent
   | (AgentRuntimeBaseEvent & {
       kind: 'child_event'
       child: AgentRuntimeChild
@@ -1267,7 +1277,7 @@ export type AgentRuntimeCapabilities = {
     diagnostics: CapabilityState
   }
   observability?: {
-    modelAudit: CapabilityState & { capacity?: number; inMemory?: boolean }
+    fullTrace: CapabilityState & { durable: boolean }
   }
   context?: {
     state: CapabilityState
@@ -1289,7 +1299,7 @@ export type AgentRuntimeCapabilities = {
     resumeSession: boolean
   }
   guard: {
-    toolStorm: AgentRuntimeToolStormGuardSupport
+    execution: AgentRuntimeExecutionGuardSupport
   }
   storage: {
     guiOwnedThreads: boolean
@@ -1392,7 +1402,7 @@ export function createDefaultAgentRuntimeCapabilities(input: {
       diagnostics: unsupported()
     },
     observability: {
-      modelAudit: { ...unsupported(), capacity: 0, inMemory: true }
+      fullTrace: { ...unsupported(), durable: true }
     },
     context: {
       state: unsupported(),
@@ -1414,7 +1424,7 @@ export function createDefaultAgentRuntimeCapabilities(input: {
       resumeSession: false
     },
     guard: {
-      toolStorm: 'unsupported'
+      execution: 'unsupported'
     },
     storage: {
       guiOwnedThreads: false,

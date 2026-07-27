@@ -9,7 +9,7 @@ import type {
   ImageGenerationRecipe,
   ImageGenerationRenderRequest,
   ImageGenerationSegmentComponentsRequest,
-  VisualArtifactReviewRequest
+  ImageGenerationCandidateReviewRequest
 } from './types'
 import {
   editFrameworkComponentsWithImage2,
@@ -17,11 +17,12 @@ import {
   getImageGenerationStatus,
   planImageGeneration,
   renderImageGeneration,
-  reviewVisualArtifact,
+  reviewImageGenerationCandidate,
   segmentImageGenerationComponents
 } from './image-generation-engine'
 import { planVisualProduction } from './visual-production-planner'
 import type { VisualGenerateRequest } from './visual-production-planner'
+import type { VisualScene } from './visual-scene'
 
 type McpLaunchOptions = {
   workspaceRoot?: string
@@ -84,6 +85,87 @@ const sizeSchema = z.object({
   height: z.number().int().min(128).max(4096)
 }).strict()
 
+const normalizedCoordinate = z.number().min(0).max(1)
+const visualPrimitiveStyleSchema = {
+  fill: z.string().trim().min(1).max(120).optional(),
+  stroke: z.string().trim().min(1).max(120).optional(),
+  strokeWidth: z.number().nonnegative().max(64).optional(),
+  opacity: normalizedCoordinate.optional(),
+  z: z.number().finite().optional()
+}
+const visualScenePrimitiveSchema = z.union([
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.enum(['rectangle', 'ellipse', 'triangle']),
+    x: normalizedCoordinate,
+    y: normalizedCoordinate,
+    width: normalizedCoordinate.gt(0),
+    height: normalizedCoordinate.gt(0),
+    ...visualPrimitiveStyleSchema
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.literal('circle'),
+    x: normalizedCoordinate,
+    y: normalizedCoordinate,
+    radius: normalizedCoordinate.gt(0),
+    ...visualPrimitiveStyleSchema
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.literal('polygon'),
+    points: z.array(z.object({ x: normalizedCoordinate, y: normalizedCoordinate }).strict()).min(3).max(256),
+    ...visualPrimitiveStyleSchema
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.enum(['line', 'arrow']),
+    x1: normalizedCoordinate,
+    y1: normalizedCoordinate,
+    x2: normalizedCoordinate,
+    y2: normalizedCoordinate,
+    ...visualPrimitiveStyleSchema
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.literal('text'),
+    x: normalizedCoordinate,
+    y: normalizedCoordinate,
+    text: z.string().trim().min(1).max(4000),
+    fontSize: z.number().positive().max(256).optional(),
+    textColor: z.string().trim().min(1).max(120).optional(),
+    horizontalAlign: z.enum(['left', 'center', 'right']).optional(),
+    verticalAlign: z.enum(['top', 'center', 'bottom']).optional(),
+    ...visualPrimitiveStyleSchema
+  }).strict(),
+  z.object({
+    id: z.string().trim().min(1).max(160),
+    type: z.literal('image'),
+    x: normalizedCoordinate,
+    y: normalizedCoordinate,
+    width: normalizedCoordinate.gt(0),
+    height: normalizedCoordinate.gt(0),
+    prompt: z.string().trim().min(1).max(8000),
+    sourceArtifact: z.string().trim().min(1).max(4096).optional(),
+    ...visualPrimitiveStyleSchema
+  }).strict()
+])
+const visualSceneSchema = z.object({
+  version: z.literal(1),
+  coordinateSystem: z.literal('normalized'),
+  canvas: z.object({
+    width: z.number().positive().max(16384),
+    height: z.number().positive().max(16384),
+    background: z.string().trim().min(1).max(120).optional()
+  }).strict(),
+  layers: z.array(z.object({
+    id: z.string().trim().min(1).max(160),
+    owner: z.enum(['code', 'model']),
+    z: z.number().finite().optional(),
+    primitives: z.array(visualScenePrimitiveSchema).max(500)
+  }).strict()).min(1).max(64)
+}).strict() as z.ZodType<VisualScene>
+
 const IMAGE_GENERATION_EXECUTION_DESCRIPTION = 'Prepare and render model-owned visual layers after visual_generate has locked one code, model, or hybrid production route. Execution tools never reclassify prompts or switch routes.'
 
 const visualPlanSchema = z.object({
@@ -93,6 +175,9 @@ const visualPlanSchema = z.object({
   rationale: z.string().trim().min(1).max(2000),
   sourceArtifacts: z.array(z.string().trim().min(1).max(4096)).max(64),
   reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64),
+  inlineSpecification: z.string().trim().min(1).max(16000).optional(),
+  structuredData: z.unknown().optional(),
+  scene: visualSceneSchema.optional(),
   lockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
   modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
   contextStatus: z.enum(['ready', 'budget_exhausted']),
@@ -145,7 +230,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
 
   server.registerTool('visual_generate', {
     title: 'Plan Visual Generation',
-    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through visual_artifact_review.',
+    description: 'Use the single visual-production control path: audit context, request targeted research while required questions remain and budget is available, then lock code, model, or hybrid execution. Budget exhaustion still produces a draft-only route that must pass through image_generation_review_candidate.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       task: z.string().trim().min(1).max(16000),
@@ -156,7 +241,10 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
       requirements: z.object({
         lockedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
         modelOwnedElements: z.array(z.string().trim().min(1).max(1000)).max(128),
-        reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64)
+        reproducibleInputs: z.array(z.string().trim().min(1).max(4096)).max(64),
+        inlineSpecification: z.string().trim().min(1).max(16000).optional(),
+        structuredData: z.unknown().optional(),
+        scene: visualSceneSchema.optional()
       }).strict(),
       context: z.object({
         policy: z.enum(['auto', 'closed']).optional(),
@@ -244,9 +332,18 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
         visualPlan: input.visualPlan
       }
       const plan = await planImageGeneration(request)
+      const nextCall = plan.ok
+        ? {
+            tool: 'image_generation_render',
+            arguments: {
+              workspaceRoot: request.workspaceRoot,
+              recipe: plan.recipe
+            }
+          }
+        : undefined
       return textResult(
-        jsonSummary(plan.ok ? 'Generative image preparation.' : 'Generative image preparation blocked.', plan),
-        { plan }
+        jsonSummary(plan.ok ? 'Generative image preparation.' : 'Generative image preparation blocked.', { plan, nextCall }),
+        { plan, ...(nextCall ? { nextCall } : {}) }
       )
     } catch (error) {
       return errorResult('Failed to plan image generation: ' + (error instanceof Error ? error.message : String(error)))
@@ -278,11 +375,39 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
         ...(input.stageForVisualReview !== undefined ? { stageForVisualReview: input.stageForVisualReview } : {})
       }
       const result = await renderImageGeneration(request)
+      const hybridReferencePath = request.recipe.visualPlan.route === 'hybrid'
+        ? request.recipe.referencePath?.trim()
+        : undefined
+      const nextCall = result.ok
+        ? hybridReferencePath
+          ? {
+              tool: 'scientific_plotting_composite',
+              arguments: {
+                workspaceRoot: request.workspaceRoot,
+                visualPlan: request.recipe.visualPlan,
+                reviewTask: request.recipe.prompt,
+                layers: [
+                  { path: result.outputPath, owner: 'model' },
+                  { path: hybridReferencePath, owner: 'code' }
+                ]
+              }
+            }
+          : {
+              tool: 'image_generation_review_candidate',
+              arguments: {
+                workspaceRoot: request.workspaceRoot,
+                outputPath: result.outputPath,
+                manifestPath: result.manifestPath,
+                task: request.recipe.prompt,
+                ...(request.recipe.referencePath ? { referencePath: request.recipe.referencePath } : {})
+              }
+            }
+        : undefined
       return textResult(
         result.ok
-          ? jsonSummary('Rendered image generation artifact: ' + result.status + '.', result)
+          ? jsonSummary('Rendered image generation artifact: ' + result.status + '.', { result, nextCall })
           : jsonSummary('Image generation render failed: ' + result.status + '.', result),
-        { result }
+        { result, ...(nextCall ? { nextCall } : {}) }
       )
     } catch (error) {
       return errorResult('Failed to render image: ' + (error instanceof Error ? error.message : String(error)))
@@ -407,9 +532,9 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
     }
   })
 
-  server.registerTool('visual_artifact_review', {
-    title: 'Review Visual Artifact',
-    description: 'Use Model Router vision understanding to semantically review any route-produced visual against its task and truth locks. File existence, dimensions, and non-empty pixels are only supporting checks and cannot pass a visibly broken artifact.',
+  server.registerTool('image_generation_review_candidate', {
+    title: 'Review Generated Image Candidate',
+    description: 'Run manifest-bound semantic QA for a candidate produced by the locked image-generation workflow. This determines candidate repair and release status; it is not a general visual-inspection tool or a native runtime completion receipt.',
     inputSchema: {
       workspaceRoot: z.string().trim().min(1).optional(),
       outputPath: z.string().trim().min(1).max(4096),
@@ -421,7 +546,7 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
     annotations: READ_ONLY_ANNOTATIONS
   }, async (input) => {
     try {
-      const request: VisualArtifactReviewRequest = {
+      const request: ImageGenerationCandidateReviewRequest = {
         workspaceRoot: workspaceRootFor(input.workspaceRoot, options),
         outputPath: input.outputPath,
         manifestPath: input.manifestPath,
@@ -429,10 +554,10 @@ export function createImageGenerationMcpServer(options: McpLaunchOptions = {}): 
         ...(input.referencePath ? { referencePath: input.referencePath } : {}),
         ...(input.minOverall ? { minOverall: input.minOverall } : {})
       }
-      const review = await reviewVisualArtifact(request)
-      return textResult(jsonSummary('Semantic visual artifact review.', review), { review })
+      const review = await reviewImageGenerationCandidate(request)
+      return textResult(jsonSummary('Generated image candidate QA.', review), { review })
     } catch (error) {
-      return errorResult('Failed to review image: ' + (error instanceof Error ? error.message : String(error)))
+      return errorResult('Failed to review generated image candidate: ' + (error instanceof Error ? error.message : String(error)))
     }
   })
 

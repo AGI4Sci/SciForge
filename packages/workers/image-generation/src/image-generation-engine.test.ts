@@ -10,7 +10,7 @@ import {
   getImageGenerationStatus,
   planImageGeneration as planImageGenerationEngine,
   renderImageGeneration as renderImageGenerationEngine,
-  reviewVisualArtifact,
+  reviewImageGenerationCandidate,
   segmentImageGenerationComponents
 } from './image-generation-engine'
 import type { ImageGenerationPlanRequest, ImageGenerationRenderRequest } from './types'
@@ -179,7 +179,7 @@ describe('image generation engine', () => {
     writeFileSync(outputPath, canvas.toBuffer('image/png'))
     const manifestPath = writeReviewManifest(outputPath)
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -213,7 +213,7 @@ describe('image generation engine', () => {
     }), { status: 200, headers: { 'content-type': 'application/json' } }))
     globalThis.fetch = fetchMock as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -222,7 +222,7 @@ describe('image generation engine', () => {
 
     expect(review).toMatchObject({
       ok: true,
-      status: 'draft_ready',
+      status: 'repair_required',
       reviewedArtifactPath: outputPath,
       reviewedArtifactHash: createHash('sha256').update(readFileSync(outputPath)).digest('hex'),
       repairable: true,
@@ -230,6 +230,12 @@ describe('image generation engine', () => {
         pass: false,
         needsContext: false,
         violations: ['Large overlapping shapes obscure the content.']
+      },
+      nextAction: {
+        kind: 'same_route_repair',
+        route: 'hybrid',
+        maxAttempts: 2,
+        instructions: ['Rebuild the layout with non-overlapping regions.']
       },
       score: { semantic: 0.12 }
     })
@@ -260,7 +266,7 @@ describe('image generation engine', () => {
       })
     })) as unknown as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -302,7 +308,7 @@ describe('image generation engine', () => {
       })
     })) as unknown as typeof fetch
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -319,7 +325,7 @@ describe('image generation engine', () => {
     const manifestPath = writeReviewManifest(outputPath)
     writeFileSync(outputPath, Buffer.concat([readFileSync(outputPath), Buffer.from('tampered')]))
 
-    const review = await reviewVisualArtifact({
+    const review = await reviewImageGenerationCandidate({
       workspaceRoot,
       outputPath,
       manifestPath,
@@ -866,7 +872,10 @@ describe('image generation engine', () => {
     expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toMatchObject({ text: 'A tiny generated image' })
   })
 
-  it('keeps visual-review color edits source-preserving instead of running unrelated text-to-image generation', async () => {
+  it('routes visual-review color edits through the same Model Router image-edit path', async () => {
+    process.env.SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY = 'router-runtime-key'
+    process.env.SCIFORGE_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
+    process.env.SCIFORGE_MODEL_ROUTER_IMAGE_MODEL = 'sciforge-router'
     const sourcePath = join(workspaceRoot, 'source-diagram.png')
     const canvas = createCanvas(240, 160)
     const ctx = canvas.getContext('2d')
@@ -887,6 +896,20 @@ describe('image generation engine', () => {
     ctx.fillText('A', 56, 58)
     ctx.fillText('B', 170, 58)
     writeFileSync(sourcePath, canvas.toBuffer('image/png'))
+
+    const edited = createCanvas(240, 160)
+    const editedContext = edited.getContext('2d')
+    editedContext.drawImage(canvas, 0, 0)
+    editedContext.fillStyle = '#c4b5fd'
+    editedContext.fillRect(24, 30, 76, 44)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(String(input)).toBe('http://127.0.0.1:3892/v1/images/edits')
+      const form = init?.body as FormData
+      expect(form).toBeInstanceOf(FormData)
+      expect(String(form.get('prompt'))).toContain('换个颜色')
+      return Response.json({ data: [{ b64_json: edited.toBuffer('image/png').toString('base64') }] })
+    })
+    globalThis.fetch = fetchMock as unknown as typeof fetch
 
     const result = await editImageFromVisualReviewPacket({
       workspaceRoot,
@@ -923,10 +946,10 @@ describe('image generation engine', () => {
     })
     expect(result.intents[0]?.instruction).toContain('Preserve labels A and B')
     expect(result.intents[0]?.instruction).toContain('.sciforge/visual-styles/manuscript-default.json')
-    expect(result.outputs[0]?.provider).toBe('controlled-edit')
+    expect(result.outputs[0]?.provider).toBe('image-endpoint')
     expect(existsSync(result.outputs[0]!.outputPath)).toBe(true)
     expect(readFileSync(result.outputs[0]!.outputPath).equals(readFileSync(sourcePath))).toBe(false)
-    expect(result.warnings.join(' ')).toContain('source-preserving controlled color edit')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
 
     const output = await loadImage(result.outputs[0]!.outputPath)
     expect(output.width).toBe(240)

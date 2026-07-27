@@ -391,7 +391,7 @@ export type DiagramLayerManifest = {
   layers: DiagramLayer[]
 }
 
-export type ImageGenerationProvider = 'image-endpoint' | 'placeholder' | 'controlled-edit'
+export type ImageGenerationProvider = 'image-endpoint' | 'placeholder'
 export type ImageGenerationRuntimeProvider = 'image-endpoint' | 'placeholder'
 
 export type ImageGenerationRecipe = {
@@ -468,7 +468,7 @@ export type ImageGenerationPlanResult =
       task: string
       recipe: ImageGenerationRecipe
       suggestedRenderTool: 'image_generation_render'
-      suggestedReviewTool: 'visual_artifact_review'
+      suggestedReviewTool: 'image_generation_review_candidate'
       visualPlan: VisualProductionHandoff
       artifactPolicy: string
       visualReviewWorkflow: string[]
@@ -522,7 +522,7 @@ export type ImageGenerationRenderResult =
       warnings?: string[]
     }
 
-export type VisualArtifactReviewRequest = {
+export type ImageGenerationCandidateReviewRequest = {
   workspaceRoot: string
   outputPath: string
   manifestPath: string
@@ -531,7 +531,7 @@ export type VisualArtifactReviewRequest = {
   minOverall?: number
 }
 
-export type VisualArtifactReviewScore = {
+export type ImageGenerationCandidateReviewScore = {
   overall: number
   dimensions: number
   nonEmpty: number
@@ -541,14 +541,14 @@ export type VisualArtifactReviewScore = {
   warnings: string[]
 }
 
-export type VisualArtifactReviewResult =
+export type ImageGenerationCandidateReviewResult =
   | {
       ok: true
-      status: 'publication_ready' | 'draft_ready' | 'needs_context'
+      status: 'publication_ready' | 'draft_ready' | 'repair_required' | 'needs_context'
       reviewedArtifactPath: string
       reviewedArtifactHash: string
       reviewedAt: string
-      score: VisualArtifactReviewScore
+      score: ImageGenerationCandidateReviewScore
       semantic: {
         pass: boolean
         needsContext: boolean
@@ -557,6 +557,12 @@ export type VisualArtifactReviewResult =
         repairInstructions: string[]
       }
       repairable: boolean
+      nextAction?: {
+        kind: 'same_route_repair'
+        route: VisualProductionHandoff['route']
+        maxAttempts: 2
+        instructions: string[]
+      }
       warnings: string[]
     }
   | {

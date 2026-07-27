@@ -9,11 +9,13 @@ import {
   Trash2
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
 import type { ThreadTodoItem, ThreadTodoStatus } from '../../agent/types'
 
 type Props = {
   className?: string
+  threadId: string
   onCollapse: () => void
   onOpenPlan: () => void
 }
@@ -22,14 +24,21 @@ const STATUS_ORDER: ThreadTodoStatus[] = ['pending', 'in_progress', 'completed']
 
 export function TodoPanel({
   className = '',
+  threadId,
   onCollapse,
   onOpenPlan
 }: Props): ReactElement {
   const { t } = useTranslation('common')
-  const activeThreadTodos = useChatStore((s) => s.activeThreadTodos)
-  const setActiveThreadTodoStatus = useChatStore((s) => s.setActiveThreadTodoStatus)
-  const clearActiveThreadTodos = useChatStore((s) => s.clearActiveThreadTodos)
-  const items = activeThreadTodos?.items ?? []
+  const { todos, setThreadTodoStatus, clearThreadTodos } = useChatStore(
+    useShallow((s) => ({
+      todos: s.activeThreadId === threadId
+        ? s.activeThreadTodos
+        : s.threads.find((thread) => thread.id === threadId)?.todos ?? null,
+      setThreadTodoStatus: s.setThreadTodoStatus,
+      clearThreadTodos: s.clearThreadTodos
+    }))
+  )
+  const items = todos?.items ?? []
   const completed = items.filter((item) => item.status === 'completed').length
   const inProgress = items.filter((item) => item.status === 'in_progress').length
   const pending = Math.max(0, items.length - completed - inProgress)
@@ -58,7 +67,7 @@ export function TodoPanel({
           {items.length > 0 ? (
             <button
               type="button"
-              onClick={() => void clearActiveThreadTodos()}
+              onClick={() => void clearThreadTodos(threadId)}
               className="rounded-full p-1.5 text-ds-faint transition hover:bg-ds-hover hover:text-red-600"
               aria-label={t('todoClear')}
               title={t('todoClear')}
@@ -94,7 +103,7 @@ export function TodoPanel({
                 key={item.id}
                 item={item}
                 onOpenPlan={onOpenPlan}
-                onStatus={(status) => void setActiveThreadTodoStatus(item.id, status)}
+                onStatus={(status) => void setThreadTodoStatus(threadId, item.id, status)}
               />
             ))}
           </div>

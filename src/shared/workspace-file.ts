@@ -62,6 +62,11 @@ export type WorkspaceEntryRenamePayload = {
   newName: string
 }
 
+export type WorkspacePdfRenameSuggestionPayload = {
+  path: string
+  workspaceRoot: string
+}
+
 export const workspaceFileConflictStrategySchema = z.enum(['ask', 'overwrite', 'rename', 'skip', 'merge'])
 export type WorkspaceFileConflictStrategy = z.infer<typeof workspaceFileConflictStrategySchema>
 
@@ -118,11 +123,6 @@ export type WorkspaceClipboardPastePayload = {
   workspaceRoot: string
   targetDirectory: string
   conflictPolicy?: WorkspaceFileConflictPolicy
-}
-
-export type WorkspaceNativeFileDragPayload = {
-  path: string
-  workspaceRoot: string
 }
 
 export type WorkspaceFileWatchPayload = {
@@ -282,6 +282,15 @@ export type WorkspaceEntryRenameResult =
     }
   | { ok: false; message: string }
 
+export type WorkspacePdfRenameSuggestionResult =
+  | {
+      ok: true
+      suggestedName: string
+      title: string
+      source: 'metadata' | 'first-page'
+    }
+  | { ok: false; message: string }
+
 export type WorkspaceEntryCopyResult =
   | {
       ok: true
@@ -365,14 +374,6 @@ export type WorkspaceClipboardPasteResult =
       kind: 'files'
       imported: WorkspaceEntryImportItemResult[]
       pastedAt: string
-    }
-  | { ok: false; message: string }
-
-export type WorkspaceNativeFileDragResult =
-  | {
-      ok: true
-      path: string
-      startedAt: string
     }
   | { ok: false; message: string }
 

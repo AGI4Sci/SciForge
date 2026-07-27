@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useChatStore } from '../../store/chat-store'
-import type { RemoteChannelV1 } from '@shared/app-settings'
+import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import type { NormalizedThread } from '../../agent/types'
 
 type TimelineActiveThread = Pick<
@@ -19,6 +19,7 @@ export type TimelineStores = {
   chooseWorkspace: () => Promise<string | null>
   remoteChannels: RemoteChannelV1[]
   activeRemoteChannel: RemoteChannelV1 | null
+  activeAgentRuntime: AgentRuntimeId
   busy: boolean
   currentTurnUserId: string | null
   turnStartedAtByUserId: Record<string, number>
@@ -33,6 +34,7 @@ export function useTimelineStores(activeThreadId: string | null): TimelineStores
   const chooseWorkspace = useChatStore((s) => s.chooseWorkspace)
   const remoteChannels = useChatStore((s) => s.remoteChannels)
   const activeRemoteChannelId = useChatStore((s) => s.activeRemoteChannelId)
+  const activeAgentRuntime = useChatStore((s) => s.activeAgentRuntime)
   const busy = useChatStore((s) => s.busy)
   const currentTurnUserId = useChatStore((s) => s.currentTurnUserId)
   const turnStartedAtByUserId = useChatStore((s) => s.turnStartedAtByUserId)
@@ -62,6 +64,7 @@ export function useTimelineStores(activeThreadId: string | null): TimelineStores
     chooseWorkspace,
     remoteChannels,
     activeRemoteChannel,
+    activeAgentRuntime,
     busy,
     currentTurnUserId,
     turnStartedAtByUserId,

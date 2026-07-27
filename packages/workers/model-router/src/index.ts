@@ -1,9 +1,31 @@
 export {
+  ModelRouterFullTraceRecorder,
+  ModelRouterTraceSession,
+  type ModelRouterFullTraceRecorderOptions,
+  type ModelRouterTraceSessionStart,
+  type ModelRouterTraceSink,
+} from './full-trace-recorder';
+export {
+  ModelRouterTraceCorrelationRegistry,
+  completeModelRouterTraceCorrelation,
+  createModelRouterTraceCorrelationRegistry,
+  type ModelRouterTraceCorrelationExtractor,
+  type ModelRouterTraceCorrelationInput,
+} from './trace-correlation';
+export {
+  MODEL_ROUTER_MAX_REQUEST_BYTES,
+  MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES,
+  MODEL_ROUTER_VISION_MIME_TYPES,
+  createModelRouterPublicCapabilities,
   createModelRouterServer,
   startModelRouterServer,
   type ModelRouterConfig,
   type ModelRouterProfile,
+  type ModelRouterProfileCapabilityRegistration,
   type ModelRouterProviderConfig,
+  type ModelRouterPublicCapabilityContract,
+  type ModelRouterRoleReadiness,
+  type ModelRouterRoleReadinessState,
   type StartedModelRouterServer,
 } from './router';
 export {
@@ -19,10 +41,21 @@ export {
   type ModelRouterWorkerTransport,
 } from './manifest';
 export {
-  auditModelRouterTraceBundle,
-  MODEL_ROUTER_TRACE_AUDIT_SCHEMA_VERSION,
-  type AuditModelRouterTraceBundleOptions,
-  type ModelRouterTraceAuditFinding,
-  type ModelRouterTraceAuditFindingKind,
-  type ModelRouterTraceAuditReport,
-} from './trace-audit';
+  UpstreamProtocolNegotiator,
+  UpstreamRequestError,
+  buildUpstreamEndpointUrl,
+  captureUpstreamResponse,
+  isDefinitiveProtocolRejection,
+  type CanonicalUpstreamResult,
+  type UpstreamAttempt,
+  type UpstreamTraceAttemptObserver,
+  type UpstreamTraceAttemptStart,
+  type UpstreamWireProtocol,
+} from './upstream-drivers';
+export {
+  type ProviderCompatibilityConfig,
+  type ProviderCompatibilityProfile,
+  type ProviderSchemaPatternPolicy,
+  type ProviderWireProtocol,
+} from './provider-compat';
+export { assertLoopbackBinding, isLoopbackHost, normalizeLoopbackHost } from './network-policy';

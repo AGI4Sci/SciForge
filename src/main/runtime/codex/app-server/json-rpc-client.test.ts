@@ -139,9 +139,22 @@ describe('createCodexAppServerClient', () => {
       }
     }])
 
-    fake.emitStdout({ id: 1, result: { protocolVersion: '2026-01-01' } })
+    fake.emitStdout({
+      id: 1,
+      result: {
+        userAgent: 'Codex Desktop/0.141.0 (test)',
+        codexHome: '/tmp/codex-home',
+        platformFamily: 'unix',
+        platformOs: 'linux'
+      }
+    })
 
-    await expect(initialize).resolves.toEqual({ protocolVersion: '2026-01-01' })
+    await expect(initialize).resolves.toEqual({
+      userAgent: 'Codex Desktop/0.141.0 (test)',
+      codexHome: '/tmp/codex-home',
+      platformFamily: 'unix',
+      platformOs: 'linux'
+    })
     expect(fake.writtenMessages()[1]).toEqual({ method: 'initialized' })
   })
 
@@ -149,10 +162,16 @@ describe('createCodexAppServerClient', () => {
     const { client, fake } = createHarness()
 
     const first = client.connect()
-    fake.emitStdout({ id: 1, result: { protocolVersion: '2026-01-01' } })
+    const response = {
+      userAgent: 'Codex Desktop/0.141.0 (test)',
+      codexHome: '/tmp/codex-home',
+      platformFamily: 'unix',
+      platformOs: 'linux'
+    }
+    fake.emitStdout({ id: 1, result: response })
 
-    await expect(first).resolves.toEqual({ protocolVersion: '2026-01-01' })
-    await expect(client.connect()).resolves.toEqual({ protocolVersion: '2026-01-01' })
+    await expect(first).resolves.toEqual(response)
+    await expect(client.connect()).resolves.toEqual(response)
 
     expect(fake.writtenMessages().filter((message) => message.method === 'initialize')).toHaveLength(1)
   })
@@ -246,6 +265,150 @@ describe('createCodexAppServerClient', () => {
       { id: 2, method: 'thread/read', params: { threadId: 'thread-1' } },
       { id: 3, method: 'thread/name/set', params: { threadId: 'thread-1', name: 'Next title' } },
       { id: 4, method: 'thread/delete', params: { threadId: 'thread-1' } }
+    ])
+  })
+
+  it('uses the typed app-server hook discovery and config write endpoints', async () => {
+    const { client, fake } = createHarness()
+
+    client.start()
+    const hooks = client.listHooks(['/tmp/workspace'])
+    fake.emitStdout({
+      id: 1,
+      result: {
+        data: [{
+          cwd: '/tmp/workspace',
+          hooks: [],
+          warnings: [],
+          errors: []
+        }]
+      }
+    })
+    await expect(hooks).resolves.toMatchObject({
+      data: [{ cwd: '/tmp/workspace', hooks: [] }]
+    })
+
+    const write = client.writeConfigBatch({
+      edits: [{
+        keyPath: 'hooks.state',
+        value: {
+          'owned-hook-key': {
+            enabled: true,
+            trusted_hash: `sha256:${'a'.repeat(64)}`
+          }
+        },
+        mergeStrategy: 'upsert'
+      }],
+      filePath: '/tmp/codex-home/config.toml',
+      reloadUserConfig: true
+    })
+    fake.emitStdout({
+      id: 2,
+      result: {
+        status: 'ok',
+        version: '2',
+        filePath: '/tmp/codex-home/config.toml',
+        overriddenMetadata: null
+      }
+    })
+    await expect(write).resolves.toMatchObject({ status: 'ok', version: '2' })
+
+    expect(fake.writtenMessages()).toEqual([
+      {
+        id: 1,
+        method: 'hooks/list',
+        params: { cwds: ['/tmp/workspace'] }
+      },
+      {
+        id: 2,
+        method: 'config/batchWrite',
+        params: {
+          edits: [{
+            keyPath: 'hooks.state',
+            value: {
+              'owned-hook-key': {
+                enabled: true,
+                trusted_hash: `sha256:${'a'.repeat(64)}`
+              }
+            },
+            mergeStrategy: 'upsert'
+          }],
+          filePath: '/tmp/codex-home/config.toml',
+          reloadUserConfig: true
+        }
+      }
+    ])
+  })
+
+  it('exposes the Codex-managed ChatGPT account lifecycle without handling tokens', async () => {
+    const { client, fake } = createHarness()
+
+    client.start()
+
+    const account = client.readAccount({ refreshToken: true })
+    fake.emitStdout({
+      id: 1,
+      result: {
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
+        requiresOpenaiAuth: true
+      }
+    })
+    await expect(account).resolves.toMatchObject({
+      account: { type: 'chatgpt', planType: 'plus' },
+      requiresOpenaiAuth: true
+    })
+
+    const browserLogin = client.startAccountLogin({ type: 'chatgpt' })
+    fake.emitStdout({
+      id: 2,
+      result: { type: 'chatgpt', loginId: 'login-browser', authUrl: 'https://auth.example/login' }
+    })
+    await expect(browserLogin).resolves.toMatchObject({ loginId: 'login-browser' })
+
+    const deviceLogin = client.startAccountLogin({ type: 'chatgptDeviceCode' })
+    fake.emitStdout({
+      id: 3,
+      result: {
+        type: 'chatgptDeviceCode',
+        loginId: 'login-device',
+        verificationUrl: 'https://auth.example/device',
+        userCode: 'ABCD-EFGH'
+      }
+    })
+    await expect(deviceLogin).resolves.toMatchObject({ loginId: 'login-device' })
+
+    const rateLimits = client.readAccountRateLimits()
+    fake.emitStdout({
+      id: 4,
+      result: {
+        rateLimits: {
+          limitId: 'codex',
+          limitName: 'Codex',
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+          secondary: null,
+          credits: null,
+          individualLimit: null,
+          planType: 'plus',
+          rateLimitReachedType: null
+        },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      }
+    })
+    await expect(rateLimits).resolves.toMatchObject({
+      rateLimits: { limitId: 'codex', planType: 'plus' }
+    })
+
+    const logout = client.logoutAccount()
+    fake.emitStdout({ id: 5, result: {} })
+    await expect(logout).resolves.toEqual({})
+
+    expect(fake.writtenMessages()).toEqual([
+      { id: 1, method: 'account/read', params: { refreshToken: true } },
+      { id: 2, method: 'account/login/start', params: { type: 'chatgpt' } },
+      { id: 3, method: 'account/login/start', params: { type: 'chatgptDeviceCode' } },
+      { id: 4, method: 'account/rateLimits/read' },
+      { id: 5, method: 'account/logout' }
     ])
   })
 

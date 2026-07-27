@@ -1,0 +1,71 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-evidence-dag",
+  "module": {
+    "id": "sciforge.evidence-dag",
+    "displayName": "Evidence DAG",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 160
+  },
+  "packaging": {
+    "bundled": true,
+    "runtime": {
+      "requiredPaths": [
+        "pyproject.toml",
+        "python/evidence_dag/__init__.py",
+        "python/evidence_dag/digraph.py",
+        "python/evidence_dag/server.py",
+        "ui/index.html"
+      ]
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "evidence-dag.capabilities",
+          "priority": 160
+        },
+        {
+          "kind": "main.runtime-lifecycle",
+          "id": "evidence-dag.runtime-lifecycle",
+          "priority": 160
+        },
+        {
+          "kind": "main.agent-artifact-consumer",
+          "id": "evidence-dag.agent-artifact-consumer",
+          "priority": 160
+        },
+        {
+          "kind": "main.action-guard",
+          "id": "evidence-dag.write-export-guard",
+          "priority": 160
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workbench-right-panel",
+          "id": "evidence-dag.workbench-right-panel",
+          "priority": 160
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "evidence-dag.translations",
+          "priority": 160
+        }
+      ]
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 import { Fragment, useState, type ReactElement } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FolderOpen, GitFork, RefreshCw, Settings } from 'lucide-react'
-import type { RemoteChannelV1 } from '@shared/app-settings'
+import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 import { InitialSessionUsageHeatmap } from './InitialSessionUsageHeatmap'
 import { WhaleHeroStage } from './WhaleHeroStage'
@@ -130,6 +130,7 @@ export function MessageTimelineEmptyHero({
   ready,
   hasWorkspace,
   runtimeError,
+  runtimeId,
   activeRemoteChannel,
   onPickWorkspace,
   onRetry,
@@ -140,6 +141,7 @@ export function MessageTimelineEmptyHero({
   ready: boolean
   hasWorkspace: boolean
   runtimeError?: string | null
+  runtimeId: AgentRuntimeId
   activeRemoteChannel: RemoteChannelV1 | null
   onPickWorkspace: () => void
   onRetry: () => void
@@ -182,7 +184,7 @@ export function MessageTimelineEmptyHero({
     )
   }
 
-  return <InitialSessionUsageHeatmap />
+  return <InitialSessionUsageHeatmap runtimeId={runtimeId} />
 }
 
 export function ThreadForkBanner({ parentTitle }: { parentTitle: string }): ReactElement {

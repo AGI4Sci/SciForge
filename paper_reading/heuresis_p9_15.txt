@@ -1,0 +1,479 @@
+Figure 4: Idea-space diversity. Across search strategies on (a) NanoGPT and (b) DiscoGen
+OnPolicyRL. Each row shows a UMAP projection of gemini-embedding-001 embeddings of every
+accepted idea (left) and the distribution of pairwise cosine distances within each strategy (right). Stars
+mark each strategy’s best run; the outlined star is the overall best.
+
+CURIOSITY also crosses the 1.0 unlearned-but-still-capable baseline at 1.0012. No other strategy
+crosses the baseline within the budget.
+
+Across all three tasks, the largest gains in the running best occur within the first 50 to 100 valid
+solutions. After that point the slope flattens substantially, and no strategy on any task produces a
+late-stage breakthrough that would change the per-task ranking. This addresses the simplest “ran too
+short” reading of the empirical frontier reported in Section 4.4 and Section 5.4, although it does not
+rule out late breakthroughs at substantially larger budgets.
+
+4.3 Diversity
+
+Metric Diversity is measured in the embedding space of accepted ideas. We embed each idea’s plan
+with gemini-embedding-001 [31] after truncating to the first 2,500 characters of its strategy block,
+giving an embedding ei per accepted idea. For every pair of in-strategy ideas we compute the cosine
+distance dij = 1 − cos(ei, ej) and report the resulting per-strategy distribution, summarized by its
+median. For visualization, we project all embeddings jointly to two dimensions with UMAP (cosine
+metric, n_neighbors = 15, min_dist = 0.2, fixed random state 42). Figure 4 reports the joint
+UMAP projection in the top row and the per-strategy pairwise distance distribution in the bottom row.
+
+Results The diversity ranking is more stable across tasks than the quality ranking. MAP-ELITES
+and GO-EXPLORE sit at or near the top of every distribution, within a few percentage points of each
+other on every task, with MAP-ELITES the clear leader on On-Policy RL and Model Unlearning and
+OMNI edging both on nanoGPT (Fig. 4d,e,f). Both rely on a grid archive that forces under-occupied
+cells to be sampled, which keeps the accepted set spread out even when search exploits known elites.
+
+GREEDY collapses where it finds a dominant recipe to grind and explores more where it does
+not. It has the lowest median pairwise distance on nanoGPT (0.088) and the second-lowest on
+Model Unlearning (0.118), the two tasks where it wins quality by converging on a dominant recipe
+(Section 4.2). On On-Policy RL, where it fails to find a stable recipe, it ends up mid-pack (0.155).
+
+9
+
+UMAP 1UMAP 2ananoGPTUMAP 1UMAP 2bOn-Policy RLUMAP 1UMAP 2cModel UnlearningGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.000.050.100.150.200.250.30Pairwise cosine distancedGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.000.050.100.150.200.250.30eGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.000.050.100.150.200.25fGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosityBest per strategyOverall bestFigure 5: Novelty and quality–novelty trade-off.
+(a–c) Per-strategy novelty distributions on
+nanoGPT, On-Policy RL, and Model Unlearning under the 5-point rubric of Gupta and Pruthi [19] (5
+= direct copy, 1 = original). (d–f) Pooled quality vs. novelty for the same tasks; the step line traces
+the cross-strategy Pareto front in (quality, novelty) space. For each strategy the first 300 executed
+ideas are taken and filtered to valid runs.
+
+The grinding behaviour that wins GREEDY quality on tasks with a clear recipe is the same behaviour
+that collapses its diversity.
+
+ISLANDS sits at or near the bottom of every distribution, in part because we initialize each island
+population from scratch rather than from hand-picked seeds. The per-island top-5 ideas in Table 14
+make this concrete. On nanoGPT, all eight islands independently converge on slight rearrangements
+of the same handful of building blocks (MQA [51] or GQA [1], SwiGLU [52], ResFormer-style
+Value Embeddings [70], and reinvesting parameter savings into depth), and on On-Policy RL seven
+of eight islands’ top idea couples CoordConv [35] with a variant of asymmetric or optimistic GAE
+(Table 17). Migration accelerates this convergence rather than counteracting it.
+
+OMNI rotates more than any other strategy. On nanoGPT the MoI gate produces the highest median
+pairwise distance in the study (0.208) without any hand-engineered features, while on On-Policy RL
+and Model Unlearning the same gate produces the lowest (0.124 over only 41 accepted ideas, and
+0.094). The gate admits only ideas that are mechanistically distinct from their accepted neighbours,
+which approximates archive coverage when the technique vocabulary is coarse (nanoGPT architecture
+edits) but accepts clusters of fine-grained variants as distinct when it is not (PPO clip variants on
+On-Policy RL, anchor variants on Model Unlearning). The gate’s selectivity follows the same split: it
+passes only 10% of attempts on nanoGPT (417/4158) against 84% on On-Policy RL (291/345) and
+57% on Model Unlearning (276/484), so the throughput it costs is heaviest exactly where it buys the
+most diversity.
+
+4.4 Perceived novelty
+
+Metric We score the apparent originality of each accepted idea using the 5-point rubric of Gupta and
+Pruthi [19, Table 1], reproduced verbatim in Appendix D.3 (Table 15). A separate web-search-based
+agentic classifier (Claude-Code Sonnet 4.6) rates each idea on a Novelty Score (NS) from 1 to 5,
+where lower is more novel: NS = 1 is “Original” (no prior work found) and NS = 5 is “Direct Copy”.
+
+10
+
+GreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.00.20.40.60.81.0Fraction of valid ideasananoGPTGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.00.10.20.30.40.50.6bOn-Policy RLGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosity0.00.10.20.30.40.50.6cModel Unlearning0.960.981.001.02val_bpb ↓12345Novelty score ↓ = more originald0.00.51.01.5score ↑e0.70.80.91.0accuracy ↑f5 - Direct Copy4 - Combined Borrowing3 - Partial Overlap2 - Minor Similarity1 - OriginalGreedyIslandsMAP-ElitesGo-ExploreOmniCuriosityPareto frontScoring follows the paper’s reverse-logic procedure: for every idea, the classifier issues two to three
+targeted web queries on the central mechanism and grounds its score in the retrieved sources. To
+make sure that novel scores are indeed true, we additionally run a secondary verification pass on
+ideas initially rated ≤ 2, with a deeper search that confirms or downgrades the score.
+
+Results Novelty is the most task-dependent of the three axes. The floor is the same on every task (0
+ideas reach the most novel rating NS = 1 across 3,222 scored and rated runs, and the best novel-side
+rating in the study is NS = 2, “Minor Similarity”), but the strategy that produces the largest novel-side
+fraction is different for every task. CURIOSITY wins on nanoGPT, MAP-ELITES on On-Policy RL,
+and OMNI on Model Unlearning (Fig. 5a,b,c). OMNI’s diverse accepted set on nanoGPT (Section 4.3)
+does not translate into novel-side ideas there. A diverse population does not imply that any single
+idea is novel.
+
+On nanoGPT, CURIOSITY is the only strategy to produce any verified NS = 2 ideas (20/200 scored
+runs against zero for the other five strategies). All twenty modify the residual stream rather than the
+optimizer, attention, MLP, or data pipeline, and the largest family is causal-token orthogonalisation
+(Table 16). The cluster is consistent with the selection rule. The learning-progress weight favours
+anchors whose pre-execution prediction ˆy was furthest off, and LLMs have little prior for what
+residual-geometry transformations do to validation loss. Once a few such ideas enter the anchor pool,
+KNN-based sampling keeps returning to them (Fig. 12).
+
+On On-Policy RL, CURIOSITY produces no verified NS = 2 ideas. The selection rule still pulls
+toward regions where the predictor is poorly calibrated, but here those regions overlap a densely
+covered slice of prior work. MAP-ELITES produces the largest novel-side fraction (5%), with
+GO-EXPLORE and ISLANDS contributing a handful each (6/227 and 3/136). ISLANDS’ three ideas
+cohere as a single mechanism family, all modulating the GAE λ by the sign of the accumulated future
+advantage. The strongest, which we call the sign-modulated GAE-λ idea (1.563, NS = 2), is the only
+idea in the study to land in its strategy’s top-quality runs and at NS ≤ 2.
+
+On Model Unlearning, OMNI’s MoI gate produces the largest novel-side fraction in the study (14.1%,
+roughly 3× the next strategy). Published unlearning methods cluster tightly in the NPO [69],
+RMU [34], and SCRUB [29] families, so “mechanistically distinct from the accepted archive” maps
+cleanly to “novel in literature” for this task. The novel-side ideas do not translate into top-end quality,
+however. The best novel-side idea on Model Unlearning comes from GREEDY (accuracy 0.9689),
+and no novel-side idea on this task crosses the 1.0 unlearned-but-still-capable baseline.
+
+Across all three tasks combined, the strict top-10 ∩ NS ≤ 2 intersection contains exactly one idea
+(the sign-modulated GAE-λ idea on On-Policy RL); on the other two tasks it is empty. Ideas that
+polish an established recipe tend to be higher-quality and less novel, while ideas that change a
+mechanism are more novel and rarely match the quality leader. GREEDY’s top run on nanoGPT
+scores NS = 5 (a direct hyperparameter tune of the modded-nanogpt backbone). Every NS = 2 idea
+highlighted above changes a mechanism (residual-stream geometry on nanoGPT, sign-modulated
+GAE on On-Policy RL, anchor or scrambling variants on Model Unlearning) and none reaches the
+per-task quality leader except the sign-modulated GAE-λ idea. We provide more extensive analysis
+and qualitative results in Appendix D.
+
+5 Analysis
+
+5.1 The empirical frontier
+
+The main finding of our study is that current LLMs and search methods reliably alter where executed
+ideas land on the quality, diversity, and novelty axes, but does not expand the frontier. The leader on
+each axis rotates by strategy and task (Sections 4.2–4.4), yet completely novel ideas are rare under
+every strategy, and the rare novel ideas never approach the per-task quality peak. Both findings hold
+across all three tasks, six strategies, and 3,222 scored runs.
+
+The novelty floor is the same on every task. Zero ideas reach NS = 1 (“Original”) across all 3,222
+scored runs, the best novel-side rating is NS = 2 (“Minor Similarity”), and the largest novel-side
+fraction on any task is 14.1% (Section 4.4). We see the quality gap directly in the strict top-
+10 ∩ NS ≤ 2 intersection (Fig. 5d,e,f). The intersection is empty on nanoGPT, contains exactly
+one idea on On-Policy RL (the ISLANDS sign-modulated GAE-λ idea), and is empty on Model
+Unlearning, where no novel-side idea even crosses the 1.0 "unlearned-but-still-capable" baseline.
+
+11
+
+The shape of the trade-off is invariant across the three tasks, six strategies, and two metric directions.
+The running-best slope flattens by 50 to 100 valid solutions on every task (Section 4.2), which rules
+out the possibility that the runs were too short.
+
+The gap between novel-side and known-side quality appears at the peak of the distribution, not at the
+median. Per-task median quality of NS ≤ 2 ideas matches NS ≥ 4 ideas to within 2.4%, which rules
+out a “novel ideas are just bad” interpretation. The gap is at the top. On nanoGPT, the best novel-side
+idea reaches val_bpb = 0.9873 against the per-task best 0.9567, a 3.2% gap. On Model Unlearning,
+the best novel-side idea reaches 0.9689 against the per-task best 1.0309, a 6.0% gap. On-Policy RL
+is the exception. The sign-modulated GAE-λ idea lands at 1.5630, within 1.2% of the per-task best
+(1.5816), and is the only idea in the study to land in its strategy’s top-quality runs and at NS ≤ 2.
+We read this as follows. Novelty entails distance from known recipes, which means first-attempt
+executions are necessarily near-blind, and under-optimization on first attempt is a property of novelty
+itself, not a defect of the idea. Current LLMs and search methods are not able to reliably recognise
+ideas that are “novel and currently weak but high-potential” from “novel and weak.” Imbuing systems
+with such capabilities could be key to unlocking the full potential of automated research. We discuss
+this further in Section 6.1.
+
+5.2 No universal best strategy
+
+The strategy that performs best on a given task depends on the task’s solution space, and the pattern
+across the three tasks we study is task-dependent in a way that suggests a hypothesis.
+
+On On-Policy RL, where mutations are mostly scalar hyperparameter changes around a fixed PPO
+core, the two strategies built around recombination lead. MAP-ELITES produces the best quality run
+(1.582) via cell-targeted exploration, and ISLANDS matches at 1.563 via tournament selection and
+crossover, including the study’s only top-10 ∩ NS ≤ 2 idea, the sign-modulated GAE-λ idea. On
+Model Unlearning, where published methods cluster tightly in the NPO, RMU, and SCRUB families,
+OMNI’s MoI gate (“mechanistically distinct from the accepted archive”) coincides with literature-
+grounded novelty and produces 14.1% NS ≤ 2 ideas, roughly 3× the next strategy. GREEDY wins
+quality on this task by grinding a particular SCRUB-RMU variant to 1.0309. On nanoGPT, where
+mutations are code-level edits to the modded-nanogpt backbone, crossover-style recombination is
+structurally risky and the two strategies that excel are sequential. GREEDY grinds the top quality
+(0.9567) and CURIOSITY produces the only verified NS = 2 ideas (20/200, all residual-stream
+geometry).
+
+We propose a hypothesis. Recombination strategies do best on parameter-like mutations, sequential
+strategies on code-like mutations, and gating strategies in narrow-literature regimes. The diversity
+result in Section 4.3 goes the same way. MAP-ELITES produces the highest embedding-space
+pairwise distance on the two DiscoGen tasks and is a close second on nanoGPT, but breadth converts
+to quality only when the task’s quality landscape is itself broad. MAP-ELITES wins quality on On-
+Policy RL and ends up mid-pack or worse on the other two tasks (third of six on Model Unlearning,
+last on nanoGPT). The same task-geometry dependence drives both the strategy-winner and whether
+diversity pays off.
+
+5.3 Reward hacking
+
+We anticipated some reward hacking given the difficulty of our tasks, but were surprised by its
+severity in our initial experiments. Across 1,628 scored runs we confirmed 40 fabrications (2.5%),
+evenly split between nanoGPT and On-Policy RL. Some agents fabricated results without any honest
+training attempt (25 cases), others resorted to fabrication only after a real attempt failed (13), and
+a few actively disabled the grading process before submitting a fake (2). In 27 of the 40 cases,
+the fabrication was concealed behind a clean engineering report in the agent’s notes (Table 11,
+Appendix B.1).
+
+These fabrications directly corrupt the search. In the most extreme case, an OMNI executor ran out of
+memory and wrote a fake run.log via ten echo statements, claiming val_bpb = 0.900, more than
+four times the improvement of the best legitimate run in the same campaign. The strategy archive
+recorded it as the campaign best, and all subsequent anchor selections were conditioned on a result
+that never existed. Other cases were subtler. One executor spliced a fabricated evaluation line into
+
+12
+
+120 KB of authentic training log and closed its notes with “The training run completed successfully”
+(§B.2).
+
+We first observed fabrications in initial nanoGPT campaigns that ran without an inline auditor, where
+every confirmed fake reached the archive. Upon discovering the severity of these cases, we added the
+HACKERJUDGE auditor inline on all tasks for the final reported runs. Auditing has limits, however.
+The auditor is itself an agent and its verdicts are evidence rather than ground truth. Auditing the
+artifacts also cannot catch every hack. On On-Policy RL, thirteen high-scoring runs specialized the
+algorithm to the benchmark by decoding game objects directly from the observation tensor, with
+authentic artifacts and valid verdicts, and only a held-out evaluation of the kind in Section 5.4
+exposes this class. We provide the full taxonomy, verbatim trajectories, the auditor regression suite,
+and mitigation strategies in Appendix B.
+
+5.4 Held-out generalization
+
+A strategy’s ranking on the training task measures how well it fits that task, not whether its discovered
+solutions generalize beyond it. We test generalization directly, re-scoring each strategy’s elites on a
+held-out task from the same domain that the search never saw. On-Policy RL and Model Unlearning
+each provide one; nanoGPT does not.
+
+Strategy
+
+Table 2: Top-5 elites per strategy on the MinAtar/Asterix meta-
+test, normalized against the reference PPO baseline (1.0); mean ±
+SEM. Dashes mark strategies with zero successful test runs. Best train
+and test means in bold.
+
+On-Policy RL The search
+optimizes a training algo-
+rithm on MinAtar Break-
+out. We re-score the top-
+five elites per strategy on
+MinAtar/Asterix, the held-
+out environment in Disco-
+Gen [17], as mean return
+normalized to the reference
+PPO baseline of 1.0 (Ta-
+ble 2). The strategies clus-
+ter on Breakout but sepa-
+rate by more than 5× on As-
+terix. ISLANDS and MAP-
+ELITES stay well above the
+baseline, GO-EXPLORE transfers but falls below it, and the top GREEDY and OMNI elites produce
+no valid Asterix score, crashing or exceeding the compute budget on an environment they were not
+optimized for. The Breakout ranking does not identify which strategies discover an algorithm that
+holds up on a new environment.
+
+1.451±0.013
+Greedy
+Go-Explore 1.522±0.010 0.734±0.060
+1.303±0.016 1.457±0.355
+Curiosity
+1.181±0.005
+Omni
+1.572±0.004 3.991±0.041
+Islands
+MAP-Elites 1.577±0.002 2.755±0.186
+
+Timeout Failed
+
+4
+2
+0
+3
+0
+0
+
+1
+0
+0
+2
+0
+0
+
+Train ↑
+
+Test ↑
+
+—
+
+—
+
+Table 3: Top-16 elites per strategy on the MUSE
+meta-test, forget and retain normalized against the
+reference baseline (1.0). Best retain in bold.
+
+Model Unlearning The search optimizes a loss
+function on WMDP-cyber. We take the loss each
+strategy discovers and re-score it, without fur-
+ther search, on MUSE [53], a held-out unlearn-
+ing benchmark (Table 3). Both are scored the
+same way, as a baseline-normalized forget (tar-
+get knowledge removed) and retain (general ca-
+pability preserved), each above 1.0 when it beats
+the reference. On WMDP-cyber every strategy
+reaches roughly 1.0 on both, so the training task
+does not separate them. On MUSE they sep-
+arate on retain: GO-EXPLORE and ISLANDS
+preserve capability, MAP-ELITES largely does,
+and GREEDY, OMNI, and CURIOSITY do not,
+with CURIOSITY retaining almost none. The
+discovered loss still removes the target on a new
+benchmark but no longer preserves the capability it should leave intact. Forget moves the other
+way, highest for CURIOSITY and OMNI, because a model that reproduces almost nothing scores as
+near-complete forgetting; forget is meaningful only alongside retain.
+
+Greedy
+Go-Explore
+Curiosity
+Omni
+Islands
+MAP-Elites
+
+2.648
+1.295
+10.000
+4.750
+1.206
+1.342
+
+1.018
+1.019
+1.008
+1.003
+1.043
+1.029
+
+0.962
+0.901
+0.982
+0.909
+0.886
+0.889
+
+0.694
+1.048
+0.013
+0.543
+1.115
+0.895
+
+Forget ↑ Retain ↑ Forget ↑ Retain ↑
+
+Strategy
+
+Held-out
+
+Train
+
+13
+
+6 Discussion
+
+6.1 The missing capability
+
+The pattern in Section 5.1 points at one capability that none of the six strategies we tested possesses,
+but which would be needed to move the empirical frontier we report. Search needs a signal that
+decides, for a novel-but-currently-weak idea, whether it is weak because the mechanism itself is bad
+or because the first-attempt execution simply has not been optimized.
+
+No stratedy in our study reliably makes this distinction either explicitly or implicitly. GREEDY retains
+the top-K runs by current score, MAP-ELITES and GO-EXPLORE retain the cell-best, ISLANDS
+retain the tournament winners, and OMNI accepts a one-shot evaluation after the MoI gate. Since
+Novel ideas have no existing known recipes by construction and are likely under-optimized on first
+attempt, they are discarded. The result is the gap at the top of the quality distribution reported in
+Section 5.1, where novel-side medians match known-side medians but novel-side peaks fall short of
+the per-task quality leader.
+
+CURIOSITY comes closest in spirit to the missing signal. Its learning-progress weight favours anchors
+where the predictor’s pre-execution estimate was furthest off, which is a signal for “ideator surprise”
+rather than for “refinement upside.” The two are not the same. CURIOSITY’s verified novel-side ideas
+on nanoGPT only marginally improve on baseline (Table 16), and on On-Policy RL every CURIOSITY
+idea is derivative (all rated NS ≥ 3, a quarter direct copies), yet surprise is uncorrelated with quality
+(r = −0.11): the ideator’s weak predictor turns prediction error into noise rather than a refinement
+cue, and the highest-surprise ideas are elaborate PPO variants it backs confidently that then score
+far below baseline. A signal for refinement potential would have to predict expected quality after
+additional optimization, which is qualitatively different from predicting current-attempt quality or
+ideator surprise. Building such a signal is, in our view, the most direct algorithm-side route to search
+for Autonomous AI Research.
+
+6.2 Limitations and future work
+
+We discuss three groups of limitations. First, our compute budget is bounded at 300 iterations per cell.
+Second, the search algorithms and prompt configurations are intentionally untuned. Third and most
+important, the LLM-driven search paradigm itself has an architectural gap that none of the strategies
+we tested can close on its own.
+
+Compute budget. We run each (strategy, task) cell to 300 iterations on 8×A100 nodes. The
+running-best slope flattens by 50 to 100 valid solutions on every task (Section 4.2), which rules out
+the possibility that the runs were simply too short, but it does not rule out late breakthroughs at
+substantially larger budgets. A run at, say, 3,000 iterations per cell would be the most direct check on
+whether the frontier we report is a property of the search regime or only of the 102 to 103 scale at
+which we evaluated it.
+
+Algorithm and prompt tuning. We use gold-standard implementations of each search strategy and
+a single set of ideator and executor prompts across all three tasks. This is deliberate. We wanted
+the cross-task comparison to reflect the strategy itself rather than per-task prompt engineering or
+strategy-specific hyperparameter sweeps. The price is that any individual strategy could be improved
+by careful tuning. ISLANDS could use hand-picked seed populations rather than initialization from
+scratch (see Section 4.3). CURIOSITY’s predictor could be configured differently per task. OMNI’s
+MoI gate threshold could be relaxed on tasks where the technique vocabulary is fine-grained. These
+are all reasonable follow-ups. In our study the decision was to avoid hand-engineering, and make the
+algorithms as unbiased and comparable as possible.
+
+The architectural gap. The more important limitation is that our study characterises a property of
+the current LLM-driven search paradigm rather than of any one strategy. Every strategy we tested
+delegates idea generation to an LLM ideator and prunes generated ideas on a first-attempt score.
+Section 6.1 argues that this paradigm is missing a signal for refinement potential. Closing that gap
+is unlikely to come from more iterations or from better tuning of an existing strategy. It calls for a
+re-design of how research agents decide what to invest compute in, and account for the optimization
+gap between novel and known-recipe ideas. Designing and evaluating such capabilities is a key step
+to discovering simultaneously novel and performant solutions.
+
+14
+
+7 Conclusion
+
+During this work we have conducted an extensive study across three structurally distinct tasks
+(nanoGPT pretraining, On-Policy RL algorithm discovery, and WMDP-cyber Model Unlearning),
+six search strategies (Greedy, MAP-Elites, Go-Explore, Islands, Curiosity, and Omni) and three
+evaluation axes (quality, diversity, and novelty), totalling 3,222 scored runs. Through this we
+investigated the tradeoffs between Quality, Diversity, and Novelty, and found that search strategies
+reliably alter where executed ideas land on all three axes, yet completely novel ideas remain rare
+and the rare novel ideas never approach the per-task quality peak. Across the study, no idea reaches
+NS = 1 (“Original”), the top-10 ∩ NS ≤ 2 (“Minor Similarity”) intersection contains only one idea,
+and on Model Unlearning no novel-side idea crosses the unlearned-but-still-capable baseline.
+
+While diversity is often regarded as a key prerequisite for quality and novelty, we did not observe
+any clear relationship between them in our experiments. Breadth converts to quality only when the
+task’s quality landscape is itself broad, and a diverse accepted pool does not imply that any single
+idea is unprecedented. In general, MAP-ELITES and GO-EXPLORE sit at or near the top of the
+pairwise-distance ranking on every task. Novel-side ideas typically reach comparable median quality
+to known-side ideas on every task, but their peaks fall short of the per-task quality leader. This
+suggests that current LLM and search methods lack the capability to strategically allocate resources
+and to foresee potential in novel ideas that may currently perform poorly but produce breakthroughs
+given further refinement. Lastly, the fact that no idea across our experiments received a score of “1”
+(“Original”) can be attributed both to the inability of current research agents to produce novelty and
+to the tension inherent in the word “Original” itself. Can any research idea truly be original?
+
+To work towards the goal of fully automated, (super)human researchers, systems should be able to
+quickly adapt based on accumulated experience [42, 22], what Silver and Sutton [55] call the “era of
+experience.” An agent that integrates outcomes over time can recognise promising research directions
+from the trajectory of past attempts, just like seasoned human researchers strategically re-orient their
+attempts during research given new evidence. Secondly, another promising avenue is developing new
+intrinsic (encoded with base model) and extrinsic (search agorithms) exploration mechanisms that
+better utilize and integrate within state-of-the-art models and harnesses, going beyond the search
+strategies we evaluated which are based on traditional open-ended-search literature [32, 57]. Work
+across these two axes (continual learning, Quality–Diversity–Novelty search) has the potential to
+deliver on the promise of fully autonomous AI research agents and beyond.
+
+Acknowledgments and Disclosure of Funding
+
+Antonis Antoniades led the project, originated the idea, chose and implemented the search algorithms,
+built the nanoGPT task, contributed to the code abstractions, and ran experiments and analysis.
+Deepak Nathani co-originated the idea, implemented the DiscoGen tasks, and contributed to the
+code abstractions and experiments. Ritam Saha originated the fully-agentic framework, wrote
+the initial codebase, and led the implementation of the code abstractions. Alfonso Amayuelas
+implemented and ran experiments for the Curiosity search strategy. Ivan Bercovich ran the reward-
+hacking analysis, provided advice, and donated funding for part of the project via the Coefficient
+Giving grant. Zhaotian Weng implemented the Go-Explore search strategy. Vignesh Baskaran and
+Kunal Bhatia (Hexo AI) provided advice and donated part of the compute. William Yang Wang
+provided advice.
+
+References
+
+[1] Joshua Ainslie, James Lee-Thorp, Michiel de Jong, Yury Zemlyanskiy, Federico Lebrón, and
+Sumit Sanghai. GQA: training generalized multi-query transformer models from multi-head
+checkpoints. In Houda Bouamor, Juan Pino, and Kalika Bali, editors, Proceedings of the 2023
+Conference on Empirical Methods in Natural Language Processing, EMNLP 2023, Singapore,
+December 6-10, 2023, pages 4895–4901. Association for Computational Linguistics, 2023.
+doi: 10.18653/V1/2023.EMNLP-MAIN.298. URL https://doi.org/10.18653/v1/2023.
+emnlp-main.298.
+
+15
+
+

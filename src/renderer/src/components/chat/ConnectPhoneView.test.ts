@@ -30,7 +30,7 @@ function channel(enabled: boolean, provider: RemoteChannelV1['provider'] = 'feis
     model: 'auto',
     workspaceRoot: '',
     agentProfile: {
-      name: 'SciForge Runtime',
+      name: 'SciForge',
       description: '',
       identity: '',
       personality: '',
@@ -72,7 +72,7 @@ describe('ConnectPhoneView', () => {
 
   it('builds the default local runtime channel payload after a successful scan', () => {
     expect(createConnectPhoneAgentProfile()).toEqual({
-      name: 'SciForge Runtime',
+      name: 'SciForge',
       description: '',
       identity: '',
       personality: '',

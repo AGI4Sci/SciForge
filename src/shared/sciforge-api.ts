@@ -15,6 +15,14 @@ import type {
   WorkflowRuntimeStatus
 } from './app-settings'
 import type {
+  TraceClearResult,
+  TraceExportResult,
+  TraceReadQuery,
+  TraceReadResult,
+  TraceSummary,
+  TraceSummaryQuery
+} from '@sciforge/full-trace'
+import type {
   AnchoredCommentCaptureRequest,
   AnchoredCommentCaptureResult,
   AnchoredCommentThread,
@@ -39,8 +47,6 @@ import type {
   WorkspaceClipboardImageSaveResult,
   WorkspaceClipboardPastePayload,
   WorkspaceClipboardPasteResult,
-  WorkspaceNativeFileDragPayload,
-  WorkspaceNativeFileDragResult,
   WorkspaceFileReadResult,
   WorkspaceImageReadResult,
   WorkspaceDirectoryCreatePayload,
@@ -49,6 +55,8 @@ import type {
   WorkspaceDirectoryTarget,
   WorkspaceEntryRenamePayload,
   WorkspaceEntryRenameResult,
+  WorkspacePdfRenameSuggestionPayload,
+  WorkspacePdfRenameSuggestionResult,
   WorkspaceEntryCopyPayload,
   WorkspaceEntryCopyResult,
   WorkspaceEntryImportPayload,
@@ -72,37 +80,34 @@ import type {
   WorkspacePreviewArtifactDescriptor,
   WorkspacePreviewAnchor,
   WorkspacePreviewAssetTransportDescriptor,
-  WorkspacePreviewByteRange,
   WorkspacePreviewEditDiffSummary,
   WorkspacePreviewEditOperation,
   WorkspacePreviewExportTarget,
   WorkspacePreviewFileState,
   WorkspacePreviewIntegrityExpectation,
   WorkspacePreviewIntegrityVerification,
-  WorkspacePreviewPluginActionInput,
   WorkspacePreviewPluginActionResult,
   WorkspacePreviewPluginManifest,
-  WorkspacePreviewPrepareArtifactRequest,
-  WorkspacePreviewReadArtifactRangeRequest,
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from './workspace-preview'
+import type { PdfAnnotationSidecar } from './pdf-annotations'
 import type {
-  BiologyRoomApplyInput,
-  BiologyRoomApplyResult,
-  BiologyRoomCreateInput,
-  BiologyRoomHistoryInput,
-  BiologyRoomHistoryResult,
-  BiologyRoomListInput,
-  BiologyRoomManifest,
-  BiologyRoomObserveInput,
-  BiologyRoomObserveResult,
-  BiologyRoomOpenOrCreateInput,
-  BiologyRoomOpenOrCreateResult,
-  BiologyRoomRefreshInput,
-  BiologyRoomSummary,
-  BiologyRoomTarget
-} from './biology-room'
+  CapabilityReadiness,
+  CapabilityReadinessRequest,
+  CapabilityDescriptor,
+  CapabilityDiscoveryQuery,
+  CapabilityEventQuery,
+  CapabilityInvocationRequest,
+  CapabilityInvocationResult,
+  CapabilityObservation,
+  CapabilityObserveRequest,
+  CapabilityResourceBindRequest,
+  CapabilityResourceContentAccess,
+  CapabilityResourceHandle,
+  CapabilityResourceBinding as BrokerCapabilityResourceBinding,
+  CapabilityResourceChangeEvent
+} from './capability-broker'
 import type { BioGymDoctorResult, BioGymRunEvent } from './biogym'
 import type {
   WriteInlineCompletionDebugEntry,
@@ -150,28 +155,9 @@ import type {
   TerminalWritePayload
 } from './terminal'
 import type {
-  PaperRadarApiResult,
-  PaperRadarArxivSyncInput,
-  PaperRadarBiorxivSyncInput,
-  PaperRadarDigestInput,
-  PaperRadarDigestResult,
-  PaperRadarProfile,
-  PaperRadarProfileListResult,
-  PaperRadarProfileSaveResult,
-  PaperRadarProfileSyncInput,
-  PaperRadarProfileSyncResult,
-  PaperRadarRankInput,
-  PaperRadarRankResult,
-  PaperRadarReviewInput,
-  PaperRadarReviewResult,
-  PaperRadarSearchInput,
-  PaperRadarSearchResult,
-  PaperRadarStatus,
-  PaperRadarSyncResult
-} from './paper-radar'
-import type {
   VisibleContextCapturePreviewRequest,
   VisibleContextCapturePreviewResult,
+  VisibleContextPublishInput,
   VisibleContextSnapshot
 } from './visible-context'
 import type {
@@ -234,6 +220,15 @@ import type {
 } from './research-cards'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
+export type WorkspaceFilePickerFilter = {
+  name: string
+  extensions: string[]
+}
+export type WorkspaceFilePickerRequest = {
+  title: string
+  defaultPath?: string
+  filters: WorkspaceFilePickerFilter[]
+}
 export type PathOpenResult = { ok: boolean; message?: string }
 export type AgentRuntimeEventSubscribeInput = {
   runtimeId: AgentRuntimeId
@@ -332,8 +327,6 @@ export type SkillListItem = {
 export type SkillListResult =
   | { ok: true; skills: SkillListItem[]; validationErrors: Array<{ root: string; message: string }> }
   | { ok: false; message: string }
-export type RuntimeConfigFileResult = { path: string; content: string; exists: boolean }
-export type RuntimeConfigSaveResult = { ok: true; path: string }
 export type ScientificSkillsMcpConfigResult =
   | { ok: true; config: Record<string, unknown> }
   | { ok: false; message: string }
@@ -421,9 +414,6 @@ export type ScientificSkillsStatusResult =
       }
     }
   | { ok: false; message: string }
-export type ModelRouterConfigOpenResult =
-  | { ok: true; path: string }
-  | { ok: false; path: string; message: string }
 export type TurnCompleteNotificationPayload = {
   threadId?: string
   title: string
@@ -432,10 +422,6 @@ export type TurnCompleteNotificationPayload = {
 export type SystemNotificationResult =
   | { ok: true; shown: boolean; reason?: string }
   | { ok: false; message: string }
-export type DevPreviewNavigatePayload = {
-  url: string
-  webContentsId: number
-}
 export type RemoteChannelActivityPayload = {
   channelId: string
   threadId: string
@@ -457,6 +443,32 @@ export type ModelProviderModelGroup = {
   providerId: string
   label: string
   modelIds: string[]
+}
+export type ModelAccessCredentialState =
+  | 'missing'
+  | 'configured'
+  | 'authenticated'
+  | 'unauthenticated'
+  | 'rejected'
+  | 'unknown'
+export type ModelAccessWireProtocol = 'responses' | 'chat-completions' | 'anthropic-messages'
+export type ModelAccessProtocolState =
+  | 'cached'
+  | 'selected'
+  | 'pending-first-request'
+  | 'unknown'
+  | 'not-applicable'
+export type ModelAccessStatus = {
+  setupRequired: boolean
+  mode: 'api' | 'coding-plan' | null
+  service: 'model-router' | 'plan-gateway' | null
+  health: 'healthy' | 'not_configured' | 'unavailable' | 'error'
+  adapterId: string | null
+  credentialState: ModelAccessCredentialState
+  protocol: ModelAccessWireProtocol | null
+  protocolState: ModelAccessProtocolState
+  traceCaptureReady: boolean
+  action: string
 }
 export type ComputerUsePermissionKind = 'accessibility' | 'screenRecording'
 export type ComputerUsePermissionState = 'granted' | 'denied' | 'unknown'
@@ -506,208 +518,6 @@ export type ComputerUseStatusView = {
   permissions: ComputerUsePermissions
   runtime: ComputerUseRuntimeStatusView
 }
-export type EvidenceDagViewRequest = {
-  threadId?: string
-  runtimeId?: AgentRuntimeId
-}
-export type DagAutonomyMode = 'autonomous' | 'checkpointed' | 'supervised'
-export type DagUpdateProgress = {
-  stage: 'capturing' | 'evidence' | 'project' | 'compile' | 'retrying'
-  completedItems: number
-  totalItems: number
-  updatedAt?: string
-  attempt?: number
-}
-export type DagProgressiveNodeStage = 'collected' | 'extracting' | 'pending_verification' | 'committed'
-export type DagProgressiveViewStatus = {
-  /** True when the desktop inferred lifecycle state from a legacy status response. */
-  inferred?: boolean
-  /** Durable graph currently eligible for provenance and audit operations. */
-  committed: {
-    nodeCount: number
-    edgeCount: number
-    snapshotDigest?: string
-  }
-  /** Ephemeral work layered over the durable graph while an update is running. */
-  staging?: {
-    overlayId?: string
-    collectedCount: number
-    extractingCount: number
-    pendingVerificationCount: number
-    temporaryEdgeCount: number
-    updatedAt?: string
-  }
-}
-export type DagPanelStatus = {
-  freshness: 'fresh' | 'dirty' | 'queued' | 'updating' | 'failed' | 'paused' | 'degraded'
-  pendingCount: number
-  viewedSnapshotDigest?: string
-  latestSnapshotDigest?: string
-  desiredWatermark?: string
-  committedWatermark?: string
-  auditTargetDigest?: string
-  auditStale?: boolean
-  attentionCount?: number
-  missingArtifactCount?: number
-  autonomyMode?: DagAutonomyMode
-  lastError?: string
-  degradedReason?: string
-  nextAttemptAt?: string
-  progress?: DagUpdateProgress
-  /** Optional progressive rendering metadata; older DAG services may omit it. */
-  progressiveView?: DagProgressiveViewStatus
-  scope?: {
-    includedSessions: string[]
-    excludedSessions: string[]
-    isolatedSessions: string[]
-  }
-}
-export type EvidenceDagViewResult = {
-  url: string
-  threadId?: string
-  status: DagPanelStatus
-}
-export type EvidenceDagUpdateRequest = {
-  runtimeId: AgentRuntimeId
-  threadId: string
-  operation?: 'update' | 'rebuild'
-  rebuildKind?: 'schema_upgrade' | 'corruption_recovery' | 'reinterpretation'
-  rebuildRationale?: string
-}
-export type EvidenceDagPriorityRequest = {
-  runtimeId: AgentRuntimeId
-  threadId: string
-  visible: boolean
-}
-export type EvidenceDagUpdateResult = {
-  url: string
-  threadId: string
-  itemCount: number
-  jobId: string
-  status: DagPanelStatus
-}
-export type EvidenceSourceSelector = {
-  type: 'pdf' | 'text' | 'table' | 'figure' | 'code' | 'dataset' | 'web'
-  page?: number
-  section?: string
-  table?: string
-  figure?: string
-  rowRange?: string
-  columnNames?: string[]
-  lineRange?: string
-  quote?: string
-  query?: Record<string, unknown>
-}
-export type EvidenceDagEvidencePreviewResolveRequest = {
-  runtimeId: AgentRuntimeId
-  threadId: string
-  snapshotDigest: string
-  sourceAssertionId: string
-  artifactVersionId: string
-  sourceAnchorId: string
-}
-export type EvidenceDagEvidencePreviewResolveResult =
-  | {
-      ok: true
-      path: string
-      workspaceRoot: string
-      runtimeId: AgentRuntimeId
-      threadId: string
-      snapshotDigest: string
-      sourceAssertionId: string
-      artifactId?: string
-      artifactVersionId: string
-      sourceAnchorId: string
-      selector: EvidenceSourceSelector
-      contentDigest: string
-      anchorDigest?: string
-      mediaType?: string
-    }
-  | {
-      ok: false
-      code: 'snapshot_mismatch' | 'provenance_mismatch' | 'access_restricted' |
-        'unsupported_locator' | 'file_unavailable'
-      message: string
-    }
-export type ProjectDagViewName = 'home' | 'goals' | 'graph' | 'attention'
-export type ProjectDagViewRequest = {
-  view?: ProjectDagViewName
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-  sessions?: string[]
-}
-export type ProjectDagViewResult = {
-  url: string
-  status: DagPanelStatus
-  goal?: {
-    id: string
-    title: string
-    description?: string
-    version?: number
-  }
-}
-export type ProjectDagUpdateRequest = {
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-  sessions?: string[]
-  scope?: 'all' | string[]
-  excludedSessions?: string[]
-  isolatedSessions?: string[]
-  autonomyMode?: DagAutonomyMode
-}
-export type ProjectDagUpdateResult = {
-  url: string
-  jobId?: string
-  status: DagPanelStatus
-}
-export type ProjectDagGoalSaveRequest = {
-  title: string
-  description?: string
-  rootGoalId?: string
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-  sessions?: string[]
-  autonomyMode?: DagAutonomyMode
-}
-export type ProjectDagGoalSaveResult = {
-  goalId: string
-  version?: number
-  status: DagPanelStatus
-}
-export type ProjectDagSourceSelector = EvidenceSourceSelector
-export type ProjectDagEvidencePreviewResolveRequest = {
-  workspaceRoot: string
-  projectRoot?: string
-  project?: string
-  snapshotDigest: string
-  claimId: string
-  artifactVersionId: string
-  sourceAnchorId: string
-}
-export type ProjectDagEvidencePreviewResolveResult =
-  | {
-      ok: true
-      path: string
-      workspaceRoot: string
-      snapshotDigest: string
-      claimId: string
-      artifactId?: string
-      artifactVersionId: string
-      sourceAnchorId: string
-      selector: ProjectDagSourceSelector
-      contentDigest?: string
-      anchorDigest?: string
-      mediaType?: string
-    }
-  | {
-      ok: false
-      code: 'claim_mismatch' | 'snapshot_mismatch' | 'provenance_mismatch' |
-        'access_restricted' | 'unsupported_locator' | 'file_unavailable'
-      message: string
-    }
 export type ConnectPhoneInstallQrResult =
   | { ok: true; url: string; deviceCode: string; userCode: string; interval: number; expireIn: number }
   | { ok: false; message: string }
@@ -882,22 +692,6 @@ export type ZulipTestSendResult =
 export type ZulipGuardResult =
   | { ok: true; status: ZulipBotStatus }
   | { ok: false; message: string; status?: ZulipBotStatus; conflict?: ZulipGuardConflictStatus }
-export type LocalRuntimeStatusState =
-  | 'starting'
-  | 'running'
-  | 'restarting'
-  | 'crashed'
-  | 'failed'
-  | 'stopped'
-export type LocalRuntimeStatusPayload = {
-  state: LocalRuntimeStatusState
-  source: string
-  message?: string
-  stderrTail?: string
-  attempt?: number
-  maxAttempts?: number
-  at: string
-}
 export type PerformanceSnapshotResult =
   | { ok: true; snapshot: unknown }
   | { ok: false; message: string }
@@ -912,6 +706,7 @@ export type WorkspacePreviewOpenInput = {
   anchor?: WorkspacePreviewAnchor
   integrity?: WorkspacePreviewIntegrityExpectation
 }
+export type CapabilityResourceBinding = BrokerCapabilityResourceBinding
 export type WorkspacePreviewOpenResult =
   | {
       ok: true
@@ -920,10 +715,11 @@ export type WorkspacePreviewOpenResult =
       route: 'matched' | 'fallback'
       file: WorkspacePreviewFileState
       integrity?: WorkspacePreviewIntegrityVerification
+      capability?: CapabilityResourceBinding
     }
   | { ok: false; message: string }
 export type WorkspacePreviewObserveResult =
-  | { ok: true; observation: WorkspaceObservation }
+  | { ok: true; observation: WorkspaceObservation; capability?: CapabilityResourceBinding }
   | { ok: false; message: string }
 export type WorkspacePreviewReadRangeResult =
   | {
@@ -973,6 +769,7 @@ export type WorkspacePreviewApplyEditResult =
         effect: 'file-write' | 'session-update' | 'sidecar-write'
       }
       diffSummary?: WorkspacePreviewEditDiffSummary
+      capability?: CapabilityResourceBinding
     }
   | { ok: false; message: string }
 export type WorkspacePreviewExportResult =
@@ -992,8 +789,46 @@ export type WorkspacePreviewExportResult =
     }
   | { ok: false; message: string }
 export type WorkspacePreviewInvokeActionResult =
-  | WorkspacePreviewPluginActionResult
+  | (WorkspacePreviewPluginActionResult & { capability?: CapabilityResourceBinding })
   | { ok: false; message: string }
+
+export type WorkspacePreviewAnnotationListResult =
+  | { ok: true; sidecar: PdfAnnotationSidecar }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationImportResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      importedAt: string
+      fingerprintMatched: boolean
+      warnings: string[]
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationReviewGenerateResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      mode: 'auto' | 'import'
+      commentCount: number
+      skippedCount: number
+      generatedAt: string
+    }
+  | { ok: false; message: string }
+export type WorkspacePreviewAnnotationReviewImproveResult =
+  | {
+      ok: true
+      sidecar: PdfAnnotationSidecar
+      threadId: string
+      annotationId: string
+      modificationAdvice: string
+      revisedContent: string
+      generatedAt: string
+    }
+  | { ok: false; message: string }
+
+export type FullTraceExportDialogResult =
+  | { canceled: true }
+  | ({ canceled: false } & TraceExportResult)
 
 export type SciForgeApi = {
   platform: string
@@ -1005,7 +840,14 @@ export type SciForgeApi = {
   getSettings: () => Promise<AppSettingsV1>
   setSettings: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
   onSettingsChanged: (handler: (settings: AppSettingsV1) => void) => () => void
+  getModelAccessStatus: () => Promise<ModelAccessStatus>
   fetchUpstreamModels: () => Promise<UpstreamModelsResult>
+  traces: {
+    read: (query?: TraceReadQuery) => Promise<TraceReadResult>
+    summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
+    export: (traceIds?: readonly string[]) => Promise<FullTraceExportDialogResult>
+    clear: () => Promise<TraceClearResult>
+  }
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>
@@ -1079,7 +921,7 @@ export type SciForgeApi = {
     forceTakeover?: boolean
   ) => Promise<ZulipGuardResult>
   pickWorkspaceDirectory: (defaultPath?: string) => Promise<WorkspacePickResult>
-  pickWorkspaceFile: (defaultPath?: string) => Promise<WorkspacePickResult>
+  pickFile: (request: WorkspaceFilePickerRequest) => Promise<WorkspacePickResult>
   buildScientificSkillsMcpConfig: (workspaceRoot?: string) => Promise<ScientificSkillsMcpConfigResult>
   buildScientificPlottingMcpConfig: (workspaceRoot?: string) => Promise<ScientificPlottingMcpConfigResult>
   buildBgcDiscoveryMcpConfig: (workspaceRoot?: string) => Promise<BgcDiscoveryMcpConfigResult>
@@ -1120,10 +962,6 @@ export type SciForgeApi = {
   listSkills: (workspaceRoot?: string) => Promise<SkillListResult>
   saveSkillFile: (rootPath: string, skillName: string, content: string) => Promise<SkillSaveResult>
   openSkillRoot: (rootPath: string) => Promise<PathOpenResult>
-  getRuntimeConfigFile: () => Promise<RuntimeConfigFileResult>
-  setRuntimeConfigFile: (content: string) => Promise<RuntimeConfigSaveResult>
-  openRuntimeConfigDir: () => Promise<PathOpenResult>
-  openModelRouterConfigFile: () => Promise<ModelRouterConfigOpenResult>
   getGitBranches: (workspaceRoot: string) => Promise<GitBranchesResult>
   switchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
   createAndSwitchGitBranch: (workspaceRoot: string, branch: string) => Promise<GitBranchesResult>
@@ -1145,12 +983,12 @@ export type SciForgeApi = {
   pasteWorkspaceClipboard: (
     payload: WorkspaceClipboardPastePayload
   ) => Promise<WorkspaceClipboardPasteResult>
-  startWorkspaceNativeFileDrag: (
-    payload: WorkspaceNativeFileDragPayload
-  ) => Promise<WorkspaceNativeFileDragResult>
   renameWorkspaceEntry: (
     payload: WorkspaceEntryRenamePayload
   ) => Promise<WorkspaceEntryRenameResult>
+  suggestWorkspacePdfName: (
+    payload: WorkspacePdfRenameSuggestionPayload
+  ) => Promise<WorkspacePdfRenameSuggestionResult>
   copyWorkspaceEntry: (
     payload: WorkspaceEntryCopyPayload
   ) => Promise<WorkspaceEntryCopyResult>
@@ -1166,52 +1004,36 @@ export type SciForgeApi = {
   watchWorkspaceFile: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
   unwatchWorkspaceFile: (watchId: string) => Promise<boolean>
   onWorkspaceFileChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
-  workspacePreview: {
-    listPlugins: () => Promise<WorkspacePreviewPluginManifest[]>
-    open: (input: WorkspacePreviewOpenInput) => Promise<WorkspacePreviewOpenResult>
-    observe: (sessionId: string) => Promise<WorkspacePreviewObserveResult>
-    describeAsset: (sessionId: string) => Promise<WorkspacePreviewDescribeAssetResult>
-    readRange: (
-      sessionId: string,
-      range: WorkspacePreviewByteRange
-    ) => Promise<WorkspacePreviewReadRangeResult>
-    prepareArtifact: (
-      sessionId: string,
-      request: WorkspacePreviewPrepareArtifactRequest
-    ) => Promise<WorkspacePreviewPrepareArtifactResult>
-    readArtifactRange: (
-      sessionId: string,
-      request: WorkspacePreviewReadArtifactRangeRequest
-    ) => Promise<WorkspacePreviewReadArtifactRangeResult>
-    applyEdit: (
-      sessionId: string,
-      operation: WorkspacePreviewEditOperation
-    ) => Promise<WorkspacePreviewApplyEditResult>
-    export: (
-      sessionId: string,
-      target: WorkspacePreviewExportTarget
-    ) => Promise<WorkspacePreviewExportResult>
-    invokeAction: (
-      sessionId: string,
-      action: WorkspacePreviewPluginActionInput
-    ) => Promise<WorkspacePreviewInvokeActionResult>
-    releaseSession: (sessionId: string) => Promise<boolean>
-    watch: (payload: WorkspaceFileWatchPayload) => Promise<WorkspaceFileWatchResult>
-    unwatch: (watchId: string) => Promise<boolean>
-    onChanged: (handler: (payload: WorkspaceFileChangePayload) => void) => () => void
-    getAssetSourceUrl?: (sessionId: string) => string | null
-  }
-  /** Optional while connecting to an older desktop or browser-only bridge. */
-  biologyRoom?: {
-    pickFile: (workspaceRoot: string) => Promise<WorkspacePickResult>
-    create: (input: BiologyRoomCreateInput) => Promise<BiologyRoomManifest>
-    openOrCreate: (input: BiologyRoomOpenOrCreateInput) => Promise<BiologyRoomOpenOrCreateResult>
-    load: (input: BiologyRoomTarget) => Promise<BiologyRoomManifest>
-    list: (input: BiologyRoomListInput) => Promise<BiologyRoomSummary[]>
-    observe: (input: BiologyRoomObserveInput) => Promise<BiologyRoomObserveResult>
-    apply: (input: BiologyRoomApplyInput) => Promise<BiologyRoomApplyResult>
-    refresh: (input: BiologyRoomRefreshInput) => Promise<BiologyRoomApplyResult>
-    history: (input: BiologyRoomHistoryInput) => Promise<BiologyRoomHistoryResult>
+  capabilities: {
+    readiness: (input: CapabilityReadinessRequest) => Promise<CapabilityReadiness>
+    discover: (input?: {
+      workspaceId?: string
+      query?: CapabilityDiscoveryQuery
+    }) => Promise<CapabilityDescriptor[]>
+    observe: (input: {
+      workspaceId?: string
+      request: CapabilityObserveRequest
+    }) => Promise<CapabilityObservation>
+    bind: (input: {
+      workspaceId?: string
+      request: CapabilityResourceBindRequest
+    }) => Promise<CapabilityResourceHandle>
+    invoke: (input: {
+      workspaceId?: string
+      request: CapabilityInvocationRequest
+      approval?: { mode: 'confirmation' }
+    }) => Promise<CapabilityInvocationResult>
+    events: (input?: {
+      workspaceId?: string
+      query?: CapabilityEventQuery
+    }) => Promise<CapabilityResourceChangeEvent[]>
+    subscribe: (workspaceId?: string) => Promise<{ subscriptionId: string }>
+    unsubscribe: (subscriptionId: string) => Promise<boolean>
+    resourceContentUrl: (access: CapabilityResourceContentAccess) => string | null
+    onEvent: (handler: (payload: {
+      subscriptionId: string
+      event: CapabilityResourceChangeEvent
+    }) => void) => () => void
   }
   /** Optional until the BioGym service PR is installed. */
   biogym?: {
@@ -1232,18 +1054,6 @@ export type SciForgeApi = {
   speechToText: {
     transcribe: (payload: SpeechTranscriptionRequest) => Promise<SpeechTranscriptionResult>
   }
-  paperRadar: {
-    status: () => Promise<PaperRadarStatus>
-    syncArxiv: (payload: PaperRadarArxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
-    syncBiorxiv: (payload: PaperRadarBiorxivSyncInput) => Promise<PaperRadarApiResult<PaperRadarSyncResult>>
-    syncProfile: (payload: PaperRadarProfileSyncInput) => Promise<PaperRadarApiResult<PaperRadarProfileSyncResult>>
-    listProfiles: () => Promise<PaperRadarApiResult<PaperRadarProfileListResult>>
-    saveProfile: (payload: PaperRadarProfile) => Promise<PaperRadarApiResult<PaperRadarProfileSaveResult>>
-    review: (payload: PaperRadarReviewInput) => Promise<PaperRadarApiResult<PaperRadarReviewResult>>
-    search: (payload: PaperRadarSearchInput) => Promise<PaperRadarApiResult<PaperRadarSearchResult>>
-    rank: (payload: PaperRadarRankInput) => Promise<PaperRadarApiResult<PaperRadarRankResult>>
-    digest: (payload: PaperRadarDigestInput) => Promise<PaperRadarApiResult<PaperRadarDigestResult>>
-  }
   researchCards: {
     list: (input?: ResearchCardListInput) => Promise<ResearchCard[]>
     create: (input: ResearchCardCreateInput) => Promise<ResearchCard>
@@ -1251,7 +1061,7 @@ export type SciForgeApi = {
     archive: (input: ResearchCardArchiveInput) => Promise<ResearchCard>
   }
   visibleContext: {
-    publish: (snapshot: VisibleContextSnapshot) => Promise<VisibleContextSnapshot>
+    publish: (snapshot: VisibleContextPublishInput) => Promise<VisibleContextSnapshot>
     get: () => Promise<VisibleContextSnapshot>
     readCapturePreview: (
       request: VisibleContextCapturePreviewRequest
@@ -1281,7 +1091,6 @@ export type SciForgeApi = {
       request: FeedbackSubmissionStatusRequest
     ) => Promise<FeedbackSubmissionStatusResult>
   }
-  onRuntimeStatus: (handler: (payload: LocalRuntimeStatusPayload) => void) => () => void
   agentRuntime: {
     connect: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeThreadListInput['runtimeId']) => Promise<AgentRuntimeCapabilities>
@@ -1326,24 +1135,11 @@ export type SciForgeApi = {
   runDesktopCommand: (command: DesktopCommand) => Promise<void>
   getPerformanceSnapshot: () => Promise<PerformanceSnapshotResult>
   openExternal: (url: string) => Promise<void>
-  onDevPreviewNavigate?: (handler: (payload: DevPreviewNavigatePayload) => void) => () => void
   getComputerUsePermissions: () => Promise<ComputerUsePermissions>
   requestComputerUsePermission: (
     kind: ComputerUsePermissionKind
   ) => Promise<ComputerUsePermissions>
   getComputerUseStatus: () => Promise<ComputerUseStatusView>
-  getEvidenceDagView: (input: EvidenceDagViewRequest) => Promise<EvidenceDagViewResult>
-  updateEvidenceDag: (input: EvidenceDagUpdateRequest) => Promise<EvidenceDagUpdateResult>
-  setEvidenceDagPriority: (input: EvidenceDagPriorityRequest) => Promise<DagPanelStatus>
-  resolveEvidenceDagEvidencePreview: (
-    input: EvidenceDagEvidencePreviewResolveRequest
-  ) => Promise<EvidenceDagEvidencePreviewResolveResult>
-  getProjectDagView: (input: ProjectDagViewRequest) => Promise<ProjectDagViewResult>
-  updateProjectDag: (input: ProjectDagUpdateRequest) => Promise<ProjectDagUpdateResult>
-  saveProjectDagGoal: (input: ProjectDagGoalSaveRequest) => Promise<ProjectDagGoalSaveResult>
-  resolveProjectDagEvidencePreview: (
-    input: ProjectDagEvidencePreviewResolveRequest
-  ) => Promise<ProjectDagEvidencePreviewResolveResult>
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>

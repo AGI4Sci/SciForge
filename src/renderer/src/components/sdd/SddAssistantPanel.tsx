@@ -2,11 +2,11 @@ import type { ReactElement } from 'react'
 import { FileQuestion, Lightbulb, PanelRightClose, Plus, Search, Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { AgentProviderCapabilities, ChatBlock, RuntimeConnectionStatus } from '../../agent/types'
-import type { QueuedUserMessage } from '../../store/chat-store-types'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { SddDraft } from '../../sdd/sdd-draft-store'
 import { MessageTimeline } from '../chat/MessageTimeline'
 import { FloatingComposer, type ComposerFileReference } from '../chat/FloatingComposer'
+import type { QueuedComposerMessage } from '../chat/FloatingComposerQueuedMessages'
 import type { ComposerReasoningEffort } from '../chat/FloatingComposerModelPicker'
 import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 
@@ -28,11 +28,11 @@ type Props = {
   composerReasoningEffort: ComposerReasoningEffort
   setComposerModel: (modelId: string) => void
   setComposerReasoningEffort: (effort: ComposerReasoningEffort) => void
-  queuedMessages: QueuedUserMessage[]
+  queuedMessages: QueuedComposerMessage[]
   removeQueuedMessage: (id: string) => void
-  updateQueuedMessage: (id: string, text: string) => boolean
-  steerQueuedMessage: (id: string) => Promise<boolean>
-  retryQueuedMessage: (id: string) => Promise<boolean>
+  updateQueuedMessage?: (id: string, text: string) => boolean
+  steerQueuedMessage?: (id: string) => Promise<boolean>
+  retryQueuedMessage?: (id: string) => Promise<boolean>
   fileReferenceEnabled?: boolean
   fileReferences?: ComposerFileReference[]
   onAddFileReference?: (reference: ComposerFileReference) => void
@@ -213,9 +213,15 @@ export function SddAssistantPanel({
           modelPickerMode="combobox"
           queuedMessages={queuedMessages}
           onRemoveQueuedMessage={removeQueuedMessage}
-          onEditQueuedMessage={(id, text) => void updateQueuedMessage(id, text)}
-          onSteerQueuedMessage={(id) => void steerQueuedMessage(id)}
-          onRetryQueuedMessage={(id) => void retryQueuedMessage(id)}
+          onEditQueuedMessage={updateQueuedMessage
+            ? (id, text) => void updateQueuedMessage(id, text)
+            : undefined}
+          onSteerQueuedMessage={steerQueuedMessage
+            ? (id) => void steerQueuedMessage(id)
+            : undefined}
+          onRetryQueuedMessage={retryQueuedMessage
+            ? (id) => void retryQueuedMessage(id)
+            : undefined}
           fileReferenceEnabled={fileReferenceEnabled}
           fileReferences={fileReferences}
           onAddFileReference={onAddFileReference}

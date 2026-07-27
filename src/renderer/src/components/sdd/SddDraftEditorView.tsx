@@ -3,8 +3,8 @@ import { ArrowRight, FileText, Loader2, Save, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useShallow } from 'zustand/react/shallow'
 import { SDD_IMAGE_RELATIVE_DIR, sddUnitImageDir } from '@shared/sdd'
-import { useSddDraftStore } from '../../sdd/sdd-draft-store'
-import { saveActiveSddDraftToDisk, syncActiveSddDraftFromDisk } from '../../sdd/sdd-draft-actions'
+import { selectSddDraftSession, useSddDraftStore } from '../../sdd/sdd-draft-store'
+import { saveSddDraftToDisk, syncSddDraftFromDisk } from '../../sdd/sdd-draft-actions'
 import { useWriteWorkspaceStore } from '../../write/write-workspace-store'
 import { startWriteWorkspaceFileWatch } from '../../write/write-file-watch'
 import { WriteMarkdownEditor } from '../write/WriteMarkdownEditor'
@@ -13,6 +13,7 @@ import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
 const SDD_AUTOSAVE_MS = 650
 
 type Props = {
+  ownerSessionId: string
   leftSidebarCollapsed: boolean
   assistantOpen: boolean
   onToggleLeftSidebar: () => void
@@ -56,6 +57,7 @@ export function SddAssistantToggleButton({
 }
 
 export function SddDraftEditorView({
+  ownerSessionId,
   leftSidebarCollapsed,
   assistantOpen,
   onToggleLeftSidebar,
@@ -66,25 +68,21 @@ export function SddDraftEditorView({
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const saveTimerRef = useRef<number | null>(null)
-  const {
-    activeDraft,
-    content,
-    saveStatus,
-    operationStatus,
-    error,
-    setContent,
-    setOperationStatus
-  } = useSddDraftStore(
-    useShallow((s) => ({
-      activeDraft: s.activeDraft,
-      content: s.content,
-      saveStatus: s.saveStatus,
-      operationStatus: s.operationStatus,
-      error: s.error,
-      setContent: s.setContent,
-      setOperationStatus: s.setOperationStatus
-    }))
-  )
+  const session = useSddDraftStore((state) => selectSddDraftSession(state, ownerSessionId))
+  const activeDraft = session?.draft ?? null
+  const content = session?.content ?? ''
+  const saveStatus = session?.saveStatus ?? 'saved'
+  const operationStatus = session?.operationStatus ?? 'idle'
+  const error = session?.error ?? null
+  const setContent = (value: string): void => {
+    useSddDraftStore.getState().setSessionContent(ownerSessionId, value)
+  }
+  const setOperationStatus = (
+    status: 'idle' | 'upgrading' | 'error',
+    message: string | null = null
+  ): void => {
+    useSddDraftStore.getState().setSessionOperationStatus(ownerSessionId, status, message)
+  }
   const {
     inlineCompletion,
     inlineCompletionApiReady,
@@ -115,7 +113,7 @@ export function SddDraftEditorView({
     if (!activeDraft || saveStatus !== 'dirty') return
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null
-      void saveActiveSddDraftToDisk()
+      void saveSddDraftToDisk(ownerSessionId)
     }, SDD_AUTOSAVE_MS)
     return () => {
       if (saveTimerRef.current) {
@@ -123,12 +121,12 @@ export function SddDraftEditorView({
         saveTimerRef.current = null
       }
     }
-  }, [activeDraft, content, saveStatus])
+  }, [activeDraft, content, ownerSessionId, saveStatus])
 
   useEffect(() => () => {
     if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-    void saveActiveSddDraftToDisk()
-  }, [])
+    void saveSddDraftToDisk(ownerSessionId)
+  }, [ownerSessionId])
 
   const activeDraftId = activeDraft?.id
   const activeDraftWorkspaceRoot = activeDraft?.workspaceRoot
@@ -151,14 +149,20 @@ export function SddDraftEditorView({
       path: activeDraftAbsolutePath ?? activeDraftRelativePath,
       kind: 'text',
       onTextSnapshot: (snapshot) => {
-        void syncActiveSddDraftFromDisk(snapshot)
+        void syncSddDraftFromDisk(ownerSessionId, snapshot)
       },
       onImageChanged: () => undefined,
       onError: (message) => {
-        useSddDraftStore.getState().setSaveStatus('error', message)
+        useSddDraftStore.getState().setSessionSaveStatus(ownerSessionId, 'error', message)
       }
     })
-  }, [activeDraftAbsolutePath, activeDraftId, activeDraftRelativePath, activeDraftWorkspaceRoot])
+  }, [
+    activeDraftAbsolutePath,
+    activeDraftId,
+    activeDraftRelativePath,
+    activeDraftWorkspaceRoot,
+    ownerSessionId
+  ])
 
   if (!activeDraft) {
     return (
@@ -227,7 +231,7 @@ export function SddDraftEditorView({
                 type="button"
                 onClick={() => {
                   if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-                  void saveActiveSddDraftToDisk()
+                  void saveSddDraftToDisk(ownerSessionId)
                 }}
                 disabled={readOnly || saveStatus === 'saved'}
                 className="ds-sidebar-toggle-button disabled:cursor-not-allowed disabled:opacity-45"
@@ -296,7 +300,7 @@ export function SddDraftEditorView({
             onSelectionChange={setSelection}
             onSaveShortcut={() => {
               if (saveTimerRef.current) window.clearTimeout(saveTimerRef.current)
-              void saveActiveSddDraftToDisk()
+              void saveSddDraftToDisk(ownerSessionId)
             }}
             onImagePasteSaved={() => {
               setOperationStatus('idle')

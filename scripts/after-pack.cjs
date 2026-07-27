@@ -1,11 +1,12 @@
-const { execFileSync } = require('node:child_process')
-const { chmodSync, existsSync, readdirSync } = require('node:fs')
+const { execFileSync, spawnSync } = require('node:child_process')
+const { chmodSync, existsSync, readdirSync, rmSync } = require('node:fs')
 const { join } = require('node:path')
-const localRuntimePackage = require('./local-runtime-package.cjs')
+const { pathToFileURL } = require('node:url')
 const releaseWorkerManifest = require('./release-worker-manifest.cjs')
+const nativeRuntimeDependencies = require('./native-runtime-dependencies.cjs')
 
-const LOCAL_RUNTIME_REQUIRED_PATHS = localRuntimePackage.LOCAL_RUNTIME_REQUIRED_PATHS
-const MCP_NODE_ENTRY_REQUIRED_PATHS = releaseWorkerManifest.mcpNodeEntryRequiredPaths
+const PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
+  releaseWorkerManifest.packagedExecutableNodeEntryRequiredPaths
 
 function normalizePlatform(platform) {
   return platform === 'win' ? 'win32' : platform
@@ -26,22 +27,10 @@ function unpackedAppRoot(context) {
   return join(packedResourcesDir(context), 'app.asar.unpacked')
 }
 
-function projectRoot(context) {
-  return context.packager?.projectDir || process.cwd()
-}
-
 function assertExists(path, label) {
   if (!existsSync(path)) {
     throw new Error(`[after-pack] Missing ${label}: ${path}`)
   }
-}
-
-function prunePackedLocalRuntimeDependencies(context) {
-  localRuntimePackage.prunePackedLocalRuntimeDependencies(unpackedAppRoot(context))
-}
-
-function validateBundledLocalRuntime(context) {
-  localRuntimePackage.validateBundledLocalRuntime(unpackedAppRoot(context))
 }
 
 function validateBundledReleaseRuntime(context, runtimeEntry) {
@@ -57,9 +46,57 @@ function validateBundledReleaseRuntimes(context) {
   }
 }
 
-function validateBuiltMcpNodeEntries(context) {
-  const root = projectRoot(context)
-  for (const relativePath of MCP_NODE_ENTRY_REQUIRED_PATHS) {
+function validateNativeRuntimeDependencies(context) {
+  const root = unpackedAppRoot(context)
+  const requiredPaths = nativeRuntimeDependencies.packagedNativeBindingRelativePaths(
+    context.electronPlatformName,
+    context.arch
+  )
+  for (const relativePath of requiredPaths) {
+    assertExists(join(root, relativePath), `native runtime dependency ${relativePath}`)
+  }
+}
+
+function pruneUnrelatedNativeRuntimeDependencies(context) {
+  const nativeModulesRoot = join(unpackedAppRoot(context), 'node_modules', '@napi-rs')
+  if (!existsSync(nativeModulesRoot)) return
+  const retainedPackages = new Set(nativeRuntimeDependencies.canvasPackagesForTarget(
+    context.electronPlatformName,
+    context.arch
+  ).map((packageName) => packageName.slice('@napi-rs/'.length)))
+  for (const entry of readdirSync(nativeModulesRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith('canvas-')) continue
+    if (retainedPackages.has(entry.name)) continue
+    rmSync(join(nativeModulesRoot, entry.name), { force: true, recursive: true })
+  }
+}
+
+function verifyBundledMultiAgentContract(context, options = {}) {
+  const root = unpackedAppRoot(context)
+  const contractPath = join(root, 'packages', 'workers', 'multi-agent', 'dist', 'contract.js')
+  const zodManifestPath = join(root, 'node_modules', 'zod', 'package.json')
+  assertExists(contractPath, 'multi-agent contract')
+  assertExists(zodManifestPath, 'root zod dependency')
+
+  const runner = options.spawnSync || spawnSync
+  const nodeExecutable = options.nodeExecutable || process.execPath
+  const verificationProgram = `await import(${JSON.stringify(pathToFileURL(contractPath).href)})`
+  const result = runner(nodeExecutable, ['--input-type=module', '--eval', verificationProgram], {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: 'pipe'
+  })
+  const stderr = String(result.stderr || '').trim()
+  const stdout = String(result.stdout || '').trim()
+  if (result.error || result.status !== 0) {
+    const detail = stderr || stdout || result.error?.message || `exit status ${result.status}`
+    throw new Error(`[after-pack] Packaged multi-agent contract is not loadable: ${detail}`)
+  }
+}
+
+function validatePackagedExecutableNodeEntries(context) {
+  const root = unpackedAppRoot(context)
+  for (const relativePath of PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS) {
     assertExists(join(root, relativePath), relativePath)
   }
 }
@@ -107,32 +144,32 @@ function ensureNodePtyHelpersExecutable(context) {
 }
 
 async function afterPack(context) {
-  prunePackedLocalRuntimeDependencies(context)
-  validateBundledLocalRuntime(context)
   validateBundledReleaseRuntimes(context)
-  validateBuiltMcpNodeEntries(context)
+  pruneUnrelatedNativeRuntimeDependencies(context)
+  validateNativeRuntimeDependencies(context)
+  verifyBundledMultiAgentContract(context)
+  validatePackagedExecutableNodeEntries(context)
   ensureNodePtyHelpersExecutable(context)
   maybeAdhocSignMacApp(context)
 }
 
-exports.LOCAL_RUNTIME_REQUIRED_PATHS = LOCAL_RUNTIME_REQUIRED_PATHS
 for (const [exportName, requiredPaths] of Object.entries(
   releaseWorkerManifest.runtimeRequiredPathExports
 )) {
   exports[exportName] = requiredPaths
 }
-exports.MCP_NODE_ENTRY_REQUIRED_PATHS = MCP_NODE_ENTRY_REQUIRED_PATHS
+exports.PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS =
+  PACKAGED_EXECUTABLE_NODE_ENTRY_REQUIRED_PATHS
 exports._internals = {
   appBundlePath,
   packedResourcesDir,
   unpackedAppRoot,
-  projectRoot,
-  npmCommand: localRuntimePackage.npmCommand,
-  prunePackedLocalRuntimeDependencies,
-  validateBundledLocalRuntime,
   validateBundledReleaseRuntime,
   validateBundledReleaseRuntimes,
-  validateBuiltMcpNodeEntries,
+  pruneUnrelatedNativeRuntimeDependencies,
+  validateNativeRuntimeDependencies,
+  verifyBundledMultiAgentContract,
+  validatePackagedExecutableNodeEntries,
   ensureNodePtyHelpersExecutable
 }
 exports.default = afterPack

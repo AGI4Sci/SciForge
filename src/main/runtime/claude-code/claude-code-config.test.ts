@@ -1,11 +1,12 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
+import { delimiter, dirname } from 'node:path'
+import { deriveTraceId } from '@sciforge/full-trace'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultClaudeRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -17,21 +18,9 @@ import {
   claudeCodeCliModel,
   claudeCodeSdkExtraArgs,
   claudeCodeRuntimeEnv,
-  prepareClaudeCodeSdkLaunch
+  prepareClaudeCodeSdkLaunch,
+  resolveClaudeCodeExecutable
 } from './claude-code-config'
-
-const computerUseLaunch = {
-  appPath: '/tmp/sciforge-app',
-  execPath: '/tmp/electron',
-  isPackaged: false
-}
-
-const originalCuaServiceUrl = process.env.SCIFORGE_CUA_SERVICE_URL
-
-afterEach(() => {
-  if (originalCuaServiceUrl === undefined) delete process.env.SCIFORGE_CUA_SERVICE_URL
-  else process.env.SCIFORGE_CUA_SERVICE_URL = originalCuaServiceUrl
-})
 
 function settings(): AppSettingsV1 {
   const modelRouter = defaultModelRouterSettings()
@@ -39,7 +28,6 @@ function settings(): AppSettingsV1 {
   modelRouter.publicModelAlias = 'sciforge-router'
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -51,7 +39,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'claude',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       claude: {
@@ -78,6 +66,116 @@ function settings(): AppSettingsV1 {
 }
 
 describe('claude-code config launch helpers', () => {
+  it('keeps the literal default command on the SDK-bundled executable', async () => {
+    let executableChecks = 0
+    await expect(resolveClaudeCodeExecutable(' claude ', {
+      env: { PATH: '/external/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async () => {
+        executableChecks += 1
+        return true
+      },
+      readLoginShellPath: async () => '/login-shell/bin'
+    })).resolves.toBeUndefined()
+    expect(executableChecks).toBe(0)
+  })
+
+  it('expands and validates an explicitly configured executable path', async () => {
+    const checked: string[] = []
+    await expect(resolveClaudeCodeExecutable('~/.local/bin/claude', {
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => {
+        checked.push(path)
+        return true
+      }
+    })).resolves.toBe('/users/tester/.local/bin/claude')
+    expect(checked).toEqual(['/users/tester/.local/bin/claude'])
+
+    await expect(resolveClaudeCodeExecutable('/missing/claude', {
+      platform: 'darwin',
+      isExecutable: async () => false
+    })).rejects.toThrow('missing or not executable: /missing/claude')
+
+    await expect(resolveClaudeCodeExecutable('./bin/claude', {
+      platform: 'darwin',
+      isExecutable: async () => true
+    })).rejects.toThrow('must be absolute')
+  })
+
+  it('resolves a custom command from the inherited PATH', async () => {
+    let loginShellReads = 0
+    await expect(resolveClaudeCodeExecutable('claude-enterprise', {
+      env: { PATH: '/gui/bin:/team/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/team/bin/claude-enterprise',
+      readLoginShellPath: async () => {
+        loginShellReads += 1
+        return ''
+      }
+    })).resolves.toBe('/team/bin/claude-enterprise')
+    expect(loginShellReads).toBe(0)
+  })
+
+  it('falls back to the login-shell PATH and common install directories', async () => {
+    await expect(resolveClaudeCodeExecutable('claude-login', {
+      env: { PATH: '/usr/bin', SHELL: '/bin/zsh' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/volta/bin/claude-login',
+      readLoginShellPath: async () => '/volta/bin:/opt/custom/bin'
+    })).resolves.toBe('/volta/bin/claude-login')
+
+    await expect(resolveClaudeCodeExecutable('claude-local', {
+      env: { PATH: '' },
+      homeDir: '/users/tester',
+      platform: 'linux',
+      isExecutable: async (path) => path === '/users/tester/.local/bin/claude-local',
+      readLoginShellPath: async () => ''
+    })).resolves.toBe('/users/tester/.local/bin/claude-local')
+
+    await expect(resolveClaudeCodeExecutable('claude-nvm', {
+      env: { PATH: '/usr/bin', NVM_BIN: '~/.nvm/current/bin' },
+      homeDir: '/users/tester',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/users/tester/.nvm/current/bin/claude-nvm',
+      readLoginShellPath: async () => ''
+    })).resolves.toBe('/users/tester/.nvm/current/bin/claude-nvm')
+  })
+
+  it('reports an actionable error when a custom command cannot be resolved', async () => {
+    await expect(resolveClaudeCodeExecutable('missing-claude', {
+      env: { PATH: '/usr/bin' },
+      homeDir: '/users/tester',
+      platform: 'linux',
+      isExecutable: async () => false,
+      readLoginShellPath: async () => ''
+    })).rejects.toThrow('Use the default "claude" for the SDK-bundled executable')
+  })
+
+  it('rejects Coding Plan and non-selected API access without a fallback', async () => {
+    const codingPlan = settings()
+    codingPlan.activeAgentRuntime = 'codex'
+    codingPlan.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
+    await expect(prepareClaudeCodeSdkLaunch({
+      settings: codingPlan,
+      text: 'hello',
+      threadId: 'thread-plan',
+      turnId: 'turn-plan'
+    })).rejects.toThrow(/requires API model access/)
+
+    const codexApi = settings()
+    codexApi.activeAgentRuntime = 'codex'
+    await expect(prepareClaudeCodeSdkLaunch({
+      settings: codexApi,
+      text: 'hello',
+      threadId: 'thread-api',
+      turnId: 'turn-api'
+    })).rejects.toThrow(/selected Agent runtime/)
+  })
+
   it('forces Claude Code traffic through the Model Router env', () => {
     const env = claudeCodeRuntimeEnv({
       OPENAI_API_KEY: 'sk-openai',
@@ -103,6 +201,7 @@ describe('claude-code config launch helpers', () => {
       ANTHROPIC_AUTH_TOKEN: 'anthropic-token',
       ANTHROPIC_BASE_URL: 'https://api.anthropic.com',
       ANTHROPIC_MODEL: 'opus',
+      ANTHROPIC_CUSTOM_HEADERS: 'authorization: inherited-secret\nx-inherited: conflict',
       MODEL_PROVIDER: 'anthropic',
       KUN_BASE_URL: 'https://old-runtime-provider.example/v1',
       SCIFORGE_IMAGE_API_KEY: 'outer-image-key',
@@ -116,15 +215,14 @@ describe('claude-code config launch helpers', () => {
       EXPERT_PROVIDER_BASE_URL: 'http://127.0.0.1:8001/v1',
       EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
       SCIMODALITY_ROUTER_PORT: '3898',
-      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token',
-      EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
-      EDAG_LLM_API_KEY: 'outer-edag-key',
-      EDAG_LLM_MODEL: 'outer-edag-model'
+      SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token'
     }, {
       configDir: '/tmp/claude-config',
       baseUrl: 'http://127.0.0.1:49876/v1',
       apiKey: 'local-runtime-router-key',
-      model: 'sonnet'
+      model: 'sonnet',
+      threadId: 'thread-env',
+      turnId: 'turn-env'
     })
 
     expect(env.OPENAI_API_KEY).toBeUndefined()
@@ -160,13 +258,16 @@ describe('claude-code config launch helpers', () => {
     expect(env.EXPERT_PROVIDER_API_KEY).toBeUndefined()
     expect(env.SCIMODALITY_ROUTER_PORT).toBeUndefined()
     expect(env.SCIMODALITY_ROUTER_RUNTIME_TOKEN).toBeUndefined()
-    expect(env.EDAG_LLM_BASE_URL).toBeUndefined()
-    expect(env.EDAG_LLM_API_KEY).toBeUndefined()
-    expect(env.EDAG_LLM_MODEL).toBeUndefined()
     expect(env.ANTHROPIC_BASE_URL).toBe('http://127.0.0.1:49876')
     expect(env.ANTHROPIC_API_KEY).toBe('local-runtime-router-key')
     expect(env.ANTHROPIC_AUTH_TOKEN).toBe('local-runtime-router-key')
     expect(env.ANTHROPIC_MODEL).toBe('sonnet')
+    expect(env.ANTHROPIC_CUSTOM_HEADERS).toBe([
+      `x-sciforge-trace-id: ${deriveTraceId({ runtimeId: 'claude', threadId: 'thread-env', turnId: 'turn-env' })}`,
+      'x-sciforge-runtime-id: claude',
+      'x-sciforge-thread-id: thread-env',
+      'x-sciforge-turn-id: turn-env'
+    ].join('\n'))
     expect(env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-config')
     expect(env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC).toBe('1')
   })
@@ -184,6 +285,8 @@ describe('claude-code config launch helpers', () => {
         }
       },
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       sessionId: 'session-1',
       managedConfigDir: '/tmp/claude-managed'
@@ -210,62 +313,25 @@ describe('claude-code config launch helpers', () => {
     ])).toEqual({ allowedTools: 'Edit' })
   })
 
-  it('injects the managed computer-use MCP server into SDK options when configured', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
+  it('passes a validated custom executable to the SDK and makes its directory discoverable', async () => {
+    const current = settings()
+    current.agents.claude = {
+      ...(current.agents.claude ?? defaultClaudeRuntimeSettings()),
+      command: process.execPath
+    }
     const launch = await prepareClaudeCodeSdkLaunch({
-      settings: settings(),
+      settings: current,
       text: 'hello',
+      threadId: 'thread-custom-executable',
+      turnId: 'turn-custom-executable',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
+      env: { PATH: '/usr/bin' }
     })
 
-    expect(launch.sdkOptions.mcpServers).toMatchObject({
-      gui_owl_computer_use: {
-        type: 'stdio',
-        command: '/tmp/electron',
-        args: [
-          '/tmp/sciforge-app/out/main/computer-use-mcp-node-entry.js',
-          '--gui-owl-computer-use-mcp-server'
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
-        },
-        alwaysLoad: true
-      }
-    })
-    expect(launch.sdkOptions.mcpServers).not.toHaveProperty('gui_computer_use')
-  })
-
-  it('injects scientific visual tools and the shared route policy into Claude tasks', async () => {
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: settings(),
-      text: 'Beautify a paper figure.',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: {
-        scientificPlottingMcp: { launch: computerUseLaunch },
-        imageGenerationMcp: { launch: computerUseLaunch }
-      }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toHaveProperty('scientific_plotting')
-    expect(launch.sdkOptions.mcpServers).toHaveProperty('image_generation')
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      type: 'preset',
-      preset: 'claude_code',
-      append: expect.stringContaining('call `visual_generate` first')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('When `visual_generate` returns `needs_context`')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('Choose route `code`')
-    })
-    expect(launch.sdkOptions.systemPrompt).toMatchObject({
-      append: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
-    })
+    expect(launch.pathToClaudeCodeExecutable).toBe(process.execPath)
+    expect(launch.sdkOptions.pathToClaudeCodeExecutable).toBe(process.execPath)
+    expect(launch.env.PATH?.split(delimiter)[0]).toBe(dirname(process.execPath))
   })
 
   it('rejects launch options when the text reasoner is incomplete', async () => {
@@ -275,55 +341,11 @@ describe('claude-code config launch helpers', () => {
     await expect(prepareClaudeCodeSdkLaunch({
       settings: current,
       text: 'hello',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
       workspace: '/tmp/workspace',
       managedConfigDir: '/tmp/claude-managed'
     })).rejects.toThrow('text reasoner')
-  })
-
-  it('does not inject the shared computer-use MCP server when computer use is disabled', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: {
-        ...settings(),
-        computerUse: {
-          enabled: false,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: true
-          }
-        }
-      },
-      text: 'hello',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toBeUndefined()
-  })
-
-  it('does not inject the shared computer-use MCP server when Claude runtime access is disabled', async () => {
-    process.env.SCIFORGE_CUA_SERVICE_URL = 'http://127.0.0.1:3900'
-    const launch = await prepareClaudeCodeSdkLaunch({
-      settings: {
-        ...settings(),
-        computerUse: {
-          enabled: true,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: false
-          }
-        }
-      },
-      text: 'hello',
-      workspace: '/tmp/workspace',
-      managedConfigDir: '/tmp/claude-managed',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } }
-    })
-
-    expect(launch.sdkOptions.mcpServers).toBeUndefined()
   })
 
   it('uses Claude CLI model aliases instead of the router public alias', () => {

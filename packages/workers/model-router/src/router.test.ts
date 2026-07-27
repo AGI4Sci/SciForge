@@ -1,26 +1,21 @@
 import assert from 'node:assert/strict';
-import { access, mkdir, mkdtemp, readFile, readdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { basename, dirname, join } from 'node:path';
+import { join } from 'node:path';
 import { test } from 'node:test';
+import type { TraceEvent, TraceEventInput } from '@sciforge/full-trace';
 
+import { startModelRouterServer, type ModelRouterConfig } from './router';
+import { ModelRouterFullTraceRecorder } from './full-trace-recorder';
 import {
-  DEFAULT_MODEL_ROUTER_TRACE_ROOT,
-  startModelRouterServer as startModelRouterServerRaw,
-  type ModelRouterConfig,
-} from './router';
+  chatCompletionToResponse,
+  chatToolNameAliasesFromResponsesTools,
+  responseToAnthropicMessage,
+} from './response-compat';
 
 const pngDataUrl = `data:image/png;base64,${Buffer.from('tiny-png').toString('base64')}`;
 const forbiddenPublicSurfacePattern =
   /text-secret|vision-secret|image-secret|Authorization|Bearer|baseUrl|apiKeyEnv|SCIFORGE_TEXT_API_KEY|SCIFORGE_VISION_API_KEY|SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY|text-model|vision-model|image-model|text-provider|vision-provider|image-provider|https:\/\/text\.example|https:\/\/vision\.example|https:\/\/image\.example/i;
-
-function startModelRouterServer(options: Parameters<typeof startModelRouterServerRaw>[0]) {
-  const workspaceRoot = options.workspaceRoot ?? process.cwd();
-  return startModelRouterServerRaw({
-    ...options,
-    traceDataRoot: options.traceDataRoot ?? traceDataRootForWorkspace(workspaceRoot),
-  });
-}
 
 test('public manifest exposes only the Model Router worker contract', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-public-manifest-'));
@@ -40,8 +35,10 @@ test('public manifest exposes only the Model Router worker contract', async () =
 
     assert.equal(body.workerId, 'sciforge.model-router');
     assert.equal(body.workerVersion, '0.1.0');
-    assert.match(serialized, /refs_first_trace/);
+    assert.match(serialized, /full_trace/);
     assert.match(serialized, /refs-first/);
+    assert.match(serialized, /model_router_capabilities/);
+    assert.match(serialized, /\/v1\/capabilities/);
     assert.match(serialized, /\/v1\/responses/);
     assert.match(serialized, /sciforge\.model-router\.responses/);
     assert.doesNotMatch(serialized, forbiddenPublicSurfacePattern);
@@ -84,6 +81,136 @@ test('public model list exposes only the configured public alias', async () => {
   }
 });
 
+test('authenticated capability discovery exposes only sanitized active-profile readiness and features', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-capabilities-'));
+  const config = testConfig({
+    publicModelAlias: 'public-router-alias',
+    imageGenerator: testImageGeneratorConfig(),
+    scientificTranslator: testScientificTranslatorConfig(),
+  });
+  config.profiles.default.capabilities = {
+    vision: {
+      mimeTypes: ['image/png', 'IMAGE/JPEG', 'https://private-provider.example/model'],
+      maxInputBytes: 4 * 1024 * 1024,
+    },
+    images: {
+      generation: true,
+      editing: true,
+      referenceImages: true,
+      masks: false,
+      sizeSelection: true,
+      sizes: ['512x512', '1024x1024', 'private-model-size'],
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const unauthorized = await fetch(`${server.url}/v1/capabilities`);
+    assert.equal(unauthorized.status, 401);
+
+    const response = await fetch(`${server.url}/v1/capabilities`, { headers: runtimeHeaders() });
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, unknown>;
+    assert.deepEqual(body, {
+      schemaVersion: 'sciforge.model-router.capabilities.v1',
+      publicModelAlias: 'public-router-alias',
+      profile: 'default',
+      roles: {
+        textReasoner: { configured: true, ready: true, state: 'ready' },
+        imageGenerator: { configured: true, ready: true, state: 'ready' },
+        visionTranslator: { configured: true, ready: true, state: 'ready' },
+        scientificTranslator: { configured: true, ready: false, state: 'missing_credentials' },
+      },
+      vision: {
+        available: true,
+        input: {
+          mimeTypes: ['image/png', 'image/jpeg'],
+          maxInputBytes: 4 * 1024 * 1024,
+          maxRequestBytes: 40 * 1024 * 1024,
+          sources: ['inline', 'url', 'workspace_ref'],
+        },
+      },
+      images: {
+        available: true,
+        maxRequestBytes: 40 * 1024 * 1024,
+        features: {
+          generation: true,
+          editing: true,
+          referenceImages: true,
+          masks: false,
+          sizeSelection: true,
+        },
+        sizes: {
+          mode: 'enumerated',
+          values: ['512x512', '1024x1024'],
+        },
+      },
+    });
+    assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
+    assert.doesNotMatch(JSON.stringify(body), /private-provider|private-model/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('capability discovery selects registered profiles and fails closed for unknown profiles', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-profile-capabilities-'));
+  const config = testConfig();
+  config.profiles.textOnly = {
+    textReasoner: config.profiles.default.textReasoner,
+    translators: {},
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch([], []),
+  });
+
+  try {
+    const selected = await fetch(`${server.url}/v1/capabilities`, {
+      headers: runtimeHeaders({ 'x-sciforge-model-router-profile': 'textOnly' }),
+    });
+    assert.equal(selected.status, 200);
+    const body = await selected.json() as Record<string, unknown>;
+    assert.equal(body.profile, 'textOnly');
+    assert.deepEqual(body.vision, {
+      available: false,
+      input: {
+        mimeTypes: [],
+        maxInputBytes: 0,
+        maxRequestBytes: 40 * 1024 * 1024,
+        sources: ['inline', 'url', 'workspace_ref'],
+      },
+    });
+    assert.deepEqual((body.images as Record<string, unknown>).features, {
+      generation: false,
+      editing: false,
+      referenceImages: false,
+      masks: false,
+      sizeSelection: false,
+    });
+
+    const unknown = await fetch(`${server.url}/v1/capabilities`, {
+      headers: runtimeHeaders({ 'x-sciforge-model-router-profile': 'missing' }),
+    });
+    assert.equal(unknown.status, 400);
+    assert.match(await unknown.text(), /unknown_profile/i);
+  } finally {
+    await server.close();
+  }
+});
+
 test('runtime model routes require the configured bearer token', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-runtime-auth-'));
   const server = await startModelRouterServer({
@@ -97,6 +224,8 @@ test('runtime model routes require the configured bearer token', async () => {
   try {
     const missing = await fetch(`${server.url}/v1/models`);
     assert.equal(missing.status, 401);
+    const missingCapabilities = await fetch(`${server.url}/v1/capabilities`);
+    assert.equal(missingCapabilities.status, 401);
     const invalid = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: 'Bearer wrong' },
@@ -180,23 +309,12 @@ test('image generations route through the configured image generator without exp
     });
     assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
 
-    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
-    assert.equal(trace.schemaVersion, 'sciforge.model-router.image-generation-trace.v1');
-    assert.equal(trace.route, 'model-router.images.generations');
-    assert.equal(trace.profileId, 'default');
-    assert.equal(trace.role, 'imageGenerator');
-    assert.equal(trace.upstreamModel, 'image-model');
-    assert.equal(trace.status, 'completed');
-    assert.equal(typeof trace.latencyMs, 'number');
-    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
-    const traceText = JSON.stringify(trace);
-    assert.doesNotMatch(traceText, /Draw a cell diagram|generated-pixels|image-secret|image-provider|image\.example|base64|b64_json/i);
   } finally {
     await server.close();
   }
 });
 
-test('image edits proxy authenticated multipart input through the configured image generator and write a safe trace', async () => {
+test('image edits proxy authenticated multipart input through the configured image generator', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-edits-'));
   const calls: CapturedFetch[] = [];
   const outputBase64 = Buffer.from('edited-output-pixels').toString('base64');
@@ -261,12 +379,6 @@ test('image edits proxy authenticated multipart input through the configured ima
       },
     });
 
-    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
-    assert.equal(trace.route, 'model-router.images.edits');
-    assert.equal(trace.wireApi, 'images.edits');
-    assert.equal(trace.status, 'completed');
-    const traceText = JSON.stringify(trace);
-    assert.doesNotMatch(traceText, /Repair the disconnected arrow|private-source|private-mask|image-secret|image-provider|image\.example|pixels|base64|b64_json/i);
   } finally {
     await server.close();
   }
@@ -314,8 +426,67 @@ test('image edits require runtime auth, multipart input, and the public router m
   }
 });
 
-test('image generation provider failures write a safe failed routing trace', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-failure-trace-'));
+test('image routes enforce the active profile capability registration before provider calls', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-capability-enforcement-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig({ imageGenerator: testImageGeneratorConfig() });
+  config.profiles.default.capabilities = {
+    images: {
+      generation: false,
+      editing: true,
+      referenceImages: false,
+      masks: false,
+      sizeSelection: true,
+      sizes: ['512x512'],
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: {
+      ...testEnv(),
+      SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret',
+    },
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, []),
+  });
+
+  try {
+    const generation = await fetch(`${server.url}/v1/images/generations`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'Draw a cell.' }),
+    });
+    assert.equal(generation.status, 422);
+    assert.equal((await generation.json() as { error: { code: string } }).error.code, 'image_capability_not_supported');
+
+    const maskedEdit = imageEditForm('sciforge-router');
+    maskedEdit.set('mask', new Blob(['mask'], { type: 'image/png' }), 'mask.png');
+    const maskResponse = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: maskedEdit,
+    });
+    assert.equal(maskResponse.status, 422);
+    assert.equal((await maskResponse.json() as { error: { code: string } }).error.code, 'image_masks_not_supported');
+
+    const sizedEdit = imageEditForm('sciforge-router');
+    sizedEdit.set('size', '1024x1024');
+    const sizeResponse = await fetch(`${server.url}/v1/images/edits`, {
+      method: 'POST',
+      headers: runtimeHeaders(),
+      body: sizedEdit,
+    });
+    assert.equal(sizeResponse.status, 422);
+    assert.equal((await sizeResponse.json() as { error: { code: string } }).error.code, 'image_size_not_supported');
+    assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('image generation provider failures preserve the upstream status', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-failure-'));
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
@@ -337,22 +508,13 @@ test('image generation provider failures write a safe failed routing trace', asy
     });
     assert.equal(response.status, 503);
 
-    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
-    assert.equal(trace.profileId, 'default');
-    assert.equal(trace.role, 'imageGenerator');
-    assert.equal(trace.upstreamModel, 'image-model');
-    assert.equal(trace.status, 'failed');
-    assert.equal(trace.errorSummary, 'provider_http_503');
-    assert.equal(typeof trace.latencyMs, 'number');
-    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
-    assert.doesNotMatch(JSON.stringify(trace), /private failure prompt|private upstream failure|image-secret|image-provider|image\.example/i);
   } finally {
     await server.close();
   }
 });
 
-test('image generation provider timeouts write a safe failed routing trace', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-timeout-trace-'));
+test('image generation provider timeouts return the timeout classification', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-image-timeout-'));
   const server = await startModelRouterServer({
     port: 0,
     config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
@@ -376,15 +538,6 @@ test('image generation provider timeouts write a safe failed routing trace', asy
     const body = await response.json() as Record<string, { code?: string }>;
     assert.equal(body.error?.code, 'provider_exception_timeout');
 
-    const trace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'trace.json')) as Record<string, unknown>;
-    assert.equal(trace.profileId, 'default');
-    assert.equal(trace.role, 'imageGenerator');
-    assert.equal(trace.upstreamModel, 'image-model');
-    assert.equal(trace.status, 'failed');
-    assert.equal(trace.errorSummary, 'provider_exception_timeout');
-    assert.equal(typeof trace.latencyMs, 'number');
-    assert.match(String(trace.traceRef), /^traces\/\d{4}-\d{2}-\d{2}\/img_/);
-    assert.doesNotMatch(JSON.stringify(trace), /private timeout prompt|private provider request|image-secret|image-provider|image\.example/i);
   } finally {
     await server.close();
   }
@@ -571,7 +724,7 @@ test('healthz reports recent image generator auth failures after a routed reques
   }
 });
 
-test('openai-compatible provider bases are normalized to v1 chat completions', async () => {
+test('generic upstream bases are normalized to the incoming protocol endpoint', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-provider-base-'));
   const calls: CapturedFetch[] = [];
   const config = testConfig();
@@ -587,6 +740,12 @@ test('openai-compatible provider bases are normalized to v1 chat completions', a
   });
 
   try {
+    const initialHealth = await fetch(`${server.url}/healthz?check=upstream`);
+    const initialHealthBody = await initialHealth.json() as Record<string, unknown>;
+    assert.equal(initialHealthBody.protocol, null);
+    assert.equal(initialHealthBody.traceCapture, 'disabled');
+    assert.equal(calls.length, 0);
+
     const response = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
@@ -598,13 +757,19 @@ test('openai-compatible provider bases are normalized to v1 chat completions', a
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
+
+    const negotiatedHealth = await fetch(`${server.url}/healthz?check=upstream`);
+    const negotiatedHealthBody = await negotiatedHealth.json() as Record<string, unknown>;
+    assert.equal(negotiatedHealthBody.protocol, 'responses');
+    assert.equal(negotiatedHealthBody.traceCapture, 'disabled');
+    assert.equal(calls.length, 1);
   } finally {
     await server.close();
   }
 });
 
-test('openai-compatible provider bases preserve query and hash suffixes when normalized', async () => {
+test('generic upstream bases preserve query and hash suffixes when normalized', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-provider-base-query-'));
   const calls: CapturedFetch[] = [];
   const config = testConfig();
@@ -633,8 +798,89 @@ test('openai-compatible provider bases preserve query and hash suffixes when nor
     assert.equal(calls.length, 1);
     assert.equal(
       calls[0]?.url,
-      'https://text.example/openai/deployments/deepseek/v1/chat/completions?api-version=2026-01-01#stable'
+      'https://text.example/openai/deployments/deepseek/v1/responses?api-version=2026-01-01#stable'
     );
+  } finally {
+    await server.close();
+  }
+});
+
+test('Codex-shaped Responses requests negotiate to a Messages-only upstream without losing reasoning or tools', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-responses-to-messages-'));
+  const calls: CapturedFetch[] = [];
+  const fetchImpl: typeof fetch = async (url, init) => {
+    const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+    calls.push({
+      url: String(url),
+      headers: Object.fromEntries(new Headers(init?.headers).entries()),
+      body,
+    });
+    const pathname = new URL(String(url)).pathname;
+    if (!pathname.endsWith('/messages')) {
+      return Response.json({ error: { message: 'endpoint not found' } }, { status: 404 });
+    }
+    return Response.json({
+      id: 'msg_codex_fallback',
+      type: 'message',
+      role: 'assistant',
+      content: [
+        { type: 'thinking', thinking: 'Need to inspect the repository.', signature: 'signed-reasoning' },
+        { type: 'tool_use', id: 'toolu_codex', name: 'inspect_repo', input: { path: '.' } },
+      ],
+      stop_reason: 'tool_use',
+      usage: { input_tokens: 9, output_tokens: 5, cache_read_input_tokens: 3 },
+    });
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl,
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Inspect the repository.',
+        max_output_tokens: 4096,
+        reasoning: { effort: 'high', summary: 'detailed' },
+        tools: [{
+          type: 'function',
+          name: 'inspect_repo',
+          description: 'Inspect a repository path.',
+          parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] },
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.deepEqual(calls.map((call) => new URL(call.url).pathname), [
+      '/v1/responses',
+      '/v1/chat/completions',
+      '/v1/messages',
+    ]);
+    assert.equal(calls[1]?.body.max_tokens, 4096);
+    assert.equal(calls[2]?.body.max_tokens, 4096);
+    assert.deepEqual(calls[2]?.body.thinking, { type: 'enabled', budget_tokens: 3072 });
+    assert.equal(Array.isArray(calls[2]?.body.tools), true);
+    assert.deepEqual(body.output.map((item: Record<string, unknown>) => item.type), ['reasoning', 'function_call']);
+    assert.equal(body.output[0]?.signature, 'signed-reasoning');
+    assert.deepEqual(body.usage, {
+      input_tokens: 9,
+      output_tokens: 5,
+      total_tokens: 14,
+      input_tokens_details: { cached_tokens: 3 },
+      output_tokens_details: { reasoning_tokens: 0 },
+      prompt_tokens: 9,
+      completion_tokens: 5,
+      cached_input_tokens: 3,
+      reasoning_output_tokens: 0,
+    });
   } finally {
     await server.close();
   }
@@ -677,10 +923,90 @@ test('anthropic messages route through the configured text reasoner', async () =
     assert.equal(body.role, 'assistant');
     assert.deepEqual(body.content, [{ type: 'text', text: 'The Claude-compatible answer.' }]);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/messages');
     assert.deepEqual(calls[0]?.body.messages, [
-      { role: 'user', content: 'hello' },
+      { role: 'user', content: [{ type: 'text', text: 'hello' }] },
     ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('Claude-shaped Messages preserve adaptive thinking and native terminal metadata', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-claude-adaptive-'));
+  const calls: CapturedFetch[] = [];
+  const nativeMessages = (
+    id: string,
+    stopReason: string,
+    stopSequence: string | null,
+    content: Array<Record<string, unknown>> = [{ type: 'text', text: 'done' }],
+  ) => Response.json({
+    id,
+    type: 'message',
+    role: 'assistant',
+    model: 'configured-model',
+    content,
+    stop_reason: stopReason,
+    stop_sequence: stopSequence,
+    usage: { input_tokens: 4, output_tokens: 2 },
+  });
+  const streamBody = [
+    ['message_start', { type: 'message_start', message: { id: 'msg_stream', type: 'message', role: 'assistant', content: [], usage: { input_tokens: 4, output_tokens: 0 } } }],
+    ['content_block_start', { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } }],
+    ['content_block_delta', { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'streamed' } }],
+    ['message_delta', { type: 'message_delta', delta: { stop_reason: 'stop_sequence', stop_sequence: 'END' }, usage: { output_tokens: 2 } }],
+  ].map(([event, data]) => `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`).join('');
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      nativeMessages('msg_stop_sequence', 'stop_sequence', 'END'),
+      nativeMessages('msg_max_tokens', 'max_tokens', null),
+      nativeMessages('msg_tool_use', 'tool_use', null, [{
+        type: 'tool_use', id: 'toolu_terminal', name: 'lookup', input: { query: 'x' },
+      }]),
+      nativeMessages('msg_end_turn', 'end_turn', null),
+      new Response(streamBody, { headers: { 'content-type': 'text/event-stream' } }),
+    ]),
+  });
+
+  const requestBody = {
+    model: 'claude-sonnet-4-5',
+    max_tokens: 4096,
+    messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' }] }],
+  };
+  try {
+    const cases = [
+      { stopReason: 'stop_sequence', stopSequence: 'END', thinking: { type: 'adaptive', display: 'summarized' } },
+      { stopReason: 'max_tokens', stopSequence: null },
+      { stopReason: 'tool_use', stopSequence: null },
+      { stopReason: 'end_turn', stopSequence: null },
+    ] as const;
+    for (const expected of cases) {
+      const response = await fetch(`${server.url}/v1/messages`, {
+        method: 'POST',
+        headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify({ ...requestBody, ...(expected.thinking ? { thinking: expected.thinking } : {}) }),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json() as Record<string, any>;
+      assert.equal(body.stop_reason, expected.stopReason);
+      assert.equal(body.stop_sequence, expected.stopSequence);
+    }
+
+    assert.deepEqual(calls[0]?.body.thinking, { type: 'adaptive', display: 'summarized' });
+    assert.equal(calls.every((call) => new URL(call.url).pathname.endsWith('/messages')), true);
+
+    const streamed = await fetch(`${server.url}/v1/messages`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ ...requestBody, stream: true }),
+    });
+    const events = parseSseEvents(await streamed.text());
+    const terminal = events.find((event) => event.type === 'message_delta');
+    assert.deepEqual(terminal?.delta, { stop_reason: 'stop_sequence', stop_sequence: 'END' });
   } finally {
     await server.close();
   }
@@ -699,7 +1025,7 @@ test('public text preserves local paths while hiding internal router identities'
     fetchImpl: captureFetch(calls, [
       chatCompletion(
         'text-reasoner-answer',
-        `Read ${workspaceDataPath} but never read ${privatePath}. Internal model=text-model provider=text-provider.`,
+        `Read ${workspaceDataPath} but never read ${privatePath}. Internal model=text-model.`,
       ),
     ]),
   });
@@ -720,7 +1046,7 @@ test('public text preserves local paths while hiding internal router identities'
     const text = String(body.content?.[0]?.text ?? '');
     assert.ok(text.includes(workspaceDataPath));
     assert.match(text, /\/Users\/alice\/private\/input\.h5ad/);
-    assert.doesNotMatch(text, /text-model|text-provider/);
+    assert.doesNotMatch(text, /text-model/);
     assert.equal(calls.length, 1);
   } finally {
     await server.close();
@@ -796,7 +1122,7 @@ test('anthropic messages accepts Claude Code model aliases as router public alia
     assert.equal(body.model, 'sonnet');
     assert.deepEqual(body.content, [{ type: 'text', text: 'Routed through the local Model Router.' }]);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/messages');
   } finally {
     await server.close();
   }
@@ -837,9 +1163,77 @@ test('chat completions compatibility route returns OpenAI-shaped text choices', 
     assert.equal(body.choices?.[0]?.finish_reason, 'stop');
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
-    assert.equal(calls[0]?.body.messages?.[0]?.role, 'user');
+    assert.equal(calls[0]?.body.messages?.[0]?.role, 'system');
     assert.match(JSON.stringify(calls[0]?.body.messages), /Be concise/);
     assert.match(JSON.stringify(calls[0]?.body.messages), /hello/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('Chat terminal reasons survive non-streaming and streaming router roundtrips', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-chat-terminals-'));
+  const calls: CapturedFetch[] = [];
+  const nativeChat = (id: string, finishReason: string) => Response.json({
+    id,
+    object: 'chat.completion',
+    model: 'configured-model',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'done' }, finish_reason: finishReason }],
+    usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+  });
+  const streamBody = [
+    { id: 'chat_stream', object: 'chat.completion.chunk', choices: [{ delta: { content: 'streamed' } }] },
+    { id: 'chat_stream', object: 'chat.completion.chunk', choices: [{ delta: {}, finish_reason: 'length' }] },
+    { id: 'chat_stream', object: 'chat.completion.chunk', choices: [], usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 } },
+  ].map((data) => `data: ${JSON.stringify(data)}\n\n`).join('');
+  const server = await startModelRouterServer({
+    port: 0,
+    config: testConfig(),
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      nativeChat('chat_stop', 'stop'),
+      nativeChat('chat_length', 'length'),
+      nativeChat('chat_content_filter', 'content_filter'),
+      new Response(streamBody, { headers: { 'content-type': 'text/event-stream' } }),
+    ]),
+  });
+
+  const requestBody = {
+    model: 'sciforge-router',
+    messages: [{ role: 'user', content: 'hello' }],
+  };
+  try {
+    for (const finishReason of ['stop', 'length', 'content_filter'] as const) {
+      const response = await fetch(`${server.url}/v1/chat/completions`, {
+        method: 'POST',
+        headers: runtimeHeaders({ 'content-type': 'application/json' }),
+        body: JSON.stringify(requestBody),
+      });
+      assert.equal(response.status, 200);
+      const body = await response.json() as Record<string, any>;
+      assert.equal(body.choices?.[0]?.finish_reason, finishReason);
+    }
+
+    const streamed = await fetch(`${server.url}/v1/chat/completions`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ ...requestBody, stream: true }),
+    });
+    const events = parseSseEvents(await streamed.text());
+    const terminal = events.find((event) => event.choices?.[0]?.finish_reason !== undefined);
+    assert.equal(terminal?.choices?.[0]?.finish_reason, 'length');
+    assert.equal(calls.every((call) => new URL(call.url).pathname.endsWith('/chat/completions')), true);
+
+    const filteredCanonical = chatCompletionToResponse({
+      id: 'chat_filtered',
+      object: 'chat.completion',
+      choices: [{ message: { role: 'assistant', content: '' }, finish_reason: 'content_filter' }],
+    });
+    assert.throws(
+      () => responseToAnthropicMessage(filteredCanonical),
+      /cannot represent Chat finish_reason="content_filter"/,
+    );
   } finally {
     await server.close();
   }
@@ -917,9 +1311,95 @@ test('chat completions compatibility route sends image_url inputs through vision
     assert.equal(body.choices?.[0]?.message?.content, 'The figure is readable.');
     assert.equal(calls.length, 2);
     assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
-    assert.match(JSON.stringify(calls[0]?.body), /data:image\/png;base64/);
+    const visionMessages = calls[0]?.body.messages as Array<Record<string, any>>;
+    assert.deepEqual(visionMessages[1]?.content?.map((part: Record<string, unknown>) => part.type), [
+      'text',
+      'image_url',
+    ]);
+    assert.equal(visionMessages[1]?.content?.[1]?.image_url?.url, pngDataUrl);
     assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
     assert.equal(calls[1]?.body.max_tokens, 1024);
+    assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
+  } finally {
+    await server.close();
+  }
+});
+
+test('vision routing emits strict Responses content parts while retaining the canonical chat fallback', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-responses-vision-schema-'));
+  const config = testConfig();
+  config.profiles.default.translators.vision!.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const calls: CapturedFetch[] = [];
+  const responses = [
+    chatCompletion('vision-strict-responses', 'Observation: the diagram contains three labeled stages.'),
+    chatCompletion('text-final', JSON.stringify({ type: 'final_answer', content: 'The diagram has three labeled stages.' })),
+  ];
+  let strictSchemaError: unknown;
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async (url, init) => {
+      const body = await capturedRequestBody(init?.body);
+      calls.push({
+        url: String(url),
+        headers: Object.fromEntries(new Headers(init?.headers).entries()),
+        body,
+      });
+      if (new URL(String(url)).pathname.endsWith('/responses')) {
+        try {
+          const input = body.input as Array<Record<string, any>>;
+          const content = input[0]?.content as Array<Record<string, any>>;
+          assert.equal(input[0]?.role, 'user');
+          assert.deepEqual(content.map((part) => part.type), ['input_text', 'input_image']);
+          assert.match(content[0]?.text ?? '', /User request:/u);
+          assert.deepEqual(content[1], {
+            type: 'input_image',
+            image_url: pngDataUrl,
+          });
+          assert.doesNotMatch(JSON.stringify(content), /"type":"(?:text|image_url)"/u);
+        } catch (error) {
+          strictSchemaError = error;
+          return Response.json({ error: { message: 'strict Responses schema rejected the request' } }, { status: 400 });
+        }
+      }
+      const fixture = responses.shift();
+      assert.ok(fixture, `Unexpected fetch call to ${url}`);
+      return adaptChatFixtureToRequestedWire(fixture, String(url), body);
+    },
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'How many labeled stages are shown?' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+
+    if (strictSchemaError) throw strictSchemaError;
+    assert.equal(response.status, 200);
+    const body = await response.json() as Record<string, any>;
+    assert.equal(body.output_text, 'The diagram has three labeled stages.');
+    assert.equal(calls.length, 2);
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
     assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
   } finally {
     await server.close();
@@ -1059,43 +1539,53 @@ test('anthropic messages map tool use through the router provider path', async (
       input: { path: 'README.md', old_string: 'old', new_string: 'new' },
     }]);
     assert.deepEqual(calls[0]?.body.tools, [{
-      type: 'function',
-      function: {
-        name: 'Edit',
-        description: 'Edit a file',
-        parameters: {
-          type: 'object',
-          properties: {
-            path: { type: 'string' },
-            old_string: { type: 'string' },
-            new_string: { type: 'string' },
-          },
+      name: 'Edit',
+      description: 'Edit a file',
+      input_schema: {
+        type: 'object',
+        properties: {
+          path: { type: 'string' },
+          old_string: { type: 'string' },
+          new_string: { type: 'string' },
         },
       },
     }]);
     assert.deepEqual(calls[0]?.body.messages, [
       {
         role: 'assistant',
-        content: null,
-        tool_calls: [{
+        content: [{
+          type: 'tool_use',
           id: 'previous-tool',
-          type: 'function',
-          function: {
-            name: 'Edit',
-            arguments: JSON.stringify({ path: 'README.md', old_string: 'before', new_string: 'after' }),
+          name: 'Edit',
+          input: {
+            path: 'README.md',
+            old_string: 'before',
+            new_string: 'after',
           },
         }],
       },
       {
-        role: 'tool',
-        tool_call_id: 'previous-tool',
-        content: 'Previous edit completed.',
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: 'previous-tool',
+          content: 'Previous edit completed.',
+        }],
       },
     ]);
   } finally {
     await server.close();
   }
 });
+
+function anthropicToolUseInput(messages: Array<Record<string, any>>): Record<string, any> {
+  for (const message of messages) {
+    const content = Array.isArray(message.content) ? message.content : [];
+    const toolUse = content.find((part: Record<string, unknown>) => part.type === 'tool_use');
+    if (toolUse && typeof toolUse === 'object') return (toolUse as Record<string, any>).input ?? {};
+  }
+  return {};
+}
 
 test('anthropic messages request hygiene folds long tool argument arrays before provider calls', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-messages-hygiene-args-'));
@@ -1142,8 +1632,7 @@ test('anthropic messages request hygiene folds long tool argument arrays before 
 
     assert.equal(response.status, 200);
     const messages = calls[0]?.body.messages as Array<Record<string, any>>;
-    const toolCall = messages[0]?.tool_calls?.[0] as Record<string, any>;
-    const args = JSON.parse(String(toolCall.function.arguments)) as Record<string, any>;
+    const args = anthropicToolUseInput(messages);
     assert.equal(args.mode, 'full');
     assert.equal(Array.isArray(args.ids), false);
     assert.equal(args.ids.__sciforge_request_hygiene__.source, 'tool_call.arguments.ids');
@@ -1201,8 +1690,7 @@ test('anthropic messages request hygiene folds long string tool arguments as str
 
     assert.equal(response.status, 200);
     const messages = calls[0]?.body.messages as Array<Record<string, any>>;
-    const toolCall = messages[0]?.tool_calls?.[0] as Record<string, any>;
-    const args = JSON.parse(String(toolCall.function.arguments)) as Record<string, any>;
+    const args = anthropicToolUseInput(messages);
     assert.equal(args.path, 'report.md');
     assert.equal(typeof args.content, 'string');
     assert.match(args.content, /sciforge request_hygiene/);
@@ -1213,7 +1701,7 @@ test('anthropic messages request hygiene folds long string tool arguments as str
   }
 });
 
-test('anthropic messages request hygiene replaces long shell commands with a safe no-op', async () => {
+test('anthropic messages request hygiene replaces long shell commands with an explicit failing history sentinel', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-messages-hygiene-shell-args-'));
   const longCommand = `python3 <<'PY'\n${'print("work")\n'.repeat(700)}PY`;
   const calls: CapturedFetch[] = [];
@@ -1258,9 +1746,11 @@ test('anthropic messages request hygiene replaces long shell commands with a saf
 
     assert.equal(response.status, 200);
     const messages = calls[0]?.body.messages as Array<Record<string, any>>;
-    const toolCall = messages[0]?.tool_calls?.[0] as Record<string, any>;
-    const args = JSON.parse(String(toolCall.function.arguments)) as Record<string, any>;
-    assert.equal(args.cmd, ': # sciforge request hygiene omitted prior shell command; inspect paired tool result');
+    const args = anthropicToolUseInput(messages);
+    assert.equal(
+      args.cmd,
+      'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command',
+    );
     assert.equal(args.workdir, workspaceRoot);
     assert.doesNotMatch(args.cmd, /\[sciforge request_hygiene/u);
     assert.ok(!JSON.stringify(calls[0]?.body).includes(longCommand.slice(0, 80)));
@@ -1294,6 +1784,7 @@ test('healthz reports provider readiness without leaking private bindings', asyn
     });
     assert.equal(body.recentError, null);
     assert.deepEqual(body.capabilities, [
+      'model_router_capabilities',
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
@@ -1302,7 +1793,7 @@ test('healthz reports provider readiness without leaking private bindings', asyn
       'image_generation',
       'vision_translation',
       'scientific_translation',
-      'refs_first_trace',
+      'full_trace',
     ]);
     assert.deepEqual(body.upstream, {
       category: 'ready',
@@ -1342,6 +1833,7 @@ test('healthz blocks missing provider credentials without leaking binding names'
     });
     assert.equal(body.recentError, 'provider-auth');
     assert.deepEqual(body.capabilities, [
+      'model_router_capabilities',
       'model_router_responses',
       'model_router_messages',
       'model_router_image_generations',
@@ -1350,7 +1842,7 @@ test('healthz blocks missing provider credentials without leaking binding names'
       'image_generation',
       'vision_translation',
       'scientific_translation',
-      'refs_first_trace',
+      'full_trace',
     ]);
     assert.deepEqual(body.upstream, {
       category: 'provider-auth',
@@ -1386,9 +1878,9 @@ test('healthz reports recent provider auth failures after a routed request fails
     });
     assert.equal(failed.status, 401);
     const failedBody = await failed.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(failedBody.error?.code, 'provider_http_401');
-    assert.match(failedBody.error?.message ?? '', /upstream provider credentials were rejected/i);
-    assert.match(failedBody.error?.message ?? '', /Update the upstream API key in SciForge Model Router settings/i);
+    assert.equal(failedBody.error?.code, 'upstream_http_401');
+    assert.match(failedBody.error?.message ?? '', /Upstream API credentials were rejected/i);
+    assert.match(failedBody.error?.message ?? '', /Update the API key in SciForge Model Router settings/i);
     assert.doesNotMatch(JSON.stringify(failedBody), forbiddenPublicSurfacePattern);
 
     const response = await fetch(`${server.url}/healthz?check=upstream`);
@@ -1408,6 +1900,7 @@ test('healthz reports recent provider auth failures after a routed request fails
       ok: false,
       retryable: false,
       httpStatus: 401,
+      role: 'textReasoner',
       releaseAcceptance: 'not-evaluated',
     });
     assert.doesNotMatch(serialized, forbiddenPublicSurfacePattern);
@@ -1440,9 +1933,9 @@ test('healthz reports recent provider network failures after a routed request fa
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
     });
-    assert.equal(failed.status, 500);
+    assert.equal(failed.status, 502);
     const failedBody = await failed.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(failedBody.error?.code, 'provider_exception_network');
+    assert.equal(failedBody.error?.code, 'upstream_network_error');
 
     const response = await fetch(`${server.url}/healthz?check=upstream`);
     assert.equal(response.status, 503);
@@ -1453,7 +1946,8 @@ test('healthz reports recent provider network failures after a routed request fa
       category: 'provider-network',
       ok: false,
       retryable: true,
-      httpStatus: 500,
+      httpStatus: 502,
+      role: 'textReasoner',
       releaseAcceptance: 'not-evaluated',
     });
     assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
@@ -1480,9 +1974,9 @@ test('healthz reports recent provider bad responses after invalid upstream JSON'
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
     });
-    assert.equal(failed.status, 500);
+    assert.equal(failed.status, 502);
     const failedBody = await failed.json() as Record<string, { code?: string }>;
-    assert.equal(failedBody.error?.code, 'provider_invalid_json');
+    assert.equal(failedBody.error?.code, 'upstream_invalid_response');
 
     const response = await fetch(`${server.url}/healthz?check=upstream`);
     assert.equal(response.status, 503);
@@ -1493,7 +1987,8 @@ test('healthz reports recent provider bad responses after invalid upstream JSON'
       category: 'provider-bad-response',
       ok: false,
       retryable: false,
-      httpStatus: 500,
+      httpStatus: 502,
+      role: 'textReasoner',
       releaseAcceptance: 'not-evaluated',
     });
     assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
@@ -1522,7 +2017,7 @@ test('healthz reports recent provider errors after non-auth upstream HTTP failur
     });
     assert.equal(failed.status, 500);
     const failedBody = await failed.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(failedBody.error?.code, 'provider_http_500');
+    assert.equal(failedBody.error?.code, 'upstream_http_500');
     assert.doesNotMatch(JSON.stringify(failedBody), /sk-should-not-leak/i);
 
     const response = await fetch(`${server.url}/healthz?check=upstream`);
@@ -1535,6 +2030,7 @@ test('healthz reports recent provider errors after non-auth upstream HTTP failur
       ok: false,
       retryable: true,
       httpStatus: 500,
+      role: 'textReasoner',
       releaseAcceptance: 'not-evaluated',
     });
     assert.doesNotMatch(JSON.stringify(body), forbiddenPublicSurfacePattern);
@@ -1655,26 +2151,11 @@ test('pure text responses are routed only to the configured text reasoner', asyn
       reasoning_output_tokens: 5,
     });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     assert.equal(calls[0]?.headers.authorization, 'Bearer text-secret');
     assert.equal(calls[0]?.body.model, 'text-model');
-    assert.deepEqual(calls[0]?.body.messages, [
-      { role: 'user', content: 'Explain SciForge in one sentence.' },
-    ]);
+    assert.equal(calls[0]?.body.input, 'Explain SciForge in one sentence.');
 
-    const traceText = await readSingleTraceFile(workspaceRoot, 'trace.json');
-    assert.match(traceText, /"profileId":\s*"default"/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|Authorization|data:image|base64/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
-    assert.match(traceText, /"providerBindingSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"providerAliasSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"modelAliasSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"wireRequest":\s*\{/);
-    assert.match(traceText, /"endpointRoute":\s*"chat\.completions"/);
-    assert.match(traceText, /"messageCount":\s*1/);
-    assert.match(traceText, /"toolCount":\s*0/);
-    assert.match(traceText, /"stopReason":\s*"stop"/);
-    assert.match(traceText, /"latencyMs":\s*\d+/);
   } finally {
     await server.close();
   }
@@ -1686,8 +2167,8 @@ test('interactive responses preempt in-flight Evidence DAG provider work', async
   const backgroundStarted = new Promise<void>((resolve) => { markBackgroundStarted = resolve; });
   let backgroundAborted = false;
   const fetchImpl: typeof fetch = async (_input, init) => {
-    const body = JSON.parse(String(init?.body)) as { messages?: Array<{ content?: string }> };
-    const serialized = JSON.stringify(body.messages ?? []);
+    const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+    const serialized = JSON.stringify(body);
     if (serialized.includes('background evidence extraction')) {
       markBackgroundStarted();
       return new Promise<Response>((_resolve, reject) => {
@@ -1697,7 +2178,13 @@ test('interactive responses preempt in-flight Evidence DAG provider work', async
         }, { once: true });
       });
     }
-    return Response.json(chatCompletion('interactive answer'));
+    return Response.json({
+      id: 'resp_interactive',
+      object: 'response',
+      status: 'completed',
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'interactive answer' }] }],
+      output_text: 'interactive answer',
+    });
   };
   const server = await startModelRouterServer({
     port: 0,
@@ -1725,73 +2212,188 @@ test('interactive responses preempt in-flight Evidence DAG provider work', async
     });
     assert.equal(interactive.status, 200);
     assert.equal(backgroundAborted, true);
-    assert.equal((await background).status, 500);
+    assert.equal((await background).status, 504);
   } finally {
     await server.close();
   }
 });
 
-test('relative trace roots resolve under trace data root instead of workspace symlinks', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-workspace-'));
-  const symlinkTarget = await mkdtemp(join(tmpdir(), 'sciforge-model-router-trace-symlink-target-'));
-  await symlink(symlinkTarget, join(workspaceRoot, '.sciforge'));
-  const calls: CapturedFetch[] = [];
+test('client disconnect aborts the text upstream and records error plus partial terminal trace events', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-client-abort-trace-'));
+  const capturedEvents: TraceEventInput[] = [];
+  const recorder = new ModelRouterFullTraceRecorder({
+    sink: {
+      async appendMany(inputs) {
+        capturedEvents.push(...inputs);
+        return inputs as TraceEvent[];
+      },
+    },
+  });
+  const pending = abortingFetch();
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig({ traceRoot: '.sciforge/model-router-traces' }),
+    config: testConfig(),
     env: testEnv(),
     workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('text-reasoner-answer', 'The text answer.'),
-    ]),
+    fetchImpl: pending.fetchImpl,
+    fullTraceRecorder: recorder,
   });
 
+  const client = new AbortController();
+  const health = await fetch(`${server.url}/healthz?check=upstream`);
+  assert.equal((await health.json() as Record<string, unknown>).traceCapture, 'ready');
+  const request = fetch(`${server.url}/v1/responses`, {
+    method: 'POST',
+    headers: runtimeHeaders({ 'content-type': 'application/json' }),
+    body: JSON.stringify({ model: 'sciforge-router', input: 'Keep generating until cancelled.' }),
+    signal: client.signal,
+  });
   try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: runtimeHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        model: 'sciforge-router',
-        input: 'Explain SciForge in one sentence.',
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    await access(join(traceDataRootForWorkspace(workspaceRoot), '.sciforge/model-router-traces'));
-    await assert.rejects(access(join(symlinkTarget, 'model-router-traces')));
+    await promiseWithTimeout(pending.started, 'text upstream did not start');
+    client.abort();
+    await assert.rejects(request, /abort/i);
+    await promiseWithTimeout(pending.aborted, 'text upstream did not receive abort');
   } finally {
     await server.close();
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await recorder.flush();
+
+  const upstreamEvents = capturedEvents.filter((event) => (
+    (event.payload as Record<string, unknown>).upstream === true
+  ));
+  assert.equal(upstreamEvents.some((event) => event.kind === 'error'), true);
+  assert.equal(upstreamEvents.some((event) => event.kind === 'model_response_end'), true);
+  assert.equal(capturedEvents.some((event) => event.kind === 'error'), true);
+  assert.equal(capturedEvents.some((event) => event.kind === 'model_response_end'), true);
 });
 
-test('trace roots inside the workspace are rejected', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-workspace-trace-root-'));
-  const calls: CapturedFetch[] = [];
-  const server = await startModelRouterServer({
-    port: 0,
-    config: testConfig({ traceRoot: join(workspaceRoot, 'model-router-traces') }),
-    env: testEnv(),
-    workspaceRoot,
-    fetchImpl: captureFetch(calls, []),
-  });
-
-  try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+test('client disconnect propagates to every public upstream path', async (context) => {
+  await context.test('chat completions', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-chat-'));
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig(),
+      env: testEnv(),
+      path: '/v1/chat/completions',
+      headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         model: 'sciforge-router',
-        input: 'Explain SciForge in one sentence.',
+        messages: [{ role: 'user', content: 'Keep generating until cancelled.' }],
       }),
     });
+  });
 
-    assert.equal(response.status, 500);
-    const body = await response.json() as { error?: { code?: string } };
-    assert.equal(body.error?.code, 'invalid_trace_root');
-    assert.equal(calls.length, 0);
-  } finally {
-    await server.close();
-  }
+  await context.test('anthropic messages', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-messages-'));
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig(),
+      env: testEnv(),
+      path: '/v1/messages',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        max_tokens: 4096,
+        messages: [{ role: 'user', content: 'Keep generating until cancelled.' }],
+      }),
+    });
+  });
+
+  await context.test('image generation', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-image-generation-'));
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+      env: { ...testEnv(), SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret' },
+      path: '/v1/images/generations',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'Generate until cancelled.' }),
+    });
+  });
+
+  await context.test('image edit', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-image-edit-'));
+    const form = imageEditForm('sciforge-router');
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+      env: { ...testEnv(), SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret' },
+      path: '/v1/images/edits',
+      body: form,
+    });
+  });
+
+  await context.test('vision translation', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-vision-'));
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig(),
+      env: testEnv(),
+      path: '/v1/responses',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Inspect until cancelled.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+  });
+
+  await context.test('scientific translation', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-scientific-'));
+    await mkdir(join(workspaceRoot, '.sciforge', 'uploads', 'abort'), { recursive: true });
+    await writeFile(
+      join(workspaceRoot, '.sciforge', 'uploads', 'abort', 'protein.fasta'),
+      '>protein\nMKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQ\n',
+    );
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig({ scientificTranslator: testScientificTranslatorConfig() }),
+      env: {
+        ...testEnv(),
+        SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN: 'scientific-secret',
+      },
+      path: '/v1/responses',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Analyze until cancelled.' },
+            {
+              type: 'input_object',
+              ref: '.sciforge/uploads/abort/protein.fasta',
+              mimeType: 'text/plain',
+              title: 'protein.fasta',
+            },
+          ],
+        }],
+      }),
+    });
+  });
+
+  await context.test('provider image URL download', async () => {
+    const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-abort-image-download-'));
+    await assertClientAbortPropagates({
+      workspaceRoot,
+      config: testConfig({ imageGenerator: testImageGeneratorConfig() }),
+      env: { ...testEnv(), SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY: 'image-secret' },
+      path: '/v1/images/generations',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'sciforge-router', prompt: 'Generate and download.' }),
+      responsesBeforePending: [Response.json({
+        created: 1,
+        data: [{ url: 'https://cdn.example/generated.png' }],
+      })],
+    });
+  });
 });
 
 test('pure text responses expose upstream reasoning content as a Responses reasoning item', async () => {
@@ -1831,63 +2433,9 @@ test('pure text responses expose upstream reasoning content as a Responses reaso
       type: 'summary_text',
       text: 'Need a concise one sentence answer.',
     }]);
-    assert.equal(calls[0]?.body.reasoning, undefined);
-    assert.equal(calls[0]?.body.reasoning_effort, 'high');
+    assert.deepEqual(calls[0]?.body.reasoning, { effort: 'high', summary: 'detailed' });
+    assert.equal(calls[0]?.body.reasoning_effort, undefined);
     assert.equal(calls[0]?.body.include_reasoning, undefined);
-  } finally {
-    await server.close();
-  }
-});
-
-test('responses trace records sanitized handoff audit metadata without owning runtime lifecycle', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-handoff-audit-'));
-  const calls: CapturedFetch[] = [];
-  const server = await startModelRouterServer({
-    port: 0,
-    config: testConfig(),
-    env: testEnv(),
-    workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('text-handoff-audit-final', 'The handoff continued through the router.'),
-    ]),
-  });
-
-  try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: runtimeHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        model: 'sciforge-router',
-        input: 'Continue from the runtime handoff packet.',
-        metadata: {
-          schemaVersion: 'sciforge.model-router.request-audit.v1',
-          route: 'model-router.responses',
-          source: 'agent-runtime-host',
-          operation: 'runtime_handoff',
-          runtimeId: 'claude',
-          threadId: 'claude-thread-private-123',
-          sourceRuntimeId: 'codex',
-          sourceThreadId: 'codex-thread-private-456',
-          targetRuntimeId: 'claude',
-          targetThreadId: 'claude-thread-private-123',
-          packetDigest: `sha256:${'a'.repeat(64)}`,
-        },
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"schemaVersion":\s*"sciforge\.model-router\.request-audit\.v1"/);
-    assert.match(traceText, /"operation":\s*"runtime_handoff"/);
-    assert.match(traceText, /"runtimeId":\s*"claude"/);
-    assert.match(traceText, /"threadIdSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"sourceThreadIdSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"targetThreadIdSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.match(traceText, /"packetDigest":\s*"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"/);
-    assert.doesNotMatch(traceText, /claude-thread-private-123|codex-thread-private-456/);
-    assert.doesNotMatch(traceText, /activeTurn|runtimeSession|threadLifecycle/i);
   } finally {
     await server.close();
   }
@@ -1934,11 +2482,12 @@ test('anthropic messages route through the text reasoner', async () => {
       cache_read_input_tokens: 0,
     });
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
-    assert.equal(calls[0]?.headers.authorization, 'Bearer text-secret');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/messages');
+    assert.equal(calls[0]?.headers['x-api-key'], 'text-secret');
     assert.deepEqual(calls[0]?.body.messages, [
-      { role: 'user', content: 'Answer tersely.\nReply with exactly: pong' },
+      { role: 'user', content: [{ type: 'text', text: 'Reply with exactly: pong' }] },
     ]);
+    assert.deepEqual(calls[0]?.body.system, [{ type: 'text', text: 'Answer tersely.' }]);
   } finally {
     await server.close();
   }
@@ -2028,25 +2577,65 @@ test('vision responses translate refs first, then ask the text reasoner for the 
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'The chart label is ATP concentration.');
     assert.equal(calls.length, 3);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     assert.equal(calls[0]?.headers.authorization, 'Bearer vision-secret');
     assert.equal(calls[0]?.body.model, 'vision-model');
     assert.match(JSON.stringify(calls[0]?.body), /data:image\/png;base64/);
     assert.doesNotMatch(JSON.stringify(calls[0]?.body), /artifact:microscopy-panel/);
-    assert.equal(calls[1]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[1]?.url, 'https://vision.example/v1/responses');
     assert.match(JSON.stringify(calls[1]?.body), /artifact:microscopy-panel/);
     assert.doesNotMatch(JSON.stringify(calls[1]?.body), /data:image|base64|tiny-png/i);
-    assert.equal(calls[2]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[2]?.url, 'https://text.example/v1/responses');
     assert.doesNotMatch(JSON.stringify(calls[2]?.body), /data:image|base64|tiny-png/i);
     assert.match(JSON.stringify(calls[2]?.body), /Observation: the chart label is ATP concentration/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"source":\s*"inline"/);
-    assert.match(traceText, /"source":\s*"ref"/);
-    assert.match(traceText, /"sha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|data:image|base64|tiny-png/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
-    assert.match(traceText, /"roleAlias":\s*"translators\.vision"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('vision routing enforces the active profile MIME registration before upstream translation', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-vision-capability-enforcement-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.capabilities = {
+    vision: {
+      mimeTypes: ['image/jpeg'],
+      maxInputBytes: 1024,
+    },
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('text-final', JSON.stringify({
+        type: 'final_answer',
+        content: 'The referenced image could not be inspected.',
+      })),
+    ]),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: [{
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'Describe this image.' },
+            { type: 'input_image', image_url: pngDataUrl },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
+    assert.match(String((await response.json() as { output_text: string }).output_text), /could not be inspected/i);
   } finally {
     await server.close();
   }
@@ -2086,17 +2675,12 @@ test('vision inputs fall back to text when the active profile has no vision tran
     assert.match(String(body.output_text), /image.*not sent/i);
     assert.match(String(body.output_text), /could not inspect the image/i);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     const textReasonerBody = JSON.stringify(calls[0]?.body);
     assert.match(textReasonerBody, /status=not_sent/);
     assert.match(textReasonerBody, /image payload was not sent/i);
     assert.doesNotMatch(textReasonerBody, /data:image|base64|tiny-png/i);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"status":\s*"not_sent"/);
-    assert.match(traceText, /"degraded":\s*true/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|data:image|base64|tiny-png/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
@@ -2157,9 +2741,6 @@ test('tool result screenshots fall back to safe text and are not sent without vi
     assert.match(textReasonerBody, /images_omitted/);
     assert.match(textReasonerBody, /status=not_sent/);
     assert.doesNotMatch(textReasonerBody, /data:image|base64|tiny-png/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"vision\.image"/);
-    assert.doesNotMatch(traceText, /data:image|base64|tiny-png/i);
   } finally {
     await server.close();
   }
@@ -2226,15 +2807,12 @@ test('standard MCP visualSnapshot tool result routes through the vision translat
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'The screenshot shows a settings window.');
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     const visionBody = JSON.stringify(calls[0]?.body);
     assert.match(visionBody, new RegExp(`data:image/png;base64,${imageData}`));
     const textReasonerBody = JSON.stringify(calls[1]?.body);
     assert.match(textReasonerBody, /settings window/);
     assert.doesNotMatch(textReasonerBody, /mcp-screen-pixels|data:image|base64/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"vision\.image"/);
-    assert.doesNotMatch(traceText, /mcp-screen-pixels|data:image|base64/i);
   } finally {
     await server.close();
   }
@@ -2291,15 +2869,12 @@ test('Codex dynamic tool inputImage results route through the vision translator'
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'The screenshot shows arXiv search results.');
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     const visionBody = JSON.stringify(calls[0]?.body);
     assert.match(visionBody, new RegExp(`data:image/png;base64,${imageData}`));
     const textReasonerBody = JSON.stringify(calls[1]?.body);
     assert.match(textReasonerBody, /arXiv search results/);
     assert.doesNotMatch(textReasonerBody, /codex-dynamic-screen-pixels|data:image|base64/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"vision\.image"/);
-    assert.doesNotMatch(traceText, /codex-dynamic-screen-pixels|data:image|base64/i);
   } finally {
     await server.close();
   }
@@ -2367,14 +2942,11 @@ test('Anthropic tool_result images route through the vision translator', async (
     const body = await response.json() as Record<string, unknown>;
     assert.deepEqual(body.content, [{ type: 'text', text: 'The screenshot shows arXiv search results.' }]);
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
-    assert.match(JSON.stringify(calls[0]?.body), new RegExp(`data:image/png;base64,${imageData}`));
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/messages');
+    assert.match(JSON.stringify(calls[0]?.body), new RegExp(`"type":"base64","media_type":"image/png","data":"${imageData}"`));
     const textReasonerBody = JSON.stringify(calls[1]?.body);
     assert.match(textReasonerBody, /arXiv search results/);
     assert.doesNotMatch(textReasonerBody, /claude-mcp-screen-pixels|data:image|base64/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"vision\.image"/);
-    assert.doesNotMatch(traceText, /claude-mcp-screen-pixels|data:image|base64/i);
   } finally {
     await server.close();
   }
@@ -2443,18 +3015,18 @@ test('responses tool calls pass through the Model Router API without becoming te
     });
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.body.tool_choice, 'auto');
-    assert.equal((calls[0]?.body.tools as Array<{ function?: { name?: string } }> | undefined)?.[0]?.function?.name, 'gui_present');
+    assert.equal((calls[0]?.body.tools as Array<{ name?: string }> | undefined)?.[0]?.name, 'gui_present');
   } finally {
     await server.close();
   }
 });
 
-test('responses tool outputs are forwarded to chat providers as tool messages', async () => {
+test('responses tool outputs are preserved through canonical upstream routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-output-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config: testResponsesExtensionConfig(),
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -2498,30 +3070,10 @@ test('responses tool outputs are forwarded to chat providers as tool messages', 
     assert.equal(response.status, 200);
     const body = await response.json() as { output_text?: string };
     assert.equal(body.output_text, '工具输出时间是 Mon Jun 15 17:01:38 CST 2026。');
-    assert.deepEqual(calls[0]?.body.messages, [
-      {
-        role: 'user',
-        content: 'Run date and answer.',
-      },
-      {
-        role: 'assistant',
-        content: null,
-        reasoning_content: 'Need to run date before answering.',
-        tool_calls: [{
-          id: 'call_date_1',
-          type: 'function',
-          function: {
-            name: 'local_shell',
-            arguments: '{"cmd":"date"}',
-          },
-        }],
-      },
-      {
-        role: 'tool',
-        tool_call_id: 'call_date_1',
-        content: 'Mon Jun 15 17:01:38 CST 2026\n',
-      },
-    ]);
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), ['user', 'function_call', 'function_call_output']);
+    assert.equal(providerInput[1]?.reasoning_content, 'Need to run date before answering.');
+    assert.equal(providerInput[2]?.output, 'Mon Jun 15 17:01:38 CST 2026\n');
   } finally {
     await server.close();
   }
@@ -2582,20 +3134,21 @@ test('responses request hygiene folds pasted image data and giant tool outputs b
     assert.ok(!serializedProviderBody.includes(imagePayload.slice(0, 80)));
     assert.ok(!serializedProviderBody.includes(giantToolOutput));
     assert.match(serializedProviderBody, /sciforge request_hygiene/);
-    assert.match(serializedProviderBody, /source=user_message\.content/);
+    assert.match(serializedProviderBody, /source=message\.text/);
     assert.match(serializedProviderBody, /source=tool_message\.content/);
     assert.match(serializedProviderBody, /reason=large_tool_output/);
     assert.match(serializedProviderBody, /digest=sha256:/);
 
-    const messages = calls[0]?.body.messages as Array<Record<string, unknown>>;
-    const toolContent = String(messages[2]?.content ?? '');
+    const input = calls[0]?.body.input as Array<Record<string, unknown>>;
+    const toolOutput = input.find((item) => item.type === 'function_call_output');
+    const toolContent = String(toolOutput?.output ?? '');
     assert.ok(toolContent.length < 1_000, `expected folded tool content, got ${toolContent.length} chars`);
   } finally {
     await server.close();
   }
 });
 
-test('responses adjacent tool calls are forwarded as one assistant message', async () => {
+test('responses preserve adjacent parallel function calls', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-adjacent-tool-calls-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -2654,51 +3207,20 @@ test('responses adjacent tool calls are forwarded as one assistant message', asy
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0]?.body.messages, [
-      {
-        role: 'user',
-        content: 'Run pwd and git status.',
-      },
-      {
-        role: 'assistant',
-        content: null,
-        reasoning_content: 'Need the current directory.\nNeed the worktree status.',
-        tool_calls: [
-          {
-            id: 'call_pwd_1',
-            type: 'function',
-            function: {
-              name: 'local_shell',
-              arguments: '{"cmd":"pwd"}',
-            },
-          },
-          {
-            id: 'call_git_status_1',
-            type: 'function',
-            function: {
-              name: 'local_shell',
-              arguments: '{"cmd":"git status --short"}',
-            },
-          },
-        ],
-      },
-      {
-        role: 'tool',
-        tool_call_id: 'call_pwd_1',
-        content: '/tmp/workspace\n',
-      },
-      {
-        role: 'tool',
-        tool_call_id: 'call_git_status_1',
-        content: ' M package.json\n',
-      },
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), [
+      'user',
+      'function_call',
+      'function_call',
+      'function_call_output',
+      'function_call_output',
     ]);
   } finally {
     await server.close();
   }
 });
 
-test('responses developer messages are replayed as chat-compatible system messages', async () => {
+test('responses developer messages are preserved through canonical upstream routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-developer-replay-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -2752,34 +3274,14 @@ test('responses developer messages are replayed as chat-compatible system messag
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0]?.body.messages, [
-      {
-        role: 'system',
-        content: 'Always answer briefly.\nNever call extra tools.',
-      },
-      {
-        role: 'user',
-        content: 'Say hello.',
-      },
-      {
-        role: 'assistant',
-        content: null,
-        reasoning_content: 'Need one date call before answering.',
-        tool_calls: [{
-          id: 'call_date_developer',
-          type: 'function',
-          function: {
-            name: 'local_shell',
-            arguments: '{"cmd":"date"}',
-          },
-        }],
-      },
-      {
-        role: 'tool',
-        tool_call_id: 'call_date_developer',
-        content: 'Mon Jun 15 17:01:38 CST 2026\n',
-      },
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), [
+      'developer',
+      'user',
+      'function_call',
+      'function_call_output',
     ]);
+    assert.match(JSON.stringify(providerInput[0]), /Always answer briefly/);
   } finally {
     await server.close();
   }
@@ -2829,22 +3331,15 @@ test('responses tool transcript drops orphan tool outputs before provider calls'
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0]?.body.messages, [
-      {
-        role: 'user',
-        content: 'Continue safely.',
-      },
-      {
-        role: 'user',
-        content: 'Answer from valid context only.',
-      },
-    ]);
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.role), ['user', 'user']);
+    assert.doesNotMatch(JSON.stringify(providerInput), /call_missing/);
   } finally {
     await server.close();
   }
 });
 
-test('responses assistant output text history is normalized for chat providers', async () => {
+test('responses assistant output text history is preserved through canonical upstream routing', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-output-text-history-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -2881,9 +3376,11 @@ test('responses assistant output text history is normalized for chat providers',
     });
 
     assert.equal(response.status, 200);
-    const providerPayload = JSON.stringify(calls[0]?.body.messages);
-    assert.doesNotMatch(providerPayload, /output_text/);
-    assert.match(providerPayload, /First prompt\.\\nEarlier answer\.\\nContinue\./);
+    const providerPayload = JSON.stringify(calls[0]?.body.input);
+    assert.match(providerPayload, /output_text/);
+    assert.match(providerPayload, /First prompt/);
+    assert.match(providerPayload, /Earlier answer/);
+    assert.match(providerPayload, /Continue/);
   } finally {
     await server.close();
   }
@@ -2944,52 +3441,75 @@ test('responses tool transcript removes bridge items between tool calls and outp
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0]?.body.messages, [
-      {
-        role: 'user',
-        content: 'Run pwd.',
-      },
-      {
-        role: 'assistant',
-        content: null,
-        tool_calls: [{
-          id: 'call_pwd_bridge',
-          type: 'function',
-          function: {
-            name: 'local_shell',
-            arguments: '{"cmd":"pwd"}',
-          },
-        }],
-      },
-      {
-        role: 'tool',
-        tool_call_id: 'call_pwd_bridge',
-        content: '/tmp/workspace\n',
-      },
-    ]);
+    const providerInput = calls[0]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), ['user', 'function_call', 'function_call_output']);
+    assert.doesNotMatch(JSON.stringify(providerInput), /GUI-only bridge|approval_bridge/);
   } finally {
     await server.close();
   }
 });
 
-test('responses tool outputs restore cached function calls stripped by app-server clients', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-tool-reasoning-cache-'));
+test('responses follow-ups replay encrypted continuation state and the complete parallel tool turn', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-response-continuation-'));
+  const encryptedContent = 'AbCd0123_+'.repeat(80);
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config,
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
-      chatCompletion('text-tool-call-with-reasoning', '', [{
-        id: 'call_date_cached',
-        type: 'function',
-        function: {
-          name: 'local_shell',
-          arguments: '{"cmd":"date"}',
-        },
-      }], { reasoning_content: 'Need to run date before answering.' }),
-      chatCompletion('text-tool-output-final', '工具输出时间是 Mon Jun 15 17:01:38 CST 2026。'),
+      Response.json({
+        id: 'resp_upstream_tool_turn',
+        object: 'response',
+        status: 'completed',
+        output: [
+          {
+            id: 'rs_parallel_tools',
+            type: 'reasoning',
+            encrypted_content: encryptedContent,
+            summary: [{ type: 'summary_text', text: 'Need both tool results.' }],
+          },
+          {
+            id: 'cmp_parallel_tools',
+            type: 'compaction',
+            encrypted_content: encryptedContent,
+          },
+          {
+            id: 'fc_parallel_a',
+            type: 'function_call',
+            call_id: 'call_parallel_a',
+            name: 'local_shell',
+            arguments: '{"cmd":"pwd"}',
+          },
+          {
+            id: 'fc_parallel_b',
+            type: 'function_call',
+            call_id: 'call_parallel_b',
+            name: 'local_shell',
+            arguments: '{"cmd":"git status --short"}',
+          },
+        ],
+        output_text: '',
+        usage: { input_tokens: 10, output_tokens: 8, total_tokens: 18 },
+      }),
+      Response.json({
+        id: 'resp_upstream_final',
+        object: 'response',
+        status: 'completed',
+        output: [{
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text: 'Both tools finished.' }],
+        }],
+        output_text: 'Both tools finished.',
+        usage: { input_tokens: 20, output_tokens: 4, total_tokens: 24 },
+      }),
     ]),
   });
 
@@ -2999,7 +3519,7 @@ test('responses tool outputs restore cached function calls stripped by app-serve
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         model: 'sciforge-router',
-        input: 'Run date and answer.',
+        input: 'Run both tools and answer.',
         tools: [{
           type: 'function',
           name: 'local_shell',
@@ -3010,24 +3530,37 @@ test('responses tool outputs restore cached function calls stripped by app-serve
     });
 
     assert.equal(first.status, 200);
-    const firstBody = await first.json() as { output?: Array<Record<string, unknown>> };
-    const firstFunctionCall = firstBody.output?.find((item) => item.type === 'function_call');
-    assert.equal(firstFunctionCall?.reasoning_content, 'Need to run date before answering.');
+    const firstBody = await first.json() as { id?: string; output?: Array<Record<string, unknown>> };
+    assert.match(String(firstBody.id), /^resp_/u);
+    assert.notEqual(firstBody.id, 'resp_upstream_tool_turn');
+    assert.equal(firstBody.output?.find((item) => item.type === 'reasoning')?.encrypted_content, encryptedContent);
 
     const second = await fetch(`${server.url}/v1/responses`, {
       method: 'POST',
       headers: runtimeHeaders({ 'content-type': 'application/json' }),
       body: JSON.stringify({
         model: 'sciforge-router',
+        previous_response_id: firstBody.id,
         input: [
           {
             role: 'user',
-            content: [{ type: 'input_text', text: 'Run date and answer.' }],
+            content: [{ type: 'input_text', text: 'Run both tools and answer.' }],
+          },
+          {
+            type: 'function_call',
+            call_id: 'call_parallel_a',
+            name: 'local_shell',
+            arguments: '{"cmd":"pwd"}',
           },
           {
             type: 'function_call_output',
-            call_id: 'call_date_cached',
-            output: 'Mon Jun 15 17:01:38 CST 2026\n',
+            call_id: 'call_parallel_a',
+            output: '/tmp/workspace\n',
+          },
+          {
+            type: 'function_call_output',
+            call_id: 'call_parallel_b',
+            output: ' M package.json\n',
           },
         ],
         tools: [{
@@ -3040,9 +3573,22 @@ test('responses tool outputs restore cached function calls stripped by app-serve
     });
 
     assert.equal(second.status, 200);
-    assert.equal(
-      (calls[1]?.body.messages as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
-      'Need to run date before answering.'
+    assert.equal(calls[1]?.body.previous_response_id, undefined);
+    const providerInput = calls[1]?.body.input as Array<Record<string, unknown>>;
+    assert.deepEqual(providerInput.map((item) => item.type ?? item.role), [
+      'user',
+      'reasoning',
+      'compaction',
+      'function_call',
+      'function_call',
+      'function_call_output',
+      'function_call_output',
+    ]);
+    assert.equal(providerInput[1]?.encrypted_content, encryptedContent);
+    assert.equal(providerInput[2]?.encrypted_content, encryptedContent);
+    assert.deepEqual(
+      providerInput.filter((item) => item.type === 'function_call').map((item) => item.call_id),
+      ['call_parallel_a', 'call_parallel_b'],
     );
   } finally {
     await server.close();
@@ -3054,7 +3600,7 @@ test('responses assistant text history preserves reasoning_content for thinking 
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config: testResponsesExtensionConfig(),
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -3092,7 +3638,7 @@ test('responses assistant text history preserves reasoning_content for thinking 
 
     assert.equal(response.status, 200);
     assert.equal(
-      (calls[0]?.body.messages as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
+      (calls[0]?.body.input as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
       'Need to clarify reproduction scope before planning.'
     );
   } finally {
@@ -3151,11 +3697,11 @@ test('responses tool outputs expose provider 400 bodies without retry-side reque
 
     assert.equal(response.status, 400);
     const body = await response.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(body.error?.code, 'provider_http_400');
+    assert.equal(body.error?.code, 'upstream_http_400');
     assert.match(body.error?.message ?? '', /reasoning_content/);
     assert.equal(calls.length, 1);
     assert.equal(
-      (calls[0]?.body.messages as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
+      (calls[0]?.body.input as Array<Record<string, unknown>> | undefined)?.[1]?.reasoning_content,
       undefined
     );
   } finally {
@@ -3163,7 +3709,48 @@ test('responses tool outputs expose provider 400 bodies without retry-side reque
   }
 });
 
-test('responses routing drops non-function Codex tools before chat provider calls', async () => {
+test('invalid tool schemas return a structured capability error instead of a router 500', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-invalid-tool-schema-'));
+  const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, []),
+  });
+
+  try {
+    const response = await fetch(`${server.url}/v1/responses`, {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({
+        model: 'sciforge-router',
+        input: 'Use the tool if appropriate.',
+        tools: [{
+          type: 'function',
+          name: 'invalid_tool',
+          parameters: [{ type: 'string' }],
+        }],
+      }),
+    });
+
+    assert.equal(response.status, 422);
+    const body = await response.json() as { error?: { code?: string; message?: string } };
+    assert.equal(body.error?.code, 'upstream_protocol_capability_unsupported');
+    assert.match(body.error?.message ?? '', /JSON Schema object or boolean/u);
+    assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('responses routing preserves supported Codex tool declarations for the upstream protocol', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-codex-tools-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -3192,19 +3779,17 @@ test('responses routing drops non-function Codex tools before chat provider call
     });
 
     assert.equal(response.status, 200);
-    assert.deepEqual(calls[0]?.body.tools, [{
-      type: 'function',
-      function: {
-        name: 'gui_present',
-        parameters: { type: 'object', properties: {} },
-      },
-    }]);
+    assert.deepEqual(calls[0]?.body.tools, [
+      { type: 'local_shell' },
+      { type: 'apply_patch' },
+      { type: 'function', name: 'gui_present', parameters: { type: 'object', properties: {} } },
+    ]);
   } finally {
     await server.close();
   }
 });
 
-test('responses routing exposes namespaced dynamic tools as provider-safe chat functions', async () => {
+test('responses routing preserves namespaced dynamic tools across upstream protocols', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-dynamic-tools-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -3252,26 +3837,27 @@ test('responses routing exposes namespaced dynamic tools as provider-safe chat f
 
     assert.equal(response.status, 200);
     assert.deepEqual(calls[0]?.body.tools, [
+      { type: 'local_shell' },
       {
-        type: 'function',
-        function: {
-          name: 'mcp_gui_research_research_search',
-          description: 'Search scientific literature.',
-          parameters: { type: 'object', properties: { query: { type: 'string' } } },
-        },
+        namespace: 'mcp_gui_research',
+        name: 'research_search',
+        description: 'Search scientific literature.',
+        inputSchema: { type: 'object', properties: { query: { type: 'string' } } },
       },
       {
-        type: 'function',
-        function: {
-          name: 'mcp_lab_inspect_dataset',
+        type: 'namespace',
+        name: 'mcp_lab',
+        tools: [{
+          type: 'function',
+          name: 'inspect.dataset',
           description: 'Inspect a dataset.',
-          parameters: { type: 'object', properties: { id: { type: 'string' } } },
-        },
+          input_schema: { type: 'object', properties: { id: { type: 'string' } } },
+        }],
       },
     ]);
     assert.deepEqual(calls[0]?.body.tool_choice, {
       type: 'function',
-      function: { name: 'mcp_gui_research_research_search' },
+      function: { name: 'mcp_gui_research.research_search' },
     });
   } finally {
     await server.close();
@@ -3321,7 +3907,7 @@ test('responses routing maps provider dynamic tool calls back to namespaced Resp
     assert.equal(body.output?.[0]?.call_id, 'call_research_search_1');
     assert.equal(body.output?.[0]?.name, 'mcp_gui_research.research_search');
     assert.equal(body.output?.[0]?.arguments, JSON.stringify({ query: 'agentic RL', maxResults: 1 }));
-    assert.equal((calls[0]?.body.tools as Array<{ function?: { name?: string } }> | undefined)?.[0]?.function?.name, 'mcp_gui_research_research_search');
+    assert.equal((calls[0]?.body.tools as Array<{ name?: string }> | undefined)?.[0]?.name, 'research_search');
   } finally {
     await server.close();
   }
@@ -3493,11 +4079,6 @@ test('workspace image refs are materialized only as transient provider image pay
     assert.match(visionBody, new RegExp(expectedDataUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(visionBody, /SciForge visual ref image_1: images\/panel\.png/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"source":\s*"ref"/);
-    assert.match(traceText, /"ref":\s*"images\/panel\.png"/);
-    assert.doesNotMatch(traceText, /data:image|base64|local-ref-pixels/i);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
@@ -3544,10 +4125,6 @@ test('local_image inputs are normalized as visual objects inside the Model Route
     assert.equal(calls.length, 2);
     const visionBody = JSON.stringify(calls[0]?.body);
     assert.match(visionBody, new RegExp(expectedDataUrl.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"title":\s*"酒店凭证\.jpg"/);
-    assert.match(traceText, /"ref":\s*"\.sciforge\/uploads\/session-local\/hotel\.jpg"/);
-    assert.doesNotMatch(traceText, /data:image|base64|local-image-pixels/i);
   } finally {
     await server.close();
   }
@@ -3603,10 +4180,6 @@ test('input_object refs are detected and translated inside the Model Router', as
     assert.match(textReasonerBody, /Do not tell the user you cannot directly access or see the image/i);
     assert.match(textReasonerBody, /Do not mention modality observations, visual observations, translators, or router internals/i);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"source":\s*"ref"/);
-    assert.match(traceText, /"ref":\s*"\.sciforge\/uploads\/session-test\/hotel\.jpg"/);
-    assert.doesNotMatch(traceText, /data:image|base64|input-object-pixels/i);
   } finally {
     await server.close();
   }
@@ -3676,14 +4249,10 @@ test('scientific file uploads are translated to evidence via the managed sci-mod
     assert.match(String(calls[0]?.body.payload ?? ''), /MQIFVKTLTGK/);
     // The text reasoner received the real expert evidence as an observation (no cheating, no raw fallback).
     const textBody = JSON.stringify(calls[1]?.body);
-    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
     assert.match(textBody, /source=sci-modality:protein\/esm2text-protein/);
     assert.doesNotMatch(textBody, /status=unsupported/);
     assert.doesNotMatch(textBody, /risk_marker=scientific_modality_risk:low|fallback_marker=workspace_text_fallback|MQIFVKTLTGK/);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"roleAlias":\s*"translators\.scientific"/);
-    assert.match(traceText, /"serviceBindingSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.doesNotMatch(traceText, /sci-modality\.example|SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN|sci-modality-runtime-token/);
   } finally {
     await server.close();
   }
@@ -3741,7 +4310,7 @@ test('only allowlisted protein FASTA, PDB/mmCIF, and SMILES files reach the scie
       assert.match(calls[0]?.url ?? '', /\/modality\/translate$/);
       assert.equal(calls[0]?.body.modality, entry.modality);
       assert.equal(calls[0]?.body.payload, entry.payload);
-      assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+      assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
       assert.doesNotMatch(JSON.stringify(calls[1]?.body), new RegExp(entry.payload.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     } finally {
       await server.close();
@@ -3944,7 +4513,7 @@ test('high-risk scientific uploads fail closed when expert translation fails', a
     assert.match(body.error?.message ?? '', /raw object text was not sent/i);
     assert.equal(calls.length, 1);
     assert.match(calls[0]?.url ?? '', /\/modality\/translate$/);
-    assert.equal(calls.some((call) => call.url === 'https://text.example/v1/chat/completions'), false);
+    assert.equal(calls.some((call) => call.url.startsWith('https://text.example/')), false);
   } finally {
     await server.close();
   }
@@ -3983,7 +4552,7 @@ test('low-risk textual uploads fall back with explicit risk and fallback markers
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     const textBody = JSON.stringify(calls[0]?.body);
     assert.match(textBody, /risk_marker=scientific_modality_risk:low/);
     assert.match(textBody, /fallback_marker=workspace_text_fallback/);
@@ -4088,15 +4657,12 @@ test('input_object vision observations are cached across repeated Model Router r
 
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
-    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/chat/completions').length, 1);
-    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/chat/completions').length, 2);
+    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/responses').length, 1);
+    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/responses').length, 2);
     const secondTextReasonerBody = JSON.stringify(calls[2]?.body);
     assert.match(secondTextReasonerBody, /cached/i);
     assert.match(secondTextReasonerBody, /browser window and map UI/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"cacheStatus":\s*"hit"/);
-    assert.match(traceText, /"cacheStatus":\s*"stored"/);
   } finally {
     await server.close();
   }
@@ -4142,16 +4708,12 @@ test('inline image vision observations are cached across repeated Model Router r
 
     assert.equal(first.status, 200);
     assert.equal(second.status, 200);
-    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/chat/completions').length, 1);
-    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/chat/completions').length, 2);
+    assert.equal(calls.filter((call) => call.url === 'https://vision.example/v1/responses').length, 1);
+    assert.equal(calls.filter((call) => call.url === 'https://text.example/v1/responses').length, 2);
     const secondTextReasonerBody = JSON.stringify(calls[2]?.body);
     assert.match(secondTextReasonerBody, /cache_status=hit/);
     assert.match(secondTextReasonerBody, /421\.15 yuan/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"cacheStatus":\s*"hit"/);
-    assert.match(traceText, /"cacheStatus":\s*"stored"/);
-    assert.doesNotMatch(traceText, /data:image|base64|tiny-png/i);
   } finally {
     await server.close();
   }
@@ -4185,15 +4747,11 @@ test('textual ask refs route through vision translator before text reasoner', as
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'It shows a cell culture plate.');
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     assert.match(JSON.stringify(calls[0]?.body), /\.sciforge\/uploads\/img\.png/);
-    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
     assert.match(JSON.stringify(calls[1]?.body), /What is shown\?/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"source":\s*"ref"/);
-    assert.match(traceText, /"ref":\s*"\.sciforge\/uploads\/img\.png"/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
@@ -4224,10 +4782,8 @@ test('textual ask refs do not route non-visual artifacts through the vision tran
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     assert.doesNotMatch(JSON.stringify(calls[0]?.body), /vision-model|SciForge visual ref/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.doesNotMatch(traceText, /"kind":\s*"vision\.image"/);
   } finally {
     await server.close();
   }
@@ -4268,13 +4824,9 @@ test('structured textual ref metadata beats chart and figure title keywords', as
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     assert.doesNotMatch(JSON.stringify(calls[0]?.body), /vision-model|SciForge visual ref/i);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"document"/);
-    assert.match(traceText, /"degraded":\s*true/);
-    assert.doesNotMatch(traceText, /"kind":\s*"vision\.image"/);
   } finally {
     await server.close();
   }
@@ -4312,13 +4864,10 @@ test('structured image metadata routes opaque refs through the vision translator
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 2);
-    assert.equal(calls[0]?.url, 'https://vision.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://vision.example/v1/responses');
     assert.match(JSON.stringify(calls[0]?.body), /artifact:opaque-asset/);
-    assert.equal(calls[1]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[1]?.url, 'https://text.example/v1/responses');
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"vision\.image"/);
-    assert.match(traceText, /"source":\s*"ref"/);
   } finally {
     await server.close();
   }
@@ -4351,14 +4900,10 @@ test('unsupported explicit modality refs degrade without using the vision transl
     const body = await response.json() as Record<string, unknown>;
     assert.equal(body.output_text, 'I could not inspect the referenced audio modality.');
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     assert.match(JSON.stringify(calls[0]?.body), /status=unsupported/);
     assert.match(JSON.stringify(calls[0]?.body), /kind=audio/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"kind":\s*"audio"/);
-    assert.match(traceText, /"degraded":\s*true/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
@@ -4427,51 +4972,10 @@ test('unsafe textual refs are not routed or leaked upstream', async () => {
 
     assert.equal(response.status, 200);
     assert.equal(calls.length, 1);
-    assert.equal(calls[0]?.url, 'https://text.example/v1/chat/completions');
+    assert.equal(calls[0]?.url, 'https://text.example/v1/responses');
     assert.doesNotMatch(JSON.stringify(calls[0]?.body), /\/Users|private\.example|secret\.png|private\.png/i);
     assert.match(JSON.stringify(calls[0]?.body), /What is shown\?/);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.doesNotMatch(traceText, /"source":\s*"ref"/);
-    assert.doesNotMatch(traceText, /\/Users|private\.example|secret\.png|private\.png/i);
-  } finally {
-    await server.close();
-  }
-});
-
-test('absolute trace roots do not leak local paths in public metadata trace refs', async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-absolute-trace-workspace-'));
-  const traceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-absolute-trace-root-'));
-  const calls: CapturedFetch[] = [];
-  const server = await startModelRouterServer({
-    port: 0,
-    config: testConfig({ traceRoot }),
-    env: testEnv(),
-    workspaceRoot,
-    fetchImpl: captureFetch(calls, [
-      chatCompletion('text-reasoner-answer', 'The text answer.'),
-    ]),
-  });
-
-  try {
-    const response = await fetch(`${server.url}/v1/responses`, {
-      method: 'POST',
-      headers: runtimeHeaders({ 'content-type': 'application/json' }),
-      body: JSON.stringify({
-        model: 'sciforge-router',
-        input: 'Explain trace refs.',
-        metadata: { profile: 'default' },
-      }),
-    });
-
-    assert.equal(response.status, 200);
-    const body = await response.json() as {
-      metadata?: { traceRef?: string };
-    };
-    assert.ok(body.metadata?.traceRef);
-    assert.doesNotMatch(body.metadata.traceRef, /\/(?:Applications|Users|Volumes|private|tmp|var|home|opt|etc)\//i);
-    assert.doesNotMatch(body.metadata.traceRef, /^[A-Za-z]:\\/);
-    assert.match(body.metadata.traceRef, /^sha256:[a-f0-9]{64}$/);
   } finally {
     await server.close();
   }
@@ -4519,6 +5023,70 @@ test('profile and provider configuration failures fail closed before upstream ca
     assert.equal(missingSecret.status, 400);
     assert.match(await missingSecret.text(), /missing_secret/);
     assert.equal(calls.length, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('invalid provider compatibility settings fail closed before upstream calls', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-invalid-compatibility-'));
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['chat-completions'],
+  };
+  let calls = 0;
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: async () => {
+      calls += 1;
+      return chatCompletion('must-not-send', 'must not send');
+    },
+  });
+
+  try {
+    const response = await fetch(server.url + '/v1/responses', {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
+    });
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /invalid_provider_config/u);
+    assert.equal(calls, 0);
+  } finally {
+    await server.close();
+  }
+});
+
+test('explicit provider compatibility selects the configured upstream wire', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-explicit-wire-'));
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'chat-completions',
+    allowedProtocols: ['chat-completions'],
+  };
+  const calls: CapturedFetch[] = [];
+  const server = await startModelRouterServer({
+    port: 0,
+    config,
+    env: testEnv(),
+    workspaceRoot,
+    fetchImpl: captureFetch(calls, [
+      chatCompletion('explicit-chat', 'configured wire'),
+    ]),
+  });
+
+  try {
+    const response = await fetch(server.url + '/v1/responses', {
+      method: 'POST',
+      headers: runtimeHeaders({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ model: 'sciforge-router', input: 'hello' }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(new URL(calls[0]?.url ?? '').pathname, '/v1/chat/completions');
   } finally {
     await server.close();
   }
@@ -4659,7 +5227,7 @@ test('streaming responses send response.created before upstream completion', asy
   }
 });
 
-test('image URL inputs are usable upstream but only hashed in traces', async () => {
+test('image URL inputs are usable by the vision upstream', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-url-'));
   const privateImageUrl = 'https://private.example.test/figure.png?token=secret-token';
   const calls: CapturedFetch[] = [];
@@ -4686,17 +5254,12 @@ test('image URL inputs are usable upstream but only hashed in traces', async () 
 
     assert.equal(response.status, 200);
     assert.match(JSON.stringify(calls[0]?.body), /private\.example\.test\/figure\.png/);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"source":\s*"url"/);
-    assert.match(traceText, /"urlSha256":\s*"sha256:[a-f0-9]{64}"/);
-    assert.doesNotMatch(traceText, /private\.example|secret-token|figure\.png/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
 });
 
-test('text reasoner HTTP failures still write sanitized refs-first trace summaries', async () => {
+test('text reasoner HTTP failures preserve safe provider diagnostics', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-text-http-failure-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -4737,8 +5300,8 @@ test('text reasoner HTTP failures still write sanitized refs-first trace summari
 
     assert.equal(response.status, 503);
     const responseBody = await response.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(responseBody.error?.code, 'provider_http_503');
-    assert.match(responseBody.error?.message ?? '', /Provider returned HTTP 503/);
+    assert.equal(responseBody.error?.code, 'upstream_http_503');
+    assert.match(responseBody.error?.message ?? '', /Upstream returned HTTP 503/);
     assert.doesNotMatch(responseBody.error?.message ?? '', /text-secret|text-model/i);
     assert.equal(calls.length, 4);
     const visionPrompt = calls.slice(0, 3).map((call) => JSON.stringify(call.body)).join('\n');
@@ -4746,26 +5309,12 @@ test('text reasoner HTTP failures still write sanitized refs-first trace summari
     assert.match(visionPrompt, /sha256:[a-f0-9]{64}/);
     assert.doesNotMatch(visionPrompt, /\/Users|private\.example|absolute-secret|private-panel/i);
 
-    const inputTrace = JSON.parse(await readSingleTraceFile(workspaceRoot, 'input-modalities.json')) as {
-      modalities: Array<Record<string, unknown>>;
-    };
-    assert.equal(inputTrace.modalities[0]?.ref, 'artifact:workspace/plots/figure-1.png');
-    assert.match(String(inputTrace.modalities[1]?.ref), /^sha256:[a-f0-9]{64}$/);
-    assert.match(String(inputTrace.modalities[2]?.ref), /^sha256:[a-f0-9]{64}$/);
-
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"phase":\s*"text-control-or-final"/);
-    assert.match(traceText, /"status":\s*"failed"/);
-    assert.match(traceText, /"errorSummary":\s*"provider_http_503"/);
-    assert.match(traceText, /"schemaVersion":\s*"sciforge\.model-router\.final-routing-summary\.v1"/);
-    assert.doesNotMatch(traceText, /text-secret|vision-secret|raw prompt payload|text-provider|vision-provider|text-model|vision-model/i);
-    assert.doesNotMatch(traceText, /\/Users|private\.example|absolute-secret|private-panel/i);
   } finally {
     await server.close();
   }
 });
 
-test('text reasoner exceptions still write sanitized failure traces', async () => {
+test('text reasoner exceptions return a network failure', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-text-exception-'));
   const calls: CapturedFetch[] = [];
   const server = await startModelRouterServer({
@@ -4794,15 +5343,9 @@ test('text reasoner exceptions still write sanitized failure traces', async () =
       }),
     });
 
-    assert.equal(response.status, 500);
+    assert.equal(response.status, 502);
     assert.equal(calls.length, 1);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"phase":\s*"text-direct"/);
-    assert.match(traceText, /"status":\s*"failed"/);
-    assert.match(traceText, /"errorSummary":\s*"provider_exception_(?:fetch_failed|network)"/);
-    assert.match(traceText, /"schemaVersion":\s*"sciforge\.model-router\.final-routing-summary\.v1"/);
-    assert.doesNotMatch(traceText, /text-secret|raw-payload-private|Explain SciForge|text-provider|text-model/i);
   } finally {
     await server.close();
   }
@@ -4831,28 +5374,28 @@ test('text reasoner invalid JSON failures preserve safe provider diagnostics', a
       }),
     });
 
-    assert.equal(response.status, 500);
+    assert.equal(response.status, 502);
     const responseBody = await response.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(responseBody.error?.code, 'provider_invalid_json');
+    assert.equal(responseBody.error?.code, 'upstream_invalid_response');
     assert.match(responseBody.error?.message ?? '', /non-JSON response/);
     assert.doesNotMatch(responseBody.error?.message ?? '', /text-secret|raw prompt payload|Explain SciForge|text-model/i);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"phase":\s*"text-direct"/);
-    assert.match(traceText, /"status":\s*"failed"/);
-    assert.match(traceText, /"errorSummary":\s*"provider_invalid_json"/);
-    assert.doesNotMatch(traceText, /text-secret|raw prompt payload|Explain SciForge|text-provider|text-model/i);
   } finally {
     await server.close();
   }
 });
 
-test('text reasoner provider error payloads are classified without leaking body text', async () => {
+test('single-protocol provider rejections are classified without leaking body text', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'sciforge-model-router-text-error-payload-'));
   const calls: CapturedFetch[] = [];
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preferredProtocol: 'responses',
+    allowedProtocols: ['responses'],
+  };
   const server = await startModelRouterServer({
     port: 0,
-    config: testConfig(),
+    config,
     env: testEnv(),
     workspaceRoot,
     fetchImpl: captureFetch(calls, [
@@ -4875,17 +5418,12 @@ test('text reasoner provider error payloads are classified without leaking body 
       }),
     });
 
-    assert.equal(response.status, 500);
+    assert.equal(response.status, 502);
     const responseBody = await response.json() as Record<string, { code?: string; message?: string }>;
-    assert.equal(responseBody.error?.code, 'provider_error_payload');
-    assert.match(responseBody.error?.message ?? '', /error payload/);
+    assert.equal(responseBody.error?.code, 'upstream_protocol_unsupported');
+    assert.match(responseBody.error?.message ?? '', /definitively rejected/);
     assert.doesNotMatch(responseBody.error?.message ?? '', /text-secret|raw prompt payload|Explain SciForge|text-model/i);
 
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"phase":\s*"text-direct"/);
-    assert.match(traceText, /"status":\s*"failed"/);
-    assert.match(traceText, /"errorSummary":\s*"provider_error_payload"/);
-    assert.doesNotMatch(traceText, /text-secret|raw prompt payload|Explain SciForge|text-provider|text-model/i);
   } finally {
     await server.close();
   }
@@ -4919,10 +5457,6 @@ test('vision translator failures force an explicit image unavailable final answe
     const body = await response.json() as Record<string, unknown>;
     assert.match(String(body.output_text), /could not inspect the image/i);
     assert.doesNotMatch(String(body.output_text), /sk-should-not-leak|data:image|base64/i);
-    const traceText = await readTraceBundle(workspaceRoot);
-    assert.match(traceText, /"degraded":\s*true/);
-    assert.doesNotMatch(traceText, /sk-should-not-leak|data:image|base64/i);
-    assert.doesNotMatch(traceText, /text-provider|vision-provider|text-model|vision-model/i);
   } finally {
     await server.close();
   }
@@ -4985,7 +5519,6 @@ type CapturedFetch = {
 };
 
 function testConfig(options: {
-  traceRoot?: string;
   publicModelAlias?: string | null;
   imageGenerator?: ModelRouterConfig['profiles'][string]['imageGenerator'];
   scientificTranslator?: ModelRouterConfig['profiles'][string]['translators']['scientific'];
@@ -4995,9 +5528,7 @@ function testConfig(options: {
     publicModelAlias: options.publicModelAlias === undefined ? 'sciforge-router' : undefined,
     profiles: {
       default: {
-        traceRoot: options.traceRoot ?? DEFAULT_MODEL_ROUTER_TRACE_ROOT,
         textReasoner: {
-          provider: 'text-provider',
           baseUrl: 'https://text.example/v1',
           apiKeyEnv: 'SCIFORGE_TEXT_API_KEY',
           model: 'text-model',
@@ -5005,7 +5536,6 @@ function testConfig(options: {
         ...(options.imageGenerator ? { imageGenerator: options.imageGenerator } : {}),
         translators: {
           vision: {
-            provider: 'vision-provider',
             baseUrl: 'https://vision.example/v1',
             apiKeyEnv: 'SCIFORGE_VISION_API_KEY',
             model: 'vision-model',
@@ -5019,6 +5549,14 @@ function testConfig(options: {
   return config;
 }
 
+function testResponsesExtensionConfig(): ModelRouterConfig {
+  const config = testConfig();
+  config.profiles.default.textReasoner.compatibility = {
+    preserveResponsesReasoningContent: true,
+  };
+  return config;
+}
+
 function testScientificTranslatorConfig(): NonNullable<ModelRouterConfig['profiles'][string]['translators']['scientific']> {
   return {
     baseUrl: 'http://sci-modality.example:3898',
@@ -5029,14 +5567,13 @@ function testScientificTranslatorConfig(): NonNullable<ModelRouterConfig['profil
 
 function testImageGeneratorConfig(): NonNullable<ModelRouterConfig['profiles'][string]['imageGenerator']> {
   return {
-    provider: 'image-provider',
     baseUrl: 'https://image.example',
     apiKeyEnv: 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY',
     model: 'image-model',
   };
 }
 
-function testConfigWithoutVision(options: { traceRoot?: string; publicModelAlias?: string | null } = {}): ModelRouterConfig {
+function testConfigWithoutVision(options: { publicModelAlias?: string | null } = {}): ModelRouterConfig {
   const config = testConfig(options);
   config.profiles.default.translators = {};
   return config;
@@ -5065,17 +5602,127 @@ function imageEditForm(model: string): FormData {
   return form;
 }
 
+async function assertClientAbortPropagates(options: {
+  workspaceRoot: string;
+  config: ModelRouterConfig;
+  env: Record<string, string>;
+  path: string;
+  headers?: Record<string, string>;
+  body: BodyInit;
+  responsesBeforePending?: Response[];
+}): Promise<void> {
+  const pending = abortingFetch(options.responsesBeforePending);
+  const server = await startModelRouterServer({
+    port: 0,
+    config: options.config,
+    env: options.env,
+    workspaceRoot: options.workspaceRoot,
+    fetchImpl: pending.fetchImpl,
+  });
+  const client = new AbortController();
+  const request = fetch(`${server.url}${options.path}`, {
+    method: 'POST',
+    headers: runtimeHeaders(options.headers),
+    body: options.body,
+    signal: client.signal,
+  });
+  try {
+    await promiseWithTimeout(pending.started, `${options.path} upstream did not start`);
+    client.abort();
+    await assert.rejects(request, /abort/i);
+    await promiseWithTimeout(pending.aborted, `${options.path} upstream did not receive abort`);
+  } finally {
+    await server.close();
+  }
+}
+
+function abortingFetch(responsesBeforePending: Response[] = []): {
+  fetchImpl: typeof fetch;
+  started: Promise<void>;
+  aborted: Promise<void>;
+} {
+  const responses = [...responsesBeforePending];
+  let markStarted!: () => void;
+  let markAborted!: () => void;
+  const started = new Promise<void>((resolve) => { markStarted = resolve; });
+  const aborted = new Promise<void>((resolve) => { markAborted = resolve; });
+  const fetchImpl: typeof fetch = async (_url, init) => {
+    const response = responses.shift();
+    if (response) return response;
+    markStarted();
+    return await new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal;
+      const onAbort = () => {
+        markAborted();
+        reject(signal?.reason ?? new DOMException('Aborted', 'AbortError'));
+      };
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+    });
+  };
+  return { fetchImpl, started, aborted };
+}
+
+async function promiseWithTimeout<T>(promise: Promise<T>, message: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 function captureFetch(calls: CapturedFetch[], responses: Response[]): typeof fetch {
   return async (url, init) => {
+    const body = await capturedRequestBody(init?.body);
     calls.push({
       url: String(url),
       headers: Object.fromEntries(new Headers(init?.headers).entries()),
-      body: await capturedRequestBody(init?.body),
+      body,
     });
     const response = responses.shift();
     assert.ok(response, `Unexpected fetch call to ${url}`);
-    return response;
+    return adaptChatFixtureToRequestedWire(response, String(url), body);
   };
+}
+
+async function adaptChatFixtureToRequestedWire(
+  response: Response,
+  url: string,
+  requestBody: Record<string, unknown>,
+): Promise<Response> {
+  if (!response.ok) return response;
+  let payload: unknown;
+  try {
+    payload = await response.clone().json();
+  } catch {
+    return response;
+  }
+  if (!payload || typeof payload !== 'object' || !Array.isArray((payload as { choices?: unknown }).choices)) {
+    return response;
+  }
+  const canonical = chatCompletionToResponse(
+    payload,
+    { model: String(requestBody.model ?? '') },
+    chatToolNameAliasesFromResponsesTools(requestBody.tools),
+  );
+  const headers = new Headers(response.headers);
+  headers.set('content-type', 'application/json');
+  if (new URL(url).pathname.endsWith('/responses')) {
+    return Response.json(canonical, { status: response.status, headers });
+  }
+  if (new URL(url).pathname.endsWith('/messages')) {
+    return Response.json(responseToAnthropicMessage(canonical, { model: String(requestBody.model ?? '') }), {
+      status: response.status,
+      headers,
+    });
+  }
+  return response;
 }
 
 async function capturedRequestBody(body: BodyInit | null | undefined): Promise<Record<string, unknown>> {
@@ -5152,33 +5799,4 @@ function chatCompletion(
     }],
     ...(Object.keys(usage).length ? { usage } : {}),
   });
-}
-
-async function readTraceBundle(workspaceRoot: string) {
-  const root = defaultTraceRootForWorkspace(workspaceRoot);
-  const days = await readdir(root);
-  const contents: string[] = [];
-  for (const day of days.sort()) {
-    const runs = await readdir(join(root, day));
-    for (const run of runs.sort()) {
-      const files = await readdir(join(root, day, run));
-      contents.push(...await Promise.all(files.sort().map((file) => readFile(join(root, day, run, file), 'utf8'))));
-    }
-  }
-  return contents.join('\n');
-}
-
-async function readSingleTraceFile(workspaceRoot: string, fileName: string) {
-  const root = defaultTraceRootForWorkspace(workspaceRoot);
-  const days = await readdir(root);
-  const runs = await readdir(join(root, days[0] ?? 'missing'));
-  return await readFile(join(root, days[0] ?? 'missing', runs[0] ?? 'missing', fileName), 'utf8');
-}
-
-function traceDataRootForWorkspace(workspaceRoot: string): string {
-  return join(dirname(workspaceRoot), `${basename(workspaceRoot)}-model-router-data`);
-}
-
-function defaultTraceRootForWorkspace(workspaceRoot: string): string {
-  return join(traceDataRootForWorkspace(workspaceRoot), DEFAULT_MODEL_ROUTER_TRACE_ROOT);
 }

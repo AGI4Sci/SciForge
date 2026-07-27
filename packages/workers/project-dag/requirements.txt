@@ -1,2 +1,0 @@
-# same footprint as evidence-dag (which this package imports as a library)
-networkx>=3.0

@@ -3,11 +3,14 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { AgentRuntimeChild } from '@shared/agent-runtime-contract'
 import type { SideConversation } from '../../store/chat-store-types'
-import { ChildAgentsPanelView } from './ChildAgentsPanel'
+import { ChildAgentsPanelView, sessionChildAgentsOwner } from './ChildAgentsPanel'
 
 const labels: Record<string, string> = {
   sidebarChildren: 'Children',
   sidebarChildrenActive: 'Active',
+  sidebarChildrenFilterAll: 'Show all child agents',
+  sidebarChildrenFilterActive: 'Show active child agents',
+  sidebarChildrenActiveEmpty: 'No child agents are active right now.',
   sidebarChildrenLoading: 'Loading children',
   sidebarChildrenLoadError: 'Unable to load children',
   sidebarChildrenNoThread: 'No active thread.',
@@ -144,6 +147,37 @@ function side(overrides: Partial<SideConversation> = {}): SideConversation {
     ...overrides
   }
 }
+
+describe('sessionChildAgentsOwner', () => {
+  it('binds polling to the resident panel session instead of the globally focused session', () => {
+    const sessionOne = sessionChildAgentsOwner('session-1', {
+      id: 'session-1',
+      runtimeId: 'codex',
+      title: 'Session 1',
+      updatedAt: '2026-07-18T00:00:00.000Z',
+      model: 'gpt-5',
+      mode: 'agent'
+    })
+    const sessionTwo = sessionChildAgentsOwner('session-2', {
+      id: 'session-2',
+      runtimeId: 'claude',
+      title: 'Session 2',
+      updatedAt: '2026-07-18T00:00:00.000Z',
+      model: 'claude',
+      mode: 'agent'
+    })
+
+    expect(sessionOne).toEqual({ activeThreadId: 'session-1', activeRuntimeId: 'codex' })
+    expect(sessionTwo).toEqual({ activeThreadId: 'session-2', activeRuntimeId: 'claude' })
+  })
+
+  it('does not fall back to another session when the owner id is empty', () => {
+    expect(sessionChildAgentsOwner('   ', null)).toEqual({
+      activeThreadId: null,
+      activeRuntimeId: undefined
+    })
+  })
+})
 
 describe('ChildAgentsPanelView', () => {
   it('shows direct children of the active thread as horizontal tabs in a right panel', () => {
@@ -469,6 +503,72 @@ describe('ChildAgentsPanelView', () => {
 
     expect(html.match(/role="tab"/g)).toHaveLength(1)
     expect(html.match(/>clone-repo</g)).toHaveLength(1)
+  })
+
+  it('merges a prompt-only event shadow into the matching reasoning thread record', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'child-event-shadow',
+          name: 'writing-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Child-agent runtime guardrails:\nDo not spawn children.\n\nDelegated task:\nReview the writing.',
+          summary: 'Prompt-only event record'
+        }),
+        child({
+          id: 'thread-writing-review',
+          kind: 'thread',
+          name: 'writing-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the writing.',
+          summary: undefined,
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-writing-review' },
+          transcriptRef: { runtimeId: 'codex', childId: 'thread-writing-review', transcriptId: 'thread-writing-review' }
+        })
+      ],
+      selectedSide: side({ threadId: 'thread-writing-review', title: 'writing-review' })
+    })
+
+    expect(html.match(/role="tab"/g)).toHaveLength(1)
+    expect(html.match(/>writing-review</g)).toHaveLength(1)
+    expect(html).toContain('child-ok')
+    expect(html).not.toContain('Prompt-only event record')
+  })
+
+  it('keeps a same-name event when its delegated task differs from the reasoning thread', () => {
+    const html = renderView({
+      children: [
+        child({
+          id: 'child-event-methods',
+          name: 'paper-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the methods.'
+        }),
+        child({
+          id: 'thread-writing-review',
+          kind: 'thread',
+          name: 'paper-review',
+          parentTurnId: 'turn-review',
+          prompt: 'Review the writing.',
+          openAsThreadRef: { runtimeId: 'codex', threadId: 'thread-writing-review' }
+        })
+      ]
+    })
+
+    expect(html.match(/role="tab"/g)).toHaveLength(2)
+  })
+
+  it('renders the child and active counts as list filter buttons', () => {
+    const html = renderView({
+      children: [
+        child({ id: 'running-child', name: 'running-child', status: 'running' }),
+        child({ id: 'completed-child', name: 'completed-child', status: 'completed', prompt: 'A different task' })
+      ]
+    })
+
+    expect(html).toContain('aria-label="Show all child agents"')
+    expect(html).toContain('aria-label="Show active child agents"')
+    expect(html).toContain('aria-pressed="true"')
   })
 
   it('collapses distinct retries under the latest active attempt by default', () => {

@@ -1,17 +1,14 @@
-import { spawn, type ChildProcess } from 'node:child_process'
+import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
-  mergeModelRouterSettings,
+  getModelAccessSettings,
   getModelRouterSettings,
   isModelRouterTextReasonerConfigured,
   type AppSettingsV1,
-  type ModelRouterMemberProviderSettingsPatchV1,
-  type ModelRouterSettingsPatchV1,
-  type ModelRouterMemberProviderSettingsV1,
-  type ModelRouterScientificTranslatorSettingsPatchV1,
-  type ModelRouterScientificTranslatorSettingsV1
+  type ModelRouterMemberSettingsV1,
+  type ModelRouterProtocolPreference
 } from '../shared/app-settings'
 import {
   DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
@@ -24,6 +21,12 @@ import {
   isPrefixedEnv,
   isUpstreamProviderConfigEnv
 } from './upstream-provider-env'
+import { resolveModelAccessSidecarProcessLaunch } from './model-access-sidecar-launch'
+import {
+  stopModelAccessGatewaySidecar,
+  synchronizeModelAccessGatewaySidecar,
+  type ModelAccessGatewayLaunchSpec
+} from './model-access-gateway-sidecar'
 
 const ROUTER_RUNTIME_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_RUNTIME_API_KEY'
 const TEXT_REASONER_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_TEXT_API_KEY'
@@ -31,6 +34,7 @@ const VISION_TRANSLATOR_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_VISION_API_KEY'
 const IMAGE_GENERATOR_KEY_ENV = 'SCIFORGE_MODEL_ROUTER_IMAGE_API_KEY'
 const SCIENTIFIC_TRANSLATOR_TOKEN_ENV = 'SCIFORGE_MODEL_ROUTER_SCIENTIFIC_TRANSLATOR_TOKEN'
 const MODEL_ROUTER_INSTANCE_ID_ENV = 'SCIFORGE_MODEL_ROUTER_INSTANCE_ID'
+const MODEL_ROUTER_USER_DATA_DIR_ENV = 'SCIFORGE_MODEL_ROUTER_USER_DATA_DIR'
 const BLOCKED_INHERITED_WORKER_ENV_PREFIXES = [
   ...DIRECT_PROVIDER_WORKER_ENV_PREFIXES,
   ...MODEL_ROUTER_PRIVATE_ENV_PREFIXES,
@@ -47,34 +51,31 @@ const LEGACY_MODEL_ROUTER_ENV_NAMES = [
   'MODEL_ROUTER_MODEL'
 ] as const
 
-let modelRouterChild: ChildProcess | null = null
-let modelRouterLaunchSignature: string | null = null
-let modelRouterStatePath: string | null = null
-
-type ModelRouterProviderConfig = {
-  provider: string
+type ModelRouterMemberConfig = {
   baseUrl: string
   apiKeyEnv: string
   model: string
-  maxSupplementRounds?: number
+  compatibility?: {
+    preferredProtocol?: Exclude<ModelRouterProtocolPreference, 'auto'>
+    allowedProtocols?: Array<Exclude<ModelRouterProtocolPreference, 'auto'>>
+    probeBeforeUse?: boolean
+  }
 }
 
 type ModelRouterScientificTranslatorConfig = {
   baseUrl: string
   tokenEnv: string
   model: string
-  timeoutMs?: number
 }
 
 type ModelRouterSidecarConfig = {
   defaultProfile: string
   publicModelAlias: string
   profiles: Record<string, {
-    traceRoot: string
-    textReasoner: ModelRouterProviderConfig
-    imageGenerator?: ModelRouterProviderConfig
+    textReasoner: ModelRouterMemberConfig
+    imageGenerator?: ModelRouterMemberConfig
     translators: {
-      vision?: ModelRouterProviderConfig
+      vision?: ModelRouterMemberConfig
       scientific?: ModelRouterScientificTranslatorConfig
     }
   }>
@@ -98,10 +99,20 @@ export function buildModelRouterSidecarLaunch(
   options: {
     userDataDir: string
     appRoot?: string
+    resourcesPath?: string
+    execPath?: string
+    isPackaged?: boolean
     env?: NodeJS.ProcessEnv
     npmCommand?: string
   }
 ): ModelRouterSidecarLaunchResult {
+  const modelAccess = getModelAccessSettings(settings)
+  if (!modelAccess) {
+    return { ok: false, reason: 'Model access mode must be configured before starting Model Router.' }
+  }
+  if (modelAccess.mode !== 'api') {
+    return { ok: false, reason: 'Model Router is unavailable while coding-plan access is selected.' }
+  }
   const router = getModelRouterSettings(settings)
   if (!router.enabled) return { ok: false, reason: 'Model Router is disabled.' }
   if (!router.autoStart) return { ok: false, reason: 'Model Router auto-start is disabled.' }
@@ -122,43 +133,43 @@ export function buildModelRouterSidecarLaunch(
   const vision = router.profiles.default.translators.vision
   const scientific = router.profiles.default.translators.scientific
   const env: NodeJS.ProcessEnv = modelRouterSidecarEnv(baseEnv)
+  env[MODEL_ROUTER_USER_DATA_DIR_ENV] = options.userDataDir
   env[ROUTER_RUNTIME_KEY_ENV] = router.runtimeApiKey
   env[TEXT_REASONER_KEY_ENV] = textReasoner.apiKey.trim()
-  if (vision.apiKey.trim()) {
+  if (isModelRouterMemberConfigured(vision)) {
     env[VISION_TRANSLATOR_KEY_ENV] = vision.apiKey.trim()
   }
-  if (imageGenerator.apiKey.trim()) {
+  if (isModelRouterMemberConfigured(imageGenerator)) {
     env[IMAGE_GENERATOR_KEY_ENV] = imageGenerator.apiKey.trim()
   }
-  if (scientific.apiKey.trim()) {
+  if (isModelRouterMemberConfigured(scientific)) {
     env[SCIENTIFIC_TRANSLATOR_TOKEN_ENV] = scientific.apiKey.trim()
   }
 
-  const npmCommand = options.npmCommand ?? (process.platform === 'win32' ? 'npm.cmd' : 'npm')
+  const processLaunch = resolveModelAccessSidecarProcessLaunch('model-router', [
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(port),
+    '--config',
+    configPath,
+    '--workspace-root',
+    settings.workspaceRoot || join(options.userDataDir, 'model-router'),
+    '--quiet'
+  ], {
+    appRoot: options.appRoot,
+    resourcesPath: options.resourcesPath,
+    execPath: options.execPath,
+    isPackaged: options.isPackaged,
+    npmCommand: options.npmCommand,
+    env
+  })
   return {
     ok: true,
     launch: {
-      command: npmCommand,
-      cwd: options.appRoot ?? process.cwd(),
-      args: [
-        '--workspace',
-        '@sciforge/model-router',
-        'run',
-        'start',
-        '--',
-        '--host',
-        '127.0.0.1',
-        '--port',
-        String(port),
-        '--config',
-        configPath,
-        '--workspace-root',
-        settings.workspaceRoot || join(options.userDataDir, 'model-router'),
-        '--quiet'
-      ],
-      env,
+      ...processLaunch,
       configPath,
-      config: defaultModelRouterSidecarConfig(settings, options.userDataDir, baseEnv)
+      config: defaultModelRouterSidecarConfig(settings)
     }
   }
 }
@@ -198,42 +209,13 @@ function isBlockedStandaloneModelRouterEnv(key: string): boolean {
   return isPrefixedEnv(key, STANDALONE_MODEL_ROUTER_ENV_PREFIXES)
 }
 
-export async function ensureModelRouterConfigFile(
-  settings: AppSettingsV1,
-  options: { userDataDir: string; env?: NodeJS.ProcessEnv }
-): Promise<{ path: string; created: boolean }> {
-  const path = modelRouterConfigPath(options.userDataDir)
-  await mkdir(join(options.userDataDir, 'model-router'), { recursive: true })
-  let created = false
-  try {
-    await access(path)
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-    created = true
-  }
-  await syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir, env: options.env })
-  return { path, created }
-}
-
-export async function syncModelRouterSettingsFromConfigFile(
-  settings: AppSettingsV1,
-  options: { userDataDir: string }
-): Promise<AppSettingsV1> {
-  const patch = await modelRouterSettingsPatchFromConfigFile(options.userDataDir)
-  if (!patch) return settings
-  return {
-    ...settings,
-    modelRouter: mergeModelRouterSettings(settings.modelRouter, patch)
-  }
-}
-
 export async function syncModelRouterConfigFileFromSettings(
   settings: AppSettingsV1,
-  options: { userDataDir: string; env?: NodeJS.ProcessEnv }
+  options: { userDataDir: string }
 ): Promise<{ path: string }> {
   const path = modelRouterConfigPath(options.userDataDir)
   await mkdir(join(options.userDataDir, 'model-router'), { recursive: true })
-  const config = defaultModelRouterSidecarConfig(settings, options.userDataDir, options.env)
+  const config = defaultModelRouterSidecarConfig(settings)
   await writeFile(path, `${JSON.stringify(config, null, 2)}\n`, { encoding: 'utf8' })
   return { path }
 }
@@ -243,112 +225,75 @@ export async function ensureModelRouterSidecar(
   options: {
     userDataDir: string
     appRoot?: string
+    resourcesPath?: string
+    execPath?: string
+    isPackaged?: boolean
     env?: NodeJS.ProcessEnv
     spawnImpl?: typeof spawn
     log?: (message: string) => void
   }
 ): Promise<void> {
+  const spec = buildModelRouterGatewayLaunchSpec(settings, options)
+  if (!spec.ok) {
+    options.log?.(spec.reason)
+    await synchronizeModelAccessGatewaySidecar(null, options)
+    return
+  }
+  await synchronizeModelAccessGatewaySidecar(spec.spec, options)
+}
+
+type ModelRouterGatewayLaunchSpecResult =
+  | { ok: true; spec: ModelAccessGatewayLaunchSpec }
+  | { ok: false; reason: string }
+
+export function buildModelRouterGatewayLaunchSpec(
+  settings: AppSettingsV1,
+  options: Parameters<typeof buildModelRouterSidecarLaunch>[1]
+): ModelRouterGatewayLaunchSpecResult {
   const instanceId = randomUUID()
   const launchEnv = {
     ...(options.env ?? process.env),
     [MODEL_ROUTER_INSTANCE_ID_ENV]: instanceId
   }
-  const launch = buildModelRouterSidecarLaunch(settings, {
-    userDataDir: options.userDataDir,
-    appRoot: options.appRoot,
-    env: launchEnv
-  })
-  if (!launch.ok) {
-    options.log?.(launch.reason)
-    if (isModelRouterChildRunning()) {
-      await stopModelRouterSidecar()
-    }
-    return
-  }
-
-  const signature = modelRouterManagedLaunchSignature(launch.launch)
-  if (isModelRouterChildRunning()) {
-    if (modelRouterLaunchSignature === signature) return
-    options.log?.('Model Router sidecar launch settings changed; restarting sidecar.')
-    await stopModelRouterSidecar()
-  }
-
-  await stopRecordedModelRouterSidecar(settings, options.userDataDir, options.log)
-
-  const postStopLaunch = buildModelRouterSidecarLaunch(settings, {
-    userDataDir: options.userDataDir,
-    appRoot: options.appRoot,
-    env: launchEnv
-  })
-  if (!postStopLaunch.ok) {
-    options.log?.(postStopLaunch.reason)
-    return
-  }
-  await syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir, env: options.env })
-  const spawnImpl = options.spawnImpl ?? spawn
-  options.log?.(`Starting Model Router sidecar from ${postStopLaunch.launch.cwd}.`)
-  // On Windows the command is `npm.cmd`; Node >= 18.20 refuses to spawn a `.cmd`
-  // without a shell (throws EINVAL). Use a shell on win32 and quote any args that
-  // contain spaces/special chars so cmd.exe parses them correctly.
-  const useShell = process.platform === 'win32'
-  const spawnArgs = useShell
-    ? postStopLaunch.launch.args.map(quoteWindowsShellArg)
-    : postStopLaunch.launch.args
-  modelRouterChild = spawnImpl(postStopLaunch.launch.command, spawnArgs, {
-    cwd: postStopLaunch.launch.cwd,
-    env: postStopLaunch.launch.env,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    detached: false,
-    shell: useShell
-  })
-  modelRouterLaunchSignature = modelRouterManagedLaunchSignature(postStopLaunch.launch)
-  modelRouterStatePath = modelRouterSidecarStatePath(options.userDataDir)
-  const child = modelRouterChild
-  if (child.pid) {
-    await writeFile(modelRouterStatePath, `${JSON.stringify({
-      pid: child.pid,
+  const result = buildModelRouterSidecarLaunch(settings, { ...options, env: launchEnv })
+  if (!result.ok) return result
+  const router = getModelRouterSettings(settings)
+  const healthUrl = router.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health'
+  const signature = modelRouterManagedLaunchSignature(result.launch)
+  return {
+    ok: true,
+    spec: {
+      mode: 'model-router',
+      ...result.launch,
+      signature,
       instanceId,
-      signature: modelRouterLaunchSignature
-    }, null, 2)}\n`, 'utf8')
-  }
-  attachModelRouterChildLogging(child, options.log)
-  child.once('error', (error) => {
-    options.log?.(`Model Router sidecar failed to start: ${error.message}`)
-  })
-  child.once('exit', (code, signal) => {
-    if (modelRouterChild !== child) return
-    modelRouterChild = null
-    modelRouterLaunchSignature = null
-    if (code !== 0 || signal) {
-      options.log?.(`Model Router sidecar exited unexpectedly (code=${code ?? 'null'}, signal=${signal ?? 'null'}).`)
+      healthUrl,
+      startMessage: `Starting Model Router sidecar from ${result.launch.cwd}.`,
+      logLabel: 'Model Router',
+      prepare: () => syncModelRouterConfigFileFromSettings(settings, { userDataDir: options.userDataDir }).then(() => undefined)
     }
-  })
+  }
 }
 
 function defaultModelRouterSidecarConfig(
-  settings: AppSettingsV1,
-  userDataDir: string,
-  env: NodeJS.ProcessEnv = process.env
+  settings: AppSettingsV1
 ): ModelRouterSidecarConfig & { runtimeApiKeyEnv: string } {
   const router = getModelRouterSettings(settings)
   const textReasoner = router.profiles.default.textReasoner
-  const vision = providerConfig(router.profiles.default.translators.vision, VISION_TRANSLATOR_KEY_ENV)
-  const imageGenerator = providerConfig(router.profiles.default.imageGenerator, IMAGE_GENERATOR_KEY_ENV)
+  const vision = memberConfig(router.profiles.default.translators.vision, VISION_TRANSLATOR_KEY_ENV, true)
+  const imageGenerator = memberConfig(router.profiles.default.imageGenerator, IMAGE_GENERATOR_KEY_ENV)
   const scientific = scientificTranslatorConfig(router.profiles.default.translators.scientific)
-  const configRoot = join(userDataDir, 'model-router')
-
   return {
     defaultProfile: 'default',
     publicModelAlias: router.publicModelAlias,
     runtimeApiKeyEnv: ROUTER_RUNTIME_KEY_ENV,
     profiles: {
       default: {
-        traceRoot: join(configRoot, 'traces'),
         textReasoner: {
-          provider: textReasoner.provider.trim() || 'openai-compatible',
           baseUrl: textReasoner.baseUrl.trim(),
           apiKeyEnv: TEXT_REASONER_KEY_ENV,
-          model: textReasoner.model.trim()
+          model: textReasoner.model.trim(),
+          ...protocolCompatibility(textReasoner.protocol)
         },
         ...(imageGenerator ? { imageGenerator } : {}),
         translators: {
@@ -360,70 +305,13 @@ function defaultModelRouterSidecarConfig(
   }
 }
 
-export async function stopModelRouterSidecar(): Promise<void> {
-  const child = modelRouterChild
-  if (!child) return
-  modelRouterChild = null
-  modelRouterLaunchSignature = null
-  if (child.exitCode !== null || child.signalCode !== null) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve()
-    }, 2_000)
-    child.once('exit', () => {
-      clearTimeout(timer)
-      resolve()
-    })
-    child.kill('SIGTERM')
-  })
-  if (modelRouterStatePath) {
-    await rm(modelRouterStatePath, { force: true })
-    modelRouterStatePath = null
-  }
-}
-
-function modelRouterSidecarStatePath(userDataDir: string): string {
-  return join(userDataDir, 'model-router', 'sidecar-state.json')
-}
-
-async function stopRecordedModelRouterSidecar(
-  settings: AppSettingsV1,
-  userDataDir: string,
+export async function stopModelRouterSidecar(options: {
+  userDataDir?: string
+  fetchImpl?: typeof fetch
+  killProcessImpl?: typeof process.kill
   log?: (message: string) => void
-): Promise<void> {
-  const statePath = modelRouterSidecarStatePath(userDataDir)
-  let state: { pid?: unknown; instanceId?: unknown }
-  try {
-    state = JSON.parse(await readFile(statePath, 'utf8')) as { pid?: unknown; instanceId?: unknown }
-  } catch {
-    return
-  }
-  const pid = typeof state.pid === 'number' && Number.isInteger(state.pid) && state.pid > 1 ? state.pid : 0
-  const instanceId = typeof state.instanceId === 'string' ? state.instanceId.trim() : ''
-  if (!pid || !instanceId) {
-    await rm(statePath, { force: true })
-    return
-  }
-  const router = getModelRouterSettings(settings)
-  const healthUrl = router.baseUrl.replace(/\/+$/, '').replace(/\/v1$/, '') + '/health'
-  try {
-    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(1_500) })
-    const health = await response.json() as { instanceId?: unknown }
-    if (health.instanceId !== instanceId) {
-      await rm(statePath, { force: true })
-      return
-    }
-    process.kill(pid, 'SIGTERM')
-    log?.('Stopped a stale app-managed Model Router sidecar before launching the current runtime.')
-  } catch {
-    // A missing process or unreachable endpoint means the recorded sidecar is already gone.
-  }
-  await rm(statePath, { force: true })
-}
-
-function isModelRouterChildRunning(): boolean {
-  return Boolean(modelRouterChild && modelRouterChild.exitCode === null && modelRouterChild.signalCode === null)
+} = {}): Promise<void> {
+  await stopModelAccessGatewaySidecar(options)
 }
 
 function modelRouterManagedLaunchSignature(launch: ModelRouterSidecarLaunch): string {
@@ -432,6 +320,7 @@ function modelRouterManagedLaunchSignature(launch: ModelRouterSidecarLaunch): st
     args: launch.args,
     cwd: launch.cwd,
     config: launch.config,
+    userDataDir: launch.env[MODEL_ROUTER_USER_DATA_DIR_ENV] ?? '',
     runtimeApiKey: launch.env[ROUTER_RUNTIME_KEY_ENV] ?? '',
     textReasonerApiKey: launch.env[TEXT_REASONER_KEY_ENV] ?? '',
     visionTranslatorApiKey: launch.env[VISION_TRANSLATOR_KEY_ENV] ?? '',
@@ -440,115 +329,47 @@ function modelRouterManagedLaunchSignature(launch: ModelRouterSidecarLaunch): st
   })
 }
 
-function providerConfig(
-  provider: ModelRouterMemberProviderSettingsV1,
-  apiKeyEnv: string
-): ModelRouterProviderConfig | null {
-  if (!provider.provider.trim() || !provider.baseUrl.trim() || !provider.model.trim()) return null
+function memberConfig(
+  member: ModelRouterMemberSettingsV1,
+  apiKeyEnv: string,
+  protocolAware = false
+): ModelRouterMemberConfig | null {
+  if (!isModelRouterMemberConfigured(member)) return null
   return {
-    provider: provider.provider,
-    baseUrl: provider.baseUrl,
+    baseUrl: member.baseUrl,
     apiKeyEnv,
-    model: provider.model,
-    ...(provider.maxSupplementRounds === undefined ? {} : { maxSupplementRounds: provider.maxSupplementRounds })
+    model: member.model,
+    ...(protocolAware ? protocolCompatibility(member.protocol) : {})
   }
 }
 
-function scientificTranslatorConfig(
-  translator: ModelRouterScientificTranslatorSettingsV1
-): ModelRouterScientificTranslatorConfig | null {
-  const baseUrl = translator.baseUrl.trim()
-  const model = translator.model.trim()
-  if (!baseUrl || !model) return null
+function protocolCompatibility(
+  protocol: ModelRouterProtocolPreference | undefined
+): Pick<ModelRouterMemberConfig, 'compatibility'> | Record<string, never> {
+  if (!protocol || protocol === 'auto') return {}
   return {
-    baseUrl,
-    tokenEnv: SCIENTIFIC_TRANSLATOR_TOKEN_ENV,
-    model,
-    ...(translator.timeoutMs === undefined ? {} : { timeoutMs: translator.timeoutMs })
-  }
-}
-
-async function modelRouterSettingsPatchFromConfigFile(
-  userDataDir: string
-): Promise<ModelRouterSettingsPatchV1 | null> {
-  const path = modelRouterConfigPath(userDataDir)
-  let raw = ''
-  try {
-    raw = await readFile(path, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
-    throw error
-  }
-  const parsed = JSON.parse(raw) as unknown
-  if (!isRecord(parsed)) return null
-  const defaultProfileId = stringValue(parsed.defaultProfile) || 'default'
-  const profiles = isRecord(parsed.profiles) ? parsed.profiles : null
-  const profile = profiles && isRecord(profiles[defaultProfileId])
-    ? profiles[defaultProfileId]
-    : profiles && isRecord(profiles.default)
-      ? profiles.default
-      : null
-  if (!profile) return null
-
-  const textReasoner = memberProviderPatchFromConfig(profile.textReasoner)
-  const imageGenerator = memberProviderPatchFromConfig(profile.imageGenerator)
-  const translators = isRecord(profile.translators) ? profile.translators : {}
-  const vision = memberProviderPatchFromConfig(translators.vision)
-  const scientific = scientificTranslatorPatchFromConfig(translators.scientific)
-
-  return {
-    ...(stringValue(parsed.publicModelAlias) ? { publicModelAlias: stringValue(parsed.publicModelAlias) } : {}),
-    profiles: {
-      default: {
-        ...(textReasoner ? { textReasoner } : {}),
-        ...(imageGenerator ? { imageGenerator } : {}),
-        translators: {
-          ...(vision ? { vision } : {}),
-          ...(scientific ? { scientific } : {})
-        }
-      }
+    compatibility: {
+      preferredProtocol: protocol,
+      allowedProtocols: [protocol]
     }
   }
 }
 
-function memberProviderPatchFromConfig(value: unknown): ModelRouterMemberProviderSettingsPatchV1 | null {
-  if (!isRecord(value)) return null
+function scientificTranslatorConfig(
+  translator: ModelRouterMemberSettingsV1
+): ModelRouterScientificTranslatorConfig | null {
+  const baseUrl = translator.baseUrl.trim()
+  const model = translator.model.trim()
+  if (!isModelRouterMemberConfigured(translator)) return null
   return {
-    ...(stringValue(value.provider) ? { provider: stringValue(value.provider) } : {}),
-    ...(stringValue(value.baseUrl) ? { baseUrl: stringValue(value.baseUrl) } : {}),
-    ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
-    ...(numberValue(value.maxSupplementRounds) === undefined ? {} : { maxSupplementRounds: numberValue(value.maxSupplementRounds) })
+    baseUrl,
+    tokenEnv: SCIENTIFIC_TRANSLATOR_TOKEN_ENV,
+    model
   }
 }
 
-function scientificTranslatorPatchFromConfig(
-  value: unknown
-): ModelRouterScientificTranslatorSettingsPatchV1 | null {
-  if (!isRecord(value)) return null
-  return {
-    ...(stringValue(value.baseUrl) ? { baseUrl: stringValue(value.baseUrl) } : {}),
-    ...(stringValue(value.model) ? { model: stringValue(value.model) } : {}),
-    ...(numberValue(value.timeoutMs) === undefined ? {} : { timeoutMs: numberValue(value.timeoutMs) })
-  }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
-}
-
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-// When spawning through a Windows shell (cmd.exe), wrap args containing spaces or
-// shell metacharacters in double quotes so they survive command-line parsing.
-function quoteWindowsShellArg(arg: string): string {
-  if (arg.length > 0 && !/[\s"&|<>^()]/.test(arg)) return arg
-  return `"${arg.replace(/"/g, '\\"')}"`
+function isModelRouterMemberConfigured(member: ModelRouterMemberSettingsV1): boolean {
+  return Boolean(member.baseUrl.trim() && member.apiKey.trim() && member.model.trim())
 }
 
 function localPortFromRouterBaseUrl(baseUrl: string): number | null {
@@ -561,24 +382,4 @@ function localPortFromRouterBaseUrl(baseUrl: string): number | null {
   } catch {
     return null
   }
-}
-
-function attachModelRouterChildLogging(
-  child: ChildProcess,
-  log: ((message: string) => void) | undefined
-): void {
-  if (!log) return
-  child.stdout?.on('data', (chunk) => logModelRouterChildChunk('stdout', chunk, log))
-  child.stderr?.on('data', (chunk) => logModelRouterChildChunk('stderr', chunk, log))
-}
-
-function logModelRouterChildChunk(
-  stream: 'stdout' | 'stderr',
-  chunk: unknown,
-  log: (message: string) => void
-): void {
-  const text = Buffer.isBuffer(chunk) ? chunk.toString('utf8') : String(chunk)
-  const normalized = text.replace(/\s+/g, ' ').trim()
-  if (!normalized) return
-  log(`Model Router sidecar ${stream}: ${normalized.slice(0, 1_000)}`)
 }

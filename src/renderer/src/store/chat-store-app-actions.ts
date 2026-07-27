@@ -1,6 +1,7 @@
 import type i18next from 'i18next'
 import {
   getActiveAgentRuntime,
+  getModelAccessSettings,
   type AgentRuntimeId,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -35,12 +36,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
   | 'openConnectPhone'
   | 'setConnectPhonePanelOpen'
   | 'openSchedule'
-  | 'openWorkflow'
   | 'selectRemoteGuardChannel'
   | 'clearRemoteGuardChannel'
   | 'openInitialSetup'
   | 'closeInitialSetup'
-  | 'selectInspectorItem'
   | 'applyI18nFromSettings'
   | 'reloadUiSettings'
 > {
@@ -69,6 +68,10 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
     },
 
     setActiveAgentRuntime: async (runtimeId: AgentRuntimeId) => {
+      if (get().modelAccessMode === 'coding-plan' && runtimeId !== 'codex') {
+        set({ error: 'Codex Plan requires the Codex runtime.' })
+        return
+      }
       const previousRuntimeId = get().activeAgentRuntime
       set({
         activeAgentRuntime: runtimeId,
@@ -155,10 +158,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
       set({ route: 'schedule', remoteGuardChannelId: null, connectPhonePanelOpen: false })
     },
 
-    openWorkflow: () => {
-      set({ route: 'workflow', remoteGuardChannelId: null, connectPhonePanelOpen: false })
-    },
-
     selectRemoteGuardChannel: (channelId) => {
       const channel = get().remoteChannels.find((item) => item.id === channelId)
       if (!channel) return
@@ -178,8 +177,6 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
 
     closeInitialSetup: () => set({ initialSetupOpen: false, initialSetupMode: 'required' }),
 
-    selectInspectorItem: (id) => set({ inspectorSelectedId: id }),
-
     applyI18nFromSettings: async (locale) => {
       await i18n.changeLanguage(locale)
       applyDocumentLocale(locale)
@@ -195,6 +192,7 @@ export function createAppActions(options: CreateAppActionsOptions): Pick<
         workspaceRoot,
         workspaceLabel: workspaceLabelFromPath(workspaceRoot),
         activeAgentRuntime: getActiveAgentRuntime(settings),
+        modelAccessMode: getModelAccessSettings(settings)?.mode ?? null,
         remoteChannels: settings.remoteChannel.channels,
         activeRemoteChannelId: settings.remoteChannel.channels.some(
           (channel) => channel.id === get().activeRemoteChannelId && channel.enabled

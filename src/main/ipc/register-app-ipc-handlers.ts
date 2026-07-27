@@ -1,9 +1,18 @@
-import { app, dialog, ipcMain, nativeImage, shell, type BrowserWindow, type NativeImage, type WebContents } from 'electron'
+import { app, dialog, ipcMain, shell, type BrowserWindow, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import { watch, type FSWatcher } from 'node:fs'
 import { randomUUID } from 'node:crypto'
 import { dirname, join } from 'node:path'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { z } from 'zod'
+import type {
+  TraceClearResult,
+  TraceExportOptions,
+  TraceExportResult,
+  TraceReadQuery,
+  TraceReadResult,
+  TraceSummary,
+  TraceSummaryQuery
+} from '@sciforge/full-trace'
 import { mainPerformanceMonitor } from '../performance-monitor'
 import {
   type AppSettingsPatch,
@@ -20,9 +29,8 @@ import type {
   ConnectPhoneInstallPollResult,
   ConnectPhoneInstallQrResult,
   ConnectPhoneRuntimeStatus,
-  DagPanelStatus,
   DesktopCommand,
-  ModelRouterConfigOpenResult,
+  ModelAccessStatus,
   SystemNotificationResult,
   TurnCompleteNotificationPayload,
   UpstreamModelsResult,
@@ -30,16 +38,6 @@ import type {
 } from '../../shared/sciforge-api'
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
-import {
-  biologyRoomApplyInputSchema,
-  biologyRoomCreateInputSchema,
-  biologyRoomHistoryInputSchema,
-  biologyRoomListInputSchema,
-  biologyRoomObserveInputSchema,
-  biologyRoomOpenOrCreateInputSchema,
-  biologyRoomRefreshInputSchema,
-  biologyRoomTargetSchema
-} from '../../shared/biology-room'
 import {
   agentRuntimeConnectPayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
@@ -78,16 +76,7 @@ import {
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
-  runtimeConfigContentSchema,
   desktopCommandSchema,
-  evidenceDagEvidencePreviewResolvePayloadSchema,
-  evidenceDagUpdatePayloadSchema,
-  evidenceDagPriorityPayloadSchema,
-  evidenceDagViewPayloadSchema,
-  projectDagGoalSavePayloadSchema,
-  projectDagEvidencePreviewResolvePayloadSchema,
-  projectDagUpdatePayloadSchema,
-  projectDagViewPayloadSchema,
   defaultPathSchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
@@ -110,18 +99,13 @@ import {
   logErrorPayloadSchema,
   notificationPayloadSchema,
   openEditorPathPayloadSchema,
-  paperRadarArxivSyncPayloadSchema,
-  paperRadarBiorxivSyncPayloadSchema,
-  paperRadarDigestPayloadSchema,
-  paperRadarProfilePayloadSchema,
-  paperRadarProfileSyncPayloadSchema,
-  paperRadarRankPayloadSchema,
-  paperRadarReviewPayloadSchema,
-  paperRadarSearchPayloadSchema,
   researchCardArchivePayloadSchema,
   researchCardCreatePayloadSchema,
   researchCardListPayloadSchema,
   researchCardUpdatePayloadSchema,
+  traceExportPayloadSchema,
+  traceReadPayloadSchema,
+  traceSummariesPayloadSchema,
   visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishPayloadSchema,
   rootPathSchema,
@@ -141,18 +125,7 @@ import {
   workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
-  workspacePreviewApplyEditPayloadSchema,
-  workspacePreviewDescribeAssetPayloadSchema,
-  workspacePreviewExportPayloadSchema,
-  workspacePreviewInvokeActionPayloadSchema,
-  workspaceNativeFileDragPayloadSchema,
-  workspacePreviewPrepareArtifactPayloadSchema,
-  workspacePreviewListPluginsPayloadSchema,
-  workspacePreviewObservePayloadSchema,
-  workspacePreviewOpenPayloadSchema,
-  workspacePreviewReadArtifactRangePayloadSchema,
-  workspacePreviewReadRangePayloadSchema,
-  workspacePreviewReleaseSessionPayloadSchema,
+  workspacePdfRenameSuggestionPayloadSchema,
   workspaceFileCreatePayloadSchema,
   workspaceFileTargetPayloadSchema,
   workspaceFileWatchPayloadSchema,
@@ -183,7 +156,6 @@ import {
   buildBgcDiscoveryMcpConfigFragment,
   type BgcDiscoveryMcpLaunchConfig
 } from '../bgc-discovery-mcp-config'
-import { buildDatasetApiMcpConfigFragment } from '../dataset-api-mcp-config'
 import {
   buildImageGenerationMcpConfigFragment,
   type ImageGenerationMcpLaunchConfig
@@ -230,26 +202,10 @@ import type {
   ScientificPlottingPrepareReferenceResult,
   ScientificPlottingStatusResult
 } from '../../shared/scientific-plotting'
-import {
-  EVIDENCE_DAG_API_KEY_ENV,
-  EVIDENCE_DAG_SERVICE_URL_ENV,
-  evidenceDagApiKeyFromEnv,
-  evidenceDagServiceUrlFromEnv,
-  evidenceDagThreadId,
-  evidenceDagUiUrl
-} from '../../../packages/workers/evidence-dag/desktop/contract'
-import {
-  DEFAULT_PROJECT_DAG_SERVICE_URL,
-  projectDagApiKeyFromEnv,
-  PROJECT_DAG_SERVICE_VERSION,
-  projectDagServiceUrlFromEnv,
-  projectDagUiUrl
-} from '../../../packages/workers/project-dag/desktop/contract'
 import type {
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
   AgentRuntimeId,
-  AgentRuntimeItem,
   AgentRuntimeThread,
   AgentRuntimeThreadDetail,
   AgentRuntimeThreadListInput,
@@ -267,12 +223,8 @@ import type {
   SpeechTranscriptionRequest,
   SpeechTranscriptionResult
 } from '../../shared/speech-to-text'
-import {
-  evaluateEvidenceDagHighImpactGate,
-  type EvidenceDagGateMetadata
-} from '../../shared/evidence-dag-gate'
-import type { PaperRadarApiResult } from '../../shared/paper-radar'
 import type { ResearchCardService } from '../services/research-card-service'
+import type { MainActionGuardEvaluator } from '../modules/runtime-contributions'
 import type {
   AgentRuntimeApprovalResolveInput,
   AgentRuntimeEventSubscribeInput,
@@ -290,9 +242,6 @@ import type { RemoteChannelRuntime } from '../remote-channel-runtime'
 import type { DiscordBotRuntime } from '../discord-bot-runtime'
 import type { ZulipBotRuntime } from '../zulip-bot-runtime'
 import type { ScheduleRuntime } from '../schedule-runtime'
-import type { PaperRadarWorkerService } from '../services/paper-radar-worker-service'
-import { resolveEvidenceDagEvidencePreview } from '../services/evidence-dag-evidence-preview'
-import { resolveProjectDagEvidencePreview } from '../services/project-dag-evidence-preview'
 import { checkWorkflowCode, type WorkflowRuntime } from '../workflow-runtime'
 import { createAndSwitchGitBranch, getGitBranches, switchGitBranch } from '../services/git-service'
 import {
@@ -313,6 +262,7 @@ import {
   readWorkspaceFile,
   moveWorkspaceEntry,
   renameWorkspaceEntry,
+  suggestWorkspacePdfName,
   resolveWorkspaceFile,
   saveWorkspaceClipboardImage,
   writeWorkspaceFile
@@ -331,18 +281,6 @@ import {
 import { readComputerUseRuntimeStatus } from '../services/computer-use-status'
 import { copyWriteDocumentAsRichText, exportWriteDocument } from '../services/write-export-service'
 import { listGuiSkills } from '../services/skill-service'
-import { WorkspacePreviewHost } from '../services/workspace-preview'
-import { BiologyRoomService } from '../services/biology-room-service'
-import {
-  acknowledgeEvidenceDagSnapshot,
-  enqueueEvidenceDagUpdate,
-  enqueueProjectFresh,
-  ensureEvidenceDagFresh,
-  prioritizeEvidenceDagUpdate,
-  evidenceDagQueueStatus,
-  type EvidenceDagQueueStatus,
-  type EvidenceSnapshot
-} from '../runtime/evidence-dag-feed'
 import type { TerminalPtyBridge } from '../terminal/terminal-pty-ipc'
 
 type GuiUpdaterModule = typeof import('../gui-updater')
@@ -352,8 +290,6 @@ type WorkspaceFileWatchRecord = {
   sender: AppBridgeSender
   path: string
   workspaceRoot: string
-  kind: 'legacy-file' | 'workspace-preview'
-  changeChannel: 'file:workspace-changed' | 'workspacePreview:changed'
   timer: ReturnType<typeof setTimeout> | null
 }
 
@@ -363,18 +299,17 @@ type AgentRuntimeEventStreamRecord = {
   onSenderDestroyed: () => void
 }
 
-type WorkspacePreviewSenderSessionRecord = {
-  sender: AppBridgeSender
-  sessionIds: Set<string>
-  onSenderDestroyed: () => void
-}
-
 export type AppBridgeSender = {
   id: number
   isDestroyed: () => boolean
   send: (channel: string, ...args: unknown[]) => void
   once: (event: 'destroyed', listener: () => void) => unknown
   removeListener: (event: 'destroyed', listener: () => void) => unknown
+}
+
+function visibleContextWindowId(sender: AppBridgeSender): string {
+  const nativeCapture = (sender as { capturePage?: unknown }).capturePage
+  return `${typeof nativeCapture === 'function' ? 'electron' : 'browser'}:${sender.id}`
 }
 
 type AppBridgeInvokeEvent = {
@@ -392,8 +327,17 @@ export type AppBridgeDispatcher = {
 
 type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
+  actionGuardEvaluator: MainActionGuardEvaluator
   getMainWindow: () => BrowserWindow | null
+  isTrustedIpcSender: (event: IpcMainInvokeEvent) => boolean
   applySettingsPatch: (partial: AppSettingsPatch) => Promise<AppSettingsV1>
+  getModelAccessStatus: (settings: AppSettingsV1) => Promise<ModelAccessStatus>
+  traces?: {
+    read: (query?: TraceReadQuery) => Promise<TraceReadResult>
+    summaries: (query?: TraceSummaryQuery) => Promise<TraceSummary[]>
+    export: (options: TraceExportOptions) => Promise<TraceExportResult>
+    clear: () => Promise<TraceClearResult>
+  }
   agentRuntime?: {
     connect: (runtimeId?: AgentRuntimeId) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeId) => Promise<AgentRuntimeCapabilities>
@@ -442,11 +386,7 @@ type RegisterAppIpcHandlersOptions = {
   pollFeishuInstall: (deviceCode: string) => Promise<ConnectPhoneInstallPollResult>
   startWeixinInstallQrcode: (weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallQrResult>
   pollWeixinInstall: (deviceCode: string, weixinBridgeUrl?: string) => Promise<ConnectPhoneInstallPollResult>
-  resolveRuntimeConfigPath: () => string
-  openModelRouterConfigFile: (settings: AppSettingsV1) => Promise<ModelRouterConfigOpenResult>
-  getPaperRadarService?: () => PaperRadarWorkerService | null
   researchCards?: ResearchCardService
-  onRuntimeMcpConfigWritten?: (path: string, content: string) => Promise<void> | void
   showTurnCompleteNotification: (
     payload: TurnCompleteNotificationPayload
   ) => Promise<SystemNotificationResult>
@@ -455,31 +395,6 @@ type RegisterAppIpcHandlersOptions = {
   loadGuiUpdaterModule: () => Promise<GuiUpdaterModule>
   resolveLogDirectory: () => string
   terminalPtyBridge?: TerminalPtyBridge
-  workspacePreviewHost?: Pick<WorkspacePreviewHost,
-    | 'listPlugins'
-    | 'open'
-    | 'observe'
-    | 'describeAsset'
-    | 'readRange'
-    | 'prepareArtifact'
-    | 'readArtifactRange'
-    | 'applyEdit'
-    | 'exportPreview'
-    | 'invokeAction'
-    | 'releaseSession'
-    | 'prepareWatch'
-    | 'createWatchSnapshot'
-  >
-  biologyRoomService?: Pick<BiologyRoomService,
-    | 'create'
-    | 'openOrCreate'
-    | 'load'
-    | 'list'
-    | 'observe'
-    | 'apply'
-    | 'refresh'
-    | 'history'
-  >
   getMainPerformanceSnapshot?: () => unknown
   getScientificSkillsMcpLaunchConfig?: () => ScientificSkillsMcpLaunchConfig
   getScientificPlottingMcpLaunchConfig?: () => ScientificPlottingMcpLaunchConfig
@@ -503,8 +418,6 @@ type RegisterAppIpcHandlersOptions = {
   extractVisualStyleProfile?: (request: VisualStyleExtractRequest) => Promise<VisualStyleExtractResult>
   saveVisualStyleProfile?: (request: VisualStyleSaveProfileRequest) => Promise<VisualStyleSaveProfileResult>
   logError: (category: string, message: string, detail?: unknown) => void
-  ensureEvidenceDagReady?: () => Promise<void>
-  ensureProjectDagReady?: () => Promise<void>
   transcribeSpeech?: (
     settings: AppSettingsV1,
     request: SpeechTranscriptionRequest
@@ -518,618 +431,7 @@ function parseIpcPayload<T>(channel: string, schema: z.ZodType<T>, payload: unkn
   throw new Error(`Invalid payload for ${channel}: ${issue?.message ?? 'Bad request.'}`)
 }
 
-const EVIDENCE_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
-
-function evidenceDagViewConfig(env: Record<string, string | undefined>): {
-  serviceUrl: string
-  apiKey: string
-} {
-  const serviceUrl = evidenceDagServiceUrlFromEnv(env)
-  const apiKey = evidenceDagApiKeyFromEnv(env)
-  if (!serviceUrl || !apiKey) {
-    throw new Error(
-      `Evidence DAG is not ready. The app starts it from Model Router settings; check Model Router status or set ${EVIDENCE_DAG_SERVICE_URL_ENV} and ${EVIDENCE_DAG_API_KEY_ENV} for a manual sidecar.`
-    )
-  }
-  return { serviceUrl, apiKey }
-}
-
-async function assertEvidenceDagServiceReachable(
-  serviceUrl: string,
-  apiKey: string,
-  fetchImpl: typeof fetch | undefined = globalThis.fetch
-): Promise<void> {
-  if (typeof fetchImpl !== 'function') return
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), EVIDENCE_DAG_VIEW_HEALTH_TIMEOUT_MS)
-  try {
-    const response = await fetchImpl(`${serviceUrl}/version`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        authorization: `Bearer ${apiKey}`
-      },
-      signal: controller.signal
-    })
-    if (!response.ok) {
-      throw new Error(`version returned HTTP ${response.status}`)
-    }
-    const body = await response.json().catch(() => null) as { data?: { service?: unknown } } | null
-    if (body?.data?.service !== 'evidence-dag-engine') {
-      throw new Error('unexpected Evidence DAG service response')
-    }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`Evidence DAG service is not reachable at ${serviceUrl}: ${detail}`)
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-async function requestEvidenceDagJson(
-  serviceUrl: string,
-  apiKey: string,
-  path: string,
-  init: RequestInit = {},
-  fetchImpl: typeof fetch | undefined = globalThis.fetch,
-  timeoutMs?: number
-): Promise<unknown> {
-  if (typeof fetchImpl !== 'function') {
-    throw new Error('Evidence DAG fetch API is unavailable.')
-  }
-  const headers = new Headers(init.headers)
-  headers.set('authorization', `Bearer ${apiKey}`)
-  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json')
-  const controller = timeoutMs ? new AbortController() : undefined
-  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : undefined
-  let response: Response
-  try {
-    response = await fetchImpl(`${serviceUrl}${path}`, {
-      ...init,
-      headers,
-      ...(controller ? { signal: controller.signal } : {})
-    })
-  } catch (error) {
-    if (controller?.signal.aborted) {
-      throw new Error(`Evidence DAG request timed out after ${timeoutMs} ms.`)
-    }
-    throw error
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-  const body = await response.json().catch(() => null) as {
-    ok?: boolean
-    data?: unknown
-    error?: { message?: unknown }
-  } | null
-  if (!response.ok || body?.ok !== true) {
-    const message = typeof body?.error?.message === 'string'
-      ? body.error.message
-      : `Evidence DAG returned HTTP ${response.status}`
-    throw new Error(message)
-  }
-  return body.data
-}
-
-function evidenceDagBackfillItems(detail: AgentRuntimeThreadDetail): AgentRuntimeItem[] {
-  if (detail.items?.length) return [...detail.items]
-  return (detail.turns ?? []).flatMap((turn) => turn.items ?? [])
-}
-
-async function evidenceDagThreadUpdateSource(
-  input: { runtimeId: AgentRuntimeId; threadId: string },
-  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-): Promise<{ detail: AgentRuntimeThreadDetail; items: AgentRuntimeItem[] }> {
-  if (!agentRuntime) {
-    throw new Error('Agent runtime is required to build the current thread Evidence DAG.')
-  }
-  const detail = await agentRuntime.readThread({
-    runtimeId: input.runtimeId,
-    threadId: input.threadId
-  })
-  const items = evidenceDagBackfillItems(detail)
-  return { detail, items }
-}
-
-async function evidenceDagThreadWorkspaceRoot(
-  input: { runtimeId: AgentRuntimeId; threadId: string },
-  detail: AgentRuntimeThreadDetail,
-  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-): Promise<string | undefined> {
-  const detailWorkspace = detail.workspace?.trim()
-  if (detailWorkspace) return detailWorkspace
-  if (!agentRuntime) return undefined
-  const threads = await agentRuntime.listThreads({
-    limit: 1_000,
-    includeArchived: true,
-    includeSide: true
-  })
-  return threads.find((thread) =>
-    thread.runtimeId === input.runtimeId && thread.id === input.threadId
-  )?.workspace?.trim() || undefined
-}
-
-function projectDagWorkspaceScopeKey(value: string | undefined): string {
-  const normalized = (value ?? '').trim().replace(/[\\/]+$/, '').replace(/\\/g, '/')
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized
-}
-
-async function projectDagSessionScopeForWorkspace(
-  input: { workspaceRoot?: string; projectRoot?: string; sessions?: string[] },
-  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-): Promise<string[] | undefined> {
-  if (input.sessions) return [...new Set(input.sessions.map((session) => session.trim()).filter(Boolean))].sort()
-  const workspaceRoot = input.projectRoot?.trim() || input.workspaceRoot?.trim()
-  if (!workspaceRoot) return undefined
-  if (!agentRuntime) {
-    throw new Error('Project DAG requires agent runtime session scope for the current project.')
-  }
-  const wanted = projectDagWorkspaceScopeKey(workspaceRoot)
-  if (!wanted) return undefined
-  const threads = await agentRuntime.listThreads({
-    limit: 1_000,
-    includeArchived: false,
-    includeSide: true
-  })
-  const scoped = threads
-    .filter((thread) => projectDagWorkspaceScopeKey(thread.workspace) === wanted)
-    .map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id))
-  return [...new Set(scoped)].sort()
-}
-
-async function projectDagRuntimeThreadsForScope(
-  input: {
-    workspaceRoot?: string
-    projectRoot?: string
-    sessions?: string[]
-    scope?: 'all' | string[]
-    excludedSessions?: string[]
-    isolatedSessions?: string[]
-  },
-  agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-): Promise<AgentRuntimeThread[]> {
-  if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
-  const sessionScope = await projectDagSessionScopeForWorkspace(input, agentRuntime)
-  const requested = input.scope === 'all'
-    ? sessionScope
-    : Array.isArray(input.scope)
-      ? input.scope
-      : sessionScope
-  const wanted = requested ? new Set(requested) : undefined
-  const threads = await agentRuntime.listThreads({ limit: 1_000, includeArchived: false, includeSide: true })
-  return threads.filter((thread) => !wanted || wanted.has(evidenceDagThreadId(thread.runtimeId, thread.id)))
-}
-
 type WriteExportIpcPayload = z.infer<typeof writeExportPayloadSchema>
-
-type EvidenceDagAuditForGate = {
-  riskDigest?: unknown
-  auditCompletedAt?: string
-  auditUnavailableReason?: string
-}
-
-function objectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null
-}
-
-function optionalStringField(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key]
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined
-}
-
-function finiteNumberField(record: Record<string, unknown>, key: string): number | undefined {
-  const value = record[key]
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
-}
-
-function stringArrayField(record: Record<string, unknown>, key: string): string[] {
-  const value = record[key]
-  return Array.isArray(value)
-    ? [...new Set(value
-        .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
-        .map((item) => item.trim()))].sort()
-    : []
-}
-
-function snapshotDigest(value: unknown): string | undefined {
-  const record = objectRecord(value)
-  return record ? optionalStringField(record, 'digest') : undefined
-}
-
-function dagFreshness(value: unknown): DagPanelStatus['freshness'] | undefined {
-  if (value === 'fresh' || value === 'dirty' || value === 'queued' || value === 'updating' ||
-      value === 'failed' || value === 'paused' || value === 'degraded') return value
-  if (value === 'running') return 'updating'
-  if (value === 'pending') return 'queued'
-  if (value === 'error' || value === 'update_failed') return 'failed'
-  if (value === 'empty') return 'dirty'
-  return undefined
-}
-
-function dagPanelStatus(value: unknown, local?: EvidenceDagQueueStatus): DagPanelStatus {
-  const record = objectRecord(value) ?? {}
-  const snapshot = objectRecord(record.snapshot ?? record.committedSnapshot)
-  const workerPending = finiteNumberField(record, 'pending') ?? finiteNumberField(record, 'pendingCount') ?? 0
-  const localFreshness = local
-    ? dagFreshness(local.state)
-    : undefined
-  const freshness = localFreshness && localFreshness !== 'fresh'
-    ? localFreshness
-    : dagFreshness(record.state) ?? dagFreshness(record.status) ?? dagFreshness(record.freshness) ??
-      (workerPending > 0 ? 'queued' : 'fresh')
-  const latestSnapshotDigest = snapshotDigest(snapshot)
-  const auditTargetDigest = optionalStringField(record, 'auditTargetDigest')
-  const latestJob = Array.isArray(record.jobs)
-    ? objectRecord(record.jobs.find((job) => Boolean(objectRecord(job)?.last_error)))
-    : null
-  const lastError = local?.lastError ?? optionalStringField(record, 'error') ??
-    (latestJob ? optionalStringField(latestJob, 'last_error') : undefined)
-  const autonomy = objectRecord(record.autonomy)
-  const autonomyMode = record.autonomyMode ?? autonomy?.autonomyMode ?? autonomy?.autonomy_mode
-  const evidenceVector = Array.isArray(snapshot?.evidenceVector) ? snapshot.evidenceVector : []
-  const includedSessions = evidenceVector.flatMap((entry) => {
-    const item = objectRecord(entry)
-    const threadId = item ? optionalStringField(item, 'threadId') : undefined
-    return threadId ? [threadId] : []
-  })
-  const excludedSessions = snapshot ? stringArrayField(snapshot, 'excludedSessions') : []
-  const isolatedSessions = snapshot ? stringArrayField(snapshot, 'isolatedSessions') : []
-  const staging = objectRecord(record.staging)
-  const graphState = optionalStringField(record, 'graphState') ?? optionalStringField(staging ?? {}, 'status')
-  const stagedCount = finiteNumberField(staging ?? {}, 'newTraceCount') ?? 0
-  const progressiveView = staging || graphState ? {
-    committed: {
-      nodeCount: finiteNumberField(record, 'nodeCount') ?? 0,
-      edgeCount: finiteNumberField(record, 'edgeCount') ?? 0,
-      ...(latestSnapshotDigest ? { snapshotDigest: latestSnapshotDigest } : {})
-    },
-    ...(staging ? {
-      staging: {
-        overlayId: optionalStringField(staging, 'batchDigest'),
-        collectedCount: graphState === 'staging' ? stagedCount : 0,
-        extractingCount: graphState === 'updating' ? stagedCount : 0,
-        pendingVerificationCount: graphState === 'provisional' ? stagedCount : 0,
-        temporaryEdgeCount: finiteNumberField(staging, 'temporaryEdgeCount') ?? 0,
-        updatedAt: optionalStringField(staging, 'updatedAt')
-      }
-    } : {})
-  } : undefined
-  const localProgress = local && local.state !== 'fresh'
-    ? {
-        stage: local.state === 'failed'
-          ? 'retrying' as const
-          : local.phase === 'project'
-            ? 'project' as const
-            : 'evidence' as const,
-        completedItems: local.phase === 'project' ? 1 : 0,
-        totalItems: local.phase === 'project' ? 2 : 1,
-        ...(local.updatedAt ? { updatedAt: local.updatedAt } : {}),
-        ...(local.attempts ? { attempt: local.attempts } : {})
-      }
-    : undefined
-  return {
-    freshness,
-    pendingCount: Math.max(workerPending, local?.pendingCount ?? 0),
-    ...(latestSnapshotDigest ? { latestSnapshotDigest, viewedSnapshotDigest: latestSnapshotDigest } : {}),
-    ...(local?.desiredWatermark || optionalStringField(record, 'desiredWatermark') ? {
-      desiredWatermark: local?.desiredWatermark ?? optionalStringField(record, 'desiredWatermark')
-    } : {}),
-    ...(local?.committedWatermark || optionalStringField(snapshot ?? {}, 'inputWatermark') ? {
-      committedWatermark: local?.committedWatermark ?? optionalStringField(snapshot ?? {}, 'inputWatermark')
-    } : {}),
-    ...(auditTargetDigest ? { auditTargetDigest } : {}),
-    ...(typeof record.auditStale === 'boolean' ? { auditStale: record.auditStale } : {}),
-    ...(finiteNumberField(record, 'attentionCount') !== undefined ? {
-      attentionCount: finiteNumberField(record, 'attentionCount')
-    } : {}),
-    ...(finiteNumberField(record, 'missingArtifactCount') !== undefined ? {
-      missingArtifactCount: finiteNumberField(record, 'missingArtifactCount')
-    } : {}),
-    ...(autonomyMode === 'autonomous' || autonomyMode === 'checkpointed' || autonomyMode === 'supervised'
-      ? { autonomyMode }
-      : {}),
-    ...(lastError ? { lastError } : {}),
-    ...(optionalStringField(record, 'degradedReason') ? {
-      degradedReason: optionalStringField(record, 'degradedReason')
-    } : {}),
-    ...(local?.nextAttemptAt ? { nextAttemptAt: local.nextAttemptAt } : {}),
-    ...(localProgress ? { progress: localProgress } : {}),
-    ...(progressiveView ? { progressiveView } : {}),
-    ...((includedSessions.length || excludedSessions.length || isolatedSessions.length) ? {
-      scope: { includedSessions, excludedSessions, isolatedSessions }
-    } : {})
-  }
-}
-
-function projectDagPanelStatus(
-  value: unknown,
-  evidenceStatuses: EvidenceDagQueueStatus[] = [],
-  sessionCount = evidenceStatuses.length
-): DagPanelStatus {
-  const status = dagPanelStatus(value)
-  const activeEvidence = evidenceStatuses.filter((item) =>
-    item.state === 'queued' || item.state === 'updating' || item.state === 'failed' || item.pendingCount > 0)
-  const degradedEvidence = evidenceStatuses.find((item) => item.state === 'degraded')
-  const totalItems = Math.max(sessionCount, evidenceStatuses.length)
-  if (activeEvidence.length > 0) {
-    const failed = activeEvidence.find((item) => item.state === 'failed' || item.state === 'degraded')
-    const updating = activeEvidence.some((item) => item.state === 'updating')
-    const projectPhase = activeEvidence.some((item) => item.phase === 'project')
-    const completedItems = evidenceStatuses.filter((item) =>
-      item.state === 'fresh' || item.phase === 'project').length
-    const updatedAt = activeEvidence
-      .map((item) => item.updatedAt)
-      .filter((item): item is string => Boolean(item))
-      .sort()
-      .at(-1)
-    return {
-      ...status,
-      freshness: failed ? 'failed' : updating ? 'updating' : 'queued',
-      pendingCount: Math.max(status.pendingCount, activeEvidence.length),
-      ...(failed?.lastError ? { lastError: failed.lastError } : {}),
-      ...(failed?.nextAttemptAt ? { nextAttemptAt: failed.nextAttemptAt } : {}),
-      progress: {
-        stage: failed ? 'retrying' : projectPhase ? 'project' : 'evidence',
-        completedItems,
-        totalItems,
-        ...(updatedAt ? { updatedAt } : {}),
-        ...(failed?.attempts ? { attempt: failed.attempts } : {})
-      }
-    }
-  }
-
-  const record = objectRecord(value) ?? {}
-  const jobs = Array.isArray(record.jobs) ? record.jobs.map(objectRecord).filter(Boolean) : []
-  const activeJob = jobs.find((job) => {
-    const jobStatus = optionalStringField(job!, 'status')
-    return jobStatus === 'queued' || jobStatus === 'running' ||
-      jobStatus === 'failed' || jobStatus === 'interrupted'
-  })
-  if (!activeJob) {
-    return degradedEvidence
-      ? {
-          ...status,
-          freshness: status.freshness === 'fresh' ? 'degraded' : status.freshness,
-          ...(degradedEvidence.lastError ? {
-            lastError: degradedEvidence.lastError,
-            degradedReason: degradedEvidence.lastError
-          } : {})
-        }
-      : status
-  }
-  const jobStatus = optionalStringField(activeJob, 'status')
-  const attempts = finiteNumberField(activeJob, 'attempts')
-  const updatedAt = optionalStringField(activeJob, 'updated_at') ?? optionalStringField(activeJob, 'updatedAt')
-  return {
-    ...status,
-    progress: {
-      stage: jobStatus === 'failed' || jobStatus === 'interrupted'
-        ? 'retrying'
-        : jobStatus === 'running'
-          ? 'compile'
-          : 'project',
-      completedItems: totalItems,
-      totalItems,
-      ...(updatedAt ? { updatedAt } : {}),
-      ...(attempts ? { attempt: attempts } : {})
-    }
-  }
-}
-
-function projectDagCommittedSessions(value: unknown): string[] {
-  const record = objectRecord(value)
-  const snapshots = [
-    objectRecord(record?.committedSnapshot ?? record?.snapshot),
-    objectRecord(record?.previousCommittedSnapshot)
-  ].filter((snapshot): snapshot is Record<string, unknown> => Boolean(snapshot))
-  const included = snapshots.flatMap((snapshot) =>
-    Array.isArray(snapshot.evidenceVector) ? snapshot.evidenceVector.flatMap((entry) => {
-        const item = objectRecord(entry)
-        const threadId = item ? optionalStringField(item, 'threadId') : undefined
-        return threadId ? [threadId] : []
-      }) : [])
-  return [...new Set([
-    ...included,
-    ...snapshots.flatMap((snapshot) => stringArrayField(snapshot, 'excludedSessions')),
-    ...snapshots.flatMap((snapshot) => stringArrayField(snapshot, 'isolatedSessions'))
-  ])].sort()
-}
-
-function projectDagCommittedEvidenceDigests(value: unknown): Map<string, string> {
-  const record = objectRecord(value)
-  const snapshots = [
-    objectRecord(record?.previousCommittedSnapshot),
-    objectRecord(record?.committedSnapshot ?? record?.snapshot)
-  ].filter((snapshot): snapshot is Record<string, unknown> => Boolean(snapshot))
-  const evidenceVector = snapshots.flatMap((snapshot) =>
-    Array.isArray(snapshot.evidenceVector) ? snapshot.evidenceVector : [])
-  return new Map(evidenceVector.flatMap((entry) => {
-    const item = objectRecord(entry)
-    const threadId = item ? optionalStringField(item, 'threadId') : undefined
-    const digest = item ? optionalStringField(item, 'digest') : undefined
-    return threadId && digest ? [[threadId, digest] as const] : []
-  }))
-}
-
-function reusableEvidenceSnapshot(
-  workerStatus: unknown,
-  expectedThreadId: string,
-  threadUpdatedAt?: string,
-  desiredWatermark?: string,
-  committedDigest?: string
-): EvidenceSnapshot | undefined {
-  const status = objectRecord(workerStatus)
-  const snapshot = objectRecord(status?.snapshot)
-  if (!snapshot || optionalStringField(snapshot, 'threadId') !== expectedThreadId ||
-      optionalStringField(snapshot, 'status') !== 'committed') return undefined
-  const createdAt = optionalStringField(snapshot, 'createdAt')
-  if (!createdAt) return undefined
-  const version = finiteNumberField(snapshot, 'version')
-  const digest = optionalStringField(snapshot, 'digest')
-  const inputWatermark = optionalStringField(snapshot, 'inputWatermark')
-  const schemaVersion = optionalStringField(snapshot, 'schemaVersion')
-  const extractorVersion = optionalStringField(snapshot, 'extractorVersion')
-  const verifierVersion = optionalStringField(snapshot, 'verifierVersion')
-  if (version === undefined || !digest || !inputWatermark || !schemaVersion ||
-      !extractorVersion || !verifierVersion) return undefined
-  const snapshotTime = Date.parse(createdAt)
-  const threadTime = threadUpdatedAt ? Date.parse(threadUpdatedAt) : Number.NaN
-  const coversQueuedTarget = desiredWatermark === inputWatermark
-  const matchesCommittedProject = committedDigest === digest
-  if (!coversQueuedTarget && !matchesCommittedProject && (
-    !Number.isFinite(snapshotTime) || !Number.isFinite(threadTime) || snapshotTime < threadTime
-  )) return undefined
-  return {
-    threadId: expectedThreadId,
-    version,
-    digest,
-    inputWatermark,
-    schemaVersion,
-    extractorVersion,
-    verifierVersion,
-    artifactDigests: stringArrayField(snapshot, 'artifactDigests'),
-    createdAt,
-    status: 'committed'
-  }
-}
-
-function projectDagStatusQuery(input: {
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-}): string {
-  const query = new URLSearchParams()
-  if (input.workspaceRoot) query.set('workspaceRoot', input.workspaceRoot)
-  if (input.projectRoot) query.set('projectRoot', input.projectRoot)
-  if (input.project) query.set('project', input.project)
-  const serialized = query.toString()
-  return serialized ? `?${serialized}` : ''
-}
-
-function projectDagUpdateIdentity(input: {
-  workspaceRoot?: string
-  projectRoot?: string
-  project?: string
-  sessions?: string[]
-  scope?: 'all' | string[]
-}): {
-  projectKey: string
-  workspaceRoot?: string
-  projectRoot?: string
-} {
-  const workspaceRoot = input.workspaceRoot?.trim() || input.projectRoot?.trim()
-  const projectRoot = input.projectRoot?.trim() || workspaceRoot
-  const projectKey = workspaceRoot || projectRoot || input.project?.trim()
-  const hasExplicitSessionScope = Boolean(
-    input.sessions?.some((session) => session.trim()) ||
-    (Array.isArray(input.scope) && input.scope.some((session) => session.trim()))
-  )
-  if (!projectKey) {
-    throw new Error('Project DAG update requires workspaceRoot, projectRoot, or project.')
-  }
-  if (!workspaceRoot && !hasExplicitSessionScope) {
-    throw new Error(
-      'Project DAG update requires workspaceRoot/projectRoot unless an explicit session scope is provided.'
-    )
-  }
-  return {
-    projectKey,
-    ...(workspaceRoot ? { workspaceRoot } : {}),
-    ...(projectRoot ? { projectRoot } : {})
-  }
-}
-
-function evidenceDagAuditRunForGate(audit: unknown): EvidenceDagAuditForGate {
-  const record = objectRecord(audit)
-  if (!record) {
-    return { auditUnavailableReason: 'Evidence DAG audit response was empty.' }
-  }
-  const riskDigest = record.risk_digest ?? record.riskDigest
-  if (!riskDigest) {
-    return { auditUnavailableReason: 'Evidence DAG audit response did not include risk_digest.' }
-  }
-  return {
-    riskDigest,
-    auditCompletedAt:
-      optionalStringField(record, 'completed_at') ??
-      optionalStringField(record, 'completedAt')
-  }
-}
-
-async function collectWriteExportEvidenceDagAudit(
-  input: WriteExportIpcPayload,
-  options: {
-    agentRuntime?: RegisterAppIpcHandlersOptions['agentRuntime']
-    ensureEvidenceDagReady?: RegisterAppIpcHandlersOptions['ensureEvidenceDagReady']
-  }
-): Promise<EvidenceDagAuditForGate> {
-  const runtimeId = input.runtimeId
-  const threadId = input.threadId?.trim()
-  if (!runtimeId || !threadId) {
-    return { auditUnavailableReason: 'write:export did not include runtimeId and threadId.' }
-  }
-  if (!options.agentRuntime) {
-    return { auditUnavailableReason: 'Agent runtime is required to build the current thread Evidence DAG.' }
-  }
-
-  try {
-    await options.ensureEvidenceDagReady?.()
-    const config = evidenceDagViewConfig(process.env)
-    await assertEvidenceDagServiceReachable(config.serviceUrl, config.apiKey)
-    const detail = await options.agentRuntime.readThread({ runtimeId, threadId })
-    const includedSessions = input.workspaceRoot
-      ? await projectDagSessionScopeForWorkspace({ workspaceRoot: input.workspaceRoot }, options.agentRuntime)
-      : undefined
-    const ensured = await ensureEvidenceDagFresh({
-      runtimeId,
-      threadId,
-      items: evidenceDagBackfillItems(detail),
-      targetWatermark: String(detail.latestSeq),
-      reason: 'manual_immediate',
-      priority: 'immediate',
-      projectContext: input.workspaceRoot ? {
-        projectKey: input.workspaceRoot,
-        workspaceRoot: input.workspaceRoot,
-        projectRoot: input.workspaceRoot,
-        includedSessions
-      } : undefined
-    })
-    const audit = await requestEvidenceDagJson(
-      config.serviceUrl,
-      config.apiKey,
-      '/audits',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          threadId: ensured.snapshot.threadId,
-          targetDigest: ensured.snapshot.digest,
-          level: 'L0',
-          trigger: 'manual',
-          threshold: 0.7
-        })
-      }
-    )
-    return evidenceDagAuditRunForGate(audit)
-  } catch (error) {
-    return {
-      auditUnavailableReason: error instanceof Error ? error.message : String(error)
-    }
-  }
-}
-
-function withWriteExportEvidenceDagContext(
-  metadata: EvidenceDagGateMetadata,
-  input: WriteExportIpcPayload
-): EvidenceDagGateMetadata & { runtimeId?: AgentRuntimeId; threadId?: string } {
-  return {
-    ...metadata,
-    ...(input.runtimeId ? { runtimeId: input.runtimeId } : {}),
-    ...(input.threadId ? { threadId: input.threadId } : {})
-  }
-}
 
 function writeExportServicePayload(input: WriteExportIpcPayload) {
   return {
@@ -1137,109 +439,6 @@ function writeExportServicePayload(input: WriteExportIpcPayload) {
     workspaceRoot: input.workspaceRoot,
     format: input.format,
     content: input.content
-  }
-}
-
-const PROJECT_DAG_VIEW_HEALTH_TIMEOUT_MS = 1500
-
-function projectDagViewConfig(env: Record<string, string | undefined>): {
-  serviceUrl: string
-  apiKey: string
-} {
-  const serviceUrl = projectDagServiceUrlFromEnv(env) || DEFAULT_PROJECT_DAG_SERVICE_URL
-  const apiKey = projectDagApiKeyFromEnv(env)
-  if (!apiKey) {
-    throw new Error(
-      'Project DAG is not ready. The app starts it from Model Router settings; check Model Router status.'
-    )
-  }
-  return { serviceUrl, apiKey }
-}
-
-async function requestProjectDagJson(
-  serviceUrl: string,
-  apiKey: string,
-  path: string,
-  init: RequestInit = {},
-  fetchImpl: typeof fetch | undefined = globalThis.fetch
-): Promise<unknown> {
-  if (typeof fetchImpl !== 'function') {
-    throw new Error('Project DAG fetch API is unavailable.')
-  }
-  const headers = new Headers(init.headers)
-  headers.set('authorization', `Bearer ${apiKey}`)
-  if (init.body && !headers.has('content-type')) headers.set('content-type', 'application/json')
-  const response = await fetchImpl(`${serviceUrl}${path}`, {
-    ...init,
-    headers
-  })
-  const body = await response.json().catch(() => null) as {
-    ok?: boolean
-    data?: unknown
-    error?: { message?: unknown }
-  } | null
-  if (!response.ok || body?.ok !== true) {
-    const message = typeof body?.error?.message === 'string'
-      ? body.error.message
-      : `Project DAG returned HTTP ${response.status}`
-    throw new Error(message)
-  }
-  return body.data
-}
-
-async function assertProjectDagServiceReachable(
-  serviceUrl: string,
-  apiKey: string,
-  fetchImpl: typeof fetch | undefined = globalThis.fetch
-): Promise<void> {
-  if (typeof fetchImpl !== 'function') return
-
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), PROJECT_DAG_VIEW_HEALTH_TIMEOUT_MS)
-  try {
-    const response = await fetchImpl(`${serviceUrl}/version`, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: {
-        authorization: `Bearer ${apiKey}`
-      },
-      signal: controller.signal
-    })
-    if (!response.ok) {
-      throw new Error(`version returned HTTP ${response.status}`)
-    }
-    const body = await response.json().catch(() => null) as {
-      data?: { service?: unknown; version?: unknown }
-    } | null
-    if (body?.data?.service !== 'project-dag-engine') {
-      throw new Error('unexpected Project DAG service response')
-    }
-    if (body.data.version !== PROJECT_DAG_SERVICE_VERSION) {
-      throw new Error(
-        `stale Project DAG ${String(body.data.version ?? 'unknown')} ` +
-        `(requires ${PROJECT_DAG_SERVICE_VERSION}); restart SciForge`
-      )
-    }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error)
-    throw new Error(`Project DAG service is not reachable at ${serviceUrl}: ${detail}`)
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
-function validateMcpConfigContent(content: string): void {
-  const trimmed = content.trim()
-  if (!trimmed) return
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(trimmed) as unknown
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    throw new Error(`MCP config must be JSON: ${message}`)
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('MCP config must be a JSON object.')
   }
 }
 
@@ -1305,19 +504,14 @@ function runDesktopCommand(
   }
 }
 
-type NativeFileDragSender = AppBridgeSender & {
-  startDrag: (item: { file: string; icon: NativeImage }) => void
-}
-
-function isNativeFileDragSender(sender: AppBridgeSender): sender is NativeFileDragSender {
-  return typeof (sender as { startDrag?: unknown }).startDrag === 'function'
-}
-
 export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): AppBridgeDispatcher {
   const {
     store,
+    actionGuardEvaluator,
     getMainWindow,
     applySettingsPatch,
+    getModelAccessStatus,
+    traces,
     agentRuntime,
     fetchUpstreamModels,
     getRemoteChannelRuntime,
@@ -1330,17 +524,12 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     pollFeishuInstall,
     startWeixinInstallQrcode,
     pollWeixinInstall,
-    resolveRuntimeConfigPath,
-    openModelRouterConfigFile,
-    onRuntimeMcpConfigWritten,
     showTurnCompleteNotification,
     getAppVersion,
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
-    workspacePreviewHost: providedWorkspacePreviewHost,
-    biologyRoomService: providedBiologyRoomService,
     getMainPerformanceSnapshot,
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
@@ -1362,23 +551,22 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     extractVisualStyleProfile: extractVisualStyleProfileHandler = extractVisualStyleProfile,
     saveVisualStyleProfile: saveVisualStyleProfileOverride,
     logError,
-    ensureEvidenceDagReady,
-    ensureProjectDagReady,
     transcribeSpeech = requestSpeechTranscription
   } = options
-  const workspacePreviewHost = providedWorkspacePreviewHost ?? new WorkspacePreviewHost({
-    loadSettings: () => store.load()
-  })
-  const biologyRoomService = providedBiologyRoomService ?? new BiologyRoomService()
   const workspaceFileWatchers = new Map<string, WorkspaceFileWatchRecord>()
   const agentRuntimeEventStreams = new Map<string, AgentRuntimeEventStreamRecord>()
-  const workspacePreviewSenderSessions = new Map<number, WorkspacePreviewSenderSessionRecord>()
-  const workspacePreviewSessionOwnerIds = new Map<string, number>()
   const invokeHandlers = new Map<string, AppBridgeInvokeHandler>()
+  const requireTraceStore = (): NonNullable<RegisterAppIpcHandlersOptions['traces']> => {
+    if (!traces) throw new Error('Full trace storage is not initialized.')
+    return traces
+  }
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
     invokeHandlers.set(channel, handler)
     ipcMain.handle(channel, async (event, payload: unknown) => {
+      if (!options.isTrustedIpcSender(event)) {
+        throw new Error('Rejected IPC invocation from an untrusted renderer frame.')
+      }
       const startedAt = mainPerformanceMonitor.now()
       mainPerformanceMonitor.count('main.ipc.invoke')
       mainPerformanceMonitor.count(`main.ipc.invoke.${channel}`)
@@ -1406,6 +594,33 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       })
     }
   }
+
+  handleInvoke('traces:read', async (_, payload: unknown) =>
+    requireTraceStore().read(parseIpcPayload('traces:read', traceReadPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('traces:summaries', async (_, payload: unknown) =>
+    requireTraceStore().summaries(parseIpcPayload('traces:summaries', traceSummariesPayloadSchema, payload ?? {}))
+  )
+  handleInvoke('traces:export', async (_, payload: unknown) => {
+    const request = parseIpcPayload('traces:export', traceExportPayloadSchema, payload ?? {})
+    const date = new Date().toISOString().slice(0, 10)
+    const saveOptions = {
+      title: 'Export SciForge full traces',
+      defaultPath: `sciforge-trace-${date}.jsonl`,
+      filters: [{ name: 'SciForge Full Trace', extensions: ['jsonl'] }]
+    }
+    const mainWindow = getMainWindow()
+    const selection = mainWindow
+      ? await dialog.showSaveDialog(mainWindow, saveOptions)
+      : await dialog.showSaveDialog(saveOptions)
+    if (selection.canceled || !selection.filePath) return { canceled: true as const }
+    const result = await requireTraceStore().export({
+      destination: selection.filePath,
+      ...(request.traceIds?.length ? { traceIds: request.traceIds } : {})
+    })
+    return { canceled: false as const, ...result }
+  })
+  handleInvoke('traces:clear', async () => requireTraceStore().clear())
 
   const saveVisualStyleProfileHandler = saveVisualStyleProfileOverride ?? (async (
     request: VisualStyleSaveProfileRequest
@@ -1468,102 +683,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   }
 
-  const cleanupWorkspacePreviewSenderSessionRecord = (
-    senderId: number,
-    record: WorkspacePreviewSenderSessionRecord
-  ): void => {
-    if (workspacePreviewSenderSessions.get(senderId) !== record) return
-    record.sender.removeListener('destroyed', record.onSenderDestroyed)
-    workspacePreviewSenderSessions.delete(senderId)
-  }
-
-  const cleanupWorkspacePreviewSessionOwnership = (sessionId: string): void => {
-    const senderId = workspacePreviewSessionOwnerIds.get(sessionId)
-    if (senderId === undefined) return
-    workspacePreviewSessionOwnerIds.delete(sessionId)
-    const record = workspacePreviewSenderSessions.get(senderId)
-    if (!record) return
-    record.sessionIds.delete(sessionId)
-    if (record.sessionIds.size === 0) {
-      cleanupWorkspacePreviewSenderSessionRecord(senderId, record)
-    }
-  }
-
-  const releaseWorkspacePreviewSession = (sessionId: string): boolean => {
-    const released = workspacePreviewHost.releaseSession(sessionId)
-    if (released) cleanupWorkspacePreviewSessionOwnership(sessionId)
-    return released
-  }
-
-  const disposeWorkspacePreviewSessionsForSender = (sender: AppBridgeSender): void => {
-    const record = workspacePreviewSenderSessions.get(sender.id)
-    if (!record) return
-    for (const sessionId of [...record.sessionIds]) {
-      workspacePreviewHost.releaseSession(sessionId)
-      workspacePreviewSessionOwnerIds.delete(sessionId)
-    }
-    record.sessionIds.clear()
-    cleanupWorkspacePreviewSenderSessionRecord(sender.id, record)
-  }
-
-  const trackWorkspacePreviewSessionForSender = (sender: AppBridgeSender, sessionId: string): void => {
-    cleanupWorkspacePreviewSessionOwnership(sessionId)
-    if (sender.isDestroyed()) {
-      workspacePreviewHost.releaseSession(sessionId)
-      return
-    }
-    let record = workspacePreviewSenderSessions.get(sender.id)
-    if (!record) {
-      const onSenderDestroyed = () => disposeWorkspacePreviewSessionsForSender(sender)
-      record = {
-        sender,
-        sessionIds: new Set<string>(),
-        onSenderDestroyed
-      }
-      workspacePreviewSenderSessions.set(sender.id, record)
-      sender.once('destroyed', onSenderDestroyed)
-    }
-    record.sessionIds.add(sessionId)
-    workspacePreviewSessionOwnerIds.set(sessionId, sender.id)
-  }
-
   const emitWorkspaceFileChange = async (watchId: string): Promise<void> => {
     const record = workspaceFileWatchers.get(watchId)
     if (!record) return
     const changedAt = new Date().toISOString()
     try {
-      if (record.kind === 'workspace-preview') {
-        const result = await workspacePreviewHost.createWatchSnapshot({
-          path: record.path,
-          workspaceRoot: record.workspaceRoot
-        })
-        const latest = workspaceFileWatchers.get(watchId)
-        if (!latest || latest.sender.isDestroyed()) return
-        if (result.ok) {
-          latest.sender.send(latest.changeChannel, {
-            ok: true,
-            watchId,
-            workspaceRoot: result.workspaceRoot,
-            path: result.path,
-            content: result.content,
-            size: result.size,
-            truncated: result.truncated,
-            mtimeMs: result.mtimeMs,
-            changedAt
-          })
-          return
-        }
-        latest.sender.send(latest.changeChannel, {
-          ok: false,
-          watchId,
-          workspaceRoot: latest.workspaceRoot,
-          path: latest.path,
-          message: result.message,
-          changedAt
-        })
-        return
-      }
-
       const result = await readWorkspaceFile({
         path: record.path,
         workspaceRoot: record.workspaceRoot
@@ -1571,7 +695,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
       if (result.ok) {
-        latest.sender.send(latest.changeChannel, {
+        latest.sender.send('file:workspace-changed', {
           ok: true,
           watchId,
           workspaceRoot: latest.workspaceRoot,
@@ -1583,7 +707,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         })
         return
       }
-      latest.sender.send(latest.changeChannel, {
+      latest.sender.send('file:workspace-changed', {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -1594,7 +718,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     } catch (error) {
       const latest = workspaceFileWatchers.get(watchId)
       if (!latest || latest.sender.isDestroyed()) return
-      latest.sender.send(latest.changeChannel, {
+      latest.sender.send('file:workspace-changed', {
         ok: false,
         watchId,
         workspaceRoot: latest.workspaceRoot,
@@ -1618,6 +742,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   }
 
   handleInvoke('settings:get', async () => store.load())
+  handleInvoke('modelAccess:status', async () => getModelAccessStatus(await store.load()))
   handleInvoke('settings:set', async (_, partial: unknown) =>
     applySettingsPatch(
       parseIpcPayload('settings:set', settingsPatchSchema, partial) as AppSettingsPatch
@@ -1672,14 +797,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       : { ok: false, message: 'Renderer performance monitor is not available.', mainSnapshot }
   })
 
-  const requirePaperRadarService = (): PaperRadarWorkerService => {
-    const service = options.getPaperRadarService?.()
-    if (!service) {
-      throw new Error('Paper Radar is not available in this build.')
-    }
-    return service
-  }
-
   const requireResearchCardService = (): ResearchCardService => {
     if (!options.researchCards) {
       throw new Error('Research card service is not initialized.')
@@ -1708,61 +825,11 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     )
   )
 
-  const paperRadarRequest = async <T>(request: () => Promise<PaperRadarApiResult<T>>): Promise<PaperRadarApiResult<T>> => {
-    try {
-      return await request()
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
-    }
-  }
-
-  handleInvoke('paperRadar:status', async () => {
-    try {
-      return await requirePaperRadarService().status()
-    } catch (error) {
-      return { ok: false, message: error instanceof Error ? error.message : String(error) }
-    }
-  })
-  handleInvoke('paperRadar:sync-arxiv', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-arxiv', paperRadarArxivSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncArxiv(input))
-  })
-  handleInvoke('paperRadar:sync-biorxiv', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-biorxiv', paperRadarBiorxivSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncBiorxiv(input))
-  })
-  handleInvoke('paperRadar:sync-profile', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:sync-profile', paperRadarProfileSyncPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().syncProfile(input))
-  })
-  handleInvoke('paperRadar:profiles:list', async () =>
-    paperRadarRequest(() => requirePaperRadarService().listProfiles())
-  )
-  handleInvoke('paperRadar:profiles:save', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:profiles:save', paperRadarProfilePayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().saveProfile(input))
-  })
-  handleInvoke('paperRadar:review', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:review', paperRadarReviewPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().review(input))
-  })
-  handleInvoke('paperRadar:search', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:search', paperRadarSearchPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().search(input))
-  })
-  handleInvoke('paperRadar:rank', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:rank', paperRadarRankPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().rank(input))
-  })
-  handleInvoke('paperRadar:digest', async (_, payload: unknown) => {
-    const input = parseIpcPayload('paperRadar:digest', paperRadarDigestPayloadSchema, payload ?? {})
-    return paperRadarRequest(() => requirePaperRadarService().digest(input))
-  })
-
-  handleInvoke('visibleContext:publish', async (_, payload: unknown) => {
+  handleInvoke('visibleContext:publish', async (event, payload: unknown) => {
     const snapshot = parseIpcPayload('visibleContext:publish', visibleContextPublishPayloadSchema, payload)
-    if (!visibleContext) return snapshot
-    return visibleContext.publish(snapshot)
+    const boundSnapshot = { ...snapshot, windowId: visibleContextWindowId(event.sender) }
+    if (!visibleContext) return boundSnapshot
+    return visibleContext.publish(boundSnapshot)
   })
   handleInvoke('visibleContext:get', async () => {
     if (!visibleContext) return emptyVisibleContextSnapshot()
@@ -1883,11 +950,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('agentRuntime:usage', agentRuntimeUsagePayloadSchema, payload)
     )
   )
-  handleInvoke('agentRuntime:auxiliary', async (_, payload: unknown) =>
-    requireAgentRuntime().auxiliary(
-      parseIpcPayload('agentRuntime:auxiliary', agentRuntimeAuxiliaryPayloadSchema, payload)
+  handleInvoke('agentRuntime:auxiliary', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'agentRuntime:auxiliary',
+      agentRuntimeAuxiliaryPayloadSchema,
+      payload
     )
-  )
+    mainPerformanceMonitor.count(`main.agentRuntime.auxiliary.${request.operation}`)
+    return requireAgentRuntime().auxiliary(request)
+  })
   handleInvoke('agentRuntime:stopEvents', async (event, payload: unknown) =>
     disposeAgentRuntimeEventStream(streamIdSchema.parse(payload), event.sender)
   )
@@ -2282,52 +1353,26 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('workspace:pick-file', async (_, defaultPath: unknown): Promise<WorkspacePickResult> => {
-    const normalizedDefaultPath = parseIpcPayload(
+  handleInvoke('workspace:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
+    const request = parseIpcPayload(
       'workspace:pick-file',
-      z.object({ defaultPath: defaultPathSchema }).strict(),
-      { defaultPath }
-    ).defaultPath
-    const options: Electron.OpenDialogOptions = {
-      title: 'Select reference figure',
-      defaultPath: normalizedDefaultPath,
-      properties: ['openFile', 'dontAddToRecent'],
-      filters: [
-        { name: 'Figures', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp', 'pdf'] },
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp', 'bmp'] },
-        { name: 'All Files', extensions: ['*'] }
-      ]
-    }
-    const mainWindow = getMainWindow()
-    const result = mainWindow
-      ? await dialog.showOpenDialog(mainWindow, options)
-      : await dialog.showOpenDialog(options)
-    return {
-      canceled: result.canceled,
-      path: result.canceled ? null : (result.filePaths[0] ?? null)
-    }
-  })
-
-  handleInvoke('biologyRoom:pick-file', async (_, payload: unknown): Promise<WorkspacePickResult> => {
-    const { workspaceRoot } = parseIpcPayload(
-      'biologyRoom:pick-file',
-      z.object({ workspaceRoot: z.string().trim().min(1).max(4_096) }).strict(),
+      z.object({
+        title: z.string().trim().min(1).max(160),
+        defaultPath: defaultPathSchema,
+        filters: z.array(z.object({
+          name: z.string().trim().min(1).max(80),
+          extensions: z.array(
+            z.string().trim().regex(/^(?:\*|[a-z0-9][a-z0-9.+_-]{0,31})$/i)
+          ).min(1).max(64)
+        }).strict()).min(1).max(16)
+      }).strict(),
       payload
     )
     const options: Electron.OpenDialogOptions = {
-      title: 'Select a biology asset',
-      defaultPath: workspaceRoot,
+      title: request.title,
+      defaultPath: request.defaultPath,
       properties: ['openFile', 'dontAddToRecent'],
-      filters: [
-        {
-          name: 'Biology files',
-          extensions: [
-            'fa', 'fasta', 'fna', 'faa', 'gb', 'gbk', 'pdb', 'cif', 'mmcif',
-            'gff', 'gff3', 'bed', 'vcf', 'gz'
-          ]
-        },
-        { name: 'All Files', extensions: ['*'] }
-      ]
+      filters: request.filters
     }
     const mainWindow = getMainWindow()
     const result = mainWindow
@@ -2338,33 +1383,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       path: result.canceled ? null : (result.filePaths[0] ?? null)
     }
   })
-  handleInvoke('biologyRoom:create', async (_, payload: unknown) =>
-    biologyRoomService.create(parseIpcPayload('biologyRoom:create', biologyRoomCreateInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:openOrCreate', async (_, payload: unknown) =>
-    biologyRoomService.openOrCreate(
-      parseIpcPayload('biologyRoom:openOrCreate', biologyRoomOpenOrCreateInputSchema, payload)
-    )
-  )
-  handleInvoke('biologyRoom:load', async (_, payload: unknown) =>
-    biologyRoomService.load(parseIpcPayload('biologyRoom:load', biologyRoomTargetSchema, payload))
-  )
-  handleInvoke('biologyRoom:list', async (_, payload: unknown) =>
-    biologyRoomService.list(parseIpcPayload('biologyRoom:list', biologyRoomListInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:observe', async (_, payload: unknown) =>
-    biologyRoomService.observe(parseIpcPayload('biologyRoom:observe', biologyRoomObserveInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:apply', async (_, payload: unknown) =>
-    biologyRoomService.apply(parseIpcPayload('biologyRoom:apply', biologyRoomApplyInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:refresh', async (_, payload: unknown) =>
-    biologyRoomService.refresh(parseIpcPayload('biologyRoom:refresh', biologyRoomRefreshInputSchema, payload))
-  )
-  handleInvoke('biologyRoom:history', async (_, payload: unknown) =>
-    biologyRoomService.history(parseIpcPayload('biologyRoom:history', biologyRoomHistoryInputSchema, payload))
-  )
-
   handleInvoke(
     'skill:save-file',
     async (_, payload: unknown) => {
@@ -2480,29 +1498,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       return {
         ok: true as const,
         config: buildBgcDiscoveryMcpConfigFragment(launch, request.workspaceRoot)
-      }
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('mcp:dataset-api-config', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'mcp:dataset-api-config',
-      scientificPlottingMcpConfigPayloadSchema,
-      payload
-    )
-    try {
-      return {
-        ok: true as const,
-        config: buildDatasetApiMcpConfigFragment({
-          appPath: app.getAppPath(),
-          execPath: process.execPath,
-          isPackaged: app.isPackaged
-        }, request.workspaceRoot)
       }
     } catch (error) {
       return {
@@ -2816,59 +1811,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   })
 
-  handleInvoke('runtimeConfig:read', async () => {
-    const path = resolveRuntimeConfigPath()
-    try {
-      const content = await readFile(path, 'utf8')
-      return { path, content, exists: true as const }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return { path, content: '', exists: false as const }
-      }
-      throw error
-    }
-  })
-
-  handleInvoke('runtimeConfig:write', async (_, content: unknown) => {
-    const validatedContent = parseIpcPayload(
-      'runtimeConfig:write',
-      runtimeConfigContentSchema,
-      content
-    )
-    const path = resolveRuntimeConfigPath()
-    validateMcpConfigContent(validatedContent)
-    await mkdir(dirname(path), { recursive: true })
-    await writeFile(path, validatedContent, 'utf8')
-    try {
-      await onRuntimeMcpConfigWritten?.(path, validatedContent)
-    } catch (error: unknown) {
-      logError('mcp-config', 'Failed to apply MCP config change after write', {
-        path,
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }
-    return { ok: true as const, path }
-  })
-
-  handleInvoke('runtimeConfig:open-dir', async () => {
-    try {
-      const path = resolveRuntimeConfigPath()
-      const dirPath = dirname(path)
-      await mkdir(dirPath, { recursive: true })
-      return openPathWithShell(dirPath)
-    } catch (error) {
-      return {
-        ok: false as const,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  })
-
-  handleInvoke('modelRouter:config:open', async () => {
-    const settings = await store.load()
-    return openModelRouterConfigFile(settings)
-  })
-
   handleInvoke('git:branches', async (_, workspaceRoot: unknown) =>
     getGitBranches(parseIpcPayload('git:branches', workspaceRootSchema, workspaceRoot))
   )
@@ -2901,25 +1843,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:resolve-workspace', workspaceFileTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('file:start-workspace-native-drag', async (event, payload: unknown) => {
-    const request = parseIpcPayload(
-      'file:start-workspace-native-drag',
-      workspaceNativeFileDragPayloadSchema,
-      payload
-    )
-    const resolved = await resolveWorkspaceFile(request)
-    if (!resolved.ok) return resolved
-    if (!isNativeFileDragSender(event.sender)) {
-      return { ok: false, message: 'Native file dragging is not available in this environment.' }
-    }
-    const icon = await app.getFileIcon(resolved.path).catch(() => nativeImage.createEmpty())
-    event.sender.startDrag({ file: resolved.path, icon })
-    return {
-      ok: true,
-      path: resolved.path,
-      startedAt: new Date().toISOString()
-    }
-  })
   handleInvoke('file:list-workspace-directory', async (_, payload: unknown) =>
     listWorkspaceDirectory(
       parseIpcPayload('file:list-workspace-directory', workspaceDirectoryTargetPayloadSchema, payload)
@@ -2935,89 +1858,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:read-workspace-image', workspaceFileTargetPayloadSchema, payload)
     )
   )
-  handleInvoke('workspacePreview:listPlugins', async (_, payload: unknown) => {
-    parseIpcPayload('workspacePreview:listPlugins', workspacePreviewListPluginsPayloadSchema, payload ?? {})
-    return workspacePreviewHost.listPlugins()
-  })
-  handleInvoke('workspacePreview:open', async (event, payload: unknown) => {
-    const result = await workspacePreviewHost.open(
-      parseIpcPayload('workspacePreview:open', workspacePreviewOpenPayloadSchema, payload)
-    )
-    if (result.ok) trackWorkspacePreviewSessionForSender(event.sender, result.session.id)
-    return result
-  })
-  handleInvoke('workspacePreview:observe', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:observe',
-      workspacePreviewObservePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.observe(request.sessionId)
-  })
-  handleInvoke('workspacePreview:releaseSession', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:releaseSession',
-      workspacePreviewReleaseSessionPayloadSchema,
-      payload
-    )
-    return releaseWorkspacePreviewSession(request.sessionId)
-  })
-  handleInvoke('workspacePreview:describeAsset', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:describeAsset',
-      workspacePreviewDescribeAssetPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.describeAsset(request.sessionId)
-  })
-  handleInvoke('workspacePreview:readRange', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:readRange',
-      workspacePreviewReadRangePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.readRange(request.sessionId, request.range)
-  })
-  handleInvoke('workspacePreview:prepareArtifact', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:prepareArtifact',
-      workspacePreviewPrepareArtifactPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.prepareArtifact(request.sessionId, request.request)
-  })
-  handleInvoke('workspacePreview:readArtifactRange', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:readArtifactRange',
-      workspacePreviewReadArtifactRangePayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.readArtifactRange(request.sessionId, request.request)
-  })
-  handleInvoke('workspacePreview:applyEdit', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:applyEdit',
-      workspacePreviewApplyEditPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.applyEdit(request.sessionId, request.operation)
-  })
-  handleInvoke('workspacePreview:export', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:export',
-      workspacePreviewExportPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.exportPreview(request.sessionId, request.target)
-  })
-  handleInvoke('workspacePreview:invokeAction', async (_, payload: unknown) => {
-    const request = parseIpcPayload(
-      'workspacePreview:invokeAction',
-      workspacePreviewInvokeActionPayloadSchema,
-      payload
-    )
-    return workspacePreviewHost.invokeAction(request.sessionId, request.action)
-  })
   handleInvoke('file:write-workspace', async (_, payload: unknown) =>
     writeWorkspaceFile(
       parseIpcPayload('file:write-workspace', workspaceFileWritePayloadSchema, payload)
@@ -3053,6 +1893,15 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
       parseIpcPayload('file:rename-workspace-entry', workspaceEntryRenamePayloadSchema, payload)
     )
   )
+  handleInvoke('file:suggest-workspace-pdf-name', async (_, payload: unknown) =>
+    suggestWorkspacePdfName(
+      parseIpcPayload(
+        'file:suggest-workspace-pdf-name',
+        workspacePdfRenameSuggestionPayloadSchema,
+        payload
+      )
+    )
+  )
   handleInvoke('file:copy-workspace-entry', async (_, payload: unknown) =>
     copyWorkspaceEntry(
       parseIpcPayload('file:copy-workspace-entry', workspaceEntryCopyPayloadSchema, payload)
@@ -3075,45 +1924,29 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   )
   const startWorkspaceFileWatch = async (
     event: AppBridgeInvokeEvent,
-    payload: unknown,
-    channel: 'file:watch-workspace' | 'workspacePreview:watch',
-    changeChannel: 'file:workspace-changed' | 'workspacePreview:changed',
-    kind: WorkspaceFileWatchRecord['kind']
+    payload: unknown
   ): Promise<WorkspaceFileWatchResult> => {
-    const request = parseIpcPayload(channel, workspaceFileWatchPayloadSchema, payload)
+    const request = parseIpcPayload('file:watch-workspace', workspaceFileWatchPayloadSchema, payload)
     let watchedPath: string
-    let watchWorkspaceRoot = request.workspaceRoot
     let initialContent: string
     let initialSize: number
     let initialTruncated: boolean
     let initialMtimeMs: number | undefined
-    let startedAt = new Date().toISOString()
-    if (kind === 'workspace-preview') {
-      const initial = await workspacePreviewHost.prepareWatch(request, startedAt)
-      if (!initial.ok) return initial
-      watchedPath = initial.path
-      watchWorkspaceRoot = initial.workspaceRoot
+    const startedAt = new Date().toISOString()
+    const initial = await readWorkspaceFile(request)
+    if (initial.ok) {
       initialContent = initial.content
       initialSize = initial.size
       initialTruncated = initial.truncated
-      initialMtimeMs = initial.mtimeMs
-      startedAt = initial.startedAt
+      initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
+      watchedPath = initial.path
     } else {
-      const initial = await readWorkspaceFile(request)
-      if (initial.ok) {
-        watchedPath = initial.path
-        initialContent = initial.content
-        initialSize = initial.size
-        initialTruncated = initial.truncated
-        initialMtimeMs = 'mtimeMs' in initial ? initial.mtimeMs : undefined
-      } else {
-        const initialImage = await readWorkspaceImage(request)
-        if (!initialImage.ok) return initial
-        watchedPath = initialImage.path
-        initialContent = ''
-        initialSize = initialImage.size
-        initialTruncated = false
-      }
+      const initialImage = await readWorkspaceImage(request)
+      if (!initialImage.ok) return initial
+      watchedPath = initialImage.path
+      initialContent = ''
+      initialSize = initialImage.size
+      initialTruncated = false
     }
 
     const watchId = randomUUID()
@@ -3125,9 +1958,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
         watcher,
         sender: event.sender,
         path: watchedPath,
-        workspaceRoot: watchWorkspaceRoot,
-        kind,
-        changeChannel,
+        workspaceRoot: request.workspaceRoot,
         timer: null
       })
       event.sender.once('destroyed', () => disposeWorkspaceFileWatchesForSender(event.sender))
@@ -3149,39 +1980,23 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     }
   }
   handleInvoke('file:watch-workspace', async (event, payload: unknown) =>
-    startWorkspaceFileWatch(event, payload, 'file:watch-workspace', 'file:workspace-changed', 'legacy-file')
+    startWorkspaceFileWatch(event, payload)
   )
   handleInvoke('file:unwatch-workspace', async (_, watchId: unknown) =>
     disposeWorkspaceFileWatch(parseIpcPayload('file:unwatch-workspace', streamIdSchema, watchId))
   )
-  handleInvoke('workspacePreview:watch', async (event, payload: unknown) =>
-    startWorkspaceFileWatch(event, payload, 'workspacePreview:watch', 'workspacePreview:changed', 'workspace-preview')
-  )
-  handleInvoke('workspacePreview:unwatch', async (_, watchId: unknown) =>
-    disposeWorkspaceFileWatch(parseIpcPayload('workspacePreview:unwatch', streamIdSchema, watchId))
-  )
   handleInvoke('write:export', async (_, payload: unknown) => {
     const input = parseIpcPayload('write:export', writeExportPayloadSchema, payload)
-    const audit = await collectWriteExportEvidenceDagAudit(input, {
-      agentRuntime,
-      ensureEvidenceDagReady
+    const guard = await actionGuardEvaluator.evaluate({
+      actionId: 'write.export',
+      payload: input
     })
-    const gate = evaluateEvidenceDagHighImpactGate({
-      action: 'write:export',
-      riskDigest: audit.riskDigest,
-      auditCompletedAt: audit.auditCompletedAt,
-      auditUnavailableReason: audit.auditUnavailableReason,
-      overrideConfirmed: input.evidenceDagGateOverride === true,
-      requireFreshAudit: true
-    })
-    if (!gate.allowed) {
-      throw new Error(gate.message)
+    if (!guard.allowed) {
+      throw new Error(
+        guard.message ?? 'Action write.export was rejected by an installed domain guard.'
+      )
     }
-    const result = await exportWriteDocument(writeExportServicePayload(input), { parentWindow: getMainWindow() })
-    return {
-      ...result,
-      evidenceDagGate: withWriteExportEvidenceDagContext(gate.metadata, input)
-    }
+    return exportWriteDocument(writeExportServicePayload(input), { parentWindow: getMainWindow() })
   })
   handleInvoke('write:copy-rich-text', async (_, payload: unknown) =>
     copyWriteDocumentAsRichText(
@@ -3228,435 +2043,6 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   handleInvoke('shell:open-external', async (_, url: unknown) => {
     const validatedUrl = parseIpcPayload('shell:open-external', shellOpenExternalUrlSchema, url)
     await shell.openExternal(validatedUrl)
-  })
-  handleInvoke('evidenceDag:view', async (_, payload: unknown) => {
-    const input = parseIpcPayload('evidenceDag:view', evidenceDagViewPayloadSchema, payload)
-    await ensureEvidenceDagReady?.()
-    const config = evidenceDagViewConfig(process.env)
-    const threadId = input.threadId?.trim()
-    const engineThreadId = threadId && input.runtimeId
-      ? evidenceDagThreadId(input.runtimeId, threadId)
-      : undefined
-    const [workerStatus, localStatus] = await Promise.all([
-      engineThreadId
-        ? requestEvidenceDagJson(
-            config.serviceUrl,
-            config.apiKey,
-            `/updates/status?threadId=${encodeURIComponent(engineThreadId)}`,
-            { method: 'GET', cache: 'no-store' },
-            globalThis.fetch,
-            3_000
-          )
-        : Promise.resolve({ status: 'fresh', pendingCount: 0 }),
-      threadId && input.runtimeId
-        ? Promise.resolve().then(() => evidenceDagQueueStatus(input.runtimeId!, threadId)).catch(() => undefined)
-        : Promise.resolve(undefined)
-    ])
-    return {
-      url: evidenceDagUiUrl({
-        runtimeId: input.runtimeId,
-        threadId,
-        serviceUrl: config.serviceUrl,
-        apiKey: config.apiKey
-      }),
-      ...(threadId ? { threadId } : {}),
-      status: dagPanelStatus(workerStatus, localStatus)
-    }
-  })
-  handleInvoke('evidenceDag:update', async (_, payload: unknown) => {
-    const input = parseIpcPayload('evidenceDag:update', evidenceDagUpdatePayloadSchema, payload)
-    const { detail, items } = await evidenceDagThreadUpdateSource(input, agentRuntime)
-    const workspaceRoot = await evidenceDagThreadWorkspaceRoot(input, detail, agentRuntime)
-    const includedSessions = [evidenceDagThreadId(input.runtimeId, input.threadId)]
-    const queued = await enqueueEvidenceDagUpdate({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId,
-      items,
-      targetWatermark: String(detail.latestSeq),
-      reason: input.operation === 'rebuild' ? input.rebuildKind! : 'manual_immediate',
-      priority: 'immediate',
-      rebuild: input.operation === 'rebuild',
-      rebuildRationale: input.rebuildRationale,
-      projectContext: workspaceRoot ? {
-        projectKey: workspaceRoot,
-        workspaceRoot,
-        projectRoot: workspaceRoot,
-        includedSessions
-      } : undefined
-    })
-    const config = evidenceDagViewConfig(process.env)
-    return {
-      url: evidenceDagUiUrl({
-        runtimeId: input.runtimeId,
-        threadId: input.threadId,
-        serviceUrl: config.serviceUrl,
-        apiKey: config.apiKey
-      }),
-      threadId: input.threadId,
-      itemCount: items.length,
-      jobId: queued.jobId,
-      status: dagPanelStatus({}, queued)
-    }
-  })
-  handleInvoke('evidenceDag:priority', async (_, payload: unknown) => {
-    const input = parseIpcPayload('evidenceDag:priority', evidenceDagPriorityPayloadSchema, payload)
-    if (!input.visible) return { freshness: 'fresh', pendingCount: 0 } satisfies DagPanelStatus
-    return dagPanelStatus({}, await prioritizeEvidenceDagUpdate(input.runtimeId, input.threadId))
-  })
-  handleInvoke('evidenceDag:resolve-evidence-preview', async (_, payload: unknown) => {
-    const input = parseIpcPayload(
-      'evidenceDag:resolve-evidence-preview',
-      evidenceDagEvidencePreviewResolvePayloadSchema,
-      payload
-    )
-    if (!agentRuntime) {
-      return {
-        ok: false as const,
-        code: 'file_unavailable' as const,
-        message: 'Agent runtime is required to resolve Evidence DAG workspace evidence.'
-      }
-    }
-    const detail = await agentRuntime.readThread({
-      runtimeId: input.runtimeId,
-      threadId: input.threadId
-    })
-    const workspaceRoot = detail.workspace?.trim()
-    if (!workspaceRoot) {
-      return {
-        ok: false as const,
-        code: 'file_unavailable' as const,
-        message: 'The Evidence DAG thread has no trusted workspace root.'
-      }
-    }
-    await ensureEvidenceDagReady?.()
-    const config = evidenceDagViewConfig(process.env)
-    const engineThreadId = evidenceDagThreadId(input.runtimeId, input.threadId)
-    const query = new URLSearchParams({
-      snapshotDigest: input.snapshotDigest,
-      sourceAssertionId: input.sourceAssertionId,
-      artifactVersionId: input.artifactVersionId,
-      sourceAnchorId: input.sourceAnchorId
-    })
-    const snapshotEvidence = await requestEvidenceDagJson(
-      config.serviceUrl,
-      config.apiKey,
-      `/threads/${encodeURIComponent(engineThreadId)}/evidence-preview?${query.toString()}`,
-      { method: 'GET', cache: 'no-store' },
-      globalThis.fetch,
-      3_000
-    )
-    return resolveEvidenceDagEvidencePreview(input, {
-      engineThreadId,
-      workspaceRoot,
-      snapshotEvidence,
-      resolveWorkspaceFile
-    })
-  })
-  handleInvoke('projectDag:view', async (_, payload: unknown) => {
-    const input = parseIpcPayload('projectDag:view', projectDagViewPayloadSchema, payload)
-    await ensureProjectDagReady?.()
-    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
-    await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const canResolveRuntimeScope = Boolean(
-      agentRuntime && (input.workspaceRoot || input.projectRoot || input.sessions?.length)
-    )
-    const scopedThreads = canResolveRuntimeScope
-      ? await projectDagRuntimeThreadsForScope({ ...input, scope: 'all' }, agentRuntime)
-      : []
-    const sessionScope = scopedThreads.length > 0
-      ? scopedThreads.map((thread) => evidenceDagThreadId(thread.runtimeId, thread.id)).sort()
-      : await projectDagSessionScopeForWorkspace(input, agentRuntime)
-    const [workerStatus, goalsValue, scopedEvidenceStatuses] = await Promise.all([
-      requestProjectDagJson(
-        serviceUrl,
-        apiKey,
-        `/updates/status${projectDagStatusQuery(input)}`,
-        { method: 'GET', cache: 'no-store' }
-      ),
-      requestProjectDagJson(
-        serviceUrl,
-        apiKey,
-        `/goals${projectDagStatusQuery(input)}`,
-        { method: 'GET', cache: 'no-store' }
-      ),
-      Promise.all(scopedThreads.map(async (thread) => ({
-        engineThreadId: evidenceDagThreadId(thread.runtimeId, thread.id),
-        status: await Promise.resolve(evidenceDagQueueStatus(thread.runtimeId, thread.id)).catch((error) => ({
-          state: 'degraded' as const,
-          pendingCount: 0,
-          lastError: error instanceof Error ? error.message : String(error)
-        }))
-      })))
-    ])
-    const committedSessions = projectDagCommittedSessions(workerStatus)
-    const visibleSessionScope = committedSessions.length > 0 ? committedSessions : sessionScope
-    const visibleSessionSet = visibleSessionScope ? new Set(visibleSessionScope) : undefined
-    const evidenceStatuses = scopedEvidenceStatuses
-      .filter((item) => !visibleSessionSet || visibleSessionSet.has(item.engineThreadId))
-      .map((item) => item.status)
-    const rootGoal = Array.isArray(goalsValue) ? objectRecord(goalsValue[0]) : null
-    const rootGoalId = rootGoal ? optionalStringField(rootGoal, 'id') : undefined
-    const rootGoalTitle = rootGoal ? optionalStringField(rootGoal, 'title') : undefined
-    return {
-      url: projectDagUiUrl({
-        serviceUrl,
-        apiKey,
-        view: input.view === 'attention' ? 'home' : input.view ?? 'graph',
-        embed: true,
-        workspaceRoot: input.workspaceRoot,
-        projectRoot: input.projectRoot,
-        project: input.project,
-        sessionIds: visibleSessionScope
-      }),
-      status: projectDagPanelStatus(workerStatus, evidenceStatuses, visibleSessionScope?.length ?? 0),
-      ...(rootGoalId && rootGoalTitle ? {
-        goal: {
-          id: rootGoalId,
-          title: rootGoalTitle,
-          ...(optionalStringField(rootGoal as Record<string, unknown>, 'description') ? {
-            description: optionalStringField(rootGoal as Record<string, unknown>, 'description')
-          } : {}),
-          ...(typeof rootGoal?.version === 'number' ? { version: rootGoal.version } : {})
-        }
-      } : {})
-    }
-  })
-  handleInvoke('projectDag:resolve-evidence-preview', async (_, payload: unknown) => {
-    const input = parseIpcPayload(
-      'projectDag:resolve-evidence-preview',
-      projectDagEvidencePreviewResolvePayloadSchema,
-      payload
-    )
-    await ensureProjectDagReady?.()
-    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
-    await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const query = new URLSearchParams(projectDagStatusQuery(input).slice(1))
-    query.set('snapshot', input.snapshotDigest)
-    const claimDetail = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/claims/${encodeURIComponent(input.claimId)}?${query.toString()}`,
-      { method: 'GET', cache: 'no-store' }
-    )
-    return resolveProjectDagEvidencePreview(input, {
-      claimDetail,
-      resolveWorkspaceFile
-    })
-  })
-  handleInvoke('projectDag:update', async (_, payload: unknown) => {
-    const input = parseIpcPayload('projectDag:update', projectDagUpdatePayloadSchema, payload)
-    const projectIdentity = projectDagUpdateIdentity(input)
-    await ensureProjectDagReady?.()
-    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
-    await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const initialWorkerStatus = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/updates/status${projectDagStatusQuery(input)}`,
-      { method: 'GET', cache: 'no-store' }
-    )
-    const committedSessions = projectDagCommittedSessions(initialWorkerStatus)
-    const committedDigests = projectDagCommittedEvidenceDigests(initialWorkerStatus)
-    const requestedSessions = Array.isArray(input.scope)
-      ? [...new Set([...input.scope, ...committedSessions])].sort()
-      : input.scope === 'all' && committedSessions.length > 0
-        ? committedSessions
-        : undefined
-    const scopedThreads = await projectDagRuntimeThreadsForScope(
-      requestedSessions ? { ...input, scope: requestedSessions } : input,
-      agentRuntime
-    )
-    const availableThreads = new Map(scopedThreads.map((thread) => [
-      evidenceDagThreadId(thread.runtimeId, thread.id),
-      thread
-    ]))
-    const scopedIds = new Set(requestedSessions ?? [...availableThreads.keys()])
-    const excludedSessions = [...new Set(input.excludedSessions ?? [])].sort()
-    const isolatedSessions = [...new Set(input.isolatedSessions ?? [])].sort()
-    const overlap = excludedSessions.filter((session) => isolatedSessions.includes(session))
-    if (overlap.length > 0) {
-      throw new Error(`Project sessions cannot be both excluded and isolated: ${overlap.join(', ')}`)
-    }
-    const outsideScope = [...excludedSessions, ...isolatedSessions]
-      .filter((session) => !scopedIds.has(session))
-    if (outsideScope.length > 0) {
-      throw new Error(`Project session dispositions are outside the captured workspace scope: ${outsideScope.join(', ')}`)
-    }
-    const unavailable = new Set([...excludedSessions, ...isolatedSessions])
-    const includedSessions = [...scopedIds].filter((session) => !unavailable.has(session)).sort()
-    if (includedSessions.length === 0) {
-      throw new Error('Project DAG update captured no included runtime sessions.')
-    }
-    await ensureEvidenceDagReady?.()
-    const evidenceConfig = evidenceDagViewConfig(process.env)
-    const evidenceStates = await Promise.all(includedSessions.map(async (engineThreadId) => {
-      const thread = availableThreads.get(engineThreadId)
-      const separator = engineThreadId.indexOf(':')
-      const runtimeId = separator > 0 ? engineThreadId.slice(0, separator) : ''
-      const threadId = separator > 0 ? engineThreadId.slice(separator + 1) : engineThreadId
-      const localStatus: EvidenceDagQueueStatus = runtimeId
-        ? await Promise.resolve(evidenceDagQueueStatus(runtimeId, threadId))
-            .catch(() => ({ state: 'dirty' as const, pendingCount: 0 }))
-        : { state: 'dirty', pendingCount: 0 }
-      const workerStatus = await requestEvidenceDagJson(
-        evidenceConfig.serviceUrl,
-        evidenceConfig.apiKey,
-        `/updates/status?threadId=${encodeURIComponent(engineThreadId)}`,
-        { method: 'GET', cache: 'no-store' },
-        globalThis.fetch,
-        3_000
-      ).catch(() => undefined)
-      return {
-        engineThreadId,
-        thread,
-        localStatus,
-        snapshot: localStatus.state === 'fresh' || localStatus.desiredWatermark ||
-          committedDigests.has(engineThreadId)
-          ? reusableEvidenceSnapshot(
-              workerStatus,
-              engineThreadId,
-              thread?.updatedAt,
-              localStatus.desiredWatermark,
-              committedDigests.get(engineThreadId)
-            )
-          : undefined
-      }
-    }))
-    const staleEvidence = evidenceStates.filter((item) => !item.snapshot)
-    if (staleEvidence.length > 0 && !projectIdentity.workspaceRoot) {
-      throw new Error(
-        'Project DAG update requires workspaceRoot/projectRoot to refresh stale Evidence sessions.'
-      )
-    }
-    const projectContext = {
-      ...projectIdentity,
-      project: input.project,
-      includedSessions,
-      excludedSessions,
-      isolatedSessions,
-      updateReason: 'manual_immediate' as const,
-      autonomyMode: input.autonomyMode
-    }
-    let jobId: string | undefined
-    let evidenceStatuses: EvidenceDagQueueStatus[]
-    if (staleEvidence.length > 0) {
-      if (!agentRuntime) throw new Error('Project DAG requires agent runtime sessions for the current project.')
-      const sources = await Promise.all(staleEvidence.map(async ({ thread, engineThreadId }) => {
-        if (!thread) {
-          throw new Error(
-            `Project session ${engineThreadId} is unavailable and has no reusable committed Evidence snapshot.`
-          )
-        }
-        const detail = await agentRuntime.readThread({ runtimeId: thread.runtimeId, threadId: thread.id })
-        return {
-          runtimeId: thread.runtimeId,
-          threadId: thread.id,
-          items: evidenceDagBackfillItems(detail),
-          targetWatermark: String(detail.latestSeq)
-        }
-      }))
-      const enqueued = await enqueueProjectFresh({ sessions: sources, projectContext })
-      jobId = enqueued.coordinatorJobId
-      evidenceStatuses = [
-        ...evidenceStates.filter((item) => item.snapshot).map(() => ({
-          state: 'fresh' as const,
-          pendingCount: 0
-        })),
-        ...enqueued.jobs
-      ]
-    } else {
-      const evidenceSnapshots = evidenceStates.map((item) => item.snapshot!)
-      const projectJob = objectRecord(await requestProjectDagJson(
-        serviceUrl,
-        apiKey,
-        '/updates',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            ...(projectContext.projectKey ? { projectKey: projectContext.projectKey } : {}),
-            ...(projectContext.workspaceRoot ? { workspaceRoot: projectContext.workspaceRoot } : {}),
-            ...(projectContext.projectRoot ? { projectRoot: projectContext.projectRoot } : {}),
-            ...(projectContext.project ? { project: projectContext.project } : {}),
-            ...(projectContext.autonomyMode ? { autonomyMode: projectContext.autonomyMode } : {}),
-            reason: projectContext.updateReason,
-            priority: 3,
-            evidenceVector: evidenceSnapshots.map((snapshot) => ({
-              threadId: snapshot.threadId,
-              digest: snapshot.digest
-            })),
-            evidenceSnapshots,
-            capturedScope: { includedSessions, excludedSessions, isolatedSessions }
-          })
-        }
-      ))
-      jobId = projectJob ? optionalStringField(projectJob, 'id') : undefined
-      await Promise.all(evidenceSnapshots.map((snapshot) => acknowledgeEvidenceDagSnapshot(snapshot)))
-      evidenceStatuses = evidenceSnapshots.map(() => ({ state: 'fresh' as const, pendingCount: 0 }))
-    }
-    const workerStatus = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/updates/status${projectDagStatusQuery(input)}`,
-      { method: 'GET', cache: 'no-store' }
-    )
-    const url = projectDagUiUrl({
-      serviceUrl,
-      apiKey,
-      view: 'graph',
-      embed: true,
-      workspaceRoot: input.workspaceRoot,
-      projectRoot: input.projectRoot,
-      project: input.project,
-      sessionIds: includedSessions
-    })
-    const panelStatus = projectDagPanelStatus(workerStatus, evidenceStatuses, includedSessions.length)
-    return {
-      url,
-      ...(jobId ? { jobId } : {}),
-      status: {
-        ...panelStatus,
-        autonomyMode: input.autonomyMode ?? panelStatus.autonomyMode,
-        scope: { includedSessions, excludedSessions, isolatedSessions }
-      }
-    }
-  })
-  handleInvoke('projectDag:save-goal', async (_, payload: unknown) => {
-    const input = parseIpcPayload('projectDag:save-goal', projectDagGoalSavePayloadSchema, payload)
-    await ensureProjectDagReady?.()
-    const { serviceUrl, apiKey } = projectDagViewConfig(process.env)
-    await assertProjectDagServiceReachable(serviceUrl, apiKey)
-    const goal = objectRecord(await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      input.rootGoalId ? `/goals/${encodeURIComponent(input.rootGoalId)}/update` : '/goals',
-      {
-        method: 'POST',
-        body: JSON.stringify({
-          title: input.title,
-          description: input.description ?? '',
-          actorType: 'human',
-          actorId: 'sciforge-desktop:user',
-          ...(input.rootGoalId ? { reframe: false } : {}),
-          ...(input.workspaceRoot ?? input.projectRoot ?? input.project ? {
-            projectKey: input.workspaceRoot ?? input.projectRoot ?? input.project
-          } : {})
-        })
-      }
-    )) ?? {}
-    const workerStatus = await requestProjectDagJson(
-      serviceUrl,
-      apiKey,
-      `/updates/status${projectDagStatusQuery(input)}`,
-      { method: 'GET', cache: 'no-store' }
-    )
-    const goalId = optionalStringField(goal, 'root_id') ?? optionalStringField(goal, 'rootId') ??
-      input.rootGoalId ?? optionalStringField(goal, 'id')
-    if (!goalId) throw new Error('Project DAG goal command did not return a goal id.')
-    return {
-      goalId,
-      ...(typeof goal.version === 'number' ? { version: goal.version } : {}),
-      status: projectDagPanelStatus(workerStatus)
-    }
   })
   handleInvoke('notification:turn-complete', async (_, payload: unknown) =>
     showTurnCompleteNotification(

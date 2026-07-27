@@ -1,150 +1,177 @@
-import { describe, expect, it } from 'vitest'
+import { createElement } from 'react'
+import { describe, expect, it, vi } from 'vitest'
 import {
-  LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
-  WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS,
-  WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES,
-  WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES,
-  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS,
-  WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES,
+  DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
+  WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  type WorkspacePreviewPluginManifest,
   workspacePreviewPluginManifestSchema
 } from '@shared/workspace-preview'
 import {
-  CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS,
-  DEFAULT_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS,
-  DECK_WORKSPACE_PREVIEW_PLUGIN_ID,
-  DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
-  HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
-  IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
-  MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
-  PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
-  TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
-  TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
-  createRendererWorkspacePreviewRegistry
-} from './registry'
+  WORKSPACE_PREVIEW_CORE_MANIFEST_OWNER_ID,
+  WorkspacePreviewRegistry
+} from '../../../main/services/workspace-preview/registry'
+import { createBuiltInWorkspacePreviewPluginRegistrations } from './built-in-plugin-contributions'
+import { createRendererWorkspacePreviewRegistry } from './registry'
 
-describe('renderer workspace preview registry', () => {
-  it('registers core preview descriptors against the shared manifest contract', () => {
-    const ids = CORE_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS.map((descriptor) => descriptor.manifest.id)
+vi.mock('./PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
 
+describe('renderer workspace preview contribution registry', () => {
+  it('registers one complete built-in contribution per renderer manifest', () => {
+    const registry = createBuiltInRegistry()
+    const ids = registry.list().map((descriptor) => descriptor.manifest.id)
+
+    expect(ids).toEqual([...new Set(ids)])
     expect(ids).toEqual(expect.arrayContaining([
-      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID,
-      MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID,
-      HTML_WORKSPACE_PREVIEW_PLUGIN_ID,
-      IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID,
-      PDF_WORKSPACE_PREVIEW_PLUGIN_ID,
-      DOCX_WORKSPACE_PREVIEW_PLUGIN_ID,
-      TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID,
-      DECK_WORKSPACE_PREVIEW_PLUGIN_ID
-    ]))
-    expect(ids).not.toContain('legacy')
-
-    for (const descriptor of DEFAULT_RENDERER_WORKSPACE_PREVIEW_PLUGIN_DESCRIPTORS) {
-      const manifest = workspacePreviewPluginManifestSchema.parse(descriptor.manifest)
-      expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
-    }
-  })
-
-  it('keeps renderer manifest exports aligned with source-copy support', () => {
-    const registry = createRendererWorkspacePreviewRegistry()
-
-    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['markdown'])
-    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).not.toContain('html')
-    expect(registry.get(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual([
+      'text',
+      'markdown',
+      'html',
+      'image',
       'pdf',
-      'sidecar',
-      'annotated-pdf'
-    ])
-    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual(['csv', 'tsv'])
-    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).not.toContain('xlsx')
-    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.edit).toBe(false)
-    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.structuredSelection).toBe(false)
-    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).toEqual([
-      '.csv',
-      '.tsv',
-      '.jsonl',
-      '.ndjson',
-      '.xlsx'
-    ])
-    expect(registry.get(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).not.toEqual(
-      expect.arrayContaining(['.xls', '.parquet', '.feather', '.arrow'])
-    )
-    expect(registry.get('molecular')?.manifest.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'session']))
-    expect(registry.get('omics-matrix')?.manifest.capabilities.export).not.toContain('csv')
-    expect(registry.get('bioimaging')?.manifest.capabilities.export).not.toEqual(expect.arrayContaining(['png', 'roi']))
-    expect(registry.get('proteomics-spectra')?.manifest.capabilities.export).not.toContain('csv')
-    expect(registry.get('molecular')?.manifest.capabilities.annotations).toBeUndefined()
-    expect(registry.get('sequence-genomics')?.manifest.capabilities.annotations).toBeUndefined()
-    expect(registry.get('bioimaging')?.manifest.capabilities.annotations).toBeUndefined()
-    expect(registry.get('proteomics-spectra')?.manifest.capabilities.annotations).toBeUndefined()
-  })
-
-  it('keeps renderer core manifest surfaces aligned with shared constants', () => {
-    const registry = createRendererWorkspacePreviewRegistry()
-
-    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).toEqual([
-      ...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_EXTENSIONS
-    ])
-    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
-      ...WORKSPACE_PREVIEW_FIRST_PARTY_TEXT_MIME_TYPES
-    ])
-    expect(registry.get(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.extensions).not.toContain('.jsonl')
-    expect(registry.get(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
-      ...WORKSPACE_PREVIEW_FIRST_PARTY_MARKDOWN_MIME_TYPES
-    ])
-    expect(registry.get(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.mimeTypes).toEqual([
-      ...WORKSPACE_PREVIEW_FIRST_PARTY_PDF_MIME_TYPES
-    ])
-    expect(registry.get(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)?.manifest.capabilities.export).toEqual([
-      ...WORKSPACE_PREVIEW_FIRST_PARTY_IMAGE_EXPORT_FORMATS
-    ])
-  })
-
-  it('wraps shared life-science manifests without changing their ids', () => {
-    const registry = createRendererWorkspacePreviewRegistry()
-    const sharedIds = LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => manifest.id)
-
-    for (const id of sharedIds) {
-      expect(registry.get(id)).toMatchObject({
-        kind: 'life-science',
-        source: 'shared-life-science',
-        manifest: { id }
-      })
+      'docx',
+      'tabular',
+      'deck'
+    ]))
+    for (const descriptor of registry.list()) {
+      expect(workspacePreviewPluginManifestSchema.parse(descriptor.manifest)).toBeTruthy()
+      expect(descriptor.contribution.manifest).toBe(descriptor.manifest)
+      expect(typeof descriptor.contribution.render).toBe('function')
     }
   })
 
-  it('resolves renderer-core and life-science formats before falling back to text', () => {
-    const registry = createRendererWorkspacePreviewRegistry()
-
-    expect(registry.resolve({ path: 'notes.TXT' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: '.env' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: '.env.local' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'script.py' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'script', mimeType: 'text/x-python; charset=utf-8' })?.manifest.id).toBe(
-      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
+  it('references canonical manifests and stays in parity with the main registry', () => {
+    const rendererRegistry = createBuiltInRegistry()
+    const mainById = new Map(
+      new WorkspacePreviewRegistry(DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => ({
+        ownerId: WORKSPACE_PREVIEW_CORE_MANIFEST_OWNER_ID,
+        manifest
+      })))
+        .list().map(({ manifest }) => [manifest.id, manifest])
     )
-    expect(registry.resolve({ path: 'paper.tex' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'refs.bib' })?.manifest.id).toBe(TEXT_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'README.md' })?.manifest.id).toBe(MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'report.html' })?.manifest.id).toBe(HTML_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'figure.PNG' })?.manifest.id).toBe(IMAGE_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'paper.pdf' })?.manifest.id).toBe(PDF_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'paper.docx' })?.manifest.id).toBe(DOCX_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'samples.csv' })?.manifest.id).toBe(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'records.ndjson' })?.manifest.id).toBe(TABULAR_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'talk.pptx' })?.manifest.id).toBe(DECK_WORKSPACE_PREVIEW_PLUGIN_ID)
-    expect(registry.resolve({ path: 'legacy.ppt' })).toBeNull()
-    expect(registry.resolve({ path: 'protein.pdb' })?.manifest.id).toBe('molecular')
+    const canonicalById = new Map(DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => [manifest.id, manifest]))
 
-    expect(registry.resolve({ path: 'opaque.unknown' })).toBeNull()
-    expect(registry.resolve({ path: 'opaque.unknown', includeFallback: true })?.manifest.id).toBe(
-      TEXT_WORKSPACE_PREVIEW_PLUGIN_ID
-    )
+    for (const descriptor of rendererRegistry.list()) {
+      expect(descriptor.manifest).toBe(canonicalById.get(descriptor.manifest.id))
+      expect(descriptor.manifest).toEqual(mainById.get(descriptor.manifest.id))
+    }
   })
 
-  it('does not fallback deferred non-life-science scientific formats to text', () => {
+  it('uses canonical manifest precedence without a renderer fallback path', () => {
+    const registry = createBuiltInRegistry()
+
+    expect(registry.resolve({ path: 'README.md', mimeType: 'text/html' })?.manifest.id).toBe('markdown')
+    expect(registry.resolve({ path: 'paper.docx', mimeType: 'application/pdf' })?.manifest.id).toBe('pdf')
+    expect(registry.resolve({ path: 'protein.pdb', mimeType: 'text/markdown' })?.manifest.id).toBe('markdown')
+    expect(registry.resolve({ path: 'opaque.unknown' })).toBeNull()
+    expect(registry.resolve({ path: 'mesh.vtk' })).toBeNull()
+  })
+
+  it('atomically registers and disposes a package-owned renderer and action', () => {
+    const manifest: WorkspacePreviewPluginManifest = {
+      contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+      id: 'custom-domain',
+      displayName: 'Custom Domain',
+      version: '1.0.0',
+      modality: 'unknown',
+      lifecycle: 'renderer',
+      priority: 100,
+      extensions: ['.custom'],
+      mimeTypes: [],
+      capabilities: {
+        preview: true,
+        edit: false,
+        inspect: true,
+        structuredSelection: false
+      }
+    }
+    const contribution = {
+      manifest,
+      render: () => createElement('div'),
+      actions: [{
+        id: 'custom-domain.inspect',
+        label: 'Inspect Custom Domain',
+        run: async () => ({ ok: true as const, kind: 'ui' as const, actionId: 'custom-domain.inspect' })
+      }]
+    }
+    const registry = createRendererWorkspacePreviewRegistry()
+    const registration = registry.register('custom-package', contribution)
+
+    expect(registry.get(manifest.id)?.contribution).toBe(contribution)
+    expect(registry.getAction(manifest.id, 'custom-domain.inspect')).toBe(contribution.actions[0])
+    expect(() => registry.register('duplicate-package', contribution)).toThrow(/already registered/)
+
+    registration.dispose()
+    registration.dispose()
+    expect(registry.get(manifest.id)).toBeNull()
+    expect(registry.getAction(manifest.id, 'custom-domain.inspect')).toBeNull()
+  })
+
+  it('rejects a batch without partial registration when a plugin repeats an action id', () => {
+    const manifests: WorkspacePreviewPluginManifest[] = ['one', 'two'].map((id) => ({
+      contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+      id,
+      displayName: id,
+      version: '1.0.0',
+      modality: 'unknown',
+      lifecycle: 'renderer',
+      priority: 1,
+      extensions: [`.${id}`],
+      mimeTypes: [],
+      capabilities: { preview: true, edit: false, inspect: false, structuredSelection: false }
+    }))
+    const registry = createRendererWorkspacePreviewRegistry()
+    const action = {
+      id: 'shared.action',
+      label: 'Shared',
+      run: async () => ({ ok: true as const, kind: 'ui' as const, actionId: 'shared.action' })
+    }
+
+    expect(() => registry.registerMany(manifests.map((manifest, index) => ({
+      ownerId: manifest.id,
+      contribution: {
+        manifest,
+        render: () => createElement('div'),
+        actions: index === 1 ? [action, action] : [action]
+      }
+    })))).toThrow(/action contribution/)
+    expect(registry.list()).toEqual([])
+  })
+
+  it('scopes the same action id independently to each plugin', () => {
+    const manifests: WorkspacePreviewPluginManifest[] = ['one', 'two'].map((id) => ({
+      contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
+      id,
+      displayName: id,
+      version: '1.0.0',
+      modality: 'unknown',
+      lifecycle: 'renderer',
+      priority: 1,
+      extensions: [`.${id}`],
+      mimeTypes: [],
+      capabilities: { preview: true, edit: false, inspect: false, structuredSelection: false }
+    }))
+    const actions = manifests.map((manifest) => ({
+      id: 'shared.action',
+      label: `Shared ${manifest.id}`,
+      run: async () => ({ ok: true as const, kind: 'ui' as const, actionId: 'shared.action' })
+    }))
     const registry = createRendererWorkspacePreviewRegistry()
 
-    expect(registry.resolve({ path: 'mesh.vtk', includeFallback: true })).toBeNull()
+    registry.registerMany(manifests.map((manifest, index) => ({
+      ownerId: manifest.id,
+      contribution: {
+        manifest,
+        render: () => createElement('div'),
+        actions: [actions[index]]
+      }
+    })))
+
+    expect(registry.getAction('one', 'shared.action')).toBe(actions[0])
+    expect(registry.getAction('two', 'shared.action')).toBe(actions[1])
   })
 })
+
+function createBuiltInRegistry() {
+  return createRendererWorkspacePreviewRegistry({
+    registrations: createBuiltInWorkspacePreviewPluginRegistrations()
+  })
+}

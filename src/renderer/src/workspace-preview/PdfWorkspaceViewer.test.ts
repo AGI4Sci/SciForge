@@ -13,6 +13,7 @@ import type { WorkspacePreviewAssetTransportClient } from './host'
 vi.mock('../components/write/WritePdfViewer', () => ({
   WritePdfViewer: (props: {
     filePath: string
+    documentContentKey?: string
     dataBase64?: string
     data?: Uint8Array | ArrayBuffer
     sourceUrl?: string
@@ -28,9 +29,11 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     onAnnotationSelect?: unknown
     onOpenAnnotations?: unknown
     onToggleAnnotations?: unknown
+    onPresentationStateChange?: unknown
   }) => createElement('div', {
     'data-write-pdf-viewer': 'true',
     'data-file-path': props.filePath,
+    'data-document-content-key': props.documentContentKey,
     'data-pdf-data-base64': props.dataBase64,
     'data-pdf-data-length': props.data instanceof Uint8Array ? props.data.length : props.data?.byteLength,
     'data-pdf-mime-type': props.mimeType,
@@ -45,6 +48,7 @@ vi.mock('../components/write/WritePdfViewer', () => ({
     'data-has-annotation-select': props.onAnnotationSelect ? 'true' : 'false',
     'data-has-open-annotations': props.onOpenAnnotations ? 'true' : 'false',
     'data-has-toggle-annotations': props.onToggleAnnotations ? 'true' : 'false',
+    'data-has-presentation-state-change': props.onPresentationStateChange ? 'true' : 'false',
     ...(props.sourceUrl ? { 'data-source-url': props.sourceUrl } : {})
   })
 }))
@@ -54,6 +58,7 @@ import {
   PdfWorkspaceViewer,
   buildPdfWorkspaceViewerModel,
   loadPdfWorkspacePreviewData,
+  pdfWorkspaceDocumentRevisionKey,
   resolvePdfMimeType
 } from './PdfWorkspaceViewer'
 
@@ -170,6 +175,45 @@ function createPdfTransportClient(input: {
 }
 
 describe('PdfWorkspaceViewer', () => {
+  it('keeps a stable document revision across observation and transport object refreshes', () => {
+    const observation = createPdfObservation()
+    const asset = createPdfAssetDescriptor()
+    const first = pdfWorkspaceDocumentRevisionKey({
+      observation,
+      asset,
+      transport: createPdfTransportClient({
+        asset,
+        sourceUrl: 'sciforge-resource://content?access=revision-1'
+      })
+    })
+    const refreshedObservation = createPdfObservation({
+      file: { ...observation.file },
+      view: { ...observation.view },
+      visibleText: 'A refreshed observation must not reload unchanged PDF bytes.'
+    })
+    const refreshedAsset = createPdfAssetDescriptor({
+      file: { ...asset.file },
+      range: { ...asset.range },
+      strategies: asset.strategies.map((strategy) => ({ ...strategy }))
+    })
+
+    expect(pdfWorkspaceDocumentRevisionKey({
+      observation: refreshedObservation,
+      asset: refreshedAsset,
+      transport: createPdfTransportClient({
+        asset: refreshedAsset,
+        sourceUrl: 'sciforge-resource://content?access=revision-2'
+      })
+    })).toBe(first)
+    expect(pdfWorkspaceDocumentRevisionKey({
+      observation: createPdfObservation({
+        file: { ...observation.file, mtimeMs: 42 }
+      }),
+      asset,
+      transport: createPdfTransportClient({ asset })
+    })).not.toBe(first)
+  })
+
   it('loads PDF bytes through transport and renders WritePdfViewer without file URLs', async () => {
     const observation = createPdfObservation()
     const asset = createPdfAssetDescriptor()
@@ -196,22 +240,25 @@ describe('PdfWorkspaceViewer', () => {
       observation,
       asset,
       transport,
-      previewState: result
+      previewState: result,
+      onPresentationStateChange: vi.fn()
     }))
 
     expect(html).toContain('data-workspace-preview-pdf-viewer')
     expect(html).toContain('data-pdf-ready-shell')
     expect(html).toContain('data-write-pdf-viewer="true"')
+    expect(html).toContain('data-has-presentation-state-change="true"')
     expect(html).not.toContain('data-pdf-agent-summary')
     expect(html).not.toContain('data-pdf-load-summary')
     expect(html).toContain('data-pdf-data-length="4"')
     expect(html).not.toContain('data-pdf-data-base64')
     expect(html).toContain('data-file-path="/workspace/lab/paper.pdf"')
+    expect(html).toContain('data-document-content-key=')
     expect(html).not.toContain('data-source-url')
     expect(html).not.toContain('file://')
   })
 
-  it('maps an initial document selection to the PDF page and jump rectangle', () => {
+  it('maps an initial document selection to the initial PDF page without a replayable jump request', () => {
     const observation = createPdfObservation({
       selection: {
         kind: 'document',
@@ -235,7 +282,7 @@ describe('PdfWorkspaceViewer', () => {
     }))
 
     expect(html).toContain('data-initial-page="6"')
-    expect(html).toContain('data-has-jump-rect="true"')
+    expect(html).toContain('data-has-jump-rect="false"')
   })
 
   it('prefers workspace preview URL transport for browser-native PDF loading', async () => {

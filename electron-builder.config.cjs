@@ -79,15 +79,13 @@ module.exports = {
   productName: 'SciForge',
   asar: true,
   asarUnpack: [
-    '**/kun/dist/**/*',
-    '**/kun/package*.json',
-    '**/kun/node_modules/**/*',
     ...releaseWorkerManifest.createAsarUnpackGlobs(),
-    '**/node_modules/better-sqlite3/**/*',
+    '**/node_modules/@napi-rs/canvas-*/**/*',
     '**/node_modules/node-pty/**/*',
-    '**/node_modules/bindings/**/*',
-    '**/node_modules/file-uri-to-path/**/*'
+    '**/node_modules/proxy-from-env/**/*',
+    '**/node_modules/zod/**/*',
   ],
+  beforePack: './scripts/before-pack.cjs',
   npmRebuild: true,
   directories: {
     output: process.env.SCIFORGE_DIST_DIR || process.env.DEEPSEEK_GUI_DIST_DIR || 'dist'
@@ -95,10 +93,8 @@ module.exports = {
   files: [
     'out/**/*',
     'package.json',
-    'kun/dist/**/*',
-    'kun/package.json',
-    'kun/package-lock.json',
-    'kun/node_modules/**/*',
+    'node_modules/playwright-core/**/*',
+    'node_modules/zod/**/*',
     '!**/*.map',
     '!**/*.d.ts',
     '!**/*.ts',

@@ -40,11 +40,11 @@ const tasks = [
   },
   {
     id: 'task-03-runtime-plan-tool-policy',
-    prompt: '审计本地 runtime 的 plan mode 工具白名单，确保计划模式只能使用 read/grep/find/ls/web_search/web_fetch/request_user_input/create_plan，不能执行 bash/edit/write。',
+    prompt: '审计 Codex 和 Claude Code 的 plan mode 工具策略，确保计划阶段不能提前执行实现或写入工作区。',
     files: {
-      'kun/src/adapters/tool/capability-registry.ts': `// fixture: plan mode allowed tool names are filtered here.\n`,
-      'kun/src/adapters/tool/local-tool-host.ts': `// fixture: request_user_input and create_plan are registered here.\n`,
-      'kun/tests/agent-loop-sandbox.test.ts': `// fixture: sandbox policy tests live here.\n`
+      'src/shared/long-horizon-prompt.ts': `// fixture: shared plan-mode policy is defined here.\n`,
+      'src/main/runtime/codex/codex-agent-runtime-adapter.ts': `// fixture: Codex runtime mode mapping lives here.\n`,
+      'src/main/runtime/claude-code/claude-code-agent-runtime-adapter.ts': `// fixture: Claude Code runtime mode mapping lives here.\n`
     }
   },
   {
@@ -68,16 +68,16 @@ const tasks = [
     id: 'task-06-electron-startup-crash',
     prompt: '排查 npm run dev 启动 Electron 时 main process 找不到 @anthropic-ai/claude-agent-sdk 的问题，要求找出依赖、构建产物和 package-lock 的根因，并给出验证步骤。',
     files: {
-      'package.json': `{"dependencies":{"@anthropic-ai/claude-agent-sdk":"^0.3.185"},"scripts":{"dev":"npm run build:local-runtime && electron-vite dev"}}\n`,
+      'package.json': `{"dependencies":{"@anthropic-ai/claude-agent-sdk":"^0.3.185"},"scripts":{"dev":"npm run build:agent-support && electron-vite dev"}}\n`,
       'electron.vite.config.ts': `// fixture: Electron main and renderer build config.\n`,
-      'src/main/index.ts': `// fixture: main process imports local runtime and SDK-backed adapters.\n`
+      'src/main/index.ts': `// fixture: main process imports Codex and SDK-backed Claude adapters.\n`
     }
   },
   {
     id: 'task-07-session-archive-migration',
     prompt: '为会话归档设计数据库迁移方案：sessions 增加 archived_at、archive_reason，要求有回滚策略、索引影响说明、旧数据兼容和验证 SQL。',
     files: {
-      'kun/src/adapters/file/schema.sql': `CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT, created_at TEXT NOT NULL);\n`,
+      'src/main/runtime/codex/codex-thread-store.ts': `// fixture: Codex thread metadata persistence lives here.\n`,
       'docs/database.md': `# Database notes\nMigrations must be reversible and safe for existing local workspaces.\n`
     }
   },

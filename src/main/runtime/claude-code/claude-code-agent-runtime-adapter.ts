@@ -71,13 +71,17 @@ export function createClaudeCodeAgentRuntimeAdapter(
       return result.detail
     },
 
-    async startTurn(_context, input) {
+    async startTurn(context, input) {
       const result = await service.startTurn({
         threadId: input.threadId,
         text: input.text,
         displayText: input.displayText,
         workspace: input.workspace,
-        reasoningEffort: input.reasoningEffort
+        reasoningEffort: input.reasoningEffort,
+        ownedVisualToolsAvailable:
+          context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending:
+          context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
       })
       if (!result.ok) throw claudeFailure(result)
       return {
@@ -113,6 +117,10 @@ export function createClaudeCodeAgentRuntimeAdapter(
 
     async publishSyntheticEvent(_context, event) {
       return service.publishSyntheticEvent(event)
+    },
+
+    async updateTurnGovernanceSnapshot(_context, input) {
+      service.updateTurnGovernanceSnapshot(input)
     },
 
     async usage(_context, input) {

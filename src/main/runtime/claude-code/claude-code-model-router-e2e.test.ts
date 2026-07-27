@@ -14,7 +14,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -52,7 +51,6 @@ function configuredModelRouterSettings(baseUrl: string) {
   modelRouter.publicModelAlias = 'sciforge-router'
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text.example/v1',
     apiKey: 'text-provider-key',
     model: 'text-model'
@@ -67,7 +65,7 @@ function settings(input: { workspaceRoot: string; modelRouterBaseUrl: string }):
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'claude',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: defaultCodexRuntimeSettings(),
@@ -100,9 +98,7 @@ function modelRouterConfig(): ModelRouterConfig {
     runtimeApiKeyEnv: 'MODEL_ROUTER_RUNTIME_KEY',
     profiles: {
       default: {
-        traceRoot: '.sciforge/model-router-traces',
         textReasoner: {
-          provider: 'test-text-provider',
           baseUrl: 'https://text.example/v1',
           apiKeyEnv: 'TEXT_PROVIDER_KEY',
           model: 'text-model'
@@ -270,7 +266,21 @@ function providerFetch(calls: CapturedProviderCall[]): typeof fetch {
     const body = typeof init?.body === 'string'
       ? JSON.parse(init.body) as Record<string, unknown>
       : {}
-    calls.push({ url: String(input), body })
+    const url = String(input)
+    calls.push({ url, body })
+    const pathname = new URL(url).pathname
+    if (pathname.endsWith('/messages') || pathname.endsWith('/responses')) {
+      return new Response(JSON.stringify({ error: { message: 'endpoint not found' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
+    if (!pathname.endsWith('/chat/completions')) {
+      return new Response(JSON.stringify({ error: { message: 'unexpected endpoint' } }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' }
+      })
+    }
     return new Response(JSON.stringify({
       id: 'chatcmpl-claude-e2e',
       object: 'chat.completion',
@@ -344,7 +354,11 @@ describe('Claude Code runtime + Model Router e2e', () => {
 
       await waitUntil(async () => {
         const detail = await service.readThread(thread.thread.id)
-        return detail.ok && detail.detail.latestTurnStatus === 'completed'
+        return detail.ok &&
+          detail.detail.latestTurnStatus === 'completed' &&
+          detail.detail.items?.some((item) =>
+            item.kind === 'assistant_message' && item.text === 'Routed Claude request.'
+          ) === true
       })
 
       const detail = await service.readThread(thread.thread.id)
@@ -374,12 +388,17 @@ describe('Claude Code runtime + Model Router e2e', () => {
       expect(claudeRequests[0]?.env.ANTHROPIC_API_KEY).toBe('local-runtime-router-key')
       expect(claudeRequests[0]?.env.ANTHROPIC_AUTH_TOKEN).toBe('local-runtime-router-key')
       expect(claudeRequests[0]?.env.ANTHROPIC_MODEL).toBe('sonnet')
-      expect(providerCalls).toHaveLength(1)
-      expect(providerCalls[0]?.url).toBe('https://text.example/v1/chat/completions')
-      expect(providerCalls[0]?.body.model).toBe('text-model')
-      expect(providerCalls[0]?.body).not.toHaveProperty('thinking')
-      expect(providerCalls[0]?.body).not.toHaveProperty('output_config')
-      expect(providerCalls[0]?.body.tools).toEqual(expect.arrayContaining([
+      expect(providerCalls.map((call) => call.url)).toEqual([
+        'https://text.example/v1/messages',
+        'https://text.example/v1/responses',
+        'https://text.example/v1/chat/completions'
+      ])
+      expect(providerCalls[0]?.body.thinking).toEqual({ type: 'disabled' })
+      expect(providerCalls[1]?.body).not.toHaveProperty('thinking')
+      expect(providerCalls[2]?.body.model).toBe('text-model')
+      expect(providerCalls[2]?.body).not.toHaveProperty('thinking')
+      expect(providerCalls[2]?.body).not.toHaveProperty('output_config')
+      expect(providerCalls[2]?.body.tools).toEqual(expect.arrayContaining([
         expect.objectContaining({
           type: 'function',
           function: expect.objectContaining({ name: 'Bash' })

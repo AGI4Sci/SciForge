@@ -11,10 +11,14 @@ import type { ChatState, ChatStoreGet, ChatStoreSet, SendMessageOverrides } from
 const registryMock = vi.hoisted(() => ({
   getProvider: vi.fn()
 }))
+const lifecycleMock = vi.hoisted(() => ({
+  disposeSessionRightPanelWorkspace: vi.fn()
+}))
 
 vi.mock('../agent/registry', () => ({
   getProvider: registryMock.getProvider
 }))
+vi.mock('../lib/session-right-panel-lifecycle', () => lifecycleMock)
 
 import { createMaintenanceActions } from './chat-store-maintenance-actions'
 
@@ -30,6 +34,7 @@ type Harness = {
   drainQueuedMessages: ReturnType<typeof vi.fn>
   get: ChatStoreGet
   provider: {
+    archiveThread: ReturnType<typeof vi.fn>
     compactThread: ReturnType<typeof vi.fn>
     forkThread: ReturnType<typeof vi.fn>
     getContextState: ReturnType<typeof vi.fn>
@@ -41,6 +46,7 @@ type Harness = {
     setThreadGoal: ReturnType<typeof vi.fn>
     clearThreadGoal: ReturnType<typeof vi.fn>
     interruptTurn: ReturnType<typeof vi.fn>
+    deleteThread: ReturnType<typeof vi.fn>
   }
   refreshActiveThreadContextState: ReturnType<typeof vi.fn>
   refreshThreads: ReturnType<typeof vi.fn>
@@ -110,6 +116,7 @@ function buildHarness(options: {
   let state: ChatState
 
   const provider = {
+    archiveThread: vi.fn(async () => undefined),
     compactThread: vi.fn(async () => undefined),
     forkThread: vi.fn(async () => thread('thr_fork')),
     getContextState: vi.fn(async (threadId: string) => ({
@@ -137,7 +144,8 @@ function buildHarness(options: {
       )
     ),
     clearThreadGoal: vi.fn(async () => true),
-    interruptTurn: vi.fn(async () => undefined)
+    interruptTurn: vi.fn(async () => undefined),
+    deleteThread: vi.fn(async () => undefined)
   }
   registryMock.getProvider.mockReturnValue(provider)
 
@@ -215,6 +223,32 @@ function buildHarness(options: {
 describe('chat-store-maintenance-actions goal actions', () => {
   beforeEach(() => {
     registryMock.getProvider.mockReset()
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockReset()
+  })
+
+  it('disposes a session workspace only when archiving, not when restoring', async () => {
+    const { actions, provider, state } = buildHarness()
+
+    await actions.archiveThread('thr_existing', true)
+
+    expect(provider.archiveThread).toHaveBeenCalledWith('thr_existing', true)
+    expect(lifecycleMock.disposeSessionRightPanelWorkspace).toHaveBeenCalledWith('thr_existing')
+
+    lifecycleMock.disposeSessionRightPanelWorkspace.mockClear()
+    state.activeThreadId = null
+    await actions.archiveThread('thr_existing', false)
+
+    expect(provider.archiveThread).toHaveBeenCalledWith('thr_existing', false)
+    expect(lifecycleMock.disposeSessionRightPanelWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('disposes a session workspace after its thread is deleted successfully', async () => {
+    const { actions, provider } = buildHarness()
+
+    await actions.deleteThread('thr_existing')
+
+    expect(provider.deleteThread).toHaveBeenCalledWith('thr_existing')
+    expect(lifecycleMock.disposeSessionRightPanelWorkspace).toHaveBeenCalledWith('thr_existing')
   })
 
   it('sets a goal on the active thread, syncs snapshots, and starts the goal turn', async () => {

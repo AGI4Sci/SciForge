@@ -11,17 +11,19 @@ import type {
   PdfAnnotationThread
 } from '@shared/pdf-annotations'
 import type {
-  WritePdfAnnotationAction,
   WritePdfAnnotationOverlay,
-  WritePdfSelection,
   WritePdfSelectionPageRect
 } from '../components/write/WritePdfViewer'
 import type {
-  WriteDocxAnnotationOverlay
-} from '../components/write/WriteDocxViewer'
-import type {
   WritePdfAnnotationDisplayMode
 } from '../components/write/WritePdfAnnotationsPanel'
+import type {
+  DocumentAnnotationAction,
+  DocumentAnnotationSelection,
+  DocumentKind,
+  DocumentNavigationRequest,
+  DocumentTextAnnotationOverlay
+} from './document-annotation-types'
 
 type AnnotationRect = NonNullable<NonNullable<WorkspacePreviewAnnotationUpsertTarget['anchor']>['rects']>[number]
 
@@ -31,18 +33,17 @@ export type AnnotationThreadOperationInput = {
 }
 
 export type CreateDocumentAnnotationOperationInput = {
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   path: string
-  action: WritePdfAnnotationAction
-  selection: WritePdfSelection
-  documentText?: string
+  action: DocumentAnnotationAction
+  selection: DocumentAnnotationSelection
   translationBody?: string
   visualSelectionQuote?: string
   createId?: (prefix: string) => string
 }
 
 export function workspacePreviewAnnotationKindForAction(
-  action: WritePdfAnnotationAction
+  action: DocumentAnnotationAction
 ): WorkspacePreviewAnnotationKind | null {
   if (action === 'copy') return null
   if (action === 'comment') return 'comment'
@@ -51,32 +52,18 @@ export function workspacePreviewAnnotationKindForAction(
   return 'highlight'
 }
 
-export function createPdfWorkspacePreviewAnnotationOperation(
-  input: Omit<CreateDocumentAnnotationOperationInput, 'documentKind'>
-): WorkspacePreviewEditOperation | null {
-  return createDocumentWorkspacePreviewAnnotationOperation({
-    ...input,
-    documentKind: 'pdf'
-  })
-}
-
-export function createDocxWorkspacePreviewAnnotationOperation(
-  input: Omit<CreateDocumentAnnotationOperationInput, 'documentKind'>
-): WorkspacePreviewEditOperation | null {
-  return createDocumentWorkspacePreviewAnnotationOperation({
-    ...input,
-    documentKind: 'docx'
-  })
-}
-
 export function createDocumentWorkspacePreviewAnnotationOperation(
   input: CreateDocumentAnnotationOperationInput
 ): WorkspacePreviewEditOperation | null {
+  if (
+    input.selection.sourceKind !== input.documentKind ||
+    input.selection.metadata.sourceKind !== input.documentKind
+  ) return null
   const annotationKind = workspacePreviewAnnotationKindForAction(input.action)
   if (!annotationKind) return null
 
   const rawQuote = cleanAnnotationText(input.selection.text, WORKSPACE_PREVIEW_MAX_ANNOTATION_TEXT_CHARS)
-  if (input.documentKind === 'docx' && !rawQuote) return null
+  if (input.documentKind !== 'pdf' && !rawQuote) return null
 
   const createId = input.createId ?? createLocalId
   const fallbackQuote = cleanAnnotationText(
@@ -92,9 +79,27 @@ export function createDocumentWorkspacePreviewAnnotationOperation(
   const rects = input.documentKind === 'pdf'
     ? normalizeAnnotationRects(input.selection.rects ?? input.selection.metadata.rects)
     : []
-  const context = input.documentKind === 'docx'
-    ? selectionContextInText(input.documentText ?? '', rawQuote)
-    : { before: '', after: '' }
+  const context = {
+    before: cleanAnnotationText(
+      input.selection.contextBefore ?? '',
+      WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS
+    ),
+    after: cleanAnnotationText(
+      input.selection.contextAfter ?? '',
+      WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS
+    )
+  }
+  const selectionRange = input.selection.ranges[0]
+  const textRange = rawQuote && selectionRange
+    ? {
+        start: Math.max(0, Math.min(selectionRange.from, selectionRange.to)),
+        end: Math.max(0, Math.max(selectionRange.from, selectionRange.to)),
+        startLine: selectionRange.startLine,
+        startColumn: selectionRange.startColumn,
+        endLine: selectionRange.endLine,
+        endColumn: selectionRange.endColumn
+      }
+    : undefined
   const body = input.action === 'translation'
     ? cleanAnnotationText(input.translationBody ?? '', WORKSPACE_PREVIEW_MAX_ANNOTATION_TEXT_CHARS)
     : ''
@@ -114,6 +119,7 @@ export function createDocumentWorkspacePreviewAnnotationOperation(
         quote: sourceText,
         contextBefore: context.before,
         contextAfter: context.after,
+        ...(textRange ? { textRange } : {}),
         pageStart,
         pageEnd,
         ...(rects.length ? { rects } : {})
@@ -199,39 +205,56 @@ export function createPdfAnnotationOverlaysFromSidecar(
     })
 }
 
-export function createDocxAnnotationOverlaysFromSidecar(
+export function createTextAnnotationOverlaysFromSidecar(
   sidecar: PdfAnnotationSidecar | null | undefined,
   options: {
     displayMode?: WritePdfAnnotationDisplayMode
     activeThreadId?: string | null
   } = {}
-): WriteDocxAnnotationOverlay[] {
+): DocumentTextAnnotationOverlay[] {
   if (!sidecar || options.displayMode === 'hidden') return []
   const activeThreadId = options.activeThreadId?.trim() || null
   return sidecar.threads
     .filter((thread) => shouldShowAnnotationThread(thread, options.displayMode, activeThreadId))
-    .flatMap((thread): WriteDocxAnnotationOverlay[] => {
-      const quote = anchorsForThread(sidecar, thread)
-        .map((anchor) => anchor.quote)
-        .find((value) => value.trim()) ?? ''
+    .flatMap((thread): DocumentTextAnnotationOverlay[] => {
+      const anchor = anchorsForThread(sidecar, thread)
+        .find((candidate) => candidate.quote.trim())
+      const quote = anchor?.quote ?? ''
       if (!quote.trim()) return []
       return [{
         id: thread.id,
         kind: annotationOverlayKind(thread.kind),
         quote,
-        status: thread.status
+        ...(anchor?.contextBefore ? { contextBefore: anchor.contextBefore } : {}),
+        ...(anchor?.contextAfter ? { contextAfter: anchor.contextAfter } : {}),
+        ...(anchor?.textRange ? { textRange: anchor.textRange } : {}),
+        status: thread.status,
+        label: thread.title || annotationsForThread(sidecar, thread)
+          .find((annotation) => annotation.body.trim())?.body || thread.kind
       }]
     })
 }
 
-export function firstPdfAnnotationThreadRect(
+export function createDocumentAnnotationNavigationRequest(
   sidecar: PdfAnnotationSidecar | null | undefined,
-  threadId: string | null | undefined
-): WritePdfSelectionPageRect | null {
-  if (!sidecar || !threadId) return null
+  threadId: string,
+  requestId: string
+): DocumentNavigationRequest | null {
+  if (!sidecar) return null
   const thread = sidecar.threads.find((candidate) => candidate.id === threadId)
   if (!thread) return null
-  return anchorsForThread(sidecar, thread).flatMap((anchor) => anchor.rects)[0] ?? null
+  const anchor = anchorsForThread(sidecar, thread)
+    .find((candidate) => candidate.rects.length > 0 || candidate.quote.trim())
+  if (!anchor) return null
+  return {
+    requestId,
+    threadId,
+    quote: anchor.quote,
+    ...(anchor.contextBefore ? { contextBefore: anchor.contextBefore } : {}),
+    ...(anchor.contextAfter ? { contextAfter: anchor.contextAfter } : {}),
+    ...(anchor.textRange ? { textRange: anchor.textRange } : {}),
+    ...(anchor.rects[0] ? { pageRect: { ...anchor.rects[0] } } : {})
+  }
 }
 
 function shouldShowAnnotationThread(
@@ -259,7 +282,7 @@ function annotationOverlayKind(kind: WorkspacePreviewAnnotationKind): WritePdfAn
 }
 
 function annotationAnchorKind(
-  selection: WritePdfSelection,
+  selection: DocumentAnnotationSelection,
   rawQuote: string
 ): NonNullable<NonNullable<WorkspacePreviewAnnotationUpsertTarget['anchor']>['kind']> {
   if (rawQuote) return 'text'
@@ -279,22 +302,6 @@ function normalizeAnnotationRects(
       height: clampUnit(rect.height)
     }))
     .filter((rect) => rect.width > 0 && rect.height > 0)
-}
-
-function selectionContextInText(documentText: string, selectedText: string): { before: string; after: string } {
-  if (!documentText || !selectedText) return { before: '', after: '' }
-  const index = documentText.indexOf(selectedText)
-  if (index < 0) return { before: '', after: '' }
-  return {
-    before: cleanAnnotationText(
-      documentText.slice(Math.max(0, index - WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS), index),
-      WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS
-    ),
-    after: cleanAnnotationText(
-      documentText.slice(index + selectedText.length, index + selectedText.length + WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS),
-      WORKSPACE_PREVIEW_MAX_ANNOTATION_CONTEXT_CHARS
-    )
-  }
 }
 
 function positivePage(value: number | undefined): number {

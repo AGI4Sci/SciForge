@@ -19,50 +19,19 @@ import {
   type SkillRootId
 } from '../lib/skill-root-preference'
 import { normalizeWorkspaceRoot } from '../lib/workspace-path'
-import {
-  loadInstalledPluginKeys,
-  PAPER_RADAR_EXTENSION_ID,
-  pluginStorageKey,
-  saveInstalledPluginKeys,
-  type PluginInstallKind
-} from '../lib/plugin-install-state'
-import { getProvider } from '../agent/registry'
 import type {
   ScientificSkillsInstallRequest,
   ScientificSkillsStatusResult,
   SkillListItem
 } from '@shared/sciforge-api'
-import type {
-  LocalRuntimeInfoJson,
-  LocalRuntimeToolDiagnosticsJson
-} from '../agent/local-runtime-contract'
 import { useChatStore } from '../store/chat-store'
-import { NoticeView, TabButton, type MarketplaceNotice } from './PluginMarketplaceParts'
-import {
-  buildMcpMarketplaceOverlay,
-  type McpMarketplaceOverlay,
-  type McpMarketplaceOverlayStatus
-} from './plugin-marketplace-runtime'
-import {
-  buildMcpConfig,
-  customMcpConfigFragment,
-  isJsonRecord,
-  mcpConfigHasServer,
-  mcpServersFromConfig,
-  mergeMcpJsonConfig,
-  parseMcpJsonConfig,
-  type JsonRecord
-} from '../lib/mcp-config'
+import { NoticeView, type MarketplaceNotice } from './PluginMarketplaceParts'
 
-type PluginKind = PluginInstallKind
 type PluginFilter = 'all' | 'recommended' | 'installed'
-type NoticeTone = 'success' | 'error' | 'info'
 
-type Notice = MarketplaceNotice
-
-type MarketplaceItem = {
+export type MarketplaceItem = {
   id: string
-  kind: PluginKind
+  kind: 'skill'
   titleKey?: string
   descriptionKey?: string
   title?: string
@@ -70,8 +39,6 @@ type MarketplaceItem = {
   group: 'recommended' | 'personal'
   sourceLabel?: string
   statusTone?: 'default' | 'success' | 'warning' | 'error'
-  systemManaged?: boolean
-  mcpConfig?: (workspaceRoot: string) => JsonRecord | Promise<JsonRecord>
   skillInstructions?: string
 }
 
@@ -82,7 +49,6 @@ type SkillRootOption = {
   available: boolean
 }
 
-const GUI_SCHEDULE_MCP_SERVER_ID = 'gui_schedule'
 type ScientificSkillsStatusOk = Extract<ScientificSkillsStatusResult, { ok: true }>
 type ScientificSkillsInstallBackend = NonNullable<ScientificSkillsInstallRequest['backend']>
 
@@ -100,40 +66,6 @@ function normalizePluginId(raw: string): string {
     .replace(/^-+|-+$/g, '')
 }
 
-function mcpServerDescription(server: JsonRecord | undefined, fallback: string): string {
-  if (!server) return fallback
-  const transport = typeof server.transport === 'string' ? server.transport : ''
-  const command = typeof server.command === 'string' ? server.command : ''
-  const url = typeof server.url === 'string' ? server.url : ''
-  const status = typeof server.status === 'string' ? server.status : ''
-  const lastError = typeof server.lastError === 'string' ? server.lastError : ''
-  const toolCount = typeof server.toolCount === 'number' && Number.isFinite(server.toolCount)
-    ? server.toolCount
-    : undefined
-  const parts = [
-    status ? `status: ${status}` : '',
-    transport,
-    command || url,
-    toolCount != null ? `${toolCount} tools` : '',
-    lastError ? `error: ${lastError}` : ''
-  ].filter(Boolean)
-  return parts.length ? parts.join(' · ') : fallback
-}
-
-function mcpServerStatus(diagnostic: JsonRecord | undefined, config: JsonRecord | undefined): string {
-  const diagnosticStatus = typeof diagnostic?.status === 'string' ? diagnostic.status : ''
-  if (diagnosticStatus) return diagnosticStatus
-  if (config?.enabled === false || config?.disabled === true) return 'disabled'
-  return ''
-}
-
-function mcpStatusTone(status: string): MarketplaceItem['statusTone'] {
-  if (status === 'connected' || status === 'available') return 'success'
-  if (status === 'error' || status === 'unavailable') return 'error'
-  if (status === 'disabled') return 'warning'
-  return 'default'
-}
-
 function buildSkillContent(id: string, title: string, description: string, instructions: string): string {
   return [
     '---',
@@ -147,20 +79,16 @@ function buildSkillContent(id: string, title: string, description: string, instr
   ].join('\n')
 }
 
+function skillItemKey(id: string): string {
+  return `skill:${id}`
+}
+
 function itemTitle(item: MarketplaceItem, t: (key: string) => string): string {
-  const catalogItem = item.group === 'personal'
-    ? RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
-    : undefined
-  const displayItem = catalogItem ?? item
-  return displayItem.title ?? (displayItem.titleKey ? t(displayItem.titleKey) : displayItem.id)
+  return item.title ?? (item.titleKey ? t(item.titleKey) : item.id)
 }
 
 function itemDescription(item: MarketplaceItem, t: (key: string) => string): string {
-  const catalogItem = item.group === 'personal'
-    ? RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
-    : undefined
-  const displayItem = catalogItem ?? item
-  return displayItem.description ?? (displayItem.descriptionKey ? t(displayItem.descriptionKey) : '')
+  return item.description ?? (item.descriptionKey ? t(item.descriptionKey) : '')
 }
 
 export function skillMarketplaceItemsFromDiscoveredSkills(
@@ -177,230 +105,12 @@ export function skillMarketplaceItemsFromDiscoveredSkills(
   }))
 }
 
-export function mcpMarketplaceItemsFromConfigAndDiagnostics(
-  configText: string,
-  diagnostics: LocalRuntimeToolDiagnosticsJson | null,
-  labels: {
-    configured: string
-    connected: string
-    error: string
-    disabled: string
-  }
-): MarketplaceItem[] {
-  const servers = new Map<string, {
-    id: string
-    config?: JsonRecord
-    diagnostic?: JsonRecord
-  }>()
-  try {
-    const configServers = mcpServersFromConfig(parseMcpJsonConfig(configText))
-    for (const [id, value] of Object.entries(configServers)) {
-      if (!id.trim()) continue
-      servers.set(id, {
-        id,
-        config: isJsonRecord(value) ? value : {}
-      })
-    }
-  } catch {
-    /* Invalid config is surfaced elsewhere; keep the marketplace render resilient. */
-  }
-  for (const diagnostic of diagnostics?.mcpServers ?? []) {
-    const id = typeof diagnostic.id === 'string' ? diagnostic.id.trim() : ''
-    if (!id) continue
-    const existing = servers.get(id)
-    servers.set(id, {
-      id,
-      config: existing?.config,
-      diagnostic
-    })
-  }
-  return [...servers.values()].map(({ id, config, diagnostic }) => {
-    const status = mcpServerStatus(diagnostic, config)
-    const details = { ...(config ?? {}), ...(diagnostic ?? {}) }
-    const sourceLabel =
-      status === 'connected' || status === 'available' ? labels.connected :
-      status === 'error' || status === 'unavailable' ? labels.error :
-      status === 'disabled' ? labels.disabled :
-      labels.configured
-    return {
-      id,
-      kind: 'mcp' as const,
-      title: id,
-      description: mcpServerDescription(details, labels.configured),
-      group: 'personal' as const,
-      sourceLabel,
-      statusTone: mcpStatusTone(status)
-    }
-  }).sort((left, right) => left.title.localeCompare(right.title))
-}
-
 function skillNameLooksValid(raw: string): boolean {
   const value = raw.trim()
   return !!value && value !== '.' && value !== '..' && !/[\\/]/.test(value)
 }
 
-const RECOMMENDED_ITEMS: MarketplaceItem[] = [
-  {
-    id: GUI_SCHEDULE_MCP_SERVER_ID,
-    kind: 'mcp',
-    titleKey: 'pluginMcpGuiScheduleTitle',
-    descriptionKey: 'pluginMcpGuiScheduleDesc',
-    group: 'recommended',
-    systemManaged: true
-  },
-  {
-    id: 'filesystem',
-    kind: 'mcp',
-    titleKey: 'pluginMcpFilesystemTitle',
-    descriptionKey: 'pluginMcpFilesystemDesc',
-    group: 'recommended',
-    mcpConfig: (workspaceRoot) =>
-      buildMcpConfig(
-        'filesystem',
-        'npx',
-        ['-y', '@modelcontextprotocol/server-filesystem', workspaceRoot || '/path/to/project'],
-        {
-          trustScope: 'workspace',
-          trustedWorkspaceRoots: [workspaceRoot || '/path/to/project']
-        }
-      )
-  },
-  {
-    id: 'dataset_api',
-    kind: 'mcp',
-    titleKey: 'pluginMcpDatasetApiTitle',
-    descriptionKey: 'pluginMcpDatasetApiDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildDatasetApiMcpConfig !== 'function') {
-        throw new Error('Dataset API MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildDatasetApiMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: 'playwright',
-    kind: 'mcp',
-    titleKey: 'pluginMcpPlaywrightTitle',
-    descriptionKey: 'pluginMcpPlaywrightDesc',
-    group: 'recommended',
-    mcpConfig: () =>
-      buildMcpConfig(
-        'playwright',
-        'npx',
-        ['-y', '@playwright/mcp@latest']
-      )
-  },
-  {
-    id: 'github',
-    kind: 'mcp',
-    titleKey: 'pluginMcpGithubTitle',
-    descriptionKey: 'pluginMcpGithubDesc',
-    group: 'recommended',
-    mcpConfig: () =>
-      buildMcpConfig(
-        'github',
-        'npx',
-        ['-y', '@modelcontextprotocol/server-github']
-      )
-  },
-  {
-    id: 'context7',
-    kind: 'mcp',
-    titleKey: 'pluginMcpContext7Title',
-    descriptionKey: 'pluginMcpContext7Desc',
-    group: 'recommended',
-    mcpConfig: () =>
-      buildMcpConfig(
-        'context7',
-        'npx',
-        ['-y', '@upstash/context7-mcp@latest']
-      )
-  },
-  {
-    id: 'scientific_skills',
-    kind: 'mcp',
-    titleKey: 'pluginMcpScientificSkillsTitle',
-    descriptionKey: 'pluginMcpScientificSkillsDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildScientificSkillsMcpConfig !== 'function') {
-        throw new Error('Scientific skills MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildScientificSkillsMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: 'scientific_plotting',
-    kind: 'mcp',
-    titleKey: 'pluginMcpScientificPlottingTitle',
-    descriptionKey: 'pluginMcpScientificPlottingDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildScientificPlottingMcpConfig !== 'function') {
-        throw new Error('Scientific plotting MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildScientificPlottingMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: 'bgc_discovery',
-    kind: 'mcp',
-    titleKey: 'pluginMcpBgcDiscoveryTitle',
-    descriptionKey: 'pluginMcpBgcDiscoveryDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildBgcDiscoveryMcpConfig !== 'function') {
-        throw new Error('BGC Discovery MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildBgcDiscoveryMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: 'image_generation',
-    kind: 'mcp',
-    titleKey: 'pluginMcpImageGenerationTitle',
-    descriptionKey: 'pluginMcpImageGenerationDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildImageGenerationMcpConfig !== 'function') {
-        throw new Error('Image generation MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildImageGenerationMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: 'ppt_master',
-    kind: 'mcp',
-    titleKey: 'pluginMcpPptMasterTitle',
-    descriptionKey: 'pluginMcpPptMasterDesc',
-    group: 'recommended',
-    mcpConfig: async (workspaceRoot) => {
-      if (typeof window.sciforge?.buildPptMasterMcpConfig !== 'function') {
-        throw new Error('ppt-master MCP config is unavailable in this build.')
-      }
-      const result = await window.sciforge.buildPptMasterMcpConfig(workspaceRoot || undefined)
-      if (!result.ok) throw new Error(result.message)
-      return result.config
-    }
-  },
-  {
-    id: PAPER_RADAR_EXTENSION_ID,
-    kind: 'extension',
-    titleKey: 'pluginExtensionPaperRadarTitle',
-    descriptionKey: 'pluginExtensionPaperRadarDesc',
-    group: 'recommended'
-  },
+export const RECOMMENDED_SKILL_ITEMS: readonly MarketplaceItem[] = [
   {
     id: 'code-review',
     kind: 'skill',
@@ -442,26 +152,15 @@ const RECOMMENDED_ITEMS: MarketplaceItem[] = [
 export function PluginMarketplaceView(): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = normalizeWorkspaceRoot(useChatStore((s) => s.workspaceRoot))
-  const [activeKind, setActiveKind] = useState<PluginKind>('mcp')
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<PluginFilter>('all')
-  const [installed, setInstalled] = useState<string[]>(() => loadInstalledPluginKeys())
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [notice, setNotice] = useState<Notice | null>(null)
+  const [notice, setNotice] = useState<MarketplaceNotice | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
   const [customName, setCustomName] = useState('')
   const [customDescription, setCustomDescription] = useState('')
-  const [customCommand, setCustomCommand] = useState('')
-  const [customArgs, setCustomArgs] = useState('')
-  const [customConfig, setCustomConfig] = useState('')
   const [customSkillBody, setCustomSkillBody] = useState('')
   const [skillRootId, setSkillRootId] = useState<SkillRootId>(() => loadPreferredSkillRootId())
-  const [mcpConfigText, setMcpConfigText] = useState('')
-  const [mcpLoaded, setMcpLoaded] = useState(false)
-  const [runtimeInfo, setRuntimeInfo] = useState<LocalRuntimeInfoJson | null>(null)
-  const [toolDiagnostics, setToolDiagnostics] = useState<LocalRuntimeToolDiagnosticsJson | null>(null)
-  const [runtimeOverlayLoading, setRuntimeOverlayLoading] = useState(false)
-  const [runtimeOverlayError, setRuntimeOverlayError] = useState('')
   const [discoveredSkills, setDiscoveredSkills] = useState<SkillListItem[]>([])
   const [skillListLoading, setSkillListLoading] = useState(false)
   const [skillListError, setSkillListError] = useState('')
@@ -520,54 +219,6 @@ export function PluginMarketplaceView(): ReactElement {
     }
   }, [skillRootId, skillRootOptions])
 
-  const readMcpConfig = useCallback(async (): Promise<string> => {
-    if (typeof window.sciforge?.getRuntimeConfigFile !== 'function') return mcpConfigText
-    const file = await window.sciforge.getRuntimeConfigFile()
-    setMcpConfigText(file.content)
-    setMcpLoaded(true)
-    return file.content
-  }, [mcpConfigText])
-
-  useEffect(() => {
-    if (activeKind !== 'mcp' || mcpLoaded) return
-    void readMcpConfig().catch((e) => {
-      setNotice({ tone: 'error', message: e instanceof Error ? e.message : String(e) })
-    })
-  }, [activeKind, mcpLoaded, readMcpConfig])
-
-  const refreshMcpRuntimeOverlay = useCallback(async (): Promise<void> => {
-    const provider = getProvider()
-    if (!provider.getRuntimeInfo && !provider.getToolDiagnostics) {
-      setRuntimeOverlayError(t('pluginMcpRuntimeUnavailable'))
-      return
-    }
-    setRuntimeOverlayLoading(true)
-    setRuntimeOverlayError('')
-    try {
-      const [runtimeResult, diagnosticsResult] = await Promise.allSettled([
-        provider.getRuntimeInfo?.(),
-        provider.getToolDiagnostics?.()
-      ])
-      if (runtimeResult.status === 'fulfilled' && runtimeResult.value) {
-        setRuntimeInfo(runtimeResult.value)
-      }
-      if (diagnosticsResult.status === 'fulfilled' && diagnosticsResult.value) {
-        setToolDiagnostics(diagnosticsResult.value)
-      }
-      const errors = [runtimeResult, diagnosticsResult]
-        .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
-        .map((result) => runtimeOverlayErrorMessage(result.reason, t('pluginMcpRuntimeUnavailable')))
-      if (errors.length > 0) setRuntimeOverlayError(errors[0] ?? t('pluginActionFailed'))
-    } finally {
-      setRuntimeOverlayLoading(false)
-    }
-  }, [t])
-
-  useEffect(() => {
-    if (activeKind !== 'mcp') return
-    void refreshMcpRuntimeOverlay()
-  }, [activeKind, refreshMcpRuntimeOverlay])
-
   const refreshScientificSkillsStatus = useCallback(async (): Promise<void> => {
     if (typeof window.sciforge?.getScientificSkillsStatus !== 'function') {
       setScientificSkillsStatus(null)
@@ -593,9 +244,8 @@ export function PluginMarketplaceView(): ReactElement {
   }, [t, workspaceRoot])
 
   useEffect(() => {
-    if (activeKind !== 'mcp') return
     void refreshScientificSkillsStatus()
-  }, [activeKind, refreshScientificSkillsStatus])
+  }, [refreshScientificSkillsStatus])
 
   const scientificSkillsInstallTarget = scientificSkillsInstallTargetForWorkspace(workspaceRoot)
 
@@ -666,22 +316,8 @@ export function PluginMarketplaceView(): ReactElement {
   }, [t, workspaceRoot])
 
   useEffect(() => {
-    if (activeKind !== 'skill') return
     void refreshSkillList()
-  }, [activeKind, refreshSkillList])
-
-  useEffect(() => {
-    setNotice(null)
-    setCustomOpen(false)
-  }, [activeKind])
-
-  const markInstalled = (key: string): void => {
-    setInstalled((prev) => {
-      const next = [...new Set([...prev, key])]
-      saveInstalledPluginKeys(next)
-      return next
-    })
-  }
+  }, [refreshSkillList])
 
   const discoveredSkillIds = useMemo(
     () => new Set(discoveredSkills.map((skill) => skill.id)),
@@ -694,43 +330,19 @@ export function PluginMarketplaceView(): ReactElement {
     }),
     [discoveredSkills, t]
   )
-  const discoveredMcpItems = useMemo(
-    () => mcpMarketplaceItemsFromConfigAndDiagnostics(mcpConfigText, toolDiagnostics, {
-      configured: t('pluginMcpSourceConfigured'),
-      connected: t('pluginMcpSourceConnected'),
-      error: t('pluginMcpSourceError'),
-      disabled: t('pluginMcpSourceDisabled')
-    }).filter((item) => item.id !== GUI_SCHEDULE_MCP_SERVER_ID),
-    [mcpConfigText, t, toolDiagnostics]
-  )
-  const discoveredMcpIds = useMemo(
-    () => new Set(discoveredMcpItems.map((item) => item.id)),
-    [discoveredMcpItems]
-  )
   const marketplaceItems = useMemo(
-    () => {
-      if (activeKind === 'skill') return [...RECOMMENDED_ITEMS, ...discoveredSkillItems]
-      if (activeKind === 'mcp') return [...RECOMMENDED_ITEMS, ...discoveredMcpItems]
-      return RECOMMENDED_ITEMS
-    },
-    [activeKind, discoveredMcpItems, discoveredSkillItems]
+    () => [...RECOMMENDED_SKILL_ITEMS, ...discoveredSkillItems],
+    [discoveredSkillItems]
   )
 
-  const isInstalled = useCallback((item: Pick<MarketplaceItem, 'kind' | 'id'>): boolean => {
-    if ('group' in item && item.group === 'personal') return true
-    const catalogItem = RECOMMENDED_ITEMS.find((candidate) => candidate.kind === item.kind && candidate.id === item.id)
-    if (catalogItem?.systemManaged) return true
-    if (item.kind === 'skill' && discoveredSkillIds.has(item.id)) return true
-    if (item.kind === 'mcp' && discoveredMcpIds.has(item.id)) return true
-    const key = pluginStorageKey(item.kind, item.id)
-    if (installed.includes(key)) return true
-    return item.kind === 'mcp' && mcpConfigHasServer(mcpConfigText, item.id)
-  }, [discoveredMcpIds, discoveredSkillIds, installed, mcpConfigText])
+  const isInstalled = useCallback(
+    (item: Pick<MarketplaceItem, 'id'>): boolean => discoveredSkillIds.has(item.id),
+    [discoveredSkillIds]
+  )
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    return marketplaceItems.filter((item) => item.kind === activeKind)
-      .filter((item) => {
+    return marketplaceItems.filter((item) => {
         const title = itemTitle(item, t).toLowerCase()
         const description = itemDescription(item, t).toLowerCase()
         const source = item.sourceLabel?.toLowerCase() ?? ''
@@ -745,54 +357,15 @@ export function PluginMarketplaceView(): ReactElement {
         if (filter === 'installed') return isInstalled(item)
         return true
       })
-  }, [activeKind, filter, isInstalled, marketplaceItems, query, t])
+  }, [filter, isInstalled, marketplaceItems, query, t])
 
-  const builtInItems = visibleItems.filter((item) => item.systemManaged)
-  const recommendedItems = visibleItems.filter((item) => !item.systemManaged && !isInstalled(item))
-  const personalItems = visibleItems.filter((item) =>
-    item.group === 'personal' ||
-    (!item.systemManaged && isInstalled(item) && !discoveredSkillIds.has(item.id) && !discoveredMcpIds.has(item.id))
-  )
-  const mcpRuntimeOverlay = useMemo(
-    () => buildMcpMarketplaceOverlay({
-      runtimeInfo,
-      toolDiagnostics,
-      managedServers: [{ id: GUI_SCHEDULE_MCP_SERVER_ID, toolCount: 4 }]
-    }),
-    [runtimeInfo, toolDiagnostics]
-  )
-
-  const appendMcpConfig = async (id: string, config: JsonRecord): Promise<void> => {
-    const content = mcpLoaded ? mcpConfigText : await readMcpConfig()
-    const merged = mergeMcpJsonConfig(content, config)
-    if (merged.alreadyExists && !merged.changed) {
-      markInstalled(pluginStorageKey('mcp', id))
-      setNotice({ tone: 'info', message: t('pluginAlreadyAdded') })
-      return
-    }
-    const result = await window.sciforge.setRuntimeConfigFile(merged.text)
-    setMcpConfigText(merged.text)
-    setMcpLoaded(true)
-    markInstalled(pluginStorageKey('mcp', id))
-    setNotice({ tone: 'success', message: t('pluginMcpAdded', { path: result.path }) })
-  }
+  const recommendedItems = visibleItems.filter((item) => item.group === 'recommended' && !isInstalled(item))
+  const personalItems = visibleItems.filter((item) => item.group === 'personal')
 
   const addItem = async (item: MarketplaceItem): Promise<void> => {
-    setBusyId(pluginStorageKey(item.kind, item.id))
+    setBusyId(skillItemKey(item.id))
     setNotice(null)
     try {
-      if (item.kind === 'mcp') {
-        if (!item.mcpConfig) return
-        await appendMcpConfig(item.id, await item.mcpConfig(workspaceRoot))
-        return
-      }
-
-      if (item.kind === 'extension') {
-        markInstalled(pluginStorageKey('extension', item.id))
-        setNotice({ tone: 'success', message: t('pluginExtensionEnabled') })
-        return
-      }
-
       if (!selectedSkillRoot?.path) {
         setNotice({ tone: 'error', message: t('pluginSkillRootMissing') })
         return
@@ -811,7 +384,6 @@ export function PluginMarketplaceView(): ReactElement {
         setNotice({ tone: 'error', message: result.message })
         return
       }
-      markInstalled(pluginStorageKey('skill', item.id))
       await refreshSkillList()
       setNotice({ tone: 'success', message: t('pluginSkillAdded', { path: result.path }) })
     } catch (e) {
@@ -822,47 +394,30 @@ export function PluginMarketplaceView(): ReactElement {
   }
 
   const addCustom = async (): Promise<void> => {
-    if (activeKind === 'extension') return
     const id = normalizePluginId(customName)
     if (!id) {
       setNotice({ tone: 'error', message: t('pluginCustomNameRequired') })
       return
     }
     const description = customDescription.trim() || t('pluginCustomFallbackDesc')
-    setBusyId(`custom:${activeKind}`)
+    setBusyId('custom:skill')
     setNotice(null)
     try {
-      if (activeKind === 'mcp') {
-        const fallback = buildMcpConfig(
-          id,
-          customCommand.trim() || 'npx',
-          customArgs
-            .split('\n')
-            .map((arg) => arg.trim())
-            .filter(Boolean)
-        )
-        await appendMcpConfig(id, customMcpConfigFragment(id, customConfig, fallback))
-      } else {
-        if (!selectedSkillRoot?.path) {
-          setNotice({ tone: 'error', message: t('pluginSkillRootMissing') })
-          return
-        }
-        const body = customSkillBody.trim() || t('pluginCustomSkillFallbackBody')
-        const content = buildSkillContent(id, customName.trim() || id, description, body)
-        const result = await window.sciforge.saveSkillFile(selectedSkillRoot.path, id, content)
-        if (!result.ok) {
-          setNotice({ tone: 'error', message: result.message })
-          return
-        }
-        markInstalled(pluginStorageKey('skill', id))
-        await refreshSkillList()
-        setNotice({ tone: 'success', message: t('pluginSkillAdded', { path: result.path }) })
+      if (!selectedSkillRoot?.path) {
+        setNotice({ tone: 'error', message: t('pluginSkillRootMissing') })
+        return
       }
+      const body = customSkillBody.trim() || t('pluginCustomSkillFallbackBody')
+      const content = buildSkillContent(id, customName.trim() || id, description, body)
+      const result = await window.sciforge.saveSkillFile(selectedSkillRoot.path, id, content)
+      if (!result.ok) {
+        setNotice({ tone: 'error', message: result.message })
+        return
+      }
+      await refreshSkillList()
+      setNotice({ tone: 'success', message: t('pluginSkillAdded', { path: result.path }) })
       setCustomName('')
       setCustomDescription('')
-      setCustomCommand('')
-      setCustomArgs('')
-      setCustomConfig('')
       setCustomSkillBody('')
       setCustomOpen(false)
     } catch (e) {
@@ -874,11 +429,6 @@ export function PluginMarketplaceView(): ReactElement {
 
   const openManageTarget = async (): Promise<void> => {
     try {
-      if (activeKind === 'mcp') {
-        const result = await window.sciforge.openRuntimeConfigDir()
-        if (!result.ok) setNotice({ tone: 'error', message: result.message ?? t('pluginActionFailed') })
-        return
-      }
       if (!selectedSkillRoot?.path) {
         setNotice({ tone: 'error', message: t('pluginSkillRootMissing') })
         return
@@ -893,47 +443,30 @@ export function PluginMarketplaceView(): ReactElement {
   return (
     <div className="ds-no-drag h-full min-h-0 overflow-y-auto px-6 py-7 md:px-10 lg:px-14">
       <div className="mx-auto max-w-6xl">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex rounded-xl bg-ds-subtle p-1">
-            <TabButton active={activeKind === 'mcp'} onClick={() => setActiveKind('mcp')}>
-              {t('pluginTabMcp')}
-            </TabButton>
-            <TabButton active={activeKind === 'skill'} tone="skill" onClick={() => setActiveKind('skill')}>
-              {t('pluginTabSkill')}
-            </TabButton>
-            <TabButton active={activeKind === 'extension'} onClick={() => setActiveKind('extension')}>
-              {t('pluginTabExtension')}
-            </TabButton>
+        <div className="flex flex-wrap items-center justify-end gap-3">
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void openManageTarget()}
+              className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+            >
+              <Settings className="h-4 w-4" strokeWidth={1.75} />
+              {t('pluginManage')}
+            </button>
+            <button
+              type="button"
+              onClick={() => setCustomOpen((value) => !value)}
+              className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+            >
+              <Plus className="h-4 w-4" strokeWidth={1.9} />
+              {t('pluginCreate')}
+            </button>
           </div>
-          {activeKind !== 'extension' ? (
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void openManageTarget()}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
-              >
-                <Settings className="h-4 w-4" strokeWidth={1.75} />
-                {t('pluginManage')}
-              </button>
-              <button
-                type="button"
-                onClick={() => setCustomOpen((value) => !value)}
-                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
-              >
-                <Plus className="h-4 w-4" strokeWidth={1.9} />
-                {t('pluginCreate')}
-              </button>
-            </div>
-          ) : null}
         </div>
 
         <div className="mt-9 flex flex-col items-center text-center">
           <h1 className="text-[32px] font-semibold text-ds-ink md:text-[40px]">
-            {activeKind === 'mcp'
-              ? t('pluginMcpTitle')
-              : activeKind === 'skill'
-                ? t('pluginSkillTitle')
-                : t('pluginExtensionTitle')}
+            {t('pluginSkillTitle')}
           </h1>
         </div>
 
@@ -944,13 +477,7 @@ export function PluginMarketplaceView(): ReactElement {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-              placeholder={
-                activeKind === 'mcp'
-                  ? t('pluginSearchMcp')
-                  : activeKind === 'skill'
-                    ? t('pluginSearchSkill')
-                    : t('pluginSearchExtension')
-              }
+              placeholder={t('pluginSearchSkill')}
             />
           </label>
           <label className="relative w-full md:w-[168px]">
@@ -967,88 +494,68 @@ export function PluginMarketplaceView(): ReactElement {
           </label>
         </div>
 
-        {activeKind === 'skill' ? (
-          <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
-            <select
-              value={selectedSkillRoot?.id ?? ''}
-              onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
-              className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-            >
-              {skillRootOptions.map((option) => (
-                <option key={option.id} value={option.id} disabled={!option.available}>
-                  {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              onClick={() => void openManageTarget()}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-            >
-              <FolderOpen className="h-4 w-4" />
-              {t('pluginOpenLocation')}
-            </button>
-            <button
-              type="button"
-              onClick={() => void refreshSkillList()}
-              disabled={skillListLoading}
-              className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {skillListLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-              {t('pluginSkillRefresh')}
-            </button>
-            {skillListError ? (
-              <span className="text-[12px] text-red-700 dark:text-red-300">
-                {skillListError}
-              </span>
-            ) : (
-              <span className="text-[12px] text-ds-faint">
-                {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
-              </span>
-            )}
-          </div>
-        ) : null}
+        <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+          <select
+            value={selectedSkillRoot?.id ?? ''}
+            onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
+            className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+          >
+            {skillRootOptions.map((option) => (
+              <option key={option.id} value={option.id} disabled={!option.available}>
+                {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => void openManageTarget()}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+          >
+            <FolderOpen className="h-4 w-4" />
+            {t('pluginOpenLocation')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void refreshSkillList()}
+            disabled={skillListLoading}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {skillListLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {t('pluginSkillRefresh')}
+          </button>
+          {skillListError ? (
+            <span className="text-[12px] text-red-700 dark:text-red-300">
+              {skillListError}
+            </span>
+          ) : (
+            <span className="text-[12px] text-ds-faint">
+              {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
+            </span>
+          )}
+        </div>
 
-        {activeKind === 'mcp' ? (
-          <>
-            <McpRuntimeOverlayPanel
-              overlay={mcpRuntimeOverlay}
-              loading={runtimeOverlayLoading}
-              error={runtimeOverlayError}
-              onRefresh={() => void refreshMcpRuntimeOverlay()}
-              t={t}
-            />
-            <ScientificSkillsStatusPanel
-              status={scientificSkillsStatus}
-              loading={scientificSkillsLoading}
-              error={scientificSkillsError}
-              installTarget={scientificSkillsInstallTarget}
-              installDisabled={!workspaceRoot || scientificSkillsInstalling}
-              onRefresh={() => void refreshScientificSkillsStatus()}
-              onInstall={() => {
-                setScientificSkillsInstallError('')
-                setScientificSkillsInstallOpen(true)
-              }}
-              t={t}
-            />
-          </>
-        ) : null}
+        <ScientificSkillsStatusPanel
+          status={scientificSkillsStatus}
+          loading={scientificSkillsLoading}
+          error={scientificSkillsError}
+          installTarget={scientificSkillsInstallTarget}
+          installDisabled={!workspaceRoot || scientificSkillsInstalling}
+          onRefresh={() => void refreshScientificSkillsStatus()}
+          onInstall={() => {
+            setScientificSkillsInstallError('')
+            setScientificSkillsInstallOpen(true)
+          }}
+          t={t}
+        />
 
         {customOpen ? (
           <CustomPluginPanel
-            activeKind={activeKind}
             customName={customName}
             customDescription={customDescription}
-            customCommand={customCommand}
-            customArgs={customArgs}
-            customConfig={customConfig}
             customSkillBody={customSkillBody}
-            busy={busyId === `custom:${activeKind}`}
+            busy={busyId === 'custom:skill'}
             onNameChange={setCustomName}
             onDescriptionChange={setCustomDescription}
-            onCommandChange={setCustomCommand}
-            onArgsChange={setCustomArgs}
-            onConfigChange={setCustomConfig}
             onSkillBodyChange={setCustomSkillBody}
             onAdd={() => void addCustom()}
           />
@@ -1067,18 +574,6 @@ export function PluginMarketplaceView(): ReactElement {
               if (!scientificSkillsInstalling) setScientificSkillsInstallOpen(false)
             }}
             onConfirm={() => void installScientificSkills()}
-            t={t}
-          />
-        ) : null}
-
-        {activeKind === 'mcp' ? (
-          <PluginSection
-            title={t('pluginBuiltIn')}
-            emptyText={t('pluginNoResults')}
-            items={builtInItems}
-            busyId={busyId}
-            isInstalled={isInstalled}
-            onAdd={addItem}
             t={t}
           />
         ) : null}
@@ -1103,87 +598,8 @@ export function PluginMarketplaceView(): ReactElement {
           t={t}
         />
 
-        {activeKind === 'mcp' ? (
-          <div className="mt-8 flex items-center gap-2 text-[12px] text-ds-faint">
-            <RefreshCw className="h-3.5 w-3.5" />
-            <span>{t('pluginMcpRestartHint')}</span>
-          </div>
-        ) : null}
       </div>
     </div>
-  )
-}
-
-function McpRuntimeOverlayPanel({
-  overlay,
-  loading,
-  error,
-  onRefresh,
-  t
-}: {
-  overlay: McpMarketplaceOverlay
-  loading: boolean
-  error: string
-  onRefresh: () => void
-  t: (key: string, values?: Record<string, unknown>) => string
-}): ReactElement {
-  const status = mcpRuntimeStatusLabel(overlay.status, t)
-  return (
-    <section className="mt-4 rounded-lg border border-ds-border bg-ds-card px-4 py-3 shadow-sm">
-      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <div className="flex min-w-0 items-start gap-3">
-          <Info className="mt-0.5 h-4 w-4 shrink-0 text-ds-muted" strokeWidth={1.8} />
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[13px] font-semibold text-ds-ink">{t('pluginMcpRuntimeOverlay')}</span>
-              <span className={`rounded-md px-2 py-0.5 text-[11px] font-semibold ${mcpRuntimeStatusTone(overlay.status)}`}>
-                {status}
-              </span>
-            </div>
-            <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[12px] text-ds-muted">
-              <span>{t('pluginMcpRuntimeServers', {
-                connected: overlay.connectedServers,
-                configured: overlay.configuredServers
-              })}</span>
-              <span>{t('pluginMcpRuntimeTools', { count: overlay.toolCount })}</span>
-              <span>{t('pluginMcpRuntimeSearch', {
-                mode: overlay.searchMode,
-                status: overlay.searchActive ? t('pluginMcpRuntimeSearchActive') : t('pluginMcpRuntimeSearchInactive'),
-                indexed: overlay.indexedToolCount,
-                advertised: overlay.advertisedToolCount
-              })}</span>
-              {overlay.driftCount > 0 ? <span>{t('pluginMcpRuntimeDrift', { count: overlay.driftCount })}</span> : null}
-            </div>
-            {overlay.serverIds.length > 0 ? (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {overlay.serverIds.map((id) => (
-                  <span
-                    key={id}
-                    className="rounded-md border border-ds-border-muted bg-ds-subtle px-2 py-0.5 font-mono text-[11px] text-ds-muted"
-                  >
-                    {id}
-                  </span>
-                ))}
-              </div>
-            ) : null}
-            {error || overlay.lastError ? (
-              <div className="mt-2 truncate text-[12px] text-red-700 dark:text-red-300">
-                {error || t('pluginMcpRuntimeLastError', { message: overlay.lastError })}
-              </div>
-            ) : null}
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={onRefresh}
-          disabled={loading}
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-lg border border-ds-border bg-ds-subtle px-3 text-[12px] font-semibold text-ds-ink transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          {t('pluginMcpRuntimeRefresh')}
-        </button>
-      </div>
-    </section>
   )
 }
 
@@ -1443,42 +859,6 @@ export function scientificSkillsRootSourceTitle(
   return path
 }
 
-function mcpRuntimeStatusLabel(
-  status: McpMarketplaceOverlayStatus,
-  t: (key: string) => string
-): string {
-  switch (status) {
-    case 'connected':
-      return t('pluginMcpRuntimeConnected')
-    case 'configured':
-      return t('pluginMcpRuntimeConfigured')
-    case 'drift':
-      return t('pluginMcpRuntimeDrifted')
-    case 'error':
-      return t('pluginMcpRuntimeError')
-    case 'disabled':
-      return t('pluginMcpRuntimeDisabled')
-    case 'offline':
-      return t('pluginMcpRuntimeOffline')
-  }
-}
-
-function mcpRuntimeStatusTone(status: McpMarketplaceOverlayStatus): string {
-  switch (status) {
-    case 'connected':
-      return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
-    case 'configured':
-      return 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-200'
-    case 'drift':
-      return 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-200'
-    case 'error':
-      return 'bg-red-50 text-red-700 dark:bg-red-950/30 dark:text-red-200'
-    case 'disabled':
-    case 'offline':
-      return 'bg-ds-subtle text-ds-muted'
-  }
-}
-
 function marketplaceSourceTone(tone: MarketplaceItem['statusTone']): string {
   switch (tone) {
     case 'success':
@@ -1491,11 +871,6 @@ function marketplaceSourceTone(tone: MarketplaceItem['statusTone']): string {
     default:
       return 'bg-ds-subtle text-ds-muted'
   }
-}
-
-function runtimeOverlayErrorMessage(error: unknown, fallback: string): string {
-  const message = error instanceof Error ? error.message : String(error)
-  return /sciforge|Cannot read properties/i.test(message) ? fallback : message
 }
 
 function PluginSection({
@@ -1511,7 +886,7 @@ function PluginSection({
   emptyText: string
   items: MarketplaceItem[]
   busyId: string | null
-  isInstalled: (item: Pick<MarketplaceItem, 'kind' | 'id'>) => boolean
+  isInstalled: (item: Pick<MarketplaceItem, 'id'>) => boolean
   onAdd: (item: MarketplaceItem) => Promise<void>
   t: (key: string, values?: Record<string, unknown>) => string
 }): ReactElement {
@@ -1525,13 +900,12 @@ function PluginSection({
       ) : (
         <div className="grid gap-x-14 md:grid-cols-2">
           {items.map((item) => {
-            const itemKey = pluginStorageKey(item.kind, item.id)
+            const itemKey = skillItemKey(item.id)
             const installed = isInstalled(item)
             const busy = busyId === itemKey
             return (
               <div
                 key={itemKey}
-                data-plugin-id={item.id}
                 className="flex min-h-[92px] items-center gap-5 border-b border-ds-border-muted py-5"
               >
                 <div className="min-w-0 flex-1">
@@ -1556,7 +930,6 @@ function PluginSection({
                   disabled={installed || busy}
                   onClick={() => void onAdd(item)}
                   title={installed ? t('pluginAdded') : t('pluginAdd')}
-                  aria-label={`${installed ? t('pluginAdded') : t('pluginAdd')}: ${itemTitle(item, t)}`}
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl transition ${
                     installed
                       ? 'text-ds-faint'
@@ -1581,35 +954,21 @@ function PluginSection({
 }
 
 function CustomPluginPanel({
-  activeKind,
   customName,
   customDescription,
-  customCommand,
-  customArgs,
-  customConfig,
   customSkillBody,
   busy,
   onNameChange,
   onDescriptionChange,
-  onCommandChange,
-  onArgsChange,
-  onConfigChange,
   onSkillBodyChange,
   onAdd
 }: {
-  activeKind: PluginKind
   customName: string
   customDescription: string
-  customCommand: string
-  customArgs: string
-  customConfig: string
   customSkillBody: string
   busy: boolean
   onNameChange: (value: string) => void
   onDescriptionChange: (value: string) => void
-  onCommandChange: (value: string) => void
-  onArgsChange: (value: string) => void
-  onConfigChange: (value: string) => void
   onSkillBodyChange: (value: string) => void
   onAdd: () => void
 }): ReactElement {
@@ -1630,40 +989,13 @@ function CustomPluginPanel({
           placeholder={t('pluginCustomDescription')}
         />
       </div>
-      {activeKind === 'mcp' ? (
-        <div className="mt-3 grid gap-3">
-          <div className="grid gap-3 md:grid-cols-2">
-            <input
-              value={customCommand}
-              onChange={(event) => onCommandChange(event.target.value)}
-              className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-              placeholder={t('pluginCustomCommand')}
-            />
-            <textarea
-              value={customArgs}
-              onChange={(event) => onArgsChange(event.target.value)}
-              className="min-h-[80px] rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-              placeholder={t('pluginCustomArgs')}
-              spellCheck={false}
-            />
-          </div>
-          <textarea
-            value={customConfig}
-            onChange={(event) => onConfigChange(event.target.value)}
-            className="min-h-[120px] rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-            placeholder={t('pluginCustomMcpConfig')}
-            spellCheck={false}
-          />
-        </div>
-      ) : (
-        <textarea
-          value={customSkillBody}
-          onChange={(event) => onSkillBodyChange(event.target.value)}
-          className="mt-3 min-h-[140px] w-full rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-          placeholder={t('pluginCustomSkillBody')}
-          spellCheck={false}
-        />
-      )}
+      <textarea
+        value={customSkillBody}
+        onChange={(event) => onSkillBodyChange(event.target.value)}
+        className="mt-3 min-h-[140px] w-full rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+        placeholder={t('pluginCustomSkillBody')}
+        spellCheck={false}
+      />
       <div className="mt-3 flex justify-end">
         <button
           type="button"

@@ -18,11 +18,11 @@ import type {
   AgentRuntimeCodeNavigationOutput,
   AgentRuntimeChild,
   AgentRuntimeContextState,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeFileReference,
   AgentRuntimeGitCheckpoint,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeMemoryRecord,
-  AgentRuntimeModelAuditRecord,
   AgentRuntimePhase,
   AgentRuntimeReadChildTranscriptInput,
   AgentRuntimeReadChildTranscriptResponse,
@@ -310,6 +310,7 @@ export type ChatBlock =
       modelLabel?: string
       managedBy?: UserMessageManagedBy
       meta?: RuntimeDisclosureMetadata
+      turnStatus?: string
     }
   | { kind: 'assistant'; id: string; createdAt?: string; text: string; meta?: RuntimeDisclosureMetadata }
   | { kind: 'reasoning'; id: string; createdAt?: string; text: string; meta?: RuntimeDisclosureMetadata }
@@ -370,7 +371,7 @@ export type RuntimeStatusEventPayload = {
   kind:
     | 'tool_result_upload_wait'
     | 'tool_catalog_changed'
-    | 'tool_storm_suppressed'
+    | 'execution_suppressed'
     | 'compaction_summary_fallback'
     | 'runtime_handoff'
   itemId: string
@@ -543,6 +544,11 @@ export type AgentProviderCapabilities = {
   sideConversations?: boolean
 }
 
+export type AgentProviderDirectiveOptions = {
+  /** Stable renderer identity used to make persisted runtime delivery idempotent. */
+  clientDirectiveId?: string
+}
+
 export interface AgentProvider {
   readonly id: AgentRuntimeId
   readonly displayName: string
@@ -575,8 +581,10 @@ export interface AgentProvider {
       model?: string
       reasoningEffort?: string
       remoteTargetId?: string
+      executionIntent?: AgentRuntimeExecutionIntent
       governanceProfile?: 'default' | 'write' | 'remote_guard'
       displayText?: string
+      visibleContextOwnerThreadId?: string
       guiPlan?: {
         operation: 'draft' | 'refine'
         workspaceRoot: string
@@ -587,7 +595,7 @@ export interface AgentProvider {
       }
       attachmentIds?: string[]
       fileReferences?: AgentRuntimeFileReference[]
-    }
+    } & AgentProviderDirectiveOptions
   ): Promise<{
     turnId: string
     threadId: string
@@ -618,12 +626,6 @@ export interface AgentProvider {
   runCodeNavigation?(
     input: AgentRuntimeCodeNavigationInput
   ): Promise<AgentRuntimeResult<AgentRuntimeCodeNavigationOutput>>
-  listModelAuditRecords?(options?: {
-    runtimeId?: AgentRuntimeId
-    threadId?: string
-    limit?: number
-  }): Promise<AgentRuntimeModelAuditRecord[]>
-  clearModelAuditRecords?(): Promise<boolean>
   getContextState?(threadId: string): Promise<AgentRuntimeContextState>
   listThreadChildren?(threadId: string, options?: {
     turnId?: string
@@ -681,7 +683,12 @@ export interface AgentProvider {
     workspaceRoot: string
     path: string
   }): Promise<{ ok: true; preview: AgentRuntimeWorkspaceReferencePreview } | { ok: false; message: string }>
-  steerUserMessage?(threadId: string, turnId: string, text: string): Promise<void>
+  steerUserMessage?(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: AgentProviderDirectiveOptions
+  ): Promise<void>
   interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void>
   renameThread(threadId: string, title: string): Promise<void>
   updateThreadRelation?(threadId: string, relation: 'primary' | 'fork' | 'side'): Promise<void>

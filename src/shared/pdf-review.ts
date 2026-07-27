@@ -20,6 +20,7 @@ export type PdfReviewSelection = {
 
 export type PdfReviewGenerateActionInput = {
   maxComments?: number
+  prompt?: string
   selection?: PdfReviewSelection
   replaceExisting?: boolean
 }
@@ -74,6 +75,7 @@ export const pdfReviewSelectionSchema = z.object({
 
 export const pdfReviewGenerateActionInputSchema = z.object({
   maxComments: z.number().int().positive().max(50).optional(),
+  prompt: z.string().trim().min(1).max(20_000).optional(),
   selection: pdfReviewSelectionSchema.optional(),
   replaceExisting: z.boolean().optional()
 }).strict()
@@ -82,6 +84,7 @@ export const pdfReviewGeneratePayloadSchema = pdfAnnotationSidecarTargetSchema
   .extend({
     reviewDataPath: z.string().trim().min(1).max(4096).optional(),
     maxComments: z.number().int().positive().max(50).optional(),
+    prompt: z.string().trim().min(1).max(20_000).optional(),
     selection: pdfReviewSelectionSchema.optional(),
     replaceExisting: z.boolean().optional()
   })

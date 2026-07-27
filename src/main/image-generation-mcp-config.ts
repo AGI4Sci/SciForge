@@ -157,7 +157,6 @@ export function imageGenerationMcpSettingsChanged(prev: AppSettingsV1, next: App
   if (!aConfigured && !bConfigured) return false
 
   return (
-    a.provider !== b.provider ||
     a.apiKey.trim() !== b.apiKey.trim() ||
     a.baseUrl.trim() !== b.baseUrl.trim() ||
     a.model.trim() !== b.model.trim()

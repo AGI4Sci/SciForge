@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import { RuntimeContextLedgerService } from './runtime-context-ledger-service'
 
 describe('RuntimeContextLedgerService', () => {
@@ -103,6 +104,88 @@ describe('RuntimeContextLedgerService', () => {
       .resolves.toBe('Use host-owned ledger for cross-runtime context.')
   })
 
+  it('persists directives before delivery and treats a delivered id as idempotent', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
+    const service = new RuntimeContextLedgerService(dataDir)
+
+    await service.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1',
+      text: 'Modify the document and verify every current annotation.'
+    })
+    await expect(service.beginDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1'
+    })).resolves.toMatchObject({ deliver: true, directive: { delivery: 'delivering' } })
+    await service.finishDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1',
+      delivery: 'delivered',
+      turnId: 'turn-1'
+    })
+
+    await expect(service.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1',
+      text: 'Modify the document and verify every current annotation.'
+    })).resolves.toMatchObject({ delivery: 'delivered', turnId: 'turn-1' })
+    await expect(service.beginDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1'
+    })).resolves.toMatchObject({ deliver: false, directive: { turnId: 'turn-1' } })
+    await expect(service.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      id: 'directive-1',
+      text: 'Different text under the same id.'
+    })).rejects.toThrow(/reused with different text/)
+
+    await expect(new RuntimeContextLedgerService(dataDir).get({
+      runtimeId: 'codex',
+      threadId: 'thread-1'
+    })).resolves.toMatchObject({
+      directives: [{ id: 'directive-1', delivery: 'delivered', turnId: 'turn-1' }]
+    })
+    await expect(service.createHandoffPacket({
+      sourceRuntimeId: 'codex',
+      sourceThreadId: 'thread-1',
+      targetRuntimeId: 'claude'
+    })).resolves.toMatchObject({
+      directives: [{ id: 'directive-1', text: 'Modify the document and verify every current annotation.' }]
+    })
+  })
+
+  it('fails closed instead of blindly resending an interrupted delivery', async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
+    const service = new RuntimeContextLedgerService(dataDir)
+    await service.acceptDirective({
+      runtimeId: 'claude',
+      threadId: 'thread-1',
+      id: 'directive-1',
+      text: 'Continue the task.'
+    })
+    await service.beginDirectiveDelivery({
+      runtimeId: 'claude',
+      threadId: 'thread-1',
+      id: 'directive-1'
+    })
+
+    await expect(service.beginDirectiveDelivery({
+      runtimeId: 'claude',
+      threadId: 'thread-1',
+      id: 'directive-1'
+    })).rejects.toThrow(/uncertain delivery/)
+    await expect(new RuntimeContextLedgerService(dataDir).get({
+      runtimeId: 'claude',
+      threadId: 'thread-1'
+    })).resolves.toMatchObject({ directives: [{ delivery: 'uncertain' }] })
+  })
+
   it('supports explicit clearing of objective and status', async () => {
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-'))
     const service = new RuntimeContextLedgerService(dataDir)
@@ -185,6 +268,7 @@ describe('RuntimeContextLedgerService', () => {
       turnId: 'turn-1',
       itemId: 'tool-1',
       status: 'success',
+      receipt: createExecutionReceipt({ status: 'success' }),
       toolKind: 'file_change',
       summary: 'Updated runtime-context-ledger-service.ts',
       meta: { path: 'src/main/services/runtime-context-ledger-service.ts' }

@@ -104,7 +104,7 @@ describe('VisualDocument MCP schemas', () => {
           width: 1200,
           height: 800,
           reviewEvidence: {
-            tool: 'visual_artifact_review',
+            tool: 'image_generation_review_candidate',
             ok: true,
             reviewedArtifactPath: candidatePath,
             reviewedArtifactHash: createHash('sha256').update(candidateBytes).digest('hex'),

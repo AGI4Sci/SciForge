@@ -1,7 +1,149 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createCodexAgentRuntimeAdapter } from './codex-agent-runtime-adapter'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION
+} from '../agent-runtime/execution-integrity-guard'
 
 describe('createCodexAgentRuntimeAdapter', () => {
+  it('forwards turn governance snapshots to the Codex pre-tool bridge', async () => {
+    const updateTurnGovernanceSnapshot = vi.fn(async () => ({ ok: true as const }))
+    const adapter = createCodexAgentRuntimeAdapter({
+      updateTurnGovernanceSnapshot
+    } as never)
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    }
+
+    await expect(
+      adapter.updateTurnGovernanceSnapshot?.({ settings: {} as never }, input)
+    ).resolves.toBeUndefined()
+    expect(updateTurnGovernanceSnapshot).toHaveBeenCalledWith(input)
+  })
+
+  it('latches the typed native visual requirement into Codex before dispatch', async () => {
+    const startTurn = vi.fn(async () => ({
+      ok: true as const,
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      userMessageItemId: 'user-1'
+    }))
+    const adapter = createCodexAgentRuntimeAdapter({ startTurn } as never)
+
+    await expect(adapter.startTurn({
+      settings: {} as never,
+      turnGovernanceSnapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    }, {
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      text: 'capture the exact figure'
+    })).resolves.toMatchObject({ turnId: 'turn-1' })
+
+    expect(startTurn).toHaveBeenCalledWith({
+      threadId: 'thread-1',
+      text: 'capture the exact figure',
+      displayText: undefined,
+      workspace: undefined,
+      model: undefined,
+      reasoningEffort: undefined,
+      fileReferences: undefined,
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })
+  })
+
+  it('bridges neutral coding-plan auxiliary operations to the Codex account lifecycle', async () => {
+    const service = {
+      getCodingPlanAccount: vi.fn(async () => ({
+        ok: true as const,
+        account: { type: 'chatgpt', email: 'user@example.com', planType: 'plus' },
+        planType: 'plus',
+        requiresOpenaiAuth: true
+      })),
+      startCodingPlanLogin: vi.fn(async () => ({
+        ok: true as const,
+        method: 'browser' as const,
+        loginId: 'login-1',
+        authUrl: 'https://auth.example/login'
+      })),
+      waitForCodingPlanLogin: vi.fn(async () => ({
+        ok: true as const,
+        loginId: 'login-1',
+        success: true
+      })),
+      logoutCodingPlanAccount: vi.fn(async () => ({ ok: true as const })),
+      getCodingPlanRateLimits: vi.fn(async () => ({
+        ok: true as const,
+        rateLimits: { limitId: 'codex' },
+        rateLimitsByLimitId: null,
+        rateLimitResetCredits: null
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const auxiliary = adapter.auxiliary!
+    const context = { settings: {} as never }
+
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'getCodingPlanAccount',
+      payload: { refreshToken: true }
+    })).resolves.toMatchObject({
+      authenticated: true,
+      account: { type: 'chatgpt', planType: 'plus' }
+    })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'browser' }
+    })).resolves.toMatchObject({ loginId: 'login-1' })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'waitForCodingPlanLogin',
+      payload: { loginId: 'login-1' }
+    })).resolves.toMatchObject({ success: true })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'getCodingPlanRateLimits'
+    })).resolves.toMatchObject({ rateLimits: { limitId: 'codex' } })
+    await expect(auxiliary(context, {
+      runtimeId: 'codex',
+      operation: 'logoutCodingPlanAccount'
+    })).resolves.toEqual({ ok: true })
+
+    expect(service.getCodingPlanAccount).toHaveBeenCalledWith({ refreshToken: true })
+    expect(service.startCodingPlanLogin).toHaveBeenCalledWith({ method: 'browser' })
+    expect(service.waitForCodingPlanLogin).toHaveBeenCalledWith('login-1')
+  })
+
+  it.each(['apiKey', 'amazonBedrock'] as const)(
+    'does not treat Codex %s credentials as Coding Plan authentication',
+    async (type) => {
+      const adapter = createCodexAgentRuntimeAdapter({
+        getCodingPlanAccount: vi.fn(async () => ({
+          ok: true as const,
+          account: { type },
+          planType: null,
+          requiresOpenaiAuth: true
+        }))
+      } as never)
+
+      await expect(adapter.auxiliary!({ settings: {} as never }, {
+        runtimeId: 'codex',
+        operation: 'getCodingPlanAccount',
+        payload: { refreshToken: true }
+      })).resolves.toMatchObject({ authenticated: false, account: { type } })
+    }
+  )
+
   it('reports shared research MCP capability when Codex managed config includes it', async () => {
     const adapter = createCodexAgentRuntimeAdapter({
       isResearchMcpConfigured: () => true
@@ -620,6 +762,100 @@ describe('createCodexAgentRuntimeAdapter', () => {
     ])
   })
 
+  it('preserves the hidden execution-integrity marker as typed thread metadata', async () => {
+    const service = {
+      readThread: vi.fn(async () => ({
+        ok: true as const,
+        detail: {
+          latestSeq: 1,
+          latestTurnId: 'turn-1',
+          threadStatus: 'completed',
+          blocks: [{
+            kind: 'user' as const,
+            id: 'user-1',
+            turnId: 'turn-1',
+            text: 'Runtime-enforced execution integrity gate: []\n\nshort user prompt',
+            displayText: 'short user prompt'
+          }]
+        }
+      }))
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+
+    const detail = await adapter.readThread(
+      { settings: {} as never },
+      { runtimeId: 'codex', threadId: 'thread-1' }
+    )
+
+    expect(detail.items).toContainEqual(expect.objectContaining({
+      id: 'user-1',
+      text: 'short user prompt',
+      meta: {
+        [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+      }
+    }))
+  })
+
+  it('maps Codex model output to sequence-stable item identities', async () => {
+    const service = {
+      readStoredEvents: vi.fn(async () => [
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 1,
+          deltas: [{ kind: 'agent_message' as const, text: 'Hello' }]
+        },
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 2,
+          deltas: [{ kind: 'agent_message' as const, text: 'Still working.', snapshot: true }]
+        },
+        {
+          threadId: 'thread-1',
+          turnId: 'turn-1',
+          seq: 3,
+          deltas: [{ kind: 'agent_message' as const, text: 'Hello.', snapshot: true }]
+        }
+      ])
+    }
+    const adapter = createCodexAgentRuntimeAdapter(service as never)
+    const events = []
+
+    for await (const event of adapter.subscribeEvents({ settings: {} as never }, {
+      runtimeId: 'codex',
+      threadId: 'thread-1'
+    })) {
+      events.push(event)
+    }
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        kind: 'assistant_delta',
+        itemId: 'agent_message-1-0',
+        text: 'Hello'
+      }),
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        item: expect.objectContaining({
+          id: 'agent_message-2-0',
+          kind: 'assistant_message',
+          turnId: 'turn-1',
+          text: 'Still working.'
+        })
+      }),
+      expect.objectContaining({
+        kind: 'item_snapshot',
+        item: expect.objectContaining({
+          id: 'agent_message-3-0',
+          kind: 'assistant_message',
+          turnId: 'turn-1',
+          text: 'Hello.'
+        })
+      })
+    ])
+  })
+
   it('promotes Codex execution receipt metadata onto shared tool events', async () => {
     const service = {
       readStoredEvents: vi.fn(async () => [{
@@ -631,6 +867,18 @@ describe('createCodexAgentRuntimeAdapter', () => {
           summary: 'exec_command',
           status: 'success' as const,
           toolKind: 'command_execution' as const,
+          effects: ['read'] as const,
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1' as const,
+            receiptId: 'visual_proof_abcdefghijklmnopqrstuvwxyz',
+            kind: 'visual.look' as const,
+            status: 'satisfied' as const,
+            issuer: 'sciforge.agent-visual',
+            callId: 'call-1',
+            subjectRef: 'res_abcdefghijklmnopqrstuvwxyz',
+            createdAt: '2026-07-26T00:00:00.000Z'
+          }],
+          detail: 'no matches',
           meta: {
             callId: 'call-1',
             toolName: 'exec_command',
@@ -638,7 +886,14 @@ describe('createCodexAgentRuntimeAdapter', () => {
             factSource: 'executor_result',
             evidenceStrength: 'executor_receipt',
             attempt: 2,
-            resultDigest: 'sha256:abc'
+            resultDigest: 'sha256:abc',
+            outcome: 'negative_result',
+            exitCode: 1,
+            failureClass: 'no_match',
+            resourceIdentity: 'query:missing',
+            evidenceDelta: false,
+            stateChanged: false,
+            output: { matches: [] }
           }
         }
       }])
@@ -656,13 +911,31 @@ describe('createCodexAgentRuntimeAdapter', () => {
     expect(events).toEqual([expect.objectContaining({
       kind: 'tool_event',
       itemId: 'call-1',
+      effects: ['read'],
+      completionReceipts: [expect.objectContaining({
+        receiptId: 'visual_proof_abcdefghijklmnopqrstuvwxyz',
+        kind: 'visual.look',
+        callId: 'call-1'
+      })],
       callId: 'call-1',
       toolName: 'exec_command',
       phase: 'succeeded',
       factSource: 'executor_result',
       evidenceStrength: 'executor_receipt',
       attempt: 2,
-      resultDigest: 'sha256:abc'
+      resultDigest: 'sha256:abc',
+      receipt: {
+        status: 'success',
+        outcome: 'negative_result',
+        exitCode: 1,
+        errorCode: undefined,
+        failureClass: 'no_match',
+        resourceIdentity: 'query:missing',
+        evidenceDelta: false,
+        stateChanged: false,
+        output: { matches: [] },
+        detail: 'no matches'
+      }
     })])
   })
 

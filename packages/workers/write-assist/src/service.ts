@@ -133,7 +133,6 @@ const MAX_QUERY_TERMS = 36
 const MAX_SNIPPET_CHARS = 520
 const MAX_PDF_TEXT_PAGES = 300
 const MAX_PDF_TEXT_CHARS = 1_000_000
-
 const WRITE_TEXT_FILE_EXTENSIONS = new Set([
   '.md',
   '.markdown',
@@ -644,7 +643,7 @@ export class WriteAssistService {
     const workspaceRoot = await this.resolveWorkspaceRoot(inputWorkspaceRoot)
     const rawPath = cleanOptionalPath(inputPath)
     if (!rawPath) {
-      throw serviceError('path_required', 'Path is required.', 'Pass a PDF path relative to the workspace root.')
+      throw serviceError('path_required', 'Path is required.', 'Pass a file path relative to the workspace root.')
     }
     const expanded = expandHomePath(normalizeUserPath(rawPath))
     const directPath = isAbsolute(expanded) ? resolve(expanded) : resolve(workspaceRoot, expanded)

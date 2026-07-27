@@ -10,9 +10,10 @@
 
 ## 不可变原则
 
-- 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现新版本，不做兼容，保持代码干净。
+- 旧逻辑代码和最终目标冲突时，删除旧逻辑，直接实现最合理的版本，不做兼容，保持代码干净。
 - 所有修改必须通用，不能为特色例子写硬编码补丁。
 - 相同功能的工作链路需要统一，不要额外生出旁路；删除冗余，代码尽可能精简。
+- 方案尽可能简洁、有效，太复杂的方案往往不稳定
 - LLM API 只能走 Model Router。
 - 所有 text / vision / scientific / image / speech / workflow / schedule 模型调用严格 Model Router-only；Codex / Claude / local runtime 只能作为执行 runtime，不持有上游模型旁路。
 - GUI 只是方便用户交互的壳子；新增 GUI 前必须先问：这一步是否真的需要人类交互？
@@ -225,13 +226,12 @@
 - [x] 【Proteomics / spectra bounded peak plot foundation】增强 renderer 谱图 viewer，把 `WorkspaceObservation.spectra.sampledPeaks`、`mzRange`、`intensityRange` 和 spectra selection ranges 渲染为轻量 SVG stem plot；没有 sampled peaks 但有 scanMarkers 时渲染 bounded scan marker strip；无可画数据或 FCS event matrix 时保留明确空状态 / placeholder，不新增二进制解码或 worker 旁路。
 - [x] 【拖拽与复制粘贴】在 workspace 查看器中实现拖入文件 / 文件夹、内部移动、拖到会话作为附件、复制路径 / 内容、粘贴文件 / 截图 / 文本到当前目录，并处理冲突命名策略。
 - [x] 【拖拽与复制粘贴 contract foundation】新增 workspace preview transfer contract，覆盖 drag-in / drag-out action、drag source / target、copy / paste payload、冲突命名策略，以及 Electron desktop 真实文件能力和 Web 预览下载 / 复制路径 / 复制内容降级能力。
-- [x] 【Workspace 文件树 drag-out reference foundation】为右侧 workspace 文件树行写入稳定 `WorkspacePreviewDragSource` / workspace reference DataTransfer payload，并提供 `text/plain` 相对路径 fallback，作为拖到会话附件、内部移动、Electron 原生文件拖出的共同基础。
+- [x] 【Workspace 文件树 drag-out reference foundation】为右侧 workspace 文件树行写入稳定 `WorkspacePreviewDragSource` / workspace reference DataTransfer payload，并提供 `text/plain` 相对路径 fallback，作为拖到会话附件和内部移动的共同基础。
 - [x] 【Workspace 文件树拖到会话 reference foundation】让 composer 识别 workspace 文件树的自定义 reference drag MIME 和标准 `WorkspacePreviewDragSource` fallback，拖到输入框时添加 `ComposerFileReference` 并插入对应 `@file` mention token；OS 文件 / 图片 / PDF 拖入路径保持不变。
 - [x] 【Workspace 文件树内部 drop move/copy foundation】让右侧 workspace 文件树目录行和 root 空白区域消费 workspace reference drag payload，复用现有 `moveWorkspaceEntry` / `copyWorkspaceEntry` 执行树内移动或复制；同 workspace 默认 move、Option/Alt 或跨 workspace 默认 copy，并阻止目录拖进自身或子目录。
 - [x] 【Workspace 文件树外部文件 drag-in import foundation】新增 `importWorkspaceEntries` 服务 / IPC / preload / dev bridge，支持从 Electron 文件拖拽导入外部文件或文件夹到 workspace 目录，复用冲突安全命名策略，并阻止把目录导入自身或子目录。
 - [x] 【Workspace 文件树复制路径 / 内容 foundation】保留右键复制相对路径，并为文件项新增复制内容动作；复用 `readWorkspaceFile`，仅复制未截断文本和 DOCX plain text，PDF / 图片 / 截断大文件给出明确降级提示。
 - [x] 【Workspace 文件树系统剪贴板 paste foundation】新增 `pasteWorkspaceClipboard` 服务 / IPC / preload / dev bridge，让右键 Paste 在无内部 copy/cut 项时把系统剪贴板图片保存为 PNG、文本保存为 `.txt` 到当前目录，并复用冲突安全命名策略。
 - [x] 【Workspace 文件树系统剪贴板文件 paste foundation】扩展 `pasteWorkspaceClipboard`，识别系统剪贴板里的本地文件 / 文件夹路径（如 `text/uri-list`、GNOME copied-files、macOS / Windows bookmark 或 filename buffer），复用 `importWorkspaceEntries` 导入目标目录，并沿用冲突安全命名策略；无文件路径时继续回退图片 / 文本 paste。
-- [x] 【Workspace 文件树 Electron native drag-out foundation】新增安全路径解析后的 `startWorkspaceNativeFileDrag` IPC / preload / dev bridge；桌面 sender 支持时调用 `webContents.startDrag` 拖出真实文件，Web / dev sender 返回明确降级并保留现有 reference drag payload。
 - [x] 【Workspace 文件树 conflictPolicy integration foundation】将 workspace 文件树 copy / import / paste / move 统一接入 shared `WorkspaceFileConflictPolicy`，默认保持 rename，支持 overwrite / skip，ask / merge 明确拒绝为未实现，避免拖拽和粘贴链路各自维护冲突处理旁路。
 - [x] 【迁移收口 V2 / 已决策】新插件系统已覆盖 Markdown、HTML、PDF、DOCX、图片、文本、Office 首发子集和生命科学基线格式；旧单体 `WorkspaceFilePreviewPanel` / `legacy-adapter` 已删除，已注册格式统一走 `WorkspacePreviewHost` + renderer registry + contribution registry，旧 renderer-facing preview IPC 和 visible-context 重复链路已清零，并通过 localhost browser smoke、核心 Vitest、worker tests、typecheck 和 `git diff --check` 回归。

@@ -3,7 +3,7 @@ export type ModelRouterCliOptions = {
   port?: number;
   configPath?: string;
   workspaceRoot?: string;
-  traceDataRoot?: string;
+  userDataDir?: string;
   quiet?: boolean;
 };
 
@@ -16,9 +16,9 @@ export function resolveModelRouterCliOptions(
     ...parsed,
     host: parsed.host ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_HOST'),
     port: parsed.port ?? numberEnv(env, 'SCIFORGE_MODEL_ROUTER_PORT'),
-    configPath: parsed.configPath ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_CONFIG'),
+    configPath: parsed.configPath,
     workspaceRoot: parsed.workspaceRoot ?? stringEnv(env, 'SCIFORGE_WORKSPACE_PATH'),
-    traceDataRoot: parsed.traceDataRoot ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT'),
+    userDataDir: parsed.userDataDir ?? stringEnv(env, 'SCIFORGE_MODEL_ROUTER_USER_DATA_DIR'),
   };
 }
 
@@ -30,7 +30,7 @@ export function parseModelRouterCliArgs(args: string[]): ModelRouterCliOptions {
     else if (arg === '--port') parsed.port = Number(args[++index]);
     else if (arg === '--config') parsed.configPath = args[++index];
     else if (arg === '--workspace-root') parsed.workspaceRoot = args[++index];
-    else if (arg === '--trace-data-root') parsed.traceDataRoot = args[++index];
+    else if (arg === '--user-data-dir') parsed.userDataDir = args[++index];
     else if (arg === '--quiet') parsed.quiet = true;
   }
   return parsed;

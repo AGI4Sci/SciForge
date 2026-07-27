@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ChatBlock } from '../../agent/types'
 import type { ScientificObjectRef } from '@shared/scientific-objects'
+import { workspacePreviewExtensionIdSchema } from '@shared/workspace-preview'
 import {
   scientificObjectDataFromTimelineBlocks,
   scientificObjectSelectionPrompt
@@ -22,8 +23,8 @@ function scientificObject(id: string, modality: ScientificObjectRef['modality'])
 
 describe('TimelineScientificObjectsPanel', () => {
   it('extracts and deduplicates objects from assistant metadata and JSON tool results', () => {
-    const molecule = scientificObject('1', 'molecular')
-    const sequence = scientificObject('2', 'sequence')
+    const molecule = scientificObject('1', 'sciforge.life-science-preview.molecular')
+    const sequence = scientificObject('2', 'sciforge.life-science-preview.sequence')
     const blocks: ChatBlock[] = [
       { kind: 'assistant', id: 'assistant-1', text: 'Ready', meta: { scientificObjects: [molecule] } },
       {
@@ -38,7 +39,7 @@ describe('TimelineScientificObjectsPanel', () => {
         id: 'tool-error',
         summary: 'Failed preview',
         status: 'error',
-        detail: JSON.stringify({ scientificObjects: [scientificObject('3', 'omics')] })
+        detail: JSON.stringify({ scientificObjects: [scientificObject('3', 'sciforge.life-science-preview.omics')] })
       }
     ]
 
@@ -48,8 +49,14 @@ describe('TimelineScientificObjectsPanel', () => {
 
   it('includes a structured, provenance-bound selection in the continue prompt', () => {
     const prompt = scientificObjectSelectionPrompt({
-      object: scientificObject('1', 'molecular'),
-      selection: { kind: 'molecular', chains: ['A'], ligands: ['ATP'] },
+      object: scientificObject('1', 'sciforge.life-science-preview.molecular'),
+      selection: {
+        kind: 'domain',
+        selectionType: workspacePreviewExtensionIdSchema.parse(
+          'sciforge.life-science-preview.molecular.selection'
+        ),
+        data: { wireVersion: 2, selection: { kind: 'molecular', chains: ['A'], ligands: ['ATP'] } }
+      },
       language: 'zh-CN'
     })
 

@@ -10,10 +10,19 @@ export {
   type CodexAppServerJsonRpcClientOptions
 } from './app-server/json-rpc-client'
 export {
+  CODEX_PLAN_GATEWAY_PROVIDER_ID,
   prepareCodexAppServerLaunch,
   resolveCodexWorkspace,
-  codexRuntimeEnv
+  codexRuntimeEnv,
+  type CodexPlanGatewayLaunchConfig
 } from './codex-config'
+export type {
+  CodexCodingPlanAccountResult,
+  CodexCodingPlanLoginCompletionResult,
+  CodexCodingPlanLoginMethod,
+  CodexCodingPlanLoginStartResult,
+  CodexCodingPlanRateLimitsResult
+} from './codex-runtime-api'
 export {
   createCodexAppServerPendingRequestRegistry,
   type CodexAppServerPendingRequest,

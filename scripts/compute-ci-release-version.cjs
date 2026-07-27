@@ -132,6 +132,24 @@ function writeGitHubOutputs(result) {
 }
 
 function main() {
+  const requestedVersion = String(process.env.CI_RELEASE_VERSION || '').trim()
+  if (requestedVersion) {
+    const parsed = parseSemverVersion(requestedVersion)
+    const allTags = gitLines(['tag', '--list', 'v*'])
+    const tag = `v${parsed.version}`
+    const previous = previousSemverTag(allTags, tag)
+    const result = {
+      version: parsed.version,
+      tag,
+      releaseName: `${PRODUCT_NAME} ${parsed.version}`,
+      previousTag: previous?.tag || '',
+      existingTag: allTags.includes(tag)
+    }
+    writeGitHubOutputs(result)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
   const noFetch = process.argv.includes('--no-fetch') || process.env.CI_RELEASE_NO_FETCH === '1'
   if (!noFetch) fetchTags()
 

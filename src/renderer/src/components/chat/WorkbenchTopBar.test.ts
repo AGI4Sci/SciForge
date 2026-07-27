@@ -2,38 +2,81 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import i18n from '../../i18n'
+import {
+  AnchoredCommentsTopBarActionsView,
+  useAnchoredCommentStore
+} from '../anchored-comments'
+import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 import { WorkbenchTopBar } from './WorkbenchTopBar'
 
-describe('WorkbenchTopBar Paper Radar entry', () => {
+describe('WorkbenchTopBar right-panel contributions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
+    i18n.addResourceBundle('en', 'common', {
+      rightPanelEvidenceDag: 'Evidence DAG',
+      rightPanelProjectDag: 'Project DAG'
+    }, true, true)
+    useAnchoredCommentStore.setState({
+      commentMode: false,
+      threads: [],
+      panelOpen: false
+    })
   })
 
-  it('hides Paper Radar when the extension is not enabled', () => {
+  it('does not invent a Paper Radar entry without a registered contribution', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,
-      onToggleRightPanelMode: vi.fn(),
-      paperRadarEnabled: false
+      onToggleRightPanelMode: vi.fn()
     }))
 
     expect(html).not.toContain('Paper Radar')
   })
 
-  it('shows and marks Paper Radar when the extension is enabled', () => {
+  it('renders and marks a registered right-panel contribution from its metadata', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'paper',
       onToggleRightPanelMode: vi.fn(),
-      paperRadarEnabled: true
+      rightPanelContributions: installedRendererContributions.rightPanels.list()
     }))
 
     expect(html).toContain('Paper Radar')
     expect(html).toContain('aria-pressed="true"')
   })
 
-  it('shows Evidence DAG as a right panel item', () => {
+  it('omits a registered contribution when its generic availability predicate fails', () => {
+    const registered = installedRendererContributions.rightPanels.list()[0]!
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'evidence',
-      onToggleRightPanelMode: vi.fn()
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [{
+        ...registered,
+        contribution: {
+          ...registered.contribution,
+          isAvailable: () => false
+        }
+      }]
+    }))
+
+    expect(html).not.toContain('Paper Radar')
+  })
+
+  it('shows Evidence DAG as a right panel item', () => {
+    const contribution = {
+      ...installedRendererContributions.rightPanels.list()[0]!,
+      id: 'evidence-dag.workbench-right-panel',
+      contribution: {
+        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
+        id: 'evidence-dag.workbench-right-panel',
+        mode: 'evidence-dag',
+        label: 'rightPanelEvidenceDag',
+        title: 'Evidence DAG',
+        resourceKind: 'evidence-dag'
+      }
+    }
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'evidence-dag',
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [contribution]
     }))
 
     expect(html).toContain('Evidence DAG')
@@ -41,18 +84,63 @@ describe('WorkbenchTopBar Paper Radar entry', () => {
   })
 
   it('shows Project DAG as a right panel item', () => {
+    const contribution = {
+      ...installedRendererContributions.rightPanels.list()[0]!,
+      id: 'project-dag.workbench-right-panel',
+      contribution: {
+        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
+        id: 'project-dag.workbench-right-panel',
+        mode: 'project-dag',
+        label: 'rightPanelProjectDag',
+        title: 'Project DAG',
+        resourceKind: 'project-dag'
+      }
+    }
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'project-dag',
-      onToggleRightPanelMode: vi.fn()
+      onToggleRightPanelMode: vi.fn(),
+      rightPanelContributions: [contribution]
     }))
 
     expect(html).toContain('Project DAG')
     expect(html).toContain('aria-pressed="true"')
   })
 
+  it('shows Create Loop as a right panel item', () => {
+    const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: 'workflow',
+      onToggleRightPanelMode: vi.fn()
+    }))
+
+    expect(html).toContain('Create Loop')
+    expect(html).toContain('aria-pressed="true"')
+  })
+
+  it('keeps the global comment actions in the top row', () => {
+    const initial = renderToStaticMarkup(createElement(WorkbenchTopBar, {
+      rightPanelMode: null,
+      onToggleRightPanelMode: vi.fn()
+    }))
+    expect(initial).toContain('aria-label="Comment on anything"')
+    expect(initial).not.toContain('data-sciforge-comment-launcher')
+    expect(initial).not.toContain('aria-label="Open comments"')
+
+    const active = renderToStaticMarkup(createElement(AnchoredCommentsTopBarActionsView, {
+      commentMode: true,
+      panelOpen: true,
+      threadCount: 1,
+      onToggleCommentMode: vi.fn(),
+      onTogglePanel: vi.fn()
+    }))
+    expect(active).toContain('aria-label="Exit comment mode"')
+    expect(active).toContain('aria-label="Open comments"')
+    expect(active).toContain('aria-expanded="true"')
+    expect(active).toContain('>1</span>')
+  })
+
   it('keeps right-panel controls reachable in narrow workbench widths', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
-      rightPanelMode: 'project-dag',
+      rightPanelMode: 'workflow',
       onToggleRightPanelMode: vi.fn()
     }))
 

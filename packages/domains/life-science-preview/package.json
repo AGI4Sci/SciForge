@@ -1,0 +1,46 @@
+{
+  "name": "@sciforge/domain-life-science-preview",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Trusted compile-time life-science Workspace Preview domain package for SciForge.",
+  "exports": {
+    "./contract": "./src/contract.ts",
+    "./definition": "./src/definition.ts",
+    "./main": "./src/main/index.ts",
+    "./renderer": "./src/renderer/index.tsx",
+    "./workspace-preview-wire": "./src/wire.ts"
+  },
+  "files": [
+    "src",
+    "sciforge.domain.json",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@sciforge/domain-sdk": "^0.1.0",
+    "@sciforge/workspace-bioimaging": "^0.1.0",
+    "@sciforge/workspace-molecular": "^0.1.0",
+    "@sciforge/workspace-omics": "^0.1.0",
+    "@sciforge/workspace-sequence": "^0.1.0",
+    "@sciforge/workspace-spectra": "^0.1.0",
+    "lucide-react": "^0.544.0",
+    "molstar": "5.10.1",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "typescript": "^5.8.2",
+    "vite": "^6.4.3",
+    "vitest": "^3.2.4"
+  }
+}

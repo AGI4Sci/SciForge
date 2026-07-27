@@ -1,0 +1,32 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-paper-radar",
+  "module": {
+    "id": "sciforge.paper-radar",
+    "displayName": "Paper Radar",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 100
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        { "kind": "main.capability-factory", "id": "paper-radar.capabilities" }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        { "kind": "renderer.workbench-right-panel", "id": "paper-radar.workbench-right-panel" },
+        { "kind": "renderer.i18n-resource", "id": "paper-radar.translations" }
+      ]
+    }
+  ]
+}

@@ -44,7 +44,7 @@ async function seededDocument(documentId = 'figure') {
 
 function passingReviewEvidence(path: string, content: string | Uint8Array) {
   return {
-    tool: 'visual_artifact_review' as const,
+    tool: 'image_generation_review_candidate' as const,
     ok: true as const,
     reviewedArtifactPath: path,
     reviewedArtifactHash: createHash('sha256').update(content).digest('hex'),

@@ -20,15 +20,13 @@ import type {
 } from './core/types.js'
 
 import {
-  PAPER_RADAR_MCP_SERVER_VERSION,
-  PAPER_RADAR_WORKER_CAPABILITIES,
-  PAPER_RADAR_WORKER_TRANSPORT,
+  PAPER_RADAR_SERVICE_VERSION,
   PaperRadarWorkerError,
   paperRadarErrorPayloadFromUnknown,
   type PaperDigestInput,
-  type PaperRadarCapability,
   type PaperRadarErrorCode,
-  type PaperRadarSideEffect,
+  type PaperRadarServiceSideEffect,
+  type PaperRadarWriteOperation,
   type PaperProfileSaveInput,
   type PaperProfileSyncInput,
   type PaperRankInput,
@@ -36,11 +34,6 @@ import {
   type PaperStats,
   type PaperSyncStateRecord
 } from './contract.js'
-import {
-  mcpWriteConfirmationRequired,
-  mcpWriteControlFromInput,
-  mcpWriteRedactedInput
-} from './write-action.js'
 
 export interface PaperRadarResolvedPaths {
   dbPath: string
@@ -65,26 +58,21 @@ export interface PaperRadarCallOptions {
 
 export interface PaperRadarDiagnostics {
   version: string
-  transport: typeof PAPER_RADAR_WORKER_TRANSPORT
-  capabilities: typeof PAPER_RADAR_WORKER_CAPABILITIES
   storage: PaperRadarResolvedPaths
   stats: PaperStats
   checkedAt: string
 }
 
-export type PaperRadarAuditAction = 'preview' | 'write'
+export type PaperRadarAuditAction = 'write'
 
 export interface PaperRadarAuditRecord {
   auditId: string
   sequence: number
   timestamp: string
-  capability: PaperRadarCapability
-  sideEffect: PaperRadarSideEffect
+  capability: PaperRadarWriteOperation
+  sideEffect: PaperRadarServiceSideEffect
   action: PaperRadarAuditAction
   ok: boolean
-  dryRun: boolean
-  preview: boolean
-  confirmed: boolean
   profile?: string
   from?: string
   to?: string
@@ -119,46 +107,21 @@ export interface PaperProfileListResult {
 }
 
 export interface PaperProfileSaveResult {
-  dryRun: boolean
-  preview: boolean
-  saved: boolean
   profile: TopicProfile
   auditId: string
 }
 
-export interface PaperProfileSyncPlan {
-  source: 'arxiv' | 'biorxiv'
+export interface PaperProfileSyncResult {
+  profile: string
   from: string
   to: string
   maxRecords: number
-  categories?: string[]
-  subjects?: string[]
+  results: SyncResult[]
+  fetched: number
+  upserted: number
+  skipped: number
+  auditId: string
 }
-
-export type PaperProfileSyncResult =
-  | {
-    dryRun: boolean
-    preview: true
-    profile: string
-    from: string
-    to: string
-    maxRecords: number
-    planned: PaperProfileSyncPlan[]
-    auditId: string
-  }
-  | {
-    dryRun: false
-    preview: false
-    profile: string
-    from: string
-    to: string
-    maxRecords: number
-    results: SyncResult[]
-    fetched: number
-    upserted: number
-    skipped: number
-    auditId: string
-  }
 
 export interface PaperSearchResult {
   papers: RankedPaper[]
@@ -294,52 +257,22 @@ class LocalPaperRadarService implements PaperRadarService {
       arxivCategories: input.arxiv_categories,
       biorxivSubjects: input.biorxiv_subjects
     })
-    const preview = isWritePreview(input)
-    if (preview) {
-      const audit = this.recordProfileAudit({
-        capability: 'paper_profile_save',
-        action: 'preview',
-        ok: true,
-        input,
-        profile
-      })
-      return { dryRun: input.dry_run, preview: true, saved: false, profile, auditId: audit.auditId }
-    }
-
-    if (!isWriteConfirmed(input)) {
-      this.throwConfirmationRequired({
-        capability: 'paper_profile_save',
-        action: 'write',
-        input,
-        profile: profile.name,
-        reason: 'Saving a Paper Radar profile writes profiles.json and requires explicit user confirmation.'
-      })
-    }
-
     try {
       const savedProfile = this.core.saveProfile(profile)
       const audit = this.recordProfileAudit({
         capability: 'paper_profile_save',
         action: 'write',
         ok: true,
-        input,
         profile: savedProfile
       })
-      return {
-        dryRun: false,
-        preview: false,
-        saved: true,
-        profile: savedProfile,
-        auditId: audit.auditId
-      }
+      return { profile: savedProfile, auditId: audit.auditId }
     } catch (error) {
       this.throwAuditedFailure(error, {
         capability: 'paper_profile_save',
         action: 'write',
-        input,
         profile: profile.name,
         fallbackReason: 'Failed to save Paper Radar profile.',
-        fallbackSuggestion: 'Check that profiles.json is writable, then retry with confirmed: true.'
+        fallbackSuggestion: 'Check that profiles.json is writable, then retry.'
       })
     }
   }
@@ -347,59 +280,6 @@ class LocalPaperRadarService implements PaperRadarService {
   async syncProfile(input: PaperProfileSyncInput, options: PaperRadarCallOptions = {}): Promise<PaperProfileSyncResult> {
     throwIfAborted(options.signal)
     const requestedProfile = input.profile ? normalizeProfileName(input.profile) : DEFAULT_PROFILE.name
-    const preview = isWritePreview(input)
-
-    if (preview) {
-      try {
-        const profile = this.resolveProfile(input.profile)
-        const plan = this.core.planProfileSync({
-          profile: profile.name,
-          from: input.from,
-          to: input.to,
-          maxRecords: input.max_records
-        })
-        const audit = this.recordSyncAudit({
-          capability: 'paper_profile_sync',
-          action: 'preview',
-          ok: true,
-          input,
-          profile: plan.profile,
-          from: plan.from,
-          to: plan.to,
-          maxRecords: plan.maxRecords,
-          sourceCount: plan.planned.length
-        })
-        return {
-          dryRun: input.dry_run,
-          preview: true,
-          profile: plan.profile,
-          from: plan.from,
-          to: plan.to,
-          maxRecords: plan.maxRecords,
-          planned: plan.planned,
-          auditId: audit.auditId
-        }
-      } catch (error) {
-        this.throwAuditedFailure(error, {
-          capability: 'paper_profile_sync',
-          action: 'preview',
-          input,
-          profile: requestedProfile,
-          fallbackReason: 'Failed to preview Paper Radar profile sync.',
-          fallbackSuggestion: 'Check the profile name and sync window, then retry.'
-        })
-      }
-    }
-
-    if (!isWriteConfirmed(input)) {
-      this.throwConfirmationRequired({
-        capability: 'paper_profile_sync',
-        action: 'write',
-        input,
-        profile: requestedProfile,
-        reason: 'Syncing a Paper Radar profile fetches metadata and writes SQLite sync state, so it requires explicit user confirmation.'
-      })
-    }
 
     let profileName = requestedProfile
     let from: string | undefined
@@ -429,7 +309,6 @@ class LocalPaperRadarService implements PaperRadarService {
         capability: 'paper_profile_sync',
         action: 'write',
         ok: true,
-        input,
         profile: result.profile,
         from,
         to,
@@ -440,8 +319,6 @@ class LocalPaperRadarService implements PaperRadarService {
         skipped: result.skipped
       })
       return {
-        dryRun: false,
-        preview: false,
         ...result,
         auditId: audit.auditId
       }
@@ -449,13 +326,12 @@ class LocalPaperRadarService implements PaperRadarService {
       this.throwAuditedFailure(error, {
         capability: 'paper_profile_sync',
         action: 'write',
-        input,
         profile: profileName,
         from,
         to,
         maxRecords,
         fallbackReason: 'Failed to sync Paper Radar profile.',
-        fallbackSuggestion: 'Retry later, or run the same request with dry_run/preview to inspect the planned sync first.'
+        fallbackSuggestion: 'Retry later, or reduce the requested sync window.'
       })
     }
   }
@@ -483,9 +359,7 @@ class LocalPaperRadarService implements PaperRadarService {
   diagnostics(options: PaperRadarCallOptions = {}): PaperRadarDiagnostics {
     throwIfAborted(options.signal)
     return {
-      version: PAPER_RADAR_MCP_SERVER_VERSION,
-      transport: PAPER_RADAR_WORKER_TRANSPORT,
-      capabilities: PAPER_RADAR_WORKER_CAPABILITIES,
+      version: PAPER_RADAR_SERVICE_VERSION,
       storage: this.paths,
       stats: this.core.stats(),
       checkedAt: this.now().toISOString()
@@ -512,7 +386,7 @@ class LocalPaperRadarService implements PaperRadarService {
         code: 'not_found',
         reason: `Paper Radar profile not found: ${name}`,
         retryable: false,
-        suggestion: 'Call gui_paper_profile_list and use one of the returned profile names.'
+        suggestion: 'List profiles first and use one of the returned profile names.'
       })
     }
     return profile
@@ -526,7 +400,7 @@ class LocalPaperRadarService implements PaperRadarService {
         code: 'not_found',
         reason: `Paper Radar paper not found: ${id}`,
         retryable: false,
-        suggestion: 'Call gui_paper_search or gui_paper_rank and use one of the returned paper ids.'
+        suggestion: 'Search or rank papers first and use one of the returned paper ids.'
       })
     }
     return paper
@@ -560,10 +434,9 @@ class LocalPaperRadarService implements PaperRadarService {
   }
 
   private recordProfileAudit(input: {
-    capability: Extract<PaperRadarCapability, 'paper_profile_save'>
+    capability: Extract<PaperRadarWriteOperation, 'paper_profile_save'>
     action: PaperRadarAuditAction
     ok: boolean
-    input: PaperProfileSaveInput
     profile: TopicProfile
     errorCode?: PaperRadarErrorCode
     reason?: string
@@ -573,9 +446,6 @@ class LocalPaperRadarService implements PaperRadarService {
       sideEffect: 'write',
       action: input.action,
       ok: input.ok,
-      dryRun: input.input.dry_run,
-      preview: isWritePreview(input.input),
-      confirmed: isWriteConfirmed(input.input),
       profile: input.profile.name,
       keywordCount: input.profile.keywords.length,
       excludeKeywordCount: input.profile.excludeKeywords.length,
@@ -587,10 +457,9 @@ class LocalPaperRadarService implements PaperRadarService {
   }
 
   private recordSyncAudit(input: {
-    capability: Extract<PaperRadarCapability, 'paper_profile_sync'>
+    capability: Extract<PaperRadarWriteOperation, 'paper_profile_sync'>
     action: PaperRadarAuditAction
     ok: boolean
-    input: PaperProfileSyncInput
     profile: string
     from?: string
     to?: string
@@ -607,9 +476,6 @@ class LocalPaperRadarService implements PaperRadarService {
       sideEffect: 'write',
       action: input.action,
       ok: input.ok,
-      dryRun: input.input.dry_run,
-      preview: isWritePreview(input.input),
-      confirmed: isWriteConfirmed(input.input),
       profile: input.profile,
       ...(input.from ? { from: input.from } : {}),
       ...(input.to ? { to: input.to } : {}),
@@ -623,60 +489,9 @@ class LocalPaperRadarService implements PaperRadarService {
     })
   }
 
-  private throwConfirmationRequired(input: {
-    capability: Extract<PaperRadarCapability, 'paper_profile_save' | 'paper_profile_sync'>
-    action: PaperRadarAuditAction
-    input: PaperProfileSaveInput | PaperProfileSyncInput
-    profile: string
-    reason: string
-  }): never {
-    const audit = input.capability === 'paper_profile_save'
-      ? this.recordProfileAudit({
-        capability: input.capability,
-        action: input.action,
-        ok: false,
-        input: input.input as PaperProfileSaveInput,
-        profile: normalizeTopicProfile({
-          name: input.profile,
-          keywords: [],
-          excludeKeywords: [],
-          arxivCategories: [],
-          biorxivSubjects: []
-        }),
-        errorCode: 'confirmation_required',
-        reason: input.reason
-      })
-      : this.recordSyncAudit({
-        capability: input.capability,
-        action: input.action,
-        ok: false,
-        input: input.input as PaperProfileSyncInput,
-        profile: input.profile,
-        errorCode: 'confirmation_required',
-        reason: input.reason
-      })
-    const confirmationRequired = mcpWriteConfirmationRequired({
-      worker: 'paper-radar',
-      tool: input.capability === 'paper_profile_save' ? 'gui_paper_profile_save' : 'gui_paper_profile_sync',
-      action: input.capability === 'paper_profile_save' ? 'profile_save' : 'profile_sync',
-      destructive: false,
-      confirmationId: mcpWriteControlFromInput(input.input).confirmationId ?? `${input.capability}:${input.profile}`
-    })
-    throw new PaperRadarWorkerError({
-      code: 'confirmation_required',
-      reason: input.reason,
-      retryable: false,
-      suggestion: 'Run the same request with dry_run or preview first, then retry with confirmed: true.',
-      auditId: audit.auditId,
-      confirmationRequired,
-      sideEffect: 'write'
-    })
-  }
-
   private throwAuditedFailure(error: unknown, input: {
-    capability: Extract<PaperRadarCapability, 'paper_profile_save' | 'paper_profile_sync'>
+    capability: Extract<PaperRadarWriteOperation, 'paper_profile_save' | 'paper_profile_sync'>
     action: PaperRadarAuditAction
-    input: PaperProfileSaveInput | PaperProfileSyncInput
     profile: string
     from?: string
     to?: string
@@ -694,7 +509,6 @@ class LocalPaperRadarService implements PaperRadarService {
         capability: input.capability,
         action: input.action,
         ok: false,
-        input: input.input as PaperProfileSaveInput,
         profile: normalizeTopicProfile({
           name: input.profile,
           keywords: [],
@@ -709,7 +523,6 @@ class LocalPaperRadarService implements PaperRadarService {
         capability: input.capability,
         action: input.action,
         ok: false,
-        input: input.input as PaperProfileSyncInput,
         profile: input.profile,
         from: input.from,
         to: input.to,
@@ -732,7 +545,7 @@ class LocalPaperRadarService implements PaperRadarService {
         code: 'not_found',
         reason: `Paper Radar profile not found: ${name}`,
         retryable: false,
-        suggestion: 'Call gui_paper_profile_list before syncing, ranking, or digesting with a profile.'
+        suggestion: 'List profiles before syncing, ranking, or digesting with a profile.'
       })
     }
     return profile
@@ -780,26 +593,8 @@ function cleanPath(value: string | undefined): string | undefined {
   return cleaned ? cleaned : undefined
 }
 
-function isWritePreview(input: { dry_run?: boolean; preview?: boolean }): boolean {
-  return input.dry_run === true || input.preview === true
-}
-
-function isWriteConfirmed(input: {
-  confirmed?: boolean
-  confirmation_id?: string
-  confirmation?: { confirmed: true } | 'confirmed'
-}): boolean {
-  return (
-    input.confirmed === true ||
-    input.confirmation === 'confirmed' ||
-    input.confirmation?.confirmed === true ||
-    mcpWriteControlFromInput(input).confirmed
-  )
-}
-
 function sanitizeAuditReason(reason: string): string {
-  const genericRedacted = mcpWriteRedactedInput(reason)
-  const redacted = (typeof genericRedacted === 'string' ? genericRedacted : reason)
+  const redacted = reason
     .replace(/((?:token|secret|api[_-]?key|access[_-]?token|authorization)\s*[:=]\s*)[^\s&]+/gi, '$1[redacted]')
     .replace(/([?&](?:token|secret|api[_-]?key|access[_-]?token|key)=)[^&\s]+/gi, '$1[redacted]')
     .replace(/\s+/g, ' ')

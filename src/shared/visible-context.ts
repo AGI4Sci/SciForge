@@ -1,7 +1,11 @@
 import { z } from 'zod'
+import {
+  capabilityResourceBindingSchema,
+  type CapabilityResourceBinding
+} from './capability-broker'
 
-export const VISIBLE_CONTEXT_SCHEMA_VERSION = 2
-export const VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION = 1
+export const VISIBLE_CONTEXT_SCHEMA_VERSION = 3
+export const SURFACE_RESOURCE_KIND = 'surface'
 export const VISIBLE_CONTEXT_MAX_COMPONENTS = 64
 export const VISIBLE_CONTEXT_MAX_RESOURCES = 64
 export const VISIBLE_CONTEXT_MAX_VISUAL_TARGETS = 64
@@ -57,6 +61,16 @@ export const visualContextTargetSchema = z.object({
 
 export type VisualContextTarget = z.infer<typeof visualContextTargetSchema>
 
+export const visibleContextCapabilityLocatorSchema = z.object({
+  resourceRef: z.string().regex(/^res_[A-Za-z0-9_-]{20,}$/),
+  operations: z.array(z.object({
+    operationRef: z.string().trim().min(3).max(192),
+    schemaRef: z.string().trim().min(1).max(1024)
+  }).strict()).max(512)
+}).strict()
+
+export type VisibleContextCapabilityLocator = z.infer<typeof visibleContextCapabilityLocatorSchema>
+
 type VisibleContextResourceBase = {
   kind: string
   role?: string
@@ -76,6 +90,7 @@ type VisibleContextResourceBase = {
   openThreadCount?: number
   selectedThreadId?: string | null
   updatedAt?: string
+  capability?: CapabilityResourceBinding | VisibleContextCapabilityLocator
   metadata?: Record<string, unknown>
 }
 
@@ -129,6 +144,8 @@ export type VisibleContextSnapshot = {
   components: VisibleContextComponentSnapshot[]
 }
 
+export type VisibleContextPublishInput = Omit<VisibleContextSnapshot, 'windowId'>
+
 const visibleContextResourceBaseSchema = z.object({
   kind: z.string().trim().min(1).max(128),
   role: optionalStringSchema(128),
@@ -148,6 +165,10 @@ const visibleContextResourceBaseSchema = z.object({
   openThreadCount: z.number().int().nonnegative().optional(),
   selectedThreadId: z.string().trim().max(256).nullable().optional(),
   updatedAt: optionalStringSchema(128),
+  capability: z.union([
+    capabilityResourceBindingSchema,
+    visibleContextCapabilityLocatorSchema
+  ]).optional(),
   metadata: z.record(z.string(), z.unknown()).optional()
 }).strict()
 
@@ -214,20 +235,9 @@ export const visibleContextSnapshotSchema = z.object({
   components: z.array(visibleContextComponentSnapshotSchema).max(VISIBLE_CONTEXT_MAX_COMPONENTS)
 }).strict()
 
-const visualCaptureBaseRequestSchema = z.object({
-  requestId: requestIdSchema
-}).strict()
-
-export const visibleContextCaptureRequestSchema = z.discriminatedUnion('scope', [
-  visualCaptureBaseRequestSchema.extend({ scope: z.literal('window') }).strict(),
-  visualCaptureBaseRequestSchema.extend({
-    scope: z.literal('target'),
-    componentId: z.string().trim().min(1).max(256),
-    targetId: z.string().trim().min(1).max(256)
-  }).strict()
-])
-
-export type VisibleContextCaptureRequest = z.infer<typeof visibleContextCaptureRequestSchema>
+export const visibleContextPublishInputSchema = visibleContextSnapshotSchema.omit({
+  windowId: true
+})
 
 export const visibleContextCaptureResultSchema = z.discriminatedUnion('ok', [
   z.object({
@@ -264,55 +274,6 @@ export type VisibleContextCapturePreviewResult =
     }
   | { ok: false; message: string }
 
-export const visibleContextCaptureBrokerRequestSchema = z.object({
-  schemaVersion: z.literal(VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION),
-  requestId: requestIdSchema,
-  requestedAt: timestampSchema,
-  expiresAt: timestampSchema,
-  scope: z.enum(['window', 'target']),
-  componentId: optionalStringSchema(256),
-  targetId: optionalStringSchema(256)
-}).strict().superRefine((request, context) => {
-  if (request.scope === 'target' && (!request.componentId || !request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['targetId'],
-      message: 'Target captures require both componentId and targetId.'
-    })
-  }
-  if (request.scope === 'window' && (request.componentId || request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['scope'],
-      message: 'Window captures cannot include target identifiers.'
-    })
-  }
-})
-
-export type VisibleContextCaptureBrokerRequest = z.infer<typeof visibleContextCaptureBrokerRequestSchema>
-
-const visibleContextCaptureBrokerResponseBaseSchema = z.object({
-  schemaVersion: z.literal(VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION),
-  requestId: requestIdSchema,
-  completedAt: timestampSchema
-}).strict()
-
-export const visibleContextCaptureBrokerResponseSchema = z.discriminatedUnion('ok', [
-  visibleContextCaptureBrokerResponseBaseSchema.extend({
-    ok: z.literal(true),
-    capture: visibleContextVisualSnapshotResourceSchema
-  }).strict(),
-  visibleContextCaptureBrokerResponseBaseSchema.extend({
-    ok: z.literal(false),
-    error: z.object({
-      code: z.string().trim().min(1).max(128),
-      message: z.string().trim().min(1).max(1000),
-      retryable: z.boolean()
-    }).strict()
-  }).strict()
-])
-
-export type VisibleContextCaptureBrokerResponse = z.infer<typeof visibleContextCaptureBrokerResponseSchema>
 
 export function emptyVisibleContextSnapshot(
   publishedAt = new Date(0).toISOString(),

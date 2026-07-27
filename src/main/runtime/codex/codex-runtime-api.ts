@@ -1,5 +1,7 @@
 import type {
   AgentRuntimeChild,
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeExecutionEffectClass,
   AgentRuntimeFileReference,
   AgentRuntimePhase,
   AgentRuntimeThreadRelation,
@@ -7,6 +9,11 @@ import type {
   AgentRuntimeThreadGoalStatus,
   AgentRuntimeUsage
 } from '../../../shared/agent-runtime-contract'
+import type {
+  CodexAppServerAccount,
+  CodexAppServerGetAccountRateLimitsResponse,
+  CodexAppServerPlanType
+} from './app-server/protocol'
 
 export type CodexJsonObject = Record<string, unknown>
 
@@ -87,6 +94,8 @@ export type CodexThreadEventPayload = {
     summary: string
     status: 'running' | 'success' | 'error'
     toolKind?: 'tool_call' | 'command_execution' | 'file_change'
+    effects?: AgentRuntimeExecutionEffectClass[]
+    completionReceipts?: AgentRuntimeCompletionReceipt[]
     detail?: string
     filePath?: string
     meta?: Record<string, unknown>
@@ -118,6 +127,19 @@ export type CodexThreadEventPayload = {
   turnComplete?: boolean
 }
 
+export function codexModelDeltaItemId(
+  event: Pick<CodexThreadEventPayload, 'seq' | 'turnId'>,
+  delta: NonNullable<CodexThreadEventPayload['deltas']>[number],
+  index: number
+): string {
+  const sequence = event.seq ?? delta.seq
+  const eventIdentity =
+    typeof sequence === 'number' && Number.isFinite(sequence)
+      ? Math.floor(sequence)
+      : event.turnId?.trim() || 'event'
+  return `${delta.kind}-${eventIdentity}-${Math.max(0, Math.floor(index))}`
+}
+
 export type CodexRuntimeFailure = {
   ok: false
   message: string
@@ -131,6 +153,40 @@ export type CodexRuntimeOk<T extends CodexJsonObject = CodexJsonObject> = {
 
 export type CodexConnectResult =
   | CodexRuntimeOk<{ info: CodexJsonObject }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanAccountResult =
+  | CodexRuntimeOk<{
+    account: CodexAppServerAccount | null
+    planType: CodexAppServerPlanType | null
+    requiresOpenaiAuth: boolean
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanLoginMethod = 'browser' | 'device'
+
+export type CodexCodingPlanLoginStartResult =
+  | CodexRuntimeOk<{
+    method: CodexCodingPlanLoginMethod
+    loginId: string
+    authUrl?: string
+    verificationUrl?: string
+    userCode?: string
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanLoginCompletionResult =
+  | CodexRuntimeOk<{
+    loginId: string
+    success: boolean
+    error?: string
+    account?: CodexAppServerAccount | null
+    planType?: CodexAppServerPlanType | null
+  }>
+  | CodexRuntimeFailure
+
+export type CodexCodingPlanRateLimitsResult =
+  | CodexRuntimeOk<CodexAppServerGetAccountRateLimitsResponse>
   | CodexRuntimeFailure
 
 export type CodexThreadListResult =
@@ -177,8 +233,9 @@ export type CodexTurnStartPayload = {
   workspace?: string
   model?: string
   reasoningEffort?: string
-  metadata?: Record<string, unknown>
   fileReferences?: AgentRuntimeFileReference[]
+  ownedVisualToolsAvailable?: boolean
+  nativeVisualProofChainPending?: boolean
 }
 
 export type CodexTurnStartResult =

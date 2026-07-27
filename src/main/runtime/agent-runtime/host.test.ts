@@ -2,6 +2,13 @@ import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
+import type { DomainAgentArtifactEvent } from '@sciforge/domain-sdk/host'
+import {
+  sanitizeTraceTextChunks,
+  type TraceEvent,
+  type TraceEventInput
+} from '@sciforge/full-trace'
 import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
@@ -9,7 +16,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -19,10 +25,10 @@ import type {
   AgentRuntimeAuxiliaryActiveScopedOperation,
   AgentRuntimeAuxiliaryInput,
   AgentRuntimeCapabilities,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeEvent,
   AgentRuntimeGitCheckpoint,
   AgentRuntimeId,
-  AgentRuntimeModelAuditRecord,
   AgentRuntimeUsageQuery,
   AgentRuntimeUsageResponse,
   AgentRuntimeThread,
@@ -35,12 +41,15 @@ import {
 } from '../../../shared/agent-runtime-contract'
 import type { CodexRuntimeService } from '../codex'
 import type { AgentRuntimeAdapter, AgentRuntimeAdapterContext } from './adapter'
-import { withExecutionIntegrityRequirement } from './execution-integrity-guard'
 import { createAgentRuntimeHost } from './host'
-import { configureEvidenceDagUpdateQueue } from '../evidence-dag-feed'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  EXECUTION_PUBLICATION_COMMITTED_CODE,
+  EXECUTION_PUBLICATION_PENDING_CODE
+} from './execution-integrity-guard'
 import { createCodexAgentRuntimeAdapter } from '../codex/codex-agent-runtime-adapter'
-import { createLocalRuntimeAgentRuntimeAdapter } from '../local-runtime-agent-runtime-adapter'
-import { ModelRequestAuditRecorder } from '../../services/model-request-audit-service'
+import { AgentRuntimeTraceRecorder } from '../../services/agent-runtime-trace-service'
 import { RuntimeContextStateService } from '../../services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from '../../services/runtime-context-ledger-service'
 import { SharedMemoryService } from '../../services/shared-memory-service'
@@ -56,6 +65,26 @@ import {
   type SettingsMemoryRecordUpdater
 } from '../../../renderer/src/lib/settings-memory-actions'
 
+function visualExecutionIntent(requiresRegionRef = true): AgentRuntimeExecutionIntent {
+  return {
+    mode: 'execute',
+    requirements: [
+      { id: 'visual-look-locate', receiptKind: 'visual.look' },
+      {
+        id: 'visual-capture',
+        receiptKind: 'visual.capture',
+        ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+        dependsOn: ['visual-look-locate']
+      },
+      {
+        id: 'visual-look-final',
+        receiptKind: 'visual.look',
+        dependsOn: ['visual-capture']
+      }
+    ]
+  }
+}
+
 function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'codex'): AppSettingsV1 {
   return {
     version: 1,
@@ -63,7 +92,6 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -81,6 +109,21 @@ function settings(activeAgentRuntime: AppSettingsV1['activeAgentRuntime'] = 'cod
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
+  }
+}
+
+function fakeTraceRecorder(): {
+  recorder: AgentRuntimeTraceRecorder
+  append: ReturnType<typeof vi.fn<(input: TraceEventInput<'agent_event'>) => Promise<TraceEvent>>>
+} {
+  const append = vi.fn(async (input: TraceEventInput<'agent_event'>) => input as unknown as TraceEvent)
+  return {
+    recorder: new AgentRuntimeTraceRecorder({
+      append,
+      appendMany: async (inputs) => Promise.all(inputs.map((input) => append(input))),
+      sanitizeTextChunks: (chunks) => sanitizeTraceTextChunks(chunks)
+    }),
+    append
   }
 }
 
@@ -143,7 +186,7 @@ function capabilities(runtimeId: AgentRuntimeId): AgentRuntimeCapabilities {
       resumeSession: false
     },
     guard: {
-      toolStorm: runtimeId === 'sciforge' ? 'native' : 'observe'
+      execution: runtimeId === 'sciforge' ? 'native' : 'observe'
     },
     storage: {
       guiOwnedThreads: false,
@@ -186,10 +229,6 @@ function fakeAdapter(id: AgentRuntimeId, thread: AgentRuntimeThread): AgentRunti
     }),
     publishSyntheticEvent: vi.fn(async (_ctx, event) => event)
   }
-}
-
-function json(body: unknown, status = 200): { ok: boolean; status: number; body: string } {
-  return { ok: status >= 200 && status < 300, status, body: JSON.stringify(body) }
 }
 
 function deferred<T>(): {
@@ -320,6 +359,239 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
+  it('coordinates capability confirmations through neutral approval events and resolution', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-07-22T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+      if (!input.signal?.aborted) {
+        yield { kind: 'heartbeat', runtimeId: 'codex', threadId: input.threadId } satisfies AgentRuntimeEvent
+      }
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('codex'), adapters: [adapter] })
+    const subscriptionAbort = new AbortController()
+    const events = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      signal: subscriptionAbort.signal
+    })[Symbol.asyncIterator]()
+    const remoteScript = `echo begin\n${'x'.repeat(6_000)}`
+    const decision = host.requestCapabilityApproval({
+      context: {
+        requestId: 'request-1',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        callId: 'call-1',
+        workspaceId: '/tmp/workspace'
+      },
+      actionId: 'remote-ssh.command.execute',
+      invocationId: 'agent_inv_abcdefghijklmnopqrstuvwxyz',
+      mode: 'confirmation',
+      title: 'Run remote command',
+      description: 'Runs a command on a registered SSH target.',
+      effect: 'external-write',
+      input: {
+        password: 'do-not-persist',
+        privateKey: '-----BEGIN PRIVATE KEY-----\nabc123\n-----END PRIVATE KEY-----',
+        script: remoteScript
+      },
+      resourceRef: 'res_remote_target_abcdefghijklmnop',
+      resourceLabel: 'Lab A GPU 01'
+    })
+
+    const requested = await events.next()
+    expect(requested.value).toMatchObject({
+      kind: 'approval_requested',
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      approvalId: expect.stringMatching(/^capability-approval-/u),
+      toolName: 'remote-ssh.command.execute',
+      meta: {
+        source: 'sciforge-capability-broker',
+        actionId: 'remote-ssh.command.execute',
+        invocationId: 'agent_inv_abcdefghijklmnopqrstuvwxyz',
+        callId: 'call-1',
+        effect: 'external-write',
+        approvalMode: 'confirmation',
+        inputPreviewBytes: expect.any(Number),
+        inputPreviewTruncated: true,
+        resourceRef: 'res_remote_target_abcdefghijklmnop'
+      }
+    })
+    const approvalSummary = String((requested.value as Extract<AgentRuntimeEvent, {
+      kind: 'approval_requested'
+    }>).summary)
+    const inputPreview = approvalSummary.split('Requested input:\n')[1] ?? ''
+    expect(Buffer.byteLength(inputPreview, 'utf8')).toBeLessThanOrEqual(4 * 1_024)
+    expect(approvalSummary).toContain('echo begin')
+    expect(approvalSummary).toContain('Lab A GPU 01')
+    expect(approvalSummary).toContain('<redacted>')
+    expect(approvalSummary).not.toContain('do-not-persist')
+    expect(approvalSummary).not.toContain('abc123')
+    expect((requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).meta)
+      .not.toHaveProperty('inputPreview')
+    const approvalId = (requested.value as Extract<AgentRuntimeEvent, { kind: 'approval_requested' }>).approvalId
+    await host.resolveApproval({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      approvalId,
+      decision: 'allowed'
+    })
+    await expect(decision).resolves.toBe('allowed')
+    await expect(events.next()).resolves.toMatchObject({
+      value: { kind: 'approval_resolved', approvalId, decision: 'allowed' }
+    })
+
+    const replayAbort = new AbortController()
+    const replay = host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      signal: replayAbort.signal
+    })[Symbol.asyncIterator]()
+    await expect(replay.next()).resolves.toMatchObject({
+      value: { kind: 'approval_requested', approvalId }
+    })
+    await expect(replay.next()).resolves.toMatchObject({
+      value: { kind: 'approval_resolved', approvalId, decision: 'allowed' }
+    })
+    subscriptionAbort.abort()
+    replayAbort.abort()
+    await Promise.all([events.return?.(), replay.return?.()])
+    host.dispose()
+  })
+
+  it('cancels pending capability confirmations on abort, terminal turns, and disposal', async () => {
+    const thread = {
+      id: 'claude-thread',
+      runtimeId: 'claude' as const,
+      title: 'Claude',
+      updatedAt: '2026-07-22T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('claude', thread)
+    adapter.subscribeEvents = vi.fn(async function* (_context, input) {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        turnId: 'turn-terminal',
+        state: 'aborted'
+      } satisfies AgentRuntimeEvent
+      await new Promise<void>((resolve) => input.signal?.addEventListener('abort', () => resolve(), { once: true }))
+    })
+    const host = createAgentRuntimeHost({ settings: async () => settings('claude'), adapters: [adapter] })
+    const request = (turnId: string, callId: string, signal?: AbortSignal) => host.requestCapabilityApproval({
+      context: {
+        requestId: callId,
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        turnId,
+        callId
+      },
+      actionId: 'remote-ssh.command.execute',
+      invocationId: `agent_inv_${callId.padEnd(20, 'x')}`,
+      mode: 'confirmation',
+      title: 'Run remote command',
+      description: 'Runs a command on a registered SSH target.',
+      effect: 'external-write',
+      input: { script: callId }
+    }, signal ? { signal } : {})
+
+    const abort = new AbortController()
+    const aborted = request('turn-abort', 'abort-call', abort.signal)
+    abort.abort()
+    await expect(aborted).resolves.toBe('cancelled')
+
+    const surfaceCancelled = request('turn-surface', 'surface-call')
+    expect(host.cancelCapabilityApprovalTurn({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-surface'
+    }, 'user_stop')).toBe(1)
+    await expect(surfaceCancelled).resolves.toBe('cancelled')
+
+    const terminal = request('turn-terminal', 'terminal-call')
+    const subscriptionAbort = new AbortController()
+    const streamed: AgentRuntimeEvent[] = []
+    const events = host.subscribeEvents({
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      signal: subscriptionAbort.signal
+    })[Symbol.asyncIterator]()
+    let terminalApprovalId = ''
+    while (true) {
+      const next = await events.next()
+      if (next.done) break
+      streamed.push(next.value)
+      if (next.value.kind === 'approval_requested' && next.value.turnId === 'turn-terminal') {
+        terminalApprovalId = next.value.approvalId
+      }
+      if (
+        next.value.kind === 'approval_resolved'
+        && terminalApprovalId
+        && next.value.approvalId === terminalApprovalId
+      ) break
+    }
+    subscriptionAbort.abort()
+    await events.return?.()
+    await expect(terminal).resolves.toBe('cancelled')
+    expect(streamed).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'approval_resolved', approvalId: terminalApprovalId, decision: 'error' }),
+      expect.objectContaining({ kind: 'turn_lifecycle', state: 'aborted' })
+    ]))
+
+    const disposed = Array.from({ length: 64 }, (_, index) => (
+      request(`turn-dispose-${index}`, `dispose-call-${index}`)
+    ))
+    await expect(request('turn-overflow', 'overflow-call')).resolves.toBe('cancelled')
+    host.dispose()
+    await expect(Promise.all(disposed)).resolves.toEqual(Array.from({ length: 64 }, () => 'cancelled'))
+  })
+
+  it('returns an empty list when the active runtime is healthy and an inactive runtime is unavailable', async () => {
+    const thread = {
+      id: 'unused-thread',
+      runtimeId: 'codex' as const,
+      title: 'Unused',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const local = fakeAdapter('sciforge', { ...thread, runtimeId: 'sciforge' })
+    const codex = fakeAdapter('codex', thread)
+    vi.mocked(local.listThreads).mockRejectedValue(new Error('inactive local runtime unavailable'))
+    vi.mocked(codex.listThreads).mockResolvedValue([])
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [local, codex]
+    })
+
+    await expect(host.listThreads()).resolves.toEqual([])
+  })
+
+  it('surfaces the active runtime failure when every runtime returns no threads', async () => {
+    const thread = {
+      id: 'unused-thread',
+      runtimeId: 'codex' as const,
+      title: 'Unused',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const local = fakeAdapter('sciforge', { ...thread, runtimeId: 'sciforge' })
+    const codex = fakeAdapter('codex', thread)
+    vi.mocked(local.listThreads).mockResolvedValue([])
+    vi.mocked(codex.listThreads).mockRejectedValue(new Error('active codex runtime unavailable'))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [local, codex]
+    })
+
+    await expect(host.listThreads()).rejects.toThrow('active codex runtime unavailable')
+  })
+
   it('requires explicit runtime ids for thread, turn, and event operations', async () => {
     const codexThread = {
       id: 'codex-thread',
@@ -354,6 +626,70 @@ describe('AgentRuntimeHost', () => {
     expect(codex.startTurn).not.toHaveBeenCalled()
     expect(codex.renameThread).not.toHaveBeenCalled()
     expect(codex.subscribeEvents).not.toHaveBeenCalled()
+  })
+
+  it('coalesces concurrent reads of the same runtime thread', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const readResolvers: Array<(detail: AgentRuntimeThreadDetail) => void> = []
+    vi.mocked(adapter.readThread).mockImplementation(() => new Promise<AgentRuntimeThreadDetail>((resolve) => {
+      readResolvers.push(resolve)
+    }))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    const first = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    const second = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    await vi.waitFor(() => expect(adapter.readThread).toHaveBeenCalledTimes(1))
+
+    readResolvers.shift()?.({ ...thread, latestSeq: 0, items: [] })
+    await expect(Promise.all([first, second])).resolves.toHaveLength(2)
+
+    const third = host.readThread({ runtimeId: 'codex', threadId: 'codex-thread' })
+    await vi.waitFor(() => expect(adapter.readThread).toHaveBeenCalledTimes(2))
+    readResolvers.shift()?.({ ...thread, latestSeq: 0, items: [] })
+    await expect(third).resolves.toMatchObject({ id: 'codex-thread' })
+  })
+
+  it('coalesces and briefly caches child-agent tree reads', async () => {
+    const thread = {
+      id: 'codex-thread',
+      runtimeId: 'codex' as const,
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    }
+    const adapter = fakeAdapter('codex', thread)
+    const resolvers: Array<(value: unknown) => void> = []
+    const auxiliary = vi.fn(() => new Promise<unknown>((resolve) => {
+      resolvers.push(resolve)
+    }))
+    adapter.auxiliary = auxiliary
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      operation: 'listThreadChildren' as const,
+      payload: { threadId: 'codex-thread', limit: 80 }
+    }
+
+    const first = host.auxiliary(input)
+    const second = host.auxiliary(input)
+    await vi.waitFor(() => expect(auxiliary).toHaveBeenCalledTimes(1))
+
+    const response = { children: [], degraded: false }
+    resolvers.shift()?.(response)
+    await expect(Promise.all([first, second])).resolves.toEqual([response, response])
+    await expect(host.auxiliary(input)).resolves.toBe(response)
+    expect(auxiliary).toHaveBeenCalledTimes(1)
   })
 
   it('requires explicit runtime ids for thread-bound auxiliary operations', async () => {
@@ -515,70 +851,108 @@ describe('AgentRuntimeHost', () => {
     )
   })
 
-  it('adds an on-demand visible GUI lookup hint for right-sidebar PDF annotation requests', async () => {
+  it('atomically binds every user turn and injects a bounded left-center-right component catalog', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
       title: 'Codex',
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
-    const visibleContext = {
-      get: vi.fn(async () => ({
-        schemaVersion: 1,
-        updatedAt: '2026-07-04T00:00:00.000Z',
-        activeThreadId: 'codex-thread',
-        workspaceRoot: '/tmp/workspace',
-        route: 'chat',
-        components: [{
+    const snapshot = {
+      schemaVersion: 3,
+      windowId: 'main-window',
+      revision: 12,
+      publishedAt: '2026-07-04T00:00:00.000Z',
+      freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },
+      activeThreadId: 'codex-thread',
+      workspaceRoot: '/tmp/workspace',
+      route: 'chat',
+      components: [
+        {
+          id: 'left-sidebar.sessions',
+          region: 'left-sidebar',
+          component: 'session-list',
+          title: 'Sessions',
+          visible: true,
+          updatedAt: '2026-07-04T00:00:00.000Z',
+          summary: 'The current workspace session list.',
+          state: { selectedThreadId: 'codex-thread', count: 4, nested: { filter: 'local', ignored: { deep: true } } },
+          resources: []
+        },
+        {
+          id: 'center.conversation',
+          region: 'center',
+          component: 'conversation',
+          title: 'Codex',
+          visible: true,
+          updatedAt: '2026-07-04T00:00:00.000Z',
+          summary: 'The active agent conversation.',
+          state: { running: false, messageCount: 9 },
+          resources: [{
+            kind: 'conversation',
+            capability: { resourceRef: 'res_centerabcdefghijklmnopqrstuvwxyz', operations: [] }
+          }]
+        },
+        {
           id: 'right-sidebar.file-preview',
           region: 'right-sidebar',
           component: 'workspace-preview',
           title: 'paper.pdf',
           visible: true,
           updatedAt: '2026-07-04T00:00:00.000Z',
-          summary: 'Previewing pdf file paper.pdf.',
+          summary: 'Previewing the bound paper.',
+          state: {
+            presentation: {
+              kind: 'document',
+              position: { index: 3, count: 42 },
+              visibleContent: { kind: 'text', text: 'VOYAGER current page excerpt' }
+            }
+          },
           resources: [{
-            kind: 'pdfAnnotations',
-            role: 'annotation-sidecar',
-            workspaceRoot: '/tmp/workspace',
-            relativePath: '.sciforge/pdf-annotations/sha.json',
-            annotationCount: 2,
-            threadCount: 2,
-            openThreadCount: 2,
-            accessHint: 'Use gui_workspace_read when annotation details are needed.'
+            kind: 'workspaceFile',
+            role: 'preview-target',
+            capability: { resourceRef: 'res_rightabcdefghijklmnopqrstuvwxyz', operations: [] }
           }]
-        }]
-      })),
-      peek: vi.fn(() => ({
-        schemaVersion: 1,
-        updatedAt: '1970-01-01T00:00:00.000Z',
-        components: []
-      }))
+        }
+      ]
+    }
+    const visibleContext = {
+      bindCurrentSurface: vi.fn(async () => snapshot)
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [adapter],
       services: { visibleContext: visibleContext as never }
     })
-    const userText = '看一下右侧的pdf批注，然后修改论文。'
+    const userText = 'Run the unit tests.'
 
     await host.startTurn({
       runtimeId: 'codex',
-      threadId: 'codex-thread',
+      threadId: 'codex-side-thread',
+      visibleContextOwnerThreadId: 'codex-thread',
       text: userText,
       displayText: userText
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
-    expect(visibleContext.get).toHaveBeenCalled()
-    expect(dispatched?.text).toContain('gui_visible_context')
-    expect(dispatched?.text).toContain('pdfAnnotations')
-    expect(dispatched?.text).toContain('.sciforge/pdf-annotations/sha.json')
+    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-side-thread', 'codex-thread')
+    expect(dispatched?.text).toContain('Canonical visible state bound atomically for this turn:')
+    expect(dispatched?.text).toContain('"region": "left-sidebar"')
+    expect(dispatched?.text).toContain('"region": "center"')
+    expect(dispatched?.text).toContain('"region": "right-sidebar"')
+    expect(dispatched?.text).toContain('"selectedThreadId": "codex-thread"')
+    expect(dispatched?.text).toContain('"resourceRef": [')
+    expect(dispatched?.text).toContain('sciforge_observe')
+    expect(dispatched?.text).toContain('sciforge_invoke')
+    expect(dispatched?.text).toContain('res_centerabcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('res_rightabcdefghijklmnopqrstuvwxyz')
+    expect(dispatched?.text).toContain('VOYAGER current page excerpt')
+    expect(dispatched?.text).toContain('"index": 3')
     expect(dispatched?.text).toContain(userText)
     expect(dispatched?.displayText).toBe(userText)
   })
 
-  it('does not add visible GUI lookup hints to unrelated turns', async () => {
+  it('fails closed when canonical visible state cannot be bound', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -586,16 +960,9 @@ describe('AgentRuntimeHost', () => {
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     const visibleContext = {
-      get: vi.fn(async () => ({
-        schemaVersion: 1,
-        updatedAt: '2026-07-04T00:00:00.000Z',
-        components: []
-      })),
-      peek: vi.fn(() => ({
-        schemaVersion: 1,
-        updatedAt: '1970-01-01T00:00:00.000Z',
-        components: []
-      }))
+      bindCurrentSurface: vi.fn(async () => { throw new Error('renderer unavailable') }),
+      get: vi.fn(),
+      peek: vi.fn()
     }
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
@@ -607,12 +974,20 @@ describe('AgentRuntimeHost', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread',
       text: 'Run the unit tests.',
-      displayText: 'Run the unit tests.'
+      displayText: 'Run the unit tests.',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [{ effectClass: 'command_execution' }]
+      }
     })
 
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
+    expect(visibleContext.bindCurrentSurface).toHaveBeenCalledWith('codex:codex-thread', 'codex-thread')
     expect(visibleContext.get).not.toHaveBeenCalled()
-    expect(dispatched?.text).not.toContain('gui_visible_context')
+    expect(visibleContext.peek).not.toHaveBeenCalled()
+    expect(dispatched?.text).toContain('Canonical visible state for this turn: unavailable.')
+    expect(dispatched?.text).toContain('Do not guess from file paths, mtimes, recent files, workspace scans')
+    expect(dispatched?.text).not.toContain('surface.current')
     expect(dispatched?.text).toContain('Runtime-enforced execution integrity gate')
     expect(dispatched?.displayText).toBe('Run the unit tests.')
   })
@@ -630,11 +1005,27 @@ describe('AgentRuntimeHost', () => {
       })
       adapter.subscribeEvents = vi.fn(async function* () {
         yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'unverified-answer',
+          text: '已完成并保存了准确裁剪的图片。'
+        } satisfies AgentRuntimeEvent
+        yield {
           kind: 'turn_lifecycle',
           runtimeId,
           threadId,
           turnId,
           state: 'completed'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'late-unverified-answer',
+          text: '这条终态后的成功消息也不应显示。'
         } satisfies AgentRuntimeEvent
       })
       adapter.readThread = vi.fn(async () => ({
@@ -645,31 +1036,62 @@ describe('AgentRuntimeHost', () => {
         latestTurnId: turnId,
         latestTurnStatus: 'completed',
         latestSeq: 1,
-        turns: [{ id: turnId, threadId, status: 'completed' }],
-        items: []
+        turns: [{
+          id: turnId,
+          threadId,
+          status: 'completed',
+          items: [{
+            id: 'unverified-answer',
+            turnId,
+            kind: 'assistant_message',
+            text: '已完成并保存了准确裁剪的图片。'
+          }]
+        }],
+        items: [{
+          id: 'unverified-answer',
+          turnId,
+          kind: 'assistant_message',
+          text: '已完成并保存了准确裁剪的图片。'
+        }]
       } satisfies AgentRuntimeThreadDetail))
       const host = createAgentRuntimeHost({
         settings: async () => settings(runtimeId),
         adapters: [adapter]
       })
-      const text = '需要用视觉能力看一下排版后的表格图像，优化排版。'
+      const text = '按照任务模板生成报告。'
 
-      await host.startTurn({ runtimeId, threadId, text, displayText: text })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text,
+        displayText: text,
+        executionIntent: visualExecutionIntent()
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+      const replayedEvents: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) {
+        replayedEvents.push(event)
+      }
 
       expect(adapter.startTurn).toHaveBeenCalledWith(
         expect.anything(),
         expect.objectContaining({
           text: expect.stringContaining('Runtime-enforced visual completion gate'),
           displayText: text,
-          metadata: expect.objectContaining({ sciforgeVisualExecutionRequired: true })
+          executionIntent: visualExecutionIntent()
         })
       )
       expect(events).toContainEqual(expect.objectContaining({
         kind: 'turn_lifecycle',
         state: 'failed',
         message: expect.stringContaining('verified visual inspection did not execute')
+      }))
+      expect(events.some((event) => event.kind === 'assistant_delta')).toBe(false)
+      expect(replayedEvents.some((event) => event.kind === 'assistant_delta')).toBe(false)
+      expect(replayedEvents).toContainEqual(expect.objectContaining({
+        kind: 'turn_lifecycle',
+        state: 'failed'
       }))
       expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
         expect.anything(),
@@ -682,10 +1104,250 @@ describe('AgentRuntimeHost', () => {
       )
       await expect(host.readThread({ runtimeId, threadId })).resolves.toMatchObject({
         latestTurnStatus: 'failed',
-        turns: [{ id: turnId, status: 'failed' }]
+        turns: [{ id: turnId, status: 'failed', items: [] }],
+        items: []
       })
     }
   )
+
+  it('filters persisted rejected and terminal-late assistant answers when a thread is refreshed', async () => {
+    const threadId = 'codex-thread'
+    const rejectedTurnId = 'turn-rejected'
+    const lateTurnId = 'turn-late'
+    const rejectedAnswer = {
+      id: 'rejected-answer',
+      turnId: rejectedTurnId,
+      kind: 'assistant_message' as const,
+      text: 'Unverified answer'
+    }
+    const violation = {
+      id: 'visual-violation',
+      turnId: rejectedTurnId,
+      kind: 'system' as const,
+      text: 'Visual execution missing',
+      meta: { code: 'runtime_visual_execution_missing' }
+    }
+    const lateAnswer = {
+      id: 'late-answer',
+      turnId: lateTurnId,
+      kind: 'assistant_message' as const,
+      text: 'Published after terminal',
+      createdAt: '2026-07-13T00:00:02.000Z'
+    }
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:02.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:02.000Z',
+      latestSeq: 4,
+      latestTurnId: lateTurnId,
+      latestTurnStatus: 'completed',
+      turns: [
+        {
+          id: rejectedTurnId,
+          threadId,
+          status: 'completed',
+          items: [rejectedAnswer, violation]
+        },
+        {
+          id: lateTurnId,
+          threadId,
+          status: 'completed',
+          completedAt: '2026-07-13T00:00:01.000Z',
+          items: [lateAnswer]
+        }
+      ],
+      items: [rejectedAnswer, violation, lateAnswer]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      turns: [
+        { id: rejectedTurnId, status: 'failed', items: [violation] },
+        { id: lateTurnId, status: 'completed', items: [] }
+      ],
+      items: [violation]
+    })
+  })
+
+  it('fails closed on a raw completed snapshot until its durable publication commit exists', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-validated'
+    const user = {
+      id: 'user',
+      turnId,
+      kind: 'user_message' as const,
+      text: 'Inspect the figure',
+      meta: {
+        [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
+      },
+      createdAt: '2026-07-13T00:00:00.000Z'
+    }
+    const answer = {
+      id: 'answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Verified answer',
+      createdAt: '2026-07-13T00:00:01.000Z'
+    }
+    const commit = {
+      id: 'publication-commit',
+      turnId,
+      kind: 'system' as const,
+      text: 'Publication committed',
+      meta: { code: EXECUTION_PUBLICATION_COMMITTED_CODE },
+      createdAt: '2026-07-13T00:00:02.000Z'
+    }
+    const lateAnswer = {
+      id: 'late-answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Late answer',
+      createdAt: '2026-07-13T00:00:03.000Z'
+    }
+    let committed = false
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:03.000Z'
+    })
+    adapter.readThread = vi.fn(async () => {
+      const items = committed
+        ? [user, answer, commit, lateAnswer]
+        : [user, answer]
+      return {
+        id: threadId,
+        runtimeId: 'codex',
+        title: 'Codex',
+        updatedAt: '2026-07-13T00:00:03.000Z',
+        latestSeq: items.length,
+        latestTurnId: turnId,
+        latestTurnStatus: 'completed',
+        turns: [{ id: turnId, threadId, status: 'completed', items }],
+        items
+      } satisfies AgentRuntimeThreadDetail
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'failed',
+      turns: [{ id: turnId, status: 'failed', items: [user] }],
+      items: [user]
+    })
+
+    committed = true
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'completed',
+      turns: [{ id: turnId, status: 'completed', items: [user, answer] }],
+      items: [user, answer]
+    })
+  })
+
+  it('uses a durable pending marker when a native visual plan is declared after turn start', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-native-visual'
+    const pending = {
+      id: 'publication-pending',
+      turnId,
+      kind: 'system' as const,
+      text: 'Publication pending',
+      meta: { code: EXECUTION_PUBLICATION_PENDING_CODE },
+      createdAt: '2026-07-13T00:00:00.000Z'
+    }
+    const answer = {
+      id: 'answer',
+      turnId,
+      kind: 'assistant_message' as const,
+      text: 'Unverified visual answer',
+      createdAt: '2026-07-13T00:00:01.000Z'
+    }
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:01.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:01.000Z',
+      latestSeq: 2,
+      latestTurnId: turnId,
+      latestTurnStatus: 'completed',
+      turns: [{ id: turnId, threadId, status: 'completed', items: [pending, answer] }],
+      items: [pending, answer]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      latestTurnStatus: 'failed',
+      turns: [{ id: turnId, status: 'failed', items: [] }],
+      items: []
+    })
+  })
+
+  it('hides an adapter-persisted assistant candidate while its turn is still active', async () => {
+    const threadId = 'codex-thread'
+    const turnId = 'turn-running'
+    const adapter = fakeAdapter('codex', {
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:00.000Z'
+    })
+    adapter.readThread = vi.fn(async () => ({
+      id: threadId,
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-07-13T00:00:00.000Z',
+      latestSeq: 1,
+      latestTurnId: turnId,
+      latestTurnStatus: 'running',
+      turns: [{
+        id: turnId,
+        threadId,
+        status: 'running',
+        items: [{
+          id: 'candidate',
+          turnId,
+          kind: 'assistant_message',
+          text: 'Not committed yet'
+        }]
+      }],
+      items: [{
+        id: 'candidate',
+        turnId,
+        kind: 'assistant_message',
+        text: 'Not committed yet'
+      }]
+    } satisfies AgentRuntimeThreadDetail))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter]
+    })
+
+    await expect(host.readThread({ runtimeId: 'codex', threadId })).resolves.toMatchObject({
+      turns: [{ id: turnId, status: 'running', items: [] }],
+      items: []
+    })
+  })
 
   it.each(['sciforge', 'codex', 'claude'] as const)(
     'enforces executor receipts before explicit %s execution can complete',
@@ -712,7 +1374,15 @@ describe('AgentRuntimeHost', () => {
         adapters: [adapter]
       })
 
-      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text: 'Run the unit tests.',
+        executionIntent: {
+          mode: 'execute',
+          requirements: [{ effectClass: 'command_execution' }]
+        }
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
@@ -721,6 +1391,213 @@ describe('AgentRuntimeHost', () => {
         expect.anything(),
         expect.objectContaining({ code: 'runtime_execution_incomplete', threadId, turnId })
       )
+    }
+  )
+
+  it.each(['sciforge', 'codex', 'claude'] as const)(
+    'publishes the verified %s visual answer only after the native receipt chain',
+    async (runtimeId) => {
+      const threadId = `${runtimeId}-visual-success-thread`
+      const turnId = `${runtimeId}-visual-success-turn`
+      const snapshotRef = 'snapshot_aaaaaaaaaaaaaaaaaaaa'
+      const finalSnapshotRef = 'snapshot_bbbbbbbbbbbbbbbbbbbb'
+      const regionRef = 'region_aaaaaaaaaaaaaaaaaaaa'
+      const artifactRef = 'artifact_aaaaaaaaaaaaaaaaaaaa'
+      const locateProofRef = 'visual_proof_aaaaaaaaaaaaaaaaaaaa'
+      const captureProofRef = 'visual_proof_bbbbbbbbbbbbbbbbbbbb'
+      const finalProofRef = 'visual_proof_cccccccccccccccccccc'
+      const createdAt = '2026-07-13T00:00:00.000Z'
+      const adapter = fakeAdapter(runtimeId, {
+        id: threadId,
+        runtimeId,
+        title: runtimeId,
+        updatedAt: createdAt
+      })
+      adapter.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+      vi.mocked(adapter.startTurn).mockResolvedValue({ threadId, turnId })
+      adapter.subscribeEvents = vi.fn(async function* () {
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'look-locate',
+          seq: 1,
+          callId: 'look-locate',
+          toolName: 'sciforge_look',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['read'],
+          meta: { arguments: { intent: 'locate', capture: 'region' } },
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: locateProofRef,
+            kind: 'visual.look',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'look-locate',
+            subjectRef: snapshotRef,
+            relatedRefs: [snapshotRef, regionRef],
+            attestation: `sha256:${'a'.repeat(64)}`,
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'capture-region',
+          seq: 2,
+          callId: 'capture-region',
+          toolName: 'sciforge_capture',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['local_write'],
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: captureProofRef,
+            kind: 'visual.capture',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'capture-region',
+            subjectRef: artifactRef,
+            relatedRefs: [artifactRef, regionRef],
+            parentReceiptIds: [locateProofRef],
+            sha256: 'b'.repeat(64),
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'tool_event',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'look-final',
+          seq: 3,
+          callId: 'look-final',
+          toolName: 'sciforge_look',
+          status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
+          phase: 'succeeded',
+          factSource: 'executor_result',
+          evidenceStrength: 'executor_receipt',
+          effects: ['read'],
+          completionReceipts: [{
+            contractVersion: 'completion-receipt.v1',
+            receiptId: finalProofRef,
+            kind: 'visual.look',
+            status: 'satisfied',
+            issuer: 'sciforge.agent-visual',
+            callId: 'look-final',
+            subjectRef: artifactRef,
+            relatedRefs: [finalSnapshotRef],
+            parentReceiptIds: [captureProofRef],
+            attestation: `sha256:${'c'.repeat(64)}`,
+            createdAt
+          }]
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'assistant_delta',
+          runtimeId,
+          threadId,
+          turnId,
+          itemId: 'verified-answer',
+          seq: 4,
+          text: '已准确裁剪并复核方法总览图。'
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'usage',
+          runtimeId,
+          threadId,
+          turnId,
+          seq: 5,
+          usage: {
+            inputTokens: 10,
+            outputTokens: 6,
+            totalTokens: 16
+          }
+        } satisfies AgentRuntimeEvent
+        yield {
+          kind: 'turn_lifecycle',
+          runtimeId,
+          threadId,
+          turnId,
+          seq: 6,
+          state: 'completed'
+        } satisfies AgentRuntimeEvent
+      })
+      const host = createAgentRuntimeHost({
+        settings: async () => settings(runtimeId),
+        adapters: [adapter]
+      })
+      const text = '准确截取论文中的方法总览图。'
+
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text,
+        displayText: text
+      })
+      const events: AgentRuntimeEvent[] = []
+      for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
+
+      expect(events.map((event) => event.kind)).toEqual([
+        'tool_event',
+        'tool_event',
+        'tool_event',
+        'usage',
+        'assistant_delta',
+        'turn_lifecycle'
+      ])
+      expect(events.map((event) => event.seq)).toEqual([1, 2, 3, 5, undefined, 6])
+      expect(events.filter((event) => (
+        event.kind === 'assistant_delta' && event.itemId === 'verified-answer'
+      ))).toHaveLength(1)
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          code: EXECUTION_PUBLICATION_PENDING_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          code: EXECUTION_PUBLICATION_COMMITTED_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
+      expect(adapter.updateTurnGovernanceSnapshot).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          runtimeId,
+          threadId,
+          turnId,
+          snapshot: expect.objectContaining({
+            nativeVisualProofChainPending: true
+          })
+        })
+      )
+      expect(adapter.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          snapshot: expect.objectContaining({
+            nativeVisualProofChainPending: false
+          })
+        })
+      )
+      expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'completed' })
     }
   )
 
@@ -744,6 +1621,7 @@ describe('AgentRuntimeHost', () => {
           itemId: 'call-1',
           callId: 'call-1',
           toolName: 'local_shell',
+          toolKind: 'command_execution',
           status: 'running',
           phase: 'requested',
           factSource: 'model_output',
@@ -757,7 +1635,9 @@ describe('AgentRuntimeHost', () => {
           itemId: 'call-1-result',
           callId: 'call-1',
           toolName: 'local_shell',
+          toolKind: 'command_execution',
           status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
           phase: 'succeeded',
           factSource: 'executor_result',
           evidenceStrength: 'executor_receipt'
@@ -775,12 +1655,29 @@ describe('AgentRuntimeHost', () => {
         adapters: [adapter]
       })
 
-      await host.startTurn({ runtimeId, threadId, text: 'Run the unit tests.' })
+      await host.startTurn({
+        runtimeId,
+        threadId,
+        text: 'Run the unit tests.',
+        executionIntent: {
+          mode: 'execute',
+          requirements: [{ effectClass: 'command_execution' }]
+        }
+      })
       const events: AgentRuntimeEvent[] = []
       for await (const event of host.subscribeEvents({ runtimeId, threadId })) events.push(event)
 
       expect(events.at(-1)).toMatchObject({ kind: 'turn_lifecycle', state: 'completed' })
-      expect(adapter.publishSyntheticEvent).not.toHaveBeenCalled()
+      expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          kind: 'error',
+          code: EXECUTION_PUBLICATION_COMMITTED_CODE,
+          severity: 'info',
+          threadId,
+          turnId
+        })
+      )
     }
   )
 
@@ -869,20 +1766,19 @@ describe('AgentRuntimeHost', () => {
     const adapterAuxiliary = vi.fn(async () => ({ adapter: true }))
     adapter.auxiliary = adapterAuxiliary
     const contextState = new RuntimeContextStateService()
-    const modelAudit = new ModelRequestAuditRecorder()
-    vi.spyOn(modelAudit, 'snapshot')
+    const { recorder: trace } = fakeTraceRecorder()
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [adapter],
       services: {
         contextState,
-        modelAudit
+        trace
       }
     })
 
     await expect(host.capabilities('codex')).resolves.toMatchObject({
       observability: {
-        modelAudit: { available: true, inMemory: true }
+        fullTrace: { available: true, durable: true }
       },
       context: {
         state: { available: true }
@@ -900,16 +1796,9 @@ describe('AgentRuntimeHost', () => {
     })
     expect(adapterAuxiliary).not.toHaveBeenCalled()
 
-    await expect(host.auxiliary({
-      runtimeId: 'codex',
-      operation: 'listModelAuditRecords',
-      payload: {}
-    })).resolves.toEqual([])
-    expect(modelAudit.snapshot).toHaveBeenCalledWith({
-      runtimeId: 'codex',
-      threadId: undefined,
-      limit: undefined
-    })
+    expect((await host.capabilities('codex')).capabilityDescriptors).toContainEqual(
+      expect.objectContaining({ id: 'fullTrace.agentEvents', available: true })
+    )
   })
 
   it('exposes context ledger and handoff through the shared host contract', async () => {
@@ -1083,11 +1972,16 @@ describe('AgentRuntimeHost', () => {
     })
     const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-host-'))
     const contextLedger = new RuntimeContextLedgerService(dataDir)
-    const modelAudit = new ModelRequestAuditRecorder()
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-source-task',
+      text: 'Preserve the source task requirements across runtime handoff.'
+    })
     const host = createAgentRuntimeHost({
       settings: async () => settings('codex'),
       adapters: [codex, claude],
-      services: { contextLedger, modelAudit }
+      services: { contextLedger }
     })
 
     await host.auxiliary({
@@ -1155,6 +2049,7 @@ describe('AgentRuntimeHost', () => {
       displayText: 'Please continue from here'
     })
     expect(startTurnInput?.text).toContain('Runtime handoff packet for semantic continuation.')
+    expect(startTurnInput?.text).toContain('Preserve the source task requirements across runtime handoff.')
     expect(startTurnInput?.text).toContain('"schema": "sciforge.runtime_handoff.v1"')
     expect(startTurnInput?.text).toContain('"objective": "handoff across runtimes"')
     expect(startTurnInput?.text).toContain('"schema": "sciforge.runtime_handoff_transcript.v1"')
@@ -1162,7 +2057,7 @@ describe('AgentRuntimeHost', () => {
     expect(startTurnInput?.text).toContain('wet-lab closed-loop agents and experiment protocol automation')
     expect(startTurnInput?.text).toContain('Current user request:\nPlease continue from here')
     expect(startTurnInput?.metadata).toMatchObject({
-      schemaVersion: 'sciforge.model-router.request-audit.v1',
+      schemaVersion: 'sciforge.trace.correlation.v1',
       route: 'model-router.responses',
       source: 'agent-runtime-host',
       operation: 'runtime_handoff',
@@ -1173,19 +2068,6 @@ describe('AgentRuntimeHost', () => {
       targetRuntimeId: 'claude',
       targetThreadId: 'claude-handoff-thread',
       packetDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/)
-    })
-    const auditRecords = modelAudit.snapshot({ runtimeId: 'claude', threadId: 'claude-handoff-thread' })
-    expect(auditRecords[0]).toMatchObject({
-      modelRouter: {
-        requestBodySummary: {
-          metadataKeys: expect.arrayContaining(['metadata', 'runtimeId', 'threadId', 'workspace'])
-        }
-      },
-      request: {
-        bodySummary: {
-          keys: expect.arrayContaining(['metadata', 'text'])
-        }
-      }
     })
     expect(claude.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
@@ -1213,7 +2095,7 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
-  it('records turn audit output from the neutral event stream without changing yielded events', async () => {
+  it('records durable normalized Agent events without changing yielded events', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -1237,48 +2119,11 @@ describe('AgentRuntimeHost', () => {
         state: 'completed'
       } satisfies AgentRuntimeEvent
     })
-    const modelAudit = new ModelRequestAuditRecorder()
+    const { recorder: trace, append } = fakeTraceRecorder()
     const host = createAgentRuntimeHost({
-      settings: async () => ({
-        ...settings('codex'),
-        modelRouter: {
-          ...defaultModelRouterSettings(),
-          baseUrl: 'http://127.0.0.1:4545/v1',
-          publicModelAlias: 'public-router-alias',
-          runtimeApiKey: 'runtime-secret',
-          profiles: {
-            default: {
-              textReasoner: {
-                provider: 'private-provider',
-                baseUrl: 'https://private-provider.example/v1',
-                apiKey: 'private-provider-secret',
-                model: 'private-provider-model'
-              },
-              imageGenerator: {
-                provider: 'private-image',
-                baseUrl: 'https://private-image.example/v1',
-                apiKey: 'private-image-secret',
-                model: 'private-image-model'
-              },
-              translators: {
-                vision: {
-                  provider: 'private-vision',
-                  baseUrl: 'https://private-vision.example/v1',
-                  apiKey: 'private-vision-secret',
-                  model: 'private-vision-model'
-                },
-                scientific: {
-                  baseUrl: 'http://127.0.0.1:3898',
-                  apiKey: 'private-scientific-secret',
-                  model: 'private-scientific-model'
-                }
-              }
-            }
-          }
-        }
-      }),
+      settings: async () => settings('codex'),
       adapters: [adapter],
-      services: { modelAudit }
+      services: { trace }
     })
 
     await host.startTurn({
@@ -1296,44 +2141,168 @@ describe('AgentRuntimeHost', () => {
     }
 
     expect(events.map((event) => event.kind)).toEqual(['assistant_delta', 'turn_lifecycle'])
-    expect(modelAudit.snapshot()[0]).toMatchObject({
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      source: 'agent-runtime',
+      kind: 'agent_event',
       runtimeId: 'codex',
       threadId: 'codex-thread',
       turnId: 'codex-turn',
-      provider: 'model-router',
-      model: 'public-router-alias',
-      modelRouterUrl: 'http://127.0.0.1:4545/v1',
-      providerAlias: 'model-router',
-      modelAlias: 'public-router-alias',
-      modelRouter: {
-        providerAlias: 'model-router',
-        modelAlias: 'public-router-alias',
-        requestUrl: 'http://127.0.0.1:4545/v1/responses',
-        endpointRoute: 'responses',
-        requestBodySummary: {
-          schema: 'model-router.responses.runtime',
-          keys: ['input', 'metadata'],
-          inputTextChars: 'Say hello'.length,
-          metadataKeys: ['runtimeId', 'threadId', 'workspace'],
-          attachmentCount: 0,
-          fileReferenceCount: 0,
-          hasGuiPlan: false
-        }
-      },
-      streamOutput: {
-        text: 'hello',
-        stopReason: 'completed'
+      payload: {
+        eventKind: 'assistant',
+        event: expect.objectContaining({ kind: 'assistant_delta', text: 'hello' })
       }
-    })
-    const serialized = JSON.stringify(modelAudit.snapshot()[0])
-    expect(serialized).not.toContain('runtime-secret')
-    expect(serialized).not.toContain('private-provider')
-    expect(serialized).not.toContain('private-provider.example')
-    expect(serialized).not.toContain('private-provider-model')
-    expect(serialized).not.toContain('private-provider-secret')
+    }))
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      payload: {
+        eventKind: 'lifecycle',
+        event: expect.objectContaining({ kind: 'turn_lifecycle', state: 'completed' })
+      }
+    }))
   })
 
-  it('audits SciForge, Codex, and Claude turns through shared auxiliary list and clear operations', async () => {
+  it('captures a turn when no renderer subscribes to runtime events', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'assistant-1',
+        text: 'background capture'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'Capture this without a renderer.'
+    })
+
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+  })
+
+  it('keeps durable capture on one authoritative writer across renderer subscriptions', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'assistant-1',
+        seq: 1,
+        text: 'one event'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        seq: 2,
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const observeEvent = vi.spyOn(trace, 'observeEvent')
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+    await host.startTurn({ runtimeId: 'codex', threadId: 'codex-thread', text: 'Observe twice.' })
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+
+    const consume = async (): Promise<void> => {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'codex',
+        threadId: 'codex-thread'
+      })) {
+        // Consume the complete bounded test stream.
+      }
+    }
+    await Promise.all([consume(), consume()])
+
+    expect(append).toHaveBeenCalledTimes(2)
+    expect(observeEvent).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not replay historical turns into a newly started turn trace', async () => {
+    const adapter = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(adapter.subscribeEvents).mockImplementation(async function* () {
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'historical-turn',
+        itemId: 'historical-assistant',
+        text: 'old output'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'assistant_delta',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        itemId: 'current-assistant',
+        text: 'current output'
+      } satisfies AgentRuntimeEvent
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'codex-turn',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const { recorder: trace, append } = fakeTraceRecorder()
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [adapter],
+      services: { trace }
+    })
+
+    await host.startTurn({ runtimeId: 'codex', threadId: 'codex-thread', text: 'New turn.' })
+    await vi.waitFor(() => expect(append).toHaveBeenCalledTimes(2))
+
+    expect(append).not.toHaveBeenCalledWith(expect.objectContaining({ turnId: 'historical-turn' }))
+    expect(append).toHaveBeenCalledWith(expect.objectContaining({
+      turnId: 'codex-turn',
+      payload: expect.objectContaining({
+        event: expect.objectContaining({ text: 'current output' })
+      })
+    }))
+  })
+
+  it('captures SciForge, Codex, and Claude events through the same durable trace recorder', async () => {
     for (const runtimeId of ['sciforge', 'codex', 'claude'] as const) {
       const adapter = fakeAdapter(runtimeId, {
         id: `${runtimeId}-thread`,
@@ -1361,6 +2330,7 @@ describe('AgentRuntimeHost', () => {
           turnId: `${runtimeId}-turn`,
           itemId: `${runtimeId}-tool`,
           status: 'success',
+          receipt: createExecutionReceipt({ status: 'success' }),
           summary: 'read_file',
           meta: {
             callId: `${runtimeId}-call`,
@@ -1387,27 +2357,14 @@ describe('AgentRuntimeHost', () => {
           state: 'completed'
         } satisfies AgentRuntimeEvent
       })
-      const modelAudit = new ModelRequestAuditRecorder()
+      const { recorder: trace, append } = fakeTraceRecorder()
       const host = createAgentRuntimeHost({
-        settings: async () => ({
-          ...settings(runtimeId),
-          modelRouter: {
-            ...defaultModelRouterSettings(),
-            baseUrl: 'http://127.0.0.1:4545/v1',
-            publicModelAlias: 'public-router-alias',
-            runtimeApiKey: 'runtime-secret'
-          }
-        }),
+        settings: async () => settings(runtimeId),
         adapters: [adapter],
-        services: { modelAudit }
+        services: { trace }
       })
 
       const requestText = `Read /Users/alice/private-${runtimeId} using token=runtime-secret`
-      const guardedRequestText = withExecutionIntegrityRequirement({
-        runtimeId,
-        threadId: `${runtimeId}-thread`,
-        text: requestText
-      }).text
       await host.startTurn({
         runtimeId,
         threadId: `${runtimeId}-thread`,
@@ -1426,86 +2383,18 @@ describe('AgentRuntimeHost', () => {
       expect(visibleAssistant).toMatchObject({
         text: `visible output from /Users/alice/private-${runtimeId} with token=runtime-secret`
       })
-      const records = await host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: { runtimeId, threadId: `${runtimeId}-thread` }
-      }) as AgentRuntimeModelAuditRecord[]
-      expect(records).toHaveLength(1)
-      expect(records[0]).toMatchObject({
+      expect(append).toHaveBeenCalledTimes(4)
+      expect(append.mock.calls.map(([event]) => event.payload.eventKind).sort()).toEqual([
+        'assistant',
+        'lifecycle',
+        'tool',
+        'usage'
+      ])
+      expect(append).toHaveBeenCalledWith(expect.objectContaining({
         runtimeId,
         threadId: `${runtimeId}-thread`,
-        turnId: `${runtimeId}-turn`,
-          provider: 'model-router',
-          model: 'public-router-alias',
-          modelRouterUrl: 'http://127.0.0.1:4545/v1',
-          providerAlias: 'model-router',
-          modelAlias: 'public-router-alias',
-          modelRouter: {
-            providerAlias: 'model-router',
-            modelAlias: 'public-router-alias',
-            requestUrl: 'http://127.0.0.1:4545/v1/responses',
-            endpointRoute: 'responses',
-            requestBodySummary: {
-              schema: 'model-router.responses.runtime',
-              inputTextChars: guardedRequestText.length,
-              attachmentCount: 0,
-              fileReferenceCount: 0,
-              hasGuiPlan: false
-            }
-          },
-          request: {
-            bodySummary: {
-              schema: 'agent-runtime.turnStart',
-            textChars: guardedRequestText.length,
-            attachmentCount: 0,
-            fileReferenceCount: 0,
-            hasGuiPlan: false
-          }
-        },
-        streamOutput: {
-          text: expect.stringContaining('[path]'),
-          toolCalls: [
-            expect.objectContaining({
-              callId: `${runtimeId}-call`,
-              toolName: 'read_file',
-              status: 'success',
-              arguments: expect.objectContaining({
-                Authorization: '[redacted]'
-              })
-            })
-          ],
-          usage: {
-            inputTokens: 11,
-            outputTokens: 7,
-            totalTokens: 18
-          },
-          stopReason: 'completed'
-        }
-      })
-      expect(records[0]?.durationMs).toEqual(expect.any(Number))
-      expect(JSON.stringify(records[0])).not.toContain('/Users/alice')
-      expect(JSON.stringify(records[0])).not.toContain('runtime-secret')
-
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: {
-          runtimeId: runtimeId === 'codex' ? 'claude' : 'codex',
-          threadId: `${runtimeId}-thread`
-        }
-      })).rejects.toThrow(/payload\.runtimeId must match the top-level runtimeId/)
-
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'clearModelAuditRecords',
-        payload: {}
-      })).resolves.toBe(true)
-      await expect(host.auxiliary({
-        runtimeId,
-        operation: 'listModelAuditRecords',
-        payload: { runtimeId }
-      })).resolves.toEqual([])
+        turnId: `${runtimeId}-turn`
+      }))
     }
   })
 
@@ -1710,7 +2599,7 @@ describe('AgentRuntimeHost', () => {
       model: 'router-summary-model',
       max_tokens: 321,
       metadata: {
-        schemaVersion: 'sciforge.model-router.request-audit.v1',
+        schemaVersion: 'sciforge.trace.correlation.v1',
         route: 'model-router.responses',
         source: 'agent-runtime-host',
         operation: 'context_compaction_summary',
@@ -2059,76 +2948,6 @@ describe('AgentRuntimeHost', () => {
     })
   })
 
-  it('records local runtime native compaction and goal events in shared context state', async () => {
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: vi.fn(async () => ({
-        ok: true,
-        status: 200,
-        body: JSON.stringify({})
-      })),
-      events: async function* () {
-        yield {
-          kind: 'compaction_completed',
-          threadId: 'local-thread',
-          turnId: 'turn-1',
-          itemId: 'compact-1',
-          summary: 'Runtime compacted summary',
-          replacedTokens: 800,
-          sourceDigest: 'digest-800',
-          digestMarker: '<compact:digest-800>',
-          sourceItemIds: ['item-a', 'item-b'],
-          auto: false
-        }
-        yield {
-          kind: 'goal_updated',
-          threadId: 'local-thread',
-          goal: {
-            threadId: 'local-thread',
-            objective: 'Finish shared context migration',
-            status: 'active',
-            tokensUsed: 20,
-            timeUsedSeconds: 4,
-            createdAt: '2026-06-10T00:00:00.000Z',
-            updatedAt: '2026-06-10T00:00:01.000Z'
-          }
-        }
-      }
-    })
-    const contextState = new RuntimeContextStateService()
-    const host = createAgentRuntimeHost({
-      settings: async () => settings('sciforge'),
-      adapters: [adapter],
-      services: { contextState }
-    })
-
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of host.subscribeEvents({
-      runtimeId: 'sciforge',
-      threadId: 'local-thread'
-    })) {
-      events.push(event)
-    }
-
-    expect(events.map((event) => event.kind)).toEqual(['compaction_event', 'goal_event'])
-    expect(contextState.get({
-      runtimeId: 'sciforge',
-      threadId: 'local-thread'
-    })).toMatchObject({
-      summary: 'Runtime compacted summary',
-      summarySource: 'runtime',
-      triggerReason: 'replacedTokens=800',
-      replacedTokens: 800,
-      sourceDigest: 'digest-800',
-      digestMarker: '<compact:digest-800>',
-      sourceItemIds: ['item-a', 'item-b'],
-      goalResume: {
-        objective: 'Finish shared context migration',
-        status: 'active',
-        resumeCount: 0
-      }
-    })
-  })
-
   it('does not report noop compaction success without the shared context service', async () => {
     const adapter = fakeAdapter('codex', {
       id: 'codex-thread',
@@ -2292,6 +3111,14 @@ describe('AgentRuntimeHost', () => {
       ]
     })
     const contextState = new RuntimeContextStateService()
+    const dataDir = await mkdtemp(join(tmpdir(), 'runtime-context-ledger-host-'))
+    const contextLedger = new RuntimeContextLedgerService(dataDir)
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-before-compaction',
+      text: 'Modify the document using only the resources currently visible.'
+    })
     const base = settings('codex')
     const host = createAgentRuntimeHost({
       settings: async () => ({
@@ -2309,7 +3136,7 @@ describe('AgentRuntimeHost', () => {
         }
       }),
       adapters: [adapter],
-      services: { contextState }
+      services: { contextState, contextLedger }
     })
 
     await host.startTurn({
@@ -2327,6 +3154,7 @@ describe('AgentRuntimeHost', () => {
     })
     const dispatched = vi.mocked(adapter.startTurn).mock.calls[0]?.[1]
     expect(dispatched?.text).toContain('Shared compacted context summary for this thread:')
+    expect(dispatched?.text).toContain('Modify the document using only the resources currently visible.')
     expect(dispatched?.text).toContain('Run the next step.')
     expect(dispatched?.displayText).toBe('Run the next step.')
     expect(adapter.publishSyntheticEvent).toHaveBeenCalledWith(
@@ -3224,12 +4052,7 @@ describe('AgentRuntimeHost', () => {
     expect(adapterAuxiliary).not.toHaveBeenCalled()
   })
 
-  it('can explicitly pause the default automatic Evidence DAG feed', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'off')
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
-    vi.stubGlobal('fetch', fetchMock)
+  it('does not materialize completed turns when no artifact consumer is installed', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
@@ -3262,41 +4085,28 @@ describe('AgentRuntimeHost', () => {
 
     expect(events).toHaveLength(1)
     expect(claude.readThread).not.toHaveBeenCalled()
-    expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  it('auto-enqueues completed turns from the neutral runtime event path into Evidence DAG when enabled', async () => {
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_SERVICE_URL', 'http://127.0.0.1:3897/')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_API_KEY', 'dag-secret')
-    vi.stubEnv('SCIFORGE_EVIDENCE_DAG_AUTO_FEED', 'true')
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as { threadId: string; targetWatermark: string }
-      return new Response(JSON.stringify({ ok: true, data: { snapshot: {
-        threadId: body.threadId, version: 1, digest: 'sha256:auto', inputWatermark: body.targetWatermark,
-        schemaVersion: '2', extractorVersion: '2', verifierVersion: '2', artifactDigests: [],
-        createdAt: '2026-07-10T00:00:00.000Z', status: 'committed'
-      } } }), { status: 200 })
-    })
-    vi.stubGlobal('fetch', fetchMock)
-    const queueRoot = await mkdtemp(join(tmpdir(), 'sciforge-host-dag-queue-'))
-    evidenceQueueRoots.push(queueRoot)
-    configureEvidenceDagUpdateQueue({ storagePath: join(queueRoot, 'queue.json') })
+  it('broadcasts each completed turn once to injected artifact consumers', async () => {
     const claude = fakeAdapter('claude', {
       id: 'claude-thread',
       runtimeId: 'claude',
       title: 'Claude',
+      workspace: '/workspace/thread',
       updatedAt: '2026-06-10T00:00:00.000Z'
     })
     vi.mocked(claude.readThread).mockResolvedValue({
       id: 'claude-thread',
       runtimeId: 'claude',
       title: 'Claude',
+      workspace: '/workspace/thread',
       updatedAt: '2026-06-10T00:00:00.000Z',
-      latestSeq: 2,
+      latestSeq: 7,
       turns: [{
         id: 'turn-1',
         threadId: 'claude-thread',
         status: 'completed',
+        completedAt: '2026-07-26T09:00:00.000Z',
         items: [
           { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
           { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
@@ -3310,53 +4120,46 @@ describe('AgentRuntimeHost', () => {
         threadId: 'claude-thread',
         turnId: 'turn-1',
         state: 'completed',
-        seq: 2
+        seq: 7
       } satisfies AgentRuntimeEvent
     })
+    const consume = vi.fn(async (_event: DomainAgentArtifactEvent) => undefined)
     const host = createAgentRuntimeHost({
       settings: async () => settings('claude'),
-      adapters: [claude]
+      adapters: [claude],
+      artifactConsumers: [{ consume }]
     })
 
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of host.subscribeEvents({
-      runtimeId: 'claude',
-      threadId: 'claude-thread',
-      sinceSeq: 0
-    })) {
-      events.push(event)
+    for (let replay = 0; replay < 2; replay += 1) {
+      for await (const _event of host.subscribeEvents({
+        runtimeId: 'claude',
+        threadId: 'claude-thread',
+        sinceSeq: 0
+      })) {
+        // Drain the runtime stream so its completion event is recorded.
+      }
     }
 
-    expect(events).toHaveLength(1)
-    await vi.waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(consume).toHaveBeenCalledOnce())
+    expect(claude.readThread).toHaveBeenCalledOnce()
+    expect(consume).toHaveBeenCalledWith({
+      contractVersion: 1,
+      kind: 'turn-completed',
+      runtimeId: 'claude',
+      threadId: 'claude-thread',
+      turnId: 'turn-1',
+      targetWatermark: '7',
+      sequence: 7,
+      workspaceRoot: '/workspace/thread',
+      occurredAt: '2026-07-26T09:00:00.000Z',
+      artifacts: [
+        { id: 'u1', turnId: 'turn-1', kind: 'user_message', text: 'question' },
+        { id: 'a1', turnId: 'turn-1', kind: 'assistant_message', text: 'answer' }
+      ]
     })
-    expect(claude.readThread).toHaveBeenCalledWith(
-      expect.anything(),
-      { runtimeId: 'claude', threadId: 'claude-thread' }
-    )
-    const [requestUrl, requestInit] = fetchMock.mock.calls[0]!
-    expect(requestUrl).toBe('http://127.0.0.1:3897/updates')
-    expect(requestInit).toEqual(expect.objectContaining({
-      method: 'POST',
-      body: JSON.stringify({
-        threadId: 'claude:claude-thread',
-        targetWatermark: '2',
-        reason: 'turn_committed',
-        priority: 'background',
-        trace: [
-          { id: 'u1', type: 'message', role: 'user', content: 'question' },
-          { id: 'a1', type: 'message', role: 'assistant', content: 'answer' }
-        ],
-        projectKey: '/tmp/workspace',
-        workspaceRoot: '/tmp/workspace',
-        projectRoot: '/tmp/workspace'
-      })
-    }))
-    expect(new Headers(requestInit?.headers).get('authorization')).toBe('Bearer dag-secret')
   })
 
-  it('observes repeated tool activity and steers Codex through recovery before interruption', async () => {
+  it('steers repeated tool activity once before interrupting the next exact repeat', async () => {
     const codex = fakeAdapter('codex', {
       id: 'codex-thread',
       runtimeId: 'codex',
@@ -3385,10 +4188,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3403,7 +4207,9 @@ describe('AgentRuntimeHost', () => {
     })) {
       events.push(event)
     }
-    await Promise.resolve()
+    await vi.waitFor(() => {
+      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(3)
+    })
 
     expect(events).toHaveLength(3)
     expect(codex.steerTurn).toHaveBeenCalledWith(
@@ -3414,19 +4220,20 @@ describe('AgentRuntimeHost', () => {
         turnId: 'turn-1'
       })
     )
-    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(codex.interruptTurn).toHaveBeenCalledTimes(1)
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         kind: 'runtime_status',
-        metadata: expect.objectContaining({ guard: 'toolStorm' })
+        metadata: expect.objectContaining({ guard: 'execution' })
       })
     )
     expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         kind: 'runtime_status',
-        metadata: expect.objectContaining({ level: 'recovery', recoveryAttempt: 1 })
+        metadata: expect.objectContaining({ level: 'hard', code: 'exact_repeat' })
       })
     )
   })
@@ -3462,10 +4269,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3505,10 +4313,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3547,10 +4356,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3565,11 +4375,11 @@ describe('AgentRuntimeHost', () => {
       // exhaust stream
     }
     await vi.waitFor(() => {
-      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(2)
+      expect(codex.publishSyntheticEvent).toHaveBeenCalledTimes(3)
     })
 
-    expect(codex.steerTurn).toHaveBeenCalledTimes(2)
-    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.steerTurn).toHaveBeenCalledTimes(1)
+    expect(codex.interruptTurn).toHaveBeenCalledTimes(1)
     expect(codex.publishSyntheticEvent).toHaveBeenNthCalledWith(
       1,
       expect.anything(),
@@ -3587,11 +4397,16 @@ describe('AgentRuntimeHost', () => {
       expect.objectContaining({
         kind: 'runtime_status',
         metadata: expect.objectContaining({
-          level: 'recovery',
-          recoveryAttempt: 1,
+          level: 'hard',
+          code: 'exact_repeat',
           family: 'command_execution:shell/read-file'
         })
       })
+    )
+    expect(codex.publishSyntheticEvent).toHaveBeenNthCalledWith(
+      3,
+      expect.anything(),
+      expect.objectContaining({ kind: 'error', code: 'runtime_execution_interrupted' })
     )
   })
 
@@ -3612,10 +4427,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3653,10 +4469,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3703,10 +4520,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3755,10 +4573,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('codex'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3779,7 +4598,7 @@ describe('AgentRuntimeHost', () => {
     expect(codex.publishSyntheticEvent).not.toHaveBeenCalled()
   })
 
-  it('does not run observe tool-storm controls for native-guard runtimes', async () => {
+  it('does not run observe execution-governance controls for native-guard runtimes', async () => {
     const local = fakeAdapter('sciforge', {
       id: 'local-thread',
       runtimeId: 'sciforge',
@@ -3808,10 +4627,11 @@ describe('AgentRuntimeHost', () => {
       settings: async () => ({
         ...settings('sciforge'),
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             enabled: true,
             windowSize: 8,
-            threshold: 2
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
           }
         }
       }),
@@ -3830,6 +4650,188 @@ describe('AgentRuntimeHost', () => {
     expect(local.steerTurn).not.toHaveBeenCalled()
     expect(local.interruptTurn).not.toHaveBeenCalled()
     expect(local.publishSyntheticEvent).not.toHaveBeenCalled()
+  })
+
+  it('uses native visual tool availability to deny Codex OS GUI automation', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      yield {
+        kind: 'tool_event',
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        turnId: 'turn-1',
+        itemId: 'shell-gui-fallback',
+        status: 'running',
+        toolKind: 'command_execution',
+        toolName: 'exec_command',
+        meta: {
+          callId: 'shell-gui-fallback',
+          toolName: 'exec_command',
+          arguments: { command: 'screencapture -x /tmp/sciforge.png' }
+        }
+      } satisfies AgentRuntimeEvent
+    })
+    const nativeVisualToolsAvailable = vi.fn(() => true)
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2 }
+        }
+      }),
+      adapters: [codex],
+      nativeVisualToolsAvailable
+    })
+
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(nativeVisualToolsAvailable).toHaveBeenCalledWith()
+    expect(codex.interruptTurn).toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied',
+        detail: expect.stringContaining('sciforge_look')
+      })
+    )
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        detail: expect.stringContaining('sciforge_capture')
+      })
+    )
+    const policyEvent = vi.mocked(codex.publishSyntheticEvent!).mock.calls
+      .map(([, event]) => event)
+      .find((event) => event.kind === 'error' && event.code === 'runtime_execution_policy_denied')
+    expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('sciforge_discover')
+    expect(policyEvent?.kind === 'error' ? policyEvent.detail : undefined).not.toContain('surface.inspect')
+  })
+
+  it('denies command execution while the native visual proof chain is pending', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* () {
+      yield commandToolEvent('python3 render_visual.py', 1)
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: {
+            enabled: true,
+            windowSize: 8,
+            exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2
+          }
+        }
+      }),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '按照任务模板处理当前页面。',
+      executionIntent: visualExecutionIntent()
+    })
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(codex.interruptTurn).toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied',
+        detail: expect.stringContaining('sciforge_look')
+      })
+    )
+  })
+
+  it('does not deny OS GUI automation when native visual tools are unavailable', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.subscribeEvents).mockImplementation(async function* (_context, input) {
+      yield {
+        kind: 'tool_event',
+        runtimeId: 'codex',
+        threadId: input.threadId,
+        turnId: 'turn-1',
+        itemId: 'shell-gui-fallback',
+        status: 'running',
+        toolKind: 'command_execution',
+        toolName: 'exec_command',
+        meta: {
+          callId: 'shell-gui-fallback',
+          toolName: 'exec_command',
+          arguments: { command: 'screencapture -x /tmp/sciforge.png' }
+        }
+      } satisfies AgentRuntimeEvent
+    })
+    const nativeVisualToolsAvailable = vi.fn(() => false)
+    const host = createAgentRuntimeHost({
+      settings: async () => ({
+        ...settings('codex'),
+        runtimeGuards: {
+          execution: { enabled: true, windowSize: 8, exactRepeatThreshold: 2,
+            semanticFailureThreshold: 2 }
+        }
+      }),
+      adapters: [codex],
+      nativeVisualToolsAvailable
+    })
+
+    for await (const _event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      sinceSeq: 0
+    })) {
+      // exhaust stream
+    }
+    await Promise.resolve()
+
+    expect(nativeVisualToolsAvailable).toHaveBeenCalledWith()
+    expect(codex.interruptTurn).not.toHaveBeenCalled()
+    expect(codex.publishSyntheticEvent).not.toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        kind: 'error',
+        code: 'runtime_execution_policy_denied'
+      })
+    )
   })
 
   it('routes same-thread startTurn into steer when the runtime supports active turn steering', async () => {
@@ -3888,6 +4890,213 @@ describe('AgentRuntimeHost', () => {
         text: 'second'
       }
     )
+  })
+
+  it('publishes a pending native visual snapshot before steering a visual request into an active turn', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.capabilities).mockResolvedValue({
+      ...capabilities('codex'),
+      controls: {
+        ...capabilities('codex').controls,
+        steer: true
+      }
+    })
+    let runtimeStatus: 'idle' | 'running' = 'idle'
+    vi.mocked(codex.readThread).mockImplementation(async () => ({
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z',
+      latestSeq: 0,
+      latestTurnId: runtimeStatus === 'running' ? 'turn-1' : undefined,
+      latestTurnStatus: runtimeStatus,
+      turns: runtimeStatus === 'running'
+        ? [{ id: 'turn-1', threadId: 'codex-thread', status: 'running' }]
+        : []
+    }))
+    vi.mocked(codex.startTurn).mockResolvedValueOnce({
+      threadId: 'codex-thread',
+      turnId: 'turn-1'
+    })
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+    runtimeStatus = 'running'
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '按照任务模板生成报告',
+      executionIntent: visualExecutionIntent()
+    })
+
+    expect(codex.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        snapshot: {
+          ownedVisualToolsAvailable: true,
+          nativeVisualProofChainPending: true
+        }
+      })
+    )
+    const snapshotOrder = vi.mocked(codex.updateTurnGovernanceSnapshot)
+      .mock.invocationCallOrder.at(-1) ?? 0
+    const steerOrder = vi.mocked(codex.steerTurn).mock.invocationCallOrder.at(-1) ?? 0
+    expect(snapshotOrder).toBeLessThan(steerOrder)
+  })
+
+  it('dispatches the canonical native visual snapshot with the first adapter start call', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    let dispatchedContext: AgentRuntimeAdapterContext | undefined
+    codex.startTurn = vi.fn(async (context, input) => {
+      dispatchedContext = context
+      return { threadId: input.threadId, turnId: 'turn-1' }
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: '按照任务模板生成报告',
+      executionIntent: visualExecutionIntent()
+    })
+
+    expect(dispatchedContext?.turnGovernanceSnapshot).toEqual({
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })
+  })
+
+  it('routes direct visual steer through the same execution requirement and snapshot path', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    codex.startTurn = vi.fn(async (_context, input) => ({
+      threadId: input.threadId,
+      turnId: 'turn-1'
+    }))
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+
+    await host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      text: '按照任务模板继续生成报告',
+      executionIntent: visualExecutionIntent()
+    })
+
+    expect(codex.steerTurn).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        text: expect.stringContaining('Runtime-enforced visual completion gate')
+      })
+    )
+    expect(codex.updateTurnGovernanceSnapshot).toHaveBeenLastCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        snapshot: {
+          ownedVisualToolsAvailable: true,
+          nativeVisualProofChainPending: true
+        }
+      })
+    )
+  })
+
+  it('rolls back visual obligations and their snapshot when direct steer delivery fails', async () => {
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    codex.startTurn = vi.fn(async (_context, input) => ({
+      threadId: input.threadId,
+      turnId: 'turn-1'
+    }))
+    codex.updateTurnGovernanceSnapshot = vi.fn(async () => undefined)
+    codex.steerTurn = vi.fn(async () => {
+      throw new Error('steer rejected')
+    })
+    codex.subscribeEvents = vi.fn(async function* () {
+      yield {
+        kind: 'turn_lifecycle',
+        runtimeId: 'codex',
+        threadId: 'codex-thread',
+        turnId: 'turn-1',
+        state: 'completed'
+      } satisfies AgentRuntimeEvent
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      nativeVisualToolsAvailable: () => true
+    })
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: 'first'
+    })
+
+    await expect(host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-1',
+      text: '按照任务模板继续生成报告',
+      executionIntent: visualExecutionIntent()
+    })).rejects.toThrow('steer rejected')
+
+    const snapshots = vi.mocked(codex.updateTurnGovernanceSnapshot).mock.calls
+      .map((call) => call[1].snapshot.nativeVisualProofChainPending)
+    expect(snapshots).toEqual([false, true, false])
+    const events: AgentRuntimeEvent[] = []
+    for await (const event of host.subscribeEvents({
+      runtimeId: 'codex',
+      threadId: 'codex-thread'
+    })) {
+      events.push(event)
+    }
+    expect(events).toContainEqual(expect.objectContaining({
+      kind: 'turn_lifecycle',
+      state: 'completed'
+    }))
   })
 
   it('starts a new turn when latestTurnId is terminal despite older stale running turns', async () => {
@@ -4003,6 +5212,129 @@ describe('AgentRuntimeHost', () => {
       expect.anything(),
       expect.objectContaining({ text: 'second' })
     )
+  })
+
+  it('uses the context ledger as the single persisted delivery path for start and steer', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    await contextLedger.acceptDirective({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-old',
+      text: 'Use every annotation from the earlier set.'
+    })
+    await contextLedger.beginDirectiveDelivery({ runtimeId: 'codex', threadId: 'codex-thread', id: 'directive-old' })
+    await contextLedger.finishDirectiveDelivery({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      id: 'directive-old',
+      delivery: 'delivered',
+      turnId: 'turn-old'
+    })
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const correction = 'The earlier set is stale; use only the annotations currently visible.'
+
+    await host.startTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      text: correction,
+      displayText: correction,
+      clientDirectiveId: 'directive-current'
+    })
+    await host.steerTurn({
+      runtimeId: 'codex',
+      threadId: 'codex-thread',
+      turnId: 'turn-active',
+      text: 'Continue until the requested changes are verified.',
+      clientDirectiveId: 'directive-steer'
+    })
+
+    const started = vi.mocked(codex.startTurn).mock.calls[0]?.[1]
+    expect(started?.text).toContain('later directives override conflicting earlier directives')
+    expect(started?.text).toContain('Use every annotation from the earlier set.')
+    expect(started?.text).toContain(correction)
+    expect(started?.displayText).toBe(correction)
+    const steered = vi.mocked(codex.steerTurn).mock.calls[0]?.[1]
+    expect(steered?.text).toContain('Use every annotation from the earlier set.')
+    expect(steered?.text).toContain(correction)
+    expect(steered?.text).toContain('Continue until the requested changes are verified.')
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({
+        directives: [
+          { id: 'directive-old', delivery: 'delivered' },
+          { id: 'directive-current', delivery: 'delivered' },
+          { id: 'directive-steer', delivery: 'delivered' }
+        ]
+      })
+  })
+
+  it('does not dispatch a delivered directive id twice', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockResolvedValue({ threadId: 'codex-thread', turnId: 'turn-1' })
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'codex-thread',
+      text: 'Modify the document.',
+      clientDirectiveId: 'directive-once'
+    }
+
+    await expect(host.startTurn(input)).resolves.toEqual({ threadId: 'codex-thread', turnId: 'turn-1' })
+    await expect(host.startTurn(input)).resolves.toEqual({ threadId: 'codex-thread', turnId: 'turn-1' })
+    expect(codex.startTurn).toHaveBeenCalledTimes(1)
+  })
+
+  it('records ambiguous adapter failures as uncertain and refuses a blind retry', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-host-directives-'))
+    evidenceQueueRoots.push(root)
+    const contextLedger = new RuntimeContextLedgerService(root)
+    const codex = fakeAdapter('codex', {
+      id: 'codex-thread',
+      runtimeId: 'codex',
+      title: 'Codex',
+      updatedAt: '2026-06-10T00:00:00.000Z'
+    })
+    vi.mocked(codex.startTurn).mockRejectedValue(new Error('connection closed after dispatch'))
+    const host = createAgentRuntimeHost({
+      settings: async () => settings('codex'),
+      adapters: [codex],
+      services: { contextLedger }
+    })
+    const input = {
+      runtimeId: 'codex' as const,
+      threadId: 'codex-thread',
+      text: 'Modify the document.',
+      clientDirectiveId: 'directive-uncertain'
+    }
+
+    await expect(host.startTurn(input)).rejects.toThrow('connection closed after dispatch')
+    await expect(host.startTurn(input)).rejects.toThrow(/uncertain delivery/)
+    expect(codex.startTurn).toHaveBeenCalledTimes(1)
+    await expect(contextLedger.get({ runtimeId: 'codex', threadId: 'codex-thread' }))
+      .resolves.toMatchObject({ directives: [{ id: 'directive-uncertain', delivery: 'uncertain' }] })
   })
 
   it('routes running-thread input through steerTurn when the runtime supports steering', async () => {
@@ -4314,491 +5646,6 @@ describe('AgentRuntimeHost', () => {
   })
 })
 
-describe('createLocalRuntimeAgentRuntimeAdapter', () => {
-  it('uses local runtime /v1 thread endpoints and maps thread snapshots to the neutral contract', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/threads?')) {
-          return json({
-            threads: [{
-              id: 'thr-sciforge',
-              title: 'SciForge thread',
-              workspace: '/tmp/workspace',
-              model: 'deepseek-v4-pro',
-              mode: 'agent',
-              status: 'idle',
-              createdAt: '2026-06-09T00:00:00.000Z',
-              updatedAt: '2026-06-10T00:00:00.000Z'
-            }]
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge' && init.method === 'GET') {
-          return json({
-            id: 'thr-sciforge',
-            title: 'SciForge thread',
-            workspace: '/tmp/workspace',
-            model: 'deepseek-v4-pro',
-            mode: 'agent',
-            status: 'idle',
-            createdAt: '2026-06-09T00:00:00.000Z',
-            updatedAt: '2026-06-10T00:00:00.000Z',
-            latestSeq: 2,
-            turns: [{
-              id: 'turn-1',
-              threadId: 'thr-sciforge',
-              status: 'completed',
-              createdAt: '2026-06-10T00:00:00.000Z',
-              finishedAt: '2026-06-10T00:00:01.000Z',
-              items: [
-                {
-                  id: 'user-1',
-                  kind: 'user_message',
-                  text: 'hello',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:00.000Z'
-                },
-                {
-                  id: 'assistant-1',
-                  kind: 'assistant_text',
-                  text: 'hi',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:01.000Z'
-                },
-                {
-                  id: 'tool-1',
-                  kind: 'tool_result',
-                  toolKind: 'command_execution',
-                  toolName: 'bash',
-                  output: 'ok',
-                  status: 'completed',
-                  createdAt: '2026-06-10T00:00:01.000Z'
-                }
-              ]
-            }]
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge/turns' && init.method === 'POST') {
-          return json({ threadId: 'thr-sciforge', turnId: 'turn-2', userMessageItemId: 'user-2' }, 202)
-        }
-        return json({ code: 'not_found', message: path }, 404)
-      }
-    })
-    const ctx = { settings: settings('sciforge') }
-
-    await expect(adapter.listThreads(ctx, { limit: 3, search: 'Local' })).resolves.toEqual([expect.objectContaining({
-      id: 'thr-sciforge',
-      runtimeId: 'sciforge',
-      title: 'SciForge thread',
-      backendThreadId: 'thr-sciforge'
-    })])
-    await expect(adapter.readThread(ctx, { runtimeId: 'sciforge', threadId: 'thr-sciforge' })).resolves.toMatchObject({
-      id: 'thr-sciforge',
-      runtimeId: 'sciforge',
-      latestSeq: 2,
-      turns: [{
-        id: 'turn-1',
-        status: 'completed',
-        items: [
-          { id: 'user-1', kind: 'user_message', text: 'hello' },
-          { id: 'assistant-1', kind: 'assistant_message', text: 'hi' },
-          { id: 'tool-1', kind: 'tool', toolKind: 'command_execution', detail: 'ok' }
-        ]
-      }]
-    })
-    await expect(adapter.startTurn(ctx, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-sciforge',
-      text: 'run',
-      mode: 'agent',
-      displayText: 'Run it',
-      attachmentIds: ['att-1']
-    })).resolves.toEqual({
-      threadId: 'thr-sciforge',
-      turnId: 'turn-2',
-      userMessageItemId: 'user-2'
-    })
-
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/threads?limit=3&search=Local', 'GET'],
-      ['/v1/threads/thr-sciforge', 'GET'],
-      ['/v1/threads/thr-sciforge/turns', 'POST']
-    ])
-    expect(JSON.parse(seen[2].init.body ?? '{}')).toEqual({
-      prompt: 'run',
-      model: 'sciforge-router',
-      mode: 'agent',
-      approvalPolicy: 'auto',
-      sandboxMode: 'danger-full-access',
-      displayText: 'Run it',
-      attachmentIds: ['att-1']
-    })
-  })
-
-  it('maps local runtime info capabilities without dropping tool diagnostics', async () => {
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path) => {
-        if (path !== '/v1/runtime/info') return json({}, 404)
-        return json({
-          capabilities: {
-            contractVersion: 1,
-            model: {
-              id: 'deepseek-v4-pro',
-              inputModalities: ['text', 'image'],
-              outputModalities: ['text'],
-              supportsToolCalling: true,
-              contextWindowTokens: 64000,
-              messageParts: ['text', 'image_url']
-            },
-            cli: {
-              serve: { status: 'available', enabled: true, available: true },
-              run: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' },
-              chat: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' },
-              exec: { status: 'disabled', enabled: false, available: false, reason: 'not implemented' }
-            },
-            mcp: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              configuredServers: 2,
-              connectedServers: 1,
-              toolCount: 7,
-              search: {
-                enabled: true,
-                mode: 'auto',
-                active: true,
-                indexedToolCount: 7,
-                advertisedToolCount: 4
-              }
-            },
-            web: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              fetch: { status: 'available', enabled: true, available: true },
-              search: { status: 'unavailable', enabled: true, available: false, reason: 'search provider missing' },
-              provider: 'test-web'
-            },
-            research: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              toolName: 'research_search',
-              arxiv: { status: 'available', enabled: true, available: true },
-              biorxiv: { status: 'unavailable', enabled: true, available: false },
-              semanticScholar: { status: 'available', enabled: true, available: true },
-              tavily: { status: 'available', enabled: true, available: true },
-              cns: { status: 'unavailable', enabled: true, available: false },
-              maxResults: 12
-            },
-            skills: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              configuredRoots: 1,
-              discoveredSkills: 3
-            },
-            subagents: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              maxParallel: 2,
-              maxChildRuns: 5
-            },
-            attachments: {
-              status: 'available',
-              enabled: true,
-              available: true,
-              maxImageBytes: 10,
-              maxImageDimension: 10,
-              allowedMimeTypes: ['image/png'],
-              textFallbackMaxBase64Bytes: 10,
-              textFallbackMaxImageDimension: 10,
-              textFallbackPreferredMimeType: 'image/webp'
-            },
-            memory: {
-              status: 'unavailable',
-              enabled: true,
-              available: false,
-              reason: 'memory store missing',
-              scopes: ['user'],
-              maxInjectedRecords: 4
-            }
-          }
-        })
-      }
-    })
-
-    await expect(adapter.capabilities({ settings: settings('sciforge') })).resolves.toMatchObject({
-      runtimeId: 'sciforge',
-      transport: 'http_sse',
-      model: {
-        id: 'deepseek-v4-pro',
-        inputModalities: ['text', 'image'],
-        supportsToolCalling: true,
-        contextWindowTokens: 64000
-      },
-      tools: {
-        toolCalling: true,
-        mcp: { available: true, toolCount: 7, search: { available: true } },
-        web: { available: true, fetch: { available: true }, search: { available: false } },
-        research: {
-          available: true,
-          server: 'mcp',
-          toolName: 'research_search',
-          sources: ['arxiv', 'semantic_scholar', 'web'],
-          maxResults: 12
-        },
-        skills: { available: true },
-        subagents: { available: true, maxParallel: 2, maxChildren: 5 },
-        diagnostics: { available: true }
-      },
-      storage: {
-        attachments: { available: true },
-        memory: { available: false, reason: 'memory store missing' }
-      }
-    })
-  })
-
-  it('keeps local runtime usage endpoints behind the neutral adapter contract', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/usage?')) {
-          return json({
-            group_by: 'thread',
-            buckets: [{
-              thread_id: 'thr-sciforge',
-              input_tokens: 100,
-              output_tokens: 20,
-              total_tokens: 120,
-              cached_tokens: 0,
-              cache_hit_rate: null,
-              cache_savings_usd: 0.003,
-              token_economy_savings_tokens: 4096,
-              token_economy_savings_usd: 0.0018,
-              turns: 1
-            }],
-            totals: {
-              total_tokens: 120,
-              token_economy_savings_tokens: 4096,
-              token_economy_savings_usd: 0.0018,
-              turns: 1
-            }
-          })
-        }
-        if (path === '/v1/threads/thr-sciforge') {
-          return json({
-            turns: [{
-              usage: {
-                prompt_cache_hit_tokens: 80,
-                prompt_cache_miss_tokens: 20
-              }
-            }]
-          })
-        }
-        return json({}, 404)
-      }
-    })
-
-    await expect(adapter.usage({ settings: settings('sciforge') }, {
-      groupBy: 'thread',
-      threadId: 'thr-sciforge'
-    })).resolves.toMatchObject({
-      supported: true,
-      groupBy: 'thread',
-      buckets: [{
-        threadId: 'thr-sciforge',
-        inputTokens: 100,
-        outputTokens: 20,
-        totalTokens: 120,
-        cachedTokens: 80,
-        cacheMissTokens: 20,
-        cacheHitRate: 0.8,
-        tokenEconomySavingsTokens: 4096,
-        tokenEconomySavingsUsd: 0.0018,
-        turns: 1
-      }],
-      totals: {
-        totalTokens: 120,
-        tokenEconomySavingsTokens: 4096,
-        tokenEconomySavingsUsd: 0.0018,
-        turns: 1
-      }
-    })
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/usage?group_by=thread', 'GET'],
-      ['/v1/threads/thr-sciforge', 'GET']
-    ])
-  })
-
-  it('keeps local runtime usage available when cache stat hydration misses a stale thread', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        if (path.startsWith('/v1/usage?')) {
-          return json({
-            group_by: 'thread',
-            buckets: [{
-              thread_id: 'stale-thread',
-              input_tokens: 100,
-              output_tokens: 20,
-              total_tokens: 120
-            }],
-            totals: { total_tokens: 120 }
-          })
-        }
-        if (path === '/v1/threads/stale-thread') {
-          return json({ code: 'not_found', message: 'thread not found: stale-thread' }, 404)
-        }
-        return json({}, 404)
-      }
-    })
-
-    await expect(adapter.usage({ settings: settings('sciforge') }, {
-      groupBy: 'thread',
-      threadId: 'stale-thread'
-    })).resolves.toMatchObject({
-      supported: true,
-      groupBy: 'thread',
-      buckets: [{
-        threadId: 'stale-thread',
-        totalTokens: 120
-      }]
-    })
-    expect(seen.map((entry) => [entry.path, entry.init.method])).toEqual([
-      ['/v1/usage?group_by=thread', 'GET'],
-      ['/v1/threads/stale-thread', 'GET']
-    ])
-  })
-
-  it('updates local runtime thread relation through the neutral adapter', async () => {
-    const seen: Array<{ path: string; init: { method?: string; body?: string } }> = []
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async (_settings, path, init) => {
-        seen.push({ path, init })
-        return json({})
-      }
-    })
-
-    await expect(adapter.updateThreadRelation?.({ settings: settings('sciforge') }, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-side',
-      relation: 'primary'
-    })).resolves.toBeUndefined()
-
-    expect(seen).toEqual([{
-      path: '/v1/threads/thr-side',
-      init: {
-        method: 'PATCH',
-        body: JSON.stringify({ relation: 'primary' })
-      }
-    }])
-  })
-
-  it('maps local runtime SSE events to neutral lifecycle and delta events', async () => {
-    const rawEvents = [
-      {
-        kind: 'turn_started',
-        seq: 1,
-        timestamp: '2026-06-12T04:41:37.972Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1'
-      },
-      {
-        kind: 'item_created',
-        seq: 2,
-        timestamp: '2026-06-12T04:41:37.980Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'user-1',
-        item: {
-          id: 'user-1',
-          kind: 'user_message',
-          text: 'hello',
-          status: 'completed',
-          createdAt: '2026-06-12T04:41:37.980Z'
-        }
-      },
-      {
-        kind: 'assistant_text_delta',
-        seq: 3,
-        timestamp: '2026-06-12T04:41:39.999Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'assistant-1',
-        item: {
-          id: 'assistant-1',
-          kind: 'assistant_text',
-          text: 'hi',
-          status: 'running'
-        }
-      },
-      {
-        kind: 'turn_completed',
-        seq: 4,
-        timestamp: '2026-06-12T04:41:40.021Z',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1'
-      }
-    ]
-    const adapter = createLocalRuntimeAgentRuntimeAdapter({
-      request: async () => json({}),
-      events: async function* () {
-        yield* rawEvents
-      }
-    })
-
-    const events: AgentRuntimeEvent[] = []
-    for await (const event of adapter.subscribeEvents!({ settings: settings('sciforge') }, {
-      runtimeId: 'sciforge',
-      threadId: 'thr-sciforge',
-      sinceSeq: 0
-    })) {
-      events.push(event)
-    }
-
-    expect(events).toEqual([
-      expect.objectContaining({
-        kind: 'turn_lifecycle',
-        runtimeId: 'sciforge',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        state: 'started',
-        seq: 1,
-        createdAt: '2026-06-12T04:41:37.972Z'
-      }),
-      expect.objectContaining({
-        kind: 'item_snapshot',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        seq: 2,
-        item: expect.objectContaining({ id: 'user-1', kind: 'user_message', text: 'hello' })
-      }),
-      expect.objectContaining({
-        kind: 'assistant_delta',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        itemId: 'assistant-1',
-        text: 'hi',
-        seq: 3
-      }),
-      expect.objectContaining({
-        kind: 'turn_lifecycle',
-        runtimeId: 'sciforge',
-        threadId: 'thr-sciforge',
-        turnId: 'turn-1',
-        state: 'completed',
-        seq: 4,
-        createdAt: '2026-06-12T04:41:40.021Z'
-      })
-    ])
-  })
-})
-
 describe('createCodexAgentRuntimeAdapter', () => {
   it('wraps CodexRuntimeService operations and exposes honest Codex capabilities', async () => {
     const userInputQuestions = [{
@@ -5090,7 +5937,10 @@ describe('createCodexAgentRuntimeAdapter', () => {
       displayText: 'Run it',
       model: 'gpt-5',
       reasoningEffort: 'high',
-      workspace: undefined
+      workspace: undefined,
+      fileReferences: undefined,
+      ownedVisualToolsAvailable: false,
+      nativeVisualProofChainPending: false
     })
     expect(service.resolveApproval).toHaveBeenCalledWith({
       requestId: 'server-request-1',
@@ -5109,7 +5959,7 @@ describe('createCodexAgentRuntimeAdapter', () => {
         runtimeId: 'codex',
         seq: 5,
         text: 'stored',
-        itemId: 'codex-delta-5-0'
+        itemId: 'agent_message-5-0'
       },
       {
         kind: 'approval_requested',

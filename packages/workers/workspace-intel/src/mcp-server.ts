@@ -1,16 +1,11 @@
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
-import { readFile } from 'node:fs/promises'
 
 import {
-  VISIBLE_CONTEXT_RESOURCE_URI,
-  VisualCaptureInputSchema,
   WORKSPACE_FILE_RESOURCE_URI_TEMPLATE,
   WORKSPACE_TREE_RESOURCE_URI,
-  VisibleContextInputSchema,
   WorkspaceListInputSchema,
-  WorkspacePreviewInputSchema,
   WorkspaceReadInputSchema,
   WorkspaceReferenceListInputSchema,
   WorkspaceReferencePreviewInputSchema,
@@ -23,7 +18,6 @@ import {
   createWorkspaceIntelService,
   type WorkspaceIntelService
 } from './service.js'
-import type { VisualInspectionEvidence } from './visual-inspection.js'
 
 type McpToolResult = {
   content: Array<
@@ -51,40 +45,6 @@ export function createWorkspaceIntelMcpServer(
     { name: 'sciforge-workspace-intel', version: '0.1.0' },
     { capabilities: { logging: {} } }
   )
-
-  server.registerTool('gui_visible_context', {
-    description: 'Inspect the GUI visible-context registry, including active right-sidebar components and resource pointers, without injecting full file or PDF contents.',
-    inputSchema: VisibleContextInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.visibleContext(args)
-    return toolResult(result, result.ok
-      ? `Visible context has ${result.componentCount} component${result.componentCount === 1 ? '' : 's'}.`
-      : result.error.message)
-  })
-
-  server.registerTool('gui_visual_capture', {
-    description: 'Capture and semantically inspect the current SciForge window or one visual target published by gui_visible_context. Semantic inspection is enabled by default and runs through Model Router vision before success, returning an attested textual observation plus the PNG. Set requireSemanticInspection=false only for capture-only diagnostics; capture-only results do not satisfy visual QA. Arbitrary coordinates are not accepted.',
-    inputSchema: VisualCaptureInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.visualCapture(args)
-    if (!result.ok) return toolResult(result, result.error.message)
-    const bytes = await readFile(result.resource.path)
-    const inspectionText = result.inspection
-      ? visualInspectionText(result.inspection)
-      : 'Semantic visual inspection was explicitly disabled; this capture is not visual QA evidence.'
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Captured ${result.resource.role} visual context to ${result.resource.path}.\n${inspectionText}`
-        },
-        { type: 'image', data: bytes.toString('base64'), mimeType: result.resource.mimeType }
-      ],
-      structuredContent: result
-    }
-  })
 
   server.registerTool('gui_workspace_list', {
     description: 'List read-only workspace directory entries with workspace root guard, pagination, and optional bounded recursion.',
@@ -117,15 +77,6 @@ export function createWorkspaceIntelMcpServer(
     return toolResult(result, result.ok
       ? `Read ${result.bytesRead} byte(s) from ${result.relativePath}${result.truncated ? '; more bytes are available.' : '.'}`
       : result.error.message)
-  })
-
-  server.registerTool('gui_workspace_preview', {
-    description: 'Preview a workspace file or directory without returning unbounded payloads.',
-    inputSchema: WorkspacePreviewInputSchema,
-    annotations: READ_ONLY_TOOL_ANNOTATIONS
-  }, async (args) => {
-    const result = await service.preview(args)
-    return toolResult(result, result.ok ? result.contentSummary : result.error.message)
   })
 
   server.registerTool('gui_workspace_reference_list', {
@@ -179,15 +130,6 @@ export function createWorkspaceIntelMcpServer(
     return jsonResource(WORKSPACE_TREE_RESOURCE_URI, result)
   })
 
-  server.registerResource('visible-context', VISIBLE_CONTEXT_RESOURCE_URI, {
-    title: 'Visible Context',
-    description: 'Current bounded GUI visible-context snapshot for agent on-demand inspection.',
-    mimeType: 'application/json'
-  }, async () => {
-    const result = await service.visibleContext({ includeHidden: true })
-    return jsonResource(VISIBLE_CONTEXT_RESOURCE_URI, result)
-  })
-
   server.registerResource('workspace-file', new ResourceTemplate(WORKSPACE_FILE_RESOURCE_URI_TEMPLATE, {
     list: undefined
   }), {
@@ -202,18 +144,6 @@ export function createWorkspaceIntelMcpServer(
   })
 
   return server
-}
-
-function visualInspectionText(inspection: VisualInspectionEvidence): string {
-  const lines = [
-    `Semantic visual inspection completed. Attestation: ${inspection.attestation}`,
-    `Summary: ${inspection.summary}`,
-    `Confidence: ${inspection.confidence}`
-  ]
-  if (inspection.visibleFacts.length) lines.push(`Visible facts: ${inspection.visibleFacts.join(' | ')}`)
-  if (inspection.layoutIssues.length) lines.push(`Layout issues: ${inspection.layoutIssues.join(' | ')}`)
-  if (inspection.recommendedActions.length) lines.push(`Recommended actions: ${inspection.recommendedActions.join(' | ')}`)
-  return lines.join('\n')
 }
 
 export async function startWorkspaceIntelMcpServer(

@@ -21,8 +21,14 @@ export function normalizeMarkdownMathDelimiters(markdown: string): string {
     if (trimmed === '\\[') return line.replace('\\[', '$$')
     if (trimmed === '\\]') return line.replace('\\]', '$$')
 
-    return line
+    const normalizedLine = line
       .replace(/\\\[([\s\S]+?)\\\]/g, (_match, latex: string) => `$$${latex}$$`)
       .replace(/\\\((.+?)\\\)/g, (_match, latex: string) => `$${latex}$`)
+    const singleLineDisplay = normalizedLine.trim().match(/^\$\$([^\n]+)\$\$$/)
+    if (singleLineDisplay) {
+      const indentation = normalizedLine.match(/^\s*/)?.[0] ?? ''
+      return `${indentation}$$\n${singleLineDisplay[1].trim()}\n${indentation}$$`
+    }
+    return normalizedLine
   }).join('\n')
 }

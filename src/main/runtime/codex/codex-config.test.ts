@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, stat, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it } from 'vitest'
@@ -10,14 +10,19 @@ import {
   defaultLocalRuntimeSettings,
   DEFAULT_MODEL_ROUTER_PROVIDER_ID,
   DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
-import { codexRuntimeEnv, expandHome, prepareCodexAppServerLaunch } from './codex-config'
+import {
+  CODEX_PLAN_GATEWAY_PROVIDER_ID,
+  codexRuntimeEnv,
+  expandHome,
+  prepareCodexAppServerLaunch,
+  resolveCodexCommand
+} from './codex-config'
 
 function settings(codexHome: string): AppSettingsV1 {
   const modelRouter = defaultModelRouterSettings()
@@ -25,7 +30,6 @@ function settings(codexHome: string): AppSettingsV1 {
   modelRouter.publicModelAlias = DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -37,7 +41,7 @@ function settings(codexHome: string): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'codex',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: {
@@ -63,6 +67,189 @@ function settings(codexHome: string): AppSettingsV1 {
 }
 
 describe('codex config launch helpers', () => {
+  it('finds a Codex standalone install when a Finder launch omits the user bin directory', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-command-'))
+    const command = join(home, '.local', 'bin', 'codex')
+    await mkdir(join(home, '.local', 'bin'), { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(command)
+  })
+
+  it('uses the interactive login shell PATH when Finder supplies only the system PATH', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-login-shell-'))
+    const shellBin = join(home, 'shell-managed', 'bin')
+    const command = join(shellBin, 'codex')
+    const fakeShell = join(home, 'test-login-shell')
+    await mkdir(shellBin, { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+    await writeFile(
+      fakeShell,
+      '#!/bin/sh\nprintf \'\\036%s\\037\' "$SCIFORGE_TEST_LOGIN_PATH"\n',
+      'utf8'
+    )
+    await chmod(fakeShell, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: {
+        PATH: '/usr/bin:/bin',
+        SHELL: fakeShell,
+        SCIFORGE_TEST_LOGIN_PATH: `/usr/bin:${shellBin}`
+      },
+      homeDir: home,
+      platform: 'darwin'
+    })).resolves.toBe(command)
+  })
+
+  it.each([
+    ['asdf', ['.asdf', 'shims']],
+    ['Volta', ['.volta', 'bin']],
+    ['pnpm', ['Library', 'pnpm']],
+    ['Bun', ['.bun', 'bin']]
+  ])('finds a Codex install managed by %s outside the inherited PATH', async (_manager, parts) => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-manager-'))
+    const binDir = join(home, ...parts)
+    const command = join(binDir, 'codex')
+    await mkdir(binDir, { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(command)
+  })
+
+  it('searches installed nvm Node versions when no version is activated in Finder', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-nvm-'))
+    const olderBin = join(home, '.nvm', 'versions', 'node', 'v20.19.0', 'bin')
+    const newerBin = join(home, '.nvm', 'versions', 'node', 'v22.17.0', 'bin')
+    await mkdir(olderBin, { recursive: true })
+    await mkdir(newerBin, { recursive: true })
+    await writeFile(join(olderBin, 'codex'), '#!/bin/sh\n', 'utf8')
+    await writeFile(join(newerBin, 'codex'), '#!/bin/sh\n', 'utf8')
+    await chmod(join(olderBin, 'codex'), 0o755)
+    await chmod(join(newerBin, 'codex'), 0o755)
+
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/usr/bin:/bin' },
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => ''
+    })).resolves.toBe(join(newerBin, 'codex'))
+  })
+
+  it('finds the Windows cmd shim when Explorer provides Path instead of PATH', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-windows-'))
+    const npmBin = join(home, 'AppData', 'Roaming', 'npm')
+    const command = join(npmBin, 'codex.cmd')
+    await mkdir(npmBin, { recursive: true })
+    await writeFile(command, '@echo off\r\n', 'utf8')
+
+    await expect(resolveCodexCommand('codex', {
+      env: {
+        Path: 'C:\\Windows\\System32',
+        APPDATA: join(home, 'AppData', 'Roaming')
+      },
+      homeDir: home,
+      platform: 'win32',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect a Unix shell on Windows')
+      }
+    })).resolves.toBe(command)
+  })
+
+  it('materializes the runtime bundled with the Windows Codex app', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-codex-msix-'))
+    const programFiles = join(home, 'Program Files')
+    const source = join(
+      programFiles,
+      'WindowsApps',
+      'OpenAI.Codex_26.715.4045.0_x64__test',
+      'app',
+      'resources',
+      'codex.exe'
+    )
+    await mkdir(join(source, '..'), { recursive: true })
+    await writeFile(source, 'packaged-codex-runtime', 'utf8')
+
+    const resolved = await resolveCodexCommand('codex', {
+      env: { Path: 'C:\\Windows\\System32', ProgramFiles: programFiles },
+      homeDir: home,
+      platform: 'win32'
+    })
+
+    expect(resolved).toBe(join(home, '.sciforge', 'codex-runtime', 'codex.exe'))
+    await expect(readFile(resolved, 'utf8')).resolves.toBe('packaged-codex-runtime')
+  })
+
+  it('expands and validates an explicit Codex executable path', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-explicit-codex-'))
+    const command = join(home, 'custom', 'codex')
+    await mkdir(join(home, 'custom'), { recursive: true })
+    await writeFile(command, '#!/bin/sh\n', 'utf8')
+    await chmod(command, 0o755)
+
+    await expect(resolveCodexCommand('~/custom/codex', {
+      homeDir: home,
+      platform: 'darwin',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect the shell for an explicit path')
+      }
+    })).resolves.toBe(command)
+
+    const windowsCommand = 'C:\\Tools\\Codex\\codex.exe'
+    await expect(resolveCodexCommand(windowsCommand, {
+      homeDir: 'C:\\Users\\example',
+      platform: 'win32',
+      isExecutable: async (path) => path === windowsCommand
+    })).resolves.toBe(windowsCommand)
+  })
+
+  it('rejects missing and relative explicit Codex paths with actionable errors', async () => {
+    const home = await mkdtemp(join(tmpdir(), 'sciforge-invalid-codex-'))
+
+    await expect(resolveCodexCommand('~/missing/codex', {
+      homeDir: home,
+      platform: 'darwin'
+    })).rejects.toThrow(
+      `Codex executable was not found or is not executable at "${join(home, 'missing', 'codex')}". ` +
+      'Check the path and file permissions, or use "codex" to auto-detect it.'
+    )
+
+    await expect(resolveCodexCommand('./tools/codex', {
+      homeDir: home,
+      platform: 'darwin',
+      isExecutable: async () => {
+        throw new Error('must not inspect a relative explicit path')
+      }
+    })).rejects.toThrow(
+      'Codex command path must be absolute: "./tools/codex". ' +
+      'Enter the absolute path to the Codex executable, or use "codex" to auto-detect it.'
+    )
+  })
+
+  it('prefers the supplied PATH for a bare Codex command', async () => {
+    await expect(resolveCodexCommand('codex', {
+      env: { PATH: '/custom/bin:/usr/bin' },
+      homeDir: '/Users/example',
+      platform: 'darwin',
+      isExecutable: async (path) => path === '/custom/bin/codex',
+      getLoginShellPath: async () => {
+        throw new Error('must not inspect the shell after PATH resolves the command')
+      }
+    })).resolves.toBe('/custom/bin/codex')
+  })
+
   it('prepares app-server stdio launch config and creates CODEX_HOME', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
     const managedHome = join(codexHome, 'nested')
@@ -123,9 +310,6 @@ describe('codex config launch helpers', () => {
         EXPERT_PROVIDER_API_KEY: 'outer-expert-token',
         SCIMODALITY_ROUTER_PORT: '3898',
         SCIMODALITY_ROUTER_RUNTIME_TOKEN: 'outer-router-token',
-        EDAG_LLM_BASE_URL: 'https://direct-edag-provider.example/v1',
-        EDAG_LLM_API_KEY: 'outer-edag-key',
-        EDAG_LLM_MODEL: 'outer-edag-model',
         SCIFORGE_RUNTIME_API_KEY: 'stale-runtime-key',
         PATH: '/bin',
         CODEX_USER_HOME: '/old',
@@ -134,7 +318,10 @@ describe('codex config launch helpers', () => {
       }
     })
 
-    expect(launch.command).toBe('codex')
+    expect(launch.command).toMatch(/(?:^|\/)codex$/)
+    if (launch.command.includes('/')) {
+      expect(launch.env.PATH?.split(':')).toContain(join(launch.command, '..'))
+    }
     expect(launch.args).toEqual(['app-server', '--listen', 'stdio://'])
     expect(launch.cwd).toContain('project')
     expect(launch.env.CODEX_HOME).toBe(managedHome)
@@ -181,9 +368,6 @@ describe('codex config launch helpers', () => {
     expect(launch.env.EXPERT_PROVIDER_API_KEY).toBeUndefined()
     expect(launch.env.SCIMODALITY_ROUTER_PORT).toBeUndefined()
     expect(launch.env.SCIMODALITY_ROUTER_RUNTIME_TOKEN).toBeUndefined()
-    expect(launch.env.EDAG_LLM_BASE_URL).toBeUndefined()
-    expect(launch.env.EDAG_LLM_API_KEY).toBeUndefined()
-    expect(launch.env.EDAG_LLM_MODEL).toBeUndefined()
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBe('local-runtime-router-key')
     expect(launch.env.NO_PROXY).toContain('127.0.0.1')
@@ -207,6 +391,42 @@ describe('codex config launch helpers', () => {
     expect(config).not.toContain('api.openai.com')
     expect(config).not.toContain('sk-')
     expect(config).not.toContain('OPENAI_API_KEY')
+  })
+
+  it('materializes the canonical app-owned PreToolUse hook in the isolated Codex home', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'sciforge-codex-hook-home-'))
+    const codexHome = join(root, 'codex-home')
+    const appPath = join(root, 'SciForge App')
+    const launch = await prepareCodexAppServerLaunch({
+      settings: settings(codexHome),
+      preToolUseHookLaunch: {
+        appPath,
+        execPath: process.execPath,
+        isPackaged: false
+      }
+    })
+
+    expect(launch.preToolUseHook).toMatchObject({
+      sourcePath: join(codexHome, 'hooks.json')
+    })
+    await expect(readFile(join(codexHome, 'config.toml'), 'utf8')).resolves.toContain(
+      '[features]\nhooks = true'
+    )
+    const hooks = JSON.parse(await readFile(join(codexHome, 'hooks.json'), 'utf8'))
+    expect(hooks).toEqual({
+      hooks: {
+        PreToolUse: [{
+          hooks: [{
+            type: 'command',
+            command: launch.preToolUseHook?.command,
+            commandWindows: launch.preToolUseHook?.commandWindows,
+            timeout: 10,
+            async: false,
+            statusMessage: 'Checking SciForge visual execution policy'
+          }]
+        }]
+      }
+    })
   })
 
   it('drops Codex runtime-only profile args before launching app-server', async () => {
@@ -243,105 +463,7 @@ describe('codex config launch helpers', () => {
     ])
   })
 
-  it('does not write the shared research MCP server into managed Codex config', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    const launch = await prepareCodexAppServerLaunch({
-      settings: settings(codexHome),
-      env: {
-        SCIFORGE_RESEARCH_MAX_RESULTS: '7',
-        SCIFORGE_RESEARCH_TIMEOUT_MS: '12000'
-      },
-      researchMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      }
-    })
-
-    expect(launch.codexHome).toBe(codexHome)
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_research]')
-    expect(config).not.toContain('research-search-mcp-node-entry')
-    expect(config).not.toContain('SCIFORGE_RESEARCH_MAX_RESULTS')
-    expect(config).not.toContain('SCIFORGE_RESEARCH_TIMEOUT_MS')
-  })
-
-  it('does not write the shared schedule MCP server into managed Codex config', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    const launch = await prepareCodexAppServerLaunch({
-      settings: {
-        ...settings(codexHome),
-        schedule: {
-          ...defaultScheduleSettings(),
-          internal: {
-            port: 9797,
-            secret: 'schedule-secret'
-          }
-        }
-      },
-      scheduleMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      }
-    })
-
-    expect(launch.codexHome).toBe(codexHome)
-    expect(launch.env.GUI_SCHEDULE_INTERNAL_SECRET).toBe('schedule-secret')
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_schedule]')
-    expect(config).not.toContain('schedule-mcp-node-entry')
-    expect(config).not.toContain('schedule-secret')
-  })
-
-  it('does not write the shared workflow MCP server into managed Codex config', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    const launch = await prepareCodexAppServerLaunch({
-      settings: {
-        ...settings(codexHome),
-        workflow: {
-          ...defaultWorkflowSettings(),
-          enabled: true,
-          webhookPort: 9898,
-          webhookSecret: 'workflow-secret'
-        }
-      },
-      workflowMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      }
-    })
-
-    expect(launch.codexHome).toBe(codexHome)
-    expect(launch.env.GUI_WORKFLOW_INTERNAL_SECRET).toBe('workflow-secret')
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_workflow]')
-    expect(config).not.toContain('workflow-mcp-node-entry')
-    expect(config).not.toContain('workflow-secret')
-  })
-
-  it('does not write the shared workspace intel MCP server into managed Codex config', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    const launch = await prepareCodexAppServerLaunch({
-      settings: {
-        ...settings(codexHome),
-        workspaceRoot: '/tmp/codex-workspace'
-      },
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      }
-    })
-
-    expect(launch.codexHome).toBe(codexHome)
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_workspace_intel]')
-    expect(config).not.toContain('workspace-intel-mcp-node-entry')
-  })
-
-  it('does not write the shared computer-use MCP server into managed Codex config', async () => {
+  it('does not write managed MCP servers into Codex config', async () => {
     const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
     const launch = await prepareCodexAppServerLaunch({
       settings: settings(codexHome)
@@ -349,98 +471,7 @@ describe('codex config launch helpers', () => {
 
     expect(launch.codexHome).toBe(codexHome)
     const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_computer_use]')
-    expect(config).not.toContain('computer-use-mcp-node-entry')
-  })
-
-  it('does not write GUI MCP server tables when the dynamic bridge handles exposure', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    await prepareCodexAppServerLaunch({
-      settings: settings(codexHome),
-      scheduleMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      researchMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      workflowMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      paperRadarMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false,
-        dbPath: '/tmp/sciforge-test-app/paper-radar.sqlite',
-        profilesPath: '/tmp/sciforge-test-app/paper-radar-profiles.json'
-      },
-      writeAssistMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      runtimeInspectorMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false,
-        checkpointDataDir: '/tmp/sciforge-test-app/checkpoints'
-      }
-    })
-
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_')
-    expect(config).not.toContain('-mcp-node-entry')
-  })
-
-  it('does not write the shared computer-use MCP server when computer use is disabled', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    await prepareCodexAppServerLaunch({
-      settings: {
-        ...settings(codexHome),
-        computerUse: {
-          enabled: false,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: true,
-            claude: true
-          }
-        }
-      }
-    })
-
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_computer_use]')
-    expect(config).not.toContain('computer-use-mcp-node-entry')
-  })
-
-  it('does not write the shared computer-use MCP server when Codex runtime access is disabled', async () => {
-    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
-    await prepareCodexAppServerLaunch({
-      settings: {
-        ...settings(codexHome),
-        computerUse: {
-          enabled: true,
-          runtimeEnabled: {
-            sciforge: true,
-            codex: false,
-            claude: true
-          }
-        }
-      }
-    })
-
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_computer_use]')
+    expect(config).not.toContain('[mcp_servers.')
     expect(config).not.toContain('computer-use-mcp-node-entry')
   })
 
@@ -480,6 +511,140 @@ describe('codex config launch helpers', () => {
     const persistedGlobalConfig = await readFile(join(settingsCodexHome, 'config.toml'), 'utf8')
     expect(persistedGlobalConfig).toContain('api.openai.com')
     expect(persistedGlobalConfig).not.toContain(DEFAULT_MODEL_ROUTER_PROVIDER_ID)
+  })
+
+  it('does not import auth credentials from an external CODEX_HOME', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'config.toml'), 'model_provider = "external"\n')
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external-only"}\n', { mode: 0o600 })
+
+    const launch = await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' },
+      env: {
+        SCIFORGE_RUNTIME_API_KEY: 'stale-api-path-key',
+        OPENAI_API_KEY: 'stale-openai-key'
+      }
+    })
+
+    expect(launch.accessMode).toBe('coding-plan')
+    expect(launch.env.CODEX_HOME).toBe(managedCodexHome)
+    expect(launch.env.SCIFORGE_RUNTIME_API_KEY).toBeUndefined()
+    expect(launch.env.OPENAI_API_KEY).toBeUndefined()
+
+    const config = await readFile(join(managedCodexHome, 'config.toml'), 'utf8')
+    expect(config).toContain(`model_provider = "${CODEX_PLAN_GATEWAY_PROVIDER_ID}"`)
+    expect(config).toContain(`[model_providers.${CODEX_PLAN_GATEWAY_PROVIDER_ID}]`)
+    expect(config).toContain('base_url = "http://127.0.0.1:47931/v1"')
+    expect(config).toContain('wire_api = "responses"')
+    expect(config).toContain('requires_openai_auth = true')
+    expect(config).toContain('supports_websockets = false')
+    expect(config).not.toContain('env_key')
+    expect(config).not.toContain('model =')
+    await expect(readFile(join(externalCodexHome, 'config.toml'), 'utf8'))
+      .resolves.toBe('model_provider = "external"\n')
+    await expect(readFile(join(externalCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"external-only"}\n')
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('imports explicitly trusted standard Codex auth without overwriting runtime config', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    const standardCodexHome = await mkdtemp(join(tmpdir(), 'standard-codex-home-'))
+    const standardAuthPath = join(standardCodexHome, 'auth.json')
+    await writeFile(standardAuthPath, '{"auth":"standard-login"}\n', { mode: 0o600 })
+
+    await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      standardCodexAuthPath: standardAuthPath,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })
+
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"standard-login"}\n')
+    if (process.platform !== 'win32') {
+      expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+    }
+  })
+
+  it('does not overwrite an existing managed Codex login', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external"}\n')
+    await writeFile(join(managedCodexHome, 'auth.json'), '{"auth":"managed"}\n', { mode: 0o600 })
+
+    await prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })
+
+    await expect(readFile(join(managedCodexHome, 'auth.json'), 'utf8'))
+      .resolves.toBe('{"auth":"managed"}\n')
+    expect((await stat(join(managedCodexHome, 'auth.json'))).mode & 0o777).toBe(0o600)
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a managed Codex auth symlink', async () => {
+    const externalCodexHome = await mkdtemp(join(tmpdir(), 'external-codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(externalCodexHome, 'auth.json'), '{"auth":"external"}\n', { mode: 0o600 })
+    await symlink(join(externalCodexHome, 'auth.json'), join(managedCodexHome, 'auth.json'))
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(externalCodexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })).rejects.toThrow('managed auth.json must not be a symbolic link')
+  })
+
+  it.skipIf(process.platform === 'win32')('rejects a broadly accessible managed Codex auth file', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'codex-home-'))
+    const managedCodexHome = await mkdtemp(join(tmpdir(), 'managed-codex-home-'))
+    await writeFile(join(managedCodexHome, 'auth.json'), '{"auth":"managed"}\n', { mode: 0o644 })
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      },
+      managedCodexHome,
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1/' }
+    })).rejects.toThrow('managed auth.json must not be group or world accessible')
+  })
+
+  it('fails closed when coding-plan mode has no local gateway or selects another adapter', async () => {
+    const codexHome = await mkdtemp(join(tmpdir(), 'sciforge-codex-home-'))
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      }
+    })).rejects.toThrow('Plan Gateway base URL is required')
+
+    await expect(prepareCodexAppServerLaunch({
+      settings: {
+        ...settings(codexHome),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'other-plan' }
+      },
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' }
+    })).rejects.toThrow('does not support coding plan adapter')
   })
 
   it('rejects non-local Model Router URLs', async () => {

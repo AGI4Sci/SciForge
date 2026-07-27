@@ -12,7 +12,6 @@ import {
   planFeatureNameFromRequest,
   validateCreatePlanToolInput
 } from './gui-plan'
-import * as runtimeGuiPlan from '../../kun/src/shared/gui-plan'
 
 describe('gui-plan path validation', () => {
   it('accepts direct Markdown files under the plan directory', () => {
@@ -142,79 +141,5 @@ describe('create_plan tool input validation', () => {
         title: 'Login flow'
       })
     ).toEqual([])
-  })
-})
-
-describe('runtime gui-plan parity', () => {
-  it('keeps renderer and local runtime GUI plan helper outputs aligned', () => {
-    const featureFixtures = [
-      '',
-      '   ',
-      '../',
-      'Build Login: OAuth / SSO?',
-      '登录：添加 OAuth 🪪'
-    ]
-    for (const request of featureFixtures) {
-      expect(runtimeGuiPlan.planFeatureNameFromRequest(request)).toBe(
-        planFeatureNameFromRequest(request)
-      )
-      expect(runtimeGuiPlan.buildPlanRelativePath(request)).toBe(buildPlanRelativePath(request))
-      expect(runtimeGuiPlan.buildPlanRelativePath(request, 3)).toBe(buildPlanRelativePath(request, 3))
-    }
-
-    const pathFixtures = [
-      `${GUI_PLAN_RELATIVE_DIR}/Login.md`,
-      `  ./${GUI_PLAN_RELATIVE_DIR}\\Login.md  `,
-      `${GUI_PLAN_RELATIVE_DIR}//Login.md`,
-      `${GUI_PLAN_RELATIVE_DIR}/nested/login.md`,
-      '.legacy/plan/login.md',
-      '../plan.md'
-    ]
-    for (const path of pathFixtures) {
-      expect(runtimeGuiPlan.normalizeGuiPlanRelativePath(path)).toBe(
-        normalizeGuiPlanRelativePath(path)
-      )
-      expect(runtimeGuiPlan.isGuiPlanRelativePath(path)).toBe(isGuiPlanRelativePath(path))
-      expect(runtimeGuiPlan.isGuiPlanCurrentRelativePath(path)).toBe(
-        isGuiPlanCurrentRelativePath(path)
-      )
-      expect(runtimeGuiPlan.planDisplayNameFromRelativePath(path)).toBe(
-        planDisplayNameFromRelativePath(path)
-      )
-    }
-
-    const existing = [
-      buildPlanRelativePath('Build Login: OAuth / SSO?'),
-      buildPlanRelativePath('Build Login: OAuth / SSO?', 2)
-    ]
-    expect(runtimeGuiPlan.nextAvailablePlanRelativePath('Build Login: OAuth / SSO?', existing)).toBe(
-      nextAvailablePlanRelativePath('Build Login: OAuth / SSO?', existing)
-    )
-    expect(runtimeGuiPlan.buildGuiPlanId('C:\\tmp\\ws\\', `${GUI_PLAN_RELATIVE_DIR}/Login.md`)).toBe(
-      buildGuiPlanId('C:\\tmp\\ws\\', `${GUI_PLAN_RELATIVE_DIR}/Login.md`)
-    )
-    expect(runtimeGuiPlan.guiPlanWorkspaceMatches('C:\\tmp\\ws', 'c:/tmp/ws/')).toBe(
-      guiPlanWorkspaceMatches('C:\\tmp\\ws', 'c:/tmp/ws/')
-    )
-
-    const validationFixtures = [
-      { markdown: '## plan', operation: 'draft' as const },
-      { markdown: '', operation: 'draft' as const },
-      {
-        markdown: '## plan',
-        operation: 'refine' as const,
-        plan_relative_path: `${GUI_PLAN_RELATIVE_DIR}/login.md`
-      },
-      {
-        markdown: '## plan',
-        operation: 'draft' as const,
-        plan_relative_path: '.legacy/plan/login.md'
-      }
-    ]
-    for (const input of validationFixtures) {
-      expect(runtimeGuiPlan.validateCreatePlanToolInput(input)).toEqual(
-        validateCreatePlanToolInput(input)
-      )
-    }
   })
 })

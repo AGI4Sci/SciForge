@@ -166,6 +166,31 @@ describe('RemoteGuardDetailView', () => {
     expect(remoteGuardTargetThread(channel)).toBeNull()
   })
 
+  it('keeps legacy SciForge thread mappings visible but not openable', () => {
+    const channel = discordChannel({
+      runtimeId: 'sciforge',
+      agentThreadIds: { sciforge: 'legacy-thread' }
+    })
+    const onOpenThread = vi.fn()
+    const html = renderToStaticMarkup(
+      createElement(RemoteGuardDetailView, {
+        channel,
+        onOpenThread,
+        onOpenSettings: vi.fn(),
+        t
+      })
+    )
+
+    expect(remoteGuardTargetThread(channel)).toEqual({
+      threadId: 'legacy-thread',
+      runtimeId: 'sciforge'
+    })
+    expect(html).toContain('sciforge:legacy...read')
+    expect(html).toContain('title="legacy-thread"')
+    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[\s\S]*?Open work thread<\/button>/)
+    expect(onOpenThread).not.toHaveBeenCalled()
+  })
+
   it('shows the latest remote failure reason on the desktop guard page', () => {
     const channel = discordChannel({
       lastFailure: {

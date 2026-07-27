@@ -7,7 +7,7 @@ import {
   SCHEDULE_REASONING_EFFORT_IDS,
   WORKFLOW_INPUT_FIELD_TYPES,
   WORKFLOW_NODE_INPUT_TYPES,
-  getModelProviderSettings,
+  listModelRouterModelIds,
   type AppSettingsV1,
   type WorkflowCodeCheckResult,
   type WorkflowCodeLanguage,
@@ -817,7 +817,11 @@ export function NodeConfigPanel({
     )
   }
 
-  const providers = getModelProviderSettings(settings).providers
+  const providers = [{
+    id: 'model-router',
+    name: 'Model Router',
+    models: listModelRouterModelIds(settings)
+  }]
   const danglingRefs = collectDanglingRefs(node, upstreamNodes)
 
   return (

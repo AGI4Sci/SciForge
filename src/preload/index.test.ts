@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { capabilityResourceContentAccessFromUrl } from '../shared/workspace-preview-asset-url'
 
 const invoke = vi.fn()
 const on = vi.fn()
@@ -36,25 +37,6 @@ describe('preload agentRuntime bridge', () => {
     await import('./index')
   })
 
-  it('exposes runtime status notifications', () => {
-    const api = exposedApi as {
-      onRuntimeStatus(handler: (payload: unknown) => void): () => void
-    }
-    const handler = vi.fn()
-
-    const unsubscribe = api.onRuntimeStatus(handler)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'runtime:status')?.[1]
-    wrapped?.({}, { state: 'running', source: 'test', at: '2026-06-14T00:00:00.000Z' })
-    unsubscribe()
-
-    expect(handler).toHaveBeenCalledWith({
-      state: 'running',
-      source: 'test',
-      at: '2026-06-14T00:00:00.000Z'
-    })
-    expect(removeListener).toHaveBeenCalledWith('runtime:status', wrapped)
-  })
-
   it('uses native Chromium zoom for renderer UI scaling', () => {
     const api = exposedApi as {
       setUiZoomFactor(factor: number): void
@@ -69,47 +51,52 @@ describe('preload agentRuntime bridge', () => {
     expect(setZoomFactor).toHaveBeenNthCalledWith(3, 1)
   })
 
-  it('exposes a bridge to open the local Model Router config file', async () => {
+  it('exposes one runtime-neutral model access status bridge', async () => {
     const api = exposedApi as {
-      openModelRouterConfigFile(): Promise<unknown>
+      getModelAccessStatus(): Promise<unknown>
     }
 
-    await api.openModelRouterConfigFile()
+    await api.getModelAccessStatus()
 
-    expect(invoke).toHaveBeenCalledWith('modelRouter:config:open')
+    expect(invoke).toHaveBeenCalledWith('modelAccess:status')
   })
 
-  it('exposes Evidence DAG update IPC', async () => {
+  it('exposes one generic constrained file picker without a Biology Room facade', async () => {
     const api = exposedApi as {
-      updateEvidenceDag(payload: unknown): Promise<unknown>
-      setEvidenceDagPriority(payload: unknown): Promise<unknown>
+      pickFile(request: unknown): Promise<unknown>
+      biologyRoom?: Record<string, unknown>
     }
-    const payload = { runtimeId: 'codex', threadId: 'thread-1' }
+    const request = {
+      title: 'Select data',
+      defaultPath: '/tmp/workspace',
+      filters: [{ name: 'Data', extensions: ['csv'] }]
+    }
 
-    await api.updateEvidenceDag(payload)
-    await api.setEvidenceDagPriority({ ...payload, visible: true })
+    await api.pickFile(request)
 
-    expect(invoke).toHaveBeenCalledWith('evidenceDag:update', payload)
-    expect(invoke).toHaveBeenCalledWith('evidenceDag:priority', { ...payload, visible: true })
+    expect(invoke).toHaveBeenCalledWith('workspace:pick-file', request)
+    expect(api.biologyRoom).toBeUndefined()
   })
 
-  it('exposes Project DAG panel IPC', async () => {
+  it('exposes durable full-trace read, export, and clear IPC', async () => {
     const api = exposedApi as {
-      getProjectDagView(payload: unknown): Promise<unknown>
-      updateProjectDag(payload: unknown): Promise<unknown>
-      saveProjectDagGoal(payload: unknown): Promise<unknown>
+      traces: {
+        read(query?: unknown): Promise<unknown>
+        summaries(query?: unknown): Promise<unknown>
+        export(traceIds?: readonly string[]): Promise<unknown>
+        clear(): Promise<unknown>
+      }
     }
-    const viewPayload = { view: 'graph', workspaceRoot: '/tmp/project-alpha' }
-    const updatePayload = { scope: 'all', workspaceRoot: '/tmp/project-alpha' }
-    const goalPayload = { title: 'Project alpha', workspaceRoot: '/tmp/project-alpha' }
 
-    await api.getProjectDagView(viewPayload)
-    await api.updateProjectDag(updatePayload)
-    await api.saveProjectDagGoal(goalPayload)
+    await api.traces.read({ threadId: 'thread-1', limit: 10 })
+    await api.traces.summaries({ runtimeId: 'codex', limit: 5 })
+    await api.traces.export(['trace-1'])
+    await api.traces.clear()
 
-    expect(invoke).toHaveBeenCalledWith('projectDag:view', viewPayload)
-    expect(invoke).toHaveBeenCalledWith('projectDag:update', updatePayload)
-    expect(invoke).toHaveBeenCalledWith('projectDag:save-goal', goalPayload)
+    expect(invoke).toHaveBeenCalledWith('traces:read', { threadId: 'thread-1', limit: 10 })
+    expect(invoke).toHaveBeenCalledWith('traces:summaries', { runtimeId: 'codex', limit: 5 })
+    expect(invoke).toHaveBeenCalledWith('traces:export', { traceIds: ['trace-1'] })
+    expect(invoke).toHaveBeenCalledWith('traces:clear')
   })
 
   it('does not expose the removed draw.io runtime API', () => {
@@ -163,6 +150,20 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('file:import-workspace-entries', payload)
   })
 
+  it('exposes PDF rename suggestion IPC', async () => {
+    const api = exposedApi as {
+      suggestWorkspacePdfName(payload: unknown): Promise<unknown>
+    }
+    const payload = {
+      workspaceRoot: '/tmp/workspace',
+      path: 'papers/2603.10165v2.pdf'
+    }
+
+    await api.suggestWorkspacePdfName(payload)
+
+    expect(invoke).toHaveBeenCalledWith('file:suggest-workspace-pdf-name', payload)
+  })
+
   it('exposes workspace clipboard paste IPC', async () => {
     const api = exposedApi as {
       pasteWorkspaceClipboard(payload: unknown): Promise<unknown>
@@ -176,40 +177,6 @@ describe('preload agentRuntime bridge', () => {
     await api.pasteWorkspaceClipboard(payload)
 
     expect(invoke).toHaveBeenCalledWith('clipboard:paste-workspace', payload)
-  })
-
-  it('exposes workspace native file drag IPC', async () => {
-    const api = exposedApi as {
-      startWorkspaceNativeFileDrag(payload: unknown): Promise<unknown>
-    }
-    const payload = {
-      workspaceRoot: '/tmp/workspace',
-      path: 'notes/paper.pdf'
-    }
-
-    await api.startWorkspaceNativeFileDrag(payload)
-
-    expect(invoke).toHaveBeenCalledWith('file:start-workspace-native-drag', payload)
-  })
-
-  it('exposes filtered dev preview navigation notifications', () => {
-    const api = exposedApi as {
-      onDevPreviewNavigate(handler: (payload: unknown) => void): () => void
-    }
-    const handler = vi.fn()
-
-    const unsubscribe = api.onDevPreviewNavigate(handler)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'dev-preview:navigate')?.[1]
-    wrapped?.({}, { url: 'http://127.0.0.1:5173/docs', webContentsId: 42 })
-    wrapped?.({}, { url: 'http://127.0.0.1:5173/docs', webContentsId: '42' })
-    unsubscribe()
-
-    expect(handler).toHaveBeenCalledTimes(1)
-    expect(handler).toHaveBeenCalledWith({
-      url: 'http://127.0.0.1:5173/docs',
-      webContentsId: 42
-    })
-    expect(removeListener).toHaveBeenCalledWith('dev-preview:navigate', wrapped)
   })
 
   it('keeps preview-specific HTML and DOCX writes off the renderer-facing file IPC surface', async () => {
@@ -229,120 +196,67 @@ describe('preload agentRuntime bridge', () => {
     expect(api.writeWorkspaceDocxText).toBeUndefined()
   })
 
-  it('exposes workspace preview IPC methods without replacing file channels', async () => {
+  it('exposes generic capability and file APIs without domain facades', async () => {
     const api = exposedApi as {
-      readWorkspaceFile(options: unknown): Promise<unknown>
-      workspacePreview: {
-        listPlugins(): Promise<unknown>
-        open(input: unknown): Promise<unknown>
-        observe(sessionId: string): Promise<unknown>
-        describeAsset(sessionId: string): Promise<unknown>
-        readRange(sessionId: string, range: unknown): Promise<unknown>
-        prepareArtifact(sessionId: string, request: unknown): Promise<unknown>
-        readArtifactRange(sessionId: string, request: unknown): Promise<unknown>
-        applyEdit(sessionId: string, operation: unknown): Promise<unknown>
-        export(sessionId: string, target: unknown): Promise<unknown>
-        releaseSession(sessionId: string): Promise<boolean>
-        watch(payload: unknown): Promise<unknown>
-        unwatch(watchId: string): Promise<unknown>
-        getAssetSourceUrl(sessionId: string): string | null
-        onChanged(handler: (payload: unknown) => void): () => void
+      watchWorkspaceFile(payload: unknown): Promise<unknown>
+      unwatchWorkspaceFile(watchId: string): Promise<unknown>
+      onWorkspaceFileChanged(handler: (payload: unknown) => void): () => void
+      capabilities: {
+        bind(input: unknown): Promise<unknown>
+        invoke(input: unknown): Promise<unknown>
+        resourceContentUrl(access: unknown): string | null
       }
+      workspacePreview?: unknown
+      biologyRoom?: unknown
     }
-    const openInput = {
-      path: 'protein.pdb',
-      workspaceRoot: '/tmp/workspace',
-      mimeType: 'chemical/x-pdb',
-      mode: 'inspect'
+    const resource = {
+      token: 'cap_abcdefghijklmnopqrstuvwxyz',
+      semanticRevision: 'revision-1',
+      expiresAt: '2026-07-16T14:00:00.000Z'
     }
+    invoke.mockImplementation(async (channel: string, payload?: unknown) => {
+      if (channel === 'file:watch-workspace') return { watchId: 'watch-1' }
+      if (channel === 'file:unwatch-workspace') return true
+      return undefined
+    })
 
-    await api.workspacePreview.listPlugins()
-    await api.workspacePreview.open(openInput)
-    await api.workspacePreview.observe('session-1')
-    await api.workspacePreview.describeAsset('session-1')
-    await api.workspacePreview.readRange('session-1', { offset: 0, length: 4 })
-    await api.workspacePreview.prepareArtifact('session-1', {
-      kind: 'cache-artifact',
-      source: 'observation'
+    const capabilityRequest = {
+      request: { actionId: 'workspace-preview.list', input: {} }
+    }
+    const bindRequest = {
+      workspaceId: '/tmp/workspace',
+      request: { resourceRef: 'res_abcdefghijklmnopqrstuvwxyz' }
+    }
+    await api.capabilities.bind(bindRequest)
+    await api.capabilities.invoke(capabilityRequest)
+    await api.watchWorkspaceFile({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
+    await api.unwatchWorkspaceFile('watch-1')
+    const assetSourceUrl = api.capabilities.resourceContentUrl({
+      workspaceId: '/tmp/workspace',
+      resource
     })
-    await api.workspacePreview.readArtifactRange('session-1', {
-      artifactId: 'artifact-1',
-      range: { offset: 0, length: 4 }
-    })
-    await api.workspacePreview.applyEdit('session-1', {
-      kind: 'molecular.setSelection',
-      path: 'protein.pdb',
-      selection: { kind: 'molecular', chains: ['A'] }
-    })
-    await api.workspacePreview.export('session-1', {
-      kind: 'workspace-file',
-      format: 'pdb',
-      path: 'exports/protein-copy.pdb'
-    })
-    await api.workspacePreview.releaseSession('session-1')
-    await api.workspacePreview.watch({ path: 'protein.pdb', workspaceRoot: '/tmp/workspace' })
-    await api.workspacePreview.unwatch('watch-1')
-    const assetSourceUrl = api.workspacePreview.getAssetSourceUrl('session 1')
     const changed = vi.fn()
-    const unsubscribe = api.workspacePreview.onChanged(changed)
-    const wrapped = on.mock.calls.find(([channel]) => channel === 'workspacePreview:changed')?.[1]
+    const unsubscribe = api.onWorkspaceFileChanged(changed)
+    const wrapped = on.mock.calls.find(([channel]) => channel === 'file:workspace-changed')?.[1]
     wrapped?.({}, { ok: true, watchId: 'watch-1' })
     unsubscribe()
-    await api.readWorkspaceFile({ path: 'paper.pdf', workspaceRoot: '/tmp/workspace' })
 
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:listPlugins')
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:open', openInput)
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:observe', { sessionId: 'session-1' })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:describeAsset', { sessionId: 'session-1' })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:readRange', {
-      sessionId: 'session-1',
-      range: { offset: 0, length: 4 }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:prepareArtifact', {
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:readArtifactRange', {
-      sessionId: 'session-1',
-      request: {
-        artifactId: 'artifact-1',
-        range: { offset: 0, length: 4 }
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:applyEdit', {
-      sessionId: 'session-1',
-      operation: {
-        kind: 'molecular.setSelection',
-        path: 'protein.pdb',
-        selection: { kind: 'molecular', chains: ['A'] }
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:export', {
-      sessionId: 'session-1',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: 'exports/protein-copy.pdb'
-      }
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:releaseSession', {
-      sessionId: 'session-1'
-    })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:watch', {
+    expect(invoke).toHaveBeenCalledWith('capability:bind', bindRequest)
+    expect(invoke).toHaveBeenCalledWith('capability:invoke', capabilityRequest)
+    expect(invoke).toHaveBeenCalledWith('file:watch-workspace', {
       path: 'protein.pdb',
       workspaceRoot: '/tmp/workspace'
     })
-    expect(invoke).toHaveBeenCalledWith('workspacePreview:unwatch', 'watch-1')
-    expect(assetSourceUrl).toBe('sciforge-preview://asset/session%201')
-    expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
-    expect(removeListener).toHaveBeenCalledWith('workspacePreview:changed', wrapped)
-    expect(invoke).toHaveBeenCalledWith('file:read-workspace', {
-      path: 'paper.pdf',
-      workspaceRoot: '/tmp/workspace'
+    expect(invoke).toHaveBeenCalledWith('file:unwatch-workspace', 'watch-1')
+    expect(assetSourceUrl).not.toBeNull()
+    expect(capabilityResourceContentAccessFromUrl(assetSourceUrl!)).toEqual({
+      workspaceId: '/tmp/workspace',
+      resource
     })
+    expect(changed).toHaveBeenCalledWith({ ok: true, watchId: 'watch-1' })
+    expect(removeListener).toHaveBeenCalledWith('file:workspace-changed', wrapped)
+    expect(api.workspacePreview).toBeUndefined()
+    expect(api.biologyRoom).toBeUndefined()
   })
 
   it('exposes speech-to-text transcription IPC', async () => {
@@ -423,36 +337,16 @@ describe('preload agentRuntime bridge', () => {
     expect(removeListener).toHaveBeenCalledWith('remoteChannel:activity', wrapped)
   })
 
-  it('exposes Paper Radar IPC methods through the preload bridge', async () => {
+  it('does not expose a Paper Radar domain-specific preload bridge', () => {
     const api = exposedApi as {
-      paperRadar: {
-        status(): Promise<unknown>
-        syncProfile(payload: unknown): Promise<unknown>
-        review(payload: unknown): Promise<unknown>
-        search(payload: unknown): Promise<unknown>
-        digest(payload: unknown): Promise<unknown>
+      paperRadar?: unknown
+      capabilities?: {
+        invoke?: unknown
       }
     }
 
-    await api.paperRadar.status()
-    await api.paperRadar.syncProfile({ profile: 'lab_default', maxRecords: 20 })
-    await api.paperRadar.review({
-      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
-      days: 7,
-      topK: 5
-    })
-    await api.paperRadar.search({ query: 'protein design', topK: 5 })
-    await api.paperRadar.digest({ profile: 'lab_default', days: 7, topK: 5 })
-
-    expect(invoke).toHaveBeenCalledWith('paperRadar:status')
-    expect(invoke).toHaveBeenCalledWith('paperRadar:sync-profile', { profile: 'lab_default', maxRecords: 20 })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:review', {
-      profile: { name: 'lab_default', keywords: [], excludeKeywords: [], arxivCategories: [], biorxivSubjects: [] },
-      days: 7,
-      topK: 5
-    })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:search', { query: 'protein design', topK: 5 })
-    expect(invoke).toHaveBeenCalledWith('paperRadar:digest', { profile: 'lab_default', days: 7, topK: 5 })
+    expect(api.paperRadar).toBeUndefined()
+    expect(api.capabilities?.invoke).toBeTypeOf('function')
   })
 
   it('exposes Research Cards IPC methods through the preload bridge', async () => {
@@ -495,8 +389,7 @@ describe('preload agentRuntime bridge', () => {
       }
     }
     const snapshot = {
-      schemaVersion: 2,
-      windowId: 'window-1',
+      schemaVersion: 3,
       revision: 1,
       publishedAt: '2026-07-04T00:00:00.000Z',
       freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 },

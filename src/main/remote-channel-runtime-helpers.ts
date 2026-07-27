@@ -398,6 +398,29 @@ export function remoteChannelAttachmentKindForFileName(fileName: string): 'file'
   return IMAGE_ATTACHMENT_EXTENSIONS.has(extension) ? 'image' : 'file'
 }
 
+const MAX_OUTBOUND_ATTACHMENT_FILE_NAME_LENGTH = 255
+
+function sanitizeOutboundAttachmentLeaf(value: string): string {
+  return Array.from(value, (character) => {
+    const codePoint = character.codePointAt(0) ?? 0
+    return codePoint <= 0x1f || codePoint === 0x7f || character === '"' || character === '/' || character === '\\'
+      ? '_'
+      : character
+  }).join('').replace(/_+/gu, '_').trim()
+}
+
+export function sanitizeOutboundAttachmentFileName(fileName: string, fallback = 'attachment'): string {
+  const leaf = fileName.trim().split(/[\\/]/).pop() ?? ''
+  const sanitized = sanitizeOutboundAttachmentLeaf(leaf)
+  const fallbackLeaf = sanitizeOutboundAttachmentLeaf(basename(fallback.trim()) || 'attachment') || 'attachment'
+  const candidate = sanitized && sanitized.replace(/[._\s-]+/gu, '') ? sanitized : fallbackLeaf
+  if (candidate.length <= MAX_OUTBOUND_ATTACHMENT_FILE_NAME_LENGTH) return candidate
+
+  const dot = candidate.lastIndexOf('.')
+  const extension = dot > 0 && candidate.length - dot <= 32 ? candidate.slice(dot) : ''
+  return `${candidate.slice(0, MAX_OUTBOUND_ATTACHMENT_FILE_NAME_LENGTH - extension.length)}${extension}`
+}
+
 export function remoteChannelAttachmentFromGeneratedFile(file: RemoteChannelGeneratedFileV1): RemoteChannelOutboundAttachment {
   const name = file.fileName.trim() || basename(file.path)
   return {

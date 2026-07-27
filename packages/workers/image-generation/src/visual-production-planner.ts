@@ -1,3 +1,9 @@
+import {
+  normalizeVisualScene,
+  visualSceneOwners,
+  type VisualScene
+} from './visual-scene.js'
+
 export const VISUAL_PRODUCTION_ROUTES = ['code', 'model', 'hybrid'] as const
 
 export type VisualProductionRoute = typeof VISUAL_PRODUCTION_ROUTES[number]
@@ -35,6 +41,9 @@ export type VisualProductionRequirements = {
   lockedElements: string[]
   modelOwnedElements: string[]
   reproducibleInputs: string[]
+  inlineSpecification?: string
+  structuredData?: unknown
+  scene?: VisualScene
 }
 
 export type VisualProductionHandoff = {
@@ -44,6 +53,9 @@ export type VisualProductionHandoff = {
   rationale: string
   sourceArtifacts: string[]
   reproducibleInputs: string[]
+  inlineSpecification?: string
+  structuredData?: unknown
+  scene?: VisualScene
   lockedElements: string[]
   modelOwnedElements: string[]
   contextStatus: 'ready' | 'budget_exhausted'
@@ -78,7 +90,7 @@ export type VisualProductionExecutionTool =
   | 'image_generation_prepare'
   | 'image_generation_render'
   | 'image_generation_edit_from_visual_review_packet'
-  | 'visual_artifact_review'
+  | 'image_generation_review_candidate'
 
 export type VisualProductionExecutionStage = {
   id: string
@@ -113,6 +125,10 @@ export type VisualGenerateResult =
       execution: {
         route: VisualProductionRoute
         stages: VisualProductionExecutionStage[]
+        nextCall: {
+          tool: VisualProductionExecutionTool
+          arguments: Record<string, unknown>
+        }
       }
       failPolicy: {
         mode: 'fail_closed'
@@ -167,7 +183,12 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
   const task = request.task.trim()
   if (!task) return invalidRequest('task is required.')
 
-  const requirements = normalizeRequirements(request.requirements)
+  let requirements: VisualProductionRequirements
+  try {
+    requirements = normalizeRequirements(request.requirements)
+  } catch (error) {
+    return invalidRequest(error instanceof Error ? error.message : String(error))
+  }
   const action = request.action ?? 'create'
   const reviewPacketPath = request.reviewPacketPath?.trim()
   const context = summarizeContext(request)
@@ -187,11 +208,15 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
     }
   }
 
-  const route = selectRoute(requirements)
-  if ((route === 'code' || route === 'hybrid') && requirements.reproducibleInputs.length === 0) {
-    return invalidRequest(`requirements.reproducibleInputs is required for route=${route}.`)
+  if (requirements.lockedElements.length === 0 && requirements.modelOwnedElements.length === 0 && !requirements.scene) {
+    return invalidRequest('requirements must declare lockedElements or modelOwnedElements.')
   }
-  if ((route === 'code' || route === 'hybrid') && requirements.lockedElements.length === 0) {
+  const route = selectRoute(requirements)
+  if (
+    (route === 'code' || route === 'hybrid')
+    && requirements.lockedElements.length === 0
+    && !requirements.scene?.layers.some((layer) => layer.owner === 'code')
+  ) {
     return invalidRequest(`requirements.lockedElements is required for route=${route}.`)
   }
   if (action === 'revision' && route !== 'code' && !reviewPacketPath) {
@@ -208,6 +233,11 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
     rationale: routeRationale(route),
     sourceArtifacts,
     reproducibleInputs: requirements.reproducibleInputs,
+    ...((requirements.inlineSpecification || requirements.reproducibleInputs.length === 0)
+      ? { inlineSpecification: requirements.inlineSpecification || task }
+      : {}),
+    ...(requirements.structuredData !== undefined ? { structuredData: requirements.structuredData } : {}),
+    ...(requirements.scene ? { scene: requirements.scene } : {}),
     lockedElements: requirements.lockedElements,
     modelOwnedElements: requirements.modelOwnedElements,
     contextStatus,
@@ -228,7 +258,8 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
     routeLocked: true,
     execution: {
       route,
-      stages: executionStages(route, action)
+      stages: executionStages(route, action),
+      nextCall: firstExecutionCall(request, task, action, handoff)
     },
     failPolicy: {
       mode: 'fail_closed',
@@ -237,6 +268,43 @@ export function planVisualProduction(request: VisualGenerateRequest): VisualGene
       routeChangeRequiresNewPlan: true,
       preserveCompletedStageArtifacts: true,
       failureStatus: 'route_failed'
+    }
+  }
+}
+
+function firstExecutionCall(
+  request: VisualGenerateRequest,
+  task: string,
+  action: 'create' | 'revision',
+  handoff: VisualProductionHandoff
+): { tool: VisualProductionExecutionTool; arguments: Record<string, unknown> } {
+  const workspaceRoot = request.workspaceRoot
+  if (action === 'revision' && handoff.route !== 'code') {
+    return {
+      tool: 'image_generation_edit_from_visual_review_packet',
+      arguments: {
+        workspaceRoot,
+        visualPlan: handoff,
+        reviewPacketPath: request.reviewPacketPath
+      }
+    }
+  }
+  if (handoff.route === 'model') {
+    return {
+      tool: 'image_generation_prepare',
+      arguments: { workspaceRoot, task, visualPlan: handoff }
+    }
+  }
+  return {
+    tool: 'scientific_plotting_map_data',
+    arguments: {
+      workspaceRoot,
+      task,
+      visualPlan: handoff,
+      data: handoff.scene ?? handoff.structuredData ?? {
+        reproducibleInputs: handoff.reproducibleInputs,
+        inlineSpecification: handoff.inlineSpecification
+      }
     }
   }
 }
@@ -294,12 +362,13 @@ function stopReason(
 }
 
 function selectRoute(requirements: VisualProductionRequirements): VisualProductionRoute {
-  const exactnessRequired = requirements.lockedElements.length > 0 || requirements.reproducibleInputs.length > 0
-  const generativeValue = requirements.modelOwnedElements.length > 0
+  const owners = requirements.scene ? visualSceneOwners(requirements.scene) : new Set()
+  const exactnessRequired = requirements.lockedElements.length > 0 || requirements.reproducibleInputs.length > 0 || owners.has('code')
+  const generativeValue = requirements.modelOwnedElements.length > 0 || owners.has('model')
   if (exactnessRequired && generativeValue) return 'hybrid'
   if (exactnessRequired) return 'code'
   if (generativeValue) return 'model'
-  return 'code'
+  throw new Error('requirements must declare lockedElements or modelOwnedElements.')
 }
 
 function routeRationale(route: VisualProductionRoute): string {
@@ -312,30 +381,30 @@ function executionStages(route: VisualProductionRoute, action: 'create' | 'revis
   if (action === 'revision' && route !== 'code') {
     return [
       stage('edit_visual', 'image_generation_edit_from_visual_review_packet', 'Apply normalized review annotations without replacing the source.', ['reviewPacketPath', 'sourceArtifacts', 'handoff'], ['editedArtifact', 'editedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['editedArtifact', 'editedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['editedArtifact', 'editedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   if (route === 'code') {
     return [
-      stage('map_data', 'scientific_plotting_map_data', 'Map reproducible inputs into a controlled code render request.', ['handoff', 'reproducibleInputs'], ['controlledRenderRequest']),
+      stage('map_data', 'scientific_plotting_map_data', 'Map reproducible files or inline structured data into a controlled code render request.', ['handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest']),
       stage('render_code', 'scientific_plotting_render', 'Render exact elements with the controlled code renderer.', ['controlledRenderRequest', 'handoff'], ['renderedArtifact', 'renderedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   if (route === 'model') {
     return [
       stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer from the locked handoff.', ['task', 'handoff'], ['imageRenderRecipe']),
       stage('render_model', 'image_generation_render', 'Render the model-owned visual layer without changing route or locked elements.', ['imageRenderRecipe', 'handoff'], ['renderedArtifact', 'renderedManifest']),
-      stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
+      stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['renderedArtifact', 'renderedManifest', 'handoff'], ['reviewResult'])
     ]
   }
   return [
-    stage('map_truth', 'scientific_plotting_map_data', 'Map reproducible inputs for the code-owned truth layer.', ['handoff', 'reproducibleInputs'], ['controlledRenderRequest']),
+    stage('map_truth', 'scientific_plotting_map_data', 'Map reproducible files or inline structured data for the code-owned truth layer.', ['handoff', 'reproducibleInputs|inlineSpecification|structuredData'], ['controlledRenderRequest']),
     stage('render_truth', 'scientific_plotting_render', 'Render the code-owned truth layer.', ['controlledRenderRequest', 'handoff'], ['truthArtifact', 'truthManifest']),
     stage('prepare_model', 'image_generation_prepare', 'Prepare the model-owned visual layer around controlled artifacts.', ['task', 'truthArtifact', 'truthManifest', 'handoff'], ['imageRenderRecipe']),
     stage('render_visual', 'image_generation_render', 'Render only the model-owned visual layer around controlled artifacts.', ['imageRenderRecipe', 'truthArtifact', 'truthManifest', 'handoff'], ['visualLayerArtifact', 'visualLayerManifest']),
     stage('deterministic_composite', 'scientific_plotting_composite', 'Composite the code-owned truth layer over the model-owned visual layer without redrawing locked elements.', ['truthArtifact', 'truthManifest', 'visualLayerArtifact', 'visualLayerManifest', 'handoff'], ['compositeArtifact', 'compositeManifest']),
-    stage('review_visual', 'visual_artifact_review', 'Run the unified release review against the handoff and artifact hash.', ['compositeArtifact', 'compositeManifest', 'handoff'], ['reviewResult'])
+    stage('review_visual', 'image_generation_review_candidate', 'Run manifest-bound candidate and release QA against the handoff and artifact hash.', ['compositeArtifact', 'compositeManifest', 'handoff'], ['reviewResult'])
   ]
 }
 
@@ -360,10 +429,18 @@ function stage(
 }
 
 function normalizeRequirements(value: VisualProductionRequirements): VisualProductionRequirements {
+  if (value.scene !== undefined && value.structuredData !== undefined) {
+    throw new Error('requirements.scene and requirements.structuredData are mutually exclusive; use scene for visual geometry and structuredData for chart data.')
+  }
   return {
     lockedElements: uniqueStrings(value.lockedElements),
     modelOwnedElements: uniqueStrings(value.modelOwnedElements),
-    reproducibleInputs: uniqueStrings(value.reproducibleInputs)
+    reproducibleInputs: uniqueStrings(value.reproducibleInputs),
+    ...(value.inlineSpecification?.trim()
+      ? { inlineSpecification: value.inlineSpecification.trim() }
+      : {}),
+    ...(value.structuredData !== undefined ? { structuredData: value.structuredData } : {}),
+    ...(value.scene !== undefined ? { scene: normalizeVisualScene(value.scene) } : {})
   }
 }
 

@@ -2,7 +2,10 @@ import type {
   AgentRuntimeWorkspaceReference,
   AgentRuntimeWorkspaceReferenceKind
 } from '@shared/agent-runtime-contract'
-import type { WorkspaceFileReadResult } from '@shared/workspace-file'
+import type {
+  WorkspaceEntryMovePayload,
+  WorkspaceFileReadResult
+} from '@shared/workspace-file'
 import {
   Check,
   ChevronDown,
@@ -11,9 +14,11 @@ import {
   Copy,
   ExternalLink,
   Eye,
+  FilePlus2,
   FileText,
   Folder,
   FolderOpen,
+  FolderPlus,
   Image,
   Loader2,
   PanelRightClose,
@@ -21,7 +26,9 @@ import {
   Plus,
   RefreshCw,
   Scissors,
-  Trash2
+  Sparkles,
+  Trash2,
+  Upload
 } from 'lucide-react'
 import {
   type FormEvent,
@@ -37,6 +44,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import { getProvider } from '../../agent/registry'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
+import { suggestPdfNameFromWorkspaceRead } from '../../lib/workspace-pdf-auto-rename'
 import {
   composerFileReferenceKey,
   type ComposerFileReference
@@ -95,6 +103,15 @@ type FileTreeRenameDialogState = {
   value: string
   submitting: boolean
   error: string | null
+  autoSuggested?: boolean
+}
+
+type FileTreeCreateDialogState = {
+  targetDirectoryPath: string
+  directory: boolean
+  value: string
+  submitting: boolean
+  error: string | null
 }
 
 export type FileTreeWorkspaceDropAction = 'copy' | 'move'
@@ -105,6 +122,11 @@ export type FileTreeWorkspaceDropDecision = {
   sourceWorkspaceRoot: string
   targetDirectory: string
   targetWorkspaceRoot: string
+}
+
+export type FileTreeWorkspaceDragSource = {
+  reference: AgentRuntimeWorkspaceReference
+  workspaceRoot: string
 }
 
 export type FileTreeExternalImportPayload = {
@@ -128,6 +150,12 @@ function normalizePath(value: string): string {
 
 function pathKey(value: string): string {
   return normalizePath(value).toLowerCase()
+}
+
+export function isPdfWorkspaceReference(reference: AgentRuntimeWorkspaceReference): boolean {
+  return reference.kind === 'pdf' ||
+    reference.mimeType?.toLocaleLowerCase() === 'application/pdf' ||
+    reference.name.toLocaleLowerCase().endsWith('.pdf')
 }
 
 function workspaceName(workspaceRoot: string): string {
@@ -158,6 +186,13 @@ export function renamedRelativePath(path: string, newName: string): string {
   const parent = parentDirectoryPath(path)
   const name = normalizePath(newName).split('/').filter(Boolean).at(-1) ?? newName.trim()
   return parent ? `${parent}/${name}` : name
+}
+
+export function workspaceChildPath(parentPath: string, childPath: string): string {
+  const parent = normalizePath(parentPath)
+  const child = normalizePath(childPath).replace(/^\/+/, '')
+  if (!child) return parent
+  return parent ? `${parent}/${child}` : child
 }
 
 export function rewriteRenamedPath(value: string, previousPath: string, nextPath: string): string {
@@ -227,6 +262,36 @@ export function fileTreeWorkspaceDropDecisionFromDragData(
     targetWorkspaceRoot: input.targetWorkspaceRoot,
     copyRequested: input.copyRequested
   })
+}
+
+export function fileTreeWorkspaceDropDecisionForDrag(
+  internalSource: FileTreeWorkspaceDragSource | null,
+  dragData: WorkspaceReferenceDragDataSource,
+  input: {
+    targetDirectory: string
+    targetWorkspaceRoot: string
+    copyRequested?: boolean
+  }
+): FileTreeWorkspaceDropDecision | null {
+  if (internalSource) {
+    return fileTreeWorkspaceDropDecision({
+      source: internalSource.reference,
+      sourceWorkspaceRoot: internalSource.workspaceRoot,
+      ...input
+    })
+  }
+  return fileTreeWorkspaceDropDecisionFromDragData(dragData, input)
+}
+
+export function fileTreeWorkspaceDropPayload(
+  decision: FileTreeWorkspaceDropDecision
+): WorkspaceEntryMovePayload {
+  return {
+    sourcePath: decision.sourcePath,
+    sourceWorkspaceRoot: decision.sourceWorkspaceRoot,
+    targetDirectory: decision.targetDirectory,
+    targetWorkspaceRoot: decision.targetWorkspaceRoot
+  }
 }
 
 export function fileTreeExternalImportPayload(
@@ -325,11 +390,14 @@ export function ChatFileTreePanel({
   const [focusedDirectoryPath, setFocusedDirectoryPath] = useState('')
   const [pendingScrollPath, setPendingScrollPath] = useState<string | null>(null)
   const [contextMenu, setContextMenu] = useState<FileTreeContextMenuState | null>(null)
+  const [createDialog, setCreateDialog] = useState<FileTreeCreateDialogState | null>(null)
   const [renameDialog, setRenameDialog] = useState<FileTreeRenameDialogState | null>(null)
+  const [suggestingPdfPath, setSuggestingPdfPath] = useState<string | null>(null)
   const [fileClipboard, setFileClipboard] = useState<FileTreeClipboardState | null>(null)
   const [dragTargetDirectoryPath, setDragTargetDirectoryPath] = useState<string | null>(null)
   const scrollContainerRef = useRef<HTMLDivElement | null>(null)
   const processedInitialDirectoryNonceRef = useRef<number | null>(null)
+  const internalDragSourceRef = useRef<FileTreeWorkspaceDragSource | null>(null)
   const selectedGroup = groups.find((group) => group.id === selectedGroupId) ?? groups[0]
   const root = selectedGroup?.workspaceRoot.trim() ?? ''
   const rootKey = useMemo(() => pathKey(root), [root])
@@ -356,6 +424,7 @@ export function ChatFileTreePanel({
     setExpanded(new Set([ROOT_PATH]))
     setDirectories({})
     setContextMenu(null)
+    setCreateDialog(null)
     setDragTargetDirectoryPath(null)
   }, [root])
 
@@ -491,32 +560,26 @@ export function ChatFileTreePanel({
     event: ReactDragEvent<HTMLDivElement>,
     reference: AgentRuntimeWorkspaceReference
   ): void => {
-    writeWorkspaceReferenceDragData(event.dataTransfer, reference, reference.workspaceRoot || root)
-    void window.sciforge.startWorkspaceNativeFileDrag({
-      path: reference.relativePath,
-      workspaceRoot: reference.workspaceRoot || root
-    }).then((result) => {
-      if (result.ok) return
-      void window.sciforge?.logError?.('workspace-native-drag', 'Failed to start native workspace file drag', {
-        message: result.message,
-        reference
-      })?.catch(() => undefined)
-    }).catch((error) => {
-      void window.sciforge?.logError?.('workspace-native-drag', 'Failed to request native workspace file drag', {
-        message: error instanceof Error ? error.message : String(error),
-        reference
-      })?.catch(() => undefined)
-    })
+    const sourceWorkspaceRoot = reference.workspaceRoot || root
+    internalDragSourceRef.current = {
+      reference,
+      workspaceRoot: sourceWorkspaceRoot
+    }
+    writeWorkspaceReferenceDragData(event.dataTransfer, reference, sourceWorkspaceRoot)
   }
 
   const workspaceDropDecisionForEvent = (
     event: ReactDragEvent<HTMLElement>,
     targetDirectoryPath: string
-  ): FileTreeWorkspaceDropDecision | null => fileTreeWorkspaceDropDecisionFromDragData(event.dataTransfer, {
+  ): FileTreeWorkspaceDropDecision | null => fileTreeWorkspaceDropDecisionForDrag(
+    internalDragSourceRef.current,
+    event.dataTransfer,
+    {
     targetDirectory: targetDirectoryPath,
     targetWorkspaceRoot: root,
     copyRequested: event.altKey
-  })
+    }
+  )
 
   const handleWorkspaceReferenceDragOver = (
     event: ReactDragEvent<HTMLElement>,
@@ -545,12 +608,14 @@ export function ChatFileTreePanel({
     event.preventDefault()
     event.stopPropagation()
     setDragTargetDirectoryPath(null)
+    internalDragSourceRef.current = null
     void (async () => {
       try {
         if (decision) {
+          const payload = fileTreeWorkspaceDropPayload(decision)
           const result = decision.action === 'copy'
-            ? await window.sciforge.copyWorkspaceEntry(decision)
-            : await window.sciforge.moveWorkspaceEntry(decision)
+            ? await window.sciforge.copyWorkspaceEntry(payload)
+            : await window.sciforge.moveWorkspaceEntry(payload)
           if (!result.ok) {
             window.alert(result.message)
             return
@@ -658,6 +723,49 @@ export function ChatFileTreePanel({
     })
   }
 
+  const suggestPdfRename = async (reference: AgentRuntimeWorkspaceReference): Promise<void> => {
+    if (suggestingPdfPath) return
+    const referencePath = normalizePath(reference.relativePath)
+    const referenceRoot = reference.workspaceRoot || root
+    setSuggestingPdfPath(referencePath)
+    try {
+      let result: Awaited<ReturnType<typeof window.sciforge.suggestWorkspacePdfName>> | undefined
+      if (typeof window.sciforge.suggestWorkspacePdfName === 'function') {
+        try {
+          result = await window.sciforge.suggestWorkspacePdfName({
+            path: referencePath,
+            workspaceRoot: referenceRoot
+          })
+        } catch {
+          result = undefined
+        }
+      }
+      if (!result) {
+        const readResult = await window.sciforge.readWorkspaceFile({
+          path: referencePath,
+          workspaceRoot: referenceRoot
+        })
+        result = await suggestPdfNameFromWorkspaceRead(readResult, reference.name)
+      }
+      if (!result.ok) {
+        window.alert(result.message)
+        return
+      }
+      setRenameDialog({
+        reference,
+        directory: false,
+        value: result.suggestedName,
+        submitting: false,
+        error: null,
+        autoSuggested: true
+      })
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+    } finally {
+      setSuggestingPdfPath(null)
+    }
+  }
+
   const openReferenceInEditor = (reference: AgentRuntimeWorkspaceReference): void => {
     void openWorkspacePathInEditor(
       { path: reference.relativePath },
@@ -737,6 +845,73 @@ export function ChatFileTreePanel({
     } catch (error) {
       window.alert(error instanceof Error ? error.message : String(error))
     }
+  }
+
+  const createWorkspaceEntry = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!createDialog || createDialog.submitting) return
+    const name = createDialog.value.trim()
+    if (!name) return
+    const targetDirectory = normalizePath(createDialog.targetDirectoryPath)
+    const path = workspaceChildPath(targetDirectory, name)
+    const directory = createDialog.directory
+    setCreateDialog((current) => current ? { ...current, submitting: true, error: null } : current)
+    try {
+      const result = directory
+        ? await window.sciforge.createWorkspaceDirectory({ workspaceRoot: root, path })
+        : await window.sciforge.createWorkspaceFile({ workspaceRoot: root, path, content: '' })
+      if (!result.ok) {
+        setCreateDialog((current) => current
+          ? { ...current, submitting: false, error: result.message }
+          : current)
+        return
+      }
+      setCreateDialog(null)
+      reloadDirectory(targetDirectory)
+    } catch (error) {
+      setCreateDialog((current) => current
+        ? {
+            ...current,
+            submitting: false,
+            error: error instanceof Error ? error.message : String(error)
+          }
+        : current)
+    }
+  }
+
+  const uploadWorkspaceFile = async (targetDirectoryPath: string): Promise<void> => {
+    const targetDirectory = normalizePath(targetDirectoryPath)
+    try {
+      const selection = await window.sciforge.pickFile({
+        title: t('fileTreeUploadFile'),
+        defaultPath: workspaceChildPath(root, targetDirectory),
+        filters: [{ name: t('fileTreeAllFiles'), extensions: ['*'] }]
+      })
+      if (selection.canceled || !selection.path) return
+      const result = await window.sciforge.importWorkspaceEntries({
+        sourcePaths: [selection.path],
+        targetDirectory,
+        targetWorkspaceRoot: root
+      })
+      if (!result.ok) {
+        window.alert(result.message)
+        return
+      }
+      reloadDirectory(targetDirectory)
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : String(error))
+    }
+  }
+
+  const openWorkspaceDirectoryInFileManager = (targetDirectoryPath: string): void => {
+    const targetDirectory = normalizePath(targetDirectoryPath)
+    void openWorkspacePathInEditor(
+      { path: targetDirectory || root },
+      root,
+      { editorId: 'system' }
+    ).then((result) => {
+      if (!result.ok) window.alert(result.message)
+    })
   }
 
   const deleteReference = async (reference: AgentRuntimeWorkspaceReference, directory: boolean): Promise<void> => {
@@ -887,6 +1062,8 @@ export function ChatFileTreePanel({
           workspaceRoot: reference.workspaceRoot
         })
         const selected = selectedReferenceKeys.has(referenceKey)
+        const pdf = !directory && isPdfWorkspaceReference(reference)
+        const suggestingPdfName = pdf && pathKey(suggestingPdfPath ?? '') === pathKey(reference.relativePath)
         const dragTarget = directory && pathKey(dragTargetDirectoryPath ?? '') === pathKey(reference.relativePath)
         const row = (
           <div
@@ -902,7 +1079,10 @@ export function ChatFileTreePanel({
             title={reference.relativePath || reference.name}
             onContextMenu={(event) => openContextMenu(event, reference, directory, expandedDirectory)}
             onDragStart={(event) => startReferenceDrag(event, reference)}
-            onDragEnd={() => setDragTargetDirectoryPath(null)}
+            onDragEnd={() => {
+              internalDragSourceRef.current = null
+              setDragTargetDirectoryPath(null)
+            }}
             onDragOver={directory ? (event) => handleWorkspaceReferenceDragOver(event, reference.relativePath) : undefined}
             onDrop={directory ? (event) => handleWorkspaceReferenceDrop(event, reference.relativePath) : undefined}
             onDragLeave={directory ? clearWorkspaceReferenceDragTarget : undefined}
@@ -930,6 +1110,23 @@ export function ChatFileTreePanel({
               {referenceIcon(reference.kind, expandedDirectory)}
               <span className="min-w-0 flex-1 truncate">{reference.name}</span>
             </button>
+            {pdf ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation()
+                  void suggestPdfRename(reference)
+                }}
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-ds-faint transition hover:bg-ds-card hover:text-accent disabled:cursor-wait disabled:opacity-60"
+                disabled={Boolean(suggestingPdfPath)}
+                title={t('fileTreeAutoRenamePdf')}
+                aria-label={t('fileTreeAutoRenamePdf')}
+              >
+                {suggestingPdfName
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" strokeWidth={1.8} />
+                  : <Sparkles className="h-3.5 w-3.5" strokeWidth={1.8} />}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => addReference(reference)}
@@ -1025,6 +1222,20 @@ export function ChatFileTreePanel({
             : false}
           canPaste={Boolean(fileClipboard) || Boolean(root)}
           onClose={() => setContextMenu(null)}
+          onCreateFile={() => setCreateDialog({
+            targetDirectoryPath: contextMenu.targetDirectoryPath,
+            directory: false,
+            value: '',
+            submitting: false,
+            error: null
+          })}
+          onCreateDirectory={() => setCreateDialog({
+            targetDirectoryPath: contextMenu.targetDirectoryPath,
+            directory: true,
+            value: '',
+            submitting: false,
+            error: null
+          })}
           onPreview={() => {
             if (contextMenu.reference) onPreviewFile(contextMenu.reference)
           }}
@@ -1059,7 +1270,21 @@ export function ChatFileTreePanel({
           onCopyContent={() => {
             if (contextMenu.reference) void copyReferenceContent(contextMenu.reference)
           }}
+          onUpload={() => void uploadWorkspaceFile(contextMenu.targetDirectoryPath)}
+          onOpenDirectoryInFileManager={() =>
+            openWorkspaceDirectoryInFileManager(contextMenu.targetDirectoryPath)}
           onRefresh={refresh}
+          t={t}
+        />
+      ) : null}
+      {createDialog ? (
+        <FileTreeCreateDialog
+          state={createDialog}
+          onClose={() => setCreateDialog(null)}
+          onValueChange={(value) => setCreateDialog((current) =>
+            current ? { ...current, value, error: null } : current
+          )}
+          onSubmit={createWorkspaceEntry}
           t={t}
         />
       ) : null}
@@ -1083,6 +1308,8 @@ function FileTreeContextMenu({
   selected,
   canPaste,
   onClose,
+  onCreateFile,
+  onCreateDirectory,
   onPreview,
   onToggleDirectory,
   onAddReference,
@@ -1095,6 +1322,8 @@ function FileTreeContextMenu({
   onDelete,
   onCopyPath,
   onCopyContent,
+  onUpload,
+  onOpenDirectoryInFileManager,
   onRefresh,
   t
 }: {
@@ -1102,6 +1331,8 @@ function FileTreeContextMenu({
   selected: boolean
   canPaste: boolean
   onClose: () => void
+  onCreateFile: () => void
+  onCreateDirectory: () => void
   onPreview: () => void
   onToggleDirectory: () => void
   onAddReference: () => void
@@ -1114,6 +1345,8 @@ function FileTreeContextMenu({
   onDelete: () => void
   onCopyPath: () => void
   onCopyContent: () => void
+  onUpload: () => void
+  onOpenDirectoryInFileManager: () => void
   onRefresh: () => void
   t: (key: string, options?: Record<string, unknown>) => string
 }): ReactElement {
@@ -1173,7 +1406,20 @@ function FileTreeContextMenu({
             onClick={() => run(onRename)}
           />
         </>
-      ) : null}
+      ) : (
+        <>
+          <FileTreeContextMenuItem
+            icon={<FilePlus2 className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('writeCreateFile')}
+            onClick={() => run(onCreateFile)}
+          />
+          <FileTreeContextMenuItem
+            icon={<FolderPlus className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('writeCreateFolder')}
+            onClick={() => run(onCreateDirectory)}
+          />
+        </>
+      )}
       <FileTreeContextMenuItem
         icon={<ClipboardPaste className="h-3.5 w-3.5" strokeWidth={1.8} />}
         label={t('windowsMenuPaste')}
@@ -1214,12 +1460,107 @@ function FileTreeContextMenu({
           />
         </>
       ) : (
-        <FileTreeContextMenuItem
-          icon={<RefreshCw className="h-3.5 w-3.5" strokeWidth={1.8} />}
-          label={t('workspaceReferenceRefresh')}
-          onClick={() => run(onRefresh)}
-        />
+        <>
+          <FileTreeContextMenuItem
+            icon={<Upload className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('fileTreeUploadFile')}
+            onClick={() => run(onUpload)}
+          />
+          <FileTreeContextMenuItem
+            icon={<RefreshCw className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('workspaceReferenceRefresh')}
+            onClick={() => run(onRefresh)}
+          />
+          <FileTreeContextMenuItem
+            icon={<FolderOpen className="h-3.5 w-3.5" strokeWidth={1.8} />}
+            label={t('fileTreeOpenInFileManager')}
+            onClick={() => run(onOpenDirectoryInFileManager)}
+          />
+        </>
       )}
+    </div>
+  )
+}
+
+function FileTreeCreateDialog({
+  state,
+  onClose,
+  onValueChange,
+  onSubmit,
+  t
+}: {
+  state: FileTreeCreateDialogState
+  onClose: () => void
+  onValueChange: (value: string) => void
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void
+  t: (key: string, options?: Record<string, unknown>) => string
+}): ReactElement {
+  const title = t(state.directory ? 'writeCreateFolder' : 'writeCreateFile')
+  const prompt = t(state.directory ? 'writeCreateFolderPrompt' : 'writeCreateFilePrompt')
+  const canSubmit = Boolean(state.value.trim()) && !state.submitting
+
+  useEffect(() => {
+    if (state.submitting) return
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [onClose, state.submitting])
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="file-tree-create-dialog-title"
+      className="ds-no-drag fixed inset-0 z-[80] flex items-center justify-center bg-slate-950/18 px-4 backdrop-blur-[2px] dark:bg-black/35"
+      onMouseDown={onClose}
+    >
+      <form
+        onSubmit={onSubmit}
+        onMouseDown={(event) => event.stopPropagation()}
+        className="w-full max-w-sm rounded-[24px] border border-ds-border bg-ds-card p-5 shadow-[0_24px_72px_rgba(15,23,42,0.22)]"
+      >
+        <h2
+          id="file-tree-create-dialog-title"
+          className="text-[18px] font-semibold text-ds-ink"
+        >
+          {title}
+        </h2>
+        <p className="mt-2 text-[13px] leading-6 text-ds-muted">
+          {prompt}
+        </p>
+        <input
+          autoFocus
+          aria-label={prompt}
+          disabled={state.submitting}
+          value={state.value}
+          onChange={(event) => onValueChange(event.target.value)}
+          className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
+        />
+        {state.error ? (
+          <p className="mt-3 text-[12px] leading-5 text-red-600 dark:text-red-300">
+            {state.error}
+          </p>
+        ) : null}
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            disabled={state.submitting}
+            onClick={onClose}
+            className="rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-wait disabled:opacity-60"
+          >
+            {t('cancel')}
+          </button>
+          <button
+            type="submit"
+            disabled={!canSubmit}
+            className="rounded-xl bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-55"
+          >
+            {state.submitting ? t('loading') : t('writeEntryDialogCreate')}
+          </button>
+        </div>
+      </form>
     </div>
   )
 }
@@ -1281,6 +1622,11 @@ function FileTreeRenameDialog({
           onFocus={(event) => event.currentTarget.select()}
           className="mt-4 w-full rounded-xl border border-ds-border bg-ds-main/65 px-3 py-2 text-[14px] text-ds-ink outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/25 disabled:cursor-wait disabled:opacity-70"
         />
+        {state.autoSuggested ? (
+          <p className="mt-2 text-[12px] leading-5 text-ds-muted">
+            {t('fileTreeAutoRenameReview')}
+          </p>
+        ) : null}
         {state.error ? (
           <p className="mt-3 text-[12px] leading-5 text-red-600 dark:text-red-300">
             {state.error}

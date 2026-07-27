@@ -47,7 +47,6 @@ type CreateRemoteChannelActionsOptions = {
     | 'lastSeq'
     | 'currentTurnId'
     | 'currentTurnUserId'
-    | 'inspectorSelectedId'
   >
   sseAbortRef: { current: AbortController | null }
   clearBusyWatchdog: () => void
@@ -83,13 +82,17 @@ export function remoteChannelThreadIdForProvider(
   return ''
 }
 
-function normalizeAgentRuntimeId(value: unknown): AgentRuntimeId {
-  if (value === 'codex' || value === 'claude' || value === 'sciforge') return value
-  return 'sciforge'
+function normalizeLiveAgentRuntimeId(value: unknown): AgentRuntimeId {
+  return value === 'claude' ? 'claude' : 'codex'
+}
+
+function historicalAgentRuntimeId(value: unknown): AgentRuntimeId {
+  if (value === 'claude' || value === 'sciforge') return value
+  return 'codex'
 }
 
 function runtimeIdForProvider(provider: RemoteChannelAgentProviderLike, settings: { activeAgentRuntime?: AgentRuntimeId }): AgentRuntimeId {
-  return normalizeAgentRuntimeId(provider.id ?? settings.activeAgentRuntime)
+  return normalizeLiveAgentRuntimeId(provider.id ?? settings.activeAgentRuntime)
 }
 
 function runtimeIdForRemoteChannel(
@@ -97,7 +100,7 @@ function runtimeIdForRemoteChannel(
   provider: RemoteChannelAgentProviderLike,
   settings: { activeAgentRuntime?: AgentRuntimeId }
 ): AgentRuntimeId {
-  return normalizeAgentRuntimeId(channel.runtimeId ?? runtimeIdForProvider(provider, settings))
+  return normalizeLiveAgentRuntimeId(channel.runtimeId ?? runtimeIdForProvider(provider, settings))
 }
 
 function runtimeIdForRemoteChannelConversation(
@@ -106,7 +109,7 @@ function runtimeIdForRemoteChannelConversation(
   provider: RemoteChannelAgentProviderLike,
   settings: { activeAgentRuntime?: AgentRuntimeId }
 ): AgentRuntimeId {
-  return normalizeAgentRuntimeId(conversation?.runtimeId ?? channel.runtimeId ?? runtimeIdForProvider(provider, settings))
+  return normalizeLiveAgentRuntimeId(conversation?.runtimeId ?? channel.runtimeId ?? runtimeIdForProvider(provider, settings))
 }
 
 function withAgentThreadId(
@@ -141,11 +144,11 @@ export function findRecoverableRemoteChannelThread(
   channel: RemoteChannelV1,
   runtimeId: AgentRuntimeId
 ): NormalizedThread | null {
-  const normalizedRuntimeId = normalizeAgentRuntimeId(runtimeId)
+  const normalizedRuntimeId = normalizeLiveAgentRuntimeId(runtimeId)
   const knownThreadIds = remoteChannelThreadIdsFromChannels(channels)
   const candidates = threads
     .filter((thread) => thread.archived !== true)
-    .filter((thread) => normalizeAgentRuntimeId(thread.runtimeId) === normalizedRuntimeId)
+    .filter((thread) => historicalAgentRuntimeId(thread.runtimeId) === normalizedRuntimeId)
     .filter((thread) => !knownThreadIds.has(thread.id))
     .filter((thread) => remoteChannelThreadTitleLooksManaged(thread.title))
     .sort((a, b) => updatedAtMs(b) - updatedAtMs(a))
@@ -205,7 +208,7 @@ export function channelWithRemoteThreadMapping(
   conversationId: string | undefined,
   runtimeId: AgentRuntimeId
 ): RemoteChannelV1 {
-  const normalizedRuntimeId = normalizeAgentRuntimeId(runtimeId)
+  const normalizedRuntimeId = normalizeLiveAgentRuntimeId(runtimeId)
   const channelThreadId = threadId.trim()
   const next: RemoteChannelV1 = {
     ...channel,
@@ -359,7 +362,7 @@ export function createRemoteChannelActions(options: CreateRemoteChannelActionsOp
       }
 
       const channel = newRemoteChannel(provider, agentProfile, platformCredential)
-      const runtimeId = normalizeAgentRuntimeId(settings.activeAgentRuntime)
+      const runtimeId = normalizeLiveAgentRuntimeId(settings.activeAgentRuntime)
       const nextChannel: RemoteChannelV1 = {
         ...channel,
         runtimeId,

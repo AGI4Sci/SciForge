@@ -1,17 +1,22 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { constants, createReadStream, type Stats } from 'node:fs'
 import { copyFile, open, readFile, stat } from 'node:fs/promises'
-import { basename, relative } from 'node:path'
+import { basename, isAbsolute, relative } from 'node:path'
 import { TextDecoder } from 'node:util'
+import {
+  visualFrameSchema,
+  visualSourceRenderRequestSchema,
+  type VisualFrame
+} from '@sciforge/domain-sdk/visual-source'
 import {
   WORKSPACE_TABULAR_MAX_TEXT_CHARS,
   applyWorkspaceTabularDelimitedEdit,
   type WorkspaceTabularDelimiter,
   type WorkspaceTabularDelimitedEditOperation
-} from '../../../../packages/workers/workspace-tabular/src/index.js'
+} from '@sciforge/workspace-tabular'
 import {
   updateWorkspaceDeckPptxTextElement
-} from '../../../../packages/workers/workspace-deck/src/index.js'
+} from '@sciforge/workspace-deck'
 import {
   createPdfAnchor,
   sanitizePdfAnnotationText,
@@ -21,20 +26,23 @@ import {
   type PdfAnnotationKind,
   type PdfAnnotationSidecar,
   type PdfAnnotationThread,
+  type PdfAnnotationThreadTombstone,
   type PdfAnnotationThreadStatus
 } from '../../../shared/pdf-annotations'
 import type { AppSettingsV1 } from '../../../shared/app-settings'
 import type {
+  WorkspacePreviewAnnotationImportResult,
+  WorkspacePreviewAnnotationListResult,
+  WorkspacePreviewAnnotationReviewGenerateResult,
+  WorkspacePreviewAnnotationReviewImproveResult,
   WorkspacePreviewOpenInput as WorkspacePreviewApiOpenInput,
   WorkspacePreviewOpenResult as WorkspacePreviewApiOpenResult
 } from '../../../shared/sciforge-api'
 import {
-  PDF_REVIEW_GENERATE_ACTION_ID,
-  PDF_REVIEW_IMPROVE_ACTION_ID,
   pdfReviewGenerateActionInputSchema,
-  pdfReviewGenerateActionResultSchema,
   pdfReviewImproveAnnotationActionInputSchema,
-  pdfReviewImproveAnnotationActionResultSchema
+  type PdfReviewGenerateActionInput,
+  type PdfReviewImproveAnnotationActionInput
 } from '../../../shared/pdf-review'
 import {
   exportPdfAnnotationAdobePdf,
@@ -62,12 +70,15 @@ import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_MAX_VISIBLE_TEXT_CHARS,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+  WORKSPACE_PREVIEW_RESOURCE_KIND,
   extensionFromPreviewPath,
   fileNameFromPreviewPath,
   resolveWorkspacePreviewInitialSelection,
   workspacePreviewAssetTransportDescriptorSchema,
   workspacePreviewAnnotationSidecarImportActionInputSchema,
-  workspacePreviewAnnotationSidecarImportActionResultSchema,
+  workspacePreviewAnnotationDeleteInputSchema,
+  workspacePreviewAnnotationResolveInputSchema,
+  workspacePreviewAnnotationUpdateInputSchema,
   workspacePreviewByteRangeSchema,
   workspacePreviewEditDiffSummarySchema,
   workspacePreviewEditOperationSchema,
@@ -81,6 +92,10 @@ import {
   workspacePreviewPrepareArtifactRequestSchema,
   workspacePreviewReadArtifactRangeRequestSchema,
   type WorkspacePreviewArtifactDescriptor,
+  type WorkspacePreviewAnnotationDeleteInput,
+  type WorkspacePreviewAnnotationResolveInput,
+  type WorkspacePreviewAnnotationSidecarImportActionInput,
+  type WorkspacePreviewAnnotationUpdateInput,
   type WorkspacePreviewAssetTransportDescriptor,
   type WorkspacePreviewByteRange,
   type WorkspacePreviewEditDiffSummary,
@@ -104,7 +119,7 @@ import {
   normalizePathSeparators,
   resolveOpenTargetPath,
   resolveSafeWorkspaceWriteTarget
-} from '../workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 import type { WorkspaceFileWatchPayload } from '../../../shared/workspace-file'
 import { readWorkspaceFile, readWorkspaceImage, writeWorkspaceDocxText, writeWorkspaceFile } from '../workspace-files'
 import {
@@ -112,13 +127,29 @@ import {
   type WorkspaceHtmlPreviewService
 } from '../workspace-html-preview-service'
 import {
-  createWorkspacePreviewRegistry,
   type WorkspacePreviewRegistry
 } from './registry'
 import {
-  createWorkspacePreviewWorkerClient,
-  type WorkspacePreviewWorkerClient
+  WorkspacePreviewWorkerClient,
+  type WorkspacePreviewHostRuntime
 } from './worker-client'
+import type { WorkspacePreviewBuiltInHostProviderAdapters } from './built-in-providers'
+import {
+  type WorkspacePreviewPluginRegistrationInput
+} from './composition'
+import type {
+  WorkspacePreviewProviderApplyEditInput,
+  WorkspacePreviewProviderApplyEditResult,
+  WorkspacePreviewProviderExportInput,
+  WorkspacePreviewProviderExportResult,
+  WorkspacePreviewProviderInvokeActionResult,
+  WorkspacePreviewProviderActionInput,
+  WorkspacePreviewProviderActionResult,
+  WorkspacePreviewProviderObservationInput,
+  WorkspacePreviewProviderObservationResult,
+  WorkspacePreviewProviderRegistry,
+  WorkspacePreviewRenderVisualInput
+} from './provider-registry'
 
 export type WorkspacePreviewOpenInput = WorkspacePreviewApiOpenInput & {
   now?: string
@@ -197,42 +228,11 @@ export type WorkspacePreviewDescribeAssetResult =
     }
   | { ok: false; message: string }
 
-export type WorkspacePreviewApplyEditResult =
-  | {
-      ok: true
-      session: WorkspacePreviewSession
-      operationKind: WorkspacePreviewEditOperation['kind']
-      appliedAt: string
-      audit: {
-        pluginId: string
-        path: string
-        operationKind: WorkspacePreviewEditOperation['kind']
-        effect: 'file-write' | 'session-update' | 'sidecar-write'
-      }
-      diffSummary?: WorkspacePreviewEditDiffSummary
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewApplyEditResult = WorkspacePreviewProviderApplyEditResult
 
-export type WorkspacePreviewExportResult =
-  | {
-      ok: true
-      sessionId: string
-      path: string
-      target: WorkspacePreviewExportTarget
-      exportedAt: string
-      audit: {
-        pluginId: string
-        sourcePath: string
-        targetKind: WorkspacePreviewExportTarget['kind']
-        format: string
-        effect: 'source-copy' | 'sidecar-package' | 'annotated-pdf'
-      }
-    }
-  | { ok: false; message: string }
+export type WorkspacePreviewExportResult = WorkspacePreviewProviderExportResult
 
-export type WorkspacePreviewInvokeActionResult =
-  | WorkspacePreviewPluginActionResult
-  | { ok: false; message: string }
+export type WorkspacePreviewInvokeActionResult = WorkspacePreviewProviderInvokeActionResult
 
 export type WorkspacePreviewWatchSnapshot = {
   ok: true
@@ -253,9 +253,9 @@ export type WorkspacePreviewWatchStartResult =
   | { ok: false; message: string }
 
 export type WorkspacePreviewHostOptions = {
-  registry?: WorkspacePreviewRegistry
+  domainPlugins?: readonly WorkspacePreviewPluginRegistrationInput[]
   createSessionId?: () => string
-  workerClient?: WorkspacePreviewWorkerClient
+  runtime?: WorkspacePreviewHostRuntime
   htmlPreviewService?: Pick<WorkspaceHtmlPreviewService, 'preview'>
   loadSettings?: () => Promise<AppSettingsV1>
 }
@@ -305,6 +305,9 @@ type WorkspacePreviewDeckTextEditOperation =
 type WorkspacePreviewDocumentParagraphEditOperation =
   Extract<WorkspacePreviewEditOperation, { kind: 'document.updateParagraph' }>
 
+type WorkspacePreviewSelectionEditOperation =
+  Extract<WorkspacePreviewEditOperation, { kind: 'workspace.setSelection' }>
+
 type WorkspacePreviewAnnotationUpsertOperation =
   Extract<WorkspacePreviewEditOperation, { kind: 'annotation.upsert' }>
 
@@ -334,6 +337,7 @@ function inferWorkspacePreviewMimeType(path: string, manifest: WorkspacePreviewP
 
 export class WorkspacePreviewHost {
   private readonly registry: WorkspacePreviewRegistry
+  private readonly providers: WorkspacePreviewProviderRegistry
   private readonly createSessionId: () => string
   private readonly workerClient: WorkspacePreviewWorkerClient
   private readonly htmlPreviewService: Pick<WorkspaceHtmlPreviewService, 'preview'>
@@ -341,15 +345,109 @@ export class WorkspacePreviewHost {
   private readonly sessions = new Map<string, WorkspacePreviewSessionRecord>()
 
   constructor(options: WorkspacePreviewHostOptions = {}) {
-    this.registry = options.registry ?? createWorkspacePreviewRegistry()
+    if (options.runtime && options.domainPlugins?.length) {
+      throw new Error('A precomposed workspace preview runtime cannot be combined with domain plugins.')
+    }
     this.createSessionId = options.createSessionId ?? (() => `preview-${randomUUID()}`)
-    this.workerClient = options.workerClient ?? createWorkspacePreviewWorkerClient()
     this.htmlPreviewService = options.htmlPreviewService ?? workspaceHtmlPreviewService
     this.loadSettings = options.loadSettings
+    const runtime = options.runtime ?? WorkspacePreviewWorkerClient.compose({
+      hostAdapters: this.builtInHostProviderAdapters(),
+      domainPlugins: options.domainPlugins
+    })
+    this.registry = runtime.manifests
+    this.providers = runtime.providers
+    this.workerClient = runtime.workerClient
+  }
+
+  private builtInHostProviderAdapters(): WorkspacePreviewBuiltInHostProviderAdapters {
+    return {
+      validateTextFile: async ({ file }) => {
+        const fileInfo = await stat(file.path)
+        return await isUtf8TextPreviewCompatibleFile(file.path, fileInfo)
+          ? { ok: true }
+          : { ok: false, message: `No workspace preview plugin is available for ${basename(file.path)}.` }
+      },
+      observeSourceText: async (input, hostActions) => {
+        const observation = await this.createSourceTextObservation(
+          this.providerSessionRecord(input),
+          hostActions
+        )
+        return {
+          ok: true,
+          observation,
+          bytesRead: Math.min(input.file.size ?? 0, WORKSPACE_PREVIEW_TEXT_OBSERVATION_BYTES),
+          truncated: observation.text?.truncated ?? false
+        }
+      },
+      observeDocx: async (input) => ({
+        ok: true,
+        observation: await this.createDocxObservation(this.providerSessionRecord(input)),
+        bytesRead: input.file.size ?? 0,
+        truncated: false
+      }),
+      applyTextEdit: (input) => this.applyTextEdit(
+        this.providerSessionRecord(input),
+        input.operation as Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>,
+        input.now
+      ),
+      applyTabularEdit: (input) => this.applyTabularDelimitedEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewTabularEditOperation,
+        input.now
+      ),
+      applyDeckEdit: (input) => this.applyDeckPptxTextElementEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewDeckTextEditOperation,
+        input.now
+      ),
+      applyDocumentEdit: (input) => this.applyDocumentParagraphEdit(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewDocumentParagraphEditOperation,
+        input.now
+      ),
+      applyAnnotationUpsert: (input) => this.applyAnnotationUpsert(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationUpsertOperation,
+        input.now
+      ),
+      applyAnnotationThreadUpdate: (input) => this.applyAnnotationThreadUpdate(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationThreadUpdateOperation,
+        input.now
+      ),
+      applyAnnotationThreadDelete: (input) => this.applyAnnotationThreadDelete(
+        this.providerSessionRecord(input),
+        input.operation as WorkspacePreviewAnnotationThreadDeleteOperation,
+        input.now
+      ),
+      exportSource: (input) => this.exportSourceCopy(this.providerSessionRecord(input), input.target, input.now),
+      exportAnnotationSidecar: (input) => this.exportAnnotationSidecarPackage(
+        this.providerSessionRecord(input),
+        input.target,
+        input.now
+      ),
+      exportAnnotatedPdf: (input) => this.exportAnnotatedPdf(
+        this.providerSessionRecord(input),
+        input.target,
+        input.now
+      ),
+      invokeHtmlPreview: (input) => this.invokeHtmlPreviewUrlAction(this.providerSessionRecord(input), input),
+      invokeMarkdownImage: (input) => this.invokeMarkdownReadImageAction(this.providerSessionRecord(input), input)
+    }
+  }
+
+  private providerSessionRecord(
+    input: WorkspacePreviewProviderObservationInput | WorkspacePreviewProviderApplyEditInput |
+      WorkspacePreviewProviderExportInput | WorkspacePreviewProviderActionInput
+  ): WorkspacePreviewSessionRecord {
+    const record = this.sessions.get(input.session.id)
+    if (!record) throw new Error('Workspace preview session was not found.')
+    return record
   }
 
   listPlugins(): WorkspacePreviewPluginManifest[] {
-    return this.registry.list()
+    return this.registry.list().map(({ manifest }) => manifest)
   }
 
   getSession(sessionId: string): WorkspacePreviewSession | null {
@@ -358,6 +456,62 @@ export class WorkspacePreviewHost {
 
   releaseSession(sessionId: string): boolean {
     return this.sessions.delete(sessionId)
+  }
+
+  async renderVisual(
+    sessionId: string,
+    input: WorkspacePreviewRenderVisualInput = {}
+  ): Promise<VisualFrame> {
+    const record = this.sessions.get(sessionId)
+    if (!record) throw new Error('Workspace preview session was not found.')
+    const provider = this.providers.get(record.manifest.id)
+    if (!provider?.renderVisual) {
+      throw new Error(
+        'This Workspace Preview resource does not publish visual frames. Inspect its rendered UI through the current SciForge surface and a broker-published targetRef.'
+      )
+    }
+
+    const before = await validateVisualSourceFile(record)
+    const sourceRevision = workspacePreviewVisualSourceRevision(record.session)
+    const file: WorkspacePreviewFileState = {
+      ...record.file,
+      path: before.path,
+      workspaceRoot: before.workspaceRoot,
+      size: before.size,
+      mtimeMs: before.mtimeMs
+    }
+    const request = visualSourceRenderRequestSchema.parse({
+      resource: {
+        resourceId: sessionId,
+        resourceKind: WORKSPACE_PREVIEW_RESOURCE_KIND,
+        workspaceId: before.workspaceRoot,
+        semanticRevision: sourceRevision
+      },
+      ...(input.frameIndex === undefined ? {} : { frameIndex: input.frameIndex }),
+      ...(input.target === undefined ? {} : { target: input.target }),
+      ...(input.maxDimension === undefined ? {} : { maxDimension: input.maxDimension })
+    })
+    const frame = visualFrameSchema.parse(await provider.renderVisual({
+      session: record.session,
+      manifest: record.manifest,
+      file,
+      request
+    }))
+    if (frame.sourceRevision !== sourceRevision) {
+      throw new Error(
+        `Workspace preview plugin ${record.manifest.id} rendered revision ${frame.sourceRevision}, ` +
+        `but the current session revision is ${sourceRevision}.`
+      )
+    }
+    const after = await validateVisualSourceFile(record)
+    if (
+      before.path !== after.path ||
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs
+    ) {
+      throw new Error('Workspace preview source changed while its visual frame was rendering.')
+    }
+    return frame
   }
 
   async open(input: WorkspacePreviewOpenInput): Promise<WorkspacePreviewOpenResult> {
@@ -380,16 +534,6 @@ export class WorkspacePreviewHost {
       if (route.status === 'unsupported') {
         return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
-      if (route.status === 'deferred') {
-        return {
-          ok: false,
-          message: `Preview support for ${route.extension} is deferred: ${route.reason}`
-        }
-      }
-      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
-        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
-      }
-
       const now = input.now ?? new Date().toISOString()
       const mimeType = input.mimeType ?? inferWorkspacePreviewMimeType(targetPath, route.manifest)
       const file: WorkspacePreviewFileState = {
@@ -400,6 +544,8 @@ export class WorkspacePreviewHost {
         size: fileInfo.size,
         mtimeMs: fileInfo.mtimeMs
       }
+      const validation = await this.workerClient.validateFile({ manifest: route.manifest, file })
+      if (!validation.ok) return validation
       const mode = input.mode ?? 'preview'
       const selection = resolveWorkspacePreviewInitialSelection(input)
       const integrity = input.integrity
@@ -454,34 +600,6 @@ export class WorkspacePreviewHost {
     const record = this.sessions.get(sessionId)
     if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
 
-    if (isSourceTextPreviewPlugin(record.manifest.id)) {
-      try {
-        return {
-          ok: true,
-          observation: await this.withHostObservationEnhancements(record, await this.createSourceTextObservation(record))
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          message: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
-
-    if (record.manifest.id === DOCX_WORKSPACE_PREVIEW_PLUGIN_ID) {
-      try {
-        return {
-          ok: true,
-          observation: await this.withHostObservationEnhancements(record, await this.createDocxObservation(record))
-        }
-      } catch (error) {
-        return {
-          ok: false,
-          message: error instanceof Error ? error.message : String(error)
-        }
-      }
-    }
-
     const workerObservation = await this.workerClient.observe({
       session: record.session,
       manifest: record.manifest,
@@ -529,19 +647,22 @@ export class WorkspacePreviewHost {
       if (route.status === 'unsupported') {
         return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
       }
-      if (route.status === 'deferred') {
-        return {
-          ok: false,
-          message: `Preview support for ${route.extension} is deferred: ${route.reason}`
-        }
+      const file: WorkspacePreviewFileState = {
+        workspaceRoot: await canonicalPath(expandHomePath(input.workspaceRoot)),
+        path: targetPath,
+        relativePath: normalizePathSeparators(relative(
+          await canonicalPath(expandHomePath(input.workspaceRoot)),
+          targetPath
+        )),
+        size: fileInfo.size,
+        mtimeMs: fileInfo.mtimeMs
       }
-      if (isSourceTextPreviewPlugin(route.manifest.id) && !(await isUtf8TextPreviewCompatibleFile(targetPath, fileInfo))) {
-        return { ok: false, message: `No workspace preview plugin is available for ${basename(targetPath)}.` }
-      }
+      const validation = await this.workerClient.validateFile({ manifest: route.manifest, file })
+      if (!validation.ok) return validation
 
       return {
         ok: true,
-        workspaceRoot: await canonicalPath(expandHomePath(input.workspaceRoot)),
+        workspaceRoot: file.workspaceRoot,
         path: targetPath,
         content: '',
         size: fileInfo.size,
@@ -586,7 +707,10 @@ export class WorkspacePreviewHost {
     })
   }
 
-  private async createSourceTextObservation(record: WorkspacePreviewSessionRecord): Promise<WorkspaceObservation> {
+  private async createSourceTextObservation(
+    record: WorkspacePreviewSessionRecord,
+    hostActions: readonly string[]
+  ): Promise<WorkspaceObservation> {
     const fileInfo = await stat(record.file.path)
     if (fileInfo.isDirectory()) {
       throw new Error('Cannot observe a directory as text.')
@@ -632,8 +756,7 @@ export class WorkspacePreviewHost {
         'observe',
         'select',
         'workspace.setSelection',
-        ...(record.manifest.id === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID ? ['markdown.readImage'] : []),
-        ...(record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID ? ['html.previewUrl'] : []),
+        ...hostActions,
         'text.replaceRange',
         'applyEdit',
         'save',
@@ -714,7 +837,16 @@ export class WorkspacePreviewHost {
     record: WorkspacePreviewSessionRecord,
     observation: WorkspaceObservation
   ): Promise<WorkspaceObservation> {
-    const withSelection = this.withSessionSelection(record, observation)
+    const withContentIdentity = record.file.sha256 && observation.file.sha256 !== record.file.sha256
+      ? {
+          ...observation,
+          file: {
+            ...observation.file,
+            sha256: record.file.sha256
+          }
+        }
+      : observation
+    const withSelection = this.withSessionSelection(record, withContentIdentity)
     return await this.withSidecarAnnotations(record, withSelection)
   }
 
@@ -741,27 +873,10 @@ export class WorkspacePreviewHost {
       pdfPath: record.file.path,
       workspaceRoot: record.file.workspaceRoot
     })
-    const sidecarAnnotations = loaded.ok
-      ? pdfSidecarObservationAnnotations(loaded.sidecar, loaded.warnings)
-      : [{
-          id: 'annotation-sidecar-warning',
-          kind: 'warning',
-          summary: clipObservationText(`Annotation sidecar unavailable: ${loaded.message}`)
-        }]
-    const annotations = mergeObservationAnnotations(observation.annotations, sidecarAnnotations)
-    const documentKind = annotationDocumentKindForPath(record.file.path)
     return workspaceObservationSchema.parse({
       ...observation,
-      ...(annotations.length ? { annotations } : {}),
-      actions: uniqueObservationActions([
-        ...observation.actions,
-        'annotation.sidecar.read',
-        ...(documentKind === 'pdf' ? ['annotation.sidecar.import'] : []),
-        ...(documentKind === 'pdf' ? [PDF_REVIEW_GENERATE_ACTION_ID, PDF_REVIEW_IMPROVE_ACTION_ID] : []),
-        'annotation.upsert',
-        'annotation.thread.update',
-        'annotation.thread.delete'
-      ])
+      ...(loaded.ok ? { documentAnnotations: pdfSidecarDocumentAnnotations(loaded.sidecar) } : {}),
+      actions: uniqueObservationActions(observation.actions)
     })
   }
 
@@ -1067,6 +1182,179 @@ export class WorkspacePreviewHost {
     }
   }
 
+  async listAnnotations(sessionId: string): Promise<WorkspacePreviewAnnotationListResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || !annotationDocumentKindForPath(record.file.path)) {
+      return { ok: false, message: 'The open preview does not support document annotations.' }
+    }
+
+    const loaded = await loadPdfAnnotationSidecar({
+      pdfPath: record.file.path,
+      workspaceRoot: record.file.workspaceRoot
+    })
+    if (!loaded.ok) return loaded
+    return { ok: true, sidecar: workspacePreviewAnnotationSidecarForAction(loaded.sidecar) }
+  }
+
+  async updateAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationUpdateInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationUpdateInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.upsert',
+        path: record.file.path,
+        ...parsed
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async resolveAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationResolveInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationResolveInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.thread.update',
+        path: record.file.path,
+        threadId: parsed.threadId,
+        patch: { status: parsed.resolved ? 'resolved' : 'open' }
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async deleteAnnotation(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationDeleteInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    try {
+      const parsed = workspacePreviewAnnotationDeleteInputSchema.parse(input)
+      return await this.applyEdit(sessionId, {
+        kind: 'annotation.thread.delete',
+        path: record.file.path,
+        ...parsed
+      }, now)
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async importAnnotations(
+    sessionId: string,
+    input: WorkspacePreviewAnnotationSidecarImportActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationImportResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'Annotation package import requires an open PDF annotation preview.' }
+    }
+
+    try {
+      const parsed = workspacePreviewAnnotationSidecarImportActionInputSchema.parse(input)
+      const imported = await importPdfAnnotationSidecarPackage({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      })
+      if (!imported.ok) return imported
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(imported.sidecar),
+        importedAt: imported.importedAt || now,
+        fingerprintMatched: imported.fingerprintMatched,
+        warnings: imported.warnings
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async generateAnnotationReview(
+    sessionId: string,
+    input: PdfReviewGenerateActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationReviewGenerateResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF review generation requires an open PDF annotation preview.' }
+    }
+    if (!this.loadSettings) return { ok: false, message: 'PDF review generation requires app settings.' }
+
+    try {
+      const parsed = pdfReviewGenerateActionInputSchema.parse(input)
+      const generated = await generatePdfReviewAnnotations({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      }, await this.loadSettings())
+      if (!generated.ok) return generated
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(generated.sidecar),
+        mode: generated.mode,
+        commentCount: generated.commentCount,
+        skippedCount: generated.skippedCount,
+        generatedAt: generated.generatedAt || now
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
+  async improveAnnotationReview(
+    sessionId: string,
+    input: PdfReviewImproveAnnotationActionInput,
+    now = new Date().toISOString()
+  ): Promise<WorkspacePreviewAnnotationReviewImproveResult> {
+    const record = this.sessions.get(sessionId)
+    if (!record) return { ok: false, message: 'Workspace preview session was not found.' }
+    if (!record.manifest.capabilities.annotations || annotationDocumentKindForPath(record.file.path) !== 'pdf') {
+      return { ok: false, message: 'PDF annotation improvement requires an open PDF annotation preview.' }
+    }
+
+    try {
+      const parsed = pdfReviewImproveAnnotationActionInputSchema.parse(input)
+      const improved = await improvePdfReviewAnnotation({
+        pdfPath: record.file.path,
+        workspaceRoot: record.file.workspaceRoot,
+        ...parsed
+      }, this.loadSettings ? await this.loadSettings() : undefined)
+      if (!improved.ok) return improved
+      await this.refreshSidecarSession(record, now)
+      return {
+        ok: true,
+        sidecar: workspacePreviewAnnotationSidecarForAction(improved.sidecar),
+        threadId: improved.threadId,
+        annotationId: improved.annotationId,
+        modificationAdvice: improved.modificationAdvice,
+        revisedContent: improved.revisedContent,
+        generatedAt: improved.generatedAt || now
+      }
+    } catch (error) {
+      return { ok: false, message: error instanceof Error ? error.message : String(error) }
+    }
+  }
+
   async applyEdit(
     sessionId: string,
     operation: WorkspacePreviewEditOperation,
@@ -1085,88 +1373,25 @@ export class WorkspacePreviewHost {
       if (canonicalOperationPath !== canonicalSessionPath) {
         return { ok: false, message: 'Edit operation path must match the open preview session.' }
       }
-
-      if (parsed.kind === 'workspace.setSelection' || parsed.kind === 'molecular.setSelection') {
-        const session = workspacePreviewSessionSchema.parse({
-          ...record.session,
-          selection: parsed.selection,
-          updatedAt: now
-        })
-        this.sessions.set(session.id, { ...record, session })
-        return {
-          ok: true,
-          session,
-          operationKind: parsed.kind,
-          appliedAt: now,
-          audit: {
-            pluginId: record.manifest.id,
-            path: record.file.path,
-            operationKind: parsed.kind,
-            effect: 'session-update'
-          }
-        }
+      if (parsed.kind === 'workspace.setSelection') {
+        return await this.applySelectionEdit(record, parsed, now)
       }
 
-      if (
-        parsed.kind === 'tabular.updateCell' ||
-        parsed.kind === 'tabular.insertRows' ||
-        parsed.kind === 'tabular.insertColumns' ||
-        parsed.kind === 'tabular.deleteRows' ||
-        parsed.kind === 'tabular.deleteColumns'
-      ) {
-        return await this.applyTabularDelimitedEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'deck.updateTextElement') {
-        return await this.applyDeckPptxTextElementEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'document.updateParagraph') {
-        return await this.applyDocumentParagraphEdit(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.upsert') {
-        return await this.applyAnnotationUpsert(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.thread.update') {
-        return await this.applyAnnotationThreadUpdate(record, parsed, now)
-      }
-
-      if (parsed.kind === 'annotation.thread.delete') {
-        return await this.applyAnnotationThreadDelete(record, parsed, now)
-      }
-
-      if (parsed.kind !== 'text.replaceRange') {
-        return {
-          ok: false,
-          message: `Workspace preview edit operation ${operation.kind} is not implemented by the generic host yet.`
-        }
-      }
-
-      const content = await readFile(record.file.path, 'utf8')
-      const startOffset = offsetForTextPosition(content, parsed.range.start)
-      const endOffset = offsetForTextPosition(content, parsed.range.end)
-      if (endOffset < startOffset) {
-        return { ok: false, message: 'Edit range end must be after the start.' }
-      }
-      const nextContent = `${content.slice(0, startOffset)}${parsed.text}${content.slice(endOffset)}`
-      const diffSummary = createTextEditDiffSummary({
-        path: record.file.path,
+      const result = await this.workerClient.applyEdit({
+        session: record.session,
+        manifest: record.manifest,
+        file: record.file,
         operation: parsed,
-        content,
-        nextContent,
-        startOffset,
-        endOffset
+        now
       })
-      const writeResult = await writeWorkspaceFile({
-        workspaceRoot: record.file.workspaceRoot,
-        path: record.file.path,
-        content: nextContent
-      })
-      if (!writeResult.ok) return writeResult
-
-      return await this.completeFileWriteEdit(record, parsed.kind, now, diffSummary)
+      if (result.ok && result.audit.effect === 'session-update') {
+        const session = workspacePreviewSessionSchema.parse(result.session)
+        if (session.id !== record.session.id || session.pluginId !== record.manifest.id || session.path !== record.session.path) {
+          return { ok: false, message: 'Workspace preview provider returned a session for a different preview.' }
+        }
+        this.sessions.set(session.id, { ...record, session })
+      }
+      return result
     } catch (error) {
       return {
         ok: false,
@@ -1175,14 +1400,65 @@ export class WorkspacePreviewHost {
     }
   }
 
+  private async applySelectionEdit(
+    record: WorkspacePreviewSessionRecord,
+    operation: WorkspacePreviewSelectionEditOperation,
+    now: string
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const session = workspacePreviewSessionSchema.parse({
+      ...record.session,
+      selection: operation.selection,
+      updatedAt: now
+    })
+    this.sessions.set(session.id, { ...record, session })
+    return {
+      ok: true,
+      session,
+      operationKind: operation.kind,
+      appliedAt: now,
+      audit: {
+        pluginId: record.manifest.id,
+        path: record.file.path,
+        operationKind: operation.kind,
+        effect: 'session-update'
+      }
+    }
+  }
+
+  private async applyTextEdit(
+    record: WorkspacePreviewSessionRecord,
+    operation: Extract<WorkspacePreviewEditOperation, { kind: 'text.replaceRange' }>,
+    now: string
+  ): Promise<WorkspacePreviewApplyEditResult> {
+    const content = await readFile(record.file.path, 'utf8')
+    const startOffset = offsetForTextPosition(content, operation.range.start)
+    const endOffset = offsetForTextPosition(content, operation.range.end)
+    if (endOffset < startOffset) {
+      return { ok: false, message: 'Edit range end must be after the start.' }
+    }
+    const nextContent = `${content.slice(0, startOffset)}${operation.text}${content.slice(endOffset)}`
+    const diffSummary = createTextEditDiffSummary({
+      path: record.file.path,
+      operation,
+      content,
+      nextContent,
+      startOffset,
+      endOffset
+    })
+    const writeResult = await writeWorkspaceFile({
+      workspaceRoot: record.file.workspaceRoot,
+      path: record.file.path,
+      content: nextContent
+    })
+    if (!writeResult.ok) return writeResult
+    return await this.completeFileWriteEdit(record, operation.kind, now, diffSummary)
+  }
+
   private async applyTabularDelimitedEdit(
     record: WorkspacePreviewSessionRecord,
     operation: WorkspacePreviewTabularEditOperation,
     now: string
   ): Promise<WorkspacePreviewApplyEditResult> {
-    if (record.manifest.id !== 'tabular') {
-      return { ok: false, message: `Workspace preview edit operation ${operation.kind} requires the tabular plugin.` }
-    }
     const delimiter = tabularDelimiterForPath(record.file.path)
     if (!delimiter) {
       return { ok: false, message: 'Tabular file write-back is currently implemented for CSV and TSV files only.' }
@@ -1222,9 +1498,6 @@ export class WorkspacePreviewHost {
     operation: WorkspacePreviewDeckTextEditOperation,
     now: string
   ): Promise<WorkspacePreviewApplyEditResult> {
-    if (record.manifest.id !== 'deck') {
-      return { ok: false, message: `Workspace preview edit operation ${operation.kind} requires the deck plugin.` }
-    }
     if (extensionFromPreviewPath(record.file.path) !== '.pptx') {
       return { ok: false, message: 'Deck text write-back is currently implemented for PPTX OpenXML files only.' }
     }
@@ -1305,7 +1578,7 @@ export class WorkspacePreviewHost {
 
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Annotation sidecar write-back is currently implemented for PDF and DOCX files only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar write-back.' }
     }
     if (operation.target?.documentKind && operation.target.documentKind !== documentKind) {
       return {
@@ -1414,7 +1687,7 @@ export class WorkspacePreviewHost {
 
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Annotation sidecar write-back is currently implemented for PDF and DOCX files only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar write-back.' }
     }
 
     const loaded = await loadPdfAnnotationSidecar({
@@ -1441,6 +1714,7 @@ export class WorkspacePreviewHost {
       size: fileInfo.size,
       mtimeMs: fileInfo.mtimeMs
     }
+    delete file.sha256
     const session = workspacePreviewSessionSchema.parse({
       ...record.session,
       updatedAt: now,
@@ -1554,45 +1828,51 @@ export class WorkspacePreviewHost {
           message: `Workspace preview ${parsed.kind} export requires a renderer/plugin implementation.`
         }
       }
-      if (parsed.format === 'sidecar') {
-        return await this.exportAnnotationSidecarPackage(record, parsed, now)
-      }
-      if (parsed.format === 'annotated-pdf') {
-        return await this.exportAnnotatedPdf(record, parsed, now)
-      }
-      if (!sourceFormatMatchesExportFormat(record.file.path, parsed.format)) {
-        return {
-          ok: false,
-          message: `Generic workspace-file export can only copy the source ${sourceFormatLabel(record.file.path)} file; ${parsed.format} export requires a plugin implementation.`
-        }
-      }
-
-      const writeTarget = parsed.path?.trim()
-        ? await resolveSafeWorkspaceWriteTarget(parsed.path, record.file.workspaceRoot, {
-            createParentDirectories: true,
-            targetKind: 'file'
-          })
-        : await resolveDefaultExportWriteTarget(record, parsed.format)
-      await copyFile(record.file.path, writeTarget.path, constants.COPYFILE_EXCL)
-
-      return {
-        ok: true,
-        sessionId,
-        path: writeTarget.path,
+      return await this.workerClient.exportPreview({
+        session: record.session,
+        manifest: record.manifest,
+        file: record.file,
         target: parsed,
-        exportedAt: now,
-        audit: {
-          pluginId: record.manifest.id,
-          sourcePath: record.file.path,
-          targetKind: parsed.kind,
-          format: parsed.format,
-          effect: 'source-copy'
-        }
-      }
+        now
+      })
     } catch (error) {
       return {
         ok: false,
         message: error instanceof Error ? error.message : String(error)
+      }
+    }
+  }
+
+  private async exportSourceCopy(
+    record: WorkspacePreviewSessionRecord,
+    target: WorkspacePreviewExportTarget,
+    now: string
+  ): Promise<WorkspacePreviewExportResult> {
+    if (!sourceFormatMatchesExportFormat(record.file.path, target.format)) {
+      return {
+        ok: false,
+        message: `Generic workspace-file export can only copy the source ${sourceFormatLabel(record.file.path)} file; ${target.format} export requires a plugin implementation.`
+      }
+    }
+    const writeTarget = target.path?.trim()
+      ? await resolveSafeWorkspaceWriteTarget(target.path, record.file.workspaceRoot, {
+          createParentDirectories: true,
+          targetKind: 'file'
+        })
+      : await resolveDefaultExportWriteTarget(record, target.format)
+    await copyFile(record.file.path, writeTarget.path, constants.COPYFILE_EXCL)
+    return {
+      ok: true,
+      sessionId: record.session.id,
+      path: writeTarget.path,
+      target,
+      exportedAt: now,
+      audit: {
+        pluginId: record.manifest.id,
+        sourcePath: record.file.path,
+        targetKind: target.kind,
+        format: target.format,
+        effect: 'source-copy'
       }
     }
   }
@@ -1607,9 +1887,6 @@ export class WorkspacePreviewHost {
 
     try {
       const parsed = workspacePreviewPluginActionInputSchema.parse(action)
-      const hostAction = await this.invokeHostAction(record, parsed, now)
-      if (hostAction) return hostAction
-
       const workerResult = await this.workerClient.invokeAction({
         session: record.session,
         manifest: record.manifest,
@@ -1631,7 +1908,7 @@ export class WorkspacePreviewHost {
           pluginId: record.manifest.id,
           path: record.file.path,
           actionId: parsed.actionId,
-          effect: 'worker-action'
+          effect: workerResult.effect ?? 'worker-action'
         }
       })
     } catch (error) {
@@ -1649,7 +1926,7 @@ export class WorkspacePreviewHost {
   ): Promise<WorkspacePreviewExportResult> {
     const documentKind = annotationDocumentKindForPath(record.file.path)
     if (!documentKind) {
-      return { ok: false, message: 'Sidecar export is currently implemented for PDF and DOCX previews only.' }
+      return { ok: false, message: 'The open document type does not support annotation sidecar export.' }
     }
 
     const exported = await exportPdfAnnotationSidecarPackage({
@@ -1729,298 +2006,56 @@ export class WorkspacePreviewHost {
     }
   }
 
-  private async invokeHostAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult | null> {
-    if (action.actionId === 'annotation.sidecar.read' && record.manifest.capabilities.annotations) {
-      return this.invokeAnnotationSidecarReadAction(record, action, now)
-    }
-    if (action.actionId === 'annotation.sidecar.import' && record.manifest.capabilities.annotations) {
-      return this.invokeAnnotationSidecarImportAction(record, action, now)
-    }
-    if (action.actionId === PDF_REVIEW_GENERATE_ACTION_ID && record.manifest.capabilities.annotations) {
-      return this.invokePdfReviewGenerateAction(record, action, now)
-    }
-    if (action.actionId === PDF_REVIEW_IMPROVE_ACTION_ID && record.manifest.capabilities.annotations) {
-      return this.invokePdfReviewImproveAction(record, action, now)
-    }
-    if (record.manifest.id === HTML_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'html.previewUrl') {
-      return this.invokeHtmlPreviewUrlAction(record, action, now)
-    }
-    if (record.manifest.id === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID && action.actionId === 'markdown.readImage') {
-      return this.invokeMarkdownReadImageAction(record, action, now)
-    }
-    return null
-  }
-
   private async invokeHtmlPreviewUrlAction(
     record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
+    _input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult> {
     const preview = await this.htmlPreviewService.preview({
       path: record.file.path,
       workspaceRoot: record.file.workspaceRoot
     })
-    if (!preview.ok) return preview
+    if (!preview.ok) return { ...preview, reason: 'worker-error' }
 
-    return workspacePreviewPluginActionResultSchema.parse({
+    return {
       ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
       result: {
         url: preview.url,
         size: preview.size,
         mtimeMs: preview.mtimeMs
       },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokeAnnotationSidecarReadAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (!annotationDocumentKindForPath(record.file.path)) {
-      return { ok: false, message: 'Annotation sidecar reads are currently implemented for PDF and DOCX files only.' }
+      bytesRead: 0,
+      truncated: false,
+      effect: 'host-action'
     }
-
-    const loaded = await loadPdfAnnotationSidecar({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot
-    })
-    if (!loaded.ok) return loaded
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result: {
-        sidecar: workspacePreviewAnnotationSidecarForAction(loaded.sidecar),
-        source: loaded.source,
-        warnings: loaded.warnings,
-        pdfFingerprint: loaded.pdfFingerprint
-      },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokeAnnotationSidecarImportAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'Annotation sidecar package import is currently implemented for PDF previews only.' }
-    }
-
-    const input = workspacePreviewAnnotationSidecarImportActionInputSchema.parse(action.input)
-    const imported = await importPdfAnnotationSidecarPackage({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...(input.packagePath ? { packagePath: input.packagePath } : {}),
-      ...(input.packageBase64 ? { packageBase64: input.packageBase64 } : {}),
-      ...(input.attemptRelocation !== undefined ? { attemptRelocation: input.attemptRelocation } : {})
-    })
-    if (!imported.ok) return imported
-
-    const fileInfo = await stat(record.file.path)
-    const file: WorkspacePreviewFileState = {
-      ...record.file,
-      size: fileInfo.size,
-      mtimeMs: fileInfo.mtimeMs
-    }
-    const session = workspacePreviewSessionSchema.parse({
-      ...record.session,
-      updatedAt: now,
-      mtimeMs: fileInfo.mtimeMs,
-      file
-    })
-    this.sessions.set(session.id, {
-      ...record,
-      session,
-      file
-    })
-
-    const result = workspacePreviewAnnotationSidecarImportActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(imported.sidecar),
-      importedAt: imported.importedAt || now,
-      pdfFingerprint: imported.pdfFingerprint,
-      fingerprintMatched: imported.fingerprintMatched,
-      warnings: imported.warnings,
-      counts: {
-        threads: imported.sidecar.threads.length,
-        annotations: imported.sidecar.annotations.length,
-        anchors: imported.sidecar.anchors.length
-      },
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokePdfReviewGenerateAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'PDF review generation is currently implemented for PDF previews only.' }
-    }
-    if (!this.loadSettings) {
-      return { ok: false, message: 'PDF review generation requires app settings.' }
-    }
-
-    const input = pdfReviewGenerateActionInputSchema.parse(action.input)
-    const generated = await generatePdfReviewAnnotations({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...input
-    }, await this.loadSettings())
-    if (!generated.ok) return generated
-
-    const session = await this.refreshSidecarSession(record, now)
-    const result = pdfReviewGenerateActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(generated.sidecar),
-      mode: generated.mode,
-      path: generated.path,
-      ...(generated.reviewDataPath ? { reviewDataPath: generated.reviewDataPath } : {}),
-      commentCount: generated.commentCount,
-      skippedCount: generated.skippedCount,
-      generatedAt: generated.generatedAt || now,
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
-  }
-
-  private async invokePdfReviewImproveAction(
-    record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    if (annotationDocumentKindForPath(record.file.path) !== 'pdf') {
-      return { ok: false, message: 'PDF annotation improvement is currently implemented for PDF previews only.' }
-    }
-
-    const input = pdfReviewImproveAnnotationActionInputSchema.parse(action.input)
-    const improved = await improvePdfReviewAnnotation({
-      pdfPath: record.file.path,
-      workspaceRoot: record.file.workspaceRoot,
-      ...input
-    }, this.loadSettings ? await this.loadSettings() : undefined)
-    if (!improved.ok) return improved
-
-    const session = await this.refreshSidecarSession(record, now)
-    const result = pdfReviewImproveAnnotationActionResultSchema.parse({
-      sidecar: workspacePreviewAnnotationSidecarForAction(improved.sidecar),
-      path: improved.path,
-      threadId: improved.threadId,
-      annotationId: improved.annotationId,
-      modificationAdvice: improved.modificationAdvice,
-      revisedContent: improved.revisedContent,
-      generatedAt: improved.generatedAt || now,
-      effect: 'sidecar-write'
-    })
-
-    return workspacePreviewPluginActionResultSchema.parse({
-      ok: true,
-      sessionId: session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
-      result,
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
   }
 
   private async invokeMarkdownReadImageAction(
     record: WorkspacePreviewSessionRecord,
-    action: WorkspacePreviewPluginActionInput,
-    now: string
-  ): Promise<WorkspacePreviewInvokeActionResult> {
-    const imagePath = typeof action.input.path === 'string' ? action.input.path.trim() : ''
-    if (!imagePath) return { ok: false, message: 'Markdown image path is required.' }
+    input: WorkspacePreviewProviderActionInput
+  ): Promise<WorkspacePreviewProviderActionResult> {
+    const imagePath = typeof input.action.input.path === 'string' ? input.action.input.path.trim() : ''
+    if (!imagePath) {
+      return { ok: false, reason: 'unsupported-action', message: 'Markdown image path is required.' }
+    }
 
     const image = await readWorkspaceImage({
       path: imagePath,
       workspaceRoot: record.file.workspaceRoot
     })
-    if (!image.ok) return image
+    if (!image.ok) return { ...image, reason: 'worker-error' }
 
-    return workspacePreviewPluginActionResultSchema.parse({
+    return {
       ok: true,
-      sessionId: record.session.id,
-      pluginId: record.manifest.id,
-      actionId: action.actionId,
-      invokedAt: now,
       result: {
         dataUrl: image.dataUrl,
         mimeType: image.mimeType,
         size: image.size
       },
-      audit: {
-        pluginId: record.manifest.id,
-        path: record.file.path,
-        actionId: action.actionId,
-        effect: 'host-action'
-      }
-    })
+      bytesRead: 0,
+      truncated: false,
+      effect: 'host-action'
+    }
   }
-}
-
-function isSourceTextPreviewPlugin(pluginId: string): boolean {
-  return pluginId === TEXT_WORKSPACE_PREVIEW_PLUGIN_ID ||
-    pluginId === MARKDOWN_WORKSPACE_PREVIEW_PLUGIN_ID ||
-    pluginId === HTML_WORKSPACE_PREVIEW_PLUGIN_ID
 }
 
 async function isUtf8TextPreviewCompatibleFile(path: string, fileInfo: Stats): Promise<boolean> {
@@ -2213,16 +2248,13 @@ function buildAssetTransportStrategies(
   manifest: WorkspacePreviewPluginManifest,
   artifacts: readonly WorkspacePreviewArtifactDescriptor[] = []
 ): WorkspacePreviewAssetTransportDescriptor['strategies'] {
-  const rangeReason = manifest.modality === 'bioimaging'
-    ? 'Use bounded byte ranges for metadata and plugin-owned tile decoders; raw whole-slide payloads stay out of IPC.'
-    : 'Use bounded byte ranges for lazy plugin reads; host open and observe avoid eager-loading full asset bytes.'
   const availableArtifactKinds = new Set(artifacts.map((artifact) => artifact.kind))
 
   return [
     {
       kind: 'byte-range',
       status: 'available',
-      reason: rangeReason,
+      reason: 'Use bounded byte ranges for lazy plugin reads; host open and observe avoid eager-loading full asset bytes.',
       maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES
     },
     {
@@ -2392,26 +2424,35 @@ function createDocumentParagraphEditDiffSummary(input: {
   })
 }
 
-function pdfSidecarObservationAnnotations(
-  sidecar: PdfAnnotationSidecar,
-  warnings: readonly string[] = []
-): NonNullable<WorkspaceObservation['annotations']> {
-  const annotations: NonNullable<WorkspaceObservation['annotations']> = sidecar.threads
+function pdfSidecarDocumentAnnotations(
+  sidecar: PdfAnnotationSidecar
+): NonNullable<WorkspaceObservation['documentAnnotations']> {
+  const threads = sidecar.threads
     .slice(0, WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS)
-    .map((thread) => ({
-      id: thread.id,
-      kind: thread.kind,
-      ...annotationSummaryProperty(pdfAnnotationThreadObservationSummary(sidecar, thread))
-    }))
-  for (const warning of warnings) {
-    annotations.push({
-      id: `annotation-sidecar-warning-${annotations.length + 1}`,
-      kind: 'warning',
-      summary: clipObservationText(warning)
+    .map((thread) => {
+      const anchors = sidecar.anchors.filter((anchor) => thread.anchorIds.includes(anchor.id))
+      const pages = pdfAnchorPageRange(anchors)
+      const annotationCount = sidecar.annotations.filter((annotation) => (
+        annotation.threadId === thread.id || thread.annotationIds.includes(annotation.id)
+      )).length
+      const summary = clipObservationText(pdfAnnotationThreadObservationSummary(sidecar, thread))
+      return {
+        id: thread.id,
+        kind: thread.kind,
+        status: thread.status,
+        ...(thread.title?.trim() ? { title: clipObservationText(thread.title, 512) } : {}),
+        ...pages,
+        annotationCount,
+        ...(summary ? { summary } : {})
+      }
     })
-    if (annotations.length >= WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) break
+  return {
+    threadCount: sidecar.threads.length,
+    annotationCount: sidecar.annotations.length,
+    openThreadCount: sidecar.threads.filter((thread) => thread.status === 'open').length,
+    truncated: sidecar.threads.length > threads.length,
+    threads
   }
-  return annotations
 }
 
 function workspacePreviewAnnotationSidecarForAction(sidecar: PdfAnnotationSidecar): PdfAnnotationSidecar {
@@ -2454,34 +2495,23 @@ function pdfAnnotationThreadObservationSummary(
 }
 
 function pdfAnchorPageRangeSummary(anchors: readonly PdfAnchor[]): string {
+  const range = pdfAnchorPageRange(anchors)
+  if (!range.pageStart || !range.pageEnd) return ''
+  return range.pageStart === range.pageEnd
+    ? `page ${range.pageStart}`
+    : `pages ${range.pageStart}-${range.pageEnd}`
+}
+
+function pdfAnchorPageRange(
+  anchors: readonly PdfAnchor[]
+): { pageStart?: number; pageEnd?: number } {
   const pages = anchors
     .flatMap((anchor) => [anchor.pageStart, anchor.pageEnd])
     .filter((page) => Number.isFinite(page) && page > 0)
-  if (!pages.length) return ''
+  if (!pages.length) return {}
   const start = Math.min(...pages)
   const end = Math.max(...pages)
-  return start === end ? `page ${start}` : `pages ${start}-${end}`
-}
-
-function annotationSummaryProperty(summary: string): Pick<NonNullable<WorkspaceObservation['annotations']>[number], 'summary'> | Record<string, never> {
-  const clipped = clipObservationText(summary)
-  return clipped ? { summary: clipped } : {}
-}
-
-function mergeObservationAnnotations(
-  existing: WorkspaceObservation['annotations'],
-  next: WorkspaceObservation['annotations']
-): NonNullable<WorkspaceObservation['annotations']> {
-  const merged: NonNullable<WorkspaceObservation['annotations']> = []
-  const seen = new Set<string>()
-  for (const annotation of [...(existing ?? []), ...(next ?? [])]) {
-    const key = `${annotation.id}\n${annotation.kind}\n${annotation.summary ?? ''}`
-    if (seen.has(key)) continue
-    seen.add(key)
-    merged.push(annotation)
-    if (merged.length >= WORKSPACE_PREVIEW_MAX_OBSERVATION_ITEMS) break
-  }
-  return merged
+  return { pageStart: start, pageEnd: end }
 }
 
 function uniqueObservationActions(actions: readonly string[]): string[] {
@@ -2581,7 +2611,7 @@ function formatAnnotationThreadPreview(status: PdfAnnotationThreadStatus, title:
   return [status, title].filter((part) => part.trim()).join(' | ')
 }
 
-type AnnotationDocumentKind = 'pdf' | 'docx'
+type AnnotationDocumentKind = 'pdf' | 'docx' | 'markdown'
 type AnnotationUpsertTarget = NonNullable<WorkspacePreviewAnnotationUpsertOperation['target']>
 type AnnotationUpsertAnchorTarget = NonNullable<AnnotationUpsertTarget['anchor']>
 type AnnotationUpsertThreadTarget = NonNullable<AnnotationUpsertTarget['thread']>
@@ -2591,6 +2621,7 @@ function annotationDocumentKindForPath(path: string): AnnotationDocumentKind | n
   const extension = extensionFromPreviewPath(path)
   if (extension === '.pdf') return 'pdf'
   if (extension === '.docx') return 'docx'
+  if (extension === '.md' || extension === '.mdx' || extension === '.markdown') return 'markdown'
   return null
 }
 
@@ -2620,7 +2651,7 @@ function updatePdfAnnotationThreadSidecar(input: {
   beforeTitle: string
 } {
   const existing = input.sidecar.threads.find((thread) => thread.id === input.operation.threadId)
-  if (!existing) throw new Error(`PDF annotation thread not found: ${input.operation.threadId}.`)
+  if (!existing) throw new Error(`Document annotation thread not found: ${input.operation.threadId}.`)
 
   const threads = input.sidecar.threads.map((thread) => {
     if (thread.id !== existing.id) return thread
@@ -2652,7 +2683,7 @@ function deletePdfAnnotationThreadSidecar(input: {
   anchorCount: number
 } {
   const existing = input.sidecar.threads.find((thread) => thread.id === input.operation.threadId)
-  if (!existing) throw new Error(`PDF annotation thread not found: ${input.operation.threadId}.`)
+  if (!existing) throw new Error(`Document annotation thread not found: ${input.operation.threadId}.`)
 
   const deletedAnnotationIds = new Set([
     ...existing.annotationIds,
@@ -2678,12 +2709,24 @@ function deletePdfAnnotationThreadSidecar(input: {
       !deletedAnchorCandidateIds.has(anchor.id) || retainedAnchorIds.has(anchor.id)
     )
   }
+  const tombstone: PdfAnnotationThreadTombstone = {
+    threadId: existing.id,
+    annotationIds: sortedUniqueStrings([...deletedAnnotationIds]),
+    anchorIds: sortedUniqueStrings([...deletedAnchorCandidateIds]),
+    deletedAt: input.now,
+    deletedVersion: input.sidecar.version + 1
+  }
+  const deletedThreads = [
+    ...(input.sidecar.deletedThreads ?? []).filter((candidate) => candidate.threadId !== existing.id),
+    tombstone
+  ]
 
   return {
     sidecar: commitPdfAnnotationSidecar(input.sidecar, {
       anchors,
       annotations,
-      threads
+      threads,
+      deletedThreads
     }, input.now),
     annotationCount: input.sidecar.annotations.length - annotations.length,
     anchorCount: input.sidecar.anchors.length - anchors.length
@@ -2778,7 +2821,7 @@ function updateExistingPdfAnnotationSidecar(input: {
     }, target?.thread)
   })
   if (!foundThread) {
-    throw new Error(`PDF annotation thread not found: ${input.existingAnnotation.threadId}.`)
+    throw new Error(`Document annotation thread not found: ${input.existingAnnotation.threadId}.`)
   }
 
   return {
@@ -2797,8 +2840,8 @@ function upsertPdfAnnotationAnchor(input: {
   const existing = input.sidecar.anchors.find((anchor) => anchor.id === input.target.id)
   const rects = input.target.rects ?? existing?.rects ?? []
   const quote = input.target.quote ?? existing?.quote ?? ''
-  if (!existing && input.documentKind === 'docx' && !quote.trim()) {
-    throw new Error('DOCX annotation targets require a non-empty anchor quote.')
+  if (!existing && input.documentKind !== 'pdf' && !quote.trim()) {
+    throw new Error('Text document annotation targets require a non-empty anchor quote.')
   }
   if (!existing && input.documentKind === 'pdf' && rects.length === 0 && !quote.trim() && input.target.pageStart == null) {
     throw new Error('PDF annotation targets require rects, a quote, or a pageStart.')
@@ -2812,6 +2855,7 @@ function upsertPdfAnnotationAnchor(input: {
     quote,
     contextBefore: input.target.contextBefore ?? existing?.contextBefore ?? '',
     contextAfter: input.target.contextAfter ?? existing?.contextAfter ?? '',
+    textRange: input.target.textRange ?? existing?.textRange,
     pdfFingerprint: input.sidecar.pdfFingerprint,
     createdAt,
     updatedAt: input.now
@@ -2976,7 +3020,7 @@ function applyOptionalThreadField<TKey extends keyof Pick<
 
 function commitPdfAnnotationSidecar(
   sidecar: PdfAnnotationSidecar,
-  changes: Partial<Pick<PdfAnnotationSidecar, 'anchors' | 'annotations' | 'threads'>>,
+  changes: Partial<Pick<PdfAnnotationSidecar, 'anchors' | 'annotations' | 'threads' | 'deletedThreads'>>,
   updatedAt: string
 ): PdfAnnotationSidecar {
   return stablePdfAnnotationSidecar({
@@ -3295,4 +3339,50 @@ function offsetForTextPosition(
 
   if (line === position.line && column === position.column) return content.length
   throw new Error(`Text position ${position.line}:${position.column} is outside the file.`)
+}
+
+function workspacePreviewVisualSourceRevision(session: WorkspacePreviewSession): string {
+  const revision = session.updatedAt.trim() || String(session.mtimeMs ?? session.openedAt)
+  if (!revision) throw new Error('Workspace preview session has no visual source revision.')
+  return revision
+}
+
+async function validateVisualSourceFile(
+  record: WorkspacePreviewSessionRecord
+): Promise<{
+  workspaceRoot: string
+  path: string
+  size: number
+  mtimeMs: number
+}> {
+  const workspaceRoot = await canonicalPath(record.file.workspaceRoot)
+  const path = await canonicalPath(record.file.path)
+  const relativePath = relative(workspaceRoot, path)
+  if (
+    !relativePath ||
+    isAbsolute(relativePath) ||
+    relativePath === '..' ||
+    relativePath.startsWith('../') ||
+    relativePath.startsWith('..\\')
+  ) {
+    throw new Error('Workspace preview visual source must remain inside the selected workspace.')
+  }
+  const fileInfo = await stat(path)
+  if (!fileInfo.isFile()) {
+    throw new Error('Workspace preview visual source is not a regular file.')
+  }
+  if (
+    (record.file.size !== undefined && record.file.size !== fileInfo.size) ||
+    (record.file.mtimeMs !== undefined && record.file.mtimeMs !== fileInfo.mtimeMs)
+  ) {
+    throw new Error(
+      'Workspace preview source changed after the session was opened; reopen the preview before rendering.'
+    )
+  }
+  return {
+    workspaceRoot,
+    path,
+    size: fileInfo.size,
+    mtimeMs: fileInfo.mtimeMs
+  }
 }

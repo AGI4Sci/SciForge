@@ -193,6 +193,9 @@ describe('normalizeCodexEvent', () => {
         call_id: 'call-2',
         name: 'research_search',
         success: false,
+        exit_code: 7,
+        outcome: 'retryable_error',
+        error: { code: 'provider_error', message: 'Provider rejected the request.' },
         output: 'Provider returned a result without an exit-code string.'
       }
     }, { threadId: 'thread-1', turnId: 'turn-1' })).toMatchObject({
@@ -206,7 +209,11 @@ describe('normalizeCodexEvent', () => {
           phase: 'failed',
           factSource: 'executor_result',
           evidenceStrength: 'executor_receipt',
-          success: false
+          success: false,
+          output: 'Provider returned a result without an exit-code string.',
+          error: { code: 'provider_error', message: 'Provider rejected the request.' },
+          exitCode: 7,
+          outcome: 'retryable_error'
         }
       }
     })
@@ -216,6 +223,7 @@ describe('normalizeCodexEvent', () => {
       payload: {
         type: 'function_call_output',
         call_id: 'call-1',
+        outcome: 'negative_result',
         output: 'Process exited with code 0\nOutput:\nok'
       }
     }, { threadId: 'thread-1', turnId: 'turn-1' })).toEqual({
@@ -231,7 +239,28 @@ describe('normalizeCodexEvent', () => {
           phase: 'succeeded',
           factSource: 'executor_result',
           evidenceStrength: 'executor_receipt',
-          success: true
+          success: true,
+          output: 'Process exited with code 0\nOutput:\nok',
+          exitCode: 0,
+          outcome: 'negative_result'
+        }
+      }
+    })
+
+    expect(normalizeCodexEvent({
+      type: 'response_item',
+      payload: {
+        type: 'function_call_output',
+        call_id: 'call-3',
+        output: 'Process exited with code 9\nOutput:\nfailed'
+      }
+    }, { threadId: 'thread-1', turnId: 'turn-1' })).toMatchObject({
+      tool: {
+        itemId: 'call-3',
+        status: 'error',
+        meta: {
+          success: false,
+          exitCode: 9
         }
       }
     })
@@ -301,6 +330,59 @@ describe('normalizeCodexEvent', () => {
       threadId: 'thread-1',
       turnId: 'turn-1',
       deltas: [{ text: 'visible string answer', kind: 'agent_message', snapshot: true }]
+    })
+  })
+
+  it('preserves local shell receipt exit codes and result details', () => {
+    expect(normalizeCodexEvent({
+      type: 'response_item',
+      payload: {
+        type: 'local_shell_call',
+        call_id: 'shell-success',
+        status: 'completed',
+        action: { command: 'npm test' },
+        exitCode: 0,
+        outcome: 'progress',
+        output: 'tests passed'
+      }
+    }, { threadId: 'thread-1', turnId: 'turn-1' })).toMatchObject({
+      tool: {
+        itemId: 'shell-success',
+        status: 'success',
+        detail: 'tests passed',
+        meta: {
+          success: true,
+          command: 'npm test',
+          exitCode: 0,
+          outcome: 'progress'
+        }
+      }
+    })
+
+    expect(normalizeCodexEvent({
+      type: 'response_item',
+      payload: {
+        type: 'local_shell_call',
+        call_id: 'shell-error',
+        status: 'failed',
+        action: { command: 'npm test' },
+        exit_code: 2,
+        outcome: 'fatal_error',
+        error: { message: 'test runner failed' },
+        detail: 'See diagnostics'
+      }
+    }, { threadId: 'thread-1', turnId: 'turn-1' })).toMatchObject({
+      tool: {
+        itemId: 'shell-error',
+        status: 'error',
+        detail: '{\n  "message": "test runner failed"\n}\nSee diagnostics',
+        meta: {
+          success: false,
+          command: 'npm test',
+          exitCode: 2,
+          outcome: 'fatal_error'
+        }
+      }
     })
   })
 
@@ -431,6 +513,7 @@ describe('normalizeCodexEvent', () => {
           success: true,
           command: 'npm test',
           cwd: '/tmp/workspace',
+          output: 'ok',
           exitCode: 0
         }
       }

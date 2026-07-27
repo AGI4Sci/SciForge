@@ -1,7 +1,3 @@
-import { mkdir, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { tmpdir } from 'node:os'
-import { mkdtempSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
@@ -9,47 +5,29 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { fetchUpstreamModelIds, readConfiguredLocalRuntimeModelIds } from './upstream-models'
+import { fetchUpstreamModelIds } from './upstream-models'
 
-function settings(dataDir: string, model = 'settings-model'): AppSettingsV1 {
-  const provider = defaultModelProviderSettings()
+function settings(): AppSettingsV1 {
+  const modelRouter = defaultModelRouterSettings()
+  modelRouter.profiles.default.textReasoner.model = 'private-text-model'
   return {
     version: 1,
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: {
-      ...provider,
-      providers: [
-        ...provider.providers,
-        {
-          id: 'custom-provider',
-          name: 'Custom Provider',
-          apiKey: 'sk-custom',
-          baseUrl: 'https://custom.example/v1',
-          models: ['custom-provider-model']
-        }
-      ]
-    },
     modelRouter: {
-      ...defaultModelRouterSettings(),
+      ...modelRouter,
       baseUrl: 'http://127.0.0.1:49876/v1',
       publicModelAlias: 'sciforge-router',
       runtimeApiKey: 'local-runtime-router-key'
     },
     agents: {
-      sciforge: {
-        ...defaultLocalRuntimeSettings(),
-        dataDir,
-        model,
-        providerId: 'custom-provider'
-      }
+      sciforge: defaultLocalRuntimeSettings()
     },
     workspaceRoot: '/tmp/workspace',
     log: { enabled: false, retentionDays: 7 },
@@ -71,60 +49,7 @@ describe('upstream model picker list', () => {
     vi.unstubAllGlobals()
   })
 
-  it('includes local runtime config model profiles, aliases, and the configured agent model', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'sciforge-models-'))
-    await mkdir(dataDir, { recursive: true })
-    await writeFile(
-      join(dataDir, 'config.json'),
-      JSON.stringify({
-        contextCompaction: {
-          modelProfiles: {
-            'legacy-model': {
-              aliases: ['vendor/legacy-model']
-            }
-          }
-        },
-        models: {
-          profiles: {
-            'custom-model': {
-              aliases: ['vendor/custom-model']
-            }
-          }
-        }
-      }),
-      'utf8'
-    )
-
-    const ids = await readConfiguredLocalRuntimeModelIds(settings(dataDir))
-
-    expect(ids).toEqual(expect.arrayContaining([
-      'auto',
-      'deepseek-v4-pro',
-      'deepseek-v4-flash',
-      'sciforge-router',
-      'custom-model',
-      'vendor/custom-model'
-    ]))
-    expect(ids).not.toContain('legacy-model')
-    expect(ids).not.toContain('vendor/legacy-model')
-  })
-
-  it('queries the local Model Router /v1/models with the runtime API key', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'sciforge-models-'))
-    await mkdir(dataDir, { recursive: true })
-    await writeFile(
-      join(dataDir, 'config.json'),
-      JSON.stringify({
-        models: {
-          profiles: {
-            'deepseek-v4-flash': {
-              aliases: ['deepseek-chat', 'deepseek-reasoner']
-            }
-          }
-        }
-      }),
-      'utf8'
-    )
+  it('exposes only the public alias returned by Model Router', async () => {
     const calls: Array<{ url: string; method: string | undefined; headers: HeadersInit | undefined }> = []
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
       calls.push({
@@ -134,13 +59,17 @@ describe('upstream model picker list', () => {
       })
       return new Response(JSON.stringify({
         object: 'list',
-        data: [{ id: 'sciforge-router', object: 'model' }]
+        data: [
+          { id: 'private-text-model', object: 'model' },
+          { id: 'sciforge-router', object: 'model' },
+          { id: 'unknown-model', object: 'model' },
+          { id: 'sciforge-router', object: 'model' }
+        ]
       }), { status: 200 })
     })
 
-    const result = await fetchUpstreamModelIds(settings(dataDir, 'local-only-model'), 'sk-direct-provider')
+    const result = await fetchUpstreamModelIds(settings())
 
-    expect(result).toMatchObject({ ok: true })
     expect(calls).toEqual([
       expect.objectContaining({
         url: 'http://127.0.0.1:49876/v1/models',
@@ -151,27 +80,33 @@ describe('upstream model picker list', () => {
         })
       })
     ])
-    if (result.ok) {
-      expect(result.modelIds).toContain('sciforge-router')
-      expect(result.modelIds).toContain('custom-provider-model')
-      expect(result.modelGroups).toEqual(expect.arrayContaining([
-        expect.objectContaining({
-          providerId: 'custom-provider',
-          label: 'Custom Provider',
-          modelIds: expect.arrayContaining(['custom-provider-model'])
-        }),
-        expect.objectContaining({
-          providerId: 'deepseek',
-          label: 'DeepSeek',
-          modelIds: expect.arrayContaining(['deepseek-chat', 'deepseek-reasoner'])
-        })
-      ]))
-    }
+    expect(result).toEqual({
+      ok: true,
+      modelIds: ['sciforge-router'],
+      modelGroups: [{
+        providerId: 'model-router',
+        label: 'Model Router',
+        modelIds: ['sciforge-router']
+      }]
+    })
+    expect(JSON.stringify(result)).not.toContain('private-text-model')
+    expect(JSON.stringify(result)).not.toContain('unknown-model')
+  })
+
+  it('fails closed when Model Router does not return its public alias', async () => {
+    vi.stubGlobal('fetch', async () => new Response(JSON.stringify({
+      object: 'list',
+      data: [{ id: 'private-text-model', object: 'model' }]
+    }), { status: 200 }))
+
+    await expect(fetchUpstreamModelIds(settings())).resolves.toEqual({
+      ok: false,
+      message: 'Model Router returned no supported public model aliases.'
+    })
   })
 
   it('fails closed without a Model Router runtime key', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'sciforge-models-'))
-    const appSettings = settings(dataDir, 'local-only-model')
+    const appSettings = settings()
     appSettings.modelRouter = {
       ...appSettings.modelRouter!,
       runtimeApiKey: ''
@@ -179,9 +114,9 @@ describe('upstream model picker list', () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
 
-    const result = await fetchUpstreamModelIds(appSettings, 'sk-direct-provider')
+    const result = await fetchUpstreamModelIds(appSettings)
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
       message: 'Missing Model Router runtime API key; cannot query local /v1/models.'
     })
@@ -189,8 +124,7 @@ describe('upstream model picker list', () => {
   })
 
   it('fails closed without a Model Router base URL', async () => {
-    const dataDir = mkdtempSync(join(tmpdir(), 'sciforge-models-'))
-    const appSettings = settings(dataDir, 'local-only-model')
+    const appSettings = settings()
     appSettings.modelRouter = {
       ...appSettings.modelRouter!,
       baseUrl: ''
@@ -198,9 +132,9 @@ describe('upstream model picker list', () => {
     const fetchSpy = vi.fn()
     vi.stubGlobal('fetch', fetchSpy)
 
-    const result = await fetchUpstreamModelIds(appSettings, 'sk-direct-provider')
+    const result = await fetchUpstreamModelIds(appSettings)
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       ok: false,
       message: 'Missing Model Router base URL; cannot query local /v1/models.'
     })

@@ -122,7 +122,7 @@ describe('WritePdfAnnotationsPanel', () => {
           ]
         }
       },
-      onSelectThread: vi.fn(),
+      onLocateThread: vi.fn(),
       onReopenThread: vi.fn(),
       onDeleteThread: vi.fn(),
       onEditAnnotation: vi.fn(),
@@ -163,7 +163,7 @@ describe('WritePdfAnnotationsPanel', () => {
     expect(html.match(/ds-selectable-text/g)?.length).toBeGreaterThanOrEqual(4)
     expect(html).not.toContain('A comment on the claim.')
     expect(html).not.toContain('Translation</option>')
-    expect(html).toContain('aria-label="Select annotation thread"')
+    expect(html.match(/aria-label="Locate in document"/g)).toHaveLength(2)
     expect(html).toContain('aria-label="Reopen thread"')
     expect(html).toContain('aria-label="Edit annotation"')
     expect(html).toContain('aria-label="Delete thread"')
@@ -173,7 +173,7 @@ describe('WritePdfAnnotationsPanel', () => {
     const html = renderToStaticMarkup(createElement(WritePdfAnnotationsPanel, {
       sidecar: emptyCommentSidecar(),
       selectedThreadId: 'thread-empty-comment',
-      onSelectThread: vi.fn(),
+      onLocateThread: vi.fn(),
       onDeleteThread: vi.fn(),
       onEditAnnotation: vi.fn()
     }))
@@ -190,7 +190,7 @@ describe('WritePdfAnnotationsPanel', () => {
       documentKind: 'docx',
       sidecar: panelSidecar(),
       selectedThreadId: 'thread-b',
-      onSelectThread: vi.fn(),
+      onLocateThread: vi.fn(),
       onEditAnnotation: vi.fn(),
       onAskQuestion: vi.fn(),
       onReloadSidecar: vi.fn()

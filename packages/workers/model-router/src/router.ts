@@ -1,15 +1,13 @@
 import { createHash } from 'node:crypto';
-import { constants } from 'node:fs';
-import { mkdir, open, readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, realpath, stat } from 'node:fs/promises';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { homedir, tmpdir } from 'node:os';
-import { dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
   anthropicMessagesToResponses,
-  chatCompletionToResponse,
+  chatFinishReasonFromResponse,
   chatToolNameAliasesFromResponsesTools,
   estimateAnthropicMessagesInputTokens,
   makeId,
@@ -27,14 +25,30 @@ import {
   type ModelRouterUpstreamDiagnostic,
 } from './manifest';
 import { readIncomingMessageBody, readIncomingMessageBodyBytes } from './http-body';
-import { hygienizeChatProviderBody } from './request-hygiene';
+import {
+  type ModelRouterFullTraceRecorder,
+  type ModelRouterTraceSession,
+} from './full-trace-recorder';
 import { redactTraceText, redactUserVisibleText } from './trace-redaction';
+import { normalizeLoopbackHost } from './network-policy';
+import {
+  preferredProviderProtocol,
+  providerCompatibilityConfigurationIssue,
+  type ProviderCompatibilityConfig,
+} from './provider-compat';
+import {
+  UpstreamProtocolNegotiator,
+  UpstreamRequestError,
+  captureUpstreamResponse,
+  type UpstreamAttempt,
+  type UpstreamWireProtocol,
+} from './upstream-drivers';
 
 export interface ModelRouterProviderConfig {
-  provider: string;
   baseUrl: string;
   apiKeyEnv: string;
   model: string;
+  compatibility?: ProviderCompatibilityConfig;
   maxSupplementRounds?: number;
 }
 
@@ -45,14 +59,38 @@ export interface ModelRouterScientificTranslatorConfig {
   timeoutMs?: number;
 }
 
+export const MODEL_ROUTER_VISION_MIME_TYPES = [
+  'image/png',
+  'image/jpeg',
+  'image/webp',
+  'image/gif',
+] as const;
+export const MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES = 20 * 1024 * 1024;
+export const MODEL_ROUTER_MAX_REQUEST_BYTES = 40 * 1024 * 1024;
+
+export interface ModelRouterProfileCapabilityRegistration {
+  vision?: {
+    mimeTypes?: string[];
+    maxInputBytes?: number;
+  };
+  images?: {
+    generation?: boolean;
+    editing?: boolean;
+    referenceImages?: boolean;
+    masks?: boolean;
+    sizeSelection?: boolean;
+    sizes?: string[];
+  };
+}
+
 export interface ModelRouterProfile {
-  traceRoot: string;
   textReasoner: ModelRouterProviderConfig;
   imageGenerator?: ModelRouterProviderConfig;
   translators: {
     vision?: ModelRouterProviderConfig;
     scientific?: ModelRouterScientificTranslatorConfig;
   };
+  capabilities?: ModelRouterProfileCapabilityRegistration;
 }
 
 export interface ModelRouterConfig {
@@ -66,9 +104,9 @@ export interface ModelRouterServerOptions {
   config: ModelRouterConfig;
   env?: Record<string, string | undefined>;
   workspaceRoot?: string;
-  traceDataRoot?: string;
   fetchImpl?: typeof fetch;
   log?: (message: string) => void;
+  fullTraceRecorder?: ModelRouterFullTraceRecorder;
 }
 
 export interface StartedModelRouterServer {
@@ -77,6 +115,54 @@ export interface StartedModelRouterServer {
   port: number;
   close(): Promise<void>;
 }
+
+export type ModelRouterRoleReadinessState =
+  | 'ready'
+  | 'not_configured'
+  | 'invalid_configuration'
+  | 'missing_credentials';
+
+export type ModelRouterRoleReadiness = {
+  configured: boolean;
+  ready: boolean;
+  state: ModelRouterRoleReadinessState;
+};
+
+export type ModelRouterPublicCapabilityContract = {
+  schemaVersion: 'sciforge.model-router.capabilities.v1';
+  publicModelAlias: string;
+  profile: string;
+  roles: {
+    textReasoner: ModelRouterRoleReadiness;
+    imageGenerator: ModelRouterRoleReadiness;
+    visionTranslator: ModelRouterRoleReadiness;
+    scientificTranslator: ModelRouterRoleReadiness;
+  };
+  vision: {
+    available: boolean;
+    input: {
+      mimeTypes: string[];
+      maxInputBytes: number;
+      maxRequestBytes: number;
+      sources: Array<'inline' | 'url' | 'workspace_ref'>;
+    };
+  };
+  images: {
+    available: boolean;
+    maxRequestBytes: number;
+    features: {
+      generation: boolean;
+      editing: boolean;
+      referenceImages: boolean;
+      masks: boolean;
+      sizeSelection: boolean;
+    };
+    sizes: {
+      mode: 'enumerated' | 'provider-defined' | 'unsupported';
+      values: string[];
+    };
+  };
+};
 
 type ModalityKind = 'vision.image' | 'audio' | 'video' | 'table' | 'document';
 
@@ -116,12 +202,11 @@ type ProviderCallRecord = {
   status: 'ok' | 'failed';
   roleAlias: string;
   providerBindingSha256: string;
-  providerAliasSha256: string;
   modelAliasSha256: string;
-  wireApi: 'chat.completions';
+  wireApi: UpstreamWireProtocol;
   wireRequest: {
     urlSha256: string;
-    endpointRoute: 'chat.completions';
+    endpointRoute: UpstreamWireProtocol;
     bodyShape: {
       modelAliasSha256: string;
       messageCount: number;
@@ -144,21 +229,6 @@ type RecentProviderError = {
   status?: number;
   at: number;
   role?: ModelRouterUpstreamDiagnostic['role'];
-};
-
-type RequestAuditMetadata = {
-  schemaVersion: 'sciforge.model-router.request-audit.v1';
-  route: 'model-router.responses' | 'model-router.messages';
-  source?: string;
-  operation?: string;
-  runtimeId?: string;
-  threadIdSha256?: string;
-  sourceRuntimeId?: string;
-  sourceThreadIdSha256?: string;
-  targetRuntimeId?: string;
-  targetThreadIdSha256?: string;
-  packetDigest?: string;
-  sourceDigest?: string;
 };
 
 type ResponseUsage = {
@@ -193,22 +263,25 @@ type RoutedResponse = {
   model: string;
   outputText: string;
   outputItems: JsonObject[];
-  traceRef: string;
   usage: ResponseUsage;
+  status?: string;
+  incompleteDetails?: JsonObject;
+  terminalDetails?: JsonObject;
 };
 
-type ToolCallCache = Map<string, JsonObject>;
+type ResponseContinuationBlock = readonly JsonObject[];
+type ResponseContinuationCache = Map<string, ResponseContinuationBlock>;
 
 type TextControl =
   | { type: 'final_answer'; content: string }
   | { type: 'need_more_visual_info'; target: string; question: string; reason?: string };
 
-const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = 20 * 1024 * 1024;
-const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = 40 * 1024 * 1024;
-const MAX_TOOL_CALL_CACHE_ENTRIES = 512;
+const MAX_TRANSIENT_PROVIDER_IMAGE_BYTES = MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES;
+const MAX_MODEL_ROUTER_REQUEST_BODY_BYTES = MODEL_ROUTER_MAX_REQUEST_BYTES;
+const MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES = 512;
 const MAX_TEXT_MODALITY_BYTES = 256 * 1024;
-export const DEFAULT_MODEL_ROUTER_TRACE_ROOT = 'traces';
 const RECENT_PROVIDER_AUTH_ERROR_TTL_MS = 30 * 60 * 1000;
+const modelRouterInFlightRequests = new WeakMap<Server, Set<Promise<void>>>();
 
 // Protected scientific files can carry sequence, chemistry, structure, variant, or assay data and
 // must never be inlined raw into the text reasoner. This set is intentionally broader than the file
@@ -247,16 +320,20 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
   const fetchImpl = options.fetchImpl ?? fetch;
   const env = options.env ?? processEnvSnapshot();
   const workspaceRoot = resolve(options.workspaceRoot ?? process.cwd());
-  const traceDataRoot = resolveModelRouterTraceDataRoot(env, options.traceDataRoot);
   const visionTranslationCache = new Map<string, VisionTranslationCacheEntry>();
   // Caches scientific-file expert translations by resolved modality + file-content sha. An agentic
   // turn is several router requests; the upload rides along on each, so the expert should run once.
   const scientificTranslationCache = new Map<string, ScientificEvidence>();
-  const toolCallCache: ToolCallCache = new Map();
+  const responseContinuationCache: ResponseContinuationCache = new Map();
+  const upstreamNegotiator = new UpstreamProtocolNegotiator();
   let recentRouterError: RecentProviderError | null = null;
   const backgroundControllers = new Set<AbortController>();
   let activeInteractiveRequests = 0;
-  const routeWithPriority = <T>(body: unknown, task: (signal?: AbortSignal) => Promise<T>): Promise<T> => {
+  const routeWithPriority = <T>(
+    body: unknown,
+    clientSignal: AbortSignal,
+    task: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> => {
     const background = isDagBackgroundRequest(body);
     if (background && activeInteractiveRequests > 0) {
       return Promise.reject(routerError(
@@ -268,11 +345,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
     if (!background) {
       activeInteractiveRequests += 1;
       for (const controller of backgroundControllers) controller.abort();
-      return task().finally(() => { activeInteractiveRequests = Math.max(0, activeInteractiveRequests - 1); });
+      return task(clientSignal).finally(() => { activeInteractiveRequests = Math.max(0, activeInteractiveRequests - 1); });
     }
     const controller = new AbortController();
     backgroundControllers.add(controller);
-    return task(controller.signal).finally(() => backgroundControllers.delete(controller));
+    return task(AbortSignal.any([clientSignal, controller.signal]))
+      .finally(() => backgroundControllers.delete(controller));
   };
   const recordProviderError = (error: Omit<RecentProviderError, 'at'>) => {
     recentRouterError = {
@@ -281,8 +359,28 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
     };
   };
 
-  return createServer(async (request, response) => {
+  const inFlightRequests = new Set<Promise<void>>();
+  const server = createServer((request, response) => {
+    const operation = (async (): Promise<void> => {
+    const clientController = new AbortController();
+    const abortClientRequest = () => {
+      if (!clientController.signal.aborted) {
+        clientController.abort(new DOMException('Client connection closed before the model request completed.', 'AbortError'));
+      }
+    };
+    request.once('aborted', abortClientRequest);
+    response.once('close', () => {
+      if (!response.writableFinished) abortClientRequest();
+    });
     const url = new URL(request.url ?? '/', `http://${request.headers.host ?? '127.0.0.1'}`);
+    const fullTraceSession = isModelTraceRoute(request.method, url.pathname)
+      ? options.fullTraceRecorder?.start({
+          method: request.method ?? 'POST',
+          path: `${url.pathname}${url.search}`,
+          headers: request.headers,
+        })
+      : undefined;
+    fullTraceSession?.attach(response);
     try {
       if (request.method === 'OPTIONS') return sendCors(response);
       if (request.method === 'GET' && url.pathname === '/health') {
@@ -294,6 +392,14 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         }));
       }
       if (request.method === 'GET' && url.pathname === '/healthz') {
+        const defaultTextReasoner = options.config.profiles[options.config.defaultProfile]?.textReasoner;
+        const protocol = defaultTextReasoner
+          ? upstreamNegotiator.cachedProtocol(
+            defaultTextReasoner.baseUrl,
+            defaultTextReasoner.model,
+            defaultTextReasoner.compatibility,
+          ) ?? null
+          : null;
         const recentProviderDiagnostic = recentProviderErrorDiagnostic(recentRouterError);
         const upstream = recentProviderDiagnostic
           ? recentProviderDiagnostic
@@ -311,6 +417,8 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           health: diagnostics.health,
           recentError: diagnostics.recentError,
           capabilities: diagnostics.capabilities,
+          protocol,
+          traceCapture: options.fullTraceRecorder ? 'ready' : 'disabled',
           upstream,
         });
       }
@@ -335,96 +443,114 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
           models: [publicModel],
         });
       }
+      if (request.method === 'GET' && url.pathname === '/v1/capabilities') {
+        assertRuntimeAuthorized(request, options.config, env);
+        const profileId = requestedProfileId({}, request, options.config);
+        return sendJson(
+          response,
+          200,
+          createModelRouterPublicCapabilities(options.config, env, profileId) as unknown as JsonObject,
+        );
+      }
       if (request.method === 'POST' && url.pathname === '/v1/responses') {
         assertRuntimeAuthorized(request, options.config, env);
-        const body = await readJson(request);
+        const body = await readJson(request, fullTraceSession);
         if (isRecord(body) && body.stream === true) {
           const responseId = makeId('resp');
           return sendDeferredResponseStream(
             response,
             responseId,
             options.config.publicModelAlias ?? 'sciforge-model-router',
-            routeWithPriority(body, (providerSignal) => routeResponsesRequest(body, {
+            routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
               config: options.config,
               env,
               fetchImpl,
               workspaceRoot,
-              traceDataRoot,
               request,
               visionTranslationCache,
               scientificTranslationCache,
-              toolCallCache,
+              responseContinuationCache,
               responseId,
               providerSignal,
               recordProviderError,
+              upstreamNegotiator,
+              preferredProtocol: preferredResponsesProtocol(options.config, body, request),
+              traceSession: fullTraceSession,
             })),
           );
         }
-        const result = await routeWithPriority(body, (providerSignal) => routeResponsesRequest(body, {
+        const result = await routeWithPriority(body, clientController.signal, (providerSignal) => routeResponsesRequest(body, {
           config: options.config,
           env,
           fetchImpl,
           workspaceRoot,
-          traceDataRoot,
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: preferredResponsesProtocol(options.config, body, request),
+          traceSession: fullTraceSession,
         }));
         return sendJson(response, 200, responseObject(result));
       }
       if (request.method === 'POST' && url.pathname === '/v1/chat/completions') {
         assertRuntimeAuthorized(request, options.config, env);
-        const body = await readJson(request);
+        const body = await readJson(request, fullTraceSession);
         if (!isRecord(body)) {
           throw routerError(400, 'invalid_request', 'Chat completions request body must be a JSON object.');
         }
-        if (body.stream === true) {
-          throw routerError(400, 'unsupported_stream', 'Streaming chat completions are not supported by the Model Router public compatibility endpoint yet.');
-        }
         const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
         const responseRequest = chatCompletionsToResponsesRequest(body, publicModelAlias);
-        const result = await routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
+        const resultPromise = routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
           config: options.config,
           env,
           fetchImpl,
           workspaceRoot,
-          traceDataRoot,
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: 'chat-completions',
+          traceSession: fullTraceSession,
         }));
+        if (body.stream === true) {
+          return sendDeferredChatCompletionStream(response, body, resultPromise);
+        }
+        const result = await resultPromise;
         return sendJson(response, 200, responseToChatCompletion(responseObject(result), body));
       }
       if (request.method === 'POST' && url.pathname === '/v1/images/generations') {
         assertRuntimeAuthorized(request, options.config, env);
-        const body = await readJson(request);
-        const result = await routeImageGenerationRequest(body, {
+        const body = await readJson(request, fullTraceSession);
+        const result = await routeWithPriority(body, clientController.signal, (providerSignal) => routeImageGenerationRequest(body, {
           config: options.config,
           env,
           fetchImpl,
           workspaceRoot,
-          traceDataRoot,
           request,
-        });
+          providerSignal,
+          traceSession: fullTraceSession,
+        }));
         return sendJson(response, 200, result);
       }
       if (request.method === 'POST' && url.pathname === '/v1/images/edits') {
         assertRuntimeAuthorized(request, options.config, env);
-        const form = await readMultipartForm(request);
-        const result = await routeImageEditRequest(form, {
+        const form = await readMultipartForm(request, fullTraceSession);
+        const result = await routeWithPriority({}, clientController.signal, (providerSignal) => routeImageEditRequest(form, {
           config: options.config,
           env,
           fetchImpl,
           workspaceRoot,
-          traceDataRoot,
           request,
-        });
+          providerSignal,
+          traceSession: fullTraceSession,
+        }));
         return sendJson(response, 200, result);
       }
       if (
@@ -432,7 +558,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         (url.pathname === '/v1/messages' || url.pathname === '/api/cc/v1/messages')
       ) {
         assertRuntimeAuthorized(request, options.config, env);
-        const body = await readJson(request) as AnthropicMessagesRequest;
+        const body = await readJson(request, fullTraceSession) as AnthropicMessagesRequest;
         const publicModelAlias = options.config.publicModelAlias ?? 'sciforge-model-router';
         const bodyForRouting = normalizeAnthropicMessagesRouterModel(body, publicModelAlias);
         const responseModel = stringField(body.model) || publicModelAlias;
@@ -447,34 +573,38 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
             responseId,
             responseModel,
             body,
-            routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
+            routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
               config: options.config,
               env,
               fetchImpl,
               workspaceRoot,
-              traceDataRoot,
               request,
               visionTranslationCache,
               scientificTranslationCache,
-              toolCallCache,
+              responseContinuationCache,
               responseId,
               providerSignal,
               recordProviderError,
+              upstreamNegotiator,
+              preferredProtocol: 'anthropic-messages',
+              traceSession: fullTraceSession,
             })),
           );
         }
-        const result = await routeWithPriority(responseRequest, (providerSignal) => routeResponsesRequest(responseRequest, {
+        const result = await routeWithPriority(responseRequest, clientController.signal, (providerSignal) => routeResponsesRequest(responseRequest, {
           config: options.config,
           env,
           fetchImpl,
           workspaceRoot,
-          traceDataRoot,
           request,
           visionTranslationCache,
           scientificTranslationCache,
-          toolCallCache,
+          responseContinuationCache,
           providerSignal,
           recordProviderError,
+          upstreamNegotiator,
+          preferredProtocol: 'anthropic-messages',
+          traceSession: fullTraceSession,
         }));
         return sendJson(response, 200, responseToAnthropicMessage(responseObject(result), body));
       }
@@ -483,7 +613,7 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         (url.pathname === '/v1/messages/count_tokens' || url.pathname === '/api/cc/v1/messages/count_tokens')
       ) {
         assertRuntimeAuthorized(request, options.config, env);
-        const body = await readJson(request) as AnthropicMessagesRequest;
+        const body = await readJson(request, fullTraceSession) as AnthropicMessagesRequest;
         return sendJson(response, 200, {
           input_tokens: estimateAnthropicMessagesInputTokens(body),
         });
@@ -491,12 +621,14 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
       return sendJson(response, 404, { error: { code: 'not_found', message: 'Route not found' } });
     } catch (error) {
       const routerError = normalizeRouterError(error);
+      fullTraceSession?.recordError(routerError);
       recordProviderError({
         code: routerError.code,
         status: routerError.status,
         ...(routerError.role ? { role: routerError.role } : {}),
       });
       options.log?.(`model-router ${routerError.code}: ${routerError.message}`);
+      if (response.destroyed || response.writableEnded) return;
       return sendJson(response, routerError.status, {
         error: {
           code: routerError.code,
@@ -504,7 +636,12 @@ export function createModelRouterServer(options: ModelRouterServerOptions): Serv
         },
       });
     }
+    })();
+    inFlightRequests.add(operation);
+    void operation.finally(() => inFlightRequests.delete(operation));
   });
+  modelRouterInFlightRequests.set(server, inFlightRequests);
+  return server;
 }
 
 function recentProviderErrorDiagnostic(error: RecentProviderError | null): ModelRouterUpstreamDiagnostic | null {
@@ -533,10 +670,10 @@ function providerDiagnosticCategory(
   code: string,
   status?: number,
 ): ModelRouterUpstreamDiagnostic['category'] | null {
-  if (/^provider_http_40[13]$/.test(code) || status === 401 || status === 403) return 'provider-auth';
-  if (/^provider_exception_(?:timeout|network|fetch_failed)/.test(code)) return 'provider-network';
-  if (code === 'provider_invalid_json' || code === 'provider_error_payload') return 'provider-bad-response';
-  if (code.startsWith('provider_http_') || code.startsWith('provider_exception_')) return 'provider-error';
+  if (/^(?:provider|upstream)_http_40[13]$/.test(code) || status === 401 || status === 403) return 'provider-auth';
+  if (/^(?:provider_exception_(?:timeout|network|fetch_failed)|upstream_(?:timeout|network_error))/.test(code)) return 'provider-network';
+  if (code === 'provider_invalid_json' || code === 'provider_error_payload' || code === 'upstream_invalid_response') return 'provider-bad-response';
+  if (code.startsWith('provider_http_') || code.startsWith('provider_exception_') || code.startsWith('upstream_')) return 'provider-error';
   return null;
 }
 
@@ -545,7 +682,7 @@ function recordProviderAuthFailure(
   summary: string,
   role: ProviderCallRecord['role'],
 ): void {
-  const match = /^provider_http_(40[13])$/.exec(summary);
+  const match = /^(?:provider|upstream)_http_(40[13])$/.exec(summary);
   if (!match) return;
   context.recordProviderError?.({
     code: summary,
@@ -571,6 +708,123 @@ function assertRuntimeAuthorized(
   if (authorization !== `Bearer ${runtimeApiKey}` && xApiKey !== runtimeApiKey) {
     throw routerError(401, 'unauthorized', 'Missing or invalid Model Router runtime API key.');
   }
+}
+
+export function createModelRouterPublicCapabilities(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+  profileId = config.defaultProfile,
+): ModelRouterPublicCapabilityContract {
+  const profile = config.profiles[profileId];
+  if (!profile) throw routerError(400, 'unknown_profile', 'Requested Model Router profile is not registered.');
+
+  const roles = {
+    textReasoner: providerRoleReadiness(profile.textReasoner, env),
+    imageGenerator: providerRoleReadiness(profile.imageGenerator, env),
+    visionTranslator: providerRoleReadiness(profile.translators.vision, env),
+    scientificTranslator: scientificTranslatorRoleReadiness(profile.translators.scientific, env),
+  };
+  const visionRegistration = profile.capabilities?.vision;
+  const registeredVisionMimeTypes = visionRegistration?.mimeTypes;
+  const mimeTypes = profile.translators.vision
+    ? sanitizeVisionMimeTypes(registeredVisionMimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES])
+    : [];
+  const maxInputBytes = profile.translators.vision
+    ? boundedPublicInputBytes(visionRegistration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES)
+    : 0;
+
+  const imageRegistration = profile.capabilities?.images;
+  const imageRoleRegistered = Boolean(profile.imageGenerator);
+  const generation = imageRoleRegistered && registeredFeature(imageRegistration?.generation, true);
+  const editing = imageRoleRegistered && registeredFeature(imageRegistration?.editing, true);
+  const referenceImages = editing && registeredFeature(imageRegistration?.referenceImages, true);
+  const masks = editing && registeredFeature(imageRegistration?.masks, true);
+  const sizeSelection = (generation || editing) && registeredFeature(imageRegistration?.sizeSelection, true);
+  const sizes = sizeSelection ? sanitizeImageSizes(imageRegistration?.sizes ?? []) : [];
+
+  return {
+    schemaVersion: 'sciforge.model-router.capabilities.v1',
+    publicModelAlias: config.publicModelAlias ?? 'sciforge-model-router',
+    profile: profileId,
+    roles,
+    vision: {
+      available: roles.visionTranslator.ready,
+      input: {
+        mimeTypes,
+        maxInputBytes,
+        maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+        sources: ['inline', 'url', 'workspace_ref'],
+      },
+    },
+    images: {
+      available: roles.imageGenerator.ready && (generation || editing),
+      maxRequestBytes: MODEL_ROUTER_MAX_REQUEST_BYTES,
+      features: {
+        generation,
+        editing,
+        referenceImages,
+        masks,
+        sizeSelection,
+      },
+      sizes: {
+        mode: !sizeSelection ? 'unsupported' : sizes.length > 0 ? 'enumerated' : 'provider-defined',
+        values: sizes,
+      },
+    },
+  };
+}
+
+function providerRoleReadiness(
+  provider: ModelRouterProviderConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!provider) return { configured: false, ready: false, state: 'not_configured' };
+  if (providerConfigurationIssue(provider)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[provider.apiKeyEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function scientificTranslatorRoleReadiness(
+  translator: ModelRouterScientificTranslatorConfig | undefined,
+  env: Record<string, string | undefined>,
+): ModelRouterRoleReadiness {
+  if (!translator) return { configured: false, ready: false, state: 'not_configured' };
+  if (scientificTranslatorConfigurationIssue(translator)) {
+    return { configured: true, ready: false, state: 'invalid_configuration' };
+  }
+  if (!stringField(env[translator.tokenEnv])) {
+    return { configured: true, ready: false, state: 'missing_credentials' };
+  }
+  return { configured: true, ready: true, state: 'ready' };
+}
+
+function registeredFeature(value: boolean | undefined, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function sanitizeVisionMimeTypes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => /^image\/[a-z0-9][a-z0-9.+-]{0,63}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function sanitizeImageSizes(values: unknown): string[] {
+  return [...new Set((Array.isArray(values) ? values : [])
+    .filter((value): value is string => typeof value === 'string')
+    .map((value) => value.trim().toLowerCase())
+    .filter((value) => value === 'auto' || /^[1-9]\d{1,4}x[1-9]\d{1,4}$/.test(value)))]
+    .slice(0, 32);
+}
+
+function boundedPublicInputBytes(value: number | undefined, fallback: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) return fallback;
+  return Math.min(Math.floor(value), MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
 }
 
 function modelRouterHealthzUpstreamDiagnostic(
@@ -670,7 +924,7 @@ function modelRouterHealthzUpstreamDiagnostic(
 export async function startModelRouterServer(
   options: ModelRouterServerOptions & { host?: string; port?: number },
 ): Promise<StartedModelRouterServer> {
-  const host = options.host ?? '127.0.0.1';
+  const host = normalizeLoopbackHost(options.host ?? '127.0.0.1');
   const server = createModelRouterServer(options);
   await new Promise<void>((resolve, reject) => {
     server.once('error', reject);
@@ -680,12 +934,17 @@ export async function startModelRouterServer(
     });
   });
   const address = server.address() as AddressInfo;
-  const url = `http://${host}:${address.port}`;
+  const displayHost = host.includes(':') ? `[${host.replace(/^\[|\]$/g, '')}]` : host;
+  const url = `http://${displayHost}:${address.port}`;
   return {
     server,
     url,
     port: address.port,
-    close: () => new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve()))),
+    close: async () => {
+      await new Promise<void>((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+      await Promise.allSettled([...modelRouterInFlightRequests.get(server) ?? []]);
+      await options.fullTraceRecorder?.flush();
+    },
   };
 }
 
@@ -694,8 +953,9 @@ type ImageRouteContext = {
   env: Record<string, string | undefined>;
   fetchImpl: typeof fetch;
   workspaceRoot: string;
-  traceDataRoot: string;
   request: IncomingMessage;
+  providerSignal: AbortSignal;
+  traceSession?: ModelRouterTraceSession;
 };
 
 type ResolvedImageRoute = {
@@ -710,11 +970,16 @@ async function routeImageGenerationRequest(body: unknown, context: ImageRouteCon
     throw routerError(400, 'invalid_request', 'Image generation request body must be a JSON object.');
   }
   const route = resolveImageRoute(body, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'generation',
+    { size: stringField(body.size) },
+  );
   return routeImageProviderRequest({
     context,
     route,
-    operation: 'generations',
     providerRequest: {
+      protocol: 'images-generations',
       url: providerImageGenerationsUrl(route.provider.baseUrl),
       headers: {
         'content-type': 'application/json',
@@ -733,11 +998,21 @@ async function routeImageEditRequest(form: FormData, context: ImageRouteContext)
   const prompt = requiredMultipartText(form, 'prompt');
   const images = requiredMultipartFiles(form, 'image');
   const mask = optionalMultipartFile(form, 'mask');
+  const size = optionalMultipartText(form, 'size');
   const route = resolveImageRoute({ model }, context);
+  assertImageRequestCapabilities(
+    createModelRouterPublicCapabilities(context.config, context.env, route.profileId),
+    'editing',
+    {
+      imageCount: images.length,
+      hasMask: Boolean(mask),
+      size,
+    },
+  );
   const providerForm = new FormData();
   providerForm.set('model', route.provider.model);
   providerForm.set('prompt', prompt);
-  copyOptionalMultipartText(form, providerForm, 'size');
+  if (size) providerForm.set('size', size);
   copyOptionalMultipartText(form, providerForm, 'n');
   copyOptionalMultipartText(form, providerForm, 'quality');
   copyOptionalMultipartText(form, providerForm, 'input_fidelity');
@@ -746,13 +1021,39 @@ async function routeImageEditRequest(form: FormData, context: ImageRouteContext)
   return routeImageProviderRequest({
     context,
     route,
-    operation: 'edits',
     providerRequest: {
+      protocol: 'images-edits',
       url: providerImageEditsUrl(route.provider.baseUrl),
       headers: { authorization: `Bearer ${route.secret}` },
       body: providerForm,
     },
   });
+}
+
+function assertImageRequestCapabilities(
+  capabilities: ModelRouterPublicCapabilityContract,
+  operation: 'generation' | 'editing',
+  request: { imageCount?: number; hasMask?: boolean; size?: string },
+): void {
+  if (!capabilities.images.features[operation]) {
+    throw routerError(422, 'image_capability_not_supported', `The active Model Router profile does not support image ${operation}.`, 'imageGenerator');
+  }
+  if ((request.imageCount ?? 0) > 1 && !capabilities.images.features.referenceImages) {
+    throw routerError(422, 'image_references_not_supported', 'The active Model Router profile does not support multiple reference images.', 'imageGenerator');
+  }
+  if (request.hasMask && !capabilities.images.features.masks) {
+    throw routerError(422, 'image_masks_not_supported', 'The active Model Router profile does not support masked image editing.', 'imageGenerator');
+  }
+  if (request.size && !capabilities.images.features.sizeSelection) {
+    throw routerError(422, 'image_size_selection_not_supported', 'The active Model Router profile does not support explicit image sizes.', 'imageGenerator');
+  }
+  if (
+    request.size
+    && capabilities.images.sizes.mode === 'enumerated'
+    && !capabilities.images.sizes.values.includes(request.size.toLowerCase())
+  ) {
+    throw routerError(422, 'image_size_not_supported', 'The requested image size is not supported by the active Model Router profile.', 'imageGenerator');
+  }
 }
 
 function resolveImageRoute(request: Record<string, unknown>, context: ImageRouteContext): ResolvedImageRoute {
@@ -776,76 +1077,115 @@ function resolveImageRoute(request: Record<string, unknown>, context: ImageRoute
 async function routeImageProviderRequest(options: {
   context: ImageRouteContext;
   route: ResolvedImageRoute;
-  operation: 'generations' | 'edits';
-  providerRequest: { url: string; headers: Record<string, string>; body: string | FormData };
+  providerRequest: {
+    protocol: 'images-generations' | 'images-edits';
+    url: string;
+    headers: Record<string, string>;
+    body: string | FormData;
+  };
 }): Promise<JsonObject> {
-  const { context, route, operation, providerRequest } = options;
-  const requestId = makeId('img');
-  const trace = createTraceContext(context.workspaceRoot, context.traceDataRoot, route.profile.traceRoot, requestId);
-  const publicModelAlias = context.config.publicModelAlias ?? 'sciforge-model-router';
+  const { context, route, providerRequest } = options;
   const startedAt = Date.now();
+  const traceAttempt = context.traceSession?.startUpstreamAttempt({
+    protocol: providerRequest.protocol,
+    phase: 'request',
+    method: 'POST',
+    url: providerRequest.url,
+    headers: providerRequest.headers,
+    body: await traceableImageProviderBody(providerRequest.body),
+    retry: 0,
+  });
+  let response: Response;
   try {
-    let response: Response;
-    try {
-      response = await context.fetchImpl(providerRequest.url, {
-        method: 'POST',
-        headers: providerRequest.headers,
-        body: providerRequest.body,
-      });
-    } catch (error) {
-      const errorSummary = providerExceptionSummary(error, 'fetch_failed');
-      throw routerError(500, errorSummary, `Provider request failed (${errorSummary}).`, 'imageGenerator');
-    }
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => '');
-      const errorSummary = `provider_http_${response.status}`;
-      throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, route.provider, route.secret, errorText), 'imageGenerator');
-    }
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image response.', 'imageGenerator');
-    }
-    if (isProviderErrorPayload(payload)) {
-      throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image response.', 'imageGenerator');
-    }
-    if (!isRecord(payload)) {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
-    }
-    const jsonPayload = jsonValueField(payload);
-    if (!isRecord(jsonPayload)) {
-      throw routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
-    }
-    const result = await normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl);
-    await writeImageGenerationTrace({
-      trace,
-      requestId,
-      profileId: route.profileId,
-      workspaceRoot: context.workspaceRoot,
-      publicModelAlias,
-      provider: route.provider,
-      latencyMs: Date.now() - startedAt,
-      status: 'completed',
-      operation,
+    response = await context.fetchImpl(providerRequest.url, {
+      method: 'POST',
+      headers: providerRequest.headers,
+      body: providerRequest.body,
+      signal: context.providerSignal,
     });
-    return result;
   } catch (error) {
-    const normalized = normalizeRouterError(error);
-    await writeImageGenerationTrace({
-      trace,
-      requestId,
-      profileId: route.profileId,
-      workspaceRoot: context.workspaceRoot,
-      publicModelAlias,
-      provider: route.provider,
-      latencyMs: Date.now() - startedAt,
-      status: 'failed',
-      errorSummary: normalized.code,
-      operation,
-    });
-    throw error;
+    const errorSummary = providerExceptionSummary(error, 'fetch_failed');
+    const failure = routerError(500, errorSummary, `Provider request failed (${errorSummary}).`, 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ durationMs: Date.now() - startedAt });
+    throw failure;
   }
+  traceAttempt?.responseHeaders?.(response.status, Object.fromEntries(response.headers.entries()));
+  try {
+    response = await captureUpstreamResponse(response, (index, chunk) => {
+      traceAttempt?.responseChunk?.(index, chunk);
+    });
+  } catch (error) {
+    const failure = routerError(502, 'provider_response_read_failed', 'Provider image response could not be read.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '');
+    const errorSummary = `provider_http_${response.status}`;
+    const failure = routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, route.provider, route.secret, errorText), 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (isProviderErrorPayload(payload)) {
+    const failure = routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of an image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  if (!isRecord(payload)) {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  const jsonPayload = jsonValueField(payload);
+  if (!isRecord(jsonPayload)) {
+    const failure = routerError(500, 'provider_invalid_json', 'Provider returned an invalid image response.', 'imageGenerator');
+    traceAttempt?.error?.(failure);
+    traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+    throw failure;
+  }
+  traceAttempt?.end?.({ status: response.status, durationMs: Date.now() - startedAt });
+  return normalizeImageGenerationPayload(jsonPayload as JsonObject, context.fetchImpl, context.providerSignal);
+}
+
+async function traceableImageProviderBody(body: string | FormData): Promise<unknown> {
+  if (typeof body === 'string') {
+    try {
+      return JSON.parse(body) as unknown;
+    } catch {
+      return body;
+    }
+  }
+  const entries: Array<Record<string, unknown>> = [];
+  for (const [name, value] of body.entries()) {
+    if (typeof value === 'string') {
+      entries.push({ name, value });
+      continue;
+    }
+    entries.push({
+      name,
+      file: {
+        name: value.name,
+        type: value.type,
+        size: value.size,
+        body: new Uint8Array(await value.arrayBuffer()),
+      },
+    });
+  }
+  return { encoding: 'form-data', entries };
 }
 
 function requiredMultipartText(form: FormData, name: string): string {
@@ -857,12 +1197,18 @@ function requiredMultipartText(form: FormData, name: string): string {
 }
 
 function copyOptionalMultipartText(source: FormData, target: FormData, name: string): void {
-  const value = source.get(name);
-  if (value === null) return;
+  const value = optionalMultipartText(source, name);
+  if (!value) return;
+  target.set(name, value);
+}
+
+function optionalMultipartText(form: FormData, name: string): string | undefined {
+  const value = form.get(name);
+  if (value === null) return undefined;
   if (typeof value !== 'string' || !value.trim()) {
     throw routerError(400, 'invalid_request', `Image edit multipart field "${name}" must be a non-empty string when provided.`);
   }
-  target.set(name, value);
+  return value.trim();
 }
 
 function requiredMultipartFiles(form: FormData, name: string): Blob[] {
@@ -890,17 +1236,22 @@ function appendMultipartFile(form: FormData, name: string, file: Blob): void {
 async function normalizeImageGenerationPayload(
   payload: JsonObject,
   fetchImpl: typeof fetch,
+  signal: AbortSignal,
 ): Promise<JsonObject> {
   const data = Array.isArray(payload.data) ? payload.data : undefined;
   if (!data) return payload;
-  const normalizedData = await Promise.all(data.map((item) => normalizeImageGenerationItem(item, fetchImpl)));
+  const normalizedData = await Promise.all(data.map((item) => normalizeImageGenerationItem(item, fetchImpl, signal)));
   return {
     ...payload,
     data: normalizedData,
   };
 }
 
-async function normalizeImageGenerationItem(item: unknown, fetchImpl: typeof fetch): Promise<JsonObject> {
+async function normalizeImageGenerationItem(
+  item: unknown,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<JsonObject> {
   const record = isRecord(item) ? item : {};
   const b64Json = stringField(record.b64_json);
   if (b64Json) {
@@ -918,7 +1269,7 @@ async function normalizeImageGenerationItem(item: unknown, fetchImpl: typeof fet
   }
   const imageUrl = providerImageUrlFromItem(record);
   if (!imageUrl) return jsonObjectFromRecord(record);
-  const downloaded = await fetchProviderImageUrl(imageUrl, fetchImpl);
+  const downloaded = await fetchProviderImageUrl(imageUrl, fetchImpl, signal);
   const { url: _url, image_url: _imageUrl, image: _image, ...rest } = record;
   return {
     ...jsonObjectFromRecord(rest),
@@ -974,10 +1325,14 @@ function parseImageDataUri(value: string): { mime: string; base64: string } | un
   return match ? { mime: match[1].toLowerCase(), base64: match[2] } : undefined;
 }
 
-async function fetchProviderImageUrl(url: string, fetchImpl: typeof fetch): Promise<{ mime: string; base64: string }> {
+async function fetchProviderImageUrl(
+  url: string,
+  fetchImpl: typeof fetch,
+  signal: AbortSignal,
+): Promise<{ mime: string; base64: string }> {
   let response: Response;
   try {
-    response = await fetchImpl(url);
+    response = await fetchImpl(url, { signal });
   } catch (error) {
     const errorSummary = providerExceptionSummary(error, 'image_url_fetch_failed');
     throw routerError(502, errorSummary, `Provider image URL fetch failed (${errorSummary}).`, 'imageGenerator');
@@ -1010,11 +1365,13 @@ async function routeResponsesRequest(
     env: Record<string, string | undefined>;
     fetchImpl: typeof fetch;
     workspaceRoot: string;
-    traceDataRoot: string;
     request: IncomingMessage;
     visionTranslationCache: Map<string, VisionTranslationCacheEntry>;
     scientificTranslationCache: Map<string, ScientificEvidence>;
-    toolCallCache: ToolCallCache;
+    responseContinuationCache: ResponseContinuationCache;
+    upstreamNegotiator: UpstreamProtocolNegotiator;
+    preferredProtocol: UpstreamWireProtocol;
+    traceSession?: ModelRouterTraceSession;
     responseId?: string;
     providerSignal?: AbortSignal;
     recordProviderError?: (error: Omit<RecentProviderError, 'at'>) => void;
@@ -1031,9 +1388,7 @@ async function routeResponsesRequest(
   const visionSecret = visionTranslator ? optionalSecretForProvider(visionTranslator, context.env) : undefined;
 
   const responseId = context.responseId ?? makeId('resp');
-  const trace = createTraceContext(context.workspaceRoot, context.traceDataRoot, profile.traceRoot, responseId);
   const requestInputs = extractRequestInputs(request.input, request.instructions);
-  const requestAuditMetadata = requestAuditMetadataFromRequest(request.metadata, requestAuditRoute(context.request));
   const extracted = {
     ...requestInputs,
     modalities: await materializeWorkspaceImageRefs(requestInputs.modalities, context.workspaceRoot),
@@ -1049,15 +1404,26 @@ async function routeResponsesRequest(
   const usage = emptyResponseUsage();
   const hasToolTranscriptInput = responseInputHasToolTranscript(request.input);
   const hasAssistantReasoningInput = responseInputHasAssistantReasoning(request.input);
+  const previousResponseId = stringField(request.previous_response_id);
+  const requestWithoutContinuationHandle = { ...request };
+  delete requestWithoutContinuationHandle.previous_response_id;
+  const requestWithSafeTextInput = typeof request.input === 'string'
+    ? { ...requestWithoutContinuationHandle, input: extracted.userText }
+    : requestWithoutContinuationHandle;
   const requestForTextReasoner = hasToolTranscriptInput
     ? {
-      ...request,
+      ...requestWithSafeTextInput,
       input: repairResponseToolTranscriptInput(
-        hydrateFunctionCallTranscript(request.input, context.toolCallCache),
+        restoreResponseContinuation(
+          request.input,
+          previousResponseId
+            ? context.responseContinuationCache.get(previousResponseId)
+            : undefined,
+        ),
       ),
     }
-    : request;
-  const textReasonerRequestOptions = chatRequestOptionsFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model);
+    : requestWithSafeTextInput;
+  const textReasonerRequestOptions = textReasonerOptionsFromResponsesRequest(requestForTextReasoner);
   const toolNameAliases = chatToolNameAliasesFromResponsesTools(request.tools);
   const textReasonerMessages = hasToolTranscriptInput || hasAssistantReasoningInput
     ? chatMessagesFromResponsesRequest(requestForTextReasoner, profile.textReasoner.model)
@@ -1066,13 +1432,6 @@ async function routeResponsesRequest(
   // Lexical detectors must not become routing truth; final routing must use structured semantic signals and refs-first evidence.
   const visionModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind === 'vision.image');
   const unsupportedModalities = extracted.modalities.filter((item) => finalModalityRoutingSignal(item).kind !== 'vision.image');
-
-  if (extracted.modalities.length > 0) {
-    await writeTraceJson(trace, 'input-modalities.json', {
-      schemaVersion: 'sciforge.model-router.input-modalities.v1',
-      modalities: extracted.modalities.map(publicModalityRef),
-    });
-  }
 
   if (unsupportedModalities.length > 0) {
     for (const item of unsupportedModalities) {
@@ -1103,6 +1462,8 @@ async function routeResponsesRequest(
         context.fetchImpl,
         context.scientificTranslationCache,
         scientificRisk.translatorModality,
+        context.providerSignal,
+        context.traceSession,
       );
       if (expert) {
         observations.push(expert.observation);
@@ -1146,14 +1507,6 @@ async function routeResponsesRequest(
       for (const modality of visionModalities) {
         const observation = formatVisionNotSentObservation(modality, reason);
         observations.push(observation);
-        await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
-          schemaVersion: 'sciforge.model-router.vision-observation.v1',
-          phase: 'initial',
-          status: 'not_sent',
-          cacheStatus: 'skipped',
-          targetIds: [modality.id],
-          observationSummary: boundedTraceText(observation, profile, publicModelAlias, traceRedactionSecrets),
-        });
       }
     } else {
       for (const modality of visionModalities) {
@@ -1162,15 +1515,6 @@ async function routeResponsesRequest(
         if (cached) {
           const cachedObservation = formatCachedVisionTranslationObservation(modality, cached);
           observations.push(cachedObservation);
-          await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
-            schemaVersion: 'sciforge.model-router.vision-observation.v1',
-            phase: 'initial',
-            status: cached.status,
-            cacheStatus: 'hit',
-            cacheVersion: cached.version,
-            targetIds: [modality.id],
-            observationSummary: boundedTraceText(cachedObservation, profile, publicModelAlias, traceRedactionSecrets),
-          });
           continue;
         }
         let observationStatus: 'ok' | 'failed' = 'ok';
@@ -1185,10 +1529,14 @@ async function routeResponsesRequest(
             phase: 'vision-initial',
             calls,
             signal: context.providerSignal,
+            upstreamNegotiator: context.upstreamNegotiator,
+            preferredProtocol: context.preferredProtocol,
+            traceSession: context.traceSession,
           });
           addUsage(usage, result.usage);
           observation = result.outputText;
         } catch (error) {
+          if (context.providerSignal?.aborted) throw error;
           degraded = true;
           observationStatus = 'failed';
           const summary = traceErrorSummary(error);
@@ -1205,28 +1553,22 @@ async function routeResponsesRequest(
         if (observationStatus === 'ok') {
           storeVisionTranslationCacheEntry(context.visionTranslationCache, profileId, modality, observation);
         }
-        await writeTraceJson(trace, `vision-initial-${modality.id}.json`, {
-          schemaVersion: 'sciforge.model-router.vision-observation.v1',
-          phase: 'initial',
-          status: observationStatus,
-          cacheStatus: observationStatus === 'ok' ? 'stored' : 'miss',
-          targetIds: [modality.id],
-          observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
-        });
       }
     }
   }
 
   let outputText = '';
   let outputItems: JsonObject[] = [];
-  try {
-    let supplementRounds = 0;
+  let responseStatus: string | undefined;
+  let incompleteDetails: JsonObject | undefined;
+  let terminalDetails: JsonObject | undefined;
+  let supplementRounds = 0;
     const configuredSupplementRounds = profile.translators.vision?.maxSupplementRounds ?? 0;
     const maxSupplementRounds = Number.isFinite(configuredSupplementRounds)
       ? Math.max(0, Math.floor(configuredSupplementRounds))
       : 0;
 
-    while (true) {
+  while (true) {
       const textResult = await callTextReasoner({
         profile,
         secret: textSecret,
@@ -1236,12 +1578,18 @@ async function routeResponsesRequest(
         observations,
         visualFailure: degraded,
         calls,
-        request,
+        request: requestForTextReasoner,
         requestOptions: textReasonerRequestOptions,
         toolNameAliases,
         signal: context.providerSignal,
+        upstreamNegotiator: context.upstreamNegotiator,
+        preferredProtocol: context.preferredProtocol,
+        traceSession: context.traceSession,
       });
       addUsage(usage, textResult.usage);
+      responseStatus = textResult.status;
+      incompleteDetails = textResult.incompleteDetails;
+      terminalDetails = textResult.terminalDetails;
       const hasToolCall = textResult.outputItems.some((item) => item.type === 'function_call');
       const reasoningItems = textResult.outputItems.filter((item) => item.type === 'reasoning');
       if (hasToolCall) {
@@ -1274,10 +1622,14 @@ async function routeResponsesRequest(
               phase: 'vision-supplement',
               calls,
               signal: context.providerSignal,
+              upstreamNegotiator: context.upstreamNegotiator,
+              preferredProtocol: context.preferredProtocol,
+              traceSession: context.traceSession,
             });
             addUsage(usage, result.usage);
             supplementObservation = result.outputText;
           } catch (error) {
+            if (context.providerSignal?.aborted) throw error;
             degraded = true;
             supplementStatus = 'failed';
             const summary = traceErrorSummary(error);
@@ -1291,17 +1643,6 @@ async function routeResponsesRequest(
             ].join('\n');
           }
           observations.push(formatVisionSupplementObservation(target, safeControl, supplementObservation, supplementStatus));
-          await writeTraceJson(trace, `vision-supplement-${target.id}-${supplementRounds}.json`, {
-            schemaVersion: 'sciforge.model-router.vision-observation.v1',
-            phase: 'supplement',
-            status: supplementStatus,
-            targetIds: [target.id],
-            questionSummary: boundedTraceText(safeControl.question, profile, publicModelAlias, traceRedactionSecrets),
-            ...(safeControl.reason
-              ? { reasonSummary: boundedTraceText(safeControl.reason, profile, publicModelAlias, traceRedactionSecrets) }
-              : {}),
-            observationSummary: boundedTraceText(observations.at(-1) ?? '', profile, publicModelAlias, traceRedactionSecrets),
-          });
           continue;
         }
       }
@@ -1309,23 +1650,6 @@ async function routeResponsesRequest(
       outputText = publicProviderOutputText(textResult.outputText, profile, publicModelAlias, traceRedactionSecrets);
       outputItems = reasoningItems;
       break;
-    }
-  } catch (error) {
-    await writeRoutingTrace({
-      trace,
-      responseId,
-      profileId,
-      profile,
-      workspaceRoot: context.workspaceRoot,
-      publicModelAlias,
-      modalities: extracted.modalities,
-      calls,
-      degraded,
-      requestAuditMetadata,
-      status: 'failed',
-      errorSummary: traceErrorSummary(error),
-    });
-    throw error;
   }
 
   if (!outputText) {
@@ -1352,30 +1676,17 @@ async function routeResponsesRequest(
   if (outputText && !outputItems.some((item) => item.type !== 'reasoning')) {
     outputItems = [...outputItems, messageOutputItem(outputText)];
   }
-  rememberFunctionCalls(context.toolCallCache, outputItems);
-
-  await writeRoutingTrace({
-    trace,
-    responseId,
-    profileId,
-    profile,
-    workspaceRoot: context.workspaceRoot,
-    publicModelAlias,
-    modalities: extracted.modalities,
-    calls,
-    degraded,
-    requestAuditMetadata,
-    status: 'completed',
-    outputText,
-  });
+  rememberResponseContinuation(context.responseContinuationCache, responseId, outputItems);
 
   return {
     responseId,
     model: context.config.publicModelAlias ?? 'sciforge-model-router',
     outputText,
     outputItems,
-    traceRef: trace.relativeDir,
     usage,
+    status: responseStatus,
+    incompleteDetails,
+    terminalDetails,
   };
 }
 
@@ -1388,46 +1699,16 @@ function requestedProfileId(request: Record<string, unknown>, incoming: Incoming
   return config.defaultProfile;
 }
 
-function requestAuditRoute(incoming: IncomingMessage): RequestAuditMetadata['route'] {
-  const url = new URL(incoming.url ?? '/', `http://${incoming.headers.host ?? '127.0.0.1'}`);
-  return url.pathname.includes('/messages') ? 'model-router.messages' : 'model-router.responses';
-}
-
-function requestAuditMetadataFromRequest(metadata: unknown, route: RequestAuditMetadata['route']): RequestAuditMetadata | undefined {
-  const record = isRecord(metadata) ? metadata : {};
-  if (record.schemaVersion !== 'sciforge.model-router.request-audit.v1') return undefined;
-  return compactObject({
-    schemaVersion: 'sciforge.model-router.request-audit.v1',
-    route,
-    source: boundedAuditMetadataString(record.source),
-    operation: boundedAuditMetadataString(record.operation),
-    runtimeId: boundedAuditMetadataString(record.runtimeId),
-    threadIdSha256: auditMetadataHash(record.threadId),
-    sourceRuntimeId: boundedAuditMetadataString(record.sourceRuntimeId),
-    sourceThreadIdSha256: auditMetadataHash(record.sourceThreadId),
-    targetRuntimeId: boundedAuditMetadataString(record.targetRuntimeId),
-    targetThreadIdSha256: auditMetadataHash(record.targetThreadId),
-    packetDigest: safeSha256Digest(record.packetDigest),
-    sourceDigest: safeSha256Digest(record.sourceDigest),
-  }) as RequestAuditMetadata;
-}
-
-function boundedAuditMetadataString(value: unknown): string | undefined {
-  if (typeof value !== 'string') return undefined;
-  const trimmed = value.trim();
-  if (!trimmed || trimmed.length > 96) return undefined;
-  if (!/^[a-z0-9._:-]+$/i.test(trimmed)) return undefined;
-  return trimmed;
-}
-
-function auditMetadataHash(value: unknown): string | undefined {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return normalized ? hashForTrace(normalized) : undefined;
-}
-
-function safeSha256Digest(value: unknown): string | undefined {
-  const normalized = typeof value === 'string' ? value.trim() : '';
-  return /^sha256:[a-f0-9]{64}$/i.test(normalized) ? normalized.toLowerCase() : undefined;
+function preferredResponsesProtocol(
+  config: ModelRouterConfig,
+  request: unknown,
+  incoming: IncomingMessage,
+): UpstreamWireProtocol {
+  const profileId = requestedProfileId(isRecord(request) ? request : {}, incoming, config);
+  const provider = config.profiles[profileId]?.textReasoner;
+  if (!provider) return 'responses';
+  validateProviderConfig(provider, 'textReasoner');
+  return preferredProviderProtocol(provider.compatibility, 'responses');
 }
 
 function validateRequestedModel(model: unknown, publicModelAlias: string | undefined) {
@@ -1467,13 +1748,30 @@ function validateProfile(profile: ModelRouterProfile) {
 }
 
 function validateProviderConfig(config: ModelRouterProviderConfig, role: string) {
-  if (!config.provider || !config.baseUrl || !config.apiKeyEnv || !config.model) {
+  const issue = providerConfigurationIssue(config);
+  if (issue === 'missing') {
     throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" is missing required provider configuration.`);
   }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+  }
+  const compatibilityIssue = providerCompatibilityConfigurationIssue(config.compatibility);
+  if (compatibilityIssue) {
+    throw routerError(
+      400,
+      'invalid_provider_config',
+      `Model Router profile role "${role}" has invalid compatibility settings: ${compatibilityIssue}.`,
+    );
+  }
+}
+
+function providerConfigurationIssue(config: ModelRouterProviderConfig): 'missing' | 'invalid_url' | undefined {
+  if (!config.baseUrl || !config.apiKeyEnv || !config.model) return 'missing';
   try {
     new URL(config.baseUrl);
+    return undefined;
   } catch {
-    throw routerError(400, 'invalid_provider_config', `Model Router profile role "${role}" has an invalid provider base URL.`);
+    return 'invalid_url';
   }
 }
 
@@ -1489,13 +1787,24 @@ function optionalSecretForProvider(config: ModelRouterProviderConfig, env: Recor
 }
 
 function validateScientificTranslatorConfig(config: ModelRouterScientificTranslatorConfig) {
-  if (!config.baseUrl || !config.tokenEnv || !config.model) {
+  const issue = scientificTranslatorConfigurationIssue(config);
+  if (issue === 'missing') {
     throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" is missing required service configuration.');
   }
+  if (issue === 'invalid_url') {
+    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" has an invalid service base URL.');
+  }
+}
+
+function scientificTranslatorConfigurationIssue(
+  config: ModelRouterScientificTranslatorConfig,
+): 'missing' | 'invalid_url' | undefined {
+  if (!config.baseUrl || !config.tokenEnv || !config.model) return 'missing';
   try {
     new URL(config.baseUrl);
+    return undefined;
   } catch {
-    throw routerError(400, 'invalid_provider_config', 'Model Router profile role "translators.scientific" has an invalid service base URL.');
+    return 'invalid_url';
   }
 }
 
@@ -1968,6 +2277,8 @@ async function translateScientificModalityObservation(
   fetchImpl: typeof fetch,
   cache?: Map<string, ScientificEvidence>,
   translatorModality?: ScientificTranslatorModality,
+  signal?: AbortSignal,
+  traceSession?: ModelRouterTraceSession,
 ): Promise<{ observation: string; evidence: ScientificEvidence } | undefined> {
   if (!translatorModality) return undefined;
   if (!service) return undefined;
@@ -1996,15 +2307,54 @@ async function translateScientificModalityObservation(
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let json: JsonObject | undefined;
     let ok = false;
+    const requestUrl = `${serviceUrl.replace(/\/+$/, '')}/modality/translate`;
+    const requestHeaders = {
+      'content-type': 'application/json',
+      authorization: `Bearer ${serviceToken}`,
+    };
+    const requestBody = {
+      payload,
+      modality: translatorModality,
+      objectId: item.id,
+      model: service.model,
+    };
+    const startedAt = Date.now();
+    const traceAttempt = traceSession?.startUpstreamAttempt({
+      protocol: 'scientific-translation',
+      phase: 'request',
+      method: 'POST',
+      url: requestUrl,
+      headers: requestHeaders,
+      body: requestBody,
+      retry: 0,
+    });
     try {
-      const resp = await fetchImpl(`${serviceUrl.replace(/\/+$/, '')}/modality/translate`, {
+      let resp = await fetchImpl(requestUrl, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', authorization: `Bearer ${serviceToken}` },
-        body: JSON.stringify({ payload, modality: translatorModality, objectId: item.id, model: service.model }),
-        signal: controller.signal,
+        headers: requestHeaders,
+        body: JSON.stringify(requestBody),
+        signal: signal ? AbortSignal.any([signal, controller.signal]) : controller.signal,
+      });
+      traceAttempt?.responseHeaders?.(resp.status, Object.fromEntries(resp.headers.entries()));
+      resp = await captureUpstreamResponse(resp, (index, chunk) => {
+        traceAttempt?.responseChunk?.(index, chunk);
       });
       ok = resp.ok;
       json = (await resp.json().catch(() => undefined)) as JsonObject | undefined;
+      if (!ok || !json || json.ok !== true) {
+        const failure = routerError(
+          resp.status || 502,
+          !ok ? `scientific_translation_http_${resp.status}` : 'scientific_translation_invalid_response',
+          'Scientific translator returned an unsuccessful response.',
+          'scientificTranslator',
+        );
+        traceAttempt?.error?.(failure);
+      }
+      traceAttempt?.end?.({ status: resp.status, durationMs: Date.now() - startedAt });
+    } catch (error) {
+      traceAttempt?.error?.(error);
+      traceAttempt?.end?.({ durationMs: Date.now() - startedAt });
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -2021,7 +2371,8 @@ async function translateScientificModalityObservation(
     const evidence: ScientificEvidence = { modalityInputId: item.id, modality, model, summary };
     cache?.set(cacheKey, evidence);
     return { observation: buildScientificObservation(item, evidence), evidence };
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw error;
     return undefined;
   }
 }
@@ -2406,40 +2757,61 @@ async function callVisionTranslator(options: {
   phase: string;
   calls: ProviderCallRecord[];
   signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  traceSession?: ModelRouterTraceSession;
 }) {
   const translator = options.profile.translators.vision;
   if (!translator) throw new Error('Vision translator is not configured.');
+  assertVisionInputCapability(options.profile, options.modality);
   const providerParts = [options.modality.transientProviderPart]
     .filter((part): part is JsonObject => Boolean(part));
   const content: JsonObject[] = [
     { type: 'text', text: options.instruction },
     ...providerParts,
   ];
-  const result = await callChatProvider({
+  const chatBody = {
+    model: translator.model,
+    messages: [
+      {
+        role: 'system',
+        content: [
+          'You are a SciForge vision translator.',
+          'Convert the instruction and visual input into concise textual evidence for the Agent Host.',
+          'Include visible text, important fields, layout cues, and uncertainty when relevant.',
+          'Do not claim task completion.',
+        ].join(' '),
+      },
+      { role: 'user', content },
+    ],
+  };
+  const result = await callCanonicalProvider({
     provider: translator,
     secret: options.secret,
     fetchImpl: options.fetchImpl,
-    body: {
-      model: translator.model,
-      messages: [
-        {
-          role: 'system',
-          content: [
-            'You are a SciForge vision translator.',
-            'Convert the instruction and visual input into concise textual evidence for the Agent Host.',
-            'Include visible text, important fields, layout cues, and uncertainty when relevant.',
-            'Do not claim task completion.',
-          ].join(' '),
-        },
-        { role: 'user', content },
-      ],
-    },
+    request: chatCompletionsToResponsesRequest(chatBody, translator.model),
     role: 'visionTranslator',
     phase: options.phase,
     calls: options.calls,
     signal: options.signal,
+    upstreamNegotiator: options.upstreamNegotiator,
+    preferredProtocol: options.preferredProtocol,
+    traceSession: options.traceSession,
   });
   return result;
+}
+
+function assertVisionInputCapability(profile: ModelRouterProfile, modality: ModalityRef): void {
+  const registration = profile.capabilities?.vision;
+  const mimeTypes = sanitizeVisionMimeTypes(registration?.mimeTypes ?? [...MODEL_ROUTER_VISION_MIME_TYPES]);
+  const mime = modality.mime?.trim().toLowerCase();
+  if (mime && !mimeTypes.includes(mime)) {
+    throw routerError(415, 'vision_mime_not_supported', 'The visual input MIME type is not supported by the active Model Router profile.', 'visionTranslator');
+  }
+  const maxInputBytes = boundedPublicInputBytes(registration?.maxInputBytes, MODEL_ROUTER_MAX_VISUAL_INPUT_BYTES);
+  if (modality.byteLength !== undefined && modality.byteLength > maxInputBytes) {
+    throw routerError(413, 'vision_input_too_large', 'The visual input exceeds the active Model Router profile input limit.', 'visionTranslator');
+  }
 }
 
 async function callTextReasoner(options: {
@@ -2455,6 +2827,9 @@ async function callTextReasoner(options: {
   requestOptions: Record<string, unknown>;
   toolNameAliases: Record<string, string>;
   signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  traceSession?: ModelRouterTraceSession;
 }) {
   const controlInstruction = options.observations.length
     ? [
@@ -2482,86 +2857,117 @@ async function callTextReasoner(options: {
       },
     ]
     : options.messages.length > 0 ? options.messages : [{ role: 'user', content: options.userText }];
-  return await callChatProvider({
+  const adaptedRequest = options.observations.length
+    ? {
+        ...options.request,
+        ...chatCompletionsToResponsesRequest({
+          model: options.profile.textReasoner.model,
+          messages,
+          ...multimodalTextReasonerRequestOptions(options.requestOptions, true),
+        }, options.profile.textReasoner.model),
+        tools: options.request.tools,
+        tool_choice: options.request.tool_choice,
+        parallel_tool_calls: options.request.parallel_tool_calls,
+      }
+    : {
+        ...options.request,
+        model: options.profile.textReasoner.model,
+      };
+  return await callCanonicalProvider({
     provider: options.profile.textReasoner,
     secret: options.secret,
     fetchImpl: options.fetchImpl,
-    body: {
-      model: options.profile.textReasoner.model,
-      messages,
-      ...multimodalTextReasonerRequestOptions(options.requestOptions, options.observations.length > 0),
-    },
+    request: adaptedRequest,
     role: 'textReasoner',
     phase: options.observations.length ? 'text-control-or-final' : 'text-direct',
     calls: options.calls,
     responseRequest: options.request,
     toolNameAliases: options.toolNameAliases,
     signal: options.signal,
+    upstreamNegotiator: options.upstreamNegotiator,
+    preferredProtocol: options.preferredProtocol,
+    traceSession: options.traceSession,
   });
 }
 
-async function callChatProvider(options: {
+async function callCanonicalProvider(options: {
   provider: ModelRouterProviderConfig;
   secret: string;
   fetchImpl: typeof fetch;
-  body: Record<string, unknown>;
+  request: ResponsesRequest;
   role: ProviderCallRecord['role'];
   phase: string;
   calls: ProviderCallRecord[];
   responseRequest?: Pick<ResponsesRequest, 'model'>;
   toolNameAliases?: Record<string, string>;
   signal?: AbortSignal;
+  upstreamNegotiator: UpstreamProtocolNegotiator;
+  preferredProtocol: UpstreamWireProtocol;
+  traceSession?: ModelRouterTraceSession;
 }) {
-  const startedAt = Date.now();
-  const body = hygienizeChatProviderBody(options.body);
-  let response: Response;
   try {
-    response = await options.fetchImpl(providerChatCompletionsUrl(options.provider.baseUrl), {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        authorization: `Bearer ${options.secret}`,
-      },
-      body: JSON.stringify(body),
+    const result = await options.upstreamNegotiator.request({
+      request: options.request,
+      baseUrl: options.provider.baseUrl,
+      apiKey: options.secret,
+      model: options.provider.model,
+      compatibility: options.provider.compatibility,
+      fetchImpl: options.fetchImpl,
       signal: options.signal,
+      preferredProtocol: options.preferredProtocol,
+      toolNameAliases: options.toolNameAliases,
+      traceAttempt: options.traceSession
+        ? (attempt) => options.traceSession?.startUpstreamAttempt(attempt)
+        : undefined,
+      onAttempt: (attempt) => recordUpstreamAttempt(options, attempt),
     });
+    const successfulCall = options.calls.at(-1);
+    if (successfulCall?.status === 'ok') successfulCall.stopReason = canonicalStopReason(result.response);
+    return canonicalProviderResult(result.response);
   } catch (error) {
-    const errorSummary = providerExceptionSummary(error, 'fetch_failed');
-    recordFailedProviderCall({ ...options, body }, Date.now() - startedAt, errorSummary);
-    throw routerError(500, errorSummary, `Provider request failed (${errorSummary}).`);
+    if (!(error instanceof UpstreamRequestError)) throw error;
+    const detail = error.responseBody?.trim();
+    const prefix = error.upstreamStatus === 401 || error.upstreamStatus === 403
+      ? 'Upstream API credentials were rejected. Update the API key in SciForge Model Router settings, then restart or reload the router.'
+      : error.message;
+    const message = detail
+      ? `${prefix}: ${boundedProviderTraceText(detail, options.provider, [options.secret])}`
+      : prefix;
+    throw routerError(error.status, error.code, message, options.role);
   }
-  const latencyMs = Date.now() - startedAt;
-  if (!response.ok) {
-    const errorText = await response.text().catch(() => '');
-    const errorSummary = `provider_http_${response.status}`;
-    recordFailedProviderCall({ ...options, body }, latencyMs, errorSummary);
-    throw routerError(response.status, errorSummary, providerHttpErrorMessage(response.status, options.provider, options.secret, errorText));
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    const errorSummary = 'provider_invalid_json';
-    recordFailedProviderCall({ ...options, body }, latencyMs, errorSummary);
-    throw routerError(500, 'provider_invalid_json', 'Provider returned a non-JSON response.');
-  }
-  if (isProviderErrorPayload(payload)) {
-    const errorSummary = 'provider_error_payload';
-    recordFailedProviderCall({ ...options, body }, latencyMs, errorSummary);
-    throw routerError(500, 'provider_error_payload', 'Provider returned an error payload instead of a chat completion.');
-  }
+}
+
+function canonicalStopReason(response: JsonObject): ProviderCallRecord['stopReason'] {
+  const output = Array.isArray(response.output) ? response.output : [];
+  if (output.some((item) => isRecord(item) && item.type === 'function_call')) return 'tool_calls';
+  if (response.status === 'incomplete') return 'length';
+  return response.status === 'completed' || response.object === 'response' ? 'stop' : 'unknown';
+}
+
+function recordUpstreamAttempt(
+  options: {
+    provider: ModelRouterProviderConfig;
+    request: ResponsesRequest;
+    role: ProviderCallRecord['role'];
+    phase: string;
+    calls: ProviderCallRecord[];
+  },
+  attempt: UpstreamAttempt,
+): void {
   options.calls.push({
     role: options.role,
-    phase: options.phase,
-    status: 'ok',
+    phase: attempt.phase === 'probe' ? 'protocol-probe' : options.phase,
+    status: attempt.status === 'ok' ? 'ok' : 'failed',
     roleAlias: roleAliasForCall(options.role),
     providerBindingSha256: providerBindingHash(options.provider),
-    ...providerCallTraceFields(options.provider, body),
-    wireApi: 'chat.completions',
-    latencyMs,
-    stopReason: chatCompletionStopReason(payload),
+    ...providerCallTraceFields(options.provider, options.request, attempt.protocol, attempt.url),
+    wireApi: attempt.protocol,
+    latencyMs: attempt.latencyMs,
+    stopReason: attempt.status === 'ok' ? 'unknown' : 'error',
+    ...(attempt.status === 'ok'
+      ? {}
+      : { errorSummary: attempt.errorCode ?? (attempt.httpStatus ? `upstream_http_${attempt.httpStatus}` : `upstream_${attempt.status}`) }),
   });
-  return chatCompletionResult(payload, options.responseRequest, options.toolNameAliases);
 }
 
 function providerExceptionSummary(error: unknown, fallback: string): string {
@@ -2579,10 +2985,6 @@ function providerExceptionSummary(error: unknown, fallback: string): string {
 function isProviderErrorPayload(payload: unknown): boolean {
   if (!isRecord(payload)) return false;
   return payload.error !== undefined && !Array.isArray(payload.choices);
-}
-
-function providerChatCompletionsUrl(baseUrl: string): string {
-  return buildProviderEndpointUrl(baseUrl, 'chat/completions');
 }
 
 function providerImageGenerationsUrl(baseUrl: string): string {
@@ -2665,47 +3067,14 @@ function isProviderAuthStatus(status: number): boolean {
   return status === 401 || status === 403;
 }
 
-function recordFailedProviderCall(
-  options: {
-    provider: ModelRouterProviderConfig;
-    secret?: string;
-    body?: Record<string, unknown>;
-    role: ProviderCallRecord['role'];
-    phase: string;
-    calls: ProviderCallRecord[];
-  },
-  latencyMs: number,
-  errorSummary: string,
-) {
-  options.calls.push({
-    role: options.role,
-    phase: options.phase,
-    status: 'failed',
-    roleAlias: roleAliasForCall(options.role),
-    providerBindingSha256: providerBindingHash(options.provider),
-    ...providerCallTraceFields(options.provider, options.body ?? {}),
-    wireApi: 'chat.completions',
-    latencyMs,
-    stopReason: 'error',
-    errorSummary: boundedProviderTraceText(errorSummary, options.provider, options.secret ? [options.secret] : []),
-  });
-}
-
-function chatRequestOptionsFromResponsesRequest(request: Record<string, unknown>, defaultModel: string): Record<string, unknown> {
-  const chatRequest = responsesToChatCompletions({
-    ...request,
-    model: defaultModel,
-    input: '',
-  }, { defaultModel });
+function textReasonerOptionsFromResponsesRequest(request: Record<string, unknown>): Record<string, unknown> {
+  const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
   return Object.fromEntries(Object.entries({
-    tools: chatRequest.tools,
-    tool_choice: chatRequest.tool_choice,
-    temperature: chatRequest.temperature,
-    top_p: chatRequest.top_p,
-    max_tokens: chatRequest.max_tokens,
-    parallel_tool_calls: chatRequest.parallel_tool_calls,
-    metadata: chatRequest.metadata,
-    reasoning_effort: chatRequest.reasoning_effort,
+    temperature: request.temperature,
+    top_p: request.top_p,
+    max_tokens: request.max_output_tokens ?? request.max_tokens,
+    metadata: request.metadata,
+    reasoning_effort: stringField(request.reasoning_effort) ?? stringField(reasoning?.effort),
   }).filter(([, value]) => value !== undefined));
 }
 
@@ -2749,69 +3118,86 @@ function responseInputHasAssistantReasoning(input: unknown): boolean {
   });
 }
 
-function hydrateFunctionCallTranscript(input: unknown, cache: ToolCallCache): unknown {
-  if (!Array.isArray(input)) return input;
-  let changed = false;
-  const seenFunctionCallIds = new Set<string>();
-  const hydrated: unknown[] = [];
-  for (const item of input) {
-    if (!isRecord(item)) {
-      hydrated.push(item);
-      continue;
-    }
+function restoreResponseContinuation(
+  input: unknown,
+  continuation: ResponseContinuationBlock | undefined,
+): unknown {
+  if (!Array.isArray(input) || !continuation?.length) return input;
+  const callIds = new Set(
+    continuation
+      .filter((item) => item.type === 'function_call')
+      .map(responseToolTranscriptCallId)
+      .filter(Boolean),
+  );
+  if (callIds.size === 0) return input;
+  const stateItemKeys = new Set(
+    continuation
+      .filter(isResponseContinuationStateItem)
+      .map(responseContinuationStateItemKey),
+  );
+  const insertionIndex = input.findIndex((item) => (
+    isRecord(item) && responseContinuationReferencesItem(item, callIds, stateItemKeys)
+  ));
+  if (insertionIndex < 0) return input;
 
-    if (item.type === 'function_call') {
-      const callId = stringField(item.call_id) ?? stringField(item.id);
-      if (callId) seenFunctionCallIds.add(callId);
-      const cached = callId ? cache.get(callId) : undefined;
-      if (cached && !stringField(item.reasoning_content) && stringField(cached.reasoning_content)) {
-        changed = true;
-        hydrated.push({
-          ...item,
-          reasoning_content: cached.reasoning_content,
-        });
-      } else {
-        hydrated.push(item);
-      }
-      continue;
-    }
-
-    if (item.type === 'function_call_output') {
-      const callId = stringField(item.call_id) ?? stringField(item.id);
-      const cached = callId ? cache.get(callId) : undefined;
-      if (callId && cached && !seenFunctionCallIds.has(callId)) {
-        changed = true;
-        hydrated.push({ ...cached });
-        seenFunctionCallIds.add(callId);
-      }
-    }
-
-    hydrated.push(item);
+  const restored: unknown[] = [];
+  for (let index = 0; index < input.length; index += 1) {
+    if (index === insertionIndex) restored.push(...continuation.map((item) => ({ ...item })));
+    const item = input[index];
+    if (isRecord(item) && isReplayedResponseContinuationItem(item, callIds, stateItemKeys)) continue;
+    restored.push(item);
   }
-  return changed ? hydrated : input;
+  return restored;
+}
+
+function responseContinuationReferencesItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call' || item.type === 'function_call_output') {
+    return callIds.has(responseToolTranscriptCallId(item));
+  }
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function isReplayedResponseContinuationItem(
+  item: Record<string, unknown>,
+  callIds: ReadonlySet<string>,
+  stateItemKeys: ReadonlySet<string>,
+): boolean {
+  if (item.type === 'function_call') return callIds.has(responseToolTranscriptCallId(item));
+  return isResponseContinuationStateItem(item)
+    && stateItemKeys.has(responseContinuationStateItemKey(item));
+}
+
+function responseContinuationStateItemKey(item: Record<string, unknown>): string {
+  const type = stringField(item.type);
+  const id = stringField(item.id);
+  if (id) return `${type}:${id}`;
+  return `${type}:${createHash('sha256').update(JSON.stringify(item)).digest('hex')}`;
 }
 
 function repairResponseToolTranscriptInput(input: unknown): unknown {
   if (!Array.isArray(input)) return input;
   let changed = false;
   const repaired: unknown[] = [];
-  let pendingCalls: JsonObject[] = [];
-  let pendingOutputs: JsonObject[] = [];
+  let pendingItems: JsonObject[] = [];
   let pendingCallIds = new Set<string>();
   let pendingOutputIds = new Set<string>();
 
   const resetPending = (markChanged: boolean): void => {
-    if (markChanged && (pendingCalls.length > 0 || pendingOutputs.length > 0)) changed = true;
-    pendingCalls = [];
-    pendingOutputs = [];
+    if (markChanged && pendingItems.length > 0) changed = true;
+    pendingItems = [];
     pendingCallIds = new Set<string>();
     pendingOutputIds = new Set<string>();
   };
 
   const flushPendingIfComplete = (): boolean => {
-    if (pendingCalls.length === 0) return true;
+    if (pendingCallIds.size === 0) return true;
     if (pendingOutputIds.size !== pendingCallIds.size) return false;
-    repaired.push(...pendingCalls, ...pendingOutputs);
+    repaired.push(...pendingItems);
     resetPending(false);
     return true;
   };
@@ -2829,14 +3215,14 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
         changed = true;
         continue;
       }
-      if (pendingOutputs.length > 0) {
+      if (pendingOutputIds.size > 0) {
         if (!flushPendingIfComplete()) resetPending(true);
       }
       if (pendingCallIds.has(callId)) {
         changed = true;
         continue;
       }
-      pendingCalls.push(item as JsonObject);
+      pendingItems.push(item as JsonObject);
       pendingCallIds.add(callId);
       continue;
     }
@@ -2847,13 +3233,18 @@ function repairResponseToolTranscriptInput(input: unknown): unknown {
         changed = true;
         continue;
       }
-      pendingOutputs.push(item as JsonObject);
+      pendingItems.push(item as JsonObject);
       pendingOutputIds.add(callId);
       if (pendingOutputIds.size === pendingCallIds.size) flushPendingIfComplete();
       continue;
     }
 
-    if (pendingCalls.length > 0 && isResponseToolTranscriptBridgeItem(item)) {
+    if (pendingCallIds.size > 0 && isResponseContinuationStateItem(item)) {
+      pendingItems.push(item as JsonObject);
+      continue;
+    }
+
+    if (pendingCallIds.size > 0 && isResponseToolTranscriptBridgeItem(item)) {
       changed = true;
       continue;
     }
@@ -2873,7 +3264,6 @@ function responseToolTranscriptCallId(item: Record<string, unknown>): string {
 function isResponseToolTranscriptBridgeItem(item: Record<string, unknown>): boolean {
   const type = stringField(item.type);
   if (
-    type === 'reasoning' ||
     type === 'assistant_reasoning' ||
     type === 'approval' ||
     type === 'user_input' ||
@@ -2893,37 +3283,51 @@ function responseMessageRole(item: Record<string, unknown>): string {
   return '';
 }
 
-function rememberFunctionCalls(cache: ToolCallCache, outputItems: JsonObject[]): void {
-  for (const item of outputItems) {
-    if (item.type !== 'function_call') continue;
-    const callId = stringField(item.call_id) ?? stringField(item.id);
-    if (!callId) continue;
-    cache.delete(callId);
-    cache.set(callId, { ...item });
-  }
-  while (cache.size > MAX_TOOL_CALL_CACHE_ENTRIES) {
+function isResponseContinuationStateItem(item: Record<string, unknown>): boolean {
+  return item.type === 'reasoning' || item.type === 'compaction';
+}
+
+function rememberResponseContinuation(
+  cache: ResponseContinuationCache,
+  responseId: string,
+  outputItems: JsonObject[],
+): void {
+  const continuation = outputItems
+    .filter((item) => item.type === 'function_call' || isResponseContinuationStateItem(item))
+    .map((item) => ({ ...item }));
+  if (!continuation.some((item) => item.type === 'function_call')) return;
+  cache.delete(responseId);
+  cache.set(responseId, continuation);
+  while (cache.size > MAX_RESPONSE_CONTINUATION_CACHE_ENTRIES) {
     const oldest = cache.keys().next().value;
     if (typeof oldest !== 'string') break;
     cache.delete(oldest);
   }
 }
 
-function chatCompletionResult(
-  payload: unknown,
-  request: Pick<ResponsesRequest, 'model'> = {},
-  toolNameAliases: Record<string, string> = {},
-): { outputText: string; outputItems: JsonObject[]; usage: ResponseUsage } {
-  const response = chatCompletionToResponse(payload, request, toolNameAliases);
+function canonicalProviderResult(
+  response: JsonObject,
+): {
+  outputText: string;
+  outputItems: JsonObject[];
+  usage: ResponseUsage;
+  status?: string;
+  incompleteDetails?: JsonObject;
+  terminalDetails?: JsonObject;
+} {
   const outputItems = Array.isArray(response.output)
     ? response.output.filter(isRecord) as JsonObject[]
     : [];
   const outputText = typeof response.output_text === 'string'
     ? response.output_text
-    : chatCompletionText(payload);
+    : responseOutputText(outputItems);
   return {
     outputText,
     outputItems,
-    usage: responseUsageFromChatCompletion(payload),
+    usage: responseUsageFromCanonical(response),
+    status: stringField(response.status),
+    incompleteDetails: isRecord(response.incomplete_details) ? response.incomplete_details as JsonObject : undefined,
+    terminalDetails: isRecord(response.terminal_details) ? response.terminal_details as JsonObject : undefined,
   };
 }
 
@@ -2957,9 +3361,8 @@ function addUsage(target: ResponseUsage, value: ResponseUsage): void {
   target.reasoning_output_tokens += value.reasoning_output_tokens;
 }
 
-function responseUsageFromChatCompletion(payload: unknown): ResponseUsage {
-  const completion = isRecord(payload) ? payload : {};
-  const usage = isRecord(completion.usage) ? completion.usage : {};
+function responseUsageFromCanonical(response: JsonObject): ResponseUsage {
+  const usage = isRecord(response.usage) ? response.usage : {};
   const promptDetails = firstRecord(
     usage.input_tokens_details,
     usage.prompt_tokens_details,
@@ -3009,28 +3412,6 @@ function usageInteger(record: Record<string, unknown>, ...keys: string[]): numbe
 
 function firstRecord(...values: unknown[]): Record<string, unknown> {
   return values.find(isRecord) ?? {};
-}
-
-function chatCompletionStopReason(payload: unknown): ProviderCallRecord['stopReason'] {
-  const completion = isRecord(payload) ? payload : {};
-  const choices = Array.isArray(completion.choices) ? completion.choices : [];
-  const firstChoice = isRecord(choices[0]) ? choices[0] : {};
-  const finishReason = stringField(firstChoice.finish_reason) ?? stringField(firstChoice.finishReason);
-  if (finishReason === 'stop' || finishReason === 'tool_calls' || finishReason === 'length') return finishReason;
-  return finishReason ? 'unknown' : 'unknown';
-}
-
-function chatCompletionText(payload: unknown) {
-  const completion = isRecord(payload) ? payload : {};
-  const choices = Array.isArray(completion.choices) ? completion.choices : [];
-  const firstChoice = isRecord(choices[0]) ? choices[0] : {};
-  const message = isRecord(firstChoice.message) ? firstChoice.message : {};
-  const content = message.content;
-  if (typeof content === 'string') return content;
-  if (Array.isArray(content)) {
-    return content.map((part) => isRecord(part) ? stringField(part.text) ?? stringField(part.content) ?? '' : '').filter(Boolean).join('\n');
-  }
-  return '';
 }
 
 function parseTextControl(content: string): TextControl | undefined {
@@ -3083,13 +3464,12 @@ function responseObject(result: RoutedResponse, messageItemId?: string): JsonObj
     object: 'response',
     created_at: Math.floor(Date.now() / 1000),
     model: result.model,
-    status: 'completed',
+    status: result.status ?? 'completed',
     output,
     output_text: result.outputText,
     usage: result.usage,
-    metadata: {
-      traceRef: result.traceRef,
-    },
+    ...(result.incompleteDetails ? { incomplete_details: result.incompleteDetails } : {}),
+    ...(result.terminalDetails ? { terminal_details: result.terminalDetails } : {}),
   };
 }
 
@@ -3120,10 +3500,9 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     })
     .map((message) => {
       const role = stringField(message.role) ?? 'user';
-      const content = jsonValueField(message.content) ?? chatMessageContentText(message.content) ?? '';
       return compactObject({
         role,
-        content,
+        content: chatMessageContentToResponsesParts(message.content, role),
       });
     });
   const maxTokens = body.max_tokens ?? body.max_completion_tokens;
@@ -3133,11 +3512,54 @@ function chatCompletionsToResponsesRequest(body: Record<string, unknown>, public
     ...(instructions ? { instructions } : {}),
     ...(body.temperature !== undefined ? { temperature: body.temperature } : {}),
     ...(body.top_p !== undefined ? { top_p: body.top_p } : {}),
-    ...(maxTokens !== undefined ? { max_tokens: maxTokens } : {}),
+    ...(maxTokens !== undefined ? { max_output_tokens: maxTokens } : {}),
     ...(body.metadata !== undefined ? { metadata: body.metadata } : {}),
     ...(body.reasoning !== undefined ? { reasoning: body.reasoning } : {}),
     ...(body.reasoning_effort !== undefined ? { reasoning_effort: body.reasoning_effort } : {}),
+    ...(body.stop !== undefined ? { stop: body.stop } : {}),
+    ...(body.stream !== undefined ? { stream: body.stream } : {}),
   };
+}
+
+function chatMessageContentToResponsesParts(content: unknown, role: string): JsonObject[] {
+  const parts = Array.isArray(content) ? content : [content];
+  const normalized = parts
+    .map((part) => chatContentPartToResponsesPart(part, role))
+    .filter((part): part is JsonObject => Boolean(part));
+  return normalized.length > 0
+    ? normalized
+    : [{ type: responsesTextPartType(role), text: '' }];
+}
+
+function chatContentPartToResponsesPart(part: unknown, role: string): JsonObject | undefined {
+  if (typeof part === 'string' || typeof part === 'number' || typeof part === 'boolean') {
+    return { type: responsesTextPartType(role), text: String(part) };
+  }
+  if (!isRecord(part)) return undefined;
+  const type = stringField(part.type);
+  if (type === 'text') {
+    return {
+      type: responsesTextPartType(role),
+      text: stringField(part.text) ?? stringField(part.content) ?? '',
+    };
+  }
+  if (type === 'image_url') {
+    const chatImage = isRecord(part.image_url) ? part.image_url : undefined;
+    const imageUrl = chatImage
+      ? stringField(chatImage.url)
+      : stringField(part.image_url);
+    if (!imageUrl) return undefined;
+    return compactObject({
+      type: 'input_image',
+      image_url: imageUrl,
+      detail: stringField(part.detail) ?? stringField(chatImage?.detail),
+    });
+  }
+  return jsonValueField(part) as JsonObject | undefined;
+}
+
+function responsesTextPartType(role: string): 'input_text' | 'output_text' {
+  return role === 'assistant' ? 'output_text' : 'input_text';
 }
 
 function chatMessageContentText(content: unknown): string {
@@ -3166,6 +3588,10 @@ function responseToChatCompletion(response: JsonObject, request: Record<string, 
     content: functionCalls.length && !outputText ? null : outputText,
     tool_calls: functionCalls.length ? functionCalls.map(responseFunctionCallToChatToolCall) : undefined,
   });
+  const finishReason = chatFinishReasonFromResponse(
+    response,
+    functionCalls.length ? 'tool_calls' : 'stop',
+  );
   return {
     id: stringField(response.id) || makeId('chatcmpl'),
     object: 'chat.completion',
@@ -3174,7 +3600,7 @@ function responseToChatCompletion(response: JsonObject, request: Record<string, 
     choices: [{
       index: 0,
       message,
-      finish_reason: functionCalls.length ? 'tool_calls' : 'stop',
+      finish_reason: finishReason,
     }],
     usage: chatCompletionUsageFromResponse(response.usage),
   };
@@ -3258,6 +3684,62 @@ function sendDeferredResponseStream(
   });
 }
 
+function sendDeferredChatCompletionStream(
+  response: ServerResponse,
+  request: Record<string, unknown>,
+  resultPromise: Promise<RoutedResponse>,
+) {
+  response.writeHead(200, {
+    'content-type': 'text/event-stream; charset=utf-8',
+    'cache-control': 'no-cache',
+    connection: 'keep-alive',
+  });
+  void resultPromise.then((result) => {
+    const completion = responseToChatCompletion(responseObject(result), request);
+    const choices = Array.isArray(completion.choices) ? completion.choices : [];
+    const choice = isRecord(choices[0]) ? choices[0] : {};
+    const message = isRecord(choice.message) ? choice.message : {};
+    const id = stringField(completion.id) || result.responseId;
+    const model = stringField(completion.model) || result.model;
+    writeChatCompletionChunk(response, {
+      id,
+      object: 'chat.completion.chunk',
+      created: numberField(completion.created) ?? Math.floor(Date.now() / 1000),
+      model,
+      choices: [{
+        index: 0,
+        delta: compactObject({
+          role: 'assistant',
+          content: message.content,
+          tool_calls: message.tool_calls,
+        }),
+        finish_reason: choice.finish_reason ?? 'stop',
+      }],
+    });
+    writeChatCompletionChunk(response, {
+      id,
+      object: 'chat.completion.chunk',
+      created: numberField(completion.created) ?? Math.floor(Date.now() / 1000),
+      model,
+      choices: [],
+      usage: completion.usage,
+    });
+    response.write('data: [DONE]\n\n');
+    response.end();
+  }).catch((error) => {
+    const normalized = normalizeRouterError(error);
+    writeChatCompletionChunk(response, {
+      error: { code: normalized.code, message: normalized.message },
+    });
+    response.write('data: [DONE]\n\n');
+    response.end();
+  });
+}
+
+function writeChatCompletionChunk(response: ServerResponse, payload: JsonObject): void {
+  response.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 function sendDeferredAnthropicMessageStream(
   response: ServerResponse,
   messageId: string,
@@ -3324,6 +3806,7 @@ function writeAnthropicMessageStreamResult(
 ) {
   const content = Array.isArray(message.content) ? message.content : [];
   const stopReason = typeof message.stop_reason === 'string' ? message.stop_reason : 'end_turn';
+  const stopSequence = typeof message.stop_sequence === 'string' ? message.stop_sequence : null;
   content.forEach((block, index) => {
     const contentBlock = isRecord(block) ? block : { type: 'text', text: '' };
     const blockType = typeof contentBlock.type === 'string' ? contentBlock.type : 'text';
@@ -3361,7 +3844,7 @@ function writeAnthropicMessageStreamResult(
     type: 'message_delta',
     delta: {
       stop_reason: stopReason,
-      stop_sequence: null,
+      stop_sequence: stopSequence,
     },
     usage: isRecord(message.usage) ? message.usage : { output_tokens: 0 },
   });
@@ -3487,310 +3970,16 @@ function writeSse(response: ServerResponse, event: string, data: JsonObject) {
   response.write(`data: ${JSON.stringify(data)}\n\n`);
 }
 
-type TraceContext = {
-  traceId: string;
-  absoluteDir: string;
-  relativeDir: string;
-  workspaceRoot: string;
-  traceDataRoot?: string;
-};
-
-export function resolveModelRouterTraceDataRoot(
-  env: Record<string, string | undefined> = process.env,
-  explicitRoot?: string,
-): string {
-  const configured = explicitRoot?.trim() || env.SCIFORGE_MODEL_ROUTER_TRACE_DATA_ROOT?.trim();
-  if (configured) return resolve(configured);
-  const xdgStateHome = env.XDG_STATE_HOME?.trim();
-  if (xdgStateHome) return resolve(xdgStateHome, 'sciforge', 'model-router');
-  const localAppData = env.LOCALAPPDATA?.trim();
-  if (localAppData) return resolve(localAppData, 'SciForge', 'ModelRouter');
-  const home = homedir();
-  return resolve(home || tmpdir(), '.local', 'state', 'sciforge', 'model-router');
-}
-
-function createTraceContext(
-  workspaceRoot: string,
-  traceDataRoot: string,
-  traceRoot: string,
-  responseId: string,
-): TraceContext {
-  const day = new Date().toISOString().slice(0, 10);
-  const traceId = responseId;
-  const workspaceRootAbsolute = resolve(workspaceRoot);
-  const configuredTraceRoot = traceRoot.trim() || DEFAULT_MODEL_ROUTER_TRACE_ROOT;
-  const traceRootIsAbsolute = isTraceRootAbsolute(configuredTraceRoot);
-  let traceDataRootAbsolute: string | undefined;
-  let traceRootAbsolute: string;
-
-  if (traceRootIsAbsolute) {
-    traceRootAbsolute = resolve(configuredTraceRoot);
-  } else {
-    traceDataRootAbsolute = resolve(traceDataRoot);
-    assertPathOutsideWorkspaceLexically(traceDataRootAbsolute, workspaceRootAbsolute);
-    traceRootAbsolute = resolve(traceDataRootAbsolute, configuredTraceRoot);
-    if (!isPathWithinOrEqual(traceRootAbsolute, traceDataRootAbsolute)) {
-      throw routerError(400, 'invalid_trace_root', 'Relative Model Router trace roots must stay within the trace data root.');
-    }
-  }
-
-  assertPathOutsideWorkspaceLexically(traceRootAbsolute, workspaceRootAbsolute);
-
-  const absoluteDir = resolve(traceRootAbsolute, day, responseId);
-  assertPathOutsideWorkspaceLexically(absoluteDir, workspaceRootAbsolute);
-  const relativeDir = traceRootIsAbsolute
-    ? safeTraceRef(absoluteDir)
-    : toTraceRef(relative(traceDataRootAbsolute ?? resolve(traceDataRoot), absoluteDir));
-  return {
-    traceId,
-    relativeDir,
-    absoluteDir,
-    workspaceRoot: workspaceRootAbsolute,
-    traceDataRoot: traceDataRootAbsolute,
-  };
-}
-
-async function writeTraceJson(trace: TraceContext, fileName: string, payload: JsonObject) {
-  const workspaceRootReal = await realpathOrResolved(trace.workspaceRoot);
-  if (trace.traceDataRoot) {
-    await assertPathOutsideWorkspace(trace.traceDataRoot, trace.workspaceRoot, workspaceRootReal);
-    await assertNearestExistingParentOutsideWorkspace(trace.traceDataRoot, trace.workspaceRoot, workspaceRootReal);
-  }
-  await assertNearestExistingParentOutsideWorkspace(trace.absoluteDir, trace.workspaceRoot, workspaceRootReal);
-  await mkdir(trace.absoluteDir, { recursive: true });
-  await assertPreparedTraceDirectory(trace, workspaceRootReal);
-  await writeFileNoFollow(join(trace.absoluteDir, fileName), `${JSON.stringify(payload, null, 2)}\n`);
-}
-
-function isTraceRootAbsolute(traceRoot: string): boolean {
-  return isAbsolute(traceRoot) || /^[A-Za-z]:[\\/]/.test(traceRoot) || /^\\\\/.test(traceRoot);
-}
-
-async function assertPreparedTraceDirectory(trace: TraceContext, workspaceRootReal: string): Promise<void> {
-  const realDir = await realpath(trace.absoluteDir);
-  await assertPathOutsideWorkspace(realDir, trace.workspaceRoot, workspaceRootReal);
-  if (trace.traceDataRoot) {
-    const traceDataRootReal = await realpath(trace.traceDataRoot);
-    await assertPathOutsideWorkspace(traceDataRootReal, trace.workspaceRoot, workspaceRootReal);
-    if (!isPathWithinOrEqual(realDir, traceDataRootReal)) {
-      throw routerError(500, 'invalid_trace_root', 'Model Router trace root escaped the trace data root.');
-    }
-  }
-}
-
-function assertPathOutsideWorkspaceLexically(candidate: string, workspaceRoot: string): void {
-  if (isPathWithinOrEqual(candidate, workspaceRoot)) {
-    throw routerError(500, 'invalid_trace_root', 'Model Router trace roots must not be inside the workspace.');
-  }
-}
-
-async function assertNearestExistingParentOutsideWorkspace(
-  candidate: string,
-  workspaceRoot: string,
-  workspaceRootReal: string,
-): Promise<void> {
-  let current = resolve(candidate);
-  while (true) {
-    try {
-      const realParent = await realpath(current);
-      await assertPathOutsideWorkspace(realParent, workspaceRoot, workspaceRootReal);
-      return;
-    } catch (error) {
-      if (!isNodeError(error, 'ENOENT')) throw error;
-      const parent = dirname(current);
-      if (parent === current) return;
-      current = parent;
-    }
-  }
-}
-
-async function assertPathOutsideWorkspace(
-  candidate: string,
-  workspaceRoot: string,
-  workspaceRootReal: string,
-): Promise<void> {
-  const resolved = resolve(candidate);
-  if (isPathWithinOrEqual(resolved, workspaceRoot) || isPathWithinOrEqual(resolved, workspaceRootReal)) {
-    throw routerError(500, 'invalid_trace_root', 'Model Router trace roots must not be inside the workspace.');
-  }
-  const real = await realpathIfExists(resolved);
-  if (real && (isPathWithinOrEqual(real, workspaceRoot) || isPathWithinOrEqual(real, workspaceRootReal))) {
-    throw routerError(500, 'invalid_trace_root', 'Model Router trace roots must not be inside the workspace.');
-  }
-}
-
-async function realpathOrResolved(path: string): Promise<string> {
-  return await realpathIfExists(path) ?? resolve(path);
-}
-
-async function realpathIfExists(path: string): Promise<string | undefined> {
-  try {
-    return await realpath(path);
-  } catch (error) {
-    if (isNodeError(error, 'ENOENT')) return undefined;
-    throw error;
-  }
-}
-
-async function writeFileNoFollow(path: string, data: string): Promise<void> {
-  const flags = constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | (constants.O_NOFOLLOW ?? 0);
-  const handle = await open(path, flags, 0o600);
-  try {
-    await handle.writeFile(data, 'utf8');
-  } finally {
-    await handle.close();
-  }
-}
-
-function isPathWithinOrEqual(candidate: string, root: string): boolean {
-  const relativePath = relative(resolve(root), resolve(candidate));
-  return relativePath === '' || (!relativePath.startsWith('..') && !isAbsolute(relativePath));
-}
-
-function toTraceRef(path: string): string {
-  return path.split(sep).join('/');
-}
-
-function isNodeError(error: unknown, code: string): error is NodeJS.ErrnoException {
-  return error instanceof Error && (error as NodeJS.ErrnoException).code === code;
-}
-
-async function writeRoutingTrace(options: {
-  trace: TraceContext;
-  responseId: string;
-  profileId: string;
-  profile: ModelRouterProfile;
-  workspaceRoot: string;
-  publicModelAlias: string;
-  modalities: ModalityRef[];
-  calls: ProviderCallRecord[];
-  degraded: boolean;
-  requestAuditMetadata?: RequestAuditMetadata;
-  status: 'completed' | 'failed';
-  outputText?: string;
-  errorSummary?: string;
-}) {
-  const translatorsTrace: JsonObject = {
-    ...(options.profile.translators.vision
-      ? { vision: providerTrace('translators.vision', options.profile.translators.vision, options.publicModelAlias) }
-      : {}),
-    ...(options.profile.translators.scientific
-      ? { scientific: scientificTranslatorTrace(options.profile.translators.scientific) }
-      : {}),
-  };
-  await writeTraceJson(options.trace, 'trace.json', compactObject({
-    schemaVersion: 'sciforge.model-router.trace.v1',
-    traceId: options.trace.traceId,
-    responseId: options.responseId,
-    profileId: options.profileId,
-    workspaceId: hashForTrace(options.workspaceRoot),
-    publicModelAlias: options.publicModelAlias,
-    textReasoner: providerTrace('textReasoner', options.profile.textReasoner, options.publicModelAlias),
-    translators: translatorsTrace,
-    modalityRefs: options.modalities.map(publicModalityRef),
-    requestAuditMetadata: options.requestAuditMetadata,
-    calls: options.calls,
-    degraded: options.degraded,
-  }));
-  await writeTraceJson(options.trace, 'final-routing-summary.json', compactObject({
-    schemaVersion: 'sciforge.model-router.final-routing-summary.v1',
-    responseId: options.responseId,
-    profileId: options.profileId,
-    status: options.status,
-    outputTextSha256: options.outputText ? sha256Hex(options.outputText) : undefined,
-    errorSummary: options.errorSummary,
-    degraded: options.degraded,
-    requestAuditMetadata: options.requestAuditMetadata,
-    traceRef: options.trace.relativeDir,
-  }));
-}
-
-async function writeImageGenerationTrace(options: {
-  trace: TraceContext;
-  requestId: string;
-  profileId: string;
-  workspaceRoot: string;
-  publicModelAlias: string;
-  provider: ModelRouterProviderConfig;
-  latencyMs: number;
-  status: 'completed' | 'failed';
-  errorSummary?: string;
-  operation: 'generations' | 'edits';
-}) {
-  const route = `model-router.images.${options.operation}`;
-  const audit = compactObject({
-    schemaVersion: 'sciforge.model-router.image-generation-trace.v1',
-    traceId: options.trace.traceId,
-    requestId: options.requestId,
-    route,
-    profileId: options.profileId,
-    workspaceId: hashForTrace(options.workspaceRoot),
-    publicModelAlias: options.publicModelAlias,
-    role: 'imageGenerator',
-    upstreamModel: options.provider.model,
-    providerBindingSha256: providerBindingHash(options.provider),
-    wireApi: `images.${options.operation}`,
-    latencyMs: Math.max(0, Math.round(options.latencyMs)),
-    status: options.status,
-    errorSummary: options.errorSummary,
-    traceRef: options.trace.relativeDir,
-  });
-  await writeTraceJson(options.trace, 'trace.json', audit);
-  await writeTraceJson(options.trace, 'final-routing-summary.json', compactObject({
-    schemaVersion: 'sciforge.model-router.final-routing-summary.v1',
-    requestId: options.requestId,
-    route,
-    profileId: options.profileId,
-    role: 'imageGenerator',
-    upstreamModel: options.provider.model,
-    latencyMs: Math.max(0, Math.round(options.latencyMs)),
-    status: options.status,
-    errorSummary: options.errorSummary,
-    traceRef: options.trace.relativeDir,
-  }));
-}
-
-function publicModalityRef(ref: ModalityRef): JsonObject {
-  return compactObject({
-    id: ref.id,
-    kind: ref.kind,
-    source: ref.source,
-    mime: ref.mime,
-    title: ref.title,
-    sha256: ref.sha256,
-    contentSha256: ref.contentSha256,
-    byteLength: ref.byteLength,
-    ref: ref.safeRef,
-    urlSha256: ref.urlSha256,
-  });
-}
-
-function providerTrace(roleAlias: string, provider: ModelRouterProviderConfig, publicModelAlias: string): JsonObject {
-  return {
-    roleAlias,
-    publicModelAlias,
-    providerBindingSha256: providerBindingHash(provider),
-    wireApi: 'chat.completions',
-  };
-}
-
-function scientificTranslatorTrace(service: ModelRouterScientificTranslatorConfig): JsonObject {
-  return {
-    roleAlias: 'translators.scientific',
-    serviceBindingSha256: scientificTranslatorBindingHash(service),
-  };
-}
-
 function roleAliasForCall(role: ProviderCallRecord['role']) {
   return role === 'textReasoner' ? 'textReasoner' : 'translators.vision';
 }
 
 function providerBindingHash(provider: ModelRouterProviderConfig) {
   return hashForTrace([
-    provider.provider,
     provider.baseUrl,
     provider.model,
     provider.apiKeyEnv,
+    JSON.stringify(provider.compatibility ?? {}),
   ].join('\n'));
 }
 
@@ -3802,28 +3991,25 @@ function scientificTranslatorBindingHash(service: ModelRouterScientificTranslato
   ].join('\n'));
 }
 
-function trimTrailingSlash(value: string): string {
-  return value.replace(/\/+$/u, '');
-}
-
 function providerCallTraceFields(
   provider: ModelRouterProviderConfig,
-  body: Record<string, unknown>,
-): Pick<ProviderCallRecord, 'providerAliasSha256' | 'modelAliasSha256' | 'wireRequest'> {
+  body: ResponsesRequest,
+  protocol: UpstreamWireProtocol,
+  url: string,
+): Pick<ProviderCallRecord, 'modelAliasSha256' | 'wireRequest'> {
   const modelAliasSha256 = hashForTrace(stringField(body.model) || provider.model || '');
   return {
-    providerAliasSha256: hashForTrace(provider.provider || ''),
     modelAliasSha256,
     wireRequest: {
-      urlSha256: hashForTrace(`${trimTrailingSlash(provider.baseUrl)}/chat/completions`),
-      endpointRoute: 'chat.completions',
+      urlSha256: hashForTrace(url),
+      endpointRoute: protocol,
       bodyShape: {
         modelAliasSha256,
-        messageCount: Array.isArray(body.messages) ? body.messages.length : 0,
+        messageCount: Array.isArray(body.input) ? body.input.length : body.input === undefined ? 0 : 1,
         toolCount: Array.isArray(body.tools) ? body.tools.length : 0,
-        hasImageParts: hasImageParts(body.messages),
-        textCharCount: textCharCount(body.messages),
-        maxTokensSet: body.max_tokens !== undefined || body.max_completion_tokens !== undefined,
+        hasImageParts: hasImageParts(body.input),
+        textCharCount: textCharCount(body.input) + textCharCount(body.instructions),
+        maxTokensSet: body.max_output_tokens !== undefined || body.max_tokens !== undefined,
         temperatureSet: body.temperature !== undefined,
       },
     },
@@ -3844,27 +4030,6 @@ function textCharCount(value: unknown): number {
   if (Array.isArray(value)) return value.reduce<number>((sum, item) => sum + textCharCount(item), 0);
   if (!isRecord(value)) return 0;
   return Object.values(value).reduce<number>((sum, item) => sum + textCharCount(item), 0);
-}
-
-function failedCallRecord(
-  provider: ModelRouterProviderConfig,
-  role: ProviderCallRecord['role'],
-  phase: string,
-  errorSummary: string,
-  sensitiveValues: string[] = [],
-): ProviderCallRecord {
-  return {
-    role,
-    phase,
-    status: 'failed',
-    roleAlias: roleAliasForCall(role),
-    providerBindingSha256: providerBindingHash(provider),
-    ...providerCallTraceFields(provider, {}),
-    wireApi: 'chat.completions',
-    latencyMs: 0,
-    stopReason: 'error',
-    errorSummary: boundedProviderTraceText(errorSummary, provider, sensitiveValues),
-  };
 }
 
 type RouterError = Error & {
@@ -3897,18 +4062,35 @@ function isRouterError(error: unknown): error is RouterError {
     && typeof (error as { code?: unknown }).code === 'string';
 }
 
-async function readJson(request: IncomingMessage): Promise<unknown> {
+async function readJson(
+  request: IncomingMessage,
+  traceSession?: ModelRouterTraceSession,
+): Promise<unknown> {
   const body = await readIncomingMessageBody(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
-  if (!body) return {};
-  return JSON.parse(body) as unknown;
+  if (!body) {
+    traceSession?.recordRequestBody('', {});
+    return {};
+  }
+  try {
+    const parsed = JSON.parse(body) as unknown;
+    traceSession?.recordRequestBody(body, parsed);
+    return parsed;
+  } catch (error) {
+    traceSession?.recordRequestBody(body);
+    throw error;
+  }
 }
 
-async function readMultipartForm(request: IncomingMessage): Promise<FormData> {
+async function readMultipartForm(
+  request: IncomingMessage,
+  traceSession?: ModelRouterTraceSession,
+): Promise<FormData> {
   const contentType = stringField(request.headers['content-type']);
   if (!contentType?.toLowerCase().startsWith('multipart/form-data;')) {
     throw routerError(400, 'invalid_request', 'Image edit requests must use multipart/form-data.');
   }
   const body = await readIncomingMessageBodyBytes(request, MAX_MODEL_ROUTER_REQUEST_BODY_BYTES);
+  traceSession?.recordRequestBody(body);
   try {
     const parsed = new Request('http://127.0.0.1/v1/images/edits', {
       method: 'POST',
@@ -3922,6 +4104,18 @@ async function readMultipartForm(request: IncomingMessage): Promise<FormData> {
   } catch {
     throw routerError(400, 'invalid_request', 'Image edit multipart body could not be parsed.');
   }
+}
+
+function isModelTraceRoute(method: string | undefined, pathname: string): boolean {
+  if (method !== 'POST') return false;
+  return pathname === '/v1/responses'
+    || pathname === '/v1/chat/completions'
+    || pathname === '/v1/images/generations'
+    || pathname === '/v1/images/edits'
+    || pathname === '/v1/messages'
+    || pathname === '/api/cc/v1/messages'
+    || pathname === '/v1/messages/count_tokens'
+    || pathname === '/api/cc/v1/messages/count_tokens';
 }
 
 function sendCors(response: ServerResponse) {
@@ -4112,8 +4306,8 @@ function isConservativeTraceRefPath(value: string) {
 function traceErrorSummary(error: unknown) {
   if (isRouterError(error)) return error.code;
   const message = error instanceof Error ? error.message : String(error);
-  if (/^provider_http_\d{3}$/.test(message)) return message;
-  if (/^provider_[a-z0-9_]+$/i.test(message)) return message;
+  if (/^(?:provider|upstream)_http_\d{3}$/.test(message)) return message;
+  if (/^(?:provider|upstream)_[a-z0-9_]+$/i.test(message)) return message;
   return 'model_router_error';
 }
 
@@ -4132,18 +4326,6 @@ function mimeFromDataUrl(value: string) {
 
 function boundedText(value: string, maxLength = 600) {
   return value.length <= maxLength ? value : `${value.slice(0, maxLength)}...`;
-}
-
-function boundedTraceText(
-  value: string,
-  profile: ModelRouterProfile,
-  publicModelAlias: string,
-  sensitiveValues: string[] = [],
-  maxLength = 600,
-) {
-  return boundedText(redactTraceText(value, {
-    sensitiveValues: [...profileTraceRedactionValues(profile, publicModelAlias), ...sensitiveValues],
-  }), maxLength);
 }
 
 function boundedProviderTraceText(
@@ -4183,7 +4365,6 @@ function profileTraceRedactionValues(profile: ModelRouterProfile, publicModelAli
 
 function providerTraceRedactionValues(provider: ModelRouterProviderConfig) {
   return [
-    provider.provider,
     provider.baseUrl,
     provider.apiKeyEnv,
     provider.model,

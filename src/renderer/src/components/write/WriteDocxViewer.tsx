@@ -31,42 +31,43 @@ import type {
   WorkspaceDocxTextWriteResult
 } from '@shared/workspace-file'
 import type {
-  WritePdfAnnotationAction,
-  WritePdfAnnotationOverlayKind,
-  WritePdfSelection
-} from './WritePdfViewer'
-
-export type WriteDocxAnnotationOverlay = {
-  id: string
-  kind: WritePdfAnnotationOverlayKind
-  quote: string
-  status?: 'open' | 'resolved'
-}
+  DocumentAnnotationAction,
+  DocumentAnnotationSelection,
+  DocumentNavigationRequest,
+  DocumentTextAnnotationOverlay
+} from '../../workspace-preview/document-annotation-types'
+import {
+  createDocumentTextAnchor,
+  isNewDocumentNavigationRequest,
+  resolveDocumentTextAnchor
+} from '../../workspace-preview/dom-text-annotations'
 
 type Props = {
   filePath: string
+  documentContentKey?: string
   paragraphs: WorkspaceDocxParagraph[]
   content: string
   size: number
   mtimeMs: number
   workspaceRoot: string
-  annotationOverlays?: WriteDocxAnnotationOverlay[]
+  annotationOverlays?: readonly DocumentTextAnnotationOverlay[]
   activeAnnotationId?: string | null
-  onAnnotationAction?: (action: WritePdfAnnotationAction, selection: WritePdfSelection) => void
+  onAnnotationAction?: (action: DocumentAnnotationAction, selection: DocumentAnnotationSelection) => void
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: () => void
+  navigationRequest?: DocumentNavigationRequest | null
   onSaveParagraphs?: (paragraphs: WorkspaceDocxTextParagraphWrite[]) => Promise<WorkspaceDocxTextWriteResult>
   className?: string
 }
 
 type DocxSelectionState = {
-  selection: WritePdfSelection
+  selection: DocumentAnnotationSelection
   toolbarStyle: CSSProperties
 }
 
 type HighlightSpan = {
   id: string
-  kind: WritePdfAnnotationOverlayKind
+  kind: DocumentTextAnnotationOverlay['kind']
   status?: 'open' | 'resolved'
   start: number
   end: number
@@ -94,7 +95,7 @@ function fileNameFromPath(path: string): string {
   return path.split(/[/\\]/).filter(Boolean).pop() ?? path
 }
 
-function anchorRectFromDomRect(rect: DOMRect): WritePdfSelection['anchorRect'] {
+function anchorRectFromDomRect(rect: DOMRect): DocumentAnnotationSelection['anchorRect'] {
   return {
     left: rect.left,
     right: rect.right,
@@ -105,12 +106,26 @@ function anchorRectFromDomRect(rect: DOMRect): WritePdfSelection['anchorRect'] {
   }
 }
 
-function paragraphIndexFromNode(node: Node, root: HTMLElement): number {
+function paragraphElementFromNode(node: Node, root: HTMLElement): HTMLElement | null {
   const element = node.nodeType === Node.ELEMENT_NODE ? node as Element : node.parentElement
   const paragraph = element?.closest<HTMLElement>('[data-docx-paragraph-index]')
-  if (!paragraph || !root.contains(paragraph)) return 1
+  return paragraph && root.contains(paragraph) ? paragraph : null
+}
+
+function paragraphIndexFromElement(paragraph: HTMLElement): number | null {
   const value = Number(paragraph.dataset.docxParagraphIndex ?? '')
-  return Number.isFinite(value) && value > 0 ? value : 1
+  return Number.isFinite(value) && value > 0 ? value : null
+}
+
+function textOffsetInElement(element: HTMLElement, node: Node, offset: number): number {
+  const range = element.ownerDocument.createRange()
+  range.selectNodeContents(element)
+  try {
+    range.setEnd(node, offset)
+    return range.toString().length
+  } catch {
+    return 0
+  }
 }
 
 function selectionToolbarStyle(rect: DOMRect): CSSProperties {
@@ -138,7 +153,7 @@ function editableParagraphText(element: HTMLElement): string {
   return element.innerText.replace(/\u00a0/g, ' ').replace(/\r\n?/g, '\n')
 }
 
-function highlightClassName(kind: WritePdfAnnotationOverlayKind, active: boolean, status?: 'open' | 'resolved'): string {
+function highlightClassName(kind: DocumentTextAnnotationOverlay['kind'], active: boolean, status?: 'open' | 'resolved'): string {
   const resolved = status === 'resolved'
   const activeClass = active ? 'ring-2 ring-accent/45' : ''
   const opacity = resolved ? 'opacity-60' : ''
@@ -149,19 +164,22 @@ function highlightClassName(kind: WritePdfAnnotationOverlayKind, active: boolean
   return `bg-amber-200/80 text-inherit ${activeClass} ${opacity}`
 }
 
-function highlightedSpansForText(
-  text: string,
-  overlays: readonly WriteDocxAnnotationOverlay[],
+function highlightedSpansForParagraph(
+  documentText: string,
+  paragraphText: string,
+  paragraphStart: number,
+  overlays: readonly DocumentTextAnnotationOverlay[],
   activeAnnotationId: string | null | undefined
 ): HighlightSpan[] {
   const spans: HighlightSpan[] = []
   const occupied: Array<{ start: number; end: number }> = []
   for (const overlay of overlays) {
-    const quote = overlay.quote.trim()
-    if (!quote) continue
-    const start = text.indexOf(quote)
-    if (start < 0) continue
-    const end = start + quote.length
+    const anchor = resolveDocumentTextAnchor(documentText, overlay)
+    if (!anchor) continue
+    const paragraphEnd = paragraphStart + paragraphText.length
+    const start = Math.max(anchor.from, paragraphStart) - paragraphStart
+    const end = Math.min(anchor.to, paragraphEnd) - paragraphStart
+    if (end <= start) continue
     if (occupied.some((span) => start < span.end && end > span.start)) continue
     occupied.push({ start, end })
     spans.push({
@@ -244,6 +262,7 @@ function paragraphTextSpans(
 
 export function WriteDocxViewer({
   filePath,
+  documentContentKey,
   paragraphs,
   content,
   size,
@@ -254,12 +273,16 @@ export function WriteDocxViewer({
   onAnnotationAction,
   onAnnotationSelect,
   onOpenAnnotations,
+  navigationRequest = null,
   onSaveParagraphs,
   className
 }: Props): ReactElement {
   const { t } = useTranslation('common')
   const rootRef = useRef<HTMLDivElement | null>(null)
+  const handledNavigationRequestIdRef = useRef<string | null>(null)
   const editableParagraphRefs = useRef<Map<number, HTMLElement>>(new Map())
+  const paragraphSourceRef = useRef(paragraphs)
+  paragraphSourceRef.current = paragraphs
   const [selectionState, setSelectionState] = useState<DocxSelectionState | null>(null)
   const [committedParagraphs, setCommittedParagraphs] = useState<WorkspaceDocxParagraph[]>(paragraphs)
   const [draftParagraphs, setDraftParagraphs] = useState<WorkspaceDocxParagraph[]>(paragraphs)
@@ -270,7 +293,8 @@ export function WriteDocxViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const sourceTitle = fileNameFromPath(filePath)
-  const documentIdentity = `${filePath}\u0000${mtimeMs}\u0000${size}`
+  const documentIdentity = documentContentKey?.trim() ||
+    `${filePath}\u0000${mtimeMs}\u0000${size}`
   const visibleOverlays = useMemo(
     () => annotationOverlays.filter((overlay) => overlay.quote.trim()),
     [annotationOverlays]
@@ -289,14 +313,23 @@ export function WriteDocxViewer({
     () => committedParagraphs.map((paragraph) => paragraph.text).join('\n\n'),
     [committedParagraphs]
   )
+  const paragraphStartOffsets = useMemo(() => {
+    let offset = 0
+    return new Map(committedParagraphs.map((paragraph) => {
+      const entry: [number, number] = [paragraph.index, offset]
+      offset += paragraph.text.length + 2
+      return entry
+    }))
+  }, [committedParagraphs])
   const activeSearchMatch = searchMatches[Math.min(searchIndex, Math.max(0, searchMatches.length - 1))] ?? null
   const matchLabel = searchQuery.trim()
     ? `${searchMatches.length ? Math.min(searchIndex + 1, searchMatches.length) : 0}/${searchMatches.length}`
     : ''
 
   useEffect(() => {
-    setCommittedParagraphs(paragraphs)
-    setDraftParagraphs(paragraphs)
+    const nextParagraphs = paragraphSourceRef.current
+    setCommittedParagraphs(nextParagraphs)
+    setDraftParagraphs(nextParagraphs)
     setEditMode(false)
     setSaveState('idle')
     setSaveError(null)
@@ -315,6 +348,25 @@ export function WriteDocxViewer({
       target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
     }, 0)
   }, [activeSearchMatch, editMode])
+
+  useEffect(() => {
+    if (!isNewDocumentNavigationRequest(
+      handledNavigationRequestIdRef.current,
+      navigationRequest
+    )) return
+    window.setTimeout(() => {
+      const anchor = resolveDocumentTextAnchor(committedContent, navigationRequest)
+      const paragraph = anchor ? committedParagraphs.find((candidate) => {
+        const start = paragraphStartOffsets.get(candidate.index) ?? 0
+        return anchor.from >= start && anchor.from <= start + candidate.text.length
+      }) : undefined
+      const target = paragraph
+        ? rootRef.current?.querySelector<HTMLElement>(`[data-docx-paragraph-index="${paragraph.index}"]`)
+        : null
+      target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })
+      if (target) handledNavigationRequestIdRef.current = navigationRequest.requestId
+    }, 0)
+  }, [committedContent, committedParagraphs, navigationRequest, paragraphStartOffsets])
 
   const updateSelection = useCallback((): void => {
     if (editMode) {
@@ -342,37 +394,54 @@ export function WriteDocxViewer({
       setSelectionState(null)
       return
     }
-    const startLine = paragraphIndexFromNode(range.startContainer, root)
-    const endLine = paragraphIndexFromNode(range.endContainer, root)
-    const nextSelection: WritePdfSelection = {
-      text,
+    const startParagraph = paragraphElementFromNode(range.startContainer, root)
+    const endParagraph = paragraphElementFromNode(range.endContainer, root)
+    if (!startParagraph || !endParagraph) {
+      setSelectionState(null)
+      return
+    }
+    const startParagraphIndex = paragraphIndexFromElement(startParagraph)
+    const endParagraphIndex = paragraphIndexFromElement(endParagraph)
+    const startParagraphOffset = startParagraphIndex == null ? undefined : paragraphStartOffsets.get(startParagraphIndex)
+    const endParagraphOffset = endParagraphIndex == null ? undefined : paragraphStartOffsets.get(endParagraphIndex)
+    if (startParagraphOffset == null || endParagraphOffset == null) {
+      setSelectionState(null)
+      return
+    }
+    const anchor = createDocumentTextAnchor(
+      committedContent,
+      startParagraphOffset + textOffsetInElement(startParagraph, range.startContainer, range.startOffset),
+      endParagraphOffset + textOffsetInElement(endParagraph, range.endContainer, range.endOffset)
+    )
+    if (!anchor) {
+      setSelectionState(null)
+      return
+    }
+    const nextSelection: DocumentAnnotationSelection = {
+      text: anchor.quote,
       ranges: [{
-        from: 0,
-        to: text.length,
-        startLine,
-        startColumn: range.startOffset + 1,
-        endLine,
-        endColumn: range.endOffset + 1,
-        text,
-        charCount: text.length,
-        page: 1
+        from: anchor.from,
+        to: anchor.to,
+        startLine: anchor.start.line,
+        startColumn: anchor.start.column,
+        endLine: anchor.end.line,
+        endColumn: anchor.end.column,
+        text: anchor.quote,
+        charCount: anchor.quote.length
       }],
-      charCount: text.length,
-      sourceKind: 'pdf',
-      pageStart: 1,
-      pageEnd: 1,
+      charCount: anchor.quote.length,
+      sourceKind: 'docx',
+      contextBefore: anchor.contextBefore,
+      contextAfter: anchor.contextAfter,
       anchorRect: anchorRectFromDomRect(rect),
       rects: [],
       metadata: {
-        sourceKind: 'pdf',
+        sourceKind: 'docx',
         filePath,
         sourceTitle,
         mimeType: DOCX_MIME_TYPE,
         size,
         mtimeMs,
-        pageStart: 1,
-        pageEnd: 1,
-        pageCount: 1,
         rects: []
       }
     }
@@ -380,13 +449,13 @@ export function WriteDocxViewer({
       selection: nextSelection,
       toolbarStyle: selectionToolbarStyle(rect)
     })
-  }, [editMode, filePath, mtimeMs, size, sourceTitle])
+  }, [committedContent, editMode, filePath, mtimeMs, paragraphStartOffsets, size, sourceTitle])
 
   const scheduleSelectionUpdate = useCallback((): void => {
     window.setTimeout(updateSelection, 0)
   }, [updateSelection])
 
-  const performSelectionAction = useCallback(async (action: WritePdfAnnotationAction): Promise<void> => {
+  const performSelectionAction = useCallback(async (action: DocumentAnnotationAction): Promise<void> => {
     const selection = selectionState?.selection
     if (!selection) return
     if (action === 'copy') {
@@ -481,7 +550,13 @@ export function WriteDocxViewer({
   }
 
   const renderParagraphText = (paragraph: WorkspaceDocxParagraph): ReactElement[] => {
-    const spans = highlightedSpansForText(paragraph.text, visibleOverlays, activeAnnotationId)
+    const spans = highlightedSpansForParagraph(
+      committedContent,
+      paragraph.text,
+      paragraphStartOffsets.get(paragraph.index) ?? 0,
+      visibleOverlays,
+      activeAnnotationId
+    )
     const paragraphSearchMatches = searchMatches.filter((match) => match.paragraphIndex === paragraph.index)
     if (spans.length === 0 && paragraphSearchMatches.length === 0) return [<span key="plain">{paragraph.text}</span>]
     const parts: ReactElement[] = []
@@ -509,6 +584,7 @@ export function WriteDocxViewer({
           tabIndex={span.annotation ? 0 : undefined}
           className={className}
           data-docx-search-index={span.search?.globalIndex}
+          data-docx-annotation-id={span.annotation?.id}
           onClick={span.annotation ? () => onAnnotationSelect?.(span.annotation!.id) : undefined}
           onKeyDown={span.annotation ? (event) => handleHighlightKeyDown(event, span.annotation!.id) : undefined}
         >

@@ -1,7 +1,11 @@
 import type { SciForgeApi } from '@shared/sciforge-api'
+import { serializeCapabilityResourceContentAccess } from '@shared/workspace-preview-asset-url'
 
 const DEV_BRIDGE_PROXY_PATH = '/__sciforge-dev-bridge'
 const CLIENT_ID_STORAGE_KEY = 'sciforge.dev-browser-bridge.client-id'
+const DEV_INSTANCE_ID = typeof __SCIFORGE_DEV_INSTANCE_ID__ === 'string'
+  ? __SCIFORGE_DEV_INSTANCE_ID__.trim()
+  : ''
 
 type BridgeEnvelope<T> =
   | { ok: true; payload: T }
@@ -23,14 +27,6 @@ const channelHandlers = new Map<string, Set<ChannelHandler>>()
 function defaultBridgeUrl(): string {
   const origin = typeof window !== 'undefined' ? window.location?.origin : ''
   return origin ? `${origin}${DEV_BRIDGE_PROXY_PATH}` : 'http://127.0.0.1:5174'
-}
-
-function workspacePreviewAssetSourceUrl(sessionId: string): string | null {
-  const trimmed = sessionId.trim()
-  if (!trimmed || !bridgeUrl || !clientId) return null
-  const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/workspace-preview/assets/${encodeURIComponent(trimmed)}`)
-  url.searchParams.set('clientId', clientId)
-  return url.toString()
 }
 
 function detectPlatform(): string {
@@ -69,6 +65,7 @@ function ensureEventSource(): void {
   if (eventSource || typeof EventSource === 'undefined') return
   const eventsUrl = new URL(`${bridgeUrl.replace(/\/$/, '')}/events`)
   eventsUrl.searchParams.set('clientId', clientId)
+  if (DEV_INSTANCE_ID) eventsUrl.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
   eventSource = new EventSource(eventsUrl.toString())
   eventSource.addEventListener('bridge-message', (event) => {
     let message: BridgeMessage
@@ -101,7 +98,8 @@ async function invoke<T>(channel: string, payload?: unknown): Promise<T> {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-SciForge-Client': clientId
+      'X-SciForge-Client': clientId,
+      ...(DEV_INSTANCE_ID ? { 'X-SciForge-Dev-Instance': DEV_INSTANCE_ID } : {})
     },
     body: JSON.stringify({ channel, payload })
   }).catch((error) => {
@@ -148,7 +146,14 @@ function createApi(): SciForgeApi {
     getSettings: () => invoke('settings:get'),
     setSettings: (partial) => invoke('settings:set', partial),
     onSettingsChanged,
+    getModelAccessStatus: () => invoke('modelAccess:status'),
     fetchUpstreamModels: () => invoke('upstream:models'),
+    traces: {
+      read: (query) => invoke('traces:read', query ?? {}),
+      summaries: (query) => invoke('traces:summaries', query ?? {}),
+      export: (traceIds) => invoke('traces:export', { traceIds }),
+      clear: () => invoke('traces:clear')
+    },
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),
@@ -202,15 +207,13 @@ function createApi(): SciForgeApi {
         ...(forceTakeover ? { forceTakeover } : {})
       }),
     pickWorkspaceDirectory: (defaultPath) => invoke('workspace:pick-directory', defaultPath),
-    pickWorkspaceFile: (defaultPath) => invoke('workspace:pick-file', defaultPath),
+    pickFile: (request) => invoke('workspace:pick-file', request),
     buildScientificSkillsMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-skills-config', { workspaceRoot }),
     buildScientificPlottingMcpConfig: (workspaceRoot) =>
       invoke('mcp:scientific-plotting-config', { workspaceRoot }),
     buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
       invoke('mcp:bgc-discovery-config', { workspaceRoot }),
-    buildDatasetApiMcpConfig: (workspaceRoot) =>
-      invoke('mcp:dataset-api-config', { workspaceRoot }),
     buildImageGenerationMcpConfig: (workspaceRoot) =>
       invoke('mcp:image-generation-config', { workspaceRoot }),
     buildPptMasterMcpConfig: (workspaceRoot) =>
@@ -249,10 +252,6 @@ function createApi(): SciForgeApi {
     saveSkillFile: (rootPath, skillName, content) =>
       invoke('skill:save-file', { rootPath, skillName, content }),
     openSkillRoot: (rootPath) => invoke('skill:open-root', rootPath),
-    getRuntimeConfigFile: () => invoke('runtimeConfig:read'),
-    setRuntimeConfigFile: (content) => invoke('runtimeConfig:write', content),
-    openRuntimeConfigDir: () => invoke('runtimeConfig:open-dir'),
-    openModelRouterConfigFile: () => invoke('modelRouter:config:open'),
     getGitBranches: (workspaceRoot) => invoke('git:branches', workspaceRoot),
     switchGitBranch: (workspaceRoot, branch) =>
       invoke('git:switch-branch', { workspaceRoot, branch }),
@@ -270,8 +269,8 @@ function createApi(): SciForgeApi {
     saveWorkspaceClipboardImage: (payload) => invoke('file:save-workspace-clipboard-image', payload),
     readClipboardImage: () => invoke('clipboard:read-image'),
     pasteWorkspaceClipboard: (payload) => invoke('clipboard:paste-workspace', payload),
-    startWorkspaceNativeFileDrag: (payload) => invoke('file:start-workspace-native-drag', payload),
     renameWorkspaceEntry: (payload) => invoke('file:rename-workspace-entry', payload),
+    suggestWorkspacePdfName: (payload) => invoke('file:suggest-workspace-pdf-name', payload),
     copyWorkspaceEntry: (payload) => invoke('file:copy-workspace-entry', payload),
     importWorkspaceEntries: (payload) => invoke('file:import-workspace-entries', payload),
     moveWorkspaceEntry: (payload) => invoke('file:move-workspace-entry', payload),
@@ -279,38 +278,23 @@ function createApi(): SciForgeApi {
     watchWorkspaceFile: (payload) => invoke('file:watch-workspace', payload),
     unwatchWorkspaceFile: (watchId) => invoke('file:unwatch-workspace', watchId),
     onWorkspaceFileChanged: (handler) => onChannel('file:workspace-changed', handler),
-    workspacePreview: {
-      listPlugins: () => invoke('workspacePreview:listPlugins'),
-      open: (input) => invoke('workspacePreview:open', input),
-      observe: (sessionId) => invoke('workspacePreview:observe', { sessionId }),
-      describeAsset: (sessionId) => invoke('workspacePreview:describeAsset', { sessionId }),
-      readRange: (sessionId, range) => invoke('workspacePreview:readRange', { sessionId, range }),
-      prepareArtifact: (sessionId, request) =>
-        invoke('workspacePreview:prepareArtifact', { sessionId, request }),
-      readArtifactRange: (sessionId, request) =>
-        invoke('workspacePreview:readArtifactRange', { sessionId, request }),
-      applyEdit: (sessionId, operation) =>
-        invoke('workspacePreview:applyEdit', { sessionId, operation }),
-      export: (sessionId, target) => invoke('workspacePreview:export', { sessionId, target }),
-      invokeAction: (sessionId, action) =>
-        invoke('workspacePreview:invokeAction', { sessionId, action }),
-      releaseSession: (sessionId) =>
-        invoke('workspacePreview:releaseSession', { sessionId }),
-      watch: (payload) => invoke('workspacePreview:watch', payload),
-      unwatch: (watchId) => invoke('workspacePreview:unwatch', watchId),
-      onChanged: (handler) => onChannel('workspacePreview:changed', handler),
-      getAssetSourceUrl: workspacePreviewAssetSourceUrl
-    },
-    biologyRoom: {
-      pickFile: (workspaceRoot) => invoke('biologyRoom:pick-file', { workspaceRoot }),
-      create: (input) => invoke('biologyRoom:create', input),
-      openOrCreate: (input) => invoke('biologyRoom:openOrCreate', input),
-      load: (input) => invoke('biologyRoom:load', input),
-      list: (input) => invoke('biologyRoom:list', input),
-      observe: (input) => invoke('biologyRoom:observe', input),
-      apply: (input) => invoke('biologyRoom:apply', input),
-      refresh: (input) => invoke('biologyRoom:refresh', input),
-      history: (input) => invoke('biologyRoom:history', input)
+    capabilities: {
+      readiness: (input) => invoke('capability:readiness', input),
+      discover: (input = {}) => invoke('capability:discover', input),
+      observe: (input) => invoke('capability:observe', input),
+      bind: (input) => invoke('capability:bind', input),
+      invoke: (input) => invoke('capability:invoke', input),
+      events: (input = {}) => invoke('capability:events', input),
+      subscribe: (workspaceId) => invoke('capability:subscribe', { workspaceId }),
+      unsubscribe: (subscriptionId) => invoke('capability:unsubscribe', { subscriptionId }),
+      resourceContentUrl: (access) => {
+        const url = new URL(`${bridgeUrl.replace(/\/$/, '')}/capability/resources/content`)
+        url.searchParams.set('clientId', clientId)
+        if (DEV_INSTANCE_ID) url.searchParams.set('devInstanceId', DEV_INSTANCE_ID)
+        url.searchParams.set('access', serializeCapabilityResourceContentAccess(access))
+        return url.toString()
+      },
+      onEvent: (handler) => onChannel('capability:event', handler)
     },
     requestWriteInlineCompletion: (payload) => invoke('write:inline-completion', payload),
     retrieveWriteContext: (payload) => invoke('write:retrieve-context', payload),
@@ -338,25 +322,12 @@ function createApi(): SciForgeApi {
     speechToText: {
       transcribe: (payload) => invoke('speech:transcribe', payload)
     },
-    paperRadar: {
-      status: () => invoke('paperRadar:status'),
-      syncArxiv: (payload) => invoke('paperRadar:sync-arxiv', payload),
-      syncBiorxiv: (payload) => invoke('paperRadar:sync-biorxiv', payload),
-      syncProfile: (payload) => invoke('paperRadar:sync-profile', payload),
-      listProfiles: () => invoke('paperRadar:profiles:list'),
-      saveProfile: (payload) => invoke('paperRadar:profiles:save', payload),
-      review: (payload) => invoke('paperRadar:review', payload),
-      search: (payload) => invoke('paperRadar:search', payload),
-      rank: (payload) => invoke('paperRadar:rank', payload),
-      digest: (payload) => invoke('paperRadar:digest', payload)
-    },
     researchCards: {
       list: (input) => invoke('researchCards:list', input ?? {}),
       create: (input) => invoke('researchCards:create', input),
       update: (input) => invoke('researchCards:update', input),
       archive: (input) => invoke('researchCards:archive', input)
     },
-    onRuntimeStatus: (handler) => onChannel('runtime:status', handler),
     agentRuntime: {
       connect: (runtimeId) => invoke('agentRuntime:connect', { runtimeId }),
       capabilities: (runtimeId) => invoke('agentRuntime:capabilities', { runtimeId }),
@@ -400,16 +371,6 @@ function createApi(): SciForgeApi {
     getComputerUsePermissions: () => invoke('computer-use:permissions'),
     requestComputerUsePermission: (kind) => invoke('computer-use:request-permission', kind),
     getComputerUseStatus: () => invoke('computer-use:status'),
-    getEvidenceDagView: (input) => invoke('evidenceDag:view', input),
-    updateEvidenceDag: (input) => invoke('evidenceDag:update', input),
-    setEvidenceDagPriority: (input) => invoke('evidenceDag:priority', input),
-    resolveEvidenceDagEvidencePreview: (input) =>
-      invoke('evidenceDag:resolve-evidence-preview', input),
-    getProjectDagView: (input) => invoke('projectDag:view', input),
-    updateProjectDag: (input) => invoke('projectDag:update', input),
-    saveProjectDagGoal: (input) => invoke('projectDag:save-goal', input),
-    resolveProjectDagEvidencePreview: (input) =>
-      invoke('projectDag:resolve-evidence-preview', input),
     showTurnCompleteNotification: (payload) => invoke('notification:turn-complete', payload),
     getAppVersion: () => invoke('app:version'),
     getGuiUpdateState: () => invoke('gui:update-state'),
@@ -436,7 +397,7 @@ function isLocalBrowserHost(): boolean {
 }
 
 function hasElectronPreloadBridge(): boolean {
-  return typeof window.sciforge?.onDevPreviewNavigate === 'function'
+  return typeof window.sciforge?.getAppVersion === 'function'
 }
 
 export function installDevSciForgeBridge(): void {

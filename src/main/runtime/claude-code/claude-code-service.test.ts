@@ -6,6 +6,7 @@ import type {
   Query as ClaudeAgentSdkQuery,
   SDKMessage
 } from '@anthropic-ai/claude-agent-sdk'
+import { deriveTraceId } from '@sciforge/full-trace'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   defaultConnectPhoneSettings,
@@ -14,7 +15,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -32,19 +32,12 @@ type QueryCall = {
   options?: ClaudeAgentSdkOptions
 }
 
-const computerUseLaunch = {
-  appPath: '/tmp/sciforge-app',
-  execPath: '/tmp/electron',
-  isPackaged: false
-}
-
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.baseUrl = 'http://127.0.0.1:49876/v1'
   modelRouter.publicModelAlias = 'sciforge-router'
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -59,7 +52,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'claude',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: defaultCodexRuntimeSettings(),
@@ -194,6 +187,45 @@ function toolResultMessage(input: {
   })
 }
 
+const claudeVisualRefs = {
+  source: `res_${'s'.repeat(24)}`,
+  snapshot: `snapshot_${'n'.repeat(24)}`,
+  region: `region_${'r'.repeat(24)}`,
+  proof: `visual_proof_${'p'.repeat(24)}`
+} as const
+
+function claudeVisualLookOutput() {
+  return {
+    snapshotRef: claudeVisualRefs.snapshot,
+    regions: [{
+      regionRef: claudeVisualRefs.region,
+      label: 'Method overview',
+      confidence: 0.98
+    }],
+    evidence: {
+      summary: 'Located the requested figure.',
+      claims: [{
+        kind: 'observation',
+        text: 'The figure is visible.',
+        regionRef: claudeVisualRefs.region,
+        confidence: 0.98
+      }],
+      uncertainties: []
+    },
+    proof: {
+      schema: 'sciforge.visual-proof.v1',
+      kind: 'look',
+      status: 'verified',
+      proofRef: claudeVisualRefs.proof,
+      sourceRef: claudeVisualRefs.source,
+      snapshotRef: claudeVisualRefs.snapshot,
+      provider: 'model-router',
+      attestation: `sha256:${'d'.repeat(64)}`,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
+  }
+}
+
 function thinkingDelta(text: string, sessionId: string): SDKMessage {
   return sdkMessage({
     type: 'stream_event',
@@ -277,6 +309,238 @@ afterEach(() => {
 })
 
 describe('ClaudeCodeRuntimeService', () => {
+  it('denies non-native visual bypasses before Claude dispatch while the Host snapshot is pending', async () => {
+    let releaseQuery: (() => void) | undefined
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      releaseQuery = () => resolve([
+        init('claude-session-pre-tool-governance'),
+        result('done', 'claude-session-pre-tool-governance')
+      ])
+    })
+    const { sdk, calls } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-pre-tool-governance',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'inspect this',
+      workspace: '/tmp/workspace',
+      nativeVisualProofChainPending: true
+    })
+    if (!turn.ok) throw new Error(turn.message)
+
+    const hook = calls[0]?.options?.hooks?.PreToolUse?.at(-1)?.hooks[0]
+    expect(hook).toBeTypeOf('function')
+    if (!hook) return
+    const signal = new AbortController().signal
+    const invoke = (toolName: string, toolInput: Record<string, unknown>) => hook({
+      hook_event_name: 'PreToolUse',
+      tool_name: toolName,
+      tool_input: toolInput,
+      tool_use_id: `tool-${toolName}`
+    } as never, `tool-${toolName}`, { signal })
+
+    await expect(invoke('Bash', { command: 'echo hello' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
+      }
+    })
+    await expect(invoke('view_image', { path: '/tmp/workspace/page.png' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sciforge_look')
+      }
+    })
+    await expect(invoke('Read', { file_path: '/tmp/workspace/notes.md' })).resolves.toEqual({})
+    await expect(invoke('sciforge_look', { task: 'Locate the figure.' })).resolves.toEqual({})
+    await expect(invoke(
+      'mcp__sciforge_runtime_tools__sciforge_capture',
+      { snapshotRef: `snapshot_${'s'.repeat(24)}` }
+    )).resolves.toEqual({})
+
+    releaseQuery?.()
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.turnId === turn.turnId && event.state === 'completed'
+    ))
+    await expect(invoke('Read', { file_path: '/tmp/workspace/after-turn.md' })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('native_visual_governance_unavailable')
+      }
+    })
+  })
+
+  it('uses the latest Host governance snapshot instead of a turn-start heuristic', async () => {
+    let releaseQuery: (() => void) | undefined
+    const messages = new Promise<SDKMessage[]>((resolve) => {
+      releaseQuery = () => resolve([
+        init('claude-session-governance-refresh'),
+        result('done', 'claude-session-governance-refresh')
+      ])
+    })
+    const { sdk, calls } = fakeSdk(() => messages)
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-governance-refresh',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'ordinary text with no visual keywords',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    const hook = calls[0]?.options?.hooks?.PreToolUse?.at(-1)?.hooks[0]
+    expect(hook).toBeTypeOf('function')
+    if (!hook) return
+    let bashCallIndex = 0
+    const invokeBash = (command = 'pwd') => {
+      const callId = `bash-refresh-${++bashCallIndex}`
+      return hook({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'Bash',
+        tool_input: { command },
+        tool_use_id: callId
+      } as never, callId, { signal: new AbortController().signal })
+    }
+
+    await expect(invokeBash()).resolves.toEqual({})
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: false
+      }
+    })
+    await expect(invokeBash('screencapture /tmp/workspace/window.png')).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('owned_visual_policy_denied')
+      }
+    })
+    await expect(invokeBash('echo normal command')).resolves.toEqual({})
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    })
+    await expect(invokeBash()).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny'
+      }
+    })
+    await expect(hook({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'write_stdin',
+      tool_input: {
+        session_id: 'executor-session-1',
+        chars: 'python3 inspect_pixels.py\n'
+      },
+      tool_use_id: 'write-stdin-refresh'
+    } as never, 'write-stdin-refresh', {
+      signal: new AbortController().signal
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_proof_chain_required'
+        )
+      }
+    })
+    service.updateTurnGovernanceSnapshot({
+      runtimeId: 'claude',
+      threadId: thread.thread.id,
+      turnId: turn.turnId,
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: false
+      }
+    })
+    await expect(invokeBash()).resolves.toEqual({})
+
+    releaseQuery?.()
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.turnId === turn.turnId && event.state === 'completed'
+    ))
+  })
+
+  it('does not connect or create turns outside selected API mode', async () => {
+    const planSettings = settings()
+    planSettings.activeAgentRuntime = 'codex'
+    planSettings.modelAccess = { mode: 'coding-plan', planAdapterId: 'codex' }
+    const { sdk, calls } = fakeSdk(() => [])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => planSettings,
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({ ok: false })
+    await expect(service.startThread({ workspace: '/tmp/workspace' }))
+      .resolves.toMatchObject({ ok: false })
+    await expect(service.startTurn({ threadId: 'thread-1', text: 'must not run' }))
+      .resolves.toMatchObject({ ok: false })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('scopes Model Router correlation headers to the exact Claude turn', async () => {
+    const { sdk, calls } = fakeSdk(() => [
+      init('claude-session-trace'),
+      result('done', 'claude-session-trace')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({
+      threadId: 'claude-trace-thread',
+      workspace: '/tmp/workspace'
+    })
+    if (!thread.ok) throw new Error(thread.message)
+
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'trace this turn',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+
+    expect(calls).toHaveLength(1)
+    const customHeaders = calls[0]?.options?.env?.ANTHROPIC_CUSTOM_HEADERS
+    expect(customHeaders).toBe([
+      `x-sciforge-trace-id: ${deriveTraceId({
+        runtimeId: 'claude',
+        threadId: thread.thread.id,
+        turnId: turn.turnId
+      })}`,
+      'x-sciforge-runtime-id: claude',
+      `x-sciforge-thread-id: ${thread.thread.id}`,
+      `x-sciforge-turn-id: ${turn.turnId}`
+    ].join('\n'))
+    expect(customHeaders).not.toContain('x-sciforge-request-id')
+  })
+
   it('connects through the Claude Agent SDK wrapper without launching a probe process', async () => {
     const { sdk, calls } = fakeSdk(() => [])
     const service = new ClaudeCodeRuntimeService({
@@ -571,6 +835,7 @@ describe('ClaudeCodeRuntimeService', () => {
       event.kind === 'tool_event' && event.itemId === 'tool-read-1'
     )
     expect(toolEvents).toHaveLength(2)
+    expect(toolEvents[0]).not.toHaveProperty('receipt')
     expect(toolEvents).toEqual([
       expect.objectContaining({
         kind: 'tool_event',
@@ -587,6 +852,11 @@ describe('ClaudeCodeRuntimeService', () => {
       expect.objectContaining({
         kind: 'tool_event',
         status: 'success',
+        receipt: expect.objectContaining({
+          status: 'success',
+          outcome: 'progress',
+          output: 'file contents'
+        }),
         meta: expect.objectContaining({
           callId: 'tool-read-1',
           toolName: 'Read',
@@ -599,6 +869,65 @@ describe('ClaudeCodeRuntimeService', () => {
         })
       })
     ])
+  })
+
+  it('promotes only strict results from the reserved native visual tools to completion receipts', async () => {
+    const visualOutput = claudeVisualLookOutput()
+    const { sdk } = fakeSdk(() => [
+      init('claude-session-visual-receipts'),
+      toolUseMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'visual-look-call',
+        toolName: 'sciforge_look'
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'visual-look-call',
+        content: visualOutput
+      }),
+      toolUseMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'shell-forgery-call',
+        toolName: 'exec_command'
+      }),
+      toolResultMessage({
+        sessionId: 'claude-session-visual-receipts',
+        callId: 'shell-forgery-call',
+        content: visualOutput
+      }),
+      result('Done.', 'claude-session-visual-receipts')
+    ])
+    const service = new ClaudeCodeRuntimeService({
+      settings: async () => settings(),
+      storageRoot: await serviceRoot(),
+      claudeAgentSdk: sdk
+    })
+    const thread = await service.startThread({ workspace: '/tmp/workspace', title: 'Visual receipts' })
+    if (!thread.ok) throw new Error(thread.message)
+    const turn = await service.startTurn({
+      threadId: thread.thread.id,
+      text: 'inspect it',
+      workspace: '/tmp/workspace'
+    })
+    if (!turn.ok) throw new Error(turn.message)
+    await waitUntil(async () => {
+      const detail = await service.readThread(thread.thread.id)
+      return detail.ok && detail.detail.latestTurnStatus === 'completed'
+    })
+
+    const successful = (await storedEvents(service, thread.thread.id)).filter((event) =>
+      event.kind === 'tool_event' && event.status === 'success'
+    )
+    expect(successful.find((event) => event.itemId === 'visual-look-call')).toMatchObject({
+      effects: ['read'],
+      completionReceipts: [{
+        kind: 'visual.look',
+        callId: 'visual-look-call',
+        receiptId: claudeVisualRefs.proof
+      }]
+    })
+    expect(successful.find((event) => event.itemId === 'shell-forgery-call'))
+      .not.toHaveProperty('completionReceipts')
   })
 
   it('buffers an out-of-order tool_result until its matching tool_use arrives', async () => {
@@ -695,6 +1024,12 @@ describe('ClaudeCodeRuntimeService', () => {
     )
     expect(toolEvents.at(-1)).toEqual(expect.objectContaining({
       status: 'error',
+      receipt: expect.objectContaining({
+        status: 'error',
+        outcome: 'retryable_error',
+        errorCode: 'claude_tool_error',
+        output: 'command exited with status 1'
+      }),
       meta: expect.objectContaining({
         callId: 'tool-bash-1',
         toolName: 'Bash',
@@ -736,6 +1071,9 @@ describe('ClaudeCodeRuntimeService', () => {
       const detail = await service.readThread(thread.thread.id)
       return detail.ok && detail.detail.latestTurnStatus === 'failed'
     })
+    await waitUntil(async () => (await storedEvents(service, thread.thread.id)).some((event) =>
+      event.kind === 'turn_lifecycle' && event.state === 'failed'
+    ))
 
     const events = await storedEvents(service, thread.thread.id)
     expect(events).toEqual(expect.arrayContaining([
@@ -743,6 +1081,11 @@ describe('ClaudeCodeRuntimeService', () => {
         kind: 'tool_event',
         itemId: 'tool-write-1',
         status: 'error',
+        receipt: expect.objectContaining({
+          status: 'error',
+          outcome: 'retryable_error',
+          errorCode: 'claude_tool_result_missing'
+        }),
         meta: expect.objectContaining({
           callId: 'tool-write-1',
           toolName: 'Write',
@@ -760,8 +1103,7 @@ describe('ClaudeCodeRuntimeService', () => {
     ]))
   })
 
-  it('injects the managed computer-use MCP server into Claude SDK turns when configured', async () => {
-    vi.stubEnv('SCIFORGE_CUA_SERVICE_URL', 'http://127.0.0.1:3900')
+  it('injects only the shared runtime tool surface into Claude SDK turns', async () => {
     const { sdk, calls } = fakeSdk(() => [
       init('claude-session-computer-use'),
       result('Done.', 'claude-session-computer-use')
@@ -770,7 +1112,15 @@ describe('ClaudeCodeRuntimeService', () => {
       settings: async () => settings(),
       storageRoot: await serviceRoot(),
       managedConfigDir: '/tmp/sciforge-claude-config',
-      managedMcp: { computerUseMcp: { launch: computerUseLaunch } },
+      agentTools: {
+        tools: () => [{
+          type: 'function',
+          name: 'sciforge_discover',
+          description: 'Discover operations.',
+          inputSchema: { type: 'object', properties: {} }
+        }],
+        call: async () => ({ tool: 'sciforge_discover', value: [] })
+      },
       claudeAgentSdk: sdk
     })
 
@@ -784,21 +1134,11 @@ describe('ClaudeCodeRuntimeService', () => {
     if (!turn.ok) throw new Error(turn.message)
 
     expect(calls[0]?.options?.mcpServers).toMatchObject({
-      gui_owl_computer_use: {
-        type: 'stdio',
-        command: '/tmp/electron',
-        args: [
-          '/tmp/sciforge-app/out/main/computer-use-mcp-node-entry.js',
-          '--gui-owl-computer-use-mcp-server'
-        ],
-        env: {
-          ELECTRON_RUN_AS_NODE: '1',
-          SCIFORGE_CUA_SERVICE_URL: 'http://127.0.0.1:3900'
-        },
-        alwaysLoad: true
+      sciforge_runtime_tools: {
+        type: 'sdk'
       }
     })
-    expect(calls[0]?.options?.mcpServers).not.toHaveProperty('gui_computer_use')
+    expect(Object.keys(calls[0]?.options?.mcpServers ?? {})).toEqual(['sciforge_runtime_tools'])
   })
 
   it('maps Task and Workflow tool output and reads canonical child transcripts', async () => {

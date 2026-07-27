@@ -1,62 +1,43 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
-  WORKSPACE_PREVIEW_ASSET_SCHEME,
-  workspacePreviewAssetSourceUrl,
-  workspacePreviewSessionIdFromAssetUrl
+  CAPABILITY_RESOURCE_CONTENT_SCHEME,
+  capabilityResourceContentAccessFromUrl,
+  capabilityResourceContentSourceUrl
 } from '../shared/workspace-preview-asset-url'
 import {
-  installWorkspacePreviewAssetProtocol,
-  registerWorkspacePreviewAssetScheme,
-  type WorkspacePreviewAssetBackend,
+  installCapabilityResourceContentProtocol,
+  registerCapabilityResourceContentScheme,
+  type CapabilityResourceContentBackend,
   type WorkspacePreviewAssetProtocolApi
 } from './workspace-preview-asset-protocol'
 
 const bytes = Buffer.from('0123456789')
+const access = {
+  workspaceId: '/workspace',
+  resource: {
+    token: `cap_${'a'.repeat(32)}`,
+    semanticRevision: '1',
+    expiresAt: '2026-07-16T14:00:00.000Z'
+  }
+}
+const sourceUrl = capabilityResourceContentSourceUrl(access)
 
-function backend(authorized = true): WorkspacePreviewAssetBackend {
+function backend(): CapabilityResourceContentBackend {
   return {
-    isSessionAuthorized: vi.fn(() => authorized),
-    describeAsset: vi.fn(async () => ({
-      ok: true as const,
-      descriptor: {
-        schemaVersion: 1 as const,
-        sessionId: 'preview-session-1',
-        assetId: 'asset:preview-session-1',
-        pluginId: 'sequence-genomics',
-        modality: 'sequence' as const,
-        file: {
-          name: 'genome.fa',
-          relativePath: 'genome.fa',
-          mimeType: 'text/x-fasta',
-          size: bytes.length
-        },
-        primary: 'byte-range' as const,
-        eagerRead: { allowed: false, reason: 'bounded transport' },
-        range: {
-          available: true,
-          size: bytes.length,
-          maxChunkBytes: 4,
-          recommendedChunkBytes: 4
-        },
-        strategies: [{
-          kind: 'byte-range' as const,
-          status: 'available' as const,
-          reason: 'bounded transport',
-          maxChunkBytes: 4
-        }]
-      }
+    describe: vi.fn(async () => ({
+      size: bytes.length,
+      mimeType: 'text/x-fasta',
+      fileName: 'genome.fa',
+      maxChunkBytes: 4,
+      recommendedChunkBytes: 4
     })),
-    readRange: vi.fn(async (_sessionId, range) => {
+    readRange: vi.fn(async (_access, range) => {
       const chunk = bytes.subarray(range.offset, range.offset + range.length)
       return {
-        ok: true as const,
-        sessionId: 'preview-session-1',
-        assetId: 'asset:preview-session-1',
         offset: range.offset,
         length: chunk.length,
         size: bytes.length,
-        dataBase64: chunk.toString('base64'),
-        mimeType: 'text/x-fasta'
+        dataBase64: chunk.toString('base64')
       }
     })
   }
@@ -86,10 +67,10 @@ describe('workspace preview asset protocol', () => {
   it('registers a secure, fetchable streaming scheme before app ready', () => {
     const registerSchemesAsPrivileged = vi.fn()
 
-    registerWorkspacePreviewAssetScheme({ registerSchemesAsPrivileged })
+    registerCapabilityResourceContentScheme({ registerSchemesAsPrivileged })
 
     expect(registerSchemesAsPrivileged).toHaveBeenCalledWith([{
-      scheme: WORKSPACE_PREVIEW_ASSET_SCHEME,
+      scheme: CAPABILITY_RESOURCE_CONTENT_SCHEME,
       privileges: {
         standard: true,
         secure: true,
@@ -100,29 +81,24 @@ describe('workspace preview asset protocol', () => {
     }])
   })
 
-  it('builds session-scoped URLs and rejects malformed asset URLs', () => {
-    expect(workspacePreviewAssetSourceUrl(' preview/a ')).toBe(
-      'sciforge-preview://asset/preview%2Fa'
-    )
-    expect(workspacePreviewSessionIdFromAssetUrl(
-      'sciforge-preview://asset/preview%2Fa'
-    )).toBe('preview/a')
-    expect(workspacePreviewSessionIdFromAssetUrl(
-      'sciforge-preview://other/preview-1'
+  it('builds opaque capability resource URLs and rejects malformed access', () => {
+    expect(capabilityResourceContentAccessFromUrl(sourceUrl)).toEqual(access)
+    expect(capabilityResourceContentAccessFromUrl(
+      'sciforge-resource://other?access=%7B%7D'
     )).toBeNull()
-    expect(workspacePreviewSessionIdFromAssetUrl(
-      'sciforge-preview://asset/preview-1/extra'
+    expect(capabilityResourceContentAccessFromUrl(
+      'sciforge-resource://content?access=%7B%7D'
     )).toBeNull()
   })
 
   it('streams a single HTTP range in bounded host reads', async () => {
     const harness = protocolHarness()
     const previewBackend = backend()
-    installWorkspacePreviewAssetProtocol(harness.api, previewBackend)
-    const handler = harness.handlers.get(WORKSPACE_PREVIEW_ASSET_SCHEME)
+    installCapabilityResourceContentProtocol(harness.api, previewBackend)
+    const handler = harness.handlers.get(CAPABILITY_RESOURCE_CONTENT_SCHEME)
 
     const response = await handler?.(new Request(
-      'sciforge-preview://asset/preview-session-1',
+      sourceUrl,
       { headers: { Range: 'bytes=2-6' } }
     ))
 
@@ -132,12 +108,12 @@ describe('workspace preview asset protocol', () => {
     expect(Buffer.from(await response!.arrayBuffer()).toString()).toBe('23456')
     expect(previewBackend.readRange).toHaveBeenNthCalledWith(
       1,
-      'preview-session-1',
+      access,
       { offset: 2, length: 4 }
     )
     expect(previewBackend.readRange).toHaveBeenNthCalledWith(
       2,
-      'preview-session-1',
+      access,
       { offset: 6, length: 1 }
     )
   })
@@ -145,15 +121,15 @@ describe('workspace preview asset protocol', () => {
   it('supports HEAD and CORS preflight without reading file bytes', async () => {
     const harness = protocolHarness()
     const previewBackend = backend()
-    installWorkspacePreviewAssetProtocol(harness.api, previewBackend)
-    const handler = harness.handlers.get(WORKSPACE_PREVIEW_ASSET_SCHEME)!
+    installCapabilityResourceContentProtocol(harness.api, previewBackend)
+    const handler = harness.handlers.get(CAPABILITY_RESOURCE_CONTENT_SCHEME)!
 
     const head = await handler(new Request(
-      'sciforge-preview://asset/preview-session-1',
+      sourceUrl,
       { method: 'HEAD' }
     ))
     const options = await handler(new Request(
-      'sciforge-preview://asset/preview-session-1',
+      sourceUrl,
       { method: 'OPTIONS', headers: { Origin: 'null' } }
     ))
 
@@ -168,15 +144,15 @@ describe('workspace preview asset protocol', () => {
   it('rejects non-renderer origins instead of exposing wildcard CORS', async () => {
     const harness = protocolHarness()
     const previewBackend = backend()
-    installWorkspacePreviewAssetProtocol(harness.api, previewBackend)
-    const handler = harness.handlers.get(WORKSPACE_PREVIEW_ASSET_SCHEME)!
+    installCapabilityResourceContentProtocol(harness.api, previewBackend)
+    const handler = harness.handlers.get(CAPABILITY_RESOURCE_CONTENT_SCHEME)!
 
     const denied = await handler(new Request(
-      'sciforge-preview://asset/preview-session-1',
+      sourceUrl,
       { headers: { Origin: 'https://untrusted.example' } }
     ))
     const localDev = await handler(new Request(
-      'sciforge-preview://asset/preview-session-1',
+      sourceUrl,
       { method: 'HEAD', headers: { Origin: 'http://127.0.0.1:5173' } }
     ))
 
@@ -186,18 +162,18 @@ describe('workspace preview asset protocol', () => {
     expect(localDev.headers.get('access-control-allow-origin')).toBe('http://127.0.0.1:5173')
   })
 
-  it('does not reveal released sessions and rejects multi-range requests', async () => {
-    const unauthorizedHarness = protocolHarness()
-    installWorkspacePreviewAssetProtocol(unauthorizedHarness.api, backend(false))
-    const unauthorized = await unauthorizedHarness.handlers.get(WORKSPACE_PREVIEW_ASSET_SCHEME)!(
-      new Request('sciforge-preview://asset/preview-session-1')
+  it('rejects malformed resource access and multi-range requests', async () => {
+    const malformedHarness = protocolHarness()
+    installCapabilityResourceContentProtocol(malformedHarness.api, backend())
+    const malformed = await malformedHarness.handlers.get(CAPABILITY_RESOURCE_CONTENT_SCHEME)!(
+      new Request('sciforge-resource://content?access=%7B%7D')
     )
-    expect(unauthorized.status).toBe(404)
+    expect(malformed.status).toBe(404)
 
     const rangeHarness = protocolHarness()
-    installWorkspacePreviewAssetProtocol(rangeHarness.api, backend())
-    const invalidRange = await rangeHarness.handlers.get(WORKSPACE_PREVIEW_ASSET_SCHEME)!(
-      new Request('sciforge-preview://asset/preview-session-1', {
+    installCapabilityResourceContentProtocol(rangeHarness.api, backend())
+    const invalidRange = await rangeHarness.handlers.get(CAPABILITY_RESOURCE_CONTENT_SCHEME)!(
+      new Request(sourceUrl, {
         headers: { Range: 'bytes=0-1,4-5' }
       })
     )

@@ -10,14 +10,14 @@ import { fileURLToPath } from 'node:url'
 import { tsImport } from 'tsx/esm/api'
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const { toEvidenceDagTraceItems } = await tsImport(
-  '../src/main/runtime/evidence-dag-feed.ts', import.meta.url)
+const { evidenceTraceFromThread } = await tsImport(
+  '@sciforge/domain-evidence-dag/main', import.meta.url)
 const args = parseArgs(process.argv.slice(2))
 const runId = new Date().toISOString().replace(/[:.]/g, '-')
 const outputRoot = resolve(args.outputDir || join(repoRoot, 'temp', 'evidence-project-dag-e2e', runId))
 const storageRoot = join(outputRoot, 'isolated-storage')
 const evidenceStore = join(storageRoot, 'evidence')
-const projectDb = join(storageRoot, 'project', 'project.db')
+const projectDb = join(storageRoot, 'project', 'project-view.db')
 const logRoot = join(storageRoot, 'logs')
 const resultPath = join(outputRoot, 'result.json')
 const evidenceUrl = `http://127.0.0.1:${args.evidencePort}`
@@ -95,13 +95,25 @@ async function main() {
     runtimeWorkspace,
   })
   const runtimeItems = (runtimeThread.turns || []).flatMap((turn) => turn.items || [])
-  const trace = toEvidenceDagTraceItems(runtimeItems)
+  const trace = evidenceTraceFromThread({
+    id: args.runtimeThreadId,
+    runtimeId: runtimeThread.runtimeId || 'codex',
+    workspaceRoot: runtimeWorkspace,
+    watermark: String(runtimeThread.latestSeq),
+    turns: (runtimeThread.turns || []).map((turn) => ({
+      id: turn.id,
+      status: turn.status,
+      completedAt: turn.completedAt,
+      artifacts: turn.items || [],
+    })),
+    artifacts: runtimeThread.items || [],
+  })
   check('canonical-visible-runtime-trace', trace.length >= 2 &&
-    trace.some((item) => item.type === 'tool_result'), {
+    trace.some((item) => item.type === 'tool_result' || item.kind === 'tool'), {
     totalRuntimeItems: runtimeItems.length,
     runtimeKinds: counts(runtimeItems.map((item) => item.kind)),
     selectedItems: trace.length,
-    selectedKinds: counts(trace.map((item) => item.type)),
+    selectedKinds: counts(trace.map((item) => item.type || item.kind || 'unknown')),
     sourceReferences: trace.reduce((total, item) =>
       total + (Array.isArray(item.source_refs) ? item.source_refs.length : 0), 0),
   })
@@ -214,7 +226,6 @@ async function main() {
   const projectUpdateBody = {
     projectKey,
     evidenceVector: [{ threadId: args.sessionId, digest: evidenceSnapshot.digest }],
-    evidenceSnapshots: [evidenceSnapshot],
     capturedScope: {
       includedSessions: [args.sessionId], excludedSessions: [], isolatedSessions: [],
     },
@@ -223,8 +234,16 @@ async function main() {
   const queued = await serviceRequest(projectUrl, projectToken, '/updates', {
     method: 'POST', body: projectUpdateBody,
   })
-  check('project-update-durable-enqueued', Boolean(queued.id && queued.status), {
-    jobId: queued.id, status: queued.status,
+  check('project-update-durable-enqueued', Boolean(
+    queued.jobId &&
+    queued.acceptedRequestVersion &&
+    queued.desiredFingerprint &&
+    queued.state
+  ), {
+    jobId: queued.jobId,
+    acceptedRequestVersion: queued.acceptedRequestVersion,
+    desiredFingerprint: queued.desiredFingerprint,
+    state: queued.state,
   })
   const preRestart = await optionalServiceRequest(projectUrl, projectToken,
     `/updates/status?projectKey=${encodeURIComponent(projectKey)}`)
@@ -359,7 +378,7 @@ async function main() {
   function startEvidence(config) {
     return startSidecar({
       name: 'evidence', module: 'evidence_dag.server',
-      pythonPath: join(repoRoot, 'packages', 'workers', 'evidence-dag', 'src'),
+      pythonPath: join(repoRoot, 'packages', 'domains', 'evidence-dag', 'python'),
       env: {
         EDAG_HOST: '127.0.0.1', EDAG_PORT: String(args.evidencePort),
         EDAG_STORAGE_DIR: evidenceStore,
@@ -377,8 +396,8 @@ async function main() {
     return startSidecar({
       name: 'project', module: 'project_dag.server',
       pythonPath: [
-        join(repoRoot, 'packages', 'workers', 'project-dag', 'src'),
-        join(repoRoot, 'packages', 'workers', 'evidence-dag', 'src'),
+        join(repoRoot, 'packages', 'domains', 'project-dag', 'python'),
+        join(repoRoot, 'packages', 'domains', 'evidence-dag', 'python'),
       ].join(':'),
       env: {
         PDAG_HOST: '127.0.0.1', PDAG_PORT: String(args.projectPort),

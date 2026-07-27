@@ -3,26 +3,24 @@ import {
   DEFAULT_LOCAL_RUNTIME_DATA_DIR,
   DEFAULT_LOCAL_RUNTIME_MODEL,
   DEFAULT_LOCAL_RUNTIME_PORT,
+  DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
   DEFAULT_SANDBOX_MODE,
   type AppSettingsV1,
   type LocalRuntimeContextCompactionSettingsV1,
   type LocalRuntimeHistoryHygieneSettingsV1,
   type LocalRuntimeMcpSearchSettingsV1,
-  type LocalRuntimeTuningSettingsV1,
-  type LocalRuntimeTuningSettingsPatchV1,
   type RuntimeGuardSettingsPatchV1,
   type RuntimeGuardSettingsV1,
   type LocalRuntimeSettingsPatchV1,
   type LocalRuntimeSettingsV1,
+  type ResolvedLocalRuntimeSettingsV1,
   type AgentRuntimeSettingsEnvelopePatchV1,
   type AgentRuntimeSettingsEnvelopeV1,
   type LocalRuntimeStorageSettingsV1,
   type LocalRuntimeTokenEconomySettingsPatchV1,
   type LocalRuntimeTokenEconomySettingsV1
 } from './app-settings-types'
-import {
-  resolveLocalRuntimeSettings
-} from './app-settings-provider'
+import { resolveRuntimeModelRouterSettings } from './app-settings-model-router'
 import {
   defaultCodexRuntimeSettings,
   mergeCodexRuntimeSettings
@@ -33,8 +31,9 @@ import {
 } from './app-settings-claude'
 
 /**
- * Local runtime settings. Mirrors the bundled runtime CLI
- * options. It is the only active local-agent settings object the GUI stores.
+ * Legacy SciForge runtime settings retained so older settings files and
+ * internal tuning readers remain compatible. The runtime is not selected or
+ * started by default.
  */
 export function defaultLocalRuntimeSettings(
   port = DEFAULT_LOCAL_RUNTIME_PORT
@@ -42,8 +41,7 @@ export function defaultLocalRuntimeSettings(
   return {
     binaryPath: '',
     port,
-    autoStart: true,
-    providerId: '',
+    autoStart: false,
     runtimeToken: '',
     dataDir: DEFAULT_LOCAL_RUNTIME_DATA_DIR,
     model: DEFAULT_LOCAL_RUNTIME_MODEL,
@@ -54,8 +52,7 @@ export function defaultLocalRuntimeSettings(
     insecure: false,
     mcpSearch: defaultLocalRuntimeMcpSearchSettings(),
     storage: defaultLocalRuntimeStorageSettings(),
-    contextCompaction: defaultLocalRuntimeContextCompactionSettings(),
-    runtimeTuning: defaultLocalRuntimeTuningSettings()
+    contextCompaction: defaultLocalRuntimeContextCompactionSettings()
   }
 }
 
@@ -109,33 +106,13 @@ export function defaultLocalRuntimeContextCompactionSettings(): LocalRuntimeCont
   }
 }
 
-export function defaultLocalRuntimeTuningSettings(): LocalRuntimeTuningSettingsV1 {
-  return {
-    toolArgumentRepair: {
-      maxStringBytes: 512 * 1024
-    },
-    toolBudget: {
-      enabled: true,
-      profiles: {
-        explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
-        review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
-        implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
-        long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
-      }
-    },
-    parallelism: {
-      localReadOnly: 8,
-      networkMcp: 4
-    }
-  }
-}
-
 export function defaultRuntimeGuardSettings(): RuntimeGuardSettingsV1 {
   return {
-    toolStorm: {
+    execution: {
       enabled: true,
       windowSize: 8,
-      threshold: 3
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
     }
   }
 }
@@ -144,16 +121,29 @@ export function normalizeRuntimeGuardSettings(
   input: Partial<RuntimeGuardSettingsV1> | undefined
 ): RuntimeGuardSettingsV1 {
   const defaults = defaultRuntimeGuardSettings()
-  const toolStormInput = input?.toolStorm
-  const threshold = Math.max(
+  const executionInput = input?.execution
+  const exactRepeatThreshold = Math.max(
     2,
-    boundedPositiveInt(toolStormInput?.threshold, defaults.toolStorm.threshold, 128)
+    boundedPositiveInt(
+      executionInput?.exactRepeatThreshold,
+      defaults.execution.exactRepeatThreshold,
+      128
+    )
+  )
+  const semanticFailureThreshold = Math.max(
+    2,
+    boundedPositiveInt(
+      executionInput?.semanticFailureThreshold,
+      defaults.execution.semanticFailureThreshold,
+      128
+    )
   )
   return {
-    toolStorm: {
-      enabled: toolStormInput?.enabled !== false,
-      windowSize: boundedPositiveInt(toolStormInput?.windowSize, defaults.toolStorm.windowSize, 256),
-      threshold
+    execution: {
+      enabled: executionInput?.enabled !== false,
+      windowSize: boundedPositiveInt(executionInput?.windowSize, defaults.execution.windowSize, 256),
+      exactRepeatThreshold,
+      semanticFailureThreshold
     }
   }
 }
@@ -164,9 +154,9 @@ export function mergeRuntimeGuardSettings(
 ): RuntimeGuardSettingsV1 {
   const normalizedCurrent = normalizeRuntimeGuardSettings(current)
   return normalizeRuntimeGuardSettings({
-    toolStorm: {
-      ...normalizedCurrent.toolStorm,
-      ...(patch?.toolStorm ?? {})
+    execution: {
+      ...normalizedCurrent.execution,
+      ...(patch?.execution ?? {})
     }
   })
 }
@@ -231,44 +221,6 @@ export function mergeLocalRuntimeSettings(
     ...currentContextCompaction,
     ...(runtimePatch?.contextCompaction ?? {})
   })
-  const currentRuntimeTuning = normalizeLocalRuntimeTuningSettings(current.runtimeTuning)
-  const nextRuntimeTuning = normalizeLocalRuntimeTuningSettings({
-    ...currentRuntimeTuning,
-    ...(runtimePatch?.runtimeTuning
-      ? {
-          toolArgumentRepair: {
-            ...currentRuntimeTuning.toolArgumentRepair,
-            ...(runtimePatch.runtimeTuning.toolArgumentRepair ?? {})
-          },
-          toolBudget: {
-            ...currentRuntimeTuning.toolBudget,
-            ...(runtimePatch.runtimeTuning.toolBudget ?? {}),
-            profiles: {
-              explanation: {
-                ...currentRuntimeTuning.toolBudget.profiles.explanation,
-                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.explanation ?? {})
-              },
-              review: {
-                ...currentRuntimeTuning.toolBudget.profiles.review,
-                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.review ?? {})
-              },
-              implementation: {
-                ...currentRuntimeTuning.toolBudget.profiles.implementation,
-                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.implementation ?? {})
-              },
-              long: {
-                ...currentRuntimeTuning.toolBudget.profiles.long,
-                ...(runtimePatch.runtimeTuning.toolBudget?.profiles?.long ?? {})
-              }
-            }
-          },
-          parallelism: {
-            ...currentRuntimeTuning.parallelism,
-            ...(runtimePatch.runtimeTuning.parallelism ?? {})
-          }
-        }
-      : {})
-  })
   const sandboxMode = runtimePatch?.sandboxMode ?? current.sandboxMode
   return {
     ...current,
@@ -282,8 +234,7 @@ export function mergeLocalRuntimeSettings(
     tokenEconomy: nextTokenEconomy,
     mcpSearch: nextMcpSearch,
     storage: nextStorage,
-    contextCompaction: nextContextCompaction,
-    runtimeTuning: nextRuntimeTuning
+    contextCompaction: nextContextCompaction
   }
 }
 
@@ -296,7 +247,6 @@ function supportedLocalRuntimePatch(
   if (typeof source.binaryPath === 'string') next.binaryPath = source.binaryPath
   if (typeof source.port === 'number') next.port = source.port
   if (typeof source.autoStart === 'boolean') next.autoStart = source.autoStart
-  if (typeof source.providerId === 'string') next.providerId = source.providerId
   if (typeof source.runtimeToken === 'string') next.runtimeToken = source.runtimeToken
   if (typeof source.dataDir === 'string') next.dataDir = source.dataDir
   if (typeof source.model === 'string') next.model = source.model
@@ -319,9 +269,6 @@ function supportedLocalRuntimePatch(
   }
   if (isPlainObject(source.contextCompaction)) {
     next.contextCompaction = source.contextCompaction as LocalRuntimeSettingsPatchV1['contextCompaction']
-  }
-  if (isPlainObject(source.runtimeTuning)) {
-    next.runtimeTuning = source.runtimeTuning as LocalRuntimeTuningSettingsPatchV1
   }
   return Object.keys(next).length > 0 ? next : undefined
 }
@@ -430,77 +377,6 @@ function normalizeLocalRuntimeContextCompactionSettings(
   }
 }
 
-function normalizeLocalRuntimeTuningSettings(
-  input: Partial<LocalRuntimeTuningSettingsV1> | undefined
-): LocalRuntimeTuningSettingsV1 {
-  const defaults = defaultLocalRuntimeTuningSettings()
-  const normalizeBudgetProfile = (
-    inputProfile: Partial<LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation']> | undefined,
-    defaultProfile: LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation']
-  ): LocalRuntimeTuningSettingsV1['toolBudget']['profiles']['explanation'] => {
-    const hardLimit = boundedPositiveInt(inputProfile?.hardLimit, defaultProfile.hardLimit, 10_000)
-    const softLimit = Math.min(
-      boundedPositiveInt(inputProfile?.softLimit, defaultProfile.softLimit, 10_000),
-      hardLimit
-    )
-    return {
-      softLimit,
-      hardLimit,
-      maxAutomaticPhases: boundedPositiveInt(
-        inputProfile?.maxAutomaticPhases,
-        defaultProfile.maxAutomaticPhases,
-        32
-      ),
-      totalLimit: Math.max(
-        hardLimit,
-        boundedPositiveInt(inputProfile?.totalLimit, defaultProfile.totalLimit, 100_000)
-      )
-    }
-  }
-  return {
-    toolArgumentRepair: {
-      maxStringBytes: boundedPositiveInt(
-        input?.toolArgumentRepair?.maxStringBytes,
-        defaults.toolArgumentRepair.maxStringBytes,
-        16 * 1024 * 1024
-      )
-    },
-    toolBudget: {
-      enabled: input?.toolBudget?.enabled !== false,
-      profiles: {
-        explanation: normalizeBudgetProfile(
-          input?.toolBudget?.profiles?.explanation,
-          defaults.toolBudget.profiles.explanation
-        ),
-        review: normalizeBudgetProfile(
-          input?.toolBudget?.profiles?.review,
-          defaults.toolBudget.profiles.review
-        ),
-        implementation: normalizeBudgetProfile(
-          input?.toolBudget?.profiles?.implementation,
-          defaults.toolBudget.profiles.implementation
-        ),
-        long: normalizeBudgetProfile(
-          input?.toolBudget?.profiles?.long,
-          defaults.toolBudget.profiles.long
-        )
-      }
-    },
-    parallelism: {
-      localReadOnly: boundedPositiveInt(
-        input?.parallelism?.localReadOnly,
-        defaults.parallelism.localReadOnly,
-        64
-      ),
-      networkMcp: boundedPositiveInt(
-        input?.parallelism?.networkMcp,
-        defaults.parallelism.networkMcp,
-        64
-      )
-    }
-  }
-}
-
 export function withLocalRuntimeSettings(
   settings: AppSettingsV1,
   sciforge: LocalRuntimeSettingsV1
@@ -530,6 +406,17 @@ export function isLocalRuntimeInsecure(runtime: Pick<LocalRuntimeSettingsV1, 'in
 
 export function getActiveAgentApiKey(settings: AppSettingsV1): string {
   return resolveLocalRuntimeSettings(settings).apiKey?.trim() ?? ''
+}
+
+export function resolveLocalRuntimeSettings(settings: AppSettingsV1): ResolvedLocalRuntimeSettingsV1 {
+  const runtime = getLocalRuntimeSettings(settings)
+  const router = resolveRuntimeModelRouterSettings(settings)
+  return {
+    ...runtime,
+    apiKey: router.apiKey,
+    baseUrl: router.baseUrl,
+    model: router.model || DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
+  }
 }
 
 export function mergeAgentRuntimeSettings(

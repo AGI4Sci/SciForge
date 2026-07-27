@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 
 import { createWorkspaceIntelService } from './service.js'
+import type { VisualInspectionRequest } from './visual-inspection.js'
 
-test('lists, trees, reads, previews, and references guarded workspace files', async (t) => {
+test('lists, trees, reads, and builds bounded references for guarded workspace files', async (t) => {
   const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-service-'))
   t.after(async () => {
     await rm(tempRoot, { recursive: true, force: true })
@@ -36,11 +37,11 @@ test('lists, trees, reads, previews, and references guarded workspace files', as
   assert.equal(read.relativePath, 'src/index.ts')
   assert.match(read.content, /answer = 42/)
 
-  const preview = await service.preview({ workspaceRoot, path: 'README.md', maxChars: 20 })
+  const preview = await service.referencePreview({ workspaceRoot, path: 'README.md', maxChars: 20 })
   assert.equal(preview.ok, true)
   if (!preview.ok) return
-  assert.equal(preview.kind, 'text')
-  assert.match(preview.contentSummary, /Hello/)
+  assert.equal(preview.preview.kind, 'text')
+  assert.match(preview.preview.contentSummary, /Hello/)
 
   const references = await service.referenceList({ workspaceRoot, recursive: true, limit: 10 })
   assert.equal(references.ok, true)
@@ -95,11 +96,11 @@ test('handles binary and oversized files without unbounded reads', async (t) => 
   if (binary.ok) return
   assert.equal(binary.error.code, 'binary_file')
 
-  const binaryPreview = await service.preview({ workspaceRoot, path: 'binary.bin' })
+  const binaryPreview = await service.referencePreview({ workspaceRoot, path: 'binary.bin' })
   assert.equal(binaryPreview.ok, true)
   if (!binaryPreview.ok) return
-  assert.equal(binaryPreview.kind, 'binary')
-  assert.equal(binaryPreview.content, undefined)
+  assert.equal(binaryPreview.preview.kind, 'binary')
+  assert.equal(binaryPreview.preview.content, undefined)
 
   const huge = await service.readFile({ workspaceRoot, path: 'huge.txt', maxBytes: 1024 })
   assert.equal(huge.ok, true)
@@ -109,203 +110,54 @@ test('handles binary and oversized files without unbounded reads', async (t) => 
   assert.equal(huge.nextOffset, 1024)
 })
 
-test('requests a managed visual capture and returns the verified PNG resource', async (t) => {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-capture-'))
+test('inspects multiple guarded workspace images with content-derived MIME and anchored evidence', async (t) => {
+  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-image-inspect-'))
   t.after(async () => {
     await rm(tempRoot, { recursive: true, force: true })
   })
-  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
-  const captureDirectory = join(tempRoot, 'visible-context', 'captures')
-  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
-  const capturePath = join(captureDirectory, 'latest.png')
-  await mkdir(captureDirectory, { recursive: true })
-  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-
+  const workspaceRoot = join(tempRoot, 'workspace')
+  const jpegPath = join(workspaceRoot, 'sample.png')
+  const webpPath = join(workspaceRoot, 'render.webp')
+  await mkdir(workspaceRoot, { recursive: true })
+  await Promise.all([
+    writeFile(jpegPath, Buffer.from([0xff, 0xd8, 0xff, 0xdb])),
+    writeFile(webpPath, Buffer.from('RIFF0000WEBP', 'ascii'))
+  ])
+  let inspectedRequest: VisualInspectionRequest | undefined
   const service = createWorkspaceIntelService({
-    visibleContextPath,
-    visualCaptureTimeoutMs: 1_000,
-    visualCapturePollIntervalMs: 5,
-    visualInspector: async ({ imagePath, prompt, truthLockedElements }) => ({
-      status: 'inspected',
-      provider: 'model-router-vision',
-      model: 'sciforge-model-router',
-      inspectedAt: '2026-07-13T00:00:00.000Z',
-      captureSha256: 'a'.repeat(64),
-      observationSha256: 'b'.repeat(64),
-      attestation: `sha256:${'c'.repeat(64)}`,
-      prompt: prompt ?? '',
-      summary: `Inspected ${imagePath}`,
-      visibleFacts: truthLockedElements ?? [],
-      layoutIssues: ['Description column is too narrow.'],
-      recommendedActions: ['Widen the second column.'],
-      confidence: 0.9
-    })
-  })
-  const capturePromise = service.visualCapture({
-    scope: 'target',
-    componentId: 'right-sidebar.file-preview',
-    targetId: 'current-page',
-    inspectionPrompt: 'Inspect the final table layout.',
-    truthLockedElements: ['Capability is the first column.']
-  })
-  const requestName = await waitForFileName(requestDirectory, '.request.json')
-  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as {
-    requestId: string
-    scope: string
-    componentId: string
-    targetId: string
-  }
-  assert.equal(request.scope, 'target')
-  assert.equal(request.componentId, 'right-sidebar.file-preview')
-  assert.equal(request.targetId, 'current-page')
-  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
-    schemaVersion: 1,
-    requestId: request.requestId,
-    completedAt: new Date().toISOString(),
-    ok: true,
-    capture: {
-      kind: 'visualSnapshot',
-      role: 'target',
-      path: capturePath,
-      mimeType: 'image/png',
-      capturedAt: new Date().toISOString(),
-      width: 1200,
-      height: 800,
-      scaleFactor: 2,
-      windowId: 'window-1',
-      revision: 4,
-      componentId: request.componentId,
-      targetId: request.targetId,
-      target: {
-        id: request.targetId,
-        kind: 'document-page',
-        bounds: { x: 10, y: 20, width: 600, height: 400 },
-        page: 10,
-        active: true
-      }
+    workspaceRoot,
+    visualInspector: async (request) => {
+      inspectedRequest = request
+      return visualEvidence(request)
     }
-  }), 'utf8')
-
-  const result = await capturePromise
-  assert.equal(result.ok, true)
-  if (!result.ok) return
-  assert.equal(result.resource.path, capturePath)
-  assert.equal(result.resource.target?.page, 10)
-  assert.equal(result.inspection?.prompt, 'Inspect the final table layout.')
-  assert.deepEqual(result.inspection?.visibleFacts, ['Capability is the first column.'])
-  assert.match(result.inspection?.attestation ?? '', /^sha256:[a-f0-9]{64}$/u)
-  assert.deepEqual(await readdir(requestDirectory), [])
-})
-
-test('fails closed when capture succeeds but semantic visual inspection is unavailable', async (t) => {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-inspection-unavailable-'))
-  t.after(async () => {
-    await rm(tempRoot, { recursive: true, force: true })
-  })
-  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
-  const capturePath = join(tempRoot, 'visible-context', 'captures', 'latest.png')
-  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
-  await mkdir(join(tempRoot, 'visible-context', 'captures'), { recursive: true })
-  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  const service = createWorkspaceIntelService({
-    visibleContextPath,
-    visualCaptureTimeoutMs: 1_000,
-    visualCapturePollIntervalMs: 5
   })
 
-  const capturePromise = service.visualCapture({ scope: 'window' })
-  const requestName = await waitForFileName(requestDirectory, '.request.json')
-  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
-  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
-    schemaVersion: 1,
-    requestId: request.requestId,
-    completedAt: new Date().toISOString(),
-    ok: true,
-    capture: {
-      kind: 'visualSnapshot',
-      role: 'window',
-      path: capturePath,
-      mimeType: 'image/png',
-      capturedAt: new Date().toISOString(),
-      width: 1280,
-      height: 720,
-      scaleFactor: 2,
-      windowId: 'window-1',
-      revision: 1
-    }
-  }), 'utf8')
-
-  const result = await capturePromise
-
-  assert.equal(result.ok, false)
-  if (result.ok) return
-  assert.equal(result.error.code, 'visual_inspection_unavailable')
-  assert.match(result.error.message, /semantic visual inspection is unavailable/iu)
-})
-
-test('allows explicit capture-only diagnostics without treating them as semantic review', async (t) => {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-capture-only-'))
-  t.after(async () => {
-    await rm(tempRoot, { recursive: true, force: true })
+  const result = await service.inspectWorkspaceImages({
+    task: 'Compare the sample and rendered output.',
+    artifacts: [{
+      id: 'sample',
+      path: 'sample.png',
+      regions: [{ id: 'subject', x: 0.1, y: 0.1, width: 0.4, height: 0.5 }]
+    }, {
+      id: 'render',
+      path: 'render.webp'
+    }],
+    truthLocks: ['Do not infer hidden labels.'],
+    outputIntent: { kind: 'comparison' }
   })
-  const visibleContextPath = join(tempRoot, 'visible-context', 'snapshot.json')
-  const capturePath = join(tempRoot, 'visible-context', 'captures', 'latest.png')
-  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
-  await mkdir(join(tempRoot, 'visible-context', 'captures'), { recursive: true })
-  await writeFile(capturePath, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-  const service = createWorkspaceIntelService({
-    visibleContextPath,
-    visualCaptureTimeoutMs: 1_000,
-    visualCapturePollIntervalMs: 5
-  })
-
-  const capturePromise = service.visualCapture({ scope: 'window', requireSemanticInspection: false })
-  const requestName = await waitForFileName(requestDirectory, '.request.json')
-  const request = JSON.parse(await readFile(join(requestDirectory, requestName), 'utf8')) as { requestId: string }
-  await writeFile(join(requestDirectory, `${request.requestId}.response.json`), JSON.stringify({
-    schemaVersion: 1,
-    requestId: request.requestId,
-    completedAt: new Date().toISOString(),
-    ok: true,
-    capture: {
-      kind: 'visualSnapshot',
-      role: 'window',
-      path: capturePath,
-      mimeType: 'image/png',
-      capturedAt: new Date().toISOString(),
-      width: 1280,
-      height: 720,
-      scaleFactor: 2,
-      windowId: 'window-1',
-      revision: 1
-    }
-  }), 'utf8')
-
-  const result = await capturePromise
 
   assert.equal(result.ok, true)
   if (!result.ok) return
-  assert.equal(result.inspection, undefined)
-})
-
-test('bounds visual capture waits and reports an actionable timeout', async (t) => {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'workspace-intel-visual-timeout-'))
-  t.after(async () => {
-    await rm(tempRoot, { recursive: true, force: true })
-  })
-  const requestDirectory = join(tempRoot, 'visible-context', 'capture-requests')
-  const service = createWorkspaceIntelService({
-    visibleContextPath: join(tempRoot, 'visible-context', 'snapshot.json'),
-    visualCaptureTimeoutMs: 100,
-    visualCapturePollIntervalMs: 5
-  })
-
-  const result = await service.visualCapture({ scope: 'window' })
-  assert.equal(result.ok, false)
-  if (result.ok) return
-  assert.equal(result.error.code, 'visual_capture_timeout')
-  assert.equal(result.error.retryable, true)
-  assert.deepEqual(await readdir(requestDirectory), [])
+  assert.deepEqual(result.artifacts.map(({ id, mimeType }) => ({ id, mimeType })), [
+    { id: 'sample', mimeType: 'image/jpeg' },
+    { id: 'render', mimeType: 'image/webp' }
+  ])
+  assert.deepEqual(inspectedRequest?.artifacts.map(({ id, mimeType }) => ({ id, mimeType })), [
+    { id: 'sample', mimeType: 'image/jpeg' },
+    { id: 'render', mimeType: 'image/webp' }
+  ])
+  assert.equal(result.evidence.task, 'Compare the sample and rendered output.')
+  assert.equal(result.evidence.claims[0]?.artifactId, 'sample')
 })
 
 test('lists and reads project skills by id', async (t) => {
@@ -385,15 +237,30 @@ async function writeSkill(root: string, name: string, description: string): Prom
   ].join('\n'), 'utf8')
 }
 
-async function waitForFileName(directory: string, suffix: string): Promise<string> {
-  const deadline = Date.now() + 1_000
-  while (Date.now() < deadline) {
-    const names = await readdir(directory).catch(() => [])
-    const match = names.find((name) => name.endsWith(suffix))
-    if (match) return match
-    await new Promise<void>((resolve) => setTimeout(resolve, 5))
+function visualEvidence(request: VisualInspectionRequest) {
+  return {
+    status: 'inspected' as const,
+    provider: 'model-router' as const,
+    model: 'sciforge-model-router',
+    inspectedAt: '2026-07-13T00:00:00.000Z',
+    task: request.task,
+    artifacts: request.artifacts.map(({ id, mimeType }, index) => ({
+      id,
+      mimeType,
+      sha256: String(index + 1).repeat(64)
+    })),
+    requestSha256: 'a'.repeat(64),
+    evidenceSha256: 'b'.repeat(64),
+    attestation: `sha256:${'c'.repeat(64)}`,
+    summary: 'The requested visual evidence is available.',
+    claims: request.artifacts.map(({ id }) => ({
+      kind: 'observation' as const,
+      text: `Artifact ${id} is visible.`,
+      artifactId: id,
+      confidence: 0.9
+    })),
+    uncertainties: []
   }
-  throw new Error(`Timed out waiting for ${suffix} in ${directory}`)
 }
 
 async function withHome<T>(homeRoot: string, action: () => Promise<T>): Promise<T> {

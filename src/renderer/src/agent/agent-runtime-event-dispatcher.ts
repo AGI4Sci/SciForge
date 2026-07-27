@@ -30,10 +30,12 @@ import { extractScientificObjectMetadata } from '@shared/scientific-objects'
 type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'error'
 
 export const AGENT_RUNTIME_EVENT_REPLAY_FILTER = '__agentRuntimeEventReplayFilter' as const
+export const AGENT_RUNTIME_DELTA_HANDLES_SEQ = '__agentRuntimeDeltaHandlesSeq' as const
 export type AgentRuntimeEventReplayFilter = (event: AgentRuntimeEvent) => boolean
 
 type ReplayAwareThreadEventSink = ThreadEventSink & {
   [AGENT_RUNTIME_EVENT_REPLAY_FILTER]?: AgentRuntimeEventReplayFilter
+  [AGENT_RUNTIME_DELTA_HANDLES_SEQ]?: boolean
 }
 
 function shouldDispatchAgentRuntimeEvent(event: AgentRuntimeEvent, sink: ThreadEventSink): boolean {
@@ -524,7 +526,10 @@ export function dispatchAgentRuntimeEvent(event: AgentRuntimeEvent, sink: Thread
   if (!shouldDispatchAgentRuntimeEvent(event, sink)) return
   performanceMonitor.count('runtime.event')
   performanceMonitor.count(`runtime.event.${event.kind}`)
-  if (eventAdvancesSeq(event)) sink.onSeq(event.seq)
+  const deltaHandlesSeq =
+    (event.kind === 'assistant_delta' || event.kind === 'reasoning_delta') &&
+    (sink as ReplayAwareThreadEventSink)[AGENT_RUNTIME_DELTA_HANDLES_SEQ] === true
+  if (eventAdvancesSeq(event) && !deltaHandlesSeq) sink.onSeq(event.seq)
 
   switch (event.kind) {
     case 'thread_lifecycle':

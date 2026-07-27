@@ -1,15 +1,15 @@
 import { type ReactElement, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  getModelRouterSettings,
-  normalizeAppSettings,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../agent/runtime-client'
 import { applyTheme } from '../lib/apply-theme'
 import { useChatStore } from '../store/chat-store'
-import { Eye, EyeOff, Sparkles, Sun, Moon, Monitor, X } from 'lucide-react'
+import { Sparkles, Sun, Moon, Monitor, X } from 'lucide-react'
+import { mergeSettings } from './settings-utils'
+import { ModelAccessSettings, validateModelAccessSetup } from './model-access-settings'
 
 type ThemePref = AppSettingsV1['theme']
 type SetupFormPatch = AppSettingsPatch
@@ -28,12 +28,11 @@ export function InitialSetupDialog(): ReactElement {
   const probeRuntime = useChatStore((s) => s.probeRuntime)
 
   const [form, setForm] = useState<AppSettingsV1 | null>(null)
-  const [showApiKey, setShowApiKey] = useState(false)
+  const [planAuthenticated, setPlanAuthenticated] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const formRef = useRef<AppSettingsV1 | null>(null)
   const isPreview = initialSetupMode === 'preview'
-  const textReasoner = form ? getModelRouterSettings(form).profiles.default.textReasoner : null
 
   const setCurrentForm = (next: AppSettingsV1 | null): void => {
     formRef.current = next
@@ -56,32 +55,7 @@ export function InitialSetupDialog(): ReactElement {
   const updateForm = (patch: SetupFormPatch) => {
     const current = formRef.current
     if (!current) return
-    const next = normalizeAppSettings({
-      ...current,
-      ...patch
-    } as AppSettingsV1)
-    setCurrentForm(next)
-  }
-
-  const updateTextReasoner = (patch: { apiKey?: string; baseUrl?: string; model?: string }): void => {
-    const current = formRef.current
-    if (!current) return
-    const router = getModelRouterSettings(current)
-    const next = normalizeAppSettings({
-      ...current,
-      modelRouter: {
-        ...router,
-        profiles: {
-          default: {
-            ...router.profiles.default,
-            textReasoner: {
-              ...router.profiles.default.textReasoner,
-              ...patch
-            }
-          }
-        }
-      }
-    })
+    const next = mergeSettings(current, patch)
     setCurrentForm(next)
   }
 
@@ -100,13 +74,15 @@ export function InitialSetupDialog(): ReactElement {
   const handleSave = async () => {
     const current = formRef.current
     if (!current) return
-    const currentTextReasoner = getModelRouterSettings(current).profiles.default.textReasoner
-    if (
-      !currentTextReasoner.apiKey.trim() ||
-      !currentTextReasoner.baseUrl.trim() ||
-      !currentTextReasoner.model.trim()
-    ) {
-      setError(t('firstRunApiKeyValidation'))
+    const validation = validateModelAccessSetup(current, planAuthenticated)
+    if (validation !== 'ready') {
+      const validationKeys = {
+        'missing-mode': 'firstRunAccessModeValidation',
+        'invalid-api': 'firstRunApiValidation',
+        'missing-plan': 'firstRunPlanValidation',
+        'plan-login-required': 'firstRunPlanLoginValidation'
+      } as const
+      setError(t(validationKeys[validation]))
       return
     }
     setSaving(true)
@@ -143,8 +119,6 @@ export function InitialSetupDialog(): ReactElement {
         ? 'border-[#1388ff] bg-[#1388ff]/[0.07] text-[#1377df] shadow-[0_0_0_1px_rgba(19,136,255,0.12),0_8px_18px_rgba(19,136,255,0.07)] dark:border-[#3aa0ff] dark:bg-[#3aa0ff]/[0.12] dark:text-[#88c8ff]'
         : 'border-slate-300/80 bg-white/72 text-slate-600 hover:border-slate-400/80 hover:bg-white dark:border-white/10 dark:bg-white/[0.035] dark:text-slate-300 dark:hover:border-white/16 dark:hover:bg-white/[0.055]'
     ].join(' ')
-  const fieldClass =
-    'w-full rounded-xl border border-slate-300/75 bg-white/88 px-4 py-3 text-[15px] text-slate-800 shadow-[inset_0_1px_0_rgba(255,255,255,0.72)] outline-none transition focus:border-[#1388ff]/70 focus:ring-2 focus:ring-[#1388ff]/15 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-100 dark:shadow-none dark:focus:border-[#3aa0ff]/70 dark:focus:ring-[#3aa0ff]/15 dark:placeholder:text-slate-500'
   const labelClass = 'text-sm font-semibold text-slate-700 dark:text-slate-200'
   return (
     <div className="ds-no-drag fixed inset-0 z-50 overflow-y-auto bg-[#eef2fb]/45 p-3 backdrop-blur-[18px] dark:bg-black/62 dark:backdrop-blur-[22px] sm:p-6">
@@ -227,59 +201,13 @@ export function InitialSetupDialog(): ReactElement {
           </div>
 
           <div className="space-y-2.5 sm:space-y-3.5">
-            <label className={labelClass}>
-              {t('modelRouterRoleApiKey')}
-            </label>
-            <div className="relative">
-              <input
-                type={showApiKey ? 'text' : 'password'}
-                value={textReasoner?.apiKey ?? ''}
-                onChange={(e) => updateTextReasoner({ apiKey: e.target.value })}
-                placeholder="sk-..."
-                autoComplete="off"
-                autoCorrect="off"
-                autoCapitalize="off"
-                spellCheck={false}
-                className={`${fieldClass} pr-12 font-mono placeholder:font-sans`}
-              />
-              <button
-                type="button"
-                onClick={() => setShowApiKey((v) => !v)}
-                className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-lg text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600 dark:text-slate-500 dark:hover:bg-white/[0.06] dark:hover:text-slate-300"
-              >
-                {showApiKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <div className="rounded-xl border border-slate-200/80 bg-slate-50/75 px-4 py-3 text-[13px] text-slate-500 dark:border-white/10 dark:bg-white/[0.035] dark:text-slate-400">
-              <p className="min-w-0 leading-6">
-                {t('firstRunBuyApiHint')}
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2.5 sm:space-y-3.5">
-            <label className={labelClass}>
-              {t('modelRouterRoleBaseUrl')}
-            </label>
-            <input
-              type="text"
-              value={textReasoner?.baseUrl ?? ''}
-              onChange={(e) => updateTextReasoner({ baseUrl: e.target.value })}
-              placeholder={t('modelRouterTextReasonerBaseUrlPlaceholder')}
-              className={fieldClass}
-            />
-          </div>
-
-          <div className="space-y-2.5 sm:space-y-3.5">
-            <label className={labelClass}>
-              {t('modelRouterRoleModel')}
-            </label>
-            <input
-              type="text"
-              value={textReasoner?.model ?? ''}
-              onChange={(e) => updateTextReasoner({ model: e.target.value })}
-              placeholder={t('modelRouterTextReasonerModelPlaceholder')}
-              className={fieldClass}
+            <label className={labelClass}>{t('modelAccessMode')}</label>
+            <ModelAccessSettings
+              form={form}
+              update={updateForm}
+              t={t}
+              compact
+              onPlanAccountChange={(account) => setPlanAuthenticated(account?.authenticated === true)}
             />
           </div>
         </div>

@@ -28,14 +28,20 @@ export type SddDraftContentSnapshot = {
   updatedAt: string
 }
 
-export type SddDraftState = {
-  activeDraft: SddDraft | null
+export type SddDraftSessionState = {
+  ownerSessionId: string
+  draft: SddDraft
   content: string
   lastSavedContent: string
   saveStatus: SddDraftSaveStatus
   operationStatus: SddDraftOperationStatus
   error: string | null
-  setActiveDraft: (
+}
+
+export type SddDraftState = {
+  sessions: Record<string, SddDraftSessionState>
+  setSessionDraft: (
+    ownerSessionId: string,
     draft: SddDraft,
     content: string,
     options?: {
@@ -43,11 +49,20 @@ export type SddDraftState = {
       saveStatus?: SddDraftSaveStatus
     }
   ) => void
-  setContent: (content: string) => void
-  setSaveStatus: (status: SddDraftSaveStatus, error?: string | null) => void
-  markSaved: (content: string) => void
-  setOperationStatus: (status: SddDraftOperationStatus, error?: string | null) => void
-  clearActiveDraft: () => void
+  setSessionContent: (ownerSessionId: string, content: string) => void
+  setSessionSaveStatus: (
+    ownerSessionId: string,
+    status: SddDraftSaveStatus,
+    error?: string | null
+  ) => void
+  markSessionSaved: (ownerSessionId: string, content: string) => void
+  setSessionOperationStatus: (
+    ownerSessionId: string,
+    status: SddDraftOperationStatus,
+    error?: string | null
+  ) => void
+  removeSession: (ownerSessionId: string) => void
+  moveSession: (previousSessionId: string, nextSessionId: string) => void
 }
 
 const SDD_DRAFT_REGISTRY_STORAGE_KEY = 'sciforge.sdd.draft.registry.v1'
@@ -239,68 +254,136 @@ export function forgetRememberedSddDraft(draft: Pick<SddDraft, 'id' | 'workspace
   writeRegistry(registry)
 }
 
-export const useSddDraftStore = create<SddDraftState>((set) => ({
-  activeDraft: null,
-  content: '',
-  lastSavedContent: '',
-  saveStatus: 'saved',
-  operationStatus: 'idle',
-  error: null,
+function normalizedOwnerSessionId(ownerSessionId: string): string {
+  return ownerSessionId.trim()
+}
 
-  setActiveDraft: (draft, content, options = {}) => {
+export function selectSddDraftSession(
+  state: SddDraftState,
+  ownerSessionId: string | null | undefined
+): SddDraftSessionState | null {
+  const id = normalizedOwnerSessionId(ownerSessionId ?? '')
+  return id ? state.sessions[id] ?? null : null
+}
+
+export const useSddDraftStore = create<SddDraftState>((set) => ({
+  sessions: {},
+
+  setSessionDraft: (ownerSessionId, draft, content, options = {}) => {
+    const sessionId = normalizedOwnerSessionId(ownerSessionId)
+    if (!sessionId) return
     const lastSavedContent = options.lastSavedContent ?? content
     const saveStatus = options.saveStatus ?? (content === lastSavedContent ? 'saved' : 'dirty')
     rememberSddDraft(draft)
     rememberSddDraftContent(draft, content, lastSavedContent)
-    set({
-      activeDraft: draft,
-      content,
-      lastSavedContent,
-      saveStatus,
-      operationStatus: 'idle',
-      error: null
-    })
+    set((state) => ({
+      sessions: {
+        ...state.sessions,
+        [sessionId]: {
+          ownerSessionId: sessionId,
+          draft,
+          content,
+          lastSavedContent,
+          saveStatus,
+          operationStatus: 'idle',
+          error: null
+        }
+      }
+    }))
   },
 
-  setContent: (content) =>
+  setSessionContent: (ownerSessionId, content) =>
     set((state) => {
-      if (state.activeDraft) {
-        rememberSddDraftContent(state.activeDraft, content, state.lastSavedContent)
-      }
+      const sessionId = normalizedOwnerSessionId(ownerSessionId)
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      rememberSddDraftContent(session.draft, content, session.lastSavedContent)
       return {
-        content,
-        saveStatus: content === state.lastSavedContent ? 'saved' : 'dirty',
-        error: state.saveStatus === 'error' ? null : state.error
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...session,
+            content,
+            saveStatus: content === session.lastSavedContent ? 'saved' : 'dirty',
+            error: session.saveStatus === 'error' ? null : session.error
+          }
+        }
       }
     }),
 
-  setSaveStatus: (status, error = null) => set({ saveStatus: status, error }),
-
-  markSaved: (content) =>
+  setSessionSaveStatus: (ownerSessionId, status, error = null) =>
     set((state) => {
-      const activeDraft = state.activeDraft
-        ? { ...state.activeDraft, updatedAt: new Date().toISOString() }
-        : state.activeDraft
-      if (activeDraft) rememberSddDraft(activeDraft)
-      if (activeDraft) rememberSddDraftContent(activeDraft, content, content)
+      const sessionId = normalizedOwnerSessionId(ownerSessionId)
+      const session = state.sessions[sessionId]
+      if (!session) return state
       return {
-        activeDraft,
-        content,
-        lastSavedContent: content,
-        saveStatus: 'saved',
-        error: state.operationStatus === 'error' ? state.error : null
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, saveStatus: status, error }
+        }
       }
     }),
 
-  setOperationStatus: (status, error = null) => set({ operationStatus: status, error }),
+  markSessionSaved: (ownerSessionId, content) =>
+    set((state) => {
+      const sessionId = normalizedOwnerSessionId(ownerSessionId)
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      const draft = { ...session.draft, updatedAt: new Date().toISOString() }
+      rememberSddDraft(draft)
+      rememberSddDraftContent(draft, session.content, content)
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: {
+            ...session,
+            draft,
+            lastSavedContent: content,
+            saveStatus: session.content === content ? 'saved' : 'dirty',
+            error: session.operationStatus === 'error' ? session.error : null
+          }
+        }
+      }
+    }),
 
-  clearActiveDraft: () =>
-    set({
-      activeDraft: null,
-      content: '',
-      lastSavedContent: '',
-      saveStatus: 'saved',
-      operationStatus: 'idle',
-      error: null
+  setSessionOperationStatus: (ownerSessionId, status, error = null) =>
+    set((state) => {
+      const sessionId = normalizedOwnerSessionId(ownerSessionId)
+      const session = state.sessions[sessionId]
+      if (!session) return state
+      return {
+        sessions: {
+          ...state.sessions,
+          [sessionId]: { ...session, operationStatus: status, error }
+        }
+      }
+    }),
+
+  removeSession: (ownerSessionId) =>
+    set((state) => {
+      const sessionId = normalizedOwnerSessionId(ownerSessionId)
+      if (!sessionId || !state.sessions[sessionId]) return state
+      const sessions = { ...state.sessions }
+      delete sessions[sessionId]
+      return { sessions }
+    }),
+
+  moveSession: (previousSessionId, nextSessionId) =>
+    set((state) => {
+      const previous = normalizedOwnerSessionId(previousSessionId)
+      const next = normalizedOwnerSessionId(nextSessionId)
+      if (!previous || !next || previous === next) return state
+      const session = state.sessions[previous]
+      if (!session) return state
+      const sessions = { ...state.sessions }
+      delete sessions[previous]
+      if (!sessions[next]) {
+        sessions[next] = {
+          ...session,
+          ownerSessionId: next,
+          saveStatus: session.saveStatus === 'saving' ? 'dirty' : session.saveStatus
+        }
+      }
+      return { sessions }
     })
 }))

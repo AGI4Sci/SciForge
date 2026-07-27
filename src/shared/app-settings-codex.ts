@@ -38,10 +38,11 @@ export function defaultCodexRuntimeSettings(): CodexRuntimeSettingsV1 {
 }
 
 export function normalizeAgentRuntimeId(value: unknown): AgentRuntimeId {
-  if (value === 'sciforge') return value
   if (value === 'claude') return value
   if (value === 'codex') return value
-  return 'sciforge'
+  // SciForge's custom runtime is no longer user-selectable. Migrate its
+  // persisted id, along with unknown legacy values, to the product default.
+  return 'codex'
 }
 
 export function getActiveAgentRuntime(settings: AppSettingsV1): AgentRuntimeId {

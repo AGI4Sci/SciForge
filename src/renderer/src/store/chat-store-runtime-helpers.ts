@@ -212,7 +212,6 @@ export function clearedThreadSelection(): Pick<
   | 'turnDurationByUserId'
   | 'turnReasoningFirstAtByUserId'
   | 'turnReasoningLastAtByUserId'
-  | 'inspectorSelectedId'
   | 'focusedAgentThreadId'
   | 'focusedAgentRuntimeId'
   | 'agentFocusLineage'
@@ -236,8 +235,7 @@ export function clearedThreadSelection(): Pick<
     turnStartedAtByUserId: {},
     turnDurationByUserId: {},
     turnReasoningFirstAtByUserId: {},
-    turnReasoningLastAtByUserId: {},
-    inspectorSelectedId: null
+    turnReasoningLastAtByUserId: {}
   }
 }
 

@@ -2,6 +2,7 @@ import type { ReactElement, RefObject } from 'react'
 import { Fragment, memo, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import type { ChatBlock, RuntimeConnectionStatus, RuntimeDisclosureMetadata } from '../../agent/types'
+import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import { useChatStore } from '../../store/chat-store'
 import { isRemoteChannelThread } from '../../store/chat-store-helpers'
 import { useTimelineStores } from './use-timeline-stores'
@@ -28,6 +29,7 @@ import {
 import { extractPlanMetadataFromBlock } from '../../plan/plan-tool'
 import { planDisplayNameFromRelativePath } from '../../plan/plan-path'
 import { performanceMonitor } from '../../lib/performance-monitor'
+import { registerVisibleContextComponent } from '../../lib/visible-context'
 import { TimelineScientificObjectsPanel } from './TimelineScientificObjectsPanel'
 import { TimelineDatasetResultsPanel } from './TimelineDatasetResultsPanel'
 
@@ -44,7 +46,6 @@ type Props = {
   onOpenSettings: () => void
   autoScrollEnabled?: boolean
   onSelectSuggestion?: (prompt: string) => void
-  devPreviewCard?: ReactElement | null
   /** Disables the inline Review Plan card's Build action while a turn runs. */
   planActionsBusy?: boolean
   /** Runs the active plan (Build button on the inline Review Plan card). */
@@ -62,6 +63,54 @@ type Props = {
 
 const TURN_PAGE_SIZE = 18
 const AUTO_COLLAPSE_THRESHOLD = 24
+const PROCESS_SECTION_PAGE_SIZE = 80
+
+export function messageTimelineVisibleContextComponentId(activeThreadId: string | null): string {
+  return activeThreadId ? `chat.timeline.${activeThreadId}` : 'chat.timeline.empty'
+}
+
+export function buildMessageTimelineVisibleContextComponent(input: {
+  activeThreadId: string | null
+  blockCount: number
+  turnCount: number
+  visibleTurnCount: number
+  hiddenTurnCount: number
+  pendingRuntimeTurnCount: number
+  busy: boolean
+  live: boolean
+  reasoning: boolean
+  runtimeConnection: RuntimeConnectionStatus
+  remoteChannelMode: boolean
+  updatedAt?: string
+}): VisibleContextComponentSnapshot {
+  const active = Boolean(input.activeThreadId)
+  return {
+    id: messageTimelineVisibleContextComponentId(input.activeThreadId),
+    region: 'main',
+    component: 'message-timeline',
+    title: 'Chat timeline',
+    visible: true,
+    priority: 100,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    summary: active
+      ? `Active chat timeline with ${input.turnCount} turns; ${input.visibleTurnCount} visible and ${input.hiddenTurnCount} hidden.`
+      : 'Chat timeline without an active thread.',
+    state: {
+      activeThreadId: input.activeThreadId,
+      blockCount: input.blockCount,
+      turnCount: input.turnCount,
+      visibleTurnCount: input.visibleTurnCount,
+      hiddenTurnCount: input.hiddenTurnCount,
+      pendingRuntimeTurnCount: input.pendingRuntimeTurnCount,
+      busy: input.busy,
+      live: input.live,
+      reasoning: input.reasoning,
+      runtimeConnection: input.runtimeConnection,
+      remoteChannelMode: input.remoteChannelMode,
+      hasContent: input.blockCount > 0 || input.live || input.reasoning
+    }
+  }
+}
 
 function useStableOptionalCallback<Args extends unknown[]>(
   callback: ((...args: Args) => void) | undefined
@@ -79,6 +128,20 @@ function useStableOptionalCallback<Args extends unknown[]>(
       callbackRef.current?.(...args)
     }
   }, [hasCallback])
+}
+
+function useStableCallback<Args extends unknown[]>(
+  callback: (...args: Args) => void
+): (...args: Args) => void {
+  const callbackRef = useRef(callback)
+
+  useEffect(() => {
+    callbackRef.current = callback
+  }, [callback])
+
+  return useMemo(() => (...args: Args): void => {
+    callbackRef.current(...args)
+  }, [])
 }
 
 function blockScrollStamp(block: ChatBlock | undefined): string {
@@ -102,7 +165,30 @@ function blockScrollStamp(block: ChatBlock | undefined): string {
   }
 }
 
-export function MessageTimeline({
+export function MessageTimeline(props: Props): ReactElement {
+  const onRetryConnection = useStableCallback(props.onRetryConnection)
+  const onOpenSettings = useStableCallback(props.onOpenSettings)
+  const onSelectSuggestion = useStableOptionalCallback(props.onSelectSuggestion)
+  const onBuildPlan = useStableOptionalCallback(props.onBuildPlan)
+  const onOpenPlan = useStableOptionalCallback(props.onOpenPlan)
+  const onOpenImageArtifactInVisualReview = useStableOptionalCallback(
+    props.onOpenImageArtifactInVisualReview
+  )
+
+  return (
+    <MemoMessageTimelineComponent
+      {...props}
+      onRetryConnection={onRetryConnection}
+      onOpenSettings={onOpenSettings}
+      onSelectSuggestion={onSelectSuggestion}
+      onBuildPlan={onBuildPlan}
+      onOpenPlan={onOpenPlan}
+      onOpenImageArtifactInVisualReview={onOpenImageArtifactInVisualReview}
+    />
+  )
+}
+
+function MessageTimelineComponent({
   blocks,
   liveReasoning,
   live,
@@ -113,7 +199,6 @@ export function MessageTimeline({
   onOpenSettings,
   autoScrollEnabled = true,
   onSelectSuggestion,
-  devPreviewCard,
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
@@ -132,6 +217,7 @@ export function MessageTimeline({
     chooseWorkspace,
     remoteChannels,
     activeRemoteChannel,
+    activeAgentRuntime,
     busy,
     currentTurnUserId,
     turnStartedAtByUserId,
@@ -151,9 +237,9 @@ export function MessageTimeline({
   const liveReasoningMeta = useChatStore((s) =>
     activeThreadId && activeThreadId === s.activeThreadId ? s.liveReasoningMeta : null
   )
-  const stableOnBuildPlan = useStableOptionalCallback(onBuildPlan)
-  const stableOnOpenPlan = useStableOptionalCallback(onOpenPlan)
-  const stableOnOpenImageArtifactInVisualReview = useStableOptionalCallback(onOpenImageArtifactInVisualReview)
+  const stableOnBuildPlan = onBuildPlan
+  const stableOnOpenPlan = onOpenPlan
+  const stableOnOpenImageArtifactInVisualReview = onOpenImageArtifactInVisualReview
   const stableOnContinueScientificObject = useStableOptionalCallback(onSelectSuggestion)
 
   const remoteChannelMode = Boolean(activeThread && isRemoteChannelThread(activeThread, remoteChannels))
@@ -197,6 +283,36 @@ export function MessageTimeline({
     () => (hiddenTurnCount > 0 ? turns.slice(hiddenTurnCount) : turns),
     [hiddenTurnCount, turns]
   )
+  const pendingRuntimeTurnCount = useMemo(
+    () => turns.filter(turnHasPendingRuntimeWork).length,
+    [turns]
+  )
+
+  useEffect(() => registerVisibleContextComponent(buildMessageTimelineVisibleContextComponent({
+    activeThreadId,
+    blockCount: blocks.length,
+    turnCount: turns.length,
+    visibleTurnCount,
+    hiddenTurnCount,
+    pendingRuntimeTurnCount,
+    busy: effectiveBusy,
+    live: Boolean(live.trim()),
+    reasoning: Boolean(liveReasoning.trim()),
+    runtimeConnection,
+    remoteChannelMode
+  })), [
+    activeThreadId,
+    blocks.length,
+    effectiveBusy,
+    hiddenTurnCount,
+    live,
+    liveReasoning,
+    pendingRuntimeTurnCount,
+    remoteChannelMode,
+    runtimeConnection,
+    turns.length,
+    visibleTurnCount
+  ])
   const forkedFromTitle = activeThread?.forkedFromTitle?.trim() ?? ''
   const forkBoundaryTurnCount =
     typeof activeThread?.forkedFromTurnCount === 'number'
@@ -223,6 +339,7 @@ export function MessageTimeline({
             ready={runtimeConnection === 'ready'}
             hasWorkspace={!!workspaceRoot}
             runtimeError={runtimeError}
+            runtimeId={activeAgentRuntime}
             activeRemoteChannel={activeRemoteChannel}
             onPickWorkspace={() => void chooseWorkspace()}
             onRetry={onRetryConnection}
@@ -272,13 +389,13 @@ export function MessageTimeline({
               <MemoMessageTurn
                 turn={turn}
                 isProcessing={(effectiveBusy && isLatestTurn) || turnPending || hasLiveStream}
+                terminalStatus={turn.user?.turnStatus}
                 liveReasoning={isLatestTurn ? liveReasoning : ''}
                 liveReasoningMeta={isLatestTurn ? liveReasoningMeta : null}
                 live={isLatestTurn ? live : ''}
                 durationMs={durationMs}
                 liveStartedAtMs={liveStartedAtMs}
                 reasoningDurationMs={reasoningDurationMs}
-                devPreviewCard={isLatestTurn ? devPreviewCard : null}
                 planActionsBusy={planActionsBusy}
                 onBuildPlan={stableOnBuildPlan}
                 onOpenPlan={stableOnOpenPlan}
@@ -317,7 +434,6 @@ export function MessageTimeline({
             liveReasoning={liveReasoning}
             liveReasoningMeta={liveReasoningMeta}
             live={live}
-            devPreviewCard={devPreviewCard}
             onOpenImageArtifactInVisualReview={stableOnOpenImageArtifactInVisualReview}
             onContinueScientificObject={stableOnContinueScientificObject}
             viewportRef={containerRef}
@@ -341,16 +457,18 @@ export function MessageTimeline({
   )
 }
 
+const MemoMessageTimelineComponent = memo(MessageTimelineComponent)
+
 function MessageTurn({
   turn,
   isProcessing,
+  terminalStatus,
   liveReasoning,
   liveReasoningMeta,
   live,
   durationMs,
   liveStartedAtMs,
   reasoningDurationMs,
-  devPreviewCard,
   planActionsBusy,
   onBuildPlan,
   onOpenPlan,
@@ -360,13 +478,13 @@ function MessageTurn({
 }: {
   turn: Turn
   isProcessing: boolean
+  terminalStatus?: string
   liveReasoning: string
   liveReasoningMeta?: RuntimeDisclosureMetadata | null
   live: string
   durationMs?: number
   liveStartedAtMs?: number
   reasoningDurationMs?: number
-  devPreviewCard?: ReactElement | null
   planActionsBusy?: boolean
   onBuildPlan?: () => void
   onOpenPlan?: () => void
@@ -374,6 +492,7 @@ function MessageTurn({
   onContinueScientificObject?: (prompt: string) => void
   viewportRef: RefObject<HTMLDivElement | null>
 }): ReactElement {
+  const { t } = useTranslation('common')
   const workspaceRoot = useChatStore((s) => s.workspaceRoot)
   // Inline Review Plan card: surfaced under a turn that produced a
   // successful `create_plan` result so the user can open/build the plan
@@ -429,6 +548,19 @@ function MessageTurn({
     () => (workExpanded ? groupProcessSections(processBlocks) : []),
     [processBlocks, workExpanded]
   )
+  const [visibleProcessSectionCount, setVisibleProcessSectionCount] = useState(
+    PROCESS_SECTION_PAGE_SIZE
+  )
+  const hiddenProcessSectionCount = Math.max(
+    0,
+    processSections.length - visibleProcessSectionCount
+  )
+  const visibleProcessSections = useMemo(
+    () => hiddenProcessSectionCount > 0
+      ? processSections.slice(hiddenProcessSectionCount)
+      : processSections,
+    [hiddenProcessSectionCount, processSections]
+  )
   const reasoningSectionCount = useMemo(
     () => processSections.filter((section) => section.kind === 'reasoning').length,
     [processSections]
@@ -447,6 +579,7 @@ function MessageTurn({
         <div className="flex flex-col gap-1 pb-2">
           <WorkMetaRow
             processing={isProcessing}
+            terminalStatus={terminalStatus}
             stepCount={processBlocks.length}
             durationMs={durationMs}
             liveStartedAtMs={liveStartedAtMs}
@@ -456,7 +589,20 @@ function MessageTurn({
           />
           {workExpanded && processSections.length > 0 ? (
             <div className="flex flex-col gap-1">
-              {processSections.map((section) => (
+              {hiddenProcessSectionCount > 0 ? (
+                <button
+                  type="button"
+                  onClick={() => setVisibleProcessSectionCount((count) =>
+                    Math.min(processSections.length, count + PROCESS_SECTION_PAGE_SIZE)
+                  )}
+                  className="mb-1 w-fit rounded-full px-3 py-1.5 text-[12px] font-medium text-ds-faint transition hover:bg-ds-hover hover:text-ds-ink"
+                >
+                  {t('timelineShowEarlierWork', {
+                    count: Math.min(hiddenProcessSectionCount, PROCESS_SECTION_PAGE_SIZE)
+                  })}
+                </button>
+              ) : null}
+              {visibleProcessSections.map((section) => (
                 <ProcessSectionRow
                   key={section.id}
                   section={section}
@@ -508,8 +654,6 @@ function MessageTurn({
 
       {isProcessing ? <LiveTurnProgressRow /> : null}
 
-      {!isProcessing && devPreviewCard ? devPreviewCard : null}
-
       {planResult ? (
         <ReviewPlanCard
           title={planResult.title?.trim() || planDisplayNameFromRelativePath(planResult.relativePath)}
@@ -543,13 +687,13 @@ function LiveTurnProgressRow(): ReactElement {
 const MemoMessageTurn = memo(MessageTurn, (prev, next) => (
   sameTurnContent(prev.turn, next.turn) &&
   prev.isProcessing === next.isProcessing &&
+  prev.terminalStatus === next.terminalStatus &&
   prev.liveReasoning === next.liveReasoning &&
   prev.liveReasoningMeta === next.liveReasoningMeta &&
   prev.live === next.live &&
   prev.durationMs === next.durationMs &&
   prev.liveStartedAtMs === next.liveStartedAtMs &&
   prev.reasoningDurationMs === next.reasoningDurationMs &&
-  prev.devPreviewCard === next.devPreviewCard &&
   prev.planActionsBusy === next.planActionsBusy &&
   prev.onBuildPlan === next.onBuildPlan &&
   prev.onOpenPlan === next.onOpenPlan &&

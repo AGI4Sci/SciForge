@@ -45,10 +45,10 @@ export function remoteGuardProviderLabel(provider: RemoteChannelV1['provider']):
 
 export function remoteGuardTargetThread(channel: RemoteChannelV1): RemoteGuardTarget | null {
   const preferredRuntime: AgentRuntimeId =
-    channel.runtimeId === 'claude' ? 'claude' : channel.runtimeId === 'codex' ? 'codex' : 'sciforge'
+    channel.runtimeId === 'claude' ? 'claude' : 'codex'
   const preferred = channel.agentThreadIds?.[preferredRuntime]?.trim()
   if (preferred) return { threadId: preferred, runtimeId: preferredRuntime }
-  for (const runtimeId of ['claude', 'codex', 'sciforge'] as const satisfies readonly AgentRuntimeId[]) {
+  for (const runtimeId of ['codex', 'claude', 'sciforge'] as const satisfies readonly AgentRuntimeId[]) {
     const threadId = channel.agentThreadIds?.[runtimeId]?.trim()
     if (threadId) return { threadId, runtimeId }
   }
@@ -167,9 +167,11 @@ export function RemoteGuardDetailView({
           <div className="mt-5 flex flex-wrap gap-2">
             <button
               type="button"
-              disabled={!target}
+              disabled={!target || target.runtimeId === 'sciforge'}
               onClick={() => {
-                if (target) onOpenThread(target.threadId, target.runtimeId)
+                if (target && target.runtimeId !== 'sciforge') {
+                  onOpenThread(target.threadId, target.runtimeId)
+                }
               }}
               className="inline-flex min-h-9 items-center gap-1.5 rounded-[7px] bg-accent px-3 py-2 text-[13px] font-semibold text-white transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-45"
             >

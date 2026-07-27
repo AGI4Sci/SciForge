@@ -147,15 +147,17 @@ export type PdfExtractTextResult = WriteAssistFailure | {
   resourceUri: string
 }
 
+export const WorkspaceRootInputSchema = z.object({
+  workspaceRoot: z.string().trim().min(1).max(4096)
+    .describe('Workspace root. Omit when the managed worker already has a configured workspace.')
+    .optional()
+}).strict()
+
 export type WriteAssistWorkerDiagnostics = {
   version: typeof WRITE_ASSIST_WORKER_VERSION
   transport: typeof WRITE_ASSIST_WORKER_TRANSPORT
   capabilities: WriteAssistToolName[]
 }
-
-export const WorkspaceRootInputSchema = z.object({
-  workspaceRoot: z.string().trim().min(1).max(4096).optional()
-}).strict()
 
 export const WriteRetrieveContextInputSchema = WorkspaceRootInputSchema.extend({
   query: z.string().trim().min(1).max(WRITE_ASSIST_MAX_QUERY_CHARS),

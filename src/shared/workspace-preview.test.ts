@@ -1,24 +1,21 @@
 import { describe, expect, it } from 'vitest'
 import {
-  LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS,
-  WORKSPACE_PREVIEW_AGENT_ACCESS,
+  DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS,
   WORKSPACE_PREVIEW_MAX_ARTIFACT_BYTES,
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
   WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
   extensionFromPreviewPath,
-  isDeferredNonLifeScienceExtension,
   isDelimitedTabularEditPreviewPath,
   isFirstPartyTabularShellPreviewPath,
   isFirstPartyTextPreviewPath,
   isTextLikePreviewMimeType,
   normalizePreviewMimeType,
-  isLifeSciencePreviewExtension,
   normalizePreviewExtension,
   normalizeWorkspacePreviewSha256Digest,
   resolveWorkspacePreviewInitialSelection,
-  resolveLifeSciencePreviewRoute,
   resolveWorkspacePreviewPlugin,
   resolveWorkspacePreviewTransferCapabilities,
+  workspacePreviewContentKey,
   workspacePreviewEditOperationSchema,
   workspacePreviewAnchorSchema,
   workspacePreviewIntegrityExpectationSchema,
@@ -42,11 +39,23 @@ import {
   workspacePreviewPluginActionResultSchema,
   workspacePreviewReadArtifactRangeRequestSchema,
   workspacePreviewSessionSchema,
-  workspacePreviewPluginManifestSchema,
   type WorkspaceObservation
 } from './workspace-preview'
 
 describe('workspace preview contract', () => {
+  it('keeps shared defaults limited to host-owned preview manifests', () => {
+    expect(DEFAULT_WORKSPACE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => manifest.id)).toEqual([
+      'markdown',
+      'html',
+      'pdf',
+      'docx',
+      'image',
+      'text',
+      'tabular',
+      'deck'
+    ])
+  })
+
   it('normalizes extensions and preserves compound file suffixes', () => {
     expect(normalizePreviewExtension('CSV')).toBe('.csv')
     expect(extensionFromPreviewPath('/data/cell.OME.TIFF', ['.ome.tiff', '.tiff'])).toBe('.ome.tiff')
@@ -128,52 +137,6 @@ describe('workspace preview contract', () => {
     expect(() => normalizeWorkspacePreviewSha256Digest('not-a-digest')).toThrow(/64 hexadecimal/)
   })
 
-  it('validates plugin manifests with full agent permissions', () => {
-    const manifest = workspacePreviewPluginManifestSchema.parse(LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS[0])
-
-    expect(manifest.id).toBe('molecular')
-    expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
-    expect(manifest.capabilities.structuredSelection).toBe(true)
-  })
-
-  it('declares first-party worker packages for every life-science plugin manifest', () => {
-    expect(LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS.map((manifest) => [
-      manifest.id,
-      manifest.workerPackage
-    ])).toEqual(expect.arrayContaining([
-      ['molecular', '@sciforge/workspace-molecular'],
-      ['sequence-genomics', '@sciforge/workspace-sequence'],
-      ['omics-matrix', '@sciforge/workspace-omics'],
-      ['bioimaging', '@sciforge/workspace-bioimaging'],
-      ['proteomics-spectra', '@sciforge/workspace-spectra']
-    ]))
-  })
-
-  it('keeps life-science file write capabilities explicit without lowering agent authority', () => {
-    for (const manifest of LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS) {
-      expect(manifest.capabilities.preview).toBe(true)
-      expect(manifest.capabilities.inspect).toBe(true)
-      expect(manifest.capabilities.structuredSelection).toBe(true)
-      expect(manifest.capabilities.edit).toBe(false)
-      expect(manifest.capabilities.agent).toEqual(WORKSPACE_PREVIEW_AGENT_ACCESS)
-    }
-  })
-
-  it('resolves plugins by MIME type or highest-priority extension match', () => {
-    const plugin = resolveWorkspacePreviewPlugin({
-      path: '/workspace/protein.PDB',
-      manifests: LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS
-    })
-    const mimePlugin = resolveWorkspacePreviewPlugin({
-      path: '/workspace/unknown.bin',
-      mimeType: 'chemical/x-pdb',
-      manifests: LIFE_SCIENCE_PREVIEW_PLUGIN_MANIFESTS
-    })
-
-    expect(plugin?.id).toBe('molecular')
-    expect(mimePlugin?.id).toBe('molecular')
-  })
-
   it('routes text-like MIME parameters and text file names through the text plugin', () => {
     const textManifest = {
       contractVersion: 1 as const,
@@ -189,8 +152,7 @@ describe('workspace preview contract', () => {
         preview: true,
         edit: true,
         inspect: true,
-        structuredSelection: true,
-        agent: WORKSPACE_PREVIEW_AGENT_ACCESS
+        structuredSelection: true
       }
     }
 
@@ -210,35 +172,32 @@ describe('workspace preview contract', () => {
     })?.id).toBe('text')
   })
 
-  it('accepts representative edit operations for selections, text, tables, decks, documents, annotations, and molecular selections', () => {
+  it('accepts representative edit operations for selections, domain payloads, text, tables, decks, documents, and annotations', () => {
     expect(workspacePreviewEditOperationSchema.parse({
       kind: 'workspace.setSelection',
       path: 'variants.vcf',
       selection: {
-        kind: 'sequence',
-        sequenceId: 'chr1',
-        ranges: [{ start: 100, end: 120, strand: '+' }],
-        features: [{ type: 'variant', start: 108, end: 109 }]
+        kind: 'domain',
+        selectionType: 'sciforge.life-science-preview.sequence.selection',
+        data: {
+          schemaVersion: 2,
+          sequenceId: 'chr1',
+          ranges: [{ start: 100, end: 120, strand: '+' }]
+        }
       }
     }).kind).toBe('workspace.setSelection')
     expect(workspacePreviewEditOperationSchema.parse({
-      kind: 'workspace.setSelection',
+      kind: 'domain.applyEdit',
       path: 'atlas.h5ad',
-      selection: {
-        kind: 'omics',
+      operationType: 'sciforge.life-science-preview.omics.selection',
+      data: {
+        schemaVersion: 2,
         matrixIds: ['matrix-1'],
         obsKeys: ['cell_type'],
         varKeys: ['gene_symbol'],
-        embeddings: ['X_umap'],
-        ranges: [{
-          matrixId: 'matrix-1',
-          axis: 'obs',
-          start: 0,
-          end: 128,
-          axisLength: 2700
-        }]
+        embeddings: ['X_umap']
       }
-    }).kind).toBe('workspace.setSelection')
+    }).kind).toBe('domain.applyEdit')
     expect(workspacePreviewEditOperationSchema.parse({
       kind: 'text.replaceRange',
       path: 'notes.md',
@@ -349,6 +308,47 @@ describe('workspace preview contract', () => {
       }
     })
     expect(workspacePreviewEditOperationSchema.parse({
+      kind: 'annotation.upsert',
+      path: 'notes.md',
+      annotationId: 'a-markdown',
+      annotationKind: 'comment',
+      body: 'Clarify this section.',
+      target: {
+        documentKind: 'markdown',
+        threadId: 'thread-markdown',
+        anchor: {
+          id: 'anchor-markdown',
+          kind: 'text',
+          quote: 'important section',
+          contextBefore: 'Before',
+          contextAfter: 'After',
+          textRange: {
+            start: 120,
+            end: 137,
+            startLine: 8,
+            startColumn: 3,
+            endLine: 8,
+            endColumn: 20
+          }
+        }
+      }
+    })).toMatchObject({
+      kind: 'annotation.upsert',
+      target: {
+        documentKind: 'markdown',
+        anchor: {
+          textRange: {
+            start: 120,
+            end: 137,
+            startLine: 8,
+            startColumn: 3,
+            endLine: 8,
+            endColumn: 20
+          }
+        }
+      }
+    })
+    expect(workspacePreviewEditOperationSchema.parse({
       kind: 'annotation.thread.update',
       path: 'paper.pdf',
       threadId: 'thread-a',
@@ -396,11 +396,6 @@ describe('workspace preview contract', () => {
         }
       }
     })).toThrow()
-    expect(workspacePreviewEditOperationSchema.parse({
-      kind: 'molecular.setSelection',
-      path: 'protein.pdb',
-      selection: { kind: 'molecular', chains: ['A'], residues: [{ index: 42 }] }
-    }).kind).toBe('molecular.setSelection')
   })
 
   it('allows workspace-file exports to omit a path for host-generated source-copy targets', () => {
@@ -420,43 +415,54 @@ describe('workspace preview contract', () => {
     })
   })
 
-  it('validates sessions and agent-visible observations across life-science modalities', () => {
-    const observation: WorkspaceObservation = {
+  it('validates sessions and agent-visible observations across namespaced domain modalities', () => {
+    const observation = workspaceObservationSchema.parse({
       schemaVersion: 1,
       file: { path: 'protein.pdb' },
       view: {
         pluginId: 'molecular',
-        modality: 'molecular',
+        modality: 'sciforge.life-science-preview.molecular',
         mode: 'inspect',
         title: 'protein.pdb'
       },
       selection: {
-        kind: 'molecular',
-        chains: ['A'],
-        residues: [{ chain: 'A', index: 42, name: 'TYR' }]
+        kind: 'domain',
+        selectionType: 'sciforge.life-science-preview.molecular.selection',
+        data: {
+          schemaVersion: 2,
+          chains: ['A'],
+          residues: [{ chain: 'A', index: 42, name: 'TYR' }]
+        }
       },
-      molecular: {
-        modelCount: 1,
-        chains: ['A', 'B'],
-        ligands: ['ATP'],
-        representations: ['cartoon', 'surface']
-      },
+      pluginMetadata: [{
+        source: 'plugin-metadata',
+        metadataKind: 'sciforge.life-science-preview.molecular.observation',
+        metadataOnly: true,
+        containsPixels: false,
+        data: {
+          schemaVersion: 2,
+          modelCount: 1,
+          chains: ['A', 'B'],
+          ligands: ['ATP'],
+          representations: ['cartoon', 'surface']
+        }
+      }],
       actions: ['molecular.workbench']
-    }
+    })
 
     expect(workspacePreviewSessionSchema.parse({
       id: 'session-1',
       pluginId: 'molecular',
       workspaceRoot: '/workspace',
       path: '/workspace/protein.pdb',
-      modality: 'molecular',
+      modality: 'sciforge.life-science-preview.molecular',
       mode: 'inspect',
       openedAt: '2026-07-08T00:00:00.000Z',
       updatedAt: '2026-07-08T00:00:00.000Z',
       selection: observation.selection
-    }).selection?.kind).toBe('molecular')
-    expect(workspaceObservationSchema.parse(observation).selection?.kind).toBe('molecular')
-    expect(observation.selection?.kind).toBe('molecular')
+    }).selection?.kind).toBe('domain')
+    expect(observation.selection?.kind).toBe('domain')
+    expect(observation.pluginMetadata?.[0]?.data).toMatchObject({ modelCount: 1 })
     expect(observation.actions).toContain('molecular.workbench')
   })
 
@@ -466,23 +472,14 @@ describe('workspace preview contract', () => {
       file: { path: 'cells.ome.tiff' },
       view: {
         pluginId: 'bioimaging',
-        modality: 'bioimaging',
+        modality: 'sciforge.life-science-preview.bioimaging',
         mode: 'preview',
         title: 'cells.ome.tiff'
       },
-      bioimaging: {
-        format: 'ome-tiff',
-        dimensions: { width: 1024, height: 768 },
-        tilePlan: {
-          status: 'metadata-only',
-          pixelDecoding: false,
-          tileRendererImplemented: false
-        }
-      },
       pluginMetadata: [{
         source: 'plugin-metadata',
-        metadataKind: 'bioimaging',
-        mimeType: 'application/vnd.sciforge.workspace-preview.bioimaging-metadata+json',
+        metadataKind: 'sciforge.life-science-preview.bioimaging.observation',
+        mimeType: 'application/vnd.sciforge.life-science.bioimaging+json',
         metadataOnly: true,
         containsPixels: false,
         pixelDecoding: false,
@@ -501,7 +498,7 @@ describe('workspace preview contract', () => {
     })
 
     expect(observation.pluginMetadata?.[0]).toMatchObject({
-      metadataKind: 'bioimaging',
+      metadataKind: 'sciforge.life-science-preview.bioimaging.observation',
       metadataOnly: true,
       containsPixels: false,
       data: {
@@ -584,6 +581,10 @@ describe('workspace preview contract', () => {
     })
 
     expect(action.input.query).toBe('BRCA1')
+    expect(workspacePreviewPluginActionInputSchema.safeParse({
+      actionId: 'annotation.sidecar.read',
+      input: {}
+    }).success).toBe(false)
     expect(result.audit.effect).toBe('worker-action')
     expect(workspacePreviewPluginActionResultSchema.parse({
       ...result,
@@ -713,7 +714,7 @@ describe('workspace preview contract', () => {
       sessionId: 'session-asset',
       assetId: 'asset:session-asset',
       pluginId: 'bioimaging',
-      modality: 'bioimaging',
+      modality: 'sciforge.life-science-preview.bioimaging',
       file: {
         name: 'cells.ome.tiff',
         relativePath: 'cells.ome.tiff',
@@ -897,13 +898,102 @@ describe('workspace preview contract', () => {
     })
   })
 
+  it.each([
+    ['PDF', '/workspace/paper.pdf', 'application/pdf'],
+    ['Word', '/workspace/report.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+    ['Markdown', '/workspace/notes.md', 'text/markdown']
+  ])('keeps %s content identity independent from annotation observation state', (
+    _label,
+    path,
+    mimeType
+  ) => {
+    const observation: WorkspaceObservation = {
+      schemaVersion: 1,
+      file: {
+        path,
+        workspaceRoot: '/workspace',
+        mimeType,
+        size: 1024,
+        mtimeMs: 1783468800000,
+        sha256: 'a'.repeat(64)
+      },
+      view: {
+        pluginId: 'document-fixture',
+        modality: 'document',
+        mode: 'preview',
+        title: path.split('/').at(-1) ?? path
+      },
+      actions: ['observe']
+    }
+    const asset = workspacePreviewAssetTransportDescriptorSchema.parse({
+      schemaVersion: 1,
+      sessionId: 'session-document',
+      assetId: 'asset:session-document',
+      pluginId: 'document-fixture',
+      modality: 'document',
+      file: {
+        name: path.split('/').at(-1) ?? path,
+        relativePath: path.replace('/workspace/', ''),
+        mimeType,
+        size: 1024,
+        mtimeMs: 1783468800000,
+        sha256: 'a'.repeat(64)
+      },
+      primary: 'byte-range',
+      eagerRead: {
+        allowed: false,
+        reason: 'Use bounded reads.'
+      },
+      range: {
+        available: true,
+        maxChunkBytes: WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+        recommendedChunkBytes: WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
+        size: 1024
+      },
+      strategies: [{
+        kind: 'byte-range',
+        status: 'available',
+        reason: 'Bounded reads are available.'
+      }]
+    })
+    const contentKey = workspacePreviewContentKey({ observation, asset })
+
+    expect(workspacePreviewContentKey({
+      observation: {
+        ...observation,
+        documentAnnotations: {
+          threadCount: 2,
+          annotationCount: 4,
+          openThreadCount: 2,
+          truncated: false,
+          threads: []
+        }
+      },
+      asset: {
+        ...asset,
+        strategies: asset.strategies.map((strategy) => ({ ...strategy }))
+      }
+    })).toBe(contentKey)
+    expect(workspacePreviewContentKey({
+      observation: {
+        ...observation,
+        file: {
+          ...observation.file,
+          mtimeMs: 1783468800001
+        }
+      },
+      asset
+    })).not.toBe(contentKey)
+  })
+
   it('resolves desktop transfer capabilities and web preview fallbacks', () => {
     const desktop = resolveWorkspacePreviewTransferCapabilities('desktop')
     const web = resolveWorkspacePreviewTransferCapabilities({ runtime: 'web' })
 
     expect(desktop.nativeFileSystem).toBe(true)
     expect(desktop.dragInActions).toEqual(expect.arrayContaining(['import-files', 'move-workspace-items']))
-    expect(desktop.dragOutActions).toContain('native-file')
+    expect(desktop.dragOutActions).not.toContain('native-file')
+    expect(desktop.dragOutActions).toEqual(expect.arrayContaining(['copy-path', 'copy-content', 'attach-to-session']))
     expect(desktop.pastePayloadKinds).toEqual(expect.arrayContaining(['files', 'screenshot']))
 
     expect(web.nativeFileSystem).toBe(false)
@@ -1035,64 +1125,5 @@ describe('workspace preview contract', () => {
 
     expect(summary.undo.available).toBe(false)
     expect(summary.counts.cellsChanged).toBe(1)
-  })
-})
-
-describe('life science workspace preview scope guard', () => {
-  it('routes current-stage life-science molecular, omics, bioimaging, and spectra files', () => {
-    expect(resolveLifeSciencePreviewRoute('model.mmcif')).toMatchObject({
-      scope: 'life-science',
-      format: { pluginId: 'molecular', modality: 'molecular' }
-    })
-    expect(resolveLifeSciencePreviewRoute('atlas.h5ad')).toMatchObject({
-      scope: 'life-science',
-      format: { pluginId: 'omics-matrix', modality: 'omics' }
-    })
-    expect(resolveLifeSciencePreviewRoute('/slides/cell.ome.tiff')).toMatchObject({
-      scope: 'life-science',
-      format: { pluginId: 'bioimaging', modality: 'bioimaging' }
-    })
-    expect(resolveLifeSciencePreviewRoute('run.mzML')).toMatchObject({
-      scope: 'life-science',
-      format: { pluginId: 'proteomics-spectra', modality: 'spectra' }
-    })
-  })
-
-  it('routes sequence and genomics files to the life-science sequence plugin', () => {
-    for (const path of [
-      'reads.fastq',
-      'reference.fasta',
-      'reference.fna',
-      'proteome.faa',
-      'genes.gff',
-      'genes.gff3',
-      'variants.vcf'
-    ]) {
-      expect(resolveLifeSciencePreviewRoute(path)).toMatchObject({
-        scope: 'life-science',
-        format: { pluginId: 'sequence-genomics', modality: 'sequence' }
-      })
-    }
-  })
-
-  it('defers non-life-science scientific modalities explicitly', () => {
-    expect(resolveLifeSciencePreviewRoute('mesh.vtk')).toMatchObject({
-      scope: 'deferred-non-life-science',
-      status: 'deferred'
-    })
-    expect(resolveLifeSciencePreviewRoute('region.geojson')).toMatchObject({
-      scope: 'deferred-non-life-science',
-      status: 'deferred'
-    })
-    expect(isDeferredNonLifeScienceExtension('.stl')).toBe(true)
-    expect(isLifeSciencePreviewExtension('.stl')).toBe(false)
-  })
-
-  it('leaves unknown formats unsupported instead of silently expanding scope', () => {
-    expect(resolveLifeSciencePreviewRoute('experiment.unknown')).toEqual({
-      scope: 'unknown',
-      status: 'unsupported',
-      extension: '.unknown'
-    })
   })
 })

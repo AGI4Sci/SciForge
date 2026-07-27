@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { WORKSPACE_PREVIEW_MAX_RANGE_BYTES } from '../../shared/workspace-preview'
 import {
   AGENT_RUNTIME_AUXILIARY_OPERATIONS,
   AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS,
   type AgentRuntimeAuxiliaryOperation
 } from '../../shared/agent-runtime-contract'
+import { normalizeAppSettings, type AppSettingsV1 } from '../../shared/app-settings'
 import {
   agentRuntimeApprovalResolvePayloadSchema,
   agentRuntimeAuxiliaryPayloadSchema,
@@ -26,14 +26,9 @@ import {
   agentRuntimeStartTurnPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
-  evidenceDagUpdatePayloadSchema,
-  evidenceDagViewPayloadSchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
-  projectDagGoalSavePayloadSchema,
-  projectDagUpdatePayloadSchema,
-  projectDagViewPayloadSchema,
   remoteChannelActiveThreadContextPayloadSchema,
   remoteChannelMirrorPayloadSchema,
   remoteChannelTaskFromTextPayloadSchema,
@@ -41,6 +36,9 @@ import {
   settingsPatchSchema,
   shellOpenExternalUrlSchema,
   speechTranscriptionPayloadSchema,
+  traceExportPayloadSchema,
+  traceReadPayloadSchema,
+  traceSummariesPayloadSchema,
   visualDocumentInsertArtifactPayloadSchema,
   visualDocumentSaveAnnotationsPayloadSchema,
   skillListPayloadSchema,
@@ -52,15 +50,8 @@ import {
   workspaceEntryImportPayloadSchema,
   workspaceEntryMovePayloadSchema,
   workspaceEntryRenamePayloadSchema,
-  workspaceNativeFileDragPayloadSchema,
-  workspacePreviewApplyEditPayloadSchema,
-  workspacePreviewDescribeAssetPayloadSchema,
-  workspacePreviewExportPayloadSchema,
-  workspacePreviewObservePayloadSchema,
+  workspacePdfRenameSuggestionPayloadSchema,
   workspacePreviewOpenPayloadSchema,
-  workspacePreviewPrepareArtifactPayloadSchema,
-  workspacePreviewReadArtifactRangePayloadSchema,
-  workspacePreviewReadRangePayloadSchema,
   writeExportPayloadSchema,
   writeRichClipboardPayloadSchema,
   writeInlineCompletionPayloadSchema,
@@ -68,6 +59,30 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('accepts bounded protocol-neutral full-trace queries', () => {
+    expect(traceReadPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: ' thread-1 ',
+      kinds: ['model_request', 'agent_event'],
+      order: 'desc',
+      limit: 20
+    })).toEqual({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      kinds: ['model_request', 'agent_event'],
+      order: 'desc',
+      limit: 20
+    })
+    expect(traceSummariesPayloadSchema.parse({ traceIds: [' trace-1 '], limit: 5 })).toEqual({
+      traceIds: ['trace-1'],
+      limit: 5
+    })
+    expect(traceExportPayloadSchema.parse({ traceIds: ['trace-1'] })).toEqual({
+      traceIds: ['trace-1']
+    })
+    expect(() => traceReadPayloadSchema.parse({ kinds: ['openai-chat'] })).toThrow()
+  })
+
   it('accepts side-thread metadata when starting a PDF annotation thread', () => {
     expect(agentRuntimeStartThreadPayloadSchema.parse({
       runtimeId: 'codex',
@@ -97,10 +112,24 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: ' thread-1 ',
       text: ' hello ',
+      clientDirectiveId: ' directive-1 ',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [
+          { id: 'visual-look-locate', receiptKind: 'visual.look' },
+          {
+            id: 'visual-capture',
+            receiptKind: 'visual.capture',
+            requiresRegionRef: true,
+            dependsOn: ['visual-look-locate']
+          }
+        ]
+      },
       workspace: ' /tmp/workspace ',
       model: ' deepseek-v4-pro ',
       reasoningEffort: ' medium ',
       governanceProfile: 'remote_guard',
+      visibleContextOwnerThreadId: ' parent-thread ',
       fileReferences: [{
         path: ' /tmp/workspace/docs/spec.pdf ',
         relativePath: ' docs/spec.pdf ',
@@ -116,10 +145,24 @@ describe('app-ipc-schemas', () => {
       runtimeId: 'claude',
       threadId: 'thread-1',
       text: 'hello',
+      clientDirectiveId: 'directive-1',
+      executionIntent: {
+        mode: 'execute',
+        requirements: [
+          { id: 'visual-look-locate', receiptKind: 'visual.look' },
+          {
+            id: 'visual-capture',
+            receiptKind: 'visual.capture',
+            requiresRegionRef: true,
+            dependsOn: ['visual-look-locate']
+          }
+        ]
+      },
       workspace: '/tmp/workspace',
       model: 'deepseek-v4-pro',
       reasoningEffort: 'medium',
       governanceProfile: 'remote_guard',
+      visibleContextOwnerThreadId: 'parent-thread',
       fileReferences: [{
         path: '/tmp/workspace/docs/spec.pdf',
         relativePath: 'docs/spec.pdf',
@@ -132,6 +175,30 @@ describe('app-ipc-schemas', () => {
     })
   })
 
+  it('accepts stable directive identity on steer payloads', () => {
+    expect(agentRuntimeTurnSteerPayloadSchema.parse({
+      runtimeId: 'codex',
+      threadId: ' thread-1 ',
+      turnId: ' turn-1 ',
+      text: ' use the current annotations ',
+      clientDirectiveId: ' correction-1 ',
+      executionIntent: {
+        mode: 'inspect',
+        requirements: [{ receiptKind: 'visual.look' }]
+      }
+    })).toEqual({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      text: 'use the current annotations',
+      clientDirectiveId: 'correction-1',
+      executionIntent: {
+        mode: 'inspect',
+        requirements: [{ receiptKind: 'visual.look' }]
+      }
+    })
+  })
+
   it('rejects empty neutral agent runtime turn text', () => {
     expect(() =>
       agentRuntimeStartTurnPayloadSchema.parse({
@@ -140,68 +207,6 @@ describe('app-ipc-schemas', () => {
         text: ' '
       })
     ).toThrow()
-  })
-
-  it('accepts Evidence DAG view payloads for Claude runtime threads', () => {
-    expect(evidenceDagViewPayloadSchema.parse({
-      runtimeId: 'claude',
-      threadId: ' thread-1 '
-    })).toEqual({
-      runtimeId: 'claude',
-      threadId: 'thread-1'
-    })
-  })
-
-  it('accepts Evidence DAG update payloads', () => {
-    expect(evidenceDagUpdatePayloadSchema.parse({
-      runtimeId: 'codex',
-      threadId: ' thread-1 '
-    })).toEqual({
-      runtimeId: 'codex',
-      threadId: 'thread-1'
-    })
-    expect(() => evidenceDagUpdatePayloadSchema.parse({
-      runtimeId: 'codex',
-      threadId: 'thread-1',
-      operation: 'rebuild'
-    })).toThrow(/rebuildKind/)
-  })
-
-  it('accepts Project DAG panel payloads', () => {
-    expect(projectDagViewPayloadSchema.parse({
-      view: 'graph',
-      workspaceRoot: ' /tmp/project-alpha ',
-      projectRoot: ' /tmp/project-alpha ',
-      project: ' alpha ',
-      sessions: [' codex:thread-1 ']
-    })).toEqual({
-      view: 'graph',
-      workspaceRoot: '/tmp/project-alpha',
-      projectRoot: '/tmp/project-alpha',
-      project: 'alpha',
-      sessions: ['codex:thread-1']
-    })
-    expect(projectDagUpdatePayloadSchema.parse({
-      workspaceRoot: ' /tmp/project-alpha ',
-      sessions: [' codex:thread-1 '],
-      scope: [' session-1 '],
-      excludedSessions: [' codex:thread-2 '],
-      isolatedSessions: [' codex:thread-3 '],
-      autonomyMode: 'autonomous'
-    })).toEqual({
-      workspaceRoot: '/tmp/project-alpha',
-      sessions: ['codex:thread-1'],
-      scope: ['session-1'],
-      excludedSessions: ['codex:thread-2'],
-      isolatedSessions: ['codex:thread-3'],
-      autonomyMode: 'autonomous'
-    })
-    expect(projectDagUpdatePayloadSchema.parse({ scope: 'all' })).toEqual({ scope: 'all' })
-    expect(projectDagGoalSavePayloadSchema.parse({
-      title: ' Project alpha ',
-      description: ' Find the answer. '
-    })).toEqual({ title: 'Project alpha', description: 'Find the answer.' })
-    expect(() => projectDagViewPayloadSchema.parse({ view: 'export' })).toThrow()
   })
 
   it('accepts strict VisualDocument artifacts and normalized review annotations', () => {
@@ -504,6 +509,16 @@ describe('app-ipc-schemas', () => {
   it('accepts shared host-service auxiliary operations', () => {
     expect(agentRuntimeAuxiliaryPayloadSchema.parse({
       runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'device' }
+    })).toEqual({
+      runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'device' }
+    })
+
+    expect(agentRuntimeAuxiliaryPayloadSchema.parse({
+      runtimeId: 'codex',
       operation: 'runCodeNavigation',
       payload: {
         workspaceRoot: ' /tmp/workspace ',
@@ -575,7 +590,7 @@ describe('app-ipc-schemas', () => {
     }
   })
 
-  it('requires top-level runtime ids only for thread-bound auxiliary operations', () => {
+  it('requires top-level runtime ids for runtime-bound auxiliary operations', () => {
     const runtimeIdRequired = new Set<AgentRuntimeAuxiliaryOperation>(
       AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
     )
@@ -598,6 +613,16 @@ describe('app-ipc-schemas', () => {
         operation,
         payload: { threadId: 'thread-1' }
       })).toMatchObject({ runtimeId: 'codex', operation })
+    }
+
+    for (const operation of [
+      'getCodingPlanAccount',
+      'startCodingPlanLogin',
+      'waitForCodingPlanLogin',
+      'logoutCodingPlanAccount',
+      'getCodingPlanRateLimits'
+    ] as const) {
+      expect(() => agentRuntimeAuxiliaryPayloadSchema.parse({ operation, payload: {} }), operation).toThrow()
     }
 
     for (const operation of AGENT_RUNTIME_AUXILIARY_OPERATIONS.filter((item) => !runtimeIdRequired.has(item))) {
@@ -623,7 +648,7 @@ describe('app-ipc-schemas', () => {
     expect(skillListPayloadSchema.parse({})).toEqual({})
   })
 
-  it('accepts workspace preview open and observe IPC payloads', () => {
+  it('accepts capability-backed workspace preview open payloads', () => {
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' protein.PDB ',
       workspaceRoot: ' /tmp/workspace ',
@@ -635,9 +660,6 @@ describe('app-ipc-schemas', () => {
       mimeType: 'chemical/x-pdb',
       mode: 'inspect'
     })
-    expect(workspacePreviewObservePayloadSchema.parse({
-      sessionId: ' session-1 '
-    })).toEqual({ sessionId: 'session-1' })
     expect(workspacePreviewOpenPayloadSchema.parse({
       path: ' evidence.pdf ',
       workspaceRoot: ' /tmp/workspace ',
@@ -659,128 +681,11 @@ describe('app-ipc-schemas', () => {
         expectedDigest: `sha256:${'a'.repeat(64)}`
       }
     })
-    expect(workspacePreviewDescribeAssetPayloadSchema.parse({
-      sessionId: ' session-1 '
-    })).toEqual({ sessionId: 'session-1' })
-    expect(workspacePreviewReadRangePayloadSchema.parse({
-      sessionId: ' session-1 ',
-      range: { offset: 4, length: 16 }
-    })).toEqual({
-      sessionId: 'session-1',
-      range: { offset: 4, length: 16 }
-    })
-    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'observation'
-      }
-    })
-    expect(workspacePreviewPrepareArtifactPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        kind: 'cache-artifact',
-        source: 'plugin-metadata',
-        metadataKind: 'bioimaging'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        kind: 'cache-artifact',
-        source: 'plugin-metadata',
-        metadataKind: 'bioimaging'
-      }
-    })
-    expect(workspacePreviewReadArtifactRangePayloadSchema.parse({
-      sessionId: ' session-1 ',
-      request: {
-        artifactId: ' artifact-1 ',
-        range: { offset: 0, length: 32 }
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      request: {
-        artifactId: 'artifact-1',
-        range: { offset: 0, length: 32 }
-      }
-    })
-    expect(workspacePreviewApplyEditPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      operation: {
-        kind: 'text.replaceRange',
-        path: 'notes.md',
-        range: {
-          start: { line: 1, column: 1 },
-          end: { line: 1, column: 5 }
-        },
-        text: 'done'
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      operation: {
-        kind: 'text.replaceRange',
-        path: 'notes.md',
-        range: {
-          start: { line: 1, column: 1 },
-          end: { line: 1, column: 5 }
-        },
-        text: 'done'
-      }
-    })
-
-    expect(workspacePreviewExportPayloadSchema.parse({
-      sessionId: ' session-1 ',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: ' exports/protein-copy.pdb '
-      }
-    })).toEqual({
-      sessionId: 'session-1',
-      target: {
-        kind: 'workspace-file',
-        format: 'pdb',
-        path: 'exports/protein-copy.pdb'
-      }
-    })
-
     expect(() =>
       workspacePreviewOpenPayloadSchema.parse({
         path: 'protein.PDB',
         workspaceRoot: '/tmp/workspace',
         mode: 'review'
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewReadRangePayloadSchema.parse({
-        sessionId: 'session-1',
-        range: { offset: 0, length: WORKSPACE_PREVIEW_MAX_RANGE_BYTES + 1 }
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewApplyEditPayloadSchema.parse({
-        sessionId: 'session-1',
-        operation: {
-          kind: 'text.replaceRange',
-          path: 'notes.md',
-          range: {
-            start: { line: 1, column: 1 },
-            end: { line: 1, column: 5 }
-          },
-          text: 'x'.repeat(2_000_001)
-        }
-      })
-    ).toThrow()
-    expect(() =>
-      workspacePreviewExportPayloadSchema.parse({
-        sessionId: 'session-1',
-        target: { kind: 'workspace-file', format: 'pdb' }
       })
     ).toThrow()
   })
@@ -819,11 +724,14 @@ describe('app-ipc-schemas', () => {
           maxChildRuns: 4
         }
       },
+      modelAccess: {
+        mode: 'api',
+        planAdapterId: ''
+      },
       modelRouter: {
         profiles: {
           default: {
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://api.example.test/v1',
               apiKey: 'image-key',
               model: 'image-model'
@@ -920,6 +828,7 @@ describe('app-ipc-schemas', () => {
     expect(payload.activeAgentRuntime).toBe('claude')
     expect(payload.agentCapabilities?.subagents?.maxParallel).toBe(3)
     expect(payload.agentCapabilities?.subagents?.maxChildRuns).toBe(4)
+    expect(payload.modelAccess).toEqual({ mode: 'api', planAdapterId: '' })
     expect(payload.agents?.codex?.codexHome).toBe('/tmp/codex-home')
     expect(payload.agents?.claude?.configDir).toBe('/tmp/claude-code')
     expect(payload.write?.inlineCompletion?.maxTokens).toBe(128)
@@ -927,6 +836,96 @@ describe('app-ipc-schemas', () => {
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
     expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
     expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
+  })
+
+  it('rejects obsolete host settings for installed domain packages', () => {
+    expect(() => settingsPatchSchema.parse({
+      evidenceDag: { enabled: false }
+    })).toThrow()
+  })
+
+  it('accepts normalized full settings snapshots with persisted remote-channel failures', () => {
+    const base = normalizeAppSettings({} as AppSettingsV1)
+    const failure = {
+      provider: 'zulip' as const,
+      message: 'Runtime offline',
+      failureKind: 'runtime_unavailable',
+      failureTitle: 'Runtime unavailable',
+      channelId: 'channel-1',
+      chatId: 'chat-1',
+      remoteThreadId: 'remote-thread-1',
+      threadId: 'thread-1',
+      runtimeId: 'codex' as const,
+      occurredAt: '2026-07-19T00:00:00.000Z'
+    }
+    const normalized = normalizeAppSettings({
+      ...base,
+      remoteChannel: {
+        ...base.remoteChannel,
+        enabled: true,
+        channels: [{
+          id: 'zulip-1',
+          provider: 'zulip',
+          label: 'Zulip',
+          enabled: true,
+          model: 'auto',
+          workspaceRoot: '/tmp/workspace',
+          lastFailure: failure,
+          conversations: [{
+            id: 'conversation-1',
+            chatId: 'chat-1',
+            remoteThreadId: 'remote-thread-1',
+            latestMessageId: 'message-1',
+            senderId: 'sender-1',
+            senderName: 'User',
+            agentThreadIds: { codex: 'thread-1' },
+            workspaceRoot: '/tmp/workspace',
+            lastFailure: failure,
+            createdAt: '2026-07-19T00:00:00.000Z',
+            updatedAt: '2026-07-19T00:00:00.000Z'
+          }],
+          createdAt: '2026-07-19T00:00:00.000Z',
+          updatedAt: '2026-07-19T00:00:00.000Z'
+        }]
+      }
+    } as AppSettingsV1)
+
+    const payload = settingsPatchSchema.parse(normalized)
+    expect(payload.remoteChannel?.channels?.[0]?.lastFailure).toEqual(failure)
+    expect(payload.remoteChannel?.channels?.[0]?.conversations?.[0]?.lastFailure).toEqual(failure)
+  })
+
+  it('keeps persisted remote-channel failure payloads strict', () => {
+    expect(() => settingsPatchSchema.parse({
+      remoteChannel: {
+        channels: [{
+          lastFailure: {
+            provider: 'zulip',
+            message: 'Runtime offline',
+            occurredAt: '2026-07-19T00:00:00.000Z',
+            unexpected: true
+          }
+        }]
+      }
+    })).toThrow(/Unrecognized key/)
+  })
+
+  it('rejects legacy Model Router member fields', () => {
+    for (const member of [
+      { provider: 'legacy-provider' },
+      { maxSupplementRounds: 1 },
+      { timeoutMs: 60_000 }
+    ]) {
+      expect(() => settingsPatchSchema.parse({
+        modelRouter: {
+          profiles: {
+            default: {
+              textReasoner: member
+            }
+          }
+        }
+      })).toThrow(/Unrecognized key/)
+    }
   })
 
   it('accepts workflow AI-agent runtime ownership in settings patches', () => {
@@ -944,7 +943,6 @@ describe('app-ipc-schemas', () => {
               prompt: 'Run the workflow task.',
               workspaceRoot: '/tmp/workspace',
               runtimeId: 'sciforge',
-              providerId: '',
               model: '',
               reasoningEffort: 'high',
               mode: 'agent'
@@ -967,7 +965,8 @@ describe('app-ipc-schemas', () => {
         agents: {
           sciforge: {
             apiKey: 'sk-local',
-            baseUrl: 'https://local-runtime.example/v1'
+            baseUrl: 'https://local-runtime.example/v1',
+            providerId: 'legacy-provider'
           }
         }
       })
@@ -1165,22 +1164,13 @@ describe('app-ipc-schemas', () => {
     }).agents?.sciforge?.port).toBe(9001)
   })
 
-  it('accepts partial provider profiles in settings patches', () => {
-    const payload = settingsPatchSchema.parse({
+  it('rejects the removed direct-provider settings chain', () => {
+    expect(() => settingsPatchSchema.parse({
       provider: {
-        apiKey: 'sk-updated',
-        providers: [{
-          id: 'deepseek',
-          apiKey: 'sk-updated'
-        }]
+        apiKey: 'sk-legacy',
+        baseUrl: 'https://legacy.example/v1'
       }
-    })
-
-    expect(payload.provider?.apiKey).toBe('sk-updated')
-    expect(payload.provider?.providers?.[0]).toEqual({
-      id: 'deepseek',
-      apiKey: 'sk-updated'
-    })
+    })).toThrow(/Unrecognized key/)
   })
 
   it('rejects endpoint format patches in settings API payloads', () => {
@@ -1272,14 +1262,14 @@ describe('app-ipc-schemas', () => {
     ).toThrow(/Unrecognized key/)
   })
 
-  it('rejects legacy local runtime tool storm patches in favor of runtime guards', () => {
+  it('rejects legacy local runtime tuning patches in favor of runtime guards', () => {
     expect(() =>
       settingsPatchSchema.parse({
         agents: {
           sciforge: {
             runtimeTuning: {
-              toolStorm: {
-                threshold: 4
+              execution: {
+                exactRepeatThreshold: 4
               }
             }
           }
@@ -1289,20 +1279,28 @@ describe('app-ipc-schemas', () => {
 
     expect(settingsPatchSchema.parse({
       runtimeGuards: {
-        toolStorm: {
-          threshold: 4
+        execution: {
+          exactRepeatThreshold: 4,
+          semanticFailureThreshold: 3
         }
       }
     }).runtimeGuards).toMatchObject({
-      toolStorm: {
-        threshold: 4
+      execution: {
+        exactRepeatThreshold: 4,
+        semanticFailureThreshold: 3
       }
     })
+
+    expect(() => settingsPatchSchema.parse({
+      runtimeGuards: {
+        execution: { threshold: 4 }
+      }
+    })).toThrow(/Unrecognized key/)
 
     expect(() =>
       settingsPatchSchema.parse({
         runtimeGuards: {
-          toolStorm: {
+          execution: {
             softThreshold: 4,
             hardThreshold: 8
           },
@@ -1312,39 +1310,6 @@ describe('app-ipc-schemas', () => {
         }
       })
     ).toThrow(/Unrecognized key/)
-  })
-
-  it('accepts bounded local runtime tool budget and parallelism patches', () => {
-    const parsed = settingsPatchSchema.parse({
-      agents: {
-        sciforge: {
-          runtimeTuning: {
-            toolBudget: {
-              enabled: true,
-              profiles: {
-                review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
-                long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
-              }
-            },
-            parallelism: { localReadOnly: 8, networkMcp: 4 }
-          }
-        }
-      }
-    })
-
-    expect(parsed.agents?.sciforge?.runtimeTuning).toMatchObject({
-      toolBudget: {
-        enabled: true,
-        profiles: {
-          review: { hardLimit: 16 },
-          long: { maxAutomaticPhases: 3, totalLimit: 48 }
-        }
-      },
-      parallelism: { localReadOnly: 8, networkMcp: 4 }
-    })
-    expect(() => settingsPatchSchema.parse({
-      agents: { sciforge: { runtimeTuning: { parallelism: { localReadOnly: 65 } } } }
-    })).toThrow()
   })
 
   it('rejects unknown schedule patch fields', () => {
@@ -1506,6 +1471,15 @@ describe('app-ipc-schemas', () => {
     expect(payload.newName).toBe('final.md')
   })
 
+  it('accepts PDF rename suggestion payloads', () => {
+    const payload = workspacePdfRenameSuggestionPayloadSchema.parse({
+      workspaceRoot: '/tmp/workspace',
+      path: 'papers/2603.10165v2.pdf'
+    })
+
+    expect(payload.path).toBe('papers/2603.10165v2.pdf')
+  })
+
   it('accepts workspace delete payloads', () => {
     const payload = workspaceEntryDeletePayloadSchema.parse({
       workspaceRoot: '/tmp/workspace',
@@ -1568,16 +1542,6 @@ describe('app-ipc-schemas', () => {
     expect(payload.workspaceRoot).toBe('/tmp/workspace')
     expect(payload.targetDirectory).toBe('notes')
     expect(payload.conflictPolicy).toEqual({ strategy: 'skip' })
-  })
-
-  it('accepts workspace native file drag payloads', () => {
-    const payload = workspaceNativeFileDragPayloadSchema.parse({
-      workspaceRoot: ' /tmp/workspace ',
-      path: ' notes/paper.pdf '
-    })
-
-    expect(payload.workspaceRoot).toBe('/tmp/workspace')
-    expect(payload.path).toBe('notes/paper.pdf')
   })
 
   it('accepts structured inline completion payloads', () => {
@@ -1736,7 +1700,7 @@ describe('app-ipc-schemas', () => {
       content: '# Draft',
       runtimeId: 'codex',
       threadId: 'thread-1',
-      evidenceDagGateOverride: true
+      overrideConfirmed: true
     })
 
     expect(payload.path).toBe('/tmp/workspace/draft.md')
@@ -1744,7 +1708,13 @@ describe('app-ipc-schemas', () => {
     expect(payload.content).toBe('# Draft')
     expect(payload.runtimeId).toBe('codex')
     expect(payload.threadId).toBe('thread-1')
-    expect(payload.evidenceDagGateOverride).toBe(true)
+    expect(payload.overrideConfirmed).toBe(true)
+    expect(() => writeExportPayloadSchema.parse({
+      path: '/tmp/workspace/draft.md',
+      format: 'docx',
+      content: '# Draft',
+      evidenceDagGateOverride: true
+    })).toThrow()
 
     expect(writeExportPayloadSchema.parse({
       path: '/tmp/workspace/draft.md',

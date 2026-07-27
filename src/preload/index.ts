@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, webUtils } from 'electron'
-import { DEV_PREVIEW_NAVIGATE_CHANNEL } from '../shared/dev-preview-url'
-import type { DevPreviewNavigatePayload, SciForgeApi } from '../shared/sciforge-api'
-import { workspacePreviewAssetSourceUrl } from '../shared/workspace-preview-asset-url'
+import type { SciForgeApi } from '../shared/sciforge-api'
+import { capabilityResourceContentSourceUrl } from '../shared/workspace-preview-asset-url'
 
 const transcribeSpeech = (payload: Parameters<SciForgeApi['speechToText']['transcribe']>[0]) =>
   ipcRenderer.invoke('speech:transcribe', payload)
@@ -44,12 +43,6 @@ const createRemoteChannelTaskFromText = (
     mode: options?.mode
   })
 
-function isDevPreviewNavigatePayload(value: unknown): value is DevPreviewNavigatePayload {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const payload = value as { url?: unknown; webContentsId?: unknown }
-  return typeof payload.url === 'string' && Number.isInteger(payload.webContentsId)
-}
-
 const api = {
   platform: process.platform,
   setUiZoomFactor: (factor: number) => {
@@ -69,7 +62,14 @@ const api = {
     ipcRenderer.on('settings:changed', wrapped)
     return () => ipcRenderer.removeListener('settings:changed', wrapped)
   },
+  getModelAccessStatus: () => ipcRenderer.invoke('modelAccess:status'),
   fetchUpstreamModels: () => ipcRenderer.invoke('upstream:models'),
+  traces: {
+    read: (query) => ipcRenderer.invoke('traces:read', query ?? {}),
+    summaries: (query) => ipcRenderer.invoke('traces:summaries', query ?? {}),
+    export: (traceIds) => ipcRenderer.invoke('traces:export', { traceIds }),
+    clear: () => ipcRenderer.invoke('traces:clear')
+  },
   getConnectPhoneStatus,
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>
@@ -132,16 +132,13 @@ const api = {
     }),
   pickWorkspaceDirectory: (defaultPath) =>
     ipcRenderer.invoke('workspace:pick-directory', defaultPath),
-  pickWorkspaceFile: (defaultPath) =>
-    ipcRenderer.invoke('workspace:pick-file', defaultPath),
+  pickFile: (request) => ipcRenderer.invoke('workspace:pick-file', request),
   buildScientificSkillsMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-skills-config', { workspaceRoot }),
   buildScientificPlottingMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:scientific-plotting-config', { workspaceRoot }),
   buildBgcDiscoveryMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:bgc-discovery-config', { workspaceRoot }),
-  buildDatasetApiMcpConfig: (workspaceRoot) =>
-    ipcRenderer.invoke('mcp:dataset-api-config', { workspaceRoot }),
   buildImageGenerationMcpConfig: (workspaceRoot) =>
     ipcRenderer.invoke('mcp:image-generation-config', { workspaceRoot }),
   buildPptMasterMcpConfig: (workspaceRoot) =>
@@ -182,14 +179,6 @@ const api = {
     ipcRenderer.invoke('skill:save-file', { rootPath, skillName, content }),
   openSkillRoot: (rootPath) =>
     ipcRenderer.invoke('skill:open-root', rootPath),
-  getRuntimeConfigFile: () =>
-    ipcRenderer.invoke('runtimeConfig:read'),
-  setRuntimeConfigFile: (content) =>
-    ipcRenderer.invoke('runtimeConfig:write', content),
-  openRuntimeConfigDir: () =>
-    ipcRenderer.invoke('runtimeConfig:open-dir'),
-  openModelRouterConfigFile: () =>
-    ipcRenderer.invoke('modelRouter:config:open'),
   getGitBranches: (workspaceRoot) =>
     ipcRenderer.invoke('git:branches', workspaceRoot),
   switchGitBranch: (workspaceRoot, branch) =>
@@ -219,10 +208,10 @@ const api = {
     ipcRenderer.invoke('clipboard:read-image'),
   pasteWorkspaceClipboard: (payload) =>
     ipcRenderer.invoke('clipboard:paste-workspace', payload),
-  startWorkspaceNativeFileDrag: (payload) =>
-    ipcRenderer.invoke('file:start-workspace-native-drag', payload),
   renameWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:rename-workspace-entry', payload),
+  suggestWorkspacePdfName: (payload) =>
+    ipcRenderer.invoke('file:suggest-workspace-pdf-name', payload),
   copyWorkspaceEntry: (payload) =>
     ipcRenderer.invoke('file:copy-workspace-entry', payload),
   importWorkspaceEntries: (payload) =>
@@ -243,47 +232,24 @@ const api = {
     ipcRenderer.on('file:workspace-changed', wrapped)
     return () => ipcRenderer.removeListener('file:workspace-changed', wrapped)
   },
-  workspacePreview: {
-    listPlugins: () => ipcRenderer.invoke('workspacePreview:listPlugins'),
-    open: (input) => ipcRenderer.invoke('workspacePreview:open', input),
-    observe: (sessionId) => ipcRenderer.invoke('workspacePreview:observe', { sessionId }),
-    describeAsset: (sessionId) => ipcRenderer.invoke('workspacePreview:describeAsset', { sessionId }),
-    readRange: (sessionId, range) =>
-      ipcRenderer.invoke('workspacePreview:readRange', { sessionId, range }),
-    prepareArtifact: (sessionId, request) =>
-      ipcRenderer.invoke('workspacePreview:prepareArtifact', { sessionId, request }),
-    readArtifactRange: (sessionId, request) =>
-      ipcRenderer.invoke('workspacePreview:readArtifactRange', { sessionId, request }),
-    applyEdit: (sessionId, operation) =>
-      ipcRenderer.invoke('workspacePreview:applyEdit', { sessionId, operation }),
-    export: (sessionId, target) =>
-      ipcRenderer.invoke('workspacePreview:export', { sessionId, target }),
-    invokeAction: (sessionId, action) =>
-      ipcRenderer.invoke('workspacePreview:invokeAction', { sessionId, action }),
-    releaseSession: (sessionId) =>
-      ipcRenderer.invoke('workspacePreview:releaseSession', { sessionId }),
-    watch: (payload) => ipcRenderer.invoke('workspacePreview:watch', payload),
-    unwatch: (watchId) => ipcRenderer.invoke('workspacePreview:unwatch', watchId),
-    getAssetSourceUrl: workspacePreviewAssetSourceUrl,
-    onChanged: (handler) => {
+  capabilities: {
+    readiness: (input) => ipcRenderer.invoke('capability:readiness', input),
+    discover: (input = {}) => ipcRenderer.invoke('capability:discover', input),
+    observe: (input) => ipcRenderer.invoke('capability:observe', input),
+    bind: (input) => ipcRenderer.invoke('capability:bind', input),
+    invoke: (input) => ipcRenderer.invoke('capability:invoke', input),
+    events: (input = {}) => ipcRenderer.invoke('capability:events', input),
+    subscribe: (workspaceId) => ipcRenderer.invoke('capability:subscribe', { workspaceId }),
+    unsubscribe: (subscriptionId) => ipcRenderer.invoke('capability:unsubscribe', { subscriptionId }),
+    resourceContentUrl: capabilityResourceContentSourceUrl,
+    onEvent: (handler) => {
       const wrapped = (
         _: Electron.IpcRendererEvent,
         payload: Parameters<typeof handler>[0]
       ) => handler(payload)
-      ipcRenderer.on('workspacePreview:changed', wrapped)
-      return () => ipcRenderer.removeListener('workspacePreview:changed', wrapped)
+      ipcRenderer.on('capability:event', wrapped)
+      return () => ipcRenderer.removeListener('capability:event', wrapped)
     }
-  },
-  biologyRoom: {
-    pickFile: (workspaceRoot) => ipcRenderer.invoke('biologyRoom:pick-file', { workspaceRoot }),
-    create: (input) => ipcRenderer.invoke('biologyRoom:create', input),
-    openOrCreate: (input) => ipcRenderer.invoke('biologyRoom:openOrCreate', input),
-    load: (input) => ipcRenderer.invoke('biologyRoom:load', input),
-    list: (input) => ipcRenderer.invoke('biologyRoom:list', input),
-    observe: (input) => ipcRenderer.invoke('biologyRoom:observe', input),
-    apply: (input) => ipcRenderer.invoke('biologyRoom:apply', input),
-    refresh: (input) => ipcRenderer.invoke('biologyRoom:refresh', input),
-    history: (input) => ipcRenderer.invoke('biologyRoom:history', input)
   },
   exportWriteDocument: (payload) =>
     ipcRenderer.invoke('write:export', payload),
@@ -299,18 +265,6 @@ const api = {
     ipcRenderer.invoke('write:inline-completion-debug:clear'),
   speechToText: {
     transcribe: transcribeSpeech
-  },
-  paperRadar: {
-    status: () => ipcRenderer.invoke('paperRadar:status'),
-    syncArxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-arxiv', payload),
-    syncBiorxiv: (payload) => ipcRenderer.invoke('paperRadar:sync-biorxiv', payload),
-    syncProfile: (payload) => ipcRenderer.invoke('paperRadar:sync-profile', payload),
-    listProfiles: () => ipcRenderer.invoke('paperRadar:profiles:list'),
-    saveProfile: (payload) => ipcRenderer.invoke('paperRadar:profiles:save', payload),
-    review: (payload) => ipcRenderer.invoke('paperRadar:review', payload),
-    search: (payload) => ipcRenderer.invoke('paperRadar:search', payload),
-    rank: (payload) => ipcRenderer.invoke('paperRadar:rank', payload),
-    digest: (payload) => ipcRenderer.invoke('paperRadar:digest', payload)
   },
   researchCards: {
     list: (input) => ipcRenderer.invoke('researchCards:list', input ?? {}),
@@ -390,14 +344,6 @@ const api = {
       return () => ipcRenderer.removeListener('agentRuntime:error', wrapped)
     }
   },
-  onRuntimeStatus: (handler) => {
-    const wrapped = (
-      _: Electron.IpcRendererEvent,
-      payload: Parameters<typeof handler>[0]
-    ) => handler(payload)
-    ipcRenderer.on('runtime:status', wrapped)
-    return () => ipcRenderer.removeListener('runtime:status', wrapped)
-  },
   onRemoteChannelActivity,
   updateRemoteChannelActiveThreadContext,
   mirrorRemoteChannelMessage,
@@ -414,27 +360,10 @@ const api = {
   getPerformanceSnapshot: () =>
     ipcRenderer.invoke('performance:snapshot'),
   openExternal: (url) => ipcRenderer.invoke('shell:open-external', url),
-  onDevPreviewNavigate: (handler) => {
-    const wrapped = (_: Electron.IpcRendererEvent, payload: unknown) => {
-      if (isDevPreviewNavigatePayload(payload)) handler(payload)
-    }
-    ipcRenderer.on(DEV_PREVIEW_NAVIGATE_CHANNEL, wrapped)
-    return () => ipcRenderer.removeListener(DEV_PREVIEW_NAVIGATE_CHANNEL, wrapped)
-  },
   getComputerUsePermissions: () => ipcRenderer.invoke('computer-use:permissions'),
   requestComputerUsePermission: (kind) =>
     ipcRenderer.invoke('computer-use:request-permission', kind),
   getComputerUseStatus: () => ipcRenderer.invoke('computer-use:status'),
-  getEvidenceDagView: (input) => ipcRenderer.invoke('evidenceDag:view', input),
-  updateEvidenceDag: (input) => ipcRenderer.invoke('evidenceDag:update', input),
-  setEvidenceDagPriority: (input) => ipcRenderer.invoke('evidenceDag:priority', input),
-  resolveEvidenceDagEvidencePreview: (input) =>
-    ipcRenderer.invoke('evidenceDag:resolve-evidence-preview', input),
-  getProjectDagView: (input) => ipcRenderer.invoke('projectDag:view', input),
-  updateProjectDag: (input) => ipcRenderer.invoke('projectDag:update', input),
-  saveProjectDagGoal: (input) => ipcRenderer.invoke('projectDag:save-goal', input),
-  resolveProjectDagEvidencePreview: (input) =>
-    ipcRenderer.invoke('projectDag:resolve-evidence-preview', input),
   showTurnCompleteNotification: (payload) => ipcRenderer.invoke('notification:turn-complete', payload),
   getAppVersion: () => ipcRenderer.invoke('app:version'),
   getGuiUpdateState: () => ipcRenderer.invoke('gui:update-state'),

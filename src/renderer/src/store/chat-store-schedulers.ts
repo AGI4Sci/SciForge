@@ -4,7 +4,9 @@ import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 let startupRuntimeProbeTimer: ReturnType<typeof setTimeout> | null = null
 let busyWatchdogTimer: ReturnType<typeof setTimeout> | null = null
 let busyRecoveryAttempts = 0
-let turnCompletionPollTimer: ReturnType<typeof setInterval> | null = null
+let turnCompletionPollTimer: ReturnType<typeof setTimeout> | null = null
+let turnCompletionPollInFlight = false
+let turnCompletionPollGeneration = 0
 let runtimeThreadRefreshPollTimer: ReturnType<typeof setTimeout> | null = null
 let runtimeThreadRefreshInFlight = false
 let runtimeThreadRefreshIdleDelayMs = 0
@@ -20,6 +22,8 @@ const MAX_IDLE_RUNTIME_THREAD_REFRESH_POLL_MS = 120_000
 const RUNTIME_RECONNECT_PROBE_MIN_MS = 1_500
 const RUNTIME_RECONNECT_PROBE_MAX_MS = 10_000
 const RUNTIME_BOOT_RETRY_MS = 1_500
+const TURN_COMPLETION_POLL_MS = 2_500
+const HIDDEN_TURN_COMPLETION_POLL_MS = 15_000
 
 type RuntimeThreadRefreshPollOptions = {
   activeIntervalMs?: number
@@ -49,6 +53,8 @@ type TurnCompletionPollOptions = {
     set: ChatStoreSet,
     get: ChatStoreGet
   ) => void | Promise<void>
+  intervalMs?: number
+  hiddenIntervalMs?: number
 }
 
 export function scheduleStartupRuntimeProbe(get: ChatStoreGet): void {
@@ -99,8 +105,9 @@ export function armBusyWatchdog(
 }
 
 export function stopTurnCompletionPoll(): void {
+  turnCompletionPollGeneration += 1
   if (turnCompletionPollTimer) {
-    clearInterval(turnCompletionPollTimer)
+    clearTimeout(turnCompletionPollTimer)
     turnCompletionPollTimer = null
   }
 }
@@ -300,14 +307,42 @@ export function syncTurnCompletionPoll(
     stopTurnCompletionPoll()
     return
   }
-  if (turnCompletionPollTimer != null) return
+  if (turnCompletionPollTimer != null || turnCompletionPollInFlight) return
 
-  const tick = (): void => {
-    void pollTurnCompletionWatch(set, get, options)
+  const generation = turnCompletionPollGeneration
+  void runTurnCompletionPoll(set, get, options, generation)
+}
+
+async function runTurnCompletionPoll(
+  set: ChatStoreSet,
+  get: ChatStoreGet,
+  options: TurnCompletionPollOptions,
+  generation: number
+): Promise<void> {
+  if (turnCompletionPollInFlight || generation !== turnCompletionPollGeneration) return
+  turnCompletionPollInFlight = true
+  try {
+    await pollTurnCompletionWatch(set, get, options)
+  } finally {
+    turnCompletionPollInFlight = false
   }
 
-  turnCompletionPollTimer = setInterval(tick, 2500)
-  void tick()
+  if (generation !== turnCompletionPollGeneration) return
+  const state = get()
+  const hasWatchedThreads = Object.keys(state.watchTurnCompletion)
+    .some((id) => state.watchTurnCompletion[id])
+  if (state.runtimeConnection !== 'ready' || !hasWatchedThreads) {
+    stopTurnCompletionPoll()
+    return
+  }
+
+  const delay = runtimeWindowIsFocused()
+    ? options.intervalMs ?? TURN_COMPLETION_POLL_MS
+    : options.hiddenIntervalMs ?? HIDDEN_TURN_COMPLETION_POLL_MS
+  turnCompletionPollTimer = setTimeout(() => {
+    turnCompletionPollTimer = null
+    void runTurnCompletionPoll(set, get, options, generation)
+  }, delay)
 }
 
 async function pollTurnCompletionWatch(

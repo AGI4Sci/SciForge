@@ -91,7 +91,7 @@ describe('visual production planner', () => {
       handoff: { contextStopReason: 'no_information_gain', releaseCeiling: 'draft_ready' }
     })
     if (!result.ok || result.status === 'needs_context') return
-    expect(result.execution.stages.at(-1)?.tool).toBe('visual_artifact_review')
+    expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
   })
 
   it('allows a closed context policy to create only a reviewable draft', () => {
@@ -114,12 +114,12 @@ describe('visual production planner', () => {
     {
       route: 'code',
       requirements: { lockedElements: ['numeric values'], modelOwnedElements: [], reproducibleInputs: ['results.csv'] },
-      tools: ['scientific_plotting_map_data', 'scientific_plotting_render', 'visual_artifact_review']
+      tools: ['scientific_plotting_map_data', 'scientific_plotting_render', 'image_generation_review_candidate']
     },
     {
       route: 'model',
       requirements: { lockedElements: [], modelOwnedElements: ['illustrative composition'], reproducibleInputs: [] },
-      tools: ['image_generation_prepare', 'image_generation_render', 'visual_artifact_review']
+      tools: ['image_generation_prepare', 'image_generation_render', 'image_generation_review_candidate']
     }
   ] as const)('locks the $route route without a cross-route fallback', ({ route, requirements, tools }) => {
     const result = planVisualProduction(request({ requirements: { ...requirements } }))
@@ -161,7 +161,123 @@ describe('visual production planner', () => {
       'deterministic_composite',
       'review_visual'
     ])
-    expect(result.execution.stages.at(-1)?.tool).toBe('visual_artifact_review')
+    expect(result.execution.stages.at(-1)?.tool).toBe('image_generation_review_candidate')
+  })
+
+  it('treats a self-contained exact brief as an inline reproducible specification', () => {
+    const structuredData = {
+      categories: ['A', 'B'],
+      series: [{ values: [1, 2] }]
+    }
+    const result = planVisualProduction(request({
+      workspaceRoot: '/workspace',
+      task: 'Draw an exact vector scene from the declared locked elements.',
+      requirements: {
+        lockedElements: ['all geometry, labels, and colors'],
+        modelOwnedElements: [],
+        reproducibleInputs: [],
+        structuredData
+      }
+    }))
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'ready',
+      handoff: {
+        route: 'code',
+        inlineSpecification: 'Draw an exact vector scene from the declared locked elements.'
+      },
+      execution: {
+        nextCall: {
+          tool: 'scientific_plotting_map_data',
+          arguments: {
+            workspaceRoot: '/workspace',
+            visualPlan: { route: 'code' },
+            data: structuredData
+          }
+        }
+      }
+    })
+  })
+
+  it('uses one normalized scene to lock hybrid ownership and the first executor', () => {
+    const scene = {
+      version: 1 as const,
+      coordinateSystem: 'normalized' as const,
+      canvas: { width: 1600, height: 900, background: '#ffffff' },
+      layers: [
+        {
+          id: 'truth',
+          owner: 'code' as const,
+          primitives: [
+            { id: 'label', type: 'text' as const, x: 0.25, y: 0.5, text: 'Exact label' }
+          ]
+        },
+        {
+          id: 'illustration',
+          owner: 'model' as const,
+          primitives: [
+            { id: 'texture', type: 'image' as const, x: 0.75, y: 0.5, width: 0.4, height: 0.8, prompt: 'Subtle biological texture' }
+          ]
+        }
+      ]
+    }
+    const result = planVisualProduction(request({
+      workspaceRoot: '/workspace',
+      requirements: {
+        lockedElements: [],
+        modelOwnedElements: [],
+        reproducibleInputs: [],
+        scene
+      }
+    }))
+
+    expect(result).toMatchObject({
+      ok: true,
+      status: 'ready',
+      handoff: { route: 'hybrid', scene },
+      execution: {
+        nextCall: {
+          tool: 'scientific_plotting_map_data',
+          arguments: { data: scene }
+        }
+      }
+    })
+  })
+
+  it('rejects competing scene and chart-data representations', () => {
+    expect(planVisualProduction(request({
+      requirements: {
+        lockedElements: ['geometry'],
+        modelOwnedElements: [],
+        reproducibleInputs: [],
+        structuredData: { values: [1, 2] },
+        scene: {
+          version: 1,
+          coordinateSystem: 'normalized',
+          canvas: { width: 100, height: 100 },
+          layers: [{
+            id: 'truth',
+            owner: 'code',
+            primitives: [{ id: 'dot', type: 'circle', x: 0.5, y: 0.5, radius: 0.1 }]
+          }]
+        }
+      }
+    }))).toMatchObject({
+      ok: false,
+      status: 'invalid_request',
+      message: expect.stringContaining('mutually exclusive')
+    })
+  })
+
+  it('rejects an ownership-free request instead of silently defaulting to code', () => {
+    expect(planVisualProduction(request({
+      requirements: { lockedElements: [], modelOwnedElements: [], reproducibleInputs: [] }
+    }))).toMatchObject({
+      ok: false,
+      status: 'invalid_request',
+      message: expect.stringContaining('lockedElements or modelOwnedElements')
+    })
   })
 
   it('produces a stable plan id for the same normalized request', () => {

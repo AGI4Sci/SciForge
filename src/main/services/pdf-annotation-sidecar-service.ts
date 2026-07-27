@@ -42,11 +42,12 @@ import {
   resolveSafeWorkspaceWriteTarget,
   type ResolvedWorkspaceWriteTarget,
   writeSafeWorkspaceFile
-} from './workspace-paths'
+} from '@sciforge/domain-sdk/node/workspace-paths'
 
 const MAX_SIDECAR_JSON_BYTES = 16 * 1024 * 1024
 const MAX_IMPORT_PACKAGE_BYTES = 160 * 1024 * 1024
 const MAX_SIDECAR_PROMOTION_CANDIDATES = 200
+const sidecarMutationQueues = new Map<string, Promise<void>>()
 
 type ResolvedPdfTarget = {
   pdfPath: string
@@ -191,6 +192,94 @@ async function writeJsonFile(target: ResolvedWorkspaceWriteTarget, value: unknow
   }
 }
 
+async function withSidecarMutationLock<T>(path: string, work: () => Promise<T>): Promise<T> {
+  const previous = sidecarMutationQueues.get(path) ?? Promise.resolve()
+  let release!: () => void
+  const turn = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const queued = previous.catch(() => undefined).then(() => turn)
+  sidecarMutationQueues.set(path, queued)
+  await previous.catch(() => undefined)
+  try {
+    return await work()
+  } finally {
+    release()
+    if (sidecarMutationQueues.get(path) === queued) sidecarMutationQueues.delete(path)
+  }
+}
+
+function mergeUpdatedRecords<T extends { id: string; updatedAt: string }>(
+  current: readonly T[],
+  incoming: readonly T[]
+): T[] {
+  const byId = new Map(current.map((item) => [item.id, item]))
+  for (const item of incoming) {
+    const existing = byId.get(item.id)
+    if (!existing || item.updatedAt.localeCompare(existing.updatedAt) >= 0) byId.set(item.id, item)
+  }
+  return [...byId.values()]
+}
+
+function inferredThreadDeletions(
+  current: PdfAnnotationSidecar,
+  incoming: PdfAnnotationSidecar,
+  now: string
+): NonNullable<PdfAnnotationSidecar['deletedThreads']> {
+  if (incoming.version !== current.version) return []
+  const incomingThreadIds = new Set(incoming.threads.map((thread) => thread.id))
+  return current.threads
+    .filter((thread) => !incomingThreadIds.has(thread.id))
+    .map((thread) => ({
+      threadId: thread.id,
+      annotationIds: Array.from(new Set([
+        ...thread.annotationIds,
+        ...current.annotations
+          .filter((annotation) => annotation.threadId === thread.id)
+          .map((annotation) => annotation.id)
+      ])),
+      anchorIds: Array.from(new Set([
+        ...thread.anchorIds,
+        ...current.annotations
+          .filter((annotation) => annotation.threadId === thread.id)
+          .map((annotation) => annotation.anchorId)
+      ])),
+      deletedAt: incoming.updatedAt || now,
+      deletedVersion: current.version + 1
+    }))
+}
+
+function mergeSidecarsForSave(
+  current: PdfAnnotationSidecar,
+  incoming: PdfAnnotationSidecar,
+  target: ResolvedPdfTarget,
+  now: string
+): PdfAnnotationSidecar {
+  return stablePdfAnnotationSidecar({
+    ...current,
+    pdfFingerprint: target.fingerprint,
+    anchors: mergeUpdatedRecords(current.anchors, incoming.anchors),
+    annotations: mergeUpdatedRecords(current.annotations, incoming.annotations),
+    threads: mergeUpdatedRecords(current.threads, incoming.threads),
+    authors: mergeUpdatedRecords(current.authors, incoming.authors),
+    deletedThreads: [
+      ...(current.deletedThreads ?? []),
+      ...(incoming.deletedThreads ?? []),
+      ...inferredThreadDeletions(current, incoming, now)
+    ],
+    manifest: {
+      ...current.manifest,
+      ...incoming.manifest,
+      sourcePdfName: basename(target.pdfPath),
+      sourcePdfPath: target.pdfPath,
+      createdAt: current.manifest.createdAt,
+      updatedAt: now
+    },
+    version: Math.max(current.version, incoming.version) + 1,
+    updatedAt: now
+  })
+}
+
 function withResolvedFingerprint(sidecar: PdfAnnotationSidecar, target: ResolvedPdfTarget): PdfAnnotationSidecar {
   return stablePdfAnnotationSidecar({
     ...sidecar,
@@ -263,36 +352,14 @@ export async function loadPdfAnnotationSidecar(
 ): Promise<PdfAnnotationSidecarLoadResult> {
   try {
     const resolved = await resolvePdfAnnotationTarget(target)
-    const warnings: string[] = []
     if (await pathExists(resolved.defaultSidecarPath)) {
-      try {
-        const sidecar = withResolvedFingerprint(await readPdfAnnotationSidecar(resolved.defaultSidecarPath), resolved)
-        return {
-          ok: true,
-          sidecar,
-          path: resolved.defaultSidecarPath,
-          source: 'default',
-          pdfFingerprint: resolved.fingerprint,
-          warnings
-        }
-      } catch (error) {
-        warnings.push(`annotation sidecar skipped: ${error instanceof Error ? error.message : String(error)}`)
-      }
-    }
-
-    const promotedCandidate = (await matchingPdfAnnotationSidecarCandidates(resolved, warnings))[0]
-    if (promotedCandidate) {
-      const writableResolved = await resolvePdfAnnotationTarget(target, { createDefaultSidecarParents: true })
-      const sidecar = withResolvedFingerprint(promotedCandidate.sidecar, writableResolved)
-      const parsed = pdfAnnotationSidecarSchema.parse(sidecar)
-      await writeJsonFile(writableResolved.defaultSidecarTarget, parsed)
       return {
         ok: true,
-        sidecar: parsed,
-        path: writableResolved.defaultSidecarPath,
+        sidecar: withResolvedFingerprint(await readPdfAnnotationSidecar(resolved.defaultSidecarPath), resolved),
+        path: resolved.defaultSidecarPath,
         source: 'default',
-        pdfFingerprint: writableResolved.fingerprint,
-        warnings
+        pdfFingerprint: resolved.fingerprint,
+        warnings: []
       }
     }
 
@@ -305,6 +372,45 @@ export async function loadPdfAnnotationSidecar(
       path: resolved.defaultSidecarPath,
       source: 'empty',
       pdfFingerprint: resolved.fingerprint,
+      warnings: []
+    }
+  } catch (error) {
+    return { ok: false, message: error instanceof Error ? error.message : String(error) }
+  }
+}
+
+/**
+ * Explicit one-shot migration for legacy annotation files. Runtime observation and
+ * mutation paths intentionally never call this function.
+ */
+export async function migrateLegacyPdfAnnotationSidecar(
+  target: PdfAnnotationSidecarTarget
+): Promise<PdfAnnotationSidecarLoadResult> {
+  try {
+    const resolved = await resolvePdfAnnotationTarget(target)
+    if (await pathExists(resolved.defaultSidecarPath)) {
+      const canonical = await loadPdfAnnotationSidecar(target)
+      if (!canonical.ok) return canonical
+      if (hasPdfAnnotationContent(canonical.sidecar) || (canonical.sidecar.deletedThreads?.length ?? 0) > 0) {
+        return canonical
+      }
+    }
+
+    const warnings: string[] = []
+    const candidate = (await matchingPdfAnnotationSidecarCandidates(resolved, warnings))[0]
+    if (!candidate) return await loadPdfAnnotationSidecar(target)
+
+    const writableResolved = await resolvePdfAnnotationTarget(target, { createDefaultSidecarParents: true })
+    const parsed = pdfAnnotationSidecarSchema.parse(
+      withResolvedFingerprint(candidate.sidecar, writableResolved)
+    )
+    await writeJsonFile(writableResolved.defaultSidecarTarget, parsed)
+    return {
+      ok: true,
+      sidecar: parsed,
+      path: writableResolved.defaultSidecarPath,
+      source: 'default',
+      pdfFingerprint: writableResolved.fingerprint,
       warnings
     }
   } catch (error) {
@@ -316,27 +422,36 @@ export async function savePdfAnnotationSidecar(
   payload: PdfAnnotationSidecarSavePayload
 ): Promise<PdfAnnotationSidecarSaveResult> {
   try {
-    const resolved = await resolvePdfAnnotationTarget(payload, { createDefaultSidecarParents: true })
-    const now = new Date().toISOString()
-    const sidecar = stablePdfAnnotationSidecar({
-      ...withResolvedFingerprint(payload.sidecar, resolved),
-      version: payload.sidecar.version + 1,
-      updatedAt: now,
-      manifest: {
-        ...payload.sidecar.manifest,
-        sourcePdfName: basename(resolved.pdfPath),
-        sourcePdfPath: resolved.pdfPath,
-        updatedAt: now
+    const target = await resolvePdfAnnotationTarget(payload)
+    return await withSidecarMutationLock(target.defaultSidecarPath, async () => {
+      const resolved = await resolvePdfAnnotationTarget(payload, { createDefaultSidecarParents: true })
+      const now = new Date().toISOString()
+      let current: PdfAnnotationSidecar | undefined
+      if (await pathExists(resolved.defaultSidecarPath)) {
+        current = withResolvedFingerprint(await readPdfAnnotationSidecar(resolved.defaultSidecarPath), resolved)
+      }
+      const sidecar = current
+        ? mergeSidecarsForSave(current, payload.sidecar, resolved, now)
+        : stablePdfAnnotationSidecar({
+            ...withResolvedFingerprint(payload.sidecar, resolved),
+            version: payload.sidecar.version + 1,
+            updatedAt: now,
+            manifest: {
+              ...payload.sidecar.manifest,
+              sourcePdfName: basename(resolved.pdfPath),
+              sourcePdfPath: resolved.pdfPath,
+              updatedAt: now
+            }
+          })
+      const parsed = pdfAnnotationSidecarSchema.parse(sidecar)
+      await writeJsonFile(resolved.defaultSidecarTarget, parsed)
+      return {
+        ok: true,
+        sidecar: parsed,
+        path: resolved.defaultSidecarPath,
+        savedAt: now
       }
     })
-    const parsed = pdfAnnotationSidecarSchema.parse(sidecar)
-    await writeJsonFile(resolved.defaultSidecarTarget, parsed)
-    return {
-      ok: true,
-      sidecar: parsed,
-      path: resolved.defaultSidecarPath,
-      savedAt: now
-    }
   } catch (error) {
     return { ok: false, message: error instanceof Error ? error.message : String(error) }
   }

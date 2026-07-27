@@ -12,10 +12,10 @@ import {
   type MultiAgentUsage
 } from '../../../../packages/workers/multi-agent/src'
 import type {
-  CodexAppServerDynamicToolCallRequest,
-  CodexAppServerDynamicToolCallResponse,
-  CodexAppServerDynamicToolSpec
-} from './codex-dynamic-mcp-tools'
+  RuntimeToolCallRequest,
+  RuntimeToolCallResponse,
+  RuntimeToolDefinition
+} from '../agent-runtime/runtime-tool-contract'
 
 export const CODEX_MULTI_AGENT_NAMESPACE = 'multi_agent_v1'
 export const CODEX_MULTI_AGENT_SPAWN_TOOL = 'spawn_agent'
@@ -38,7 +38,7 @@ type ActiveRequest = {
 }
 
 type CachedMultiAgentRequest = {
-  promise: Promise<CodexAppServerDynamicToolCallResponse>
+  promise: Promise<RuntimeToolCallResponse>
   settled: boolean
 }
 
@@ -71,7 +71,7 @@ export class CodexMultiAgentToolBridge {
     })
   }
 
-  dynamicTools(): CodexAppServerDynamicToolSpec[] {
+  dynamicTools(): RuntimeToolDefinition[] {
     if (this.options.enabled === false) return []
     return [{
       type: 'function',
@@ -93,7 +93,7 @@ export class CodexMultiAgentToolBridge {
     }]
   }
 
-  canHandle(request: CodexAppServerDynamicToolCallRequest): boolean {
+  canHandle(request: RuntimeToolCallRequest): boolean {
     const name = normalizedToolName(request)
     return name === CODEX_MULTI_AGENT_FLAT_TOOL_NAME ||
       name === `${CODEX_MULTI_AGENT_NAMESPACE}.${CODEX_MULTI_AGENT_SPAWN_TOOL}` ||
@@ -101,8 +101,8 @@ export class CodexMultiAgentToolBridge {
   }
 
   async callTool(
-    request: CodexAppServerDynamicToolCallRequest
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+    request: RuntimeToolCallRequest
+  ): Promise<RuntimeToolCallResponse> {
     if (!this.canHandle(request)) {
       return failedMultiAgentResponse(`Unsupported multi-agent tool: ${displayToolName(request)}.`)
     }
@@ -137,9 +137,9 @@ export class CodexMultiAgentToolBridge {
   }
 
   private async executeToolCall(
-    request: CodexAppServerDynamicToolCallRequest & { threadId: string; turnId: string },
+    request: RuntimeToolCallRequest & { threadId: string; turnId: string },
     input: ReturnType<typeof parseSpawnAgentArguments>
-  ): Promise<CodexAppServerDynamicToolCallResponse> {
+  ): Promise<RuntimeToolCallResponse> {
 
     const active = { controller: new AbortController(), threadId: request.threadId, turnId: request.turnId }
     this.activeRequests.add(active)
@@ -242,7 +242,7 @@ export function codexChildFromMultiAgentRecord(
   }
 }
 
-function responseFromChildRecord(record: MultiAgentChildRunRecord): CodexAppServerDynamicToolCallResponse {
+function responseFromChildRecord(record: MultiAgentChildRunRecord): RuntimeToolCallResponse {
   const ok = record.status !== 'failed' && record.status !== 'aborted'
   const text = ok
     ? record.summary?.trim() || 'Child agent completed without textual output.'
@@ -275,12 +275,12 @@ function parseSpawnAgentArguments(value: unknown): {
   }
 }
 
-function normalizedToolName(request: CodexAppServerDynamicToolCallRequest): string {
+function normalizedToolName(request: RuntimeToolCallRequest): string {
   if (request.namespace) return `${request.namespace}.${request.tool}`.trim()
   return request.tool.trim()
 }
 
-function displayToolName(request: CodexAppServerDynamicToolCallRequest): string {
+function displayToolName(request: RuntimeToolCallRequest): string {
   return request.namespace ? `${request.namespace}.${request.tool}` : request.tool
 }
 
@@ -314,7 +314,7 @@ function agentUsageFromMultiAgentUsage(usage: MultiAgentUsage = EMPTY_MULTI_AGEN
   return Object.keys(normalized).length ? normalized : undefined
 }
 
-function failedMultiAgentResponse(message: string): CodexAppServerDynamicToolCallResponse {
+function failedMultiAgentResponse(message: string): RuntimeToolCallResponse {
   return {
     success: false,
     contentItems: [{ type: 'inputText', text: message }]

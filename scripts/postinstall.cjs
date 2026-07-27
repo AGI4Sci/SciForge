@@ -9,11 +9,14 @@ function run(command, args, options = {}) {
   })
 }
 
-try {
-  require('./local-runtime-package.cjs').buildProjectLocalRuntime()
-} catch (error) {
-  console.error(`[postinstall] local runtime build failed: ${error.message}`)
-  process.exit(error.status || 1)
+const supportBuild = run(
+  process.platform === 'win32' ? 'npm.cmd' : 'npm',
+  ['run', 'build:agent-support'],
+  { cwd: join(__dirname, '..') }
+)
+if (supportBuild.error || supportBuild.status !== 0) {
+  console.error('[postinstall] agent support package build failed')
+  process.exit(supportBuild.status || 1)
 }
 
 // node-pty powers the built-in terminal in the Electron main process. Its

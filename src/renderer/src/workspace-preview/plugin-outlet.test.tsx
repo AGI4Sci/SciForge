@@ -8,7 +8,10 @@ import {
 } from '@shared/workspace-preview'
 
 vi.mock('../components/write/WritePdfViewer', () => ({
-  WritePdfViewer: () => createElement('div', { 'data-write-pdf-viewer': 'true' })
+  WritePdfViewer: (props: { onPresentationStateChange?: unknown }) => createElement('div', {
+    'data-write-pdf-viewer': 'true',
+    'data-has-presentation-state-change': props.onPresentationStateChange ? 'true' : 'false'
+  })
 }))
 
 vi.mock('../components/write/WriteDocxViewer', () => ({
@@ -41,18 +44,34 @@ import {
 } from './host'
 import {
   applyWorkspacePreviewOutletEdit,
-  resolveWorkspacePreviewPluginRendererContribution,
   WorkspacePreviewPluginOutlet
 } from './WorkspacePreviewPluginOutlet'
+import {
+  createBuiltInWorkspacePreviewPluginRegistrations,
+  BUILT_IN_WORKSPACE_PREVIEW_OWNER_ID
+} from './built-in-plugin-contributions'
+
+import {
+  createRendererWorkspacePreviewRegistry
+} from './registry'
 import type {
   WorkspacePreviewPanelShellContext
 } from './WorkspacePreviewPanelShell'
+
+const rendererWorkspacePreviewRegistry = createRendererWorkspacePreviewRegistry({
+  registrations: createBuiltInWorkspacePreviewPluginRegistrations()
+})
 
 function createObservation(
   modality: WorkspaceObservation['view']['modality'],
   overrides: Partial<WorkspaceObservation> = {}
 ): WorkspaceObservation {
   const path = `/workspace/lab/sample.${modality}`
+  const pluginId = ({
+    sequence: 'sequence-genomics',
+    omics: 'omics-matrix',
+    spectra: 'proteomics-spectra'
+  } as Partial<Record<WorkspaceObservation['view']['modality'], string>>)[modality] ?? modality
 
   return {
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
@@ -61,13 +80,33 @@ function createObservation(
       workspaceRoot: '/workspace/lab'
     },
     view: {
-      pluginId: modality,
+      pluginId,
       modality,
       mode: 'preview',
       title: `sample.${modality}`
     },
     actions: [],
     ...overrides
+  }
+}
+
+function customManifest(id: string) {
+  return {
+    contractVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION as 1,
+    id,
+    displayName: id,
+    version: '1.0.0',
+    modality: 'unknown' as const,
+    lifecycle: 'renderer' as const,
+    priority: 100,
+    extensions: [`.${id}`],
+    mimeTypes: [],
+    capabilities: {
+      preview: true,
+      edit: false,
+      inspect: true,
+      structuredSelection: false
+    }
   }
 }
 
@@ -233,48 +272,14 @@ describe('WorkspacePreviewPluginOutlet', () => {
           actions: ['deck.updateTextElement']
         }),
         marker: 'data-workspace-preview-deck-viewer'
-      },
-      {
-        observation: createObservation('molecular', {
-          molecular: { modelCount: 1, chains: ['A'] },
-          actions: ['molecular.workbench']
-        }),
-        marker: 'data-workspace-preview-molecular-viewer'
-      },
-      {
-        observation: createObservation('sequence', {
-          sequence: { sequenceCount: 1, totalLength: 8, alphabet: 'dna' },
-          actions: ['workspace.setSelection']
-        }),
-        marker: 'data-workspace-preview-sequence-viewer'
-      },
-      {
-        observation: createObservation('omics', {
-          omics: { matrixShape: [10, 4], matrixIds: ['X'] },
-          actions: ['omics.preview']
-        }),
-        marker: 'data-workspace-preview-omics-viewer'
-      },
-      {
-        observation: createObservation('bioimaging', {
-          bioimaging: { dimensions: { width: 128, height: 64 } },
-          actions: ['bioimaging.inspectHeader']
-        }),
-        marker: 'data-workspace-preview-bioimaging-viewer'
-      },
-      {
-        observation: createObservation('spectra', {
-          spectra: { spectrumCount: 1, sampledPeaks: [{ mz: 100, intensity: 42 }] },
-          actions: ['spectra.preview']
-        }),
-        marker: 'data-workspace-preview-spectra-viewer'
       }
     ]
 
     for (const testCase of cases) {
       const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
         context: createContext(testCase.observation),
-        routeReason: 'registered-plugin'
+        routeReason: 'registered-plugin',
+        rendererRegistry: rendererWorkspacePreviewRegistry
       }))
 
       expect(html).toContain(testCase.marker)
@@ -315,7 +320,8 @@ describe('WorkspacePreviewPluginOutlet', () => {
 
     renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
       context: createContext(observation, { invokeAction }),
-      routeReason: 'registered-plugin'
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
     }))
 
     await expect(pluginOutletMocks.latestMarkdownProps?.loadWorkspaceImage?.({
@@ -331,46 +337,66 @@ describe('WorkspacePreviewPluginOutlet', () => {
     })
   })
 
-  it('renders a generic plugin summary for deferred shell routes without a dedicated viewer', () => {
+  it('passes the shared presentation-state channel through to the active viewer', () => {
+    const observation = createObservation('document')
+    const rendererRegistry = createRendererWorkspacePreviewRegistry({
+      registrations: [{
+        ownerId: 'example.presentation-aware',
+        contribution: {
+        manifest: customManifest('text'),
+        render: ({ onPresentationStateChange }) => createElement('div', {
+          'data-has-presentation-state-change': onPresentationStateChange ? 'true' : 'false'
+        })
+      }
+      }]
+    })
+    const textObservation = createObservation('text', {
+      view: { pluginId: 'text', modality: 'text', mode: 'preview', title: 'notes.txt' }
+    })
+
+    const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(textObservation),
+      routeReason: 'registered-plugin',
+      rendererRegistry,
+      onPresentationStateChange: vi.fn()
+    }))
+
+    expect(html).toContain('data-has-presentation-state-change="true"')
+  })
+
+  it('renders a generic plugin summary for unregistered shell routes', () => {
     const observation = createObservation('unknown', {
       view: {
-        pluginId: 'deferred-science',
+        pluginId: 'unregistered-science',
         modality: 'unknown',
         mode: 'preview',
         title: 'mesh.vtk'
       },
-      visibleText: 'Preview support is deferred.',
+      visibleText: 'No preview plugin is registered.',
       actions: ['workspace.export:source']
     })
     const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
       context: createContext(observation),
-      routeReason: 'deferred-non-life-science'
+      routeReason: 'unregistered-format',
+      rendererRegistry: rendererWorkspacePreviewRegistry
     }))
 
     expect(html).toContain('data-workspace-preview-plugin-summary')
-    expect(html).toContain('data-route-reason="deferred-non-life-science"')
-    expect(html).toContain('inline viewer has not been enabled')
+    expect(html).toContain('data-route-reason="unregistered-format"')
+    expect(html).toContain('No inline workspace preview plugin is registered')
     expect(html).toContain('Use Inspect for plugin details')
-    expect(html).not.toContain('Preview support is deferred.')
+    expect(html).not.toContain('No preview plugin is registered.')
     expect(html).not.toContain('workspace.export:source')
   })
 
   it('routes registered plugin targets from bridge route metadata while observation is still empty', () => {
-    const molecularHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
-      context: createContext(null),
-      routeReason: 'registered-plugin',
-      routePluginId: 'molecular',
-      routeModality: 'molecular'
-    }))
     const pdfHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
       context: createContext(null),
       routeReason: 'registered-plugin',
       routePluginId: 'pdf',
-      routeModality: 'document'
+      rendererRegistry: rendererWorkspacePreviewRegistry
     }))
 
-    expect(molecularHtml).toContain('data-workspace-preview-molecular-viewer')
-    expect(molecularHtml).not.toContain('data-workspace-preview-plugin-summary')
     expect(pdfHtml).toContain('data-workspace-preview-pdf-viewer')
     expect(pdfHtml).not.toContain('data-workspace-preview-plugin-summary')
   })
@@ -385,25 +411,82 @@ describe('WorkspacePreviewPluginOutlet', () => {
       }
     })
     const context = createContext(observation)
-    const renderers = [{
-      id: 'custom-life-science',
-      matches: ({ pluginId }: { pluginId?: string }) => pluginId === 'custom-life-science',
-      render: () => createElement('div', { 'data-custom-renderer': 'true' })
-    }]
-    const resolved = resolveWorkspacePreviewPluginRendererContribution(
-      context,
-      'registered-plugin',
-      renderers
-    )
+    const manifest = customManifest('custom-life-science')
+    const rendererRegistry = createRendererWorkspacePreviewRegistry({
+      registrations: [{
+        ownerId: 'example.custom-life-science',
+        contribution: {
+        manifest,
+        render: () => createElement('div', { 'data-custom-renderer': 'true' })
+      }
+      }]
+    })
     const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
       context,
       routeReason: 'registered-plugin',
-      renderers
+      rendererRegistry
     }))
 
-    expect(resolved?.id).toBe('custom-life-science')
     expect(html).toContain('data-custom-renderer="true"')
     expect(html).not.toContain('data-workspace-preview-plugin-summary')
+  })
+
+  it('routes by canonical plugin id without observation-shape arbitration', () => {
+    const observation = createObservation('text', {
+      visibleText: 'alpha',
+      text: { lineCount: 1, characterCount: 5, truncated: false },
+      tables: [{ id: 'table-1', rowCount: 1, columnCount: 1 }],
+      tabular: { header: ['sample'], rows: [{ index: 0, values: ['s1'] }] }
+    })
+
+    const html = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context: createContext(observation),
+      routeReason: 'registered-plugin',
+      rendererRegistry: rendererWorkspacePreviewRegistry
+    }))
+
+    expect(html).toContain('data-workspace-preview-text-viewer')
+    expect(html).not.toContain('data-workspace-preview-tabular-viewer')
+    expect(rendererWorkspacePreviewRegistry.list().every(
+      ({ ownerId }) => ownerId === BUILT_IN_WORKSPACE_PREVIEW_OWNER_ID
+    )).toBe(true)
+  })
+
+  it('disposes a package contribution without leaving a renderer path', () => {
+    const observation = createObservation('unknown', {
+      view: {
+        pluginId: 'custom-live-renderer',
+        modality: 'unknown',
+        mode: 'preview',
+        title: 'custom.live'
+      }
+    })
+    const context = createContext(observation)
+    const rendererRegistry = createRendererWorkspacePreviewRegistry()
+    const registration = rendererRegistry.register('example.custom-live-renderer', {
+        manifest: customManifest('custom-live-renderer'),
+        render: () => createElement('div', { 'data-custom-live-renderer': 'true' })
+    })
+
+    try {
+      const registeredHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+        context,
+        routeReason: 'registered-plugin',
+        rendererRegistry
+      }))
+      expect(registeredHtml).toContain('data-custom-live-renderer="true"')
+      expect(registeredHtml).not.toContain('data-workspace-preview-plugin-summary')
+    } finally {
+      registration.dispose()
+    }
+
+    const disposedHtml = renderToStaticMarkup(createElement(WorkspacePreviewPluginOutlet, {
+      context,
+      routeReason: 'registered-plugin',
+      rendererRegistry
+    }))
+    expect(disposedHtml).toContain('data-workspace-preview-plugin-summary')
+    expect(disposedHtml).not.toContain('data-custom-live-renderer')
   })
 
   it('applies edit operations through the shell host and refreshes the returned session', async () => {
@@ -411,19 +494,18 @@ describe('WorkspacePreviewPluginOutlet', () => {
       kind: 'workspace.setSelection',
       path: '/workspace/lab/reads.fasta',
       selection: {
-        kind: 'sequence',
-        sequenceId: 'read1',
-        ranges: [{ start: 0, end: 8 }]
+        kind: 'text',
+        ranges: [{ startLine: 1, startColumn: 1, endLine: 1, endColumn: 8 }]
       }
     }
     const applyEdit = vi.fn(async () => ({
       ok: true as const,
       session: {
         id: 'session-after-edit',
-        pluginId: 'sequence-genomics',
+        pluginId: 'fixture-preview',
         workspaceRoot: '/workspace/lab',
         path: '/workspace/lab/reads.fasta',
-        modality: 'sequence' as const,
+        modality: 'text' as const,
         mode: 'preview' as const,
         openedAt: '2026-07-08T00:00:00.000Z',
         updatedAt: '2026-07-08T00:01:00.000Z'
@@ -431,7 +513,7 @@ describe('WorkspacePreviewPluginOutlet', () => {
       operationKind: 'workspace.setSelection' as const,
       appliedAt: '2026-07-08T00:01:00.000Z',
       audit: {
-        pluginId: 'sequence-genomics',
+        pluginId: 'fixture-preview',
         path: '/workspace/lab/reads.fasta',
         operationKind: 'workspace.setSelection' as const,
         effect: 'session-update' as const
@@ -439,9 +521,9 @@ describe('WorkspacePreviewPluginOutlet', () => {
     }))
     const observe = vi.fn(async () => ({
       ok: true as const,
-      observation: createObservation('sequence')
+      observation: createObservation('text')
     }))
-    const context = createContext(createObservation('sequence'), {
+    const context = createContext(createObservation('text'), {
       applyEdit,
       observe
     })

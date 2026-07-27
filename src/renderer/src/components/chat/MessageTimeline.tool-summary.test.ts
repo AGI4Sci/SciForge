@@ -354,7 +354,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
 
   it('extracts managed visual snapshots separately from generated image artifacts', () => {
     const block = toolBlock({
-      summary: 'gui_visual_capture: captured',
+      summary: 'sciforge_invoke: captured',
       detail: JSON.stringify({
         structuredContent: {
           resource: {
@@ -369,7 +369,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
           }
         }
       }),
-      meta: { toolName: 'gui_visual_capture' }
+      meta: { toolName: 'sciforge_invoke' }
     })
 
     expect(timelineVisualSnapshotsFromToolBlock(block)).toEqual([
@@ -385,7 +385,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
 
   it('renders a visual capture inline with its tool process row', () => {
     const block: ChatBlock = toolBlock({
-      summary: 'gui_visual_capture: captured',
+      summary: 'sciforge_invoke: captured',
       detail: JSON.stringify({
         structuredContent: {
           resource: {
@@ -399,7 +399,7 @@ describe('MessageTimeline local runtime metadata smoke', () => {
           }
         }
       }),
-      meta: { toolName: 'gui_visual_capture' }
+      meta: { toolName: 'sciforge_invoke' }
     })
 
     const html = renderToStaticMarkup(

@@ -1,5 +1,10 @@
 import type {
   SciForgeApi,
+  CapabilityResourceBinding,
+  WorkspacePreviewAnnotationImportResult,
+  WorkspacePreviewAnnotationListResult,
+  WorkspacePreviewAnnotationReviewGenerateResult,
+  WorkspacePreviewAnnotationReviewImproveResult,
   WorkspacePreviewApplyEditResult,
   WorkspacePreviewDescribeAssetResult,
   WorkspacePreviewExportResult,
@@ -12,12 +17,11 @@ import type {
   WorkspacePreviewReadRangeResult
 } from '@shared/sciforge-api'
 import type {
-  WorkspaceFileChangePayload,
-  WorkspaceFileWatchPayload,
-  WorkspaceFileWatchResult
-} from '@shared/workspace-file'
-import type {
   WorkspacePreviewArtifactDescriptor,
+  WorkspacePreviewAnnotationDeleteInput,
+  WorkspacePreviewAnnotationResolveInput,
+  WorkspacePreviewAnnotationSidecarImportActionInput,
+  WorkspacePreviewAnnotationUpdateInput,
   WorkspacePreviewAssetTransportDescriptor,
   WorkspacePreviewAssetTransportKind,
   WorkspaceObservation,
@@ -33,14 +37,21 @@ import type {
   WorkspacePreviewSession,
   WorkspaceStructuredSelection
 } from '@shared/workspace-preview'
+import type {
+  PdfReviewGenerateActionInput,
+  PdfReviewImproveAnnotationActionInput
+} from '@shared/pdf-review'
 import {
-  rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor,
   type RendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewResolveInput
 } from './registry'
+import {
+  createWorkspacePreviewCapabilityAdapter,
+  type WorkspacePreviewCapabilityAdapter
+} from './capability-adapter'
 
-export type WorkspacePreviewBridgeAdapter = SciForgeApi['workspacePreview']
+export type WorkspacePreviewBridgeAdapter = WorkspacePreviewCapabilityAdapter
 
 type WorkspacePreviewApplyEditSuccess = Extract<WorkspacePreviewApplyEditResult, { ok: true }>
 
@@ -67,6 +78,7 @@ export type WorkspacePreviewAssetTransportClient = {
 
 export type WorkspacePreviewHostState = {
   session: WorkspacePreviewSession | null
+  capability: CapabilityResourceBinding | null
   descriptor: RendererWorkspacePreviewPluginDescriptor | null
   asset: WorkspacePreviewAssetTransportDescriptor | null
   observation: WorkspaceObservation | null
@@ -78,9 +90,10 @@ export type WorkspacePreviewHostState = {
 export type WorkspacePreviewHostListener = (state: Readonly<WorkspacePreviewHostState>) => void
 
 export type WorkspacePreviewHostOptions = {
-  registry?: RendererWorkspacePreviewRegistry
+  registry: RendererWorkspacePreviewRegistry
   bridge?: WorkspacePreviewBridgeAdapter | null
   getBridge?: () => WorkspacePreviewBridgeAdapter | null | undefined
+  resourceContentUrl?: SciForgeApi['capabilities']['resourceContentUrl']
 }
 
 export type WorkspacePreviewSetSelectionOptions = {
@@ -93,6 +106,7 @@ export function createWorkspacePreviewHostState(
 ): WorkspacePreviewHostState {
   return {
     session: null,
+    capability: null,
     descriptor: null,
     asset: null,
     observation: null,
@@ -103,9 +117,11 @@ export function createWorkspacePreviewHostState(
   }
 }
 
-function getWindowWorkspacePreviewBridge(): WorkspacePreviewBridgeAdapter | null {
+function getWindowCapabilityResourceContentUrl(
+  access: Parameters<SciForgeApi['capabilities']['resourceContentUrl']>[0]
+): string | null {
   if (typeof window === 'undefined') return null
-  return window.sciforge?.workspacePreview ?? null
+  return window.sciforge?.capabilities.resourceContentUrl(access) ?? null
 }
 
 function messageFromError(error: unknown): string {
@@ -125,15 +141,22 @@ function missingSessionMessage(): string {
 export class WorkspacePreviewHost {
   private readonly registry: RendererWorkspacePreviewRegistry
   private readonly getBridge: () => WorkspacePreviewBridgeAdapter | null | undefined
+  private readonly resourceContentUrl: SciForgeApi['capabilities']['resourceContentUrl']
   private readonly listeners = new Set<WorkspacePreviewHostListener>()
   private state: WorkspacePreviewHostState = createWorkspacePreviewHostState()
   private openRequestSequence = 0
 
-  constructor(options: WorkspacePreviewHostOptions = {}) {
-    this.registry = options.registry ?? rendererWorkspacePreviewRegistry
-    this.getBridge = Object.prototype.hasOwnProperty.call(options, 'bridge')
-      ? () => options.bridge ?? null
-      : options.getBridge ?? getWindowWorkspacePreviewBridge
+  constructor(options: WorkspacePreviewHostOptions) {
+    this.registry = options.registry
+    if (Object.prototype.hasOwnProperty.call(options, 'bridge')) {
+      this.getBridge = () => options.bridge ?? null
+    } else if (options.getBridge) {
+      this.getBridge = options.getBridge
+    } else {
+      const adapter = createWorkspacePreviewCapabilityAdapter()
+      this.getBridge = () => adapter
+    }
+    this.resourceContentUrl = options.resourceContentUrl ?? getWindowCapabilityResourceContentUrl
   }
 
   getState(): Readonly<WorkspacePreviewHostState> {
@@ -162,22 +185,14 @@ export class WorkspacePreviewHost {
       this.patchState({ error: null })
       return plugins
     } catch (error) {
-      this.patchState({ error: messageFromError(error) })
-      return []
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      throw new Error(message)
     }
   }
 
   async open(input: WorkspacePreviewOpenInput): Promise<WorkspacePreviewOpenResult> {
     const requestSequence = ++this.openRequestSequence
-    const descriptor = this.resolvePath({
-      path: input.path,
-      mimeType: input.mimeType,
-      includeFallback: true
-    })
-    if (!descriptor) {
-      return this.failOpen(`No workspace preview plugin resolved for ${input.path}.`)
-    }
-
     const bridge = this.bridgeOrError()
     if (!bridge) return this.failOpen(missingBridgeMessage())
 
@@ -199,7 +214,8 @@ export class WorkspacePreviewHost {
 
       this.patchState({
         session: result.session,
-        descriptor: this.registry.get(result.manifest.id) ?? this.registry.get(result.session.pluginId) ?? descriptor,
+        capability: result.capability ?? null,
+        descriptor: this.registry.get(result.manifest.id) ?? this.registry.get(result.session.pluginId),
         asset: null,
         observation: null,
         file: result.file,
@@ -239,6 +255,7 @@ export class WorkspacePreviewHost {
 
       this.patchState({
         observation: result.observation,
+        capability: result.capability ?? this.state.capability,
         error: null
       })
       return result
@@ -266,7 +283,9 @@ export class WorkspacePreviewHost {
       }
       return released
     } catch (error) {
-      this.patchState({ error: messageFromError(error) })
+      if (this.state.session?.id === resolvedSessionId) {
+        this.patchState({ error: messageFromError(error) })
+      }
       return false
     }
   }
@@ -389,22 +408,116 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.applyEdit(sessionId, resolvedOperation)
-      if (!result.ok) {
-        this.patchState({ error: result.message })
-        return result
-      }
-
-      this.patchState({
-        session: result.session,
-        descriptor: this.registry.get(result.session.pluginId) ?? this.state.descriptor,
-        asset: this.state.asset?.sessionId === result.session.id ? this.state.asset : null,
-        observation: observationWithSessionSelection(this.state.observation, result.session),
-        lastEditSummary: diffSummaryFromApplyEditResult(result),
-        error: null
-      })
-      return result
+      return this.acceptApplyEditResult(result)
     } catch (error) {
       return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async listAnnotations(
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationListResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.listAnnotations(sessionId)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async updateAnnotation(input: WorkspacePreviewAnnotationUpdateInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.updateAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async resolveAnnotation(input: WorkspacePreviewAnnotationResolveInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.resolveAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async deleteAnnotation(input: WorkspacePreviewAnnotationDeleteInput): Promise<WorkspacePreviewApplyEditResult> {
+    const sessionId = this.state.session?.id
+    if (!sessionId) return this.failApplyEdit(missingSessionMessage())
+    const bridge = this.bridgeOrError()
+    if (!bridge) return this.failApplyEdit(missingBridgeMessage())
+    try {
+      return this.acceptApplyEditResult(await bridge.deleteAnnotation(sessionId, input))
+    } catch (error) {
+      return this.failApplyEdit(messageFromError(error))
+    }
+  }
+
+  async importAnnotations(
+    input: WorkspacePreviewAnnotationSidecarImportActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationImportResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.importAnnotations(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async generateAnnotationReview(
+    input: PdfReviewGenerateActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationReviewGenerateResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.generateAnnotationReview(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
+    }
+  }
+
+  async improveAnnotationReview(
+    input: PdfReviewImproveAnnotationActionInput,
+    sessionId = this.state.session?.id
+  ): Promise<WorkspacePreviewAnnotationReviewImproveResult> {
+    if (!sessionId) return { ok: false, message: missingSessionMessage() }
+    const bridge = this.bridgeOrError()
+    if (!bridge) return { ok: false, message: missingBridgeMessage() }
+    try {
+      const result = await bridge.improveAnnotationReview(sessionId, input)
+      this.patchState({ error: result.ok ? null : result.message })
+      return result
+    } catch (error) {
+      const message = messageFromError(error)
+      this.patchState({ error: message })
+      return { ok: false, message }
     }
   }
 
@@ -448,50 +561,42 @@ export class WorkspacePreviewHost {
 
     try {
       const result = await bridge.invokeAction(sessionId, resolvedAction)
-      this.patchState({ error: result.ok ? null : result.message })
+      this.patchState({
+        capability: result.ok ? result.capability ?? this.state.capability : this.state.capability,
+        error: result.ok ? null : result.message
+      })
       return result
     } catch (error) {
       return this.failInvokeAction(messageFromError(error))
     }
   }
 
-  async watch(payload: WorkspaceFileWatchPayload): Promise<WorkspaceFileWatchResult> {
-    const bridge = this.bridgeOrError()
-    if (!bridge) return this.failWatch(missingBridgeMessage())
-
-    try {
-      const result = await bridge.watch(payload)
-      this.patchState({ error: result.ok ? null : result.message })
-      return result
-    } catch (error) {
-      return this.failWatch(messageFromError(error))
-    }
-  }
-
-  async unwatch(watchId: string): Promise<boolean> {
-    const bridge = this.bridgeOrError()
-    if (!bridge) return false
-
-    try {
-      const result = await bridge.unwatch(watchId)
-      this.patchState({ error: result ? null : `Workspace preview watch ${watchId} was not active.` })
-      return result
-    } catch (error) {
-      this.patchState({ error: messageFromError(error) })
-      return false
-    }
-  }
-
-  onChanged(handler: (payload: WorkspaceFileChangePayload) => void): () => void {
-    const bridge = this.bridgeOrError()
-    if (!bridge) return () => undefined
-    return bridge.onChanged(handler)
-  }
-
   assetSourceUrl(sessionId?: string): string | null {
     const resolvedSessionId = this.resolveSessionId(sessionId)
-    if (!resolvedSessionId) return null
-    return this.getBridge()?.getAssetSourceUrl?.(resolvedSessionId) ?? null
+    const session = this.state.session
+    const capability = this.state.capability
+    if (!resolvedSessionId || resolvedSessionId !== session?.id || !capability) return null
+    return this.resourceContentUrl({
+      workspaceId: session.workspaceRoot,
+      resource: capability.resource
+    })
+  }
+
+  private acceptApplyEditResult(result: WorkspacePreviewApplyEditResult): WorkspacePreviewApplyEditResult {
+    if (!result.ok) {
+      this.patchState({ error: result.message })
+      return result
+    }
+    this.patchState({
+      session: result.session,
+      capability: result.capability ?? this.state.capability,
+      descriptor: this.registry.get(result.session.pluginId) ?? this.state.descriptor,
+      asset: this.state.asset?.sessionId === result.session.id ? this.state.asset : null,
+      observation: observationWithSessionSelection(this.state.observation, result.session),
+      lastEditSummary: diffSummaryFromApplyEditResult(result),
+      error: null
+    })
+    return result
   }
 
   private bridgeOrError(): WorkspacePreviewBridgeAdapter | null {
@@ -558,13 +663,9 @@ export class WorkspacePreviewHost {
     return { ok: false, message }
   }
 
-  private failWatch(message: string): WorkspaceFileWatchResult {
-    this.patchState({ error: message })
-    return { ok: false, message }
-  }
 }
 
-export function createWorkspacePreviewHost(options: WorkspacePreviewHostOptions = {}): WorkspacePreviewHost {
+export function createWorkspacePreviewHost(options: WorkspacePreviewHostOptions): WorkspacePreviewHost {
   return new WorkspacePreviewHost(options)
 }
 

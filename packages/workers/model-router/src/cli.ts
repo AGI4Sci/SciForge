@@ -1,18 +1,34 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { LocalTraceStore } from '@sciforge/full-trace';
 
-import { DEFAULT_MODEL_ROUTER_TRACE_ROOT, startModelRouterServer, type ModelRouterConfig } from './router';
+import { startModelRouterServer, type ModelRouterConfig } from './router';
 import { resolveModelRouterCliOptions } from './cli-options';
+import { ModelRouterFullTraceRecorder } from './full-trace-recorder';
 
 const options = resolveModelRouterCliOptions(process.argv.slice(2), process.env);
 const config = loadModelRouterConfig(options.configPath);
+if (!options.userDataDir) {
+  throw new Error('Model Router requires --user-data-dir or SCIFORGE_MODEL_ROUTER_USER_DATA_DIR for durable tracing.');
+}
+const sensitiveValues = configuredSensitiveValues(config, process.env);
+const traceStore = new LocalTraceStore({
+  userDataDirectory: resolve(options.userDataDir),
+  sensitiveValues: () => sensitiveValues,
+});
+await traceStore.initialize();
+const fullTraceRecorder = new ModelRouterFullTraceRecorder({
+  sink: traceStore,
+  sensitiveValues: () => sensitiveValues,
+  log: options.quiet ? undefined : (message) => console.error(`[sciforge-model-router] ${message}`),
+});
 
 const server = await startModelRouterServer({
   host: options.host,
   port: options.port,
   config,
   workspaceRoot: options.workspaceRoot,
-  traceDataRoot: options.traceDataRoot,
+  fullTraceRecorder,
   log: options.quiet ? undefined : (message) => console.error(`[sciforge-model-router] ${message}`),
 });
 
@@ -30,77 +46,26 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
 }
 
 function loadModelRouterConfig(configPath: string | undefined): ModelRouterConfig {
-  const resolved = configPath;
-  if (resolved) {
-    const path = resolve(resolved);
-    if (!existsSync(path)) throw new Error(`Model Router config file not found: ${path}`);
-    return JSON.parse(readFileSync(path, 'utf8')) as ModelRouterConfig;
-  }
-  return envModelRouterConfig();
+  if (!configPath) throw new Error('Model Router requires --config.');
+  const path = resolve(configPath);
+  if (!existsSync(path)) throw new Error(`Model Router config file not found: ${path}`);
+  return JSON.parse(readFileSync(path, 'utf8')) as ModelRouterConfig;
 }
 
-function envModelRouterConfig(): ModelRouterConfig {
-  const defaultProfile = process.env.SCIFORGE_MODEL_ROUTER_DEFAULT_PROFILE || 'sciforge-runtime-default';
-  const visionBaseUrl = process.env.SCIFORGE_VISION_BASE_URL;
-  const visionModel = process.env.SCIFORGE_VISION_MODEL;
-  const imageBaseUrl = process.env.SCIFORGE_IMAGE_BASE_URL;
-  const imageModel = process.env.SCIFORGE_IMAGE_MODEL;
-  const scientificBaseUrl = process.env.SCIFORGE_SCIMODALITY_SERVICE_URL;
-  const translators: ModelRouterConfig['profiles'][string]['translators'] = {};
-  if (visionBaseUrl && visionModel) {
-    translators.vision = {
-      provider: process.env.SCIFORGE_VISION_PROVIDER || 'vision-translator',
-      baseUrl: visionBaseUrl,
-      apiKeyEnv: process.env.SCIFORGE_VISION_API_KEY_ENV || 'SCIFORGE_VISION_API_KEY',
-      model: visionModel,
-      maxSupplementRounds: numberEnv('SCIFORGE_VISION_MAX_SUPPLEMENT_ROUNDS'),
-    };
+function configuredSensitiveValues(
+  config: ModelRouterConfig,
+  env: Record<string, string | undefined>,
+): string[] {
+  const names = new Set<string>();
+  if (config.runtimeApiKeyEnv) names.add(config.runtimeApiKeyEnv);
+  for (const profile of Object.values(config.profiles)) {
+    names.add(profile.textReasoner.apiKeyEnv);
+    if (profile.imageGenerator) names.add(profile.imageGenerator.apiKeyEnv);
+    if (profile.translators.vision) names.add(profile.translators.vision.apiKeyEnv);
+    if (profile.translators.scientific) names.add(profile.translators.scientific.tokenEnv);
   }
-  if (scientificBaseUrl) {
-    translators.scientific = {
-      baseUrl: scientificBaseUrl,
-      tokenEnv: process.env.SCIFORGE_SCIMODALITY_SERVICE_TOKEN_ENV || 'SCIFORGE_SCIMODALITY_SERVICE_TOKEN',
-      model: requiredEnv('SCIFORGE_SCIMODALITY_SERVICE_MODEL'),
-      timeoutMs: numberEnv('SCIFORGE_SCIMODALITY_SERVICE_TIMEOUT_MS'),
-    };
-  }
-  return {
-    defaultProfile,
-    publicModelAlias: process.env.SCIFORGE_MODEL_ROUTER_PUBLIC_MODEL_ALIAS || 'sciforge-router',
-    profiles: {
-      [defaultProfile]: {
-        traceRoot: process.env.SCIFORGE_MODEL_ROUTER_TRACE_ROOT || DEFAULT_MODEL_ROUTER_TRACE_ROOT,
-        textReasoner: {
-          provider: process.env.SCIFORGE_TEXT_PROVIDER || 'text-reasoner',
-          baseUrl: requiredEnv('SCIFORGE_TEXT_BASE_URL'),
-          apiKeyEnv: process.env.SCIFORGE_TEXT_API_KEY_ENV || 'SCIFORGE_TEXT_API_KEY',
-          model: requiredEnv('SCIFORGE_TEXT_MODEL'),
-        },
-        ...(imageBaseUrl && imageModel
-          ? {
-              imageGenerator: {
-                provider: process.env.SCIFORGE_IMAGE_PROVIDER || 'image-generator',
-                baseUrl: imageBaseUrl,
-                apiKeyEnv: process.env.SCIFORGE_IMAGE_API_KEY_ENV || 'SCIFORGE_IMAGE_API_KEY',
-                model: imageModel,
-              },
-            }
-          : {}),
-        translators,
-      },
-    },
-  };
-}
-
-function requiredEnv(name: string) {
-  const value = process.env[name];
-  if (!value) throw new Error(`Missing required Model Router environment variable: ${name}`);
-  return value;
-}
-
-function numberEnv(name: string) {
-  const value = process.env[name];
-  if (!value) return undefined;
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  return [...names].flatMap((name) => {
+    const value = env[name]?.trim();
+    return value ? [value] : [];
+  });
 }

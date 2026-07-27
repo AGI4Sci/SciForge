@@ -21,6 +21,7 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   activeAgentRuntime?: AgentRuntimeId
+  runtimeLocked?: boolean
   canChangeModel: boolean
   stretch?: boolean
   composerReasoningEffort?: string
@@ -36,9 +37,10 @@ const REASONING_OPTIONS: Array<{ id: ComposerReasoningEffort; labelKey: string }
   { id: 'max', labelKey: 'composerReasoningMax' }
 ]
 
-const RUNTIME_OPTIONS: Array<{ id: AgentRuntimeId; labelKey: string; shortLabelKey: string }> = [
+export const COMPOSER_RUNTIME_IDS = ['codex', 'claude'] as const satisfies readonly AgentRuntimeId[]
+
+const RUNTIME_OPTIONS: Array<{ id: (typeof COMPOSER_RUNTIME_IDS)[number]; labelKey: string; shortLabelKey: string }> = [
   { id: 'codex', labelKey: 'composerRuntimeCodex', shortLabelKey: 'composerRuntimeCodexShort' },
-  { id: 'sciforge', labelKey: 'composerRuntimeLocal', shortLabelKey: 'composerRuntimeLocalShort' },
   { id: 'claude', labelKey: 'composerRuntimeClaude', shortLabelKey: 'composerRuntimeClaudeShort' }
 ]
 
@@ -83,7 +85,8 @@ export function FloatingComposerModelPicker({
   composerModel,
   composerPickList,
   composerModelGroups = [],
-  activeAgentRuntime = 'sciforge',
+  activeAgentRuntime = 'codex',
+  runtimeLocked = false,
   canChangeModel,
   stretch = false,
   composerReasoningEffort = 'max',
@@ -106,18 +109,17 @@ export function FloatingComposerModelPicker({
       const normalized = id.trim()
       if (normalized) ordered.add(normalized)
     }
-    const current = composerModel.trim()
-    if (current) ordered.add(current)
     return [...ordered]
-  }, [composerModel, composerPickList])
+  }, [composerPickList])
   const providerMenuGroups = useMemo<ComposerModelMenuGroup[]>(() => {
+    const allowed = new Set(modelOptions)
     const seen = new Set<string>()
     const groups = composerModelGroups
       .map((group) => {
         const ids = group.modelIds
           .map((id) => id.trim())
           .filter((id) => {
-            if (!id || seen.has(id)) return false
+            if (!allowed.has(id) || seen.has(id)) return false
             seen.add(id)
             return true
           })
@@ -128,7 +130,7 @@ export function FloatingComposerModelPicker({
         }
       })
       .filter((group) => group.modelIds.length > 0)
-    const ungrouped = modelOptions.filter((id) => id !== 'auto' && !seen.has(id))
+    const ungrouped = modelOptions.filter((id) => !seen.has(id))
     if (ungrouped.length > 0) {
       groups.push({
         providerId: UNGROUPED_MODEL_PROVIDER_ID,
@@ -317,13 +319,20 @@ export function FloatingComposerModelPicker({
             <div className="-mt-1 px-2 pb-1 text-[11.5px] leading-4 text-ds-faint">
               {t('composerRuntimeHint')}
             </div>
+            {runtimeLocked ? (
+              <div className="-mt-1 px-2 pb-1 text-[11.5px] leading-4 text-amber-700 dark:text-amber-300">
+                {t('composerRuntimeCodexPlanLocked')}
+              </div>
+            ) : null}
             <div className="flex flex-col gap-1">
               {RUNTIME_OPTIONS.map((option) => (
                 <PickerRow
                   key={option.id}
                   selected={currentRuntime === option.id}
                   title={t(option.labelKey)}
+                  disabled={runtimeLocked && option.id !== 'codex'}
                   onClick={() => {
+                    if (runtimeLocked && option.id !== 'codex') return
                     onActiveAgentRuntimeChange?.(option.id)
                     setMenuOpen(false)
                   }}
@@ -360,14 +369,6 @@ export function FloatingComposerModelPicker({
           {t('composerModel')}
         </MenuSectionTitle>
         <div className="pr-0.5">
-          <PickerRow
-            selected={!composerModel.trim() || composerModel.trim() === 'auto'}
-            title={t('autoLabel')}
-            onClick={() => {
-              onComposerModelChange('auto')
-              setMenuOpen(false)
-            }}
-          />
           {providerMenuGroups.map((group) => {
             const selectedModel = group.modelIds.includes(currentModel) ? currentModel : ''
             return (
@@ -649,13 +650,13 @@ function reasoningLabelKey(value: ComposerReasoningEffort): string {
   return REASONING_OPTIONS.find((option) => option.id === value)?.labelKey ?? 'composerReasoningMax'
 }
 
-function normalizeComposerRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
+export function normalizeComposerRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
   if (value === 'codex' || value === 'claude') return value
-  return 'sciforge'
+  return 'codex'
 }
 
 function runtimeShortLabelKey(value: AgentRuntimeId): string {
-  return RUNTIME_OPTIONS.find((option) => option.id === value)?.shortLabelKey ?? 'composerRuntimeLocalShort'
+  return RUNTIME_OPTIONS.find((option) => option.id === value)?.shortLabelKey ?? 'composerRuntimeCodexShort'
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -694,10 +695,12 @@ function MenuSeparator(): ReactElement {
 function PickerRow({
   selected,
   title,
+  disabled = false,
   onClick
 }: {
   selected: boolean
   title: string
+  disabled?: boolean
   onClick: () => void
 }): ReactElement {
   return (
@@ -705,9 +708,10 @@ function PickerRow({
       type="button"
       role="menuitemradio"
       aria-checked={selected}
+      disabled={disabled}
       onMouseDown={(event) => event.preventDefault()}
       onClick={onClick}
-      className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition ${
+      className={`flex min-h-9 w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition disabled:cursor-not-allowed disabled:opacity-45 ${
         selected
           ? 'bg-ds-hover text-ds-ink'
           : 'text-ds-muted hover:bg-ds-hover hover:text-ds-ink'

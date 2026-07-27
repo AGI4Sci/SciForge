@@ -1,0 +1,116 @@
+{
+  "version": 1,
+  "renderer": "sciforge-image-generation-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "image_generation_render",
+  "createdAt": "2026-07-16T01:13:02.315Z",
+  "requestHash": "a5ca526aeb4f9f38",
+  "workspaceRoot": "/Applications/workspace/ailab/research/app/DeepSeek-GUI",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper/figures/generated-image-2026-07-16t01-12-16.319z.png",
+  "outputHash": "3dba27794c34790635344358a814cc10defd675a0444b450d72914468c31bb70",
+  "recipe": {
+    "mode": "text_to_image",
+    "prompt": "A professional scientific flowchart diagram for a journal paper showing an AI-guided protein design pipeline. Six connected stages arranged horizontally left to right: 1) Input: De Novo Scaffold Objective (80-100 residues, alpha/beta fold, stable hydrophobic core), 2) Backbone Generation (RFdiffusion), 3) Sequence Design (ProteinMPNN), 4) Structural Verification (Boltz-2 confidence ranking, ESMFold consensus validation), 5) Candidate Selection (pTM >= 0.85, pLDDT >= 0.90), 6) Output: Ranked Design Candidates with Provenance. Rounded rectangular boxes in a blue-to-teal gradient color scheme, thick directional arrows, clean white background, large readable sans-serif text, subtle stage number badges in circles, BioRender style aesthetic. Horizontal layout, no text overlap, generous whitespace between stages.\n\nSciForge semantic visual brief:\n- Treat any upstream scientific_plotting or diagram draft as structure only; create the polished final visual, not a tiny box draft.\n- Use a full-canvas composition with clear hierarchy, large readable labels, grouped modules, directional arrows, and visual emphasis on the key scientific/technical relationships.\n- Prefer a publication-grade schematic style: clean typography, balanced spacing, subtle color coding, light background, and concise annotations.\n- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.\n- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.\n- Output: one self-contained high-resolution PNG-style figure suitable for VisualDocument review.",
+    "size": {
+      "width": 1600,
+      "height": 800
+    },
+    "outputFormat": "png",
+    "intent": "general_image",
+    "visualPlan": {
+      "planId": "protein-pipeline-v2",
+      "route": "model",
+      "routeLocked": true,
+      "rationale": "Conceptual workflow diagram",
+      "sourceArtifacts": [],
+      "reproducibleInputs": [],
+      "inlineSpecification": "A beautiful modern publication-quality scientific flowchart for AI-guided protein design pipeline.",
+      "structuredData": {},
+      "scene": {
+        "version": 1,
+        "coordinateSystem": "normalized",
+        "canvas": {
+          "width": 1600,
+          "height": 800,
+          "background": "white"
+        },
+        "layers": [
+          {
+            "id": "diagram",
+            "owner": "model",
+            "z": 1,
+            "primitives": [
+              {
+                "id": "bg",
+                "type": "rectangle",
+                "x": 0,
+                "y": 0,
+                "width": 1,
+                "height": 1
+              }
+            ]
+          }
+        ]
+      },
+      "lockedElements": [],
+      "modelOwnedElements": [
+        "entire diagram"
+      ],
+      "contextStatus": "ready",
+      "contextStopReason": "sufficient",
+      "contextEvidenceIds": [],
+      "unresolvedContext": [],
+      "releaseCeiling": "publication_ready",
+      "fallbackPolicy": "fail_closed"
+    }
+  },
+  "intent": "general_image",
+  "visualPlan": {
+    "planId": "protein-pipeline-v2",
+    "route": "model",
+    "routeLocked": true,
+    "rationale": "Conceptual workflow diagram",
+    "sourceArtifacts": [],
+    "reproducibleInputs": [],
+    "inlineSpecification": "A beautiful modern publication-quality scientific flowchart for AI-guided protein design pipeline.",
+    "structuredData": {},
+    "scene": {
+      "version": 1,
+      "coordinateSystem": "normalized",
+      "canvas": {
+        "width": 1600,
+        "height": 800,
+        "background": "white"
+      },
+      "layers": [
+        {
+          "id": "diagram",
+          "owner": "model",
+          "z": 1,
+          "primitives": [
+            {
+              "id": "bg",
+              "type": "rectangle",
+              "x": 0,
+              "y": 0,
+              "width": 1,
+              "height": 1
+            }
+          ]
+        }
+      ]
+    },
+    "lockedElements": [],
+    "modelOwnedElements": [
+      "entire diagram"
+    ],
+    "contextStatus": "ready",
+    "contextStopReason": "sufficient",
+    "contextEvidenceIds": [],
+    "unresolvedContext": [],
+    "releaseCeiling": "publication_ready",
+    "fallbackPolicy": "fail_closed"
+  },
+  "provider": "image-endpoint",
+  "warnings": []
+}

@@ -1,3 +1,5 @@
+import type { AgentRuntimeId } from './agent-runtime-contract'
+
 export const WRITE_EXPORT_FORMATS = ['html', 'pdf', 'doc', 'docx', 'tex'] as const
 
 export type WriteExportFormat = (typeof WRITE_EXPORT_FORMATS)[number]
@@ -7,6 +9,9 @@ export type WriteExportPayload = {
   workspaceRoot?: string
   format: WriteExportFormat
   content: string
+  runtimeId?: AgentRuntimeId
+  threadId?: string
+  overrideConfirmed?: boolean
 }
 
 export type WriteRichClipboardPayload = {

@@ -9,17 +9,20 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve('src/main/index.ts'),
+          'model-router-sidecar-node-entry': resolve('src/main/model-router-sidecar-node-entry.ts'),
+          'plan-gateway-sidecar-node-entry': resolve('src/main/plan-gateway-sidecar-node-entry.ts'),
+          'codex-pre-tool-use-governance-node-entry': resolve(
+            'src/main/codex-pre-tool-use-governance-node-entry.ts'
+          ),
           'schedule-mcp-node-entry': resolve('src/main/schedule-mcp-node-entry.ts'),
           'research-search-mcp-node-entry': resolve('src/main/research-search-mcp-node-entry.ts'),
           'workflow-mcp-node-entry': resolve('src/main/workflow-mcp-node-entry.ts'),
           'workspace-intel-mcp-node-entry': resolve('src/main/workspace-intel-mcp-node-entry.ts'),
           'remote-executor-mcp-node-entry': resolve('src/main/remote-executor-mcp-node-entry.ts'),
           'write-assist-mcp-node-entry': resolve('src/main/write-assist-mcp-node-entry.ts'),
-          'paper-radar-mcp-node-entry': resolve('src/main/paper-radar-mcp-node-entry.ts'),
           'runtime-inspector-mcp-node-entry': resolve('src/main/runtime-inspector-mcp-node-entry.ts'),
           'scientific-skills-mcp-node-entry': resolve('src/main/scientific-skills-mcp-node-entry.ts'),
           'scientific-plotting-mcp-node-entry': resolve('src/main/scientific-plotting-mcp-node-entry.ts'),
-          'dataset-api-mcp-node-entry': resolve('src/main/dataset-api-mcp-node-entry.ts'),
           'bgc-discovery-mcp-node-entry': resolve('src/main/bgc-discovery-mcp-node-entry.ts'),
           'image-generation-mcp-node-entry': resolve('src/main/image-generation-mcp-node-entry.ts'),
           'ppt-master-mcp-node-entry': resolve('src/main/ppt-master-mcp-node-entry.ts'),
@@ -30,7 +33,9 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    // Sandbox preloads cannot resolve external zod at runtime; keep it bundled
+    // whenever shared preload code pulls it into this build graph.
+    plugins: [externalizeDepsPlugin({ exclude: ['zod'] })],
     build: {
       rollupOptions: {
         output: {
@@ -41,10 +46,22 @@ export default defineConfig({
     }
   },
   renderer: {
+    define: {
+      __SCIFORGE_DEV_INSTANCE_ID__: JSON.stringify(process.env.SCIFORGE_DEV_INSTANCE_ID ?? '')
+    },
     server: {
-      // Bind the web dev surface on both loopback families so browser debugging
-      // works whether localhost resolves to ::1 or 127.0.0.1.
-      host: '::',
+      // Keep the privileged renderer and launch-editor endpoint loopback-only.
+      // The dev bootstrap and browser bridge both publish this exact address.
+      host: '127.0.0.1',
+      // Never drift to 5174+ when a stale dev renderer is already alive. The
+      // bridge endpoint intentionally owns 5174, so an incremented renderer
+      // would otherwise present a page backed by a different Electron main.
+      port: 5173,
+      strictPort: true,
+      fs: {
+        strict: true,
+        deny: ['.env', '.env.*', '*.{crt,pem,key}', '**/.git/**']
+      },
       // The renderer HTML keeps a strict script-src CSP. React Fast Refresh adds
       // an inline module preamble in dev, which loopback browser previews reject
       // and then lazy routes hang at the startup fallback.

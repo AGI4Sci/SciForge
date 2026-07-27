@@ -1,5 +1,4 @@
 import type { ChatBlock, NormalizedThread } from '../agent/types'
-import { DEFAULT_COMPOSER_MODEL_IDS } from '@shared/default-composer-models'
 import {
   isAgentRuntimeActiveTurnState,
   normalizeAgentRuntimeTurnState
@@ -30,6 +29,14 @@ const CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'sciforge.codeWorkspaceRoots.v1'
 const HIDDEN_CODE_WORKSPACE_ROOTS_STORAGE_KEY = 'sciforge.hiddenCodeWorkspaceRoots.v1'
 export const MAX_CODE_WORKSPACE_ROOTS = 30
 export const MAX_TURN_MODEL_LABELS = 500
+
+export function createClientDirectiveId(): string {
+  if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID()
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (token) => {
+    const value = Math.floor(Math.random() * 16)
+    return (token === 'x' ? value : (value & 0x3) | 0x8).toString(16)
+  })
+}
 
 export type RemoteChannelThreadStatusKind = 'bound' | 'watched' | 'running' | 'queued' | 'error'
 
@@ -186,18 +193,9 @@ export function forgetCodeWorkspaceRoot(
 }
 
 export function mergeComposerPickList(upstreamOk: boolean, upstreamIds: string[]): string[] {
-  const ordered = new Set<string>()
-  ordered.add('auto')
-  for (const id of DEFAULT_COMPOSER_MODEL_IDS) {
-    if (id !== 'auto') ordered.add(id)
-  }
-  if (upstreamOk) {
-    for (const id of upstreamIds) {
-      if (id.trim()) ordered.add(id.trim())
-    }
-  }
-  const tail = [...ordered].filter((id) => id !== 'auto').sort((a, b) => a.localeCompare(b))
-  return ['auto', ...tail]
+  if (!upstreamOk) return []
+  return [...new Set(upstreamIds.map((id) => id.trim()).filter(Boolean))]
+    .sort((a, b) => a.localeCompare(b))
 }
 
 export function newRemoteChannel(
@@ -215,7 +213,7 @@ export function newRemoteChannel(
     label: profileName,
     enabled: true,
     model: 'auto',
-    runtimeId: 'sciforge',
+    runtimeId: 'codex',
     agentThreadIds: {},
     workspaceRoot: '',
     conversations: [],

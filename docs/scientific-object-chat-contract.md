@@ -41,7 +41,12 @@ counts; it does not guess objects from arbitrary Markdown or log text.
 }
 ```
 
-Supported modalities are `molecular`, `sequence`, `spectra`, `omics`, and `bioimaging`.
+Modality is an open, canonical lowercase identifier. The built-in UI adds richer summaries for
+`molecular`, `sequence`, `spectra`, `omics`, and `bioimaging`; any domain package may emit another
+modality without changing the core schema or renderer maps. Custom scalar/array facts belong in the
+optional bounded `metadata` object, preferably nested under the modality identifier. Unknown
+modalities receive a safe generic card that retains their title, path, MIME format, provenance, and
+readable metadata.
 Every ref is content-addressed with SHA-256 and includes a workspace path so the card can open the
 first-party workspace preview without embedding large payloads in the transcript.
 

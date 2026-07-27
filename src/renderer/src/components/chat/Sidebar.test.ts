@@ -2,7 +2,11 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 import type { RemoteChannelV1 } from '@shared/app-settings'
-import { Sidebar, SidebarRemoteChannelSection } from './Sidebar'
+import {
+  Sidebar,
+  SidebarRemoteChannelSection,
+  buildSidebarVisibleContextComponent
+} from './Sidebar'
 
 vi.mock('react-i18next', async (importOriginal) => ({
   ...(await importOriginal<typeof import('react-i18next')>()),
@@ -133,8 +137,8 @@ describe('SidebarRemoteChannelSection', () => {
 })
 
 describe('Sidebar navigation continuity', () => {
-  it.each(['schedule', 'workflow'] as const)(
-    'keeps new chat, all feature entries, and conversation history visible in %s view',
+  it.each(['schedule'] as const)(
+    'keeps core navigation and conversation history visible in the %s view',
     (activeView) => {
       const html = renderToStaticMarkup(
         createElement(Sidebar, {
@@ -159,7 +163,6 @@ describe('Sidebar navigation continuity', () => {
           onOpenPlugins: vi.fn(),
           onToggleConnectPhone: vi.fn(),
           onScheduleOpen: vi.fn(),
-          onWorkflowOpen: vi.fn(),
           onToggleSidebar: vi.fn()
         })
       )
@@ -167,9 +170,127 @@ describe('Sidebar navigation continuity', () => {
       expect(html).toContain('newAgent')
       expect(html).toContain('plugins')
       expect(html).toContain('schedule')
-      expect(html).toContain('workflow')
+      expect(html).not.toContain('workflow')
       expect(html).toContain('sidebarProjects')
       expect(html).not.toContain('workflowSidebarHint')
     }
   )
+})
+
+describe('Sidebar visible context', () => {
+  it('publishes bounded semantic navigation state without list or message contents', () => {
+    const component = buildSidebarVisibleContextComponent({
+      activeThreadId: 'thread-active',
+      activeView: 'chat',
+      connectPhoneSidebarOpen: false,
+      pluginsActive: false,
+      runtimeReady: true,
+      threadSearch: 'private search text',
+      showArchivedThreads: false,
+      threads: [
+        {
+          id: 'thread-active',
+          title: 'private session title',
+          preview: 'private session message',
+          updatedAt: '2026-06-13T00:00:00.000Z',
+          model: 'auto',
+          mode: 'agent',
+          workspace: '/workspace'
+        },
+        {
+          id: 'thread-archived',
+          title: 'archived title',
+          preview: 'archived message',
+          updatedAt: '2026-06-12T00:00:00.000Z',
+          model: 'auto',
+          mode: 'agent',
+          workspace: '/workspace',
+          archived: true
+        }
+      ],
+      workspaceRoot: '/workspace',
+      workspaceCount: 3,
+      hiddenWorkspaceCount: 1,
+      remoteChannels: [
+        discordChannel({
+          recentMessages: [{
+            provider: 'discord',
+            channelId: 'discord-channel',
+            chatId: 'channel-1',
+            remoteThreadId: '',
+            messageId: 'message-1',
+            senderName: 'private sender',
+            text: 'private remote message',
+            receivedAt: '2026-06-13T00:01:00.000Z'
+          }]
+        })
+      ],
+      selectedRemoteChannelId: null,
+      updatedAt: '2026-06-13T00:03:00.000Z'
+    })
+
+    expect(component).toMatchObject({
+      id: 'left-sidebar',
+      region: 'left-sidebar',
+      component: 'navigation-sidebar',
+      visible: true,
+      resources: [
+        { kind: 'workspace', role: 'selected-workspace', workspaceRoot: '/workspace' },
+        { kind: 'agentSession', role: 'selected-session', selectedThreadId: 'thread-active' }
+      ],
+      state: {
+        activeEntry: 'session',
+        selectedSessionId: 'thread-active',
+        selectedWorkspaceRoot: '/workspace',
+        sessionCount: 2,
+        archivedSessionCount: 1,
+        workspaceCount: 3,
+        hiddenWorkspaceCount: 1,
+        remoteChannelCount: 1,
+        visibleRemoteChannelCount: 1,
+        enabledRemoteChannelCount: 1,
+        searchActive: true,
+        showingArchivedSessions: false,
+        runtimeReady: true,
+        availableEntries: expect.arrayContaining(['remote-channels', 'projects', 'settings'])
+      }
+    })
+    const serialized = JSON.stringify(component)
+    expect(serialized).not.toContain('private session title')
+    expect(serialized).not.toContain('private session message')
+    expect(serialized).not.toContain('private search text')
+    expect(serialized).not.toContain('private sender')
+    expect(serialized).not.toContain('private remote message')
+  })
+
+  it('reflects navigation selection changes while keeping component identity stable', () => {
+    const base = {
+      activeThreadId: null,
+      activeView: 'chat' as const,
+      connectPhoneSidebarOpen: false,
+      pluginsActive: false,
+      runtimeReady: true,
+      threadSearch: '',
+      showArchivedThreads: false,
+      threads: [],
+      workspaceRoot: '/workspace',
+      workspaceCount: 1,
+      hiddenWorkspaceCount: 0,
+      remoteChannels: [],
+      selectedRemoteChannelId: null,
+      updatedAt: '2026-06-13T00:03:00.000Z'
+    }
+    const projects = buildSidebarVisibleContextComponent(base)
+    const connectPhone = buildSidebarVisibleContextComponent({
+      ...base,
+      connectPhoneSidebarOpen: true,
+      updatedAt: '2026-06-13T00:04:00.000Z'
+    })
+
+    expect(projects.id).toBe(connectPhone.id)
+    expect(projects.region).toBe(connectPhone.region)
+    expect(projects.state?.activeEntry).toBe('projects')
+    expect(connectPhone.state?.activeEntry).toBe('connect-phone')
+    expect(connectPhone.updatedAt).not.toBe(projects.updatedAt)
+  })
 })

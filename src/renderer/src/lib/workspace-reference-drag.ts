@@ -40,7 +40,7 @@ export function workspaceReferenceDragPayload(
 ): WorkspaceReferenceDragPayload {
   const relativePath = normalizePath(reference.relativePath)
   const workspaceRoot = reference.workspaceRoot?.trim() || fallbackWorkspaceRoot.trim()
-  const supportedActions: WorkspacePreviewDragOutAction[] = ['copy-path', 'attach-to-session', 'native-file']
+  const supportedActions: WorkspacePreviewDragOutAction[] = ['copy-path', 'attach-to-session']
   const common = {
     path: relativePath,
     displayName: reference.name || relativePath,

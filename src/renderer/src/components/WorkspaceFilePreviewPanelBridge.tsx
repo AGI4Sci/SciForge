@@ -1,23 +1,16 @@
 import type { WorkspaceFileTarget } from '@shared/workspace-file'
-import {
-  biologyRoomFormatFromPath,
-  type BiologyRoomFormat
-} from '@shared/biology-room'
 import type {
   VisibleContextComponentSnapshot,
   VisibleContextResource
 } from '@shared/visible-context'
-import {
-  isDeferredNonLifeScienceExtension,
-  type WorkspaceObservation
-} from '@shared/workspace-preview'
+import type { WorkspaceObservation } from '@shared/workspace-preview'
 import { FolderOpen, PanelRightClose, RefreshCw } from 'lucide-react'
 import {
-  lazy,
-  Suspense,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
+  useState,
   type ReactElement
 } from 'react'
 import {
@@ -27,38 +20,34 @@ import {
   type WorkspacePreviewLastEditSummary,
   type WorkspacePreviewPanelShellContext,
   type WorkspacePreviewPluginOutletRouteReason,
-  rendererWorkspacePreviewRegistry,
   type RendererWorkspacePreviewPluginDescriptor
 } from '../workspace-preview'
+import { installedRendererContributions } from '../domain-modules/installed-renderer-contributions'
+import {
+  boundWorkspacePreviewPresentationState,
+  workspacePreviewPresentationStatesEqual,
+  type WorkspacePreviewPresentationState
+} from '../workspace-preview/presentation-state'
 import {
   registerVisibleContextComponent,
   registerVisibleContextVisualTarget
 } from '../lib/visible-context'
 
-const BiologyRoomPanelBridge = lazy(() =>
-  import('./BiologyRoomPanelBridge').then((module) => ({ default: module.BiologyRoomPanelBridge }))
-)
+const WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS = 80
+const workspacePreviewRegistry = installedRendererContributions.workspacePreviews
 
-export type WorkspaceFilePreviewPanelBridgeRoute =
-  | {
-      kind: 'biology-room'
-      format: BiologyRoomFormat
-    }
-  | {
-      kind: 'workspace-preview-shell'
-      reason: WorkspacePreviewPluginOutletRouteReason
-      pluginId?: string
-      modality?: RendererWorkspacePreviewPluginDescriptor['manifest']['modality']
-    }
-
-type WorkspacePreviewShellRoute = Extract<
-  WorkspaceFilePreviewPanelBridgeRoute,
-  { kind: 'workspace-preview-shell' }
->
+export type WorkspaceFilePreviewPanelBridgeRoute = {
+  kind: 'workspace-preview-shell'
+  reason: WorkspacePreviewPluginOutletRouteReason
+  pluginId?: string
+  modality?: RendererWorkspacePreviewPluginDescriptor['manifest']['modality']
+}
 
 export type WorkspaceFilePreviewPanelBridgeProps = {
   target: WorkspaceFileTarget | null
   workspaceRoot: string
+  sessionId?: string
+  active?: boolean
   className?: string
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
@@ -102,16 +91,8 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
       reason: 'empty'
     }
   }
-  const biologyFormat = biologyRoomFormatFromPath(target.path)
-  if (biologyFormat) {
-    return {
-      kind: 'biology-room',
-      format: biologyFormat
-    }
-  }
-  const descriptor = rendererWorkspacePreviewRegistry.resolve({
-    path: target.path,
-    includeFallback: false
+  const descriptor = workspacePreviewRegistry.resolve({
+    path: target.path
   })
   if (descriptor) {
     return {
@@ -119,12 +100,6 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
       reason: 'registered-plugin',
       pluginId: descriptor.manifest.id,
       modality: descriptor.manifest.modality
-    }
-  }
-  if (isDeferredNonLifeScienceExtension(target.path)) {
-    return {
-      kind: 'workspace-preview-shell',
-      reason: 'deferred-non-life-science'
     }
   }
   return {
@@ -136,6 +111,8 @@ export function resolveWorkspaceFilePreviewPanelBridgeRoute(
 export function WorkspaceFilePreviewPanelBridge({
   target,
   workspaceRoot,
+  sessionId,
+  active = true,
   className,
   annotationQuestionBridge,
   onClose,
@@ -147,29 +124,11 @@ export function WorkspaceFilePreviewPanelBridge({
     [targetPath]
   )
 
-  if (route.kind === 'biology-room') {
-    if (!target) throw new Error('Biology Room routing requires a file target.')
-    return (
-      <Suspense fallback={(
-        <div
-          className={compactClassName('h-full bg-ds-sidebar', className)}
-          data-biology-room-loading
-        />
-      )}>
-        <BiologyRoomPanelBridge
-          workspaceRoot={target.workspaceRoot?.trim() || workspaceRoot}
-          initialTarget={target}
-          className={compactClassName('ds-no-drag h-full', className)}
-          onClose={onClose}
-        />
-      </Suspense>
-    )
-  }
-
   return (
     <WorkspacePreviewPanelShell
       target={target}
       workspaceRoot={workspaceRoot}
+      registry={workspacePreviewRegistry}
       className={compactClassName('ds-no-drag', className)}
     >
       {(context) => (
@@ -178,6 +137,8 @@ export function WorkspaceFilePreviewPanelBridge({
           target={target}
           route={route}
           workspaceRoot={workspaceRoot}
+          sessionId={sessionId}
+          active={active}
           annotationQuestionBridge={annotationQuestionBridge}
           onClose={onClose}
           onOpenDirectory={onOpenDirectory}
@@ -194,9 +155,10 @@ function compactClassName(...parts: Array<string | undefined>): string {
 export function buildWorkspacePreviewVisibleContextComponent(input: {
   context: Pick<WorkspacePreviewPanelShellContext, 'state' | 'asset' | 'assetStatus' | 'assetError'>
   target: WorkspaceFileTarget | null
-  route: WorkspacePreviewShellRoute
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
   updatedAt: string
+  presentationState?: WorkspacePreviewPresentationState | null
 }): VisibleContextComponentSnapshot | null {
   const path = input.context.state.observation?.file.path ??
     input.context.state.file?.path ??
@@ -220,17 +182,20 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     input.route.pluginId
   const mode = observation?.view.mode ?? input.context.state.session?.mode
   const selectionKind = observation?.selection?.kind ?? input.context.state.session?.selection?.kind
-  const actionCount = observation?.actions.length ?? 0
-  const summary = observation
-    ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)} with ${actionCount} actions.`
+  const compactCapability = compactVisibleContextCapability(input.context.state.capability)
+  const documentAnnotations = observation?.documentAnnotations
+  const presentationState = boundWorkspacePreviewPresentationState(input.presentationState)
+  const presentationSummary = formatPresentationSummary(presentationState)
+  const baseSummary = observation
+    ? `Workspace preview observation for ${formatLabel(modality)} file ${fileNameFromPath(path)}.`
     : input.context.assetError
       ? `Workspace preview for ${fileNameFromPath(path)} has an asset error: ${input.context.assetError}.`
       : `Workspace preview for ${fileNameFromPath(path)} is ${input.context.assetStatus}.`
+  const summary = presentationSummary ? `${baseSummary} ${presentationSummary}` : baseSummary
   const resources: VisibleContextResource[] = [{
     kind: 'workspaceFile',
     role: 'preview-target',
     title: fileNameFromPath(path),
-    accessHint: 'Use workspacePreview.observe for structured state and workspacePreview.readRange for bounded asset bytes.',
     workspaceRoot: resolvedWorkspaceRoot,
     path,
     relativePath,
@@ -240,7 +205,10 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     mimeType: observation?.file.mimeType ?? input.context.state.file?.mimeType,
     size: observation?.file.size ?? input.context.state.file?.size,
     mtimeMs: observation?.file.mtimeMs ?? input.context.state.file?.mtimeMs,
-    annotationCount: observation?.annotations?.length,
+    annotationCount: documentAnnotations?.annotationCount,
+    threadCount: documentAnnotations?.threadCount,
+    openThreadCount: documentAnnotations?.openThreadCount,
+    capability: compactCapability,
     metadata: {
       pluginId,
       modality,
@@ -253,7 +221,8 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         status: strategy.status
       })),
       selectionKind,
-      actionCount
+      presentationKind: presentationState?.kind,
+      presentationPosition: presentationState?.position
     }
   }]
 
@@ -261,13 +230,20 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
     id: 'right-sidebar.file-preview',
     region: 'right-sidebar',
     component: 'workspace-preview',
-    title: observation?.view.title || fileNameFromPath(path),
+    title: presentationState?.title || observation?.view.title || fileNameFromPath(path),
     visible: true,
     priority: 20,
     updatedAt: input.updatedAt,
     summary,
     resources,
     state: {
+      currentPreview: compactCapability
+        ? {
+            resourceRef: compactCapability.resourceRef,
+            operationRefs: compactCapability.operations.map((operation) => operation.operationRef)
+          }
+        : null,
+      documentAnnotations: documentAnnotations ?? null,
       path,
       workspaceRoot: resolvedWorkspaceRoot,
       pluginId,
@@ -281,11 +257,43 @@ export function buildWorkspacePreviewVisibleContextComponent(input: {
         status: strategy.status
       })) ?? [],
       selectionKind: selectionKind ?? null,
-      actionCount,
+      presentation: presentationState,
       error: input.context.state.error ?? input.context.assetError,
       workspaceObservation: observation ?? null
     }
   }
+}
+
+function compactVisibleContextCapability(
+  binding: WorkspacePreviewPanelShellContext['state']['capability']
+): {
+  resourceRef: string
+  operations: Array<{ operationRef: string; schemaRef: string }>
+} | undefined {
+  if (!binding?.resourceRef) return undefined
+  return {
+    resourceRef: binding.resourceRef,
+    operations: binding.operations.map((operation) => ({
+      operationRef: operation.id,
+      schemaRef: `sciforge://capability-schema/${encodeURIComponent(operation.id)}?version=${encodeURIComponent(operation.version)}`
+    }))
+  }
+}
+
+function formatPresentationSummary(
+  presentation: WorkspacePreviewPresentationState | null
+): string {
+  if (!presentation) return ''
+  const title = presentation.title ? `Showing ${presentation.title}.` : ''
+  const position = presentation.position?.label
+    ? `Current position: ${presentation.position.label}.`
+    : presentation.position
+      ? `Current position: ${presentation.position.index}${presentation.position.count ? ` of ${presentation.position.count}` : ''}.`
+      : ''
+  const selection = presentation.selection?.summary
+    ? `Selection: ${presentation.selection.summary}.`
+    : ''
+  return [title, position, selection].filter(Boolean).join(' ')
 }
 
 function WorkspacePreviewShellBody({
@@ -293,19 +301,40 @@ function WorkspacePreviewShellBody({
   target,
   route,
   workspaceRoot,
+  sessionId,
+  active,
   annotationQuestionBridge,
   onClose,
   onOpenDirectory
 }: {
   context: WorkspacePreviewPanelShellContext
   target: WorkspaceFileTarget | null
-  route: WorkspacePreviewShellRoute
+  route: WorkspaceFilePreviewPanelBridgeRoute
   workspaceRoot: string
+  sessionId?: string
+  active: boolean
   annotationQuestionBridge?: DocumentAnnotationQuestionBridge
   onClose: () => void
   onOpenDirectory?: (target: { workspaceRoot: string; path: string }) => void
 }): ReactElement {
   const previewRef = useRef<HTMLDivElement | null>(null)
+  const observeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const presentationOwnerKey = `${context.state.session?.id ?? ''}:${target?.path ?? ''}`
+  const [presentationSnapshot, setPresentationSnapshot] = useState<{
+    ownerKey: string
+    state: WorkspacePreviewPresentationState | null
+  }>(() => ({ ownerKey: presentationOwnerKey, state: null }))
+  const presentationState = presentationSnapshot.ownerKey === presentationOwnerKey
+    ? presentationSnapshot.state
+    : null
+  const handlePresentationStateChange = useCallback((next: WorkspacePreviewPresentationState | null): void => {
+    const bounded = boundWorkspacePreviewPresentationState(next)
+    setPresentationSnapshot((current) => current.ownerKey === presentationOwnerKey &&
+      workspacePreviewPresentationStatesEqual(current.state, bounded)
+      ? current
+      : { ownerKey: presentationOwnerKey, state: bounded })
+  }, [presentationOwnerKey])
+  const capabilityWorkspaceRoot = target?.workspaceRoot?.trim() || workspaceRoot
   const lastEditSummary = context.state.lastEditSummary
   const canOpenDirectory = Boolean(target && onOpenDirectory)
   const integrityNotice = workspacePreviewIntegrityNotice({
@@ -313,16 +342,20 @@ function WorkspacePreviewShellBody({
     state: context.state,
     assetError: context.assetError
   })
-  const visibleContextComponent = useMemo(
-    () => buildWorkspacePreviewVisibleContextComponent({
+  const visibleContextComponent = useMemo(() => {
+    if (!active) return null
+    const component = buildWorkspacePreviewVisibleContextComponent({
       context,
       target,
       route,
       workspaceRoot,
-      updatedAt: new Date().toISOString()
-    }),
-    [context, route, target, workspaceRoot]
-  )
+      updatedAt: new Date().toISOString(),
+      presentationState
+    })
+    return component && sessionId
+      ? { ...component, id: `${component.id}:${encodeURIComponent(sessionId)}` }
+      : component
+  }, [active, context, presentationState, route, sessionId, target, workspaceRoot])
 
   useEffect(() => {
     if (!visibleContextComponent) return undefined
@@ -341,7 +374,12 @@ function WorkspacePreviewShellBody({
       target: {
         id: 'preview.current',
         kind: 'component',
-        contentType: workspacePreviewVisualContentType(modality),
+        contentType: workspacePreviewVisualContentType({
+          modality,
+          mimeType: observation?.file.mimeType ?? context.state.file?.mimeType ?? context.asset?.file.mimeType,
+          assetPrimary: context.asset?.primary,
+          assetStrategies: context.asset?.strategies
+        }),
         active: true,
         metadata: {
           path: visibleContextComponent.state?.path,
@@ -353,7 +391,57 @@ function WorkspacePreviewShellBody({
       },
       element: () => previewRef.current
     })
-  }, [context.state.observation, context.state.session?.modality, route.modality, visibleContextComponent])
+  }, [
+    context.asset?.file.mimeType,
+    context.asset?.primary,
+    context.asset?.strategies,
+    context.state.file?.mimeType,
+    context.state.observation,
+    context.state.session?.modality,
+    route.modality,
+    visibleContextComponent
+  ])
+
+  useEffect(() => {
+    const capabilities = window.sciforge?.capabilities
+    if (!capabilities) return undefined
+
+    let active = true
+    let subscriptionId: string | null = null
+    const offEvent = capabilities.onEvent((payload) => {
+      if (!active || payload.subscriptionId !== subscriptionId) return
+      if (payload.event.resourceKind !== 'workspace-preview') return
+      const resourceRef = context.state.capability?.resourceRef
+      if (resourceRef && payload.event.resourceRef !== resourceRef) return
+      const sessionId = context.state.session?.id
+      if (!sessionId) return
+      if (observeTimerRef.current !== null) window.clearTimeout(observeTimerRef.current)
+      observeTimerRef.current = window.setTimeout(() => {
+        observeTimerRef.current = null
+        void context.host.observe(sessionId)
+      }, WORKSPACE_PREVIEW_EVENT_REFRESH_DEBOUNCE_MS)
+    })
+
+    void capabilities.subscribe(capabilityWorkspaceRoot)
+      .then((subscription) => {
+        if (!active) {
+          void capabilities.unsubscribe(subscription.subscriptionId)
+          return
+        }
+        subscriptionId = subscription.subscriptionId
+      })
+      .catch(() => undefined)
+
+    return () => {
+      active = false
+      offEvent()
+      if (observeTimerRef.current !== null) {
+        window.clearTimeout(observeTimerRef.current)
+        observeTimerRef.current = null
+      }
+      if (subscriptionId) void capabilities.unsubscribe(subscriptionId)
+    }
+  }, [capabilityWorkspaceRoot, context.host, context.state.capability?.resourceRef, context.state.session?.id])
 
   return (
     <div
@@ -413,20 +501,30 @@ function WorkspacePreviewShellBody({
 
       <WorkspacePreviewPluginOutlet
         context={context}
+        rendererRegistry={workspacePreviewRegistry}
         routeReason={route.reason}
         routePluginId={route.pluginId}
-        routeModality={route.modality}
         annotationQuestionBridge={annotationQuestionBridge}
         visualContextComponentId={visibleContextComponent?.id}
+        onPresentationStateChange={handlePresentationStateChange}
       />
     </div>
   )
 }
 
-export function workspacePreviewVisualContentType(modality: string): string {
-  if (modality === 'deck') return 'slide'
-  if (modality === 'image' || modality === 'bioimaging') return 'image'
-  return modality
+export function workspacePreviewVisualContentType(input: Readonly<{
+  modality: string
+  mimeType?: string
+  assetPrimary?: string
+  assetStrategies?: readonly Readonly<{ kind: string; status: string }>[]
+}>): string {
+  if (input.modality === 'deck') return 'slide'
+  const mimeType = input.mimeType?.trim().toLowerCase().split(';', 1)[0]
+  const hasVisualArtifactTransport = input.assetPrimary === 'tile' || input.assetPrimary === 'thumbnail' ||
+    input.assetStrategies?.some((strategy) =>
+      (strategy.kind === 'tile' || strategy.kind === 'thumbnail') && strategy.status !== 'deferred')
+  if (mimeType?.startsWith('image/') || hasVisualArtifactTransport) return 'image'
+  return input.modality
 }
 
 function WorkspacePreviewIntegrityStatus({
@@ -496,7 +594,8 @@ function fileNameFromPath(path: string): string {
 }
 
 function formatLabel(value: string): string {
-  return value
+  const leaf = value.split('.').filter(Boolean).at(-1) ?? value
+  return leaf
     .replace(/[-_]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

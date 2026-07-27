@@ -66,14 +66,10 @@ type InteractionRequestRef = {
   requestId?: string
 }
 
-function defaultCapabilities(runtimeId: AgentRuntimeId = 'sciforge'): AgentRuntimeCapabilities {
+export function defaultCapabilities(runtimeId: AgentRuntimeId = 'codex'): AgentRuntimeCapabilities {
   return createDefaultAgentRuntimeCapabilities({
     runtimeId,
-    transport: runtimeId === 'sciforge'
-      ? 'http_sse'
-      : runtimeId === 'claude'
-        ? 'cli_process'
-        : 'jsonrpc_stdio'
+    transport: runtimeId === 'claude' ? 'cli_process' : 'jsonrpc_stdio'
   })
 }
 
@@ -321,7 +317,7 @@ function systemBlock(item: AgentRuntimeItem): Extract<ChatBlock, { kind: 'system
   }
 }
 
-function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
+function blockFromItem(item: AgentRuntimeItem, turnStatus?: string): ChatBlock | null {
   const kind = item.kind
   switch (kind) {
     case 'user_message':
@@ -330,7 +326,8 @@ function blockFromItem(item: AgentRuntimeItem): ChatBlock | null {
         id: item.id,
         createdAt: item.createdAt,
         text: item.text ?? '',
-        meta: disclosureMeta(item.meta)
+        meta: disclosureMeta(item.meta),
+        ...(turnStatus ? { turnStatus } : {})
       }
     case 'assistant_message':
       {
@@ -575,7 +572,7 @@ function settleTerminalSnapshotBlocks(blocks: ChatBlock[], outcome: TerminalSnap
   const nextBlocks = dedupedBlocks.map((block): ChatBlock => {
     if (block.kind === 'tool' && block.status === 'running') {
       changed = true
-      return { ...block, status: outcome }
+      return { ...block, status: 'error' }
     }
     if (block.kind === 'compaction' && block.status === 'running') {
       changed = true
@@ -723,8 +720,15 @@ export class AgentRuntimeProvider implements AgentProvider {
     this.rememberThreadRuntime(detail.id, detail.runtimeId)
     this.rememberInteractionRequests(detail.id, detail.runtimeId, items)
     const latestTurn = latestTurnFromDetail(detail)
+    const latestUserMessageId = [...items].reverse().find((item) => item.kind === 'user_message')?.id
+    const turnStatusById = new Map((detail.turns ?? []).map((turn) => [turn.id, turn.status]))
     const rawBlocks = mergeRepeatedUserInputBlocks(mergeRepeatedToolBlocks(items.flatMap((item) => {
-      const block = blockFromItem(item)
+      const turnStatus = item.turnId
+        ? turnStatusById.get(item.turnId)
+        : item.id === latestUserMessageId
+          ? latestTurn?.status ?? detail.status
+          : undefined
+      const block = blockFromItem(item, turnStatus)
       return block ? [block] : []
     })))
     return {
@@ -736,7 +740,7 @@ export class AgentRuntimeProvider implements AgentProvider {
       latestSeq: detail.latestSeq,
       threadStatus: detail.status ?? latestTurn?.status,
       latestTurnId: detail.latestTurnId ?? latestTurn?.id,
-      latestUserMessageId: [...items].reverse().find((item) => item.kind === 'user_message')?.id,
+      latestUserMessageId,
       usage: usageFromRuntime(detail.usage),
       goal: detail.goal ?? null,
       todos: detail.todos ?? null,
@@ -786,9 +790,14 @@ export class AgentRuntimeProvider implements AgentProvider {
     return this.threadAuxiliary(threadId, 'reviewThread', { target, model: options?.model })
   }
 
-  async steerUserMessage(threadId: string, turnId: string, text: string): Promise<void> {
+  async steerUserMessage(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options: Parameters<NonNullable<AgentProvider['steerUserMessage']>>[3] = {}
+  ): Promise<void> {
     const runtimeId = await this.runtimeIdForThread(threadId)
-    await agentRuntimeClient.steerTurn({ runtimeId, threadId, turnId, text })
+    await agentRuntimeClient.steerTurn({ runtimeId, threadId, turnId, text, ...options })
   }
 
   async interruptTurn(threadId: string, turnId: string, options?: { discard?: boolean }): Promise<void> {
@@ -845,21 +854,6 @@ export class AgentRuntimeProvider implements AgentProvider {
     input: Parameters<NonNullable<AgentProvider['runCodeNavigation']>>[0]
   ): ReturnType<NonNullable<AgentProvider['runCodeNavigation']>> {
     return this.auxiliary('runCodeNavigation', input)
-  }
-
-  async listModelAuditRecords(
-    options?: Parameters<NonNullable<AgentProvider['listModelAuditRecords']>>[0]
-  ): ReturnType<NonNullable<AgentProvider['listModelAuditRecords']>> {
-    const { runtimeId, threadId, ...payload } = options ?? {}
-    const selectedRuntimeId = runtimeId ?? (threadId ? await this.runtimeIdForThread(threadId) : undefined)
-    return this.auxiliary('listModelAuditRecords', {
-      ...payload,
-      ...(threadId ? { threadId } : {})
-    }, selectedRuntimeId)
-  }
-
-  clearModelAuditRecords(): ReturnType<NonNullable<AgentProvider['clearModelAuditRecords']>> {
-    return this.auxiliary('clearModelAuditRecords')
   }
 
   getContextState(threadId: string): ReturnType<NonNullable<AgentProvider['getContextState']>> {

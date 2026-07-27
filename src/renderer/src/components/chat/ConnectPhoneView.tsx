@@ -184,7 +184,7 @@ export function connectPhoneRecentMessageLabel(message: NonNullable<RemoteChanne
 
 export function createConnectPhoneAgentProfile(): RemoteChannelAgentProfileV1 {
   return {
-    name: 'SciForge Runtime',
+    name: 'SciForge',
     description: '',
     identity: '',
     personality: '',

@@ -1,0 +1,63 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-project-dag",
+  "module": {
+    "id": "sciforge.project-dag",
+    "displayName": "Project DAG",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 90
+  },
+  "packaging": {
+    "bundled": true,
+    "runtime": {
+      "requiredPaths": [
+        "pyproject.toml",
+        "python/project_dag/__init__.py",
+        "python/project_dag/server.py",
+        "ui/index.html"
+      ],
+      "dependencies": [
+        "@sciforge/domain-evidence-dag"
+      ]
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.capability-factory",
+          "id": "project-dag.capabilities"
+        },
+        {
+          "kind": "main.runtime-lifecycle",
+          "id": "project-dag.runtime-lifecycle"
+        },
+        {
+          "kind": "main.agent-artifact-consumer",
+          "id": "project-dag.turn-completed"
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workbench-right-panel",
+          "id": "project-dag.workbench-right-panel"
+        },
+        {
+          "kind": "renderer.i18n-resource",
+          "id": "project-dag.translations"
+        }
+      ]
+    }
+  ]
+}

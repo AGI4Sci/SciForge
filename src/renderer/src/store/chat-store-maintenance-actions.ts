@@ -82,6 +82,7 @@ import {
   threadTodoWriteItems
 } from '../plan/plan-todo-sync'
 import { providerSupportsCapability } from './chat-store-provider-capabilities'
+import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
 
 type SseAbortRef = { current: AbortController | null }
 
@@ -123,6 +124,21 @@ function applyTodosSnapshot(
   }))
 }
 
+function reportThreadOwnedError(
+  set: ChatStoreSet,
+  get: ChatStoreGet,
+  threadId: string,
+  cause: unknown
+): void {
+  if (get().activeThreadId !== threadId) return
+  set({
+    error: formatRuntimeError(cause),
+    ...(shouldOpenSettingsForError(cause)
+      ? { route: 'settings' as const, settingsSection: 'agents' as const }
+      : {})
+  })
+}
+
 function settleInterruptedTurn(set: ChatStoreSet, get: ChatStoreGet): void {
   resetBusyRecoveryAttempts()
   clearBusyWatchdog()
@@ -149,7 +165,7 @@ function rememberActionThreadRuntime(
 
 export function createMaintenanceActions(
   { set, get, sseAbortRef }: StoreActionContext
-): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setActiveThreadTodoStatus' | 'clearActiveThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'rewindAndResend' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
+): Pick<ChatState, 'renameActiveThread' | 'renameThread' | 'archiveThread' | 'compactActiveThread' | 'forkActiveThread' | 'setActiveThreadGoal' | 'setActiveThreadGoalStatus' | 'clearActiveThreadGoal' | 'setThreadTodoStatus' | 'clearThreadTodos' | 'syncPlanTodosFromMarkdown' | 'resumeSessionIntoThread' | 'deleteThread' | 'rewindAndResend' | 'resolveApproval' | 'resolveUserInput' | 'interrupt'> {
   return {
   renameActiveThread: async (title) => {
     const { activeThreadId } = get()
@@ -228,6 +244,7 @@ export function createMaintenanceActions(
           error: null
         }
       })
+      if (archived) disposeSessionRightPanelWorkspace(targetId)
       await get().refreshThreads()
     } catch (e) {
       set({
@@ -348,12 +365,7 @@ export function createMaintenanceActions(
         displayText: i18n.t('common:goalUserMessage', { objective: goal.objective })
       })
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, activeThreadId, e)
       return false
     }
   },
@@ -377,12 +389,7 @@ export function createMaintenanceActions(
       await get().refreshThreads()
       return true
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, activeThreadId, e)
       return false
     }
   },
@@ -408,19 +415,18 @@ export function createMaintenanceActions(
       await get().refreshThreads()
       return cleared
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, activeThreadId, e)
       return false
     }
   },
 
-  setActiveThreadTodoStatus: async (todoId: string, status: ThreadTodoStatus) => {
-    const { activeThreadId, activeThreadTodos } = get()
-    if (!activeThreadId || !activeThreadTodos) return false
+  setThreadTodoStatus: async (threadId: string, todoId: string, status: ThreadTodoStatus) => {
+    const targetThreadId = threadId.trim()
+    const state = get()
+    const threadTodos = state.activeThreadId === targetThreadId
+      ? state.activeThreadTodos
+      : state.threads.find((thread) => thread.id === targetThreadId)?.todos ?? null
+    if (!targetThreadId || !threadTodos) return false
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return false
@@ -431,34 +437,29 @@ export function createMaintenanceActions(
       return false
     }
     try {
-      rememberActionThreadRuntime(p, get, activeThreadId)
-      const nextItems = activeThreadTodos.items.map((item) => {
+      rememberActionThreadRuntime(p, get, targetThreadId)
+      const nextItems = threadTodos.items.map((item) => {
         if (item.id === todoId) return { ...item, status }
         if (status === 'in_progress' && item.status === 'in_progress') {
           return { ...item, status: 'pending' as const }
         }
         return item
       })
-      const todos = await p.setThreadTodos(activeThreadId, threadTodoWriteItems({
-        ...activeThreadTodos,
+      const todos = await p.setThreadTodos(targetThreadId, threadTodoWriteItems({
+        ...threadTodos,
         items: nextItems
       }))
-      applyTodosSnapshot(set, activeThreadId, todos)
+      applyTodosSnapshot(set, targetThreadId, todos)
       return true
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, targetThreadId, e)
       return false
     }
   },
 
-  clearActiveThreadTodos: async () => {
-    const { activeThreadId } = get()
-    if (!activeThreadId) return false
+  clearThreadTodos: async (threadId: string) => {
+    const targetThreadId = threadId.trim()
+    if (!targetThreadId) return false
     if (get().runtimeConnection !== 'ready') {
       set({ error: i18n.t('common:runtimeActionNeedsConnection') })
       return false
@@ -469,56 +470,50 @@ export function createMaintenanceActions(
       return false
     }
     try {
-      rememberActionThreadRuntime(p, get, activeThreadId)
-      const cleared = await p.clearThreadTodos(activeThreadId)
-      if (cleared) applyTodosSnapshot(set, activeThreadId, null)
+      rememberActionThreadRuntime(p, get, targetThreadId)
+      const cleared = await p.clearThreadTodos(targetThreadId)
+      if (cleared) applyTodosSnapshot(set, targetThreadId, null)
       return cleared
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, targetThreadId, e)
       return false
     }
   },
 
-  syncPlanTodosFromMarkdown: async (plan, markdown) => {
-    const { activeThreadId, activeThreadTodos } = get()
-    if (!activeThreadId) return false
+  syncPlanTodosFromMarkdown: async (threadId, plan, markdown) => {
+    const targetThreadId = threadId.trim()
+    if (!targetThreadId) return false
+    const state = get()
+    const existingTodos = state.activeThreadId === targetThreadId
+      ? state.activeThreadTodos
+      : (state.threads.find((thread) => thread.id === targetThreadId)?.todos ?? null)
     if (get().runtimeConnection !== 'ready') return false
     const p = getProvider()
     if (typeof p.setThreadTodos !== 'function') return false
     const now = new Date().toISOString()
     const planItems = extractPlanTodos({
       markdown,
-      threadId: activeThreadId,
+      threadId: targetThreadId,
       planId: plan.id,
       relativePath: plan.relativePath,
       now
     })
     const nextTodos = mergePlanTodosForRenderer({
-      threadId: activeThreadId,
-      existing: activeThreadTodos,
+      threadId: targetThreadId,
+      existing: existingTodos,
       planItems,
       now
     })
-    const currentWriteItems = activeThreadTodos ? threadTodoWriteItems(activeThreadTodos) : []
+    const currentWriteItems = existingTodos ? threadTodoWriteItems(existingTodos) : []
     const nextWriteItems = threadTodoWriteItems(nextTodos)
     if (sameTodoWriteItems(currentWriteItems, nextWriteItems)) return true
     try {
-      rememberActionThreadRuntime(p, get, activeThreadId)
-      const todos = await p.setThreadTodos(activeThreadId, nextWriteItems)
-      applyTodosSnapshot(set, activeThreadId, todos)
+      rememberActionThreadRuntime(p, get, targetThreadId)
+      const todos = await p.setThreadTodos(targetThreadId, nextWriteItems)
+      applyTodosSnapshot(set, targetThreadId, todos)
       return true
     } catch (e) {
-      set({
-        error: formatRuntimeError(e),
-        ...(shouldOpenSettingsForError(e)
-          ? { route: 'settings' as const, settingsSection: 'agents' as const }
-          : {})
-      })
+      reportThreadOwnedError(set, get, targetThreadId, e)
       return false
     }
   },
@@ -588,6 +583,7 @@ export function createMaintenanceActions(
           error: null
         }
       })
+      disposeSessionRightPanelWorkspace(targetId)
       await get().refreshThreads()
     } catch (e) {
       set({

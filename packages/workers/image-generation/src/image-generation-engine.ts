@@ -37,11 +37,12 @@ import type {
   ImageGenerationRenderResult,
   ImageGenerationSegmentComponentsRequest,
   ImageGenerationSegmentComponentsResult,
-  VisualArtifactReviewRequest,
-  VisualArtifactReviewResult,
+  ImageGenerationCandidateReviewRequest,
+  ImageGenerationCandidateReviewResult,
   ImageGenerationStatus,
   ImageSize
 } from './types'
+import { normalizeVisualScene, visualSceneModelPrompt } from './visual-scene.js'
 
 const RENDERER_VERSION = '0.1.0'
 const DEFAULT_MODEL_ROUTER_ALIAS = 'sciforge-router'
@@ -138,17 +139,28 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
       warnings
     }
   }
-  const size = normalizeSize(request.size, warnings)
+  if (request.visualPlan.route === 'hybrid' && !request.referencePath?.trim()) {
+    return {
+      ok: false,
+      status: 'invalid_visual_plan',
+      message: 'Hybrid image preparation requires the code-owned truth artifact as referencePath.',
+      suggestedPlanTool: 'visual_generate',
+      warnings
+    }
+  }
+  const size = normalizeSize(request.size ?? request.visualPlan.scene?.canvas, warnings)
   const task = request.task.trim()
   const intent = request.drawingIntent ?? classifyDrawingIntent(task, request.stylePreset)
   const drawingBrief = intent === 'flowchart' ? buildFlowchartBrief(task) : undefined
   const diagramSpec = intent === 'framework_diagram' ? buildFrameworkDiagramSpec(task, size) : undefined
   const frameworkDesignPlan = diagramSpec ? buildFrameworkDesignPlan(task, diagramSpec) : undefined
-  const rawPrompt = diagramSpec
+  const basePrompt = diagramSpec
     ? compileFrameworkDiagramPrompt(task, diagramSpec)
     : drawingBrief
       ? compileFlowchartPrompt(task, drawingBrief)
       : task
+  const scenePrompt = request.visualPlan.scene ? visualSceneModelPrompt(request.visualPlan.scene) : ''
+  const rawPrompt = [basePrompt, scenePrompt].filter(Boolean).join('\n\n')
   const prompt = enhanceImageGenerationPrompt(rawPrompt, request.stylePreset)
   const recipe: ImageGenerationRecipe = {
     mode: request.modeHint ?? (request.referencePath ? 'image_to_image' : 'text_to_image'),
@@ -181,7 +193,7 @@ export async function planImageGeneration(request: ImageGenerationPlanRequest): 
     task,
     recipe,
     suggestedRenderTool: 'image_generation_render',
-    suggestedReviewTool: 'visual_artifact_review',
+    suggestedReviewTool: 'image_generation_review_candidate',
     visualPlan: request.visualPlan,
     artifactPolicy: request.visualPlan.releaseCeiling === 'draft_ready'
         ? 'Render writes a draft-only PNG plus .sciforge/artifacts/*.generated-image.artifact.json for mandatory VisualDocument review.'
@@ -213,6 +225,14 @@ export async function renderImageGeneration(request: ImageGenerationRenderReques
       }
     }
     const recipe = normalizeRecipe(request.recipe, warnings)
+    if (recipe.visualPlan.route === 'hybrid' && !recipe.referencePath?.trim()) {
+      return {
+        ok: false,
+        status: 'invalid_request',
+        message: 'Hybrid rendering requires the code-owned truth artifact as recipe.referencePath.',
+        warnings
+      }
+    }
     if (recipe.visualPlan.releaseCeiling === 'draft_ready') {
       warnings.push('Rendering a context-limited draft; unified visual review cannot promote it beyond draft_ready.')
     }
@@ -390,6 +410,13 @@ function validateTerminalVisualPlan(plan: ImageGenerationRecipe['visualPlan'] | 
     || !Array.isArray(plan.lockedElements) || !Array.isArray(plan.modelOwnedElements)
     || !Array.isArray(plan.contextEvidenceIds) || !Array.isArray(plan.unresolvedContext)) {
     return 'visualPlan ownership, source, and context fields must be arrays.'
+  }
+  if (plan.scene !== undefined) {
+    try {
+      normalizeVisualScene(plan.scene)
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
   }
   return undefined
 }
@@ -2302,7 +2329,7 @@ export async function editImageFromVisualReviewPacket(
   }
 }
 
-export async function reviewVisualArtifact(request: VisualArtifactReviewRequest): Promise<VisualArtifactReviewResult> {
+export async function reviewImageGenerationCandidate(request: ImageGenerationCandidateReviewRequest): Promise<ImageGenerationCandidateReviewResult> {
   try {
     const workspaceRoot = assertWorkspaceRoot(request.workspaceRoot)
     const outputPath = await resolveWorkspacePath(workspaceRoot, request.outputPath)
@@ -2343,7 +2370,7 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
         ? 'needs_context'
         : reviewPassed
           ? visualPlan.releaseCeiling
-          : 'draft_ready',
+          : 'repair_required',
       reviewedArtifactPath: outputPath,
       reviewedArtifactHash: manifestOutputHash,
       reviewedAt: new Date().toISOString(),
@@ -2364,6 +2391,14 @@ export async function reviewVisualArtifact(request: VisualArtifactReviewRequest)
         repairInstructions: visualReview.repairInstructions
       },
       repairable,
+      ...(repairable ? {
+        nextAction: {
+          kind: 'same_route_repair' as const,
+          route: visualPlan.route,
+          maxAttempts: 2 as const,
+          instructions: visualReview.repairInstructions
+        }
+      } : {}),
       warnings
     }
   } catch (error) {
@@ -2573,7 +2608,7 @@ function stringArray(value: unknown): string[] {
 }
 
 function providerKind(): 'image-endpoint' | 'placeholder' {
-  return Boolean(configuredModelRouterImageEndpoint())
+  return configuredModelRouterImageEndpoint()
     ? 'image-endpoint'
     : 'placeholder'
 }
@@ -2588,9 +2623,6 @@ function providerKindForReadOnly(warnings: string[]): 'image-endpoint' | 'placeh
 }
 
 async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderRenderResult> {
-  const controlledEditResult = await renderControlledImageEdit(input)
-  if (controlledEditResult) return controlledEditResult
-
   if (providerKind() === 'image-endpoint') {
     try {
       await renderWithConfiguredImageEndpoint(input)
@@ -2615,110 +2647,6 @@ async function renderWithProvider(input: ProviderRenderInput): Promise<ProviderR
     placeholder: true,
     warnings: ['Rendered with placeholder provider because SCIFORGE_IMAGE_ALLOW_PLACEHOLDER=1 is set and no Model Router image endpoint is configured.']
   }
-}
-
-async function renderControlledImageEdit(input: ProviderRenderInput): Promise<ProviderRenderResult | null> {
-  const intent = input.editIntent
-  if (!intent?.sourcePath) return null
-  if (intent.mode !== 'style_transfer' || !isColorEditInstruction(intent.instruction)) return null
-
-  const sourcePath = await resolveWorkspacePath(input.workspaceRoot, intent.sourcePath)
-  const source = await loadImage(sourcePath)
-  const canvas = createCanvas(source.width, source.height)
-  const ctx = canvas.getContext('2d')
-  ctx.drawImage(source, 0, 0)
-
-  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
-  applyControlledColorEdit(imageData.data, intent.instruction)
-  ctx.putImageData(imageData, 0, 0)
-
-  await writeFile(input.outputPath, canvas.toBuffer('image/png'))
-  return {
-    provider: 'controlled-edit',
-    placeholder: false,
-    warnings: ['Applied a source-preserving controlled color edit; layout, text, and composition were kept from the original image.']
-  }
-}
-
-function isColorEditInstruction(instruction: string): boolean {
-  return /color|colour|palette|tone|hue|tint|theme|recolor|配色|颜色|色彩|色调|换色|改色|换个颜色|换颜色|调色/i.test(instruction)
-}
-
-function applyControlledColorEdit(data: Uint8ClampedArray, instruction: string): void {
-  const targetHue = preferredHueFromInstruction(instruction)
-  const genericHueShift = 54 / 360
-
-  for (let i = 0; i < data.length; i += 4) {
-    const alpha = data[i + 3]
-    if (alpha < 16) continue
-
-    const r = data[i] / 255
-    const g = data[i + 1] / 255
-    const b = data[i + 2] / 255
-    const hsl = rgbToHsl(r, g, b)
-
-    // Keep black/gray text, white backgrounds, and thin axis marks readable.
-    if (hsl.l < 0.12 || hsl.l > 0.94 || hsl.s < 0.08) continue
-
-    const nextHue = targetHue ?? ((hsl.h + genericHueShift) % 1)
-    const nextSaturation = clamp01(Math.max(0.22, hsl.s * 1.12))
-    const nextLightness = clamp01(0.08 + hsl.l * 0.9)
-    const [nextR, nextG, nextB] = hslToRgb(nextHue, nextSaturation, nextLightness)
-
-    data[i] = Math.round(nextR * 255)
-    data[i + 1] = Math.round(nextG * 255)
-    data[i + 2] = Math.round(nextB * 255)
-  }
-}
-
-function preferredHueFromInstruction(instruction: string): number | undefined {
-  const text = instruction.toLowerCase()
-  if (/red|红/.test(text)) return 0 / 360
-  if (/orange|橙/.test(text)) return 30 / 360
-  if (/yellow|黄/.test(text)) return 52 / 360
-  if (/green|绿/.test(text)) return 135 / 360
-  if (/cyan|teal|青|湖蓝/.test(text)) return 180 / 360
-  if (/blue|蓝/.test(text)) return 215 / 360
-  if (/purple|violet|紫/.test(text)) return 275 / 360
-  if (/pink|rose|粉/.test(text)) return 330 / 360
-  return undefined
-}
-
-function rgbToHsl(r: number, g: number, b: number): { h: number; s: number; l: number } {
-  const max = Math.max(r, g, b)
-  const min = Math.min(r, g, b)
-  const l = (max + min) / 2
-  if (max === min) return { h: 0, s: 0, l }
-
-  const delta = max - min
-  const s = l > 0.5 ? delta / (2 - max - min) : delta / (max + min)
-  let h = 0
-  if (max === r) h = (g - b) / delta + (g < b ? 6 : 0)
-  else if (max === g) h = (b - r) / delta + 2
-  else h = (r - g) / delta + 4
-  return { h: h / 6, s, l }
-}
-
-function hslToRgb(h: number, s: number, l: number): [number, number, number] {
-  if (s === 0) return [l, l, l]
-
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s
-  const p = 2 * l - q
-  return [
-    hueToRgb(p, q, h + 1 / 3),
-    hueToRgb(p, q, h),
-    hueToRgb(p, q, h - 1 / 3)
-  ]
-}
-
-function hueToRgb(p: number, q: number, t: number): number {
-  let value = t
-  if (value < 0) value += 1
-  if (value > 1) value -= 1
-  if (value < 1 / 6) return p + (q - p) * 6 * value
-  if (value < 1 / 2) return q
-  if (value < 2 / 3) return p + (q - p) * (2 / 3 - value) * 6
-  return p
 }
 
 function allowPlaceholderProvider(): boolean {
@@ -3469,7 +3397,7 @@ function extractEditIntents(
     ...(styleProfileRef ? [`Use the VisualStyleProfile at ${styleProfileRef} as the style constraint.`] : [])
   ].join('\n')
   return [{
-    mode: requestedInstructions.every(isColorEditInstruction) ? 'style_transfer' : 'replace',
+    mode: 'replace',
     sourcePath,
     instruction,
     ...(explicitMaskPath?.trim() ? { maskPath: explicitMaskPath.trim() } : {}),

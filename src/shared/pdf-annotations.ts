@@ -34,6 +34,15 @@ export type PdfAnchorRect = {
   height: number
 }
 
+export type PdfAnchorTextRange = {
+  start: number
+  end: number
+  startLine?: number
+  startColumn?: number
+  endLine?: number
+  endColumn?: number
+}
+
 export type PdfAnchor = {
   id: string
   kind: PdfAnchorKind
@@ -44,6 +53,7 @@ export type PdfAnchor = {
   textHash: string
   contextBefore: string
   contextAfter: string
+  textRange?: PdfAnchorTextRange
   pdfFingerprint: PdfFingerprint
   createdAt: string
   updatedAt: string
@@ -87,6 +97,14 @@ export type PdfAnnotationAuthor = {
   updatedAt: string
 }
 
+export type PdfAnnotationThreadTombstone = {
+  threadId: string
+  annotationIds: string[]
+  anchorIds: string[]
+  deletedAt: string
+  deletedVersion: number
+}
+
 export type PdfAnnotationSidecarManifest = {
   app: typeof PDF_ANNOTATION_APP_ID
   schemaVersion: typeof PDF_ANNOTATION_SCHEMA_VERSION
@@ -115,6 +133,7 @@ export type PdfAnnotationSidecar = {
   annotations: PdfAnnotation[]
   threads: PdfAnnotationThread[]
   authors: PdfAnnotationAuthor[]
+  deletedThreads?: PdfAnnotationThreadTombstone[]
   updatedAt: string
 }
 
@@ -230,6 +249,20 @@ export const pdfAnchorRectSchema = z
   })
   .strict()
 
+export const pdfAnchorTextRangeSchema = z
+  .object({
+    start: z.number().int().nonnegative(),
+    end: z.number().int().nonnegative(),
+    startLine: z.number().int().positive().optional(),
+    startColumn: z.number().int().positive().optional(),
+    endLine: z.number().int().positive().optional(),
+    endColumn: z.number().int().positive().optional()
+  })
+  .strict()
+  .refine((range) => range.end >= range.start, {
+    message: 'Annotation text range end must be greater than or equal to start.'
+  })
+
 export const pdfAnchorSchema = z
   .object({
     id: idSchema,
@@ -241,6 +274,7 @@ export const pdfAnchorSchema = z
     textHash: z.string().trim().max(128),
     contextBefore: boundedTextSchema,
     contextAfter: boundedTextSchema,
+    textRange: pdfAnchorTextRangeSchema.optional(),
     pdfFingerprint: pdfFingerprintSchema,
     createdAt: isoDateSchema,
     updatedAt: isoDateSchema
@@ -291,6 +325,16 @@ export const pdfAnnotationAuthorSchema = z
   })
   .strict()
 
+export const pdfAnnotationThreadTombstoneSchema = z
+  .object({
+    threadId: idSchema,
+    annotationIds: z.array(idSchema).max(2_000),
+    anchorIds: z.array(idSchema).max(1_000),
+    deletedAt: isoDateSchema,
+    deletedVersion: z.number().int().nonnegative()
+  })
+  .strict()
+
 export const pdfAnnotationSidecarManifestSchema = z
   .object({
     app: z.literal(PDF_ANNOTATION_APP_ID),
@@ -326,6 +370,7 @@ export const pdfAnnotationSidecarSchema = z
     annotations: z.array(pdfAnnotationSchema).max(20_000),
     threads: z.array(pdfAnnotationThreadSchema).max(10_000),
     authors: z.array(pdfAnnotationAuthorSchema).max(1_000),
+    deletedThreads: z.array(pdfAnnotationThreadTombstoneSchema).max(10_000).optional(),
     updatedAt: isoDateSchema
   })
   .strict()
@@ -416,18 +461,49 @@ function sortedUnique(values: string[]): string[] {
 }
 
 export function stablePdfAnnotationSidecar(sidecar: PdfAnnotationSidecar): PdfAnnotationSidecar {
+  const deletedThreadsById = new Map<string, PdfAnnotationThreadTombstone>()
+  for (const tombstone of sidecar.deletedThreads ?? []) {
+    const normalized: PdfAnnotationThreadTombstone = {
+      ...tombstone,
+      annotationIds: sortedUnique(tombstone.annotationIds),
+      anchorIds: sortedUnique(tombstone.anchorIds)
+    }
+    const existing = deletedThreadsById.get(normalized.threadId)
+    if (!existing || normalized.deletedVersion > existing.deletedVersion || (
+      normalized.deletedVersion === existing.deletedVersion &&
+      normalized.deletedAt.localeCompare(existing.deletedAt) > 0
+    )) {
+      deletedThreadsById.set(normalized.threadId, normalized)
+    }
+  }
+  const deletedThreads = [...deletedThreadsById.values()]
+    .sort((a, b) => a.deletedAt.localeCompare(b.deletedAt) || a.threadId.localeCompare(b.threadId))
+  const deletedThreadIds = new Set(deletedThreads.map((tombstone) => tombstone.threadId))
+  const deletedAnnotationIds = new Set(deletedThreads.flatMap((tombstone) => tombstone.annotationIds))
+  const deletedAnchorIds = new Set(deletedThreads.flatMap((tombstone) => tombstone.anchorIds))
+  const threads = sidecar.threads.filter((thread) => !deletedThreadIds.has(thread.id))
+  const annotations = sidecar.annotations.filter((annotation) =>
+    !deletedThreadIds.has(annotation.threadId) && !deletedAnnotationIds.has(annotation.id)
+  )
+  const retainedAnchorIds = new Set([
+    ...threads.flatMap((thread) => thread.anchorIds),
+    ...annotations.map((annotation) => annotation.anchorId)
+  ])
   return {
     ...sidecar,
-    anchors: [...sidecar.anchors].sort((a, b) => a.pageStart - b.pageStart || byId(a, b)),
-    annotations: [...sidecar.annotations].sort((a, b) => a.threadId.localeCompare(b.threadId) || byUpdatedThenId(a, b)),
-    threads: [...sidecar.threads]
+    anchors: sidecar.anchors
+      .filter((anchor) => !deletedAnchorIds.has(anchor.id) || retainedAnchorIds.has(anchor.id))
+      .sort((a, b) => a.pageStart - b.pageStart || byId(a, b)),
+    annotations: annotations.sort((a, b) => a.threadId.localeCompare(b.threadId) || byUpdatedThenId(a, b)),
+    threads: threads
       .map((thread) => ({
         ...thread,
         anchorIds: sortedUnique(thread.anchorIds),
         annotationIds: sortedUnique(thread.annotationIds)
       }))
       .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt) || byId(a, b)),
-    authors: [...sidecar.authors].sort(byId)
+    authors: [...sidecar.authors].sort(byId),
+    deletedThreads
   }
 }
 
@@ -465,6 +541,7 @@ export function createEmptyPdfAnnotationSidecar(
     annotations: [],
     threads: [],
     authors: [],
+    deletedThreads: [],
     updatedAt: now
   }
 }
@@ -477,15 +554,23 @@ function withV1Defaults(raw: Record<string, unknown>): Record<string, unknown> {
   const manifest = raw.manifest && typeof raw.manifest === 'object'
     ? raw.manifest as Record<string, unknown>
     : {}
+  const annotations = Array.isArray(raw.annotations)
+    ? raw.annotations.map((annotation) => {
+        if (!annotation || typeof annotation !== 'object' || Array.isArray(annotation)) return annotation
+        const { pdfFingerprint: _legacyPdfFingerprint, ...normalized } = annotation as Record<string, unknown>
+        return normalized
+      })
+    : []
   return {
     schemaVersion: PDF_ANNOTATION_SCHEMA_VERSION,
     version: typeof raw.version === 'number' ? raw.version : 0,
     ...raw,
     pdfFingerprint: fingerprint,
     anchors: Array.isArray(raw.anchors) ? raw.anchors : [],
-    annotations: Array.isArray(raw.annotations) ? raw.annotations : [],
+    annotations,
     threads: Array.isArray(raw.threads) ? raw.threads : [],
     authors: Array.isArray(raw.authors) ? raw.authors : [],
+    deletedThreads: Array.isArray(raw.deletedThreads) ? raw.deletedThreads : [],
     updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : now,
     manifest: {
       app: PDF_ANNOTATION_APP_ID,
@@ -575,6 +660,7 @@ export function createPdfAnchor(input: {
   quote?: string
   contextBefore?: string
   contextAfter?: string
+  textRange?: PdfAnchorTextRange
   pdfFingerprint: PdfFingerprint
   createdAt?: string
   updatedAt?: string
@@ -583,6 +669,9 @@ export function createPdfAnchor(input: {
   const pageRange = pdfAnchorPageRange(rects)
   const quote = sanitizePdfAnnotationText(input.quote ?? '')
   const createdAt = input.createdAt ?? new Date().toISOString()
+  const textRange = input.textRange
+    ? pdfAnchorTextRangeSchema.parse(input.textRange)
+    : undefined
   return {
     id: input.id,
     kind: input.kind ?? (quote ? 'text' : 'visual'),
@@ -592,6 +681,7 @@ export function createPdfAnchor(input: {
     textHash: quote ? hashPdfAnchorText(quote) : '',
     contextBefore: sanitizePdfAnnotationText(input.contextBefore ?? '', 2_000),
     contextAfter: sanitizePdfAnnotationText(input.contextAfter ?? '', 2_000),
+    ...(textRange ? { textRange } : {}),
     pdfFingerprint: input.pdfFingerprint,
     createdAt,
     updatedAt: input.updatedAt ?? createdAt

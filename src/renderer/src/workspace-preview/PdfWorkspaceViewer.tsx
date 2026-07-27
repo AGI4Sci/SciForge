@@ -1,4 +1,5 @@
 import {
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -9,6 +10,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import {
   WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
+  workspacePreviewContentKey,
   type WorkspaceObservation,
   type WorkspacePreviewEditOperation,
   type WorkspacePreviewAssetTransportDescriptor
@@ -17,9 +19,10 @@ import {
   WritePdfViewer
 } from '../components/write/WritePdfViewer'
 import { rightPanelContextStateKey } from '../components/right-panel-context-state'
+import { useRightPanelSessionId } from '../components/right-panel-session-scope'
 import type { WorkspacePreviewAssetTransportClient } from './host'
 import {
-  createPdfWorkspacePreviewAnnotationOperation
+  createDocumentWorkspacePreviewAnnotationOperation
 } from './document-annotation-operations'
 import type {
   WritePdfAnnotationAction,
@@ -29,8 +32,13 @@ import type {
 import type {
   WritePdfSelectionPageRect
 } from '../components/write/WritePdfViewer'
+import type {
+  WorkspacePreviewPresentationStateChangeHandler
+} from './presentation-state'
 
 export const PDF_WORKSPACE_VIEWER_MAX_BYTES = WORKSPACE_PREVIEW_MAX_RANGE_BYTES
+const StableWritePdfViewer = memo(WritePdfViewer)
+const EMPTY_PDF_ANNOTATION_OVERLAYS: WritePdfAnnotationOverlay[] = []
 
 export type PdfWorkspaceViewerStatus =
   | {
@@ -86,6 +94,7 @@ export type PdfWorkspaceViewerProps = {
   maxBytes?: number
   model?: PdfWorkspaceViewerModel
   previewState?: PdfWorkspaceViewerPreviewState
+  documentContentKey?: string
   className?: string
   visualContextComponentId?: string
   onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void> | void
@@ -97,11 +106,23 @@ export type PdfWorkspaceViewerProps = {
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
   onToggleAnnotations?: () => void
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 export type PdfWorkspaceViewerLoadResult =
   | Extract<PdfWorkspaceViewerPreviewState, { kind: 'ready' }>
   | Extract<PdfWorkspaceViewerPreviewState, { kind: 'fallback' | 'error' }>
+
+export function pdfWorkspaceDocumentRevisionKey(input: {
+  observation?: WorkspaceObservation | null
+  asset?: WorkspacePreviewAssetTransportDescriptor | null
+  transport?: WorkspacePreviewAssetTransportClient | null
+}): string {
+  return workspacePreviewContentKey({
+    observation: input.observation,
+    asset: input.asset
+  })
+}
 
 export function buildPdfWorkspaceViewerModel(input: {
   observation?: WorkspaceObservation | null
@@ -249,24 +270,44 @@ export function PdfWorkspaceViewer({
   maxBytes = PDF_WORKSPACE_VIEWER_MAX_BYTES,
   model,
   previewState,
+  documentContentKey,
   className,
   visualContextComponentId,
   onApplyEdit,
-  annotationOverlays = [],
+  annotationOverlays = EMPTY_PDF_ANNOTATION_OVERLAYS,
   activeAnnotationId = null,
   annotationsOpen = false,
   jumpToRect = null,
   onSelectionChange,
   onAnnotationSelect,
   onOpenAnnotations,
-  onToggleAnnotations
+  onToggleAnnotations,
+  onPresentationStateChange
 }: PdfWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation()
+  const rightPanelSessionId = useRightPanelSessionId()
   const resolvedAsset = asset ?? transport?.descriptor ?? null
   const resolvedModel = useMemo(() => model ?? buildPdfWorkspaceViewerModel({
     observation,
     asset: resolvedAsset
   }), [model, observation, resolvedAsset])
+  const documentRevisionKey = documentContentKey?.trim() || pdfWorkspaceDocumentRevisionKey({
+    observation,
+    asset: resolvedAsset,
+    transport
+  })
+  const loadInputRef = useRef({
+    observation,
+    asset: resolvedAsset,
+    transport,
+    model: resolvedModel
+  })
+  loadInputRef.current = {
+    observation,
+    asset: resolvedAsset,
+    transport,
+    model: resolvedModel
+  }
   const [loadedPreviewState, setLoadedPreviewState] = useState<PdfWorkspaceViewerPreviewState>(() =>
     initialPdfPreviewState({
       model: resolvedModel,
@@ -274,23 +315,23 @@ export function PdfWorkspaceViewer({
       transport
     })
   )
-  const activeDocumentKeyRef = useRef(`${observation?.file.path ?? ''}:${resolvedAsset?.assetId ?? ''}`)
+  const activeDocumentKeyRef = useRef(documentRevisionKey)
 
   useEffect(() => {
     if (previewState) return
     let cancelled = false
-    const documentKey = `${observation?.file.path ?? ''}:${resolvedAsset?.assetId ?? ''}`
-    const preserveReadyPreview = activeDocumentKeyRef.current === documentKey
-    activeDocumentKeyRef.current = documentKey
+    const current = loadInputRef.current
+    const preserveReadyPreview = activeDocumentKeyRef.current === documentRevisionKey
+    activeDocumentKeyRef.current = documentRevisionKey
 
     const initialState = initialPdfPreviewState({
-      model: resolvedModel,
-      asset: resolvedAsset,
-      transport
+      model: current.model,
+      asset: current.asset,
+      transport: current.transport
     })
     setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready' ? current : initialState)
 
-    if (resolvedModel.status.kind !== 'ready' || !resolvedAsset || !transport) return
+    if (current.model.status.kind !== 'ready' || !current.asset || !current.transport) return
 
     setLoadedPreviewState((current) => preserveReadyPreview && current.kind === 'ready'
       ? current
@@ -301,9 +342,9 @@ export function PdfWorkspaceViewer({
         })
 
     void loadPdfWorkspacePreviewData({
-      observation,
-      asset: resolvedAsset,
-      transport,
+      observation: current.observation,
+      asset: current.asset,
+      transport: current.transport,
       maxBytes
     })
       .then((result) => {
@@ -322,25 +363,34 @@ export function PdfWorkspaceViewer({
       cancelled = true
     }
   }, [
+    documentRevisionKey,
     maxBytes,
-    observation,
-    previewState,
-    resolvedAsset,
-    resolvedModel,
-    transport
+    previewState
   ])
 
   const activePreviewState = previewState ?? loadedPreviewState
-  const initialDocumentAnchor = observation?.selection?.kind === 'document'
-    ? observation.selection.anchors[0]
-    : undefined
-  const initialAnchorRect = initialDocumentAnchor?.rects?.[0]
-  const initialPage = initialDocumentAnchor?.page ?? initialAnchorRect?.page ?? 1
+  const initialAnchorStateRef = useRef<{
+    documentKey: string
+    page: number
+  } | null>(null)
+  if (initialAnchorStateRef.current?.documentKey !== documentRevisionKey) {
+    const initialDocumentAnchor = observation?.selection?.kind === 'document'
+      ? observation.selection.anchors[0]
+      : undefined
+    const observedRect = initialDocumentAnchor?.rects?.[0]
+    initialAnchorStateRef.current = {
+      documentKey: documentRevisionKey,
+      page: initialDocumentAnchor?.page ?? observedRect?.page ?? 1
+    }
+  }
+  const initialPage = initialAnchorStateRef.current.page
   const statusRole = resolvedModel.status.kind === 'unsupported' ? 'alert' : 'status'
+  const observationPath = observation?.file.path
   const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {
-    if (!observation || !onApplyEdit) return
-    const operation = createPdfWorkspacePreviewAnnotationOperation({
-      path: observation.file.path,
+    if (!observationPath || !onApplyEdit) return
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'pdf',
+      path: observationPath,
       action,
       selection,
       translationBody: t('writePdfAnnotationTranslatePrompt'),
@@ -348,7 +398,7 @@ export function PdfWorkspaceViewer({
     })
     if (!operation) return
     void onApplyEdit(operation)
-  }, [observation, onApplyEdit, t])
+  }, [observationPath, onApplyEdit, t])
 
   return (
     <section
@@ -372,8 +422,9 @@ export function PdfWorkspaceViewer({
       ) : (
         <div className="flex min-h-0 flex-1 flex-col" data-pdf-ready-shell>
           <div className="min-h-0 flex-1 pr-20" data-pdf-preview-viewport>
-            <WritePdfViewer
+            <StableWritePdfViewer
               filePath={resolvePdfFilePath(observation, resolvedAsset)}
+              documentContentKey={documentRevisionKey}
               workspaceRoot={observation?.file.workspaceRoot}
               data={activePreviewState.data}
               sourceUrl={activePreviewState.sourceUrl}
@@ -384,6 +435,7 @@ export function PdfWorkspaceViewer({
               viewStateKey={rightPanelContextStateKey({
                 mode: 'file-pdf',
                 workspaceRoot: observation?.file.workspaceRoot,
+                threadId: rightPanelSessionId,
                 resourceId: resolvePdfFilePath(observation, resolvedAsset)
               })}
               initialPage={initialPage}
@@ -391,11 +443,12 @@ export function PdfWorkspaceViewer({
               annotationOverlays={annotationOverlays}
               activeAnnotationId={activeAnnotationId}
               annotationsOpen={annotationsOpen}
-              jumpToRect={jumpToRect ?? initialAnchorRect ?? null}
+              jumpToRect={jumpToRect}
               onSelectionChange={onSelectionChange}
               onAnnotationSelect={onAnnotationSelect}
               onOpenAnnotations={onOpenAnnotations}
               onToggleAnnotations={onToggleAnnotations}
+              onPresentationStateChange={onPresentationStateChange}
               className="h-full min-h-0"
             />
           </div>

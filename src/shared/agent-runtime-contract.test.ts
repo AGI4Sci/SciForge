@@ -71,7 +71,7 @@ function exhaustiveEventLabel(event: AgentRuntimeEvent): string {
 }
 
 describe('agent runtime contract', () => {
-  it('partitions auxiliary inputs between thread-bound and active-scoped operations', () => {
+  it('partitions auxiliary inputs between runtime-id-required and active-scoped operations', () => {
     const runtimeIdRequired = new Set<AgentRuntimeAuxiliaryOperation>(
       AGENT_RUNTIME_AUXILIARY_RUNTIME_ID_REQUIRED_OPERATIONS
     )
@@ -84,10 +84,21 @@ describe('agent runtime contract', () => {
       operation: 'getThreadGoal',
       payload: { threadId: 'thread-1' }
     } satisfies AgentRuntimeAuxiliaryInput
+    const codingPlan = {
+      runtimeId: 'codex',
+      operation: 'startCodingPlanLogin',
+      payload: { method: 'device' }
+    } satisfies AgentRuntimeAuxiliaryInput
 
     expect(activeScoped.operation).toBe('getRuntimeInfo')
     expect(threadBound.runtimeId).toBe('codex')
+    expect(codingPlan.operation).toBe('startCodingPlanLogin')
     expect(runtimeIdRequired.has('getThreadGoal')).toBe(true)
+    expect(runtimeIdRequired.has('getCodingPlanAccount')).toBe(true)
+    expect(runtimeIdRequired.has('startCodingPlanLogin')).toBe(true)
+    expect(runtimeIdRequired.has('waitForCodingPlanLogin')).toBe(true)
+    expect(runtimeIdRequired.has('logoutCodingPlanAccount')).toBe(true)
+    expect(runtimeIdRequired.has('getCodingPlanRateLimits')).toBe(true)
     expect(activeScopedOperations).toEqual(expect.arrayContaining([
       'getRuntimeInfo',
       'listSkills',
@@ -194,7 +205,7 @@ describe('agent runtime contract', () => {
         resumeSession: false
       },
       guard: {
-        toolStorm: 'unsupported'
+        execution: 'unsupported'
       }
     })
     expect(capabilities.events.live).toBe(false)
@@ -272,13 +283,13 @@ describe('agent runtime contract', () => {
     })
     const codex = {
       ...base,
-      guard: { toolStorm: 'observe' }
+      guard: { execution: 'observe' }
     } satisfies AgentRuntimeCapabilities
     const localRuntime = {
       ...base,
       runtimeId: 'sciforge',
       transport: 'http_sse',
-      guard: { toolStorm: 'native' },
+      guard: { execution: 'native' },
       controls: {
         ...base.controls,
         interrupt: false,
@@ -286,8 +297,8 @@ describe('agent runtime contract', () => {
       }
     } satisfies AgentRuntimeCapabilities
 
-    expect(codex.guard.toolStorm).toBe('observe')
-    expect(localRuntime.guard.toolStorm).toBe('native')
+    expect(codex.guard.execution).toBe('observe')
+    expect(localRuntime.guard.execution).toBe('native')
     expect(localRuntime.controls.interrupt).toBe(false)
     expect(localRuntime.controls.steer).toBe(false)
   })

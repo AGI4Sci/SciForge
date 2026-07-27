@@ -13,7 +13,6 @@ import {
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -33,7 +32,6 @@ function createSettings(workspaceRoot = '/tmp/workspace'): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings()

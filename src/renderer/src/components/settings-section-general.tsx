@@ -1,100 +1,29 @@
-import { useState, type ReactElement } from 'react'
+import type { ReactElement } from 'react'
 import type {
-  ApprovalPolicy,
-  AppSettingsV1,
-  ModelRouterMemberProviderSettingsPatchV1,
-  ModelRouterScientificTranslatorSettingsPatchV1,
-  SandboxMode
+  AppSettingsV1
 } from '@shared/app-settings'
 import {
   getImageGenerationSettings,
+  getModelAccessSettings,
   getModelRouterSettings,
   type ImageGenerationSettingsPatchV1
 } from '@shared/app-settings'
 import type { GuiUpdateChannel } from '@shared/gui-update'
-import type { SkillRootId } from '../lib/skill-root-preference'
-import { FolderOpen, PencilLine, RefreshCw, Settings } from 'lucide-react'
+import { FolderOpen } from 'lucide-react'
 import { GuiUpdateControl } from './settings-gui-update'
 import {
-  InlineNoticeView,
-  SecretInput,
-  SectionJumpButton,
   SettingsCard,
   SettingRow,
   Toggle
 } from './settings-controls'
-
-function ModelRouterRoleFields({
-  t,
-  baseUrl,
-  apiKey,
-  model,
-  baseUrlPlaceholder,
-  modelPlaceholder,
-  secretVisible,
-  onToggleSecret,
-  onChange
-}: {
-  t: (key: string) => string
-  baseUrl: string
-  apiKey: string
-  model: string
-  baseUrlPlaceholder: string
-  modelPlaceholder: string
-  secretVisible: boolean
-  onToggleSecret: () => void
-  onChange: (patch: { baseUrl?: string; apiKey?: string; model?: string }) => void
-}): ReactElement {
-  const labelClass = 'text-[12px] font-medium text-ds-muted'
-  const inputClass =
-    'w-full min-w-0 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] text-ds-ink shadow-sm focus:border-accent/40 focus:outline-none focus:ring-1 focus:ring-accent/30'
-  return (
-    <div className="grid gap-3 md:max-w-md">
-      <label className="grid gap-1">
-        <span className={labelClass}>{t('modelRouterRoleBaseUrl')}</span>
-        <input
-          className={inputClass}
-          placeholder={baseUrlPlaceholder}
-          value={baseUrl}
-          onChange={(event) => onChange({ baseUrl: event.target.value })}
-        />
-      </label>
-      <label className="grid gap-1">
-        <span className={labelClass}>{t('modelRouterRoleApiKey')}</span>
-        <SecretInput
-          value={apiKey}
-          onChange={(value) => onChange({ apiKey: value })}
-          visible={secretVisible}
-          onToggleVisibility={onToggleSecret}
-          placeholder="sk-..."
-          autoComplete="off"
-          showLabel={t('showSecret')}
-          hideLabel={t('hideSecret')}
-        />
-      </label>
-      <label className="grid gap-1">
-        <span className={labelClass}>{t('modelRouterRoleModel')}</span>
-        <input
-          className={`${inputClass} font-mono`}
-          placeholder={modelPlaceholder}
-          value={model}
-          spellCheck={false}
-          onChange={(event) => onChange({ model: event.target.value })}
-        />
-      </label>
-    </div>
-  )
-}
-
-type ModelRouterSecretId = 'textReasoner' | 'visionTranslator' | 'imageGenerator' | 'scientificTranslator'
+import { GenericApiMemberFields, ModelAccessSettings } from './model-access-settings'
 
 export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): ReactElement {
   const {
     t,
-    tCommon,
     form,
     update,
-    portError,
+    saveStatus,
     selectControlClass,
     openOnboardingPreview,
     pickWorkspace,
@@ -112,190 +41,99 @@ export function GeneralSettingsSection({ ctx }: { ctx: Record<string, any> }): R
     installGuiUpdate,
     logPath,
     logDirOpenError,
-    setLogDirOpenError,
-    scrollToAgentSection,
-    agentsSectionRef,
-    skillSectionRef,
-    mcpSectionRef,
-    permissionsSectionRef,
-    selectedSkillRoot,
-    skillRootOptions,
-    skillRootId,
-    setSkillRootId,
-    skillNotice,
-    openSkillRoot,
-    openPlugins,
-    mcpConfigPath,
-    mcpConfigExists,
-    mcpConfigText,
-    setMcpConfigText,
-    mcpLoading,
-    mcpBusy,
-    mcpNotice,
-    saveMcpConfig,
-    loadMcpConfig,
-    openMcpConfigDir,
-    splitSettingsList,
-    listSettingsText
+    setLogDirOpenError
   } = ctx
   const platform = typeof window !== 'undefined' ? window.sciforge?.platform ?? '' : ''
   const openAtLoginSupported = platform === 'win32' || platform === 'darwin'
   const startMinimizedSupported = platform === 'win32'
   const desktopBehavior = form.appBehavior
+  const modelAccess = getModelAccessSettings(form)
   const modelRouterSettings = getModelRouterSettings(form)
-  const defaultModelRouterProfile = modelRouterSettings.profiles.default
+  const modelCapabilities = modelRouterSettings.profiles.default
   const imageGenerationSettings = getImageGenerationSettings(form)
   const updateImageGenerationSettings = (patch: ImageGenerationSettingsPatchV1): void => {
     update({ imageGeneration: patch })
   }
-  const updateTextReasoner = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
-    update({ modelRouter: { profiles: { default: { textReasoner: patch } } } })
-  }
-  const updateImageGenerator = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
-    update({ modelRouter: { profiles: { default: { imageGenerator: patch } } } })
-  }
-  const updateVisionTranslator = (patch: ModelRouterMemberProviderSettingsPatchV1): void => {
-    update({ modelRouter: { profiles: { default: { translators: { vision: patch } } } } })
-  }
-  const updateScientificTranslator = (patch: ModelRouterScientificTranslatorSettingsPatchV1): void => {
-    update({ modelRouter: { profiles: { default: { translators: { scientific: patch } } } } })
-  }
-  const [modelRouterSecretVisibility, setModelRouterSecretVisibility] =
-    useState<Record<ModelRouterSecretId, boolean>>({
-      textReasoner: false,
-      visionTranslator: false,
-      imageGenerator: false,
-      scientificTranslator: false
-    })
-  const toggleModelRouterSecret = (secretId: ModelRouterSecretId): void => {
-    setModelRouterSecretVisibility((current) => ({
-      ...current,
-      [secretId]: !current[secretId]
-    }))
-  }
-  const [modelRouterConfigNotice, setModelRouterConfigNotice] =
-    useState<{ tone: 'error' | 'info' | 'success'; message: string } | null>(null)
-  const openModelRouterConfigFile = async (): Promise<void> => {
-    const api = window.sciforge as typeof window.sciforge & {
-      openModelRouterConfigFile?: () => Promise<{ ok: boolean; message?: string }>
-    }
-    if (typeof api?.openModelRouterConfigFile !== 'function') {
-      setModelRouterConfigNotice({
-        tone: 'error',
-        message: t('modelRouterOpenConfigFileUnavailable')
-      })
-      return
-    }
-    setModelRouterConfigNotice(null)
-    try {
-      const result = await api.openModelRouterConfigFile()
-      if (!result.ok) {
-        setModelRouterConfigNotice({
-          tone: 'error',
-          message: t('modelRouterOpenConfigFileError', {
-            message: result.message || tCommon('unknownError')
-          })
-        })
-      }
-    } catch (error) {
-      setModelRouterConfigNotice({
-        tone: 'error',
-        message: t('modelRouterOpenConfigFileError', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-    }
-  }
 
   return (
             <>
-              <SettingsCard title={t('modelRouterModels')}>
+              <SettingsCard title={t('modelAccessTitle')}>
                 <SettingRow
-                  title={t('modelRouterTextReasoner')}
-                  description={t('modelRouterTextReasonerDesc')}
+                  title={t('modelAccessMode')}
+                  description={t('modelAccessModeDesc')}
+                  wideControl
                   control={
-                    <ModelRouterRoleFields
+                    <ModelAccessSettings
+                      form={form}
+                      update={update}
                       t={t}
-                      baseUrl={defaultModelRouterProfile.textReasoner.baseUrl}
-                      apiKey={defaultModelRouterProfile.textReasoner.apiKey}
-                      model={defaultModelRouterProfile.textReasoner.model}
-                      baseUrlPlaceholder={t('modelRouterTextReasonerBaseUrlPlaceholder')}
-                      modelPlaceholder={t('modelRouterTextReasonerModelPlaceholder')}
-                      secretVisible={modelRouterSecretVisibility.textReasoner}
-                      onToggleSecret={() => toggleModelRouterSecret('textReasoner')}
-                      onChange={updateTextReasoner}
+                      serviceProbeEnabled={saveStatus === 'idle' || saveStatus === 'saved'}
                     />
-                  }
-                />
-                <SettingRow
-                  title={t('modelRouterVisionTranslator')}
-                  description={t('modelRouterVisionTranslatorDesc')}
-                  control={
-                    <ModelRouterRoleFields
-                      t={t}
-                      baseUrl={defaultModelRouterProfile.translators.vision.baseUrl}
-                      apiKey={defaultModelRouterProfile.translators.vision.apiKey}
-                      model={defaultModelRouterProfile.translators.vision.model}
-                      baseUrlPlaceholder={t('modelRouterVisionTranslatorBaseUrlPlaceholder')}
-                      modelPlaceholder={t('modelRouterVisionTranslatorModelPlaceholder')}
-                      secretVisible={modelRouterSecretVisibility.visionTranslator}
-                      onToggleSecret={() => toggleModelRouterSecret('visionTranslator')}
-                      onChange={updateVisionTranslator}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('modelRouterImageGenerator')}
-                  description={t('modelRouterImageGeneratorDesc')}
-                  control={
-                    <ModelRouterRoleFields
-                      t={t}
-                      baseUrl={defaultModelRouterProfile.imageGenerator.baseUrl}
-                      apiKey={defaultModelRouterProfile.imageGenerator.apiKey}
-                      model={defaultModelRouterProfile.imageGenerator.model}
-                      baseUrlPlaceholder={t('modelRouterImageGeneratorBaseUrlPlaceholder')}
-                      modelPlaceholder={t('modelRouterImageGeneratorModelPlaceholder')}
-                      secretVisible={modelRouterSecretVisibility.imageGenerator}
-                      onToggleSecret={() => toggleModelRouterSecret('imageGenerator')}
-                      onChange={updateImageGenerator}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('modelRouterScientificTranslator')}
-                  description={t('modelRouterScientificTranslatorDesc')}
-                  control={
-                    <ModelRouterRoleFields
-                      t={t}
-                      baseUrl={defaultModelRouterProfile.translators.scientific.baseUrl}
-                      apiKey={defaultModelRouterProfile.translators.scientific.apiKey}
-                      model={defaultModelRouterProfile.translators.scientific.model}
-                      baseUrlPlaceholder={t('modelRouterScientificTranslatorBaseUrlPlaceholder')}
-                      modelPlaceholder={t('modelRouterScientificTranslatorModelPlaceholder')}
-                      secretVisible={modelRouterSecretVisibility.scientificTranslator}
-                      onToggleSecret={() => toggleModelRouterSecret('scientificTranslator')}
-                      onChange={updateScientificTranslator}
-                    />
-                  }
-                />
-                <SettingRow
-                  title={t('modelRouterConfigFile')}
-                  description={t('modelRouterConfigFileDesc')}
-                  control={
-                    <div className="grid gap-2">
-                      <button
-                        type="button"
-                        onClick={() => void openModelRouterConfigFile()}
-                        className="inline-flex w-full items-center justify-center gap-1.5 rounded-xl border border-ds-border bg-ds-card px-3 py-2 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-                      >
-                        <FolderOpen className="h-4 w-4" />
-                        {t('modelRouterOpenConfigFile')}
-                      </button>
-                      {modelRouterConfigNotice ? <InlineNoticeView notice={modelRouterConfigNotice} /> : null}
-                    </div>
                   }
                 />
               </SettingsCard>
+              {modelAccess?.mode === 'api' ? <details className="mt-6 overflow-hidden rounded-2xl border border-ds-border bg-ds-card/95 shadow-sm shadow-black/5 dark:shadow-black/25">
+                <summary className="cursor-pointer px-5 py-3 text-[14px] font-semibold text-ds-ink hover:bg-ds-hover">
+                  {t('modelAccessAdvancedCapabilities')}
+                  <span className="ml-2 text-[12px] font-normal text-ds-muted">
+                    {t('modelAccessAdvancedCapabilitiesDesc')}
+                  </span>
+                </summary>
+                <div className="divide-y divide-ds-border-muted border-t border-ds-border-muted px-2 py-1">
+                  <SettingRow
+                    title={t('modelRouterVisionTranslator')}
+                    description={t('modelRouterVisionTranslatorDesc')}
+                    wideControl
+                    control={
+                      <GenericApiMemberFields
+                        member={modelCapabilities.translators.vision}
+                        onChange={(patch) => update({
+                          modelRouter: { profiles: { default: { translators: { vision: patch } } } }
+                        })}
+                        t={t}
+                        testId="vision"
+                        showProtocol
+                        baseUrlPlaceholder={t('modelRouterVisionTranslatorBaseUrlPlaceholder')}
+                        modelPlaceholder={t('modelRouterVisionTranslatorModelPlaceholder')}
+                      />
+                    }
+                  />
+                  <SettingRow
+                    title={t('modelRouterImageGenerator')}
+                    description={t('modelRouterImageGeneratorDesc')}
+                    wideControl
+                    control={
+                      <GenericApiMemberFields
+                        member={modelCapabilities.imageGenerator}
+                        onChange={(patch) => update({
+                          modelRouter: { profiles: { default: { imageGenerator: patch } } }
+                        })}
+                        t={t}
+                        testId="image"
+                        baseUrlPlaceholder={t('modelRouterImageGeneratorBaseUrlPlaceholder')}
+                        modelPlaceholder={t('modelRouterImageGeneratorModelPlaceholder')}
+                      />
+                    }
+                  />
+                  <SettingRow
+                    title={t('modelRouterScientificTranslator')}
+                    description={t('modelRouterScientificTranslatorDesc')}
+                    wideControl
+                    control={
+                      <GenericApiMemberFields
+                        member={modelCapabilities.translators.scientific}
+                        onChange={(patch) => update({
+                          modelRouter: { profiles: { default: { translators: { scientific: patch } } } }
+                        })}
+                        t={t}
+                        testId="scientific"
+                        baseUrlPlaceholder={t('modelRouterScientificTranslatorBaseUrlPlaceholder')}
+                        modelPlaceholder={t('modelRouterScientificTranslatorModelPlaceholder')}
+                      />
+                    }
+                  />
+                </div>
+              </details> : null}
               <SettingsCard title={t('sectionGeneral')}>
                 <SettingRow
                   title={t('imageGenerationComponentSegmentationRunner')}

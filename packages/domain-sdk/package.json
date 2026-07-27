@@ -1,0 +1,36 @@
+{
+  "name": "@sciforge/domain-sdk",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "private": false,
+  "description": "Pure contracts for trusted compile-time SciForge domain packages.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./contract": "./src/contract.ts",
+    "./host": "./src/host.ts",
+    "./main": "./src/main.ts",
+    "./node/electron-node-executable": "./src/node/electron-node-executable.ts",
+    "./node/workspace-paths": "./src/node/workspace-paths.ts",
+    "./renderer": "./src/renderer.ts",
+    "./visual-source": "./src/visual-source.ts",
+    "./workspace-preview": "./src/workspace-preview.ts"
+  },
+  "files": [
+    "src",
+    "package.json",
+    "README.md"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.8.2"
+  }
+}

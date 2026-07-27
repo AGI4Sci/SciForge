@@ -1,4 +1,0 @@
-# Evidence-DAG engine — dependency-light by design.
-# Core + HTTP service + LLM client + benchmark all use only the stdlib,
-# except graph algorithms which use networkx.
-networkx>=3.0

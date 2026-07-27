@@ -76,4 +76,48 @@ describe('RightPanelContextStateMemory', () => {
     memory.forget('context')
     expect(memory.size).toBe(0)
   })
+
+  it('releases only the disposed Session contexts', () => {
+    const memory = new RightPanelContextStateMemory()
+    const first = rightPanelContextStateKey({ mode: 'file-pdf', threadId: 'session-1', resourceId: 'a.pdf' })
+    const second = rightPanelContextStateKey({ mode: 'file-pdf', threadId: 'session-2', resourceId: 'a.pdf' })
+    memory.remember(first, { currentPage: 4 })
+    memory.remember(second, { currentPage: 9 })
+
+    memory.forgetThread('session-1')
+
+    expect(memory.read(first)).toBeNull()
+    expect(memory.read(second)).toEqual({ currentPage: 9 })
+  })
+
+  it('moves every remembered context when a Session identity is handed off', () => {
+    const memory = new RightPanelContextStateMemory()
+    const previousPdf = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-1',
+      resourceId: 'a.pdf'
+    })
+    const previousChildren = rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'session-1'
+    })
+    const nextPdf = rightPanelContextStateKey({
+      mode: 'file-pdf',
+      threadId: 'session-2',
+      resourceId: 'a.pdf'
+    })
+    const nextChildren = rightPanelContextStateKey({
+      mode: 'child-agents',
+      threadId: 'session-2'
+    })
+    memory.remember(previousPdf, { currentPage: 4 })
+    memory.remember(previousChildren, { selectedChildId: 'review' })
+
+    memory.moveThread('session-1', 'session-2')
+
+    expect(memory.read(previousPdf)).toBeNull()
+    expect(memory.read(previousChildren)).toBeNull()
+    expect(memory.read(nextPdf)).toEqual({ currentPage: 4 })
+    expect(memory.read(nextChildren)).toEqual({ selectedChildId: 'review' })
+  })
 })

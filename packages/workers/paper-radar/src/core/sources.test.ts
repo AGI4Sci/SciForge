@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { fetchArxivMetadata } from './sources.js';
+import { fetchArxivMetadata, fetchBiorxivMetadata } from './sources.js';
 
 test('arXiv OAI sync rate-limits before following a resumption token', async () => {
   const requests: string[] = [];
@@ -33,6 +33,22 @@ test('arXiv OAI sync rate-limits before following a resumption token', async () 
   assert.deepEqual(
     result.papers.map((paper) => paper.id),
     ['arxiv:2606.00001', 'arxiv:2606.00002'],
+  );
+});
+
+test('source sync rejects a stalled upstream request after the configured timeout', async () => {
+  const fetchImpl = (async (_input: string | URL | Request, init?: RequestInit) => (
+    await new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), { once: true });
+    })
+  )) as typeof fetch;
+
+  await assert.rejects(
+    fetchBiorxivMetadata(
+      { from: '2026-06-16', to: '2026-06-17', maxRecords: 1 },
+      { fetchImpl, requestTimeoutMs: 5 },
+    ),
+    /timed out after 5 ms/i,
   );
 });
 

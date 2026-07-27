@@ -1,11 +1,11 @@
 import { z } from 'zod'
-import type { VisualInspectionEvidence } from './visual-inspection.js'
+import type {
+  VisualArtifactMimeType,
+  VisualInspectionEvidence
+} from './visual-inspection.js'
 
 export const WORKSPACE_TREE_RESOURCE_URI = 'workspace://tree'
 export const WORKSPACE_FILE_RESOURCE_URI_TEMPLATE = 'workspace://file/{+path}'
-export const VISIBLE_CONTEXT_RESOURCE_URI = 'sciforge://visible-context'
-export const VISIBLE_CONTEXT_SCHEMA_VERSION = 2
-export const VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION = 1
 
 export const WORKSPACE_INTEL_DEFAULT_READ_BYTES = 64 * 1024
 export const WORKSPACE_INTEL_MAX_READ_BYTES = 1_500_000
@@ -14,12 +14,9 @@ export const WORKSPACE_INTEL_DEFAULT_LIST_LIMIT = 200
 export const WORKSPACE_INTEL_MAX_LIST_LIMIT = 2_000
 export const WORKSPACE_INTEL_MAX_TREE_DEPTH = 12
 export const WorkspaceIntelToolNames = [
-  'gui_visible_context',
-  'gui_visual_capture',
   'gui_workspace_list',
   'gui_workspace_tree',
   'gui_workspace_read',
-  'gui_workspace_preview',
   'gui_workspace_reference_list',
   'gui_workspace_reference_preview',
   'gui_workspace_skill_list',
@@ -40,18 +37,10 @@ export type WorkspaceIntelErrorCode =
   | 'binary_file'
   | 'invalid_request'
   | 'skill_not_found'
-  | 'visible_context_unavailable'
-  | 'visual_capture_unavailable'
-  | 'visual_capture_timeout'
-  | 'visual_capture_failed'
-  | 'invalid_visual_capture_request'
-  | 'stale_visible_context'
-  | 'visual_target_not_found'
-  | 'visual_target_bounds_unavailable'
-  | 'visual_capture_request_expired'
-  | 'visual_capture_broker_failed'
   | 'visual_inspection_unavailable'
   | 'visual_inspection_invalid'
+  | 'unsupported_image_format'
+  | 'image_too_large'
   | 'read_failed'
 
 export type WorkspaceIntelError = {
@@ -195,93 +184,21 @@ export type WorkspaceSkillReadResult = WorkspaceIntelFailure | {
   nextOffset?: number
 }
 
-export type VisibleContextResource = {
-  kind: string
-  role?: string
-  title?: string
-  accessHint?: string
-  resourceUri?: string
-  workspaceRoot?: string
-  path?: string
-  relativePath?: string
-  name?: string
-  mimeType?: string
-  fileKind?: string
-  size?: number
-  mtimeMs?: number
-  annotationCount?: number
-  threadCount?: number
-  openThreadCount?: number
-  selectedThreadId?: string | null
-  updatedAt?: string
-  metadata?: Record<string, unknown>
-}
-
-export type VisualContextTarget = {
+export type WorkspaceImageArtifact = {
   id: string
-  kind: 'component' | 'document-page' | 'region' | 'window'
-  contentType?: string
-  bounds?: { x: number; y: number; width: number; height: number }
-  page?: number
-  active?: boolean
-  metadata?: Record<string, unknown>
-}
-
-export type VisibleContextVisualSnapshotResource = VisibleContextResource & {
-  kind: 'visualSnapshot'
-  role: 'window' | 'target'
+  relativePath: string
   path: string
-  mimeType: 'image/png'
-  capturedAt: string
-  width: number
-  height: number
-  scaleFactor: number
-  windowId: string
-  revision: number
-  componentId?: string
-  targetId?: string
-  target?: VisualContextTarget
+  mimeType: VisualArtifactMimeType
+  size: number
+  mtimeMs: number
+  sha256: string
 }
 
-export type VisibleContextComponent = {
-  id: string
-  region: string
-  component: string
-  title?: string
-  visible: boolean
-  priority?: number
-  updatedAt: string
-  summary: string
-  resources?: VisibleContextResource[]
-  visualTargets?: VisualContextTarget[]
-  state?: Record<string, unknown>
-}
-
-export type VisibleContextResult = WorkspaceIntelFailure | {
+export type WorkspaceImageInspectResult = WorkspaceIntelFailure | {
   ok: true
-  snapshotPath?: string
-  windowId?: string
-  revision?: number
-  publishedAt?: string
-  freshness?: {
-    stale: boolean
-    ageMs: number
-    staleAfterMs: number
-  }
-  activeThreadId?: string | null
-  workspaceRoot?: string
-  route?: string
-  components: VisibleContextComponent[]
-  componentCount: number
-  unavailable?: boolean
-  message?: string
-}
-
-export type VisualCaptureResult = WorkspaceIntelFailure | {
-  ok: true
-  requestId: string
-  resource: VisibleContextVisualSnapshotResource
-  inspection?: VisualInspectionEvidence
+  workspaceRoot: string
+  artifacts: WorkspaceImageArtifact[]
+  evidence: VisualInspectionEvidence
 }
 
 export const WorkspaceRootInputSchema = z.object({
@@ -330,115 +247,55 @@ export const WorkspaceSkillReadInputSchema = WorkspaceRootInputSchema.extend({
   maxBytes: z.number().int().min(1).max(WORKSPACE_INTEL_MAX_READ_BYTES).optional()
 }).strict()
 
-export const VisibleContextInputSchema = z.object({
-  includeHidden: z.boolean().optional(),
-  region: z.string().trim().min(1).max(128).optional(),
-  componentId: z.string().trim().min(1).max(256).optional()
-}).strict()
-
-export const VisualCaptureInputSchema = z.object({
-  scope: z.enum(['window', 'target']),
-  componentId: z.string().trim().min(1).max(256).optional(),
-  targetId: z.string().trim().min(1).max(256).optional(),
-  requireSemanticInspection: z.boolean().optional(),
-  inspectionPrompt: z.string().trim().min(1).max(16_000).optional(),
-  truthLockedElements: z.array(z.string().trim().min(1).max(1_000)).max(64).optional()
-}).strict().superRefine((request, context) => {
-  if (request.scope === 'target' && (!request.componentId || !request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['targetId'],
-      message: 'Target captures require both componentId and targetId.'
-    })
+const visualInputRegionSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  label: z.string().trim().min(1).max(512).optional(),
+  x: z.number().finite().min(0).max(1),
+  y: z.number().finite().min(0).max(1),
+  width: z.number().finite().positive().max(1),
+  height: z.number().finite().positive().max(1)
+}).strict().superRefine((region, context) => {
+  if (region.x + region.width > 1) {
+    context.addIssue({ code: 'custom', path: ['width'], message: 'Normalized regions must remain inside the image.' })
   }
-  if (request.scope === 'window' && (request.componentId || request.targetId)) {
-    context.addIssue({
-      code: 'custom',
-      path: ['scope'],
-      message: 'Window captures cannot include target identifiers.'
-    })
+  if (region.y + region.height > 1) {
+    context.addIssue({ code: 'custom', path: ['height'], message: 'Normalized regions must remain inside the image.' })
   }
 })
 
-const timestampSchema = z.string().datetime({ offset: true })
-const absolutePathSchema = z.string().trim().min(1).max(4096).refine(
-  (value) => value.startsWith('/') || /^[A-Za-z]:[\\/]/.test(value),
-  { message: 'Visual snapshot paths must be absolute.' }
-)
-
-export const VisualContextTargetSchema = z.object({
-  id: z.string().trim().min(1).max(256),
-  kind: z.enum(['component', 'document-page', 'region', 'window']),
-  contentType: z.string().trim().max(128).optional(),
-  bounds: z.object({
-    x: z.number().finite(),
-    y: z.number().finite(),
-    width: z.number().finite().positive(),
-    height: z.number().finite().positive()
-  }).strict().optional(),
-  page: z.number().int().positive().optional(),
-  active: z.boolean().optional(),
-  metadata: z.record(z.string(), z.unknown()).optional()
-}).strict().superRefine((target, context) => {
-  if (target.kind !== 'window' && !target.bounds) {
-    context.addIssue({ code: 'custom', path: ['bounds'], message: 'Element visual targets require bounds.' })
-  }
-  if (target.kind === 'document-page' && target.page === undefined) {
-    context.addIssue({ code: 'custom', path: ['page'], message: 'Document-page visual targets require a page number.' })
-  }
-})
-
-export const VisibleContextVisualSnapshotResourceSchema = z.object({
-  kind: z.literal('visualSnapshot'),
-  role: z.enum(['window', 'target']),
-  title: z.string().trim().max(256).optional(),
-  accessHint: z.string().trim().max(128).optional(),
-  resourceUri: z.string().trim().max(1024).optional(),
-  workspaceRoot: z.string().trim().min(1).max(4096).optional(),
-  path: absolutePathSchema,
-  relativePath: z.string().trim().min(1).max(4096).optional(),
-  name: z.string().trim().max(512).optional(),
-  mimeType: z.literal('image/png'),
-  fileKind: z.string().trim().max(128).optional(),
-  size: z.number().finite().nonnegative().optional(),
-  mtimeMs: z.number().finite().nonnegative().optional(),
-  annotationCount: z.number().int().nonnegative().optional(),
-  threadCount: z.number().int().nonnegative().optional(),
-  openThreadCount: z.number().int().nonnegative().optional(),
-  selectedThreadId: z.string().trim().max(256).nullable().optional(),
-  updatedAt: z.string().trim().max(128).optional(),
-  metadata: z.record(z.string(), z.unknown()).optional(),
-  capturedAt: timestampSchema,
-  width: z.number().int().positive(),
-  height: z.number().int().positive(),
-  scaleFactor: z.number().finite().positive(),
-  windowId: z.string().trim().min(1).max(256),
-  revision: z.number().int().nonnegative(),
-  componentId: z.string().trim().min(1).max(256).optional(),
-  targetId: z.string().trim().min(1).max(256).optional(),
-  target: VisualContextTargetSchema.optional()
+const visualOutputIntentSchema = z.object({
+  kind: z.enum(['description', 'ocr', 'comparison', 'quality-review', 'structured-extraction', 'custom']),
+  instructions: z.string().trim().min(1).max(4_000).optional()
 }).strict()
 
-export const VisualCaptureBrokerResponseSchema = z.discriminatedUnion('ok', [
-  z.object({
-    schemaVersion: z.literal(VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION),
-    requestId: z.string().trim().min(1).max(256),
-    completedAt: timestampSchema,
-    ok: z.literal(true),
-    capture: VisibleContextVisualSnapshotResourceSchema
-  }).strict(),
-  z.object({
-    schemaVersion: z.literal(VISIBLE_CONTEXT_CAPTURE_BROKER_SCHEMA_VERSION),
-    requestId: z.string().trim().min(1).max(256),
-    completedAt: timestampSchema,
-    ok: z.literal(false),
-    error: z.object({
-      code: z.string().trim().min(1).max(128),
-      message: z.string().trim().min(1).max(1000),
-      retryable: z.boolean()
-    }).strict()
-  }).strict()
-])
+const workspaceImageArtifactInputSchema = z.object({
+  id: z.string().trim().min(1).max(128),
+  path: z.string().trim().min(1).max(4096),
+  regions: z.array(visualInputRegionSchema).max(64).optional()
+}).strict().superRefine((artifact, context) => {
+  const regionIds = new Set<string>()
+  artifact.regions?.forEach((region, index) => {
+    if (regionIds.has(region.id)) {
+      context.addIssue({ code: 'custom', path: ['regions', index, 'id'], message: 'Region ids must be unique.' })
+    }
+    regionIds.add(region.id)
+  })
+})
+
+export const WorkspaceImageInspectInputSchema = WorkspaceRootInputSchema.extend({
+  task: z.string().trim().min(1).max(16_000),
+  artifacts: z.array(workspaceImageArtifactInputSchema).min(1).max(8),
+  truthLocks: z.array(z.string().trim().min(1).max(1_000)).max(64).optional(),
+  outputIntent: visualOutputIntentSchema.optional()
+}).strict().superRefine((input, context) => {
+  const ids = new Set<string>()
+  input.artifacts.forEach((artifact, index) => {
+    if (ids.has(artifact.id)) {
+      context.addIssue({ code: 'custom', path: ['artifacts', index, 'id'], message: 'Artifact ids must be unique.' })
+    }
+    ids.add(artifact.id)
+  })
+})
 
 export type WorkspaceListInput = z.infer<typeof WorkspaceListInputSchema>
 export type WorkspaceTreeInput = z.infer<typeof WorkspaceTreeInputSchema>
@@ -448,9 +305,7 @@ export type WorkspaceReferenceListInput = z.infer<typeof WorkspaceReferenceListI
 export type WorkspaceReferencePreviewInput = z.infer<typeof WorkspaceReferencePreviewInputSchema>
 export type WorkspaceSkillListInput = z.infer<typeof WorkspaceSkillListInputSchema>
 export type WorkspaceSkillReadInput = z.infer<typeof WorkspaceSkillReadInputSchema>
-export type VisibleContextInput = z.infer<typeof VisibleContextInputSchema>
-export type VisualCaptureInput = z.infer<typeof VisualCaptureInputSchema>
-export type VisualCaptureBrokerResponse = z.infer<typeof VisualCaptureBrokerResponseSchema>
+export type WorkspaceImageInspectInput = z.infer<typeof WorkspaceImageInspectInputSchema>
 
 export function workspaceFileResourceUri(relativePath: string): string {
   const normalized = relativePath.replace(/\\/g, '/').replace(/^\/+/, '')

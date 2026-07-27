@@ -30,6 +30,7 @@ type ToolWorkerManifest = {
 export const MODEL_ROUTER_WORKER_VERSION = '0.1.0';
 export const MODEL_ROUTER_WORKER_TRANSPORT = 'http';
 export const MODEL_ROUTER_WORKER_CAPABILITIES = [
+  'model_router_capabilities',
   'model_router_responses',
   'model_router_messages',
   'model_router_image_generations',
@@ -38,7 +39,7 @@ export const MODEL_ROUTER_WORKER_CAPABILITIES = [
   'image_generation',
   'vision_translation',
   'scientific_translation',
-  'refs_first_trace',
+  'full_trace',
 ] as const;
 
 export type ModelRouterWorkerTransport = typeof MODEL_ROUTER_WORKER_TRANSPORT;
@@ -78,9 +79,19 @@ export const modelRouterManifest: ToolWorkerManifest = {
   protocolVersion: 'sciforge.tools.v1',
   workerId: 'sciforge.model-router',
   workerVersion: MODEL_ROUTER_WORKER_VERSION,
-  description: 'Provider-compatible SciForge /v1/responses, /v1/messages, /v1/images/generations, and /v1/images/edits facade for text reasoning, image generation/editing, and refs-first visual/scientific translation.',
+  description: 'Provider-compatible SciForge /v1/responses, /v1/messages, /v1/images/generations, and /v1/images/edits facade with unified full request tracing.',
   capabilities: [...MODEL_ROUTER_WORKER_CAPABILITIES],
   providers: [
+    {
+      providerId: 'sciforge.model-router.capabilities',
+      capabilityId: 'model_router_capabilities',
+      transport: 'http',
+      invokePath: '/v1/capabilities',
+      healthPath: '/healthz',
+      manifestPath: '/manifest',
+      permissions: ['network'],
+      status: 'available',
+    },
     {
       providerId: 'sciforge.model-router.responses',
       capabilityId: 'model_router_responses',
@@ -154,7 +165,6 @@ export const modelRouterManifest: ToolWorkerManifest = {
       },
       outputSchema: {
         output_text: { type: 'string', required: true },
-        traceRef: { type: 'string', required: true },
       },
       sideEffects: ['network', 'filesystem'],
       timeoutMs: 120000,

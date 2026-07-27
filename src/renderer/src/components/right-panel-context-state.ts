@@ -83,6 +83,31 @@ export class RightPanelContextStateMemory {
     if (normalizedKey) this.states.delete(normalizedKey)
   }
 
+  forgetThread(threadId: string | null | undefined): void {
+    const normalizedThread = normalizedPart(threadId)
+    if (normalizedThread === '-') return
+    for (const key of this.states.keys()) {
+      if (key.split('|')[2] === normalizedThread) this.states.delete(key)
+    }
+  }
+
+  moveThread(
+    previousThreadId: string | null | undefined,
+    nextThreadId: string | null | undefined
+  ): void {
+    const previousThread = normalizedPart(previousThreadId)
+    const nextThread = normalizedPart(nextThreadId)
+    if (previousThread === '-' || nextThread === '-' || previousThread === nextThread) return
+    for (const [key, value] of [...this.states.entries()]) {
+      const parts = key.split('|')
+      if (parts[2] !== previousThread) continue
+      parts[2] = nextThread
+      this.states.delete(key)
+      this.states.set(parts.join('|'), value)
+    }
+    this.evictOverflow()
+  }
+
   clear(): void {
     this.states.clear()
   }
@@ -114,4 +139,15 @@ export function rememberRightPanelContextState<T extends StoredState>(
   patch: Partial<T>
 ): T | null {
   return rightPanelContextStateMemory.remember<T>(key, patch)
+}
+
+export function forgetRightPanelContextStateForSession(sessionId: string): void {
+  rightPanelContextStateMemory.forgetThread(sessionId)
+}
+
+export function moveRightPanelContextStateOwner(
+  previousSessionId: string,
+  nextSessionId: string
+): void {
+  rightPanelContextStateMemory.moveThread(previousSessionId, nextSessionId)
 }

@@ -14,44 +14,48 @@ import {
   Download,
   ExternalLink,
   FileEdit,
-  GitMerge,
   FolderOpen,
-  Globe2,
   Loader2,
   MessageCircleMore,
-  Network,
   Palette,
-  Newspaper,
   RefreshCw,
   RotateCcw,
-  Terminal
+  Terminal,
+  Workflow
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { readPreferredEditorId, writePreferredEditorId } from '../../lib/editor-preferences'
 import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
+import { AnchoredCommentsTopBarActions } from '../anchored-comments'
+import type {
+  RegisteredWorkbenchRightPanelContribution
+} from '../../domain-modules/workbench-right-panel-slot'
 
-export type RightPanelMode =
-  | 'todo'
-  | 'changes'
-  | 'browser'
-  | 'evidence'
-  | 'project-dag'
-  | 'file'
-  | 'plan'
-  | 'sdd-ai'
-  | 'checkpoints'
-  | 'paper'
-  | 'visual-review'
-  | 'child-agents'
-  | null
+export const RIGHT_PANEL_MODES = [
+  'todo',
+  'changes',
+  'workflow',
+  'file',
+  'plan',
+  'sdd-ai',
+  'checkpoints',
+  'visual-review',
+  'child-agents'
+] as const
+
+export type CoreRightPanelMode = (typeof RIGHT_PANEL_MODES)[number]
+export type ContributedRightPanelMode = string & {
+  readonly __contributedRightPanelMode?: never
+}
+export type RightPanelMode = CoreRightPanelMode | ContributedRightPanelMode | null
 
 type Props = {
   rightPanelMode: RightPanelMode
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   workspaceRoot?: string
   planPanelEnabled?: boolean
-  paperRadarEnabled?: boolean
+  rightPanelContributions?: readonly RegisteredWorkbenchRightPanelContribution[]
   sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
@@ -71,7 +75,7 @@ export function WorkbenchTopBar({
   onToggleRightPanelMode,
   workspaceRoot = '',
   planPanelEnabled = false,
-  paperRadarEnabled = false,
+  rightPanelContributions = [],
   sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
@@ -98,15 +102,19 @@ export function WorkbenchTopBar({
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
   const items = [
-    ...(paperRadarEnabled ? [{ mode: 'paper' as const, label: t('rightPanelPaperRadar'), icon: Newspaper }] : []),
+    ...rightPanelContributions
+      .filter(({ contribution }) => contribution.isAvailable())
+      .map(({ contribution }) => ({
+        mode: contribution.mode,
+        label: t(contribution.label),
+        icon: contribution.icon
+      })),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
-    { mode: 'evidence' as const, label: t('rightPanelEvidenceDag'), icon: Network },
-    { mode: 'project-dag' as const, label: t('rightPanelProjectDag'), icon: GitMerge },
+    { mode: 'workflow' as const, label: t('workflow'), icon: Workflow },
     { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
     { mode: 'file' as const, label: t('rightPanelFiles'), icon: FolderOpen },
     { mode: 'changes' as const, label: t('rightPanelChanges'), icon: FileEdit },
-    { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw },
-    { mode: 'browser' as const, label: t('rightPanelBrowser'), icon: Globe2 }
+    { mode: 'checkpoints' as const, label: t('rightPanelCheckpoints'), icon: RotateCcw }
   ]
   const selectedEditor = useMemo(
     () => editors.find((editor) => editor.id === selectedEditorId) ?? editors[0],
@@ -538,21 +546,26 @@ export function WorkbenchTopBar({
             >
               <Icon className="h-4 w-4" strokeWidth={1.75} />
             </button>
-            {isChanges && onToggleTerminal ? (
-              <button
-                type="button"
-                onClick={onToggleTerminal}
-                className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
-                  terminalOpen
-                    ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
-                    : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
-                }`}
-                aria-label={t('rightPanelTerminal')}
-                aria-pressed={terminalOpen}
-                title={t('rightPanelTerminal')}
-              >
-                <Terminal className="h-4 w-4" strokeWidth={1.75} />
-              </button>
+            {isChanges ? (
+              <>
+                {onToggleTerminal ? (
+                  <button
+                    type="button"
+                    onClick={onToggleTerminal}
+                    className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+                      terminalOpen
+                        ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                        : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+                    }`}
+                    aria-label={t('rightPanelTerminal')}
+                    aria-pressed={terminalOpen}
+                    title={t('rightPanelTerminal')}
+                  >
+                    <Terminal className="h-4 w-4" strokeWidth={1.75} />
+                  </button>
+                ) : null}
+                <AnchoredCommentsTopBarActions />
+              </>
             ) : null}
           </Fragment>
         )

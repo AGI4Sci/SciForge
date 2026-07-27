@@ -22,7 +22,6 @@ export type RemoteChannelModel = ScheduleModel
 export const DEFAULT_MODEL_ROUTER_BASE_URL = 'http://127.0.0.1:3892/v1'
 export const DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS = 'sciforge-router'
 export const DEFAULT_MODEL_ROUTER_PROVIDER_ID = 'sciforge-model-router'
-export const DEFAULT_DEEPSEEK_BASE_URL = DEFAULT_MODEL_ROUTER_BASE_URL
 export const DEFAULT_REMOTE_CHANNEL_MODEL = 'auto'
 export const REMOTE_CHANNEL_MODEL_IDS = ['auto', 'deepseek-v4-pro', 'deepseek-v4-flash'] as const
 export const DEFAULT_SCHEDULE_MODEL = DEFAULT_REMOTE_CHANNEL_MODEL
@@ -43,49 +42,39 @@ export const DEFAULT_WRITE_INLINE_LONG_COMPLETION_MIN_ACCEPT_SCORE = 0.36
 export const DEFAULT_WRITE_INLINE_LONG_COMPLETION_MAX_TOKENS = 256
 export const DEFAULT_LOCAL_RUNTIME_PORT = 8899
 export const DEFAULT_WEIXIN_BRIDGE_RPC_URL = 'http://127.0.0.1:18790/api/v1/admin/rpc'
-export const DEFAULT_MODEL_PROVIDER_ID = 'deepseek'
 export type { SpeechToTextSettingsPatchV1, SpeechToTextSettingsV1 } from './speech-to-text'
-export type ModelProviderProfileV1 = {
-  id: string
-  name: string
-  apiKey: string
-  baseUrl: string
-  models: string[]
-}
-export type ModelProviderSettingsV1 = {
-  apiKey: string
-  baseUrl: string
-  providers: ModelProviderProfileV1[]
+
+export const MODEL_ACCESS_MODES = ['api', 'coding-plan'] as const
+export type ModelAccessMode = typeof MODEL_ACCESS_MODES[number]
+
+export type ModelAccessSettingsV1 = {
+  mode: ModelAccessMode
+  planAdapterId: string
 }
 
-export type ModelProviderProfilePatchV1 = Partial<ModelProviderProfileV1>
-export type ModelProviderSettingsPatchV1 = Partial<
-  Omit<ModelProviderSettingsV1, 'providers'>
-> & {
-  providers?: ModelProviderProfilePatchV1[]
-}
+export type ModelAccessSettingsPatchV1 = Partial<ModelAccessSettingsV1>
 
-export type ModelRouterMemberProviderSettingsV1 = {
-  provider: string
+export const MODEL_ROUTER_PROTOCOL_PREFERENCES = [
+  'auto',
+  'responses',
+  'chat-completions',
+  'anthropic-messages'
+] as const
+export type ModelRouterProtocolPreference = typeof MODEL_ROUTER_PROTOCOL_PREFERENCES[number]
+
+export type ModelRouterMemberSettingsV1 = {
   baseUrl: string
   apiKey: string
   model: string
-  maxSupplementRounds?: number
-}
-
-export type ModelRouterScientificTranslatorSettingsV1 = {
-  baseUrl: string
-  apiKey: string
-  model: string
-  timeoutMs?: number
+  protocol?: ModelRouterProtocolPreference
 }
 
 export type ModelRouterProfileSettingsV1 = {
-  textReasoner: ModelRouterMemberProviderSettingsV1
-  imageGenerator: ModelRouterMemberProviderSettingsV1
+  textReasoner: ModelRouterMemberSettingsV1
+  imageGenerator: ModelRouterMemberSettingsV1
   translators: {
-    vision: ModelRouterMemberProviderSettingsV1
-    scientific: ModelRouterScientificTranslatorSettingsV1
+    vision: ModelRouterMemberSettingsV1
+    scientific: ModelRouterMemberSettingsV1
   }
 }
 
@@ -100,18 +89,14 @@ export type ModelRouterSettingsV1 = {
   }
 }
 
-export type ModelRouterMemberProviderSettingsPatchV1 =
-  Partial<ModelRouterMemberProviderSettingsV1>
-
-export type ModelRouterScientificTranslatorSettingsPatchV1 =
-  Partial<ModelRouterScientificTranslatorSettingsV1>
+export type ModelRouterMemberSettingsPatchV1 = Partial<ModelRouterMemberSettingsV1>
 
 export type ModelRouterProfileSettingsPatchV1 = {
-  textReasoner?: ModelRouterMemberProviderSettingsPatchV1
-  imageGenerator?: ModelRouterMemberProviderSettingsPatchV1
+  textReasoner?: ModelRouterMemberSettingsPatchV1
+  imageGenerator?: ModelRouterMemberSettingsPatchV1
   translators?: {
-    vision?: ModelRouterMemberProviderSettingsPatchV1
-    scientific?: ModelRouterScientificTranslatorSettingsPatchV1
+    vision?: ModelRouterMemberSettingsPatchV1
+    scientific?: ModelRouterMemberSettingsPatchV1
   }
 }
 
@@ -153,8 +138,6 @@ export type LocalRuntimeSettingsV1 = {
   binaryPath: string
   port: number
   autoStart: boolean
-  /** Selected General model provider profile. Empty or missing means the default provider. */
-  providerId: string
   runtimeToken: string
   dataDir: string
   model: string
@@ -172,8 +155,6 @@ export type LocalRuntimeSettingsV1 = {
   storage: LocalRuntimeStorageSettingsV1
   /** Fallback compaction thresholds and summary behavior. Per-model thresholds live in local runtime config models.profiles. */
   contextCompaction: LocalRuntimeContextCompactionSettingsV1
-  /** Low-level model argument repair tuning. Runtime-neutral loop guards live in `runtimeGuards`. */
-  runtimeTuning: LocalRuntimeTuningSettingsV1
 }
 
 export type ResolvedLocalRuntimeSettingsV1 = LocalRuntimeSettingsV1 & {
@@ -229,50 +210,22 @@ export type LocalRuntimeContextCompactionSettingsV1 = {
   summaryInputMaxBytes: number
 }
 
-export type LocalRuntimeToolArgumentRepairSettingsV1 = {
-  maxStringBytes: number
-}
-
-export type LocalRuntimeToolBudgetProfileSettingsV1 = {
-  softLimit: number
-  hardLimit: number
-  maxAutomaticPhases: number
-  totalLimit: number
-}
-
-export type LocalRuntimeToolBudgetSettingsV1 = {
-  enabled: boolean
-  profiles: {
-    explanation: LocalRuntimeToolBudgetProfileSettingsV1
-    review: LocalRuntimeToolBudgetProfileSettingsV1
-    implementation: LocalRuntimeToolBudgetProfileSettingsV1
-    long: LocalRuntimeToolBudgetProfileSettingsV1
-  }
-}
-
-export type LocalRuntimeParallelismSettingsV1 = {
-  localReadOnly: number
-  networkMcp: number
-}
-
-export type LocalRuntimeTuningSettingsV1 = {
-  toolArgumentRepair: LocalRuntimeToolArgumentRepairSettingsV1
-  toolBudget: LocalRuntimeToolBudgetSettingsV1
-  parallelism: LocalRuntimeParallelismSettingsV1
-}
-
-export type RuntimeToolStormGuardSettingsV1 = {
+export type RuntimeExecutionGuardSettingsV1 = {
   enabled: boolean
   windowSize: number
-  threshold: number
+  exactRepeatThreshold: number
+  semanticFailureThreshold: number
 }
 
 export type RuntimeGuardSettingsV1 = {
-  toolStorm: RuntimeToolStormGuardSettingsV1
+  execution: RuntimeExecutionGuardSettingsV1
 }
 
 export type RuntimeGuardSettingsPatchV1 = {
-  toolStorm?: Partial<Pick<RuntimeToolStormGuardSettingsV1, 'enabled' | 'windowSize' | 'threshold'>>
+  execution?: Partial<Pick<
+    RuntimeExecutionGuardSettingsV1,
+    'enabled' | 'windowSize' | 'exactRepeatThreshold' | 'semanticFailureThreshold'
+  >>
 }
 
 export type AgentSubagentSettingsV1 = {
@@ -311,20 +264,13 @@ export type ClaudeRuntimeSettingsV1 = {
 }
 
 export type AgentRuntimeSettingsEnvelopeV1 = {
+  /** @deprecated Legacy/internal tuning only; SciForge is not a selectable runtime. */
   sciforge: LocalRuntimeSettingsV1
   codex?: CodexRuntimeSettingsV1
   claude?: ClaudeRuntimeSettingsV1
 }
 
 export type AgentRuntimeSettingsMapV1 = AgentRuntimeSettingsEnvelopeV1
-
-export type LocalRuntimeTuningSettingsPatchV1 = {
-  toolArgumentRepair?: Partial<LocalRuntimeToolArgumentRepairSettingsV1>
-  toolBudget?: Partial<Omit<LocalRuntimeToolBudgetSettingsV1, 'profiles'>> & {
-    profiles?: Partial<Record<keyof LocalRuntimeToolBudgetSettingsV1['profiles'], Partial<LocalRuntimeToolBudgetProfileSettingsV1>>>
-  }
-  parallelism?: Partial<LocalRuntimeParallelismSettingsV1>
-}
 
 export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<
   Omit<LocalRuntimeTokenEconomySettingsV1, 'historyHygiene'>
@@ -335,14 +281,13 @@ export type LocalRuntimeTokenEconomySettingsPatchV1 = Partial<
 export type LocalRuntimeSettingsPatchV1 = Partial<
   Omit<
     LocalRuntimeSettingsV1,
-    'mcpSearch' | 'storage' | 'contextCompaction' | 'runtimeTuning' | 'tokenEconomy'
+    'mcpSearch' | 'storage' | 'contextCompaction' | 'tokenEconomy'
   >
 > & {
   mcpSearch?: Partial<LocalRuntimeMcpSearchSettingsV1>
   tokenEconomy?: LocalRuntimeTokenEconomySettingsPatchV1
   storage?: Partial<LocalRuntimeStorageSettingsV1>
   contextCompaction?: Partial<LocalRuntimeContextCompactionSettingsV1>
-  runtimeTuning?: LocalRuntimeTuningSettingsPatchV1
 }
 
 export type AgentRuntimeSettingsEnvelopePatchV1 = {
@@ -772,6 +717,7 @@ export type WorkflowAiAgentConfigV1 = {
   prompt: string
   workspaceRoot: string
   runtimeId?: AgentRuntimeId
+  /** UI/model-catalog grouping metadata only; never selects credentials or an endpoint. */
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort
@@ -790,9 +736,9 @@ export type WorkflowLlmConfigV1 = {
 export type WorkflowGenerateImageConfigV1 = {
   /** Image prompt; supports {{json.x}} / {{text}} interpolation. */
   prompt: string
-  /** Provider profile (with an image capability) to use; empty falls back to the Settings image provider. */
+  /** UI/model-catalog grouping metadata only; image access always uses Model Router. */
   providerId: string
-  /** Image model name; empty uses the provider/Settings default. */
+  /** Image model name; empty uses the Model Router image role. */
   model: string
   /** Optional size override (e.g. "1024x1024"); empty uses the provider default. */
   size: string
@@ -927,6 +873,7 @@ export type WorkflowParameterExtractorConfigV1 = {
   instruction: string
   /** Fields to extract (reuses the typed input-field schema). */
   fields: WorkflowInputFieldV1[]
+  /** UI/model-catalog grouping metadata only; never selects credentials or an endpoint. */
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort
@@ -940,6 +887,7 @@ export type WorkflowQuestionClassifierConfigV1 = {
   source: string
   instruction: string
   categories: WorkflowClassifierCategoryV1[]
+  /** UI/model-catalog grouping metadata only; never selects credentials or an endpoint. */
   providerId: string
   model: string
   reasoningEffort: ScheduleReasoningEffort
@@ -1262,7 +1210,7 @@ export type WorkflowHookTriggerV1 = {
 export type WorkflowSettingsV1 = {
   enabled: boolean
   defaultWorkspaceRoot: string
-  /** Default model provider for new AI nodes. Empty inherits the local runtime provider. */
+  /** Default UI model-group id for new AI nodes; never selects credentials or an endpoint. */
   providerId?: string
   model: string
   mode: ScheduleRunMode
@@ -1460,7 +1408,7 @@ export type AppSettingsV1 = {
   locale: 'en' | 'zh'
   theme: 'system' | 'light' | 'dark'
   uiFontScale: UiFontScale
-  provider: ModelProviderSettingsV1
+  modelAccess?: ModelAccessSettingsV1
   modelRouter?: ModelRouterSettingsV1
   runtimeGuards?: RuntimeGuardSettingsV1
   agentCapabilities?: AgentCapabilitySettingsV1
@@ -1485,9 +1433,9 @@ export type AppSettingsV1 = {
 }
 
 export type AppSettingsPatch = Partial<
-  Omit<AppSettingsV1, 'provider' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
+  Omit<AppSettingsV1, 'modelAccess' | 'modelRouter' | 'agents' | 'log' | 'notifications' | 'appBehavior' | 'keyboardShortcuts' | 'write' | 'speechToText' | 'remoteChannel' | 'connectPhone' | 'schedule' | 'workflow' | 'remoteExecutor' | 'guiUpdate' | 'computerUse' | 'agentCapabilities' | 'imageGeneration'>
 > & {
-  provider?: ModelProviderSettingsPatchV1
+  modelAccess?: ModelAccessSettingsPatchV1
   modelRouter?: ModelRouterSettingsPatchV1
   runtimeGuards?: RuntimeGuardSettingsPatchV1
   agentCapabilities?: AgentCapabilitySettingsPatchV1

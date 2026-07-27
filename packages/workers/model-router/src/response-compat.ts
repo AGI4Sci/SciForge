@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto';
 
+import { normalizeProviderJsonSchema } from './provider-compat';
+
 export type JsonValue =
   | null
   | boolean
@@ -19,11 +21,15 @@ export type ResponsesRequest = {
   temperature?: unknown;
   top_p?: unknown;
   max_tokens?: unknown;
+  max_output_tokens?: unknown;
   parallel_tool_calls?: unknown;
   metadata?: unknown;
   asr_options?: unknown;
   reasoning?: unknown;
   reasoning_effort?: unknown;
+  thinking?: unknown;
+  stop?: unknown;
+  stream?: unknown;
 };
 
 type ResponseToolDescriptor = {
@@ -32,31 +38,7 @@ type ResponseToolDescriptor = {
   parameters: unknown;
 };
 
-const PROVIDER_TOOL_SCHEMA_MAX_DEPTH = 8;
-const PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES = 80;
-const PROVIDER_TOOL_SCHEMA_MAX_DESCRIPTION_CHARS = 1_000;
-const PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES = 120;
 const PROVIDER_TOOL_SCHEMA_MAX_STRING_CHARS = 2_000;
-const PROVIDER_TOOL_SCHEMA_KEYS = new Set([
-  'type',
-  'description',
-  'properties',
-  'required',
-  'additionalProperties',
-  'items',
-  'enum',
-  'minimum',
-  'maximum',
-  'exclusiveMinimum',
-  'exclusiveMaximum',
-  'minLength',
-  'maxLength',
-  'minItems',
-  'maxItems',
-  'pattern',
-  'format',
-  'nullable',
-]);
 
 export type AnthropicMessagesRequest = {
   model?: string;
@@ -68,7 +50,16 @@ export type AnthropicMessagesRequest = {
   top_p?: unknown;
   max_tokens?: unknown;
   metadata?: unknown;
+  thinking?: unknown;
+  stop_sequences?: unknown;
   stream?: unknown;
+};
+
+export type CanonicalTerminalDetails = {
+  protocol: 'chat-completions' | 'anthropic-messages';
+  finish_reason?: string;
+  stop_reason?: string;
+  stop_sequence?: string | null;
 };
 
 export function makeId(prefix: string): string {
@@ -90,15 +81,16 @@ export function messageOutputItem(text: string, id = makeId('msg')): JsonObject 
   };
 }
 
-export function reasoningOutputItem(text: string, id = makeId('rs')): JsonObject {
-  return {
+export function reasoningOutputItem(text: string, id = makeId('rs'), signature?: string): JsonObject {
+  return compactJsonObject({
     id,
     type: 'reasoning',
     summary: [{
       type: 'summary_text',
       text,
     }],
-  };
+    signature,
+  });
 }
 
 export function chatToolNameAliasesFromResponsesTools(tools: unknown): Record<string, string> {
@@ -125,11 +117,12 @@ export function responsesToChatCompletions(
     tool_choice: responseToolChoiceToChatToolChoice(request.tool_choice, toolAliases),
     temperature: request.temperature,
     top_p: request.top_p,
-    max_tokens: request.max_tokens,
+    max_tokens: request.max_output_tokens ?? request.max_tokens,
     parallel_tool_calls: request.parallel_tool_calls,
     metadata: request.metadata,
     asr_options: request.asr_options,
     reasoning_effort: reasoningEffort || undefined,
+    stop: request.stop,
   });
 }
 
@@ -139,6 +132,9 @@ export function chatCompletionToResponse(
   toolNameAliases: Record<string, string> = {},
 ): JsonObject {
   const completion = isRecord(payload) ? payload : {};
+  const choices = Array.isArray(completion.choices) ? completion.choices : [];
+  const firstChoice = isRecord(choices[0]) ? choices[0] : {};
+  const finishReason = stringValue(firstChoice.finish_reason);
   const message = firstChoiceMessage(completion);
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   const reasoningContent = messageReasoningContent(message);
@@ -151,14 +147,25 @@ export function chatCompletionToResponse(
     : responseTextFromMessage(message)
       ? [...reasoningItems, messageOutputItem(responseTextFromMessage(message))]
       : [];
+  const usage = canonicalUsageFromChatCompletion(completion);
+  const incompleteReason = finishReason === 'length'
+    ? 'max_output_tokens'
+    : finishReason === 'content_filter'
+      ? 'content_filter'
+      : undefined;
   return {
     id: stringValue(completion.id) || makeId('resp'),
     object: 'response',
     created_at: numberValue(completion.created) || Math.floor(Date.now() / 1000),
     model: stringValue(request.model) || stringValue(completion.model) || '',
-    status: 'completed',
+    status: incompleteReason ? 'incomplete' : 'completed',
     output,
     output_text: toolCalls.length > 0 ? '' : responseTextFromMessage(message),
+    usage,
+    ...(finishReason
+      ? { terminal_details: { protocol: 'chat-completions', finish_reason: finishReason } }
+      : {}),
+    ...(incompleteReason ? { incomplete_details: { reason: incompleteReason } } : {}),
   };
 }
 
@@ -174,8 +181,11 @@ export function anthropicMessagesToResponses(
     tool_choice: request.tool_choice,
     temperature: request.temperature,
     top_p: request.top_p,
-    max_tokens: request.max_tokens,
+    max_output_tokens: request.max_tokens,
     metadata: request.metadata,
+    thinking: request.thinking,
+    stop: request.stop_sequences,
+    stream: request.stream,
   }) as ResponsesRequest;
 }
 
@@ -186,17 +196,226 @@ export function responseToAnthropicMessage(
   const output = Array.isArray(response.output) ? response.output : [];
   const content = responseOutputToAnthropicContent(output);
   const text = stringValue(response.output_text);
-  const stopReason = content.some((part) => part.type === 'tool_use') ? 'tool_use' : 'end_turn';
+  const terminal = anthropicTerminalFromResponse(
+    response,
+    content.some((part) => part.type === 'tool_use') ? 'tool_use' : 'end_turn',
+  );
   return {
     id: stringValue(response.id) || makeId('msg'),
     type: 'message',
     role: 'assistant',
     model: stringValue(request.model) || stringValue(response.model),
     content: content.length > 0 ? content : text ? [{ type: 'text', text }] : [],
-    stop_reason: stopReason,
-    stop_sequence: null,
+    stop_reason: terminal.stopReason,
+    stop_sequence: terminal.stopSequence,
     usage: anthropicUsageFromResponse(response, text || JSON.stringify(content)),
   };
+}
+
+export function responsesToAnthropicMessages(
+  request: ResponsesRequest,
+  options: { defaultModel?: string } = {},
+): JsonObject {
+  const chat = responsesToChatCompletions(request, options);
+  const chatMessages = Array.isArray(chat.messages) ? chat.messages : [];
+  const system: JsonValue[] = [];
+  const messages: JsonValue[] = [];
+  for (const value of chatMessages) {
+    if (!isRecord(value)) continue;
+    const role = stringValue(value.role) || 'user';
+    if (role === 'system' || role === 'developer') {
+      const text = chatContentToText(value.content);
+      if (text) system.push({ type: 'text', text });
+      continue;
+    }
+    if (role === 'tool') {
+      messages.push({
+        role: 'user',
+        content: [{
+          type: 'tool_result',
+          tool_use_id: stringValue(value.tool_call_id),
+          content: chatContentToText(value.content),
+        }],
+      });
+      continue;
+    }
+    const content = chatMessageToAnthropicContent(value);
+    messages.push({
+      role: role === 'assistant' ? 'assistant' : 'user',
+      content,
+    });
+  }
+  const maxTokens = numberValue(request.max_output_tokens) || numberValue(request.max_tokens);
+  const effectiveMaxTokens = maxTokens && maxTokens > 0 ? maxTokens : 4096;
+  return compactJsonObject({
+    model: stringValue(request.model) || options.defaultModel || '',
+    system: system.length > 0 ? system : undefined,
+    messages: messages.length > 0 ? messages : [{ role: 'user', content: [{ type: 'text', text: '' }] }],
+    tools: chatToolsToAnthropicTools(chat.tools),
+    tool_choice: chatToolChoiceToAnthropicToolChoice(chat.tool_choice, request.parallel_tool_calls),
+    temperature: request.temperature,
+    top_p: request.top_p,
+    max_tokens: effectiveMaxTokens,
+    metadata: request.metadata,
+    thinking: responsesReasoningToAnthropicThinking(request, effectiveMaxTokens),
+    stop_sequences: request.stop,
+    stream: request.stream,
+  });
+}
+
+export function responsesReasoningToAnthropicThinking(
+  request: Pick<ResponsesRequest, 'reasoning' | 'reasoning_effort' | 'thinking'>,
+  maxTokens: number,
+): JsonObject | undefined {
+  const rawThinking = isRecord(request.thinking) ? request.thinking : undefined;
+  if (rawThinking) {
+    const type = stringValue(rawThinking.type);
+    if (!type) throw new RangeError('Anthropic thinking.type must be a non-empty string.');
+    if (type === 'enabled') {
+      const budget = numberValue(rawThinking.budget_tokens);
+      assertAnthropicThinkingBudget(budget, maxTokens);
+    }
+    return compactJsonObject(rawThinking);
+  }
+  if (request.thinking !== undefined) {
+    throw new RangeError('Anthropic thinking must be an object when provided.');
+  }
+
+  const reasoning = isRecord(request.reasoning) ? request.reasoning : undefined;
+  const effort = stringValue(request.reasoning_effort) || stringValue(reasoning?.effort) || (
+    request.reasoning !== undefined ? 'medium' : ''
+  );
+  if (!effort) return undefined;
+  if (effort === 'none' || effort === 'disabled') return { type: 'disabled' };
+  const ratios: Record<string, number> = { low: 0.25, medium: 0.5, high: 0.75, xhigh: 0.875 };
+  const ratio = ratios[effort];
+  if (ratio === undefined) throw new RangeError(`Unsupported reasoning effort for Anthropic thinking: ${effort}`);
+  if (!Number.isInteger(maxTokens) || maxTokens <= 1024) {
+    throw new RangeError('Anthropic thinking requires max_tokens greater than 1024.');
+  }
+  const budget = Math.min(maxTokens - 1, Math.max(1024, Math.floor(maxTokens * ratio)));
+  assertAnthropicThinkingBudget(budget, maxTokens);
+  return { type: 'enabled', budget_tokens: budget };
+}
+
+export function anthropicMessageToResponse(
+  payload: unknown,
+  request: Pick<ResponsesRequest, 'model'> = {},
+): JsonObject {
+  const message = isRecord(payload) ? payload : {};
+  const stopReason = stringValue(message.stop_reason);
+  const stopSequence = typeof message.stop_sequence === 'string' ? message.stop_sequence : null;
+  const content = Array.isArray(message.content) ? message.content : [];
+  const output: JsonObject[] = [];
+  let outputText = '';
+  for (const value of content) {
+    if (!isRecord(value)) continue;
+    if (value.type === 'text') {
+      const text = stringValue(value.text);
+      if (!text) continue;
+      outputText += text;
+      output.push(messageOutputItem(text));
+      continue;
+    }
+    if (value.type === 'thinking') {
+      const thinking = stringValue(value.thinking);
+      if (thinking) output.push(reasoningOutputItem(thinking, makeId('rs'), stringValue(value.signature) || undefined));
+      continue;
+    }
+    if (value.type === 'tool_use') {
+      const id = stringValue(value.id) || makeId('call');
+      output.push({
+        id,
+        type: 'function_call',
+        status: 'completed',
+        call_id: id,
+        name: stringValue(value.name),
+        arguments: stringifyJsonValue(value.input) || '{}',
+      });
+    }
+  }
+  return {
+    id: stringValue(message.id) || makeId('resp'),
+    object: 'response',
+    created_at: Math.floor(Date.now() / 1000),
+    model: stringValue(request.model) || stringValue(message.model),
+    status: message.stop_reason === 'max_tokens' ? 'incomplete' : 'completed',
+    output,
+    output_text: outputText,
+    usage: canonicalUsageFromAnthropicMessage(message),
+    ...(stopReason
+      ? {
+          terminal_details: {
+            protocol: 'anthropic-messages',
+            stop_reason: stopReason,
+            stop_sequence: stopSequence,
+          },
+        }
+      : {}),
+    ...(message.stop_reason === 'max_tokens'
+      ? { incomplete_details: { reason: 'max_output_tokens' } }
+      : {}),
+  };
+}
+
+export function chatFinishReasonFromResponse(response: JsonObject, fallback: string): string {
+  const terminal = isRecord(response.terminal_details) ? response.terminal_details : {};
+  const finishReason = stringValue(terminal.finish_reason);
+  if (finishReason) return finishReason;
+
+  const stopReason = stringValue(terminal.stop_reason);
+  if (stopReason) {
+    const mapped: Record<string, string> = {
+      end_turn: 'stop',
+      stop_sequence: 'stop',
+      max_tokens: 'length',
+      tool_use: 'tool_calls',
+    };
+    const value = mapped[stopReason];
+    if (!value) throw new RangeError(`Chat Completions cannot represent Anthropic stop_reason="${stopReason}".`);
+    return value;
+  }
+
+  const incomplete = isRecord(response.incomplete_details) ? response.incomplete_details : {};
+  const incompleteReason = stringValue(incomplete.reason);
+  if (incompleteReason === 'max_output_tokens') return 'length';
+  if (incompleteReason === 'content_filter') return 'content_filter';
+  return fallback;
+}
+
+export function anthropicTerminalFromResponse(
+  response: JsonObject,
+  fallbackStopReason: string,
+): { stopReason: string; stopSequence: string | null } {
+  const terminal = isRecord(response.terminal_details) ? response.terminal_details : {};
+  const stopReason = stringValue(terminal.stop_reason);
+  if (stopReason) {
+    return {
+      stopReason,
+      stopSequence: typeof terminal.stop_sequence === 'string' ? terminal.stop_sequence : null,
+    };
+  }
+
+  const finishReason = stringValue(terminal.finish_reason);
+  if (finishReason) {
+    const mapped: Record<string, string> = {
+      stop: 'end_turn',
+      length: 'max_tokens',
+      tool_calls: 'tool_use',
+      function_call: 'tool_use',
+    };
+    const value = mapped[finishReason];
+    if (!value) throw new RangeError(`Anthropic Messages cannot represent Chat finish_reason="${finishReason}".`);
+    return { stopReason: value, stopSequence: null };
+  }
+
+  const incomplete = isRecord(response.incomplete_details) ? response.incomplete_details : {};
+  const incompleteReason = stringValue(incomplete.reason);
+  if (incompleteReason === 'max_output_tokens') return { stopReason: 'max_tokens', stopSequence: null };
+  if (incompleteReason) {
+    throw new RangeError(`Anthropic Messages cannot represent Responses incomplete reason="${incompleteReason}".`);
+  }
+  return { stopReason: fallbackStopReason, stopSequence: null };
 }
 
 export function estimateAnthropicMessagesInputTokens(request: AnthropicMessagesRequest): number {
@@ -223,7 +442,10 @@ function responsesInputToMessages(
     const pendingToolCalls: JsonObject[] = [];
     const pendingReasoning: string[] = [];
     const flushPendingToolCalls = (): void => {
-      if (pendingToolCalls.length === 0) return;
+      if (pendingToolCalls.length === 0) {
+        pendingReasoning.length = 0;
+        return;
+      }
       messages.push(compactJsonObject({
         role: 'assistant',
         content: null,
@@ -234,6 +456,11 @@ function responsesInputToMessages(
       pendingReasoning.length = 0;
     };
     for (const item of input) {
+      if (isResponsesContinuationStateItem(item)) {
+        const reasoning = responseInputReasoningText(item);
+        if (reasoning) pendingReasoning.push(reasoning);
+        continue;
+      }
       if (isRecord(item) && item.type === 'function_call') {
         const toolCall = responseInputFunctionCallToChatToolCall(item, aliasByOriginal);
         if (toolCall) {
@@ -250,6 +477,18 @@ function responsesInputToMessages(
   }
   if (messages.length === 0) messages.push({ role: 'user', content: '' });
   return messages;
+}
+
+function isResponsesContinuationStateItem(item: unknown): item is JsonObject {
+  return isRecord(item) && (item.type === 'reasoning' || item.type === 'compaction');
+}
+
+function responseInputReasoningText(item: JsonObject): string {
+  if (item.type !== 'reasoning' || !Array.isArray(item.summary)) return '';
+  return item.summary
+    .map((part) => isRecord(part) ? stringValue(part.text) : '')
+    .filter(Boolean)
+    .join('\n');
 }
 
 function anthropicSystemToText(system: unknown): string | undefined {
@@ -394,6 +633,21 @@ function responseOutputToAnthropicContent(output: JsonValue[]): JsonObject[] {
   const content: JsonObject[] = [];
   for (const item of output) {
     if (!isRecord(item)) continue;
+    if (item.type === 'reasoning') {
+      const summary = Array.isArray(item.summary) ? item.summary : [];
+      const thinking = summary
+        .map((part) => isRecord(part) ? stringValue(part.text) : '')
+        .filter(Boolean)
+        .join('\n');
+      if (thinking) {
+        content.push(compactJsonObject({
+          type: 'thinking',
+          thinking,
+          signature: stringValue(item.signature) || undefined,
+        }));
+      }
+      continue;
+    }
     if (item.type === 'message' && Array.isArray(item.content)) {
       const text = item.content
         .map((part) => isRecord(part) ? stringValue(part.text) : '')
@@ -680,103 +934,30 @@ function responseToolChoiceToChatToolChoice(
 }
 
 function providerSafeChatToolParameters(value: unknown): JsonObject {
-  const sanitized = sanitizeProviderToolSchema(value, 0);
+  const sanitized = normalizeProviderJsonSchema(value);
   if (isRecord(sanitized)) {
-    const properties = isRecord(sanitized.properties) ? sanitized.properties : {};
-    return compactJsonObject({ ...sanitized, type: 'object', properties });
-  }
-  return { type: 'object', properties: {} };
-}
-
-function sanitizeProviderToolSchema(value: unknown, depth: number): JsonValue | undefined {
-  if (depth > PROVIDER_TOOL_SCHEMA_MAX_DEPTH) return {};
-  if (!isRecord(value)) return undefined;
-  const out: Record<string, JsonValue> = {};
-  for (const [key, raw] of Object.entries(value)) {
-    if (key.startsWith('$') || !PROVIDER_TOOL_SCHEMA_KEYS.has(key)) continue;
-    switch (key) {
-      case 'properties': {
-        const properties = isRecord(raw) ? raw : undefined;
-        if (!properties) break;
-        const entries = Object.entries(properties).slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES);
-        out.properties = Object.fromEntries(entries.map(([name, schema]) => [
-          boundedProviderToolString(name),
-          sanitizeProviderToolSchema(schema, depth + 1) ?? {},
-        ]));
-        break;
-      }
-      case 'items': {
-        if (Array.isArray(raw)) {
-          out.items = raw
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map((item) => sanitizeProviderToolSchema(item, depth + 1) ?? {});
-        } else if (isRecord(raw)) {
-          out.items = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
-        }
-        break;
-      }
-      case 'required': {
-        const required = Array.isArray(raw)
-          ? raw
-            .filter((item): item is string => typeof item === 'string' && item.length > 0)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_PROPERTIES)
-            .map(boundedProviderToolString)
-          : [];
-        if (required.length) out.required = [...new Set(required)];
-        break;
-      }
-      case 'enum': {
-        if (Array.isArray(raw)) {
-          out.enum = raw
-            .filter(isJsonPrimitive)
-            .slice(0, PROVIDER_TOOL_SCHEMA_MAX_ENUM_VALUES)
-            .map((item) => typeof item === 'string' ? boundedProviderToolString(item) : item);
-        }
-        break;
-      }
-      case 'additionalProperties': {
-        if (typeof raw === 'boolean') {
-          out.additionalProperties = raw;
-        } else if (isRecord(raw)) {
-          out.additionalProperties = sanitizeProviderToolSchema(raw, depth + 1) ?? {};
-        }
-        break;
-      }
-      case 'type': {
-        const type = providerToolSchemaType(raw);
-        if (type) out.type = type;
-        break;
-      }
-      case 'description': {
-        if (typeof raw === 'string' && raw.trim()) {
-          out.description = boundedProviderToolString(raw, PROVIDER_TOOL_SCHEMA_MAX_DESCRIPTION_CHARS);
-        }
-        break;
-      }
-      case 'pattern':
-      case 'format': {
-        if (typeof raw === 'string' && raw.trim()) out[key] = boundedProviderToolString(raw);
-        break;
-      }
-      case 'nullable': {
-        if (typeof raw === 'boolean') out.nullable = raw;
-        break;
-      }
-      default: {
-        if (typeof raw === 'number' && Number.isFinite(raw)) out[key] = raw;
-        break;
-      }
+    const schemaTypes = typeof sanitized.type === 'string'
+      ? [sanitized.type]
+      : Array.isArray(sanitized.type)
+        ? sanitized.type
+        : [];
+    if (schemaTypes.length > 0 && !schemaTypes.includes('object')) {
+      throw new RangeError('Provider tool parameters must use an object root schema.');
     }
+    if (sanitized.properties !== undefined && !isRecord(sanitized.properties)) {
+      throw new RangeError('Provider tool parameter properties must be a schema map.');
+    }
+    return compactJsonObject({
+      ...sanitized,
+      type: sanitized.type ?? 'object',
+      properties: sanitized.properties ?? {},
+    });
   }
-  if (isRecord(out.properties) && !out.type) out.type = 'object';
-  return out;
-}
-
-function providerToolSchemaType(value: unknown): JsonValue | undefined {
-  if (typeof value === 'string' && value.trim()) return value;
-  if (!Array.isArray(value)) return undefined;
-  const types = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
-  return types.length ? [...new Set(types)] : undefined;
+  if (sanitized === false) {
+    throw new RangeError('Provider tool parameters cannot be represented by an always-false root schema.');
+  }
+  if (sanitized === true) return { type: 'object', properties: {} };
+  throw new RangeError('Provider tool parameters must be a JSON Schema object or boolean.');
 }
 
 function boundedProviderToolString(
@@ -784,10 +965,6 @@ function boundedProviderToolString(
   maxLength = PROVIDER_TOOL_SCHEMA_MAX_STRING_CHARS,
 ): string {
   return value.trim().slice(0, maxLength);
-}
-
-function isJsonPrimitive(value: unknown): value is string | number | boolean | null {
-  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
 }
 
 function chatToolNameAlias(name: string, index: number, used: Set<string>): string {
@@ -853,11 +1030,139 @@ function messageReasoningContent(message: Record<string, unknown>): string {
   return '';
 }
 
+function chatMessageToAnthropicContent(message: Record<string, unknown>): JsonValue[] {
+  const content: JsonValue[] = [];
+  const reasoning = messageReasoningContent(message);
+  if (reasoning) content.push({ type: 'thinking', thinking: reasoning, signature: '' });
+  const rawContent = message.content;
+  if (typeof rawContent === 'string') {
+    if (rawContent) content.push({ type: 'text', text: rawContent });
+  } else if (Array.isArray(rawContent)) {
+    for (const part of rawContent) {
+      if (!isRecord(part)) continue;
+      const type = stringValue(part.type);
+      if (type === 'text' || type === 'input_text') {
+        content.push({ type: 'text', text: stringValue(part.text) });
+      } else if (type === 'image_url' || type === 'input_image') {
+        const imageUrl = isRecord(part.image_url)
+          ? stringValue(part.image_url.url)
+          : stringValue(part.image_url);
+        const image = imageUrlToAnthropicSource(imageUrl);
+        if (image) content.push({ type: 'image', source: image });
+      }
+    }
+  }
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  for (const value of toolCalls) {
+    if (!isRecord(value)) continue;
+    const fn = isRecord(value.function) ? value.function : {};
+    content.push({
+      type: 'tool_use',
+      id: stringValue(value.id) || makeId('toolu'),
+      name: stringValue(fn.name),
+      input: parseJsonObject(stringValue(fn.arguments)) ?? {},
+    });
+  }
+  return content.length > 0 ? content : [{ type: 'text', text: '' }];
+}
+
+function imageUrlToAnthropicSource(value: string): JsonObject | undefined {
+  const data = /^data:([^;,]+);base64,(.+)$/i.exec(value);
+  if (data) return { type: 'base64', media_type: data[1], data: data[2] };
+  if (/^https?:\/\//i.test(value)) return { type: 'url', url: value };
+  return undefined;
+}
+
+function chatContentToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  return value.map((part) => isRecord(part) ? stringValue(part.text) || stringValue(part.content) : '')
+    .filter(Boolean)
+    .join('\n');
+}
+
+function chatToolsToAnthropicTools(value: unknown): JsonValue[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const tools = value.flatMap((item): JsonObject[] => {
+    if (!isRecord(item)) return [];
+    const fn = isRecord(item.function) ? item.function : {};
+    const name = stringValue(fn.name);
+    if (!name) return [];
+    return [compactJsonObject({
+      name,
+      description: fn.description,
+      input_schema: isRecord(fn.parameters) ? fn.parameters : { type: 'object', properties: {} },
+    })];
+  });
+  return tools.length > 0 ? tools : undefined;
+}
+
+function chatToolChoiceToAnthropicToolChoice(value: unknown, parallelToolCalls: unknown): JsonObject | undefined {
+  const disableParallel = parallelToolCalls === false ? true : undefined;
+  if (value === undefined || value === 'auto') {
+    return disableParallel ? { type: 'auto', disable_parallel_tool_use: true } : undefined;
+  }
+  if (value === 'required') return compactJsonObject({ type: 'any', disable_parallel_tool_use: disableParallel });
+  if (!isRecord(value)) return undefined;
+  const fn = isRecord(value.function) ? value.function : {};
+  const name = stringValue(fn.name);
+  return name ? compactJsonObject({ type: 'tool', name, disable_parallel_tool_use: disableParallel }) : undefined;
+}
+
+function canonicalUsageFromChatCompletion(completion: Record<string, unknown>): JsonObject {
+  const usage = isRecord(completion.usage) ? completion.usage : {};
+  const inputTokens = numberValue(usage.input_tokens) || numberValue(usage.prompt_tokens);
+  const outputTokens = numberValue(usage.output_tokens) || numberValue(usage.completion_tokens);
+  const inputDetails = isRecord(usage.input_tokens_details)
+    ? usage.input_tokens_details
+    : isRecord(usage.prompt_tokens_details) ? usage.prompt_tokens_details : {};
+  const outputDetails = isRecord(usage.output_tokens_details)
+    ? usage.output_tokens_details
+    : isRecord(usage.completion_tokens_details) ? usage.completion_tokens_details : {};
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: numberValue(usage.total_tokens) || inputTokens + outputTokens,
+    input_tokens_details: { cached_tokens: numberValue(inputDetails.cached_tokens) },
+    output_tokens_details: { reasoning_tokens: numberValue(outputDetails.reasoning_tokens) },
+  };
+}
+
+function canonicalUsageFromAnthropicMessage(message: Record<string, unknown>): JsonObject {
+  const usage = isRecord(message.usage) ? message.usage : {};
+  const inputTokens = numberValue(usage.input_tokens);
+  const outputTokens = numberValue(usage.output_tokens);
+  const cachedTokens = numberValue(usage.cache_read_input_tokens);
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    total_tokens: inputTokens + outputTokens,
+    input_tokens_details: { cached_tokens: cachedTokens },
+    output_tokens_details: { reasoning_tokens: 0 },
+  };
+}
+
+function assertAnthropicThinkingBudget(budget: number, maxTokens: number): void {
+  if (!Number.isInteger(budget) || budget < 1024) {
+    throw new RangeError('Anthropic thinking budget_tokens must be an integer of at least 1024.');
+  }
+  if (!Number.isInteger(maxTokens) || budget >= maxTokens) {
+    throw new RangeError('Anthropic thinking budget_tokens must be lower than max_tokens.');
+  }
+}
+
 function compactJsonObject(values: Record<string, unknown>): JsonObject {
   const out: JsonObject = {};
   for (const [key, value] of Object.entries(values)) {
     const normalized = jsonValue(value);
-    if (normalized !== undefined) out[key] = normalized;
+    if (normalized !== undefined) {
+      Object.defineProperty(out, key, {
+        configurable: true,
+        enumerable: true,
+        value: normalized,
+        writable: true,
+      });
+    }
   }
   return out;
 }

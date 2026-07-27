@@ -73,8 +73,8 @@ export function planDisplayNameFromRelativePath(relativePath: string): string {
 }
 
 /**
- * Stable name of the native local-runtime plan tool. Kept distinct from the
- * historical `gui_plan_create` MCP bridge so the renderer and runtime
+ * Stable name of the agent-runtime plan tool. Kept distinct from the
+ * historical `gui_plan_create` MCP bridge so the renderer and active runtime
  * can recognize the new contract without colliding with legacy code.
  */
 export const GUI_PLAN_CREATE_PLAN_TOOL_NAME = 'create_plan'

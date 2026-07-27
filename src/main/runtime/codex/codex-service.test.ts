@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { describe, expect, it, vi } from 'vitest'
@@ -10,7 +10,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -31,14 +30,20 @@ import type {
   CodexAppServerPendingRequestRegistryOptions
 } from './app-server/request-registry'
 import type { CodexThreadEventPayload } from './codex-runtime-api'
-import type { CodexDynamicMcpClient } from './codex-dynamic-mcp-tools'
 import { FileMultiAgentStore } from '../../../../packages/workers/multi-agent/src'
+import { CodexPreToolUseGovernanceBridge } from './codex-pre-tool-use-governance'
+import {
+  CAPABILITY_AGENT_TOOL_NAMES,
+  createCapabilityAgentToolSurface
+} from '../../capabilities/agent-tools'
+import { CapabilityBroker } from '../../capabilities/broker'
+import { CapabilityRegistry } from '../../capabilities/registry'
+import type { AgentRuntimeToolSurface } from '../agent-runtime/agent-tool-surface'
 
 function configuredModelRouterSettings() {
   const modelRouter = defaultModelRouterSettings()
   modelRouter.runtimeApiKey = 'local-runtime-router-key'
   modelRouter.profiles.default.textReasoner = {
-    provider: 'openai-compatible',
     baseUrl: 'https://text-provider.example/v1',
     apiKey: 'text-secret',
     model: 'text-model'
@@ -53,7 +58,7 @@ function settings(): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime: 'codex',
-    provider: defaultModelProviderSettings(),
+    modelAccess: { mode: 'api', planAdapterId: '' },
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
       codex: defaultCodexRuntimeSettings()
@@ -71,6 +76,45 @@ function settings(): AppSettingsV1 {
     workflow: defaultWorkflowSettings(),
     guiUpdate: { channel: 'stable' },
     codePromptPrefix: ''
+  }
+}
+
+const codexVisualRefs = {
+  source: `res_${'s'.repeat(24)}`,
+  snapshot: `snapshot_${'n'.repeat(24)}`,
+  region: `region_${'r'.repeat(24)}`,
+  proof: `visual_proof_${'p'.repeat(24)}`
+} as const
+
+function codexVisualLookOutput() {
+  return {
+    snapshotRef: codexVisualRefs.snapshot,
+    regions: [{
+      regionRef: codexVisualRefs.region,
+      label: 'Method overview',
+      confidence: 0.98
+    }],
+    evidence: {
+      summary: 'Located the requested figure.',
+      claims: [{
+        kind: 'observation',
+        text: 'The figure is visible.',
+        regionRef: codexVisualRefs.region,
+        confidence: 0.98
+      }],
+      uncertainties: []
+    },
+    proof: {
+      schema: 'sciforge.visual-proof.v1',
+      kind: 'look',
+      status: 'verified',
+      proofRef: codexVisualRefs.proof,
+      sourceRef: codexVisualRefs.source,
+      snapshotRef: codexVisualRefs.snapshot,
+      provider: 'model-router',
+      attestation: `sha256:${'d'.repeat(64)}`,
+      createdAt: '2026-07-26T00:00:00.000Z'
+    }
   }
 }
 
@@ -155,6 +199,17 @@ function clientWithQueuedEvents(): {
   }
 }
 
+function scheduleFirstActivityGuard(
+  service: CodexRuntimeService,
+  threadId = 'thread-1',
+  turnId = 'turn-1'
+): void {
+  const guarded = service as unknown as {
+    scheduleFirstActivityTimeout(threadId: string, turnId: string): void
+  }
+  guarded.scheduleFirstActivityTimeout(threadId, turnId)
+}
+
 async function tempRoot(): Promise<string> {
   return mkdtemp(join(tmpdir(), 'sciforge-codex-service-'))
 }
@@ -181,6 +236,52 @@ function deferred<T>(): {
   })
   return { promise, resolve, reject }
 }
+
+describe('CodexRuntimeService model access selection', () => {
+  it('reports missing model access as a setup problem before starting Codex', async () => {
+    const createClient = vi.fn(() => controllableClient())
+    const current = settings()
+    delete (current as Partial<AppSettingsV1>).modelAccess
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('Model access setup is required')
+    })
+    expect(createClient).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    {
+      name: 'API mode selects another runtime',
+      settings: { activeAgentRuntime: 'claude' as const }
+    },
+    {
+      name: 'coding-plan adapter does not match the selected runtime',
+      settings: {
+        activeAgentRuntime: 'claude' as const,
+        modelAccess: { mode: 'coding-plan' as const, planAdapterId: 'codex' }
+      }
+    }
+  ])('does not start Codex when $name', async ({ settings: selection }) => {
+    const createClient = vi.fn(() => controllableClient())
+    const service = new CodexRuntimeService({
+      settings: async () => ({ ...settings(), ...selection }),
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('selected Agent runtime')
+    })
+    expect(createClient).not.toHaveBeenCalled()
+  })
+})
 
 describe('CodexRuntimeService storage fallback', () => {
   it('lists stored Codex threads when app-server list is unavailable', async () => {
@@ -985,6 +1086,57 @@ describe('CodexRuntimeService storage fallback', () => {
     })
   })
 
+  it('projects streamed assistant deltas as one message and lets the final snapshot replace them', async () => {
+    const storageRoot = await tempRoot()
+    const eventStore = new CodexEventStore({ rootDir: storageRoot })
+    await eventStore.append('codex-thread-1', {
+      threadId: 'codex-thread-1',
+      turnId: 'turn-1',
+      userMessage: {
+        itemId: 'user-1',
+        turnId: 'turn-1',
+        text: 'hello'
+      }
+    })
+    await eventStore.append('codex-thread-1', {
+      threadId: 'codex-thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: 'Hello' }]
+    })
+    await eventStore.append('codex-thread-1', {
+      threadId: 'codex-thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: '. How' }]
+    })
+    await eventStore.append('codex-thread-1', {
+      threadId: 'codex-thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: ' can I help?' }]
+    })
+    await eventStore.append('codex-thread-1', {
+      threadId: 'codex-thread-1',
+      turnId: 'turn-1',
+      deltas: [{ kind: 'agent_message', text: 'Hello. How can I help?', snapshot: true }]
+    })
+
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => failingClient()
+    })
+
+    await expect(service.readThread('codex-thread-1')).resolves.toEqual({
+      ok: true,
+      detail: expect.objectContaining({
+        blocks: [
+          expect.objectContaining({ kind: 'user', id: 'user-1', text: 'hello' }),
+          expect.objectContaining({ kind: 'assistant', text: 'Hello. How can I help?', snapshot: true })
+        ]
+      })
+    })
+  })
+
   it('deduplicates stored transient reconnect errors that reused the turn id', async () => {
     const storageRoot = await tempRoot()
     const eventStore = new CodexEventStore({ rootDir: storageRoot })
@@ -1387,10 +1539,16 @@ describe('CodexRuntimeService storage fallback', () => {
     vi.mocked(client.readThread).mockRejectedValue(
       new Error('thread codex-thread-1 is not materialized yet; includeTurns is unavailable while the turn is starting')
     )
+    const abortTurn = vi.fn(() => 1)
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       sink: { send: vi.fn() },
       storageRoot,
+      capabilityAgentTools: {
+        tools: () => [],
+        call: vi.fn(async () => ({ tool: 'unused', value: null })),
+        abortTurn
+      },
       createClient: () => client
     })
 
@@ -1419,6 +1577,11 @@ describe('CodexRuntimeService storage fallback', () => {
       threadId: 'codex-thread-1',
       turnId: 'turn-1'
     })
+    expect(abortTurn).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'gui-thread-1',
+      turnId: 'turn-1'
+    }, 'user_stop')
   })
 
   it('replays stored normalized events without starting app-server JSON-RPC', async () => {
@@ -1807,71 +1970,6 @@ describe('CodexRuntimeService compatibility operations', () => {
     )
   })
 
-  it('retries the built-in Dataset MCP catalog before starting a thread', async () => {
-    const client = controllableClient()
-    const datasetToolNames = [
-      'dataset_api_catalog',
-      'dataset_api_register_provider',
-      'dataset_api_list',
-      'dataset_api_register',
-      'dataset_api_metadata',
-      'dataset_api_raw_data',
-      'dataset_prepare_plan',
-      'dataset_execute_plan',
-      'dataset_resume_plan',
-      'dataset_profile',
-      'dataset_filter',
-      'dataset_select_columns',
-      'dataset_transform',
-      'dataset_deduplicate',
-      'dataset_id_map',
-      'dataset_id_map_provider',
-      'dataset_join',
-      'dataset_structure_profile',
-      'dataset_structure_validate',
-      'dataset_graph_organize',
-      'dataset_validate',
-      'dataset_publish'
-    ]
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: datasetToolNames.map((name) => ({
-          name,
-          description: name,
-          inputSchema: { type: 'object', properties: {} }
-        }))
-      })),
-      callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
-      close: vi.fn(async () => undefined)
-    }
-    const mcpClientFactory = vi.fn(async () => {
-      if (mcpClientFactory.mock.calls.length === 1) throw new Error('transient Dataset MCP startup failure')
-      return mcpClient
-    })
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      datasetApiMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/electron',
-        isPackaged: false
-      },
-      mcpClientFactory,
-      createClient: () => client
-    })
-
-    await expect(service.startThread({ title: 'Dataset retry thread' })).resolves.toMatchObject({ ok: true })
-    expect(mcpClientFactory).toHaveBeenCalledTimes(2)
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'dataset_api_metadata' }),
-        expect.objectContaining({ name: 'dataset_api_raw_data' }),
-        expect.objectContaining({ name: 'dataset_prepare_plan' }),
-        expect.objectContaining({ name: 'dataset_publish' })
-      ])
-    }))
-  })
-
   it('returns the persisted GUI thread with resolved workspace after starting a thread', async () => {
     const storageRoot = await mkdtemp(join(tmpdir(), 'codex-runtime-service-'))
     const client = controllableClient()
@@ -1930,134 +2028,174 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
   })
 
-  it('advertises managed MCP tools as Codex dynamic tools and routes their calls', async () => {
+  it('advertises fixed capability tools and routes them first with trusted thread workspace context', async () => {
+    const storageRoot = await tempRoot()
     const client = controllableClient()
-    const sink = { send: vi.fn() }
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'search-ok' }],
-      structuredContent: { resultCount: 1 }
+    const broker = new CapabilityBroker(new CapabilityRegistry())
+    const discover = vi.spyOn(broker, 'discover')
+    const resolveCaller = vi.fn((toolContext: {
+      requestId: string | number
+      runtimeId?: string
+      threadId?: string
+      workspaceId?: string
+    }) => ({
+      audience: 'agent' as const,
+      callerId: toolContext.threadId ?? String(toolContext.requestId),
+      workspaceId: toolContext.workspaceId,
+      approvals: []
     }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'research.search',
-          description: 'Search research papers.',
-          inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
+    const capabilityAgentTools = createCapabilityAgentToolSurface({ broker, resolveCaller })
     const service = new CodexRuntimeService({
       settings: async () => settings(),
-      sink,
-      managedMcpServers: [{ id: 'research', command: '/bin/research-mcp' }],
-      mcpClientFactory: async () => mcpClient,
+      sink: { send: vi.fn() },
+      storageRoot,
+      capabilityAgentTools,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
         return client
       }
     })
 
-    await expect(service.startThread({ title: 'MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
+    await expect(service.startThread({
+      title: 'Capability thread',
+      workspace: '/tmp/capability-workspace'
+    })).resolves.toMatchObject({ ok: true })
 
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([{
-        type: 'function',
-        name: 'research_search',
-        description: 'Search research papers.',
-        inputSchema: { type: 'object', properties: { query: { type: 'string' } } }
-      }]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'delegate_task' })
-      ]),
-      developerInstructions: expect.stringContaining('delegate_task')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('stream to a `.part` file')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('explicitly asks to use the system proxy')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('call `visual_generate` first')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('When `visual_generate` returns `needs_context`')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('Choose route `code`')
-    }))
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      developerInstructions: expect.stringContaining('run `visual_artifact_review` even when the result cannot be publication-ready')
-    }))
+    const startParams = vi.mocked(client.startThread).mock.calls[0]?.[0] as {
+      dynamicTools?: Array<{ name: string }>
+    }
+    const dynamicTools = startParams.dynamicTools ?? []
+    expect(dynamicTools).toEqual(expect.arrayContaining(
+      Object.values(CAPABILITY_AGENT_TOOL_NAMES).map((name) => expect.objectContaining({ name }))
+    ))
+    expect(dynamicTools.filter((tool) => tool.name === CAPABILITY_AGENT_TOOL_NAMES.discover)).toHaveLength(1)
+
     await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      callId: 'call-research-1',
+      requestId: 'capability-request-1',
+      callId: 'capability-call-1',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      tool: 'research_search',
-      arguments: { query: 'agentic RL' }
+      tool: CAPABILITY_AGENT_TOOL_NAMES.discover,
+      arguments: {}
     })).resolves.toEqual({
-      contentItems: [
-        { type: 'inputText', text: 'search-ok' },
-        { type: 'inputText', text: 'structuredContent:\n{\n  "resultCount": 1\n}' }
-      ],
-      success: true
+      success: true,
+      contentItems: [{ type: 'inputText', text: '[]' }],
+      structuredContent: [],
+      evidenceDelta: true
     })
-    expect(callTool).toHaveBeenCalledWith(
-      { name: 'research.search', arguments: { query: 'agentic RL' } },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 30_000 })
-    )
-    const executionFacts = sink.send.mock.calls
-      .map((call) => call[1]?.event?.tool)
-      .filter((tool) => tool?.meta?.callId === 'call-research-1')
-    expect(executionFacts).toEqual([
-      expect.objectContaining({
-        itemId: 'call-research-1',
-        status: 'running',
-        meta: expect.objectContaining({
-          callId: 'call-research-1',
-          toolName: 'research_search',
-          phase: 'dispatched',
-          factSource: 'runtime_lifecycle',
-          evidenceStrength: 'runtime_lifecycle'
-        })
-      }),
-      expect.objectContaining({
-        itemId: 'call-research-1',
-        status: 'success',
-        meta: expect.objectContaining({
-          callId: 'call-research-1',
-          toolName: 'research_search',
-          phase: 'succeeded',
-          factSource: 'executor_result',
-          evidenceStrength: 'executor_receipt',
-          success: true
-        })
+    expect(resolveCaller).toHaveBeenCalledWith({
+      requestId: 'capability-request-1',
+      runtimeId: 'codex',
+      callId: 'capability-call-1',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      workspaceId: '/tmp/capability-workspace'
+    })
+    expect(discover).toHaveBeenCalledWith({
+      audience: 'agent',
+      callerId: 'thread-1',
+      workspaceId: '/tmp/capability-workspace',
+      approvals: []
+    }, {}, { context: expect.objectContaining({ runtimeId: 'codex', threadId: 'thread-1' }) })
+  })
+
+  it('mints completion receipts only for strict in-process native visual results', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
+    const output = codexVisualLookOutput()
+    const surface: AgentRuntimeToolSurface = {
+      tools: () => [
+        {
+          type: 'function',
+          name: 'sciforge_look',
+          description: 'Look.',
+          inputSchema: { type: 'object', properties: {} }
+        },
+        {
+          type: 'function',
+          name: 'ordinary_structured_tool',
+          description: 'Return structured data.',
+          inputSchema: { type: 'object', properties: {} }
+        }
+      ],
+      call: async () => ({
+        tool: 'sciforge_look',
+        value: output
       })
-    ])
+    }
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      capabilityAgentTools: surface,
+      createClient: (options) => {
+        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
+        return client
+      }
+    })
+
+    await service.startThread({
+      title: 'Native visual receipts',
+      workspace: '/tmp/capability-workspace'
+    })
+    const nativeResult = await pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'native-request',
+      callId: 'native-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'sciforge_look',
+      arguments: {}
+    })
+    const ordinaryResult = await pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'ordinary-request',
+      callId: 'ordinary-call',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      tool: 'ordinary_structured_tool',
+      arguments: {}
+    })
+
+    expect(nativeResult).toMatchObject({
+      effects: ['read'],
+      completionReceipts: [{
+        kind: 'visual.look',
+        callId: 'native-call',
+        receiptId: codexVisualRefs.proof
+      }]
+    })
+    expect(ordinaryResult).not.toHaveProperty('completionReceipts')
   })
 
   it('advertises and executes Codex multi-agent dynamic spawn calls as child threads', async () => {
     const queued = clientWithQueuedEvents()
     const storageRoot = await tempRoot()
     const sink = { send: vi.fn() }
+    const surface: AgentRuntimeToolSurface = {
+      tools: () => [{
+        type: 'function',
+        name: 'sciforge_look',
+        description: 'Look.',
+        inputSchema: { type: 'object', properties: {} }
+      }],
+      call: async () => ({
+        tool: 'sciforge_look',
+        value: codexVisualLookOutput()
+      })
+    }
     let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
     vi.mocked(queued.client.startThread)
       .mockResolvedValueOnce({ thread: { id: 'parent-codex-thread' } })
       .mockResolvedValueOnce({ thread: { id: 'child-codex-thread' } })
-    vi.mocked(queued.client.startTurn).mockResolvedValueOnce({ turn: { id: 'child-turn' } })
+    vi.mocked(queued.client.startTurn)
+      .mockResolvedValueOnce({ turn: { id: 'parent-turn' } })
+      .mockResolvedValueOnce({ turn: { id: 'child-turn' } })
     const service = new CodexRuntimeService({
       settings: async () => settings(),
       sink,
       storageRoot,
+      capabilityAgentTools: surface,
       createClient: (options) => {
         pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
         return queued.client
@@ -2067,6 +2205,15 @@ describe('CodexRuntimeService compatibility operations', () => {
     await expect(service.startThread({ threadId: 'parent-gui-thread', title: 'Parent' })).resolves.toMatchObject({
       ok: true,
       thread: expect.objectContaining({ id: 'parent-gui-thread' })
+    })
+    await expect(service.startTurn({
+      threadId: 'parent-gui-thread',
+      text: 'Delegate visual inspection.',
+      ownedVisualToolsAvailable: true,
+      nativeVisualProofChainPending: true
+    })).resolves.toMatchObject({
+      ok: true,
+      turnId: 'parent-turn'
     })
     expect(queued.client.startThread).toHaveBeenCalledWith(expect.objectContaining({
       dynamicTools: expect.arrayContaining([
@@ -2087,15 +2234,53 @@ describe('CodexRuntimeService compatibility operations', () => {
       }
     })
     await vi.waitFor(() => {
-      expect(queued.client.startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      expect(queued.client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
         threadId: 'child-codex-thread',
         model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-        modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID,
+        responsesapiClientMetadata: {
+          runtime_id: 'codex',
+          gui_thread_id: expect.any(String)
+        },
         input: expect.arrayContaining([
           expect.objectContaining({ text: 'Return child-ok only.' })
         ])
       }))
     })
+    const governanceBridge = new CodexPreToolUseGovernanceBridge({ storageRoot })
+    await expect(governanceBridge.evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'child-codex-thread',
+      turn_id: 'child-turn',
+      tool_name: 'Bash',
+      tool_use_id: 'child-bypass-call',
+      tool_input: { command: 'python inspect_pixels.py' },
+      cwd: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_proof_chain_required'
+        )
+      }
+    })
+    await expect(service.updateTurnGovernanceSnapshot({
+      runtimeId: 'codex',
+      threadId: 'parent-gui-thread',
+      turnId: 'parent-turn',
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: false
+      }
+    })).resolves.toEqual({ ok: true })
+    await expect(governanceBridge.evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'child-codex-thread',
+      turn_id: 'child-turn',
+      tool_name: 'Bash',
+      tool_use_id: 'child-after-parent-update',
+      tool_input: { command: 'pwd' },
+      cwd: '/tmp/workspace'
+    })).resolves.toEqual({})
     const childStartThreadParams = vi.mocked(queued.client.startThread).mock.calls[1]?.[0] as {
       dynamicTools?: Array<{ name?: string }>
       developerInstructions?: string
@@ -2107,6 +2292,55 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(queued.client.startTurn).not.toHaveBeenCalledWith(expect.objectContaining({
       model: 'deepseek-v4-pro'
     }))
+    await expect(pendingServerRequests?.onToolCallRequest?.({
+      requestId: 'child-look-request',
+      callId: 'child-look-call',
+      threadId: 'child-codex-thread',
+      turnId: 'child-turn',
+      tool: 'sciforge_look',
+      arguments: {}
+    })).resolves.toMatchObject({
+      success: true,
+      completionReceipts: [{
+        callId: 'child-look-call',
+        kind: 'visual.look',
+        receiptId: codexVisualRefs.proof
+      }]
+    })
+    await vi.waitFor(() => {
+      expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
+        event: expect.objectContaining({
+          threadId: 'parent-gui-thread',
+          turnId: 'parent-turn',
+          tool: expect.objectContaining({
+            status: 'success',
+            completionReceipts: [{
+              callId: 'child-look-call',
+              kind: 'visual.look',
+              receiptId: codexVisualRefs.proof,
+              contractVersion: 'completion-receipt.v1',
+              status: 'satisfied',
+              issuer: 'sciforge.agent-visual',
+              subjectRef: codexVisualRefs.source,
+              relatedRefs: [
+                codexVisualRefs.snapshot,
+                codexVisualRefs.region
+              ],
+              attestation: `sha256:${'d'.repeat(64)}`,
+              createdAt: '2026-07-26T00:00:00.000Z'
+            }],
+            meta: expect.objectContaining({
+              callId: 'child-look-call',
+              childThreadId: 'child-codex-thread',
+              childTurnId: 'child-turn',
+              governanceThreadId: 'parent-gui-thread',
+              governanceTurnId: 'parent-turn',
+              receiptScope: 'parent_turn'
+            })
+          })
+        })
+      })
+    })
     await expect(pendingServerRequests?.onToolCallRequest?.({
       requestId: 'nested-multi-agent-request',
       threadId: 'child-codex-thread',
@@ -2147,6 +2381,22 @@ describe('CodexRuntimeService compatibility operations', () => {
     await expect(pending).resolves.toMatchObject({
       success: true,
       contentItems: [{ type: 'inputText', text: 'child-ok' }]
+    })
+    await expect(governanceBridge.evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'child-codex-thread',
+      turn_id: 'child-turn',
+      tool_name: 'Bash',
+      tool_use_id: 'child-after-completion',
+      tool_input: { command: 'pwd' },
+      cwd: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_governance_unavailable'
+        )
+      }
     })
     await vi.waitFor(() => {
       expect(sink.send).toHaveBeenCalledWith(CODEX_MAIN_IPC_CHANNELS.event, {
@@ -2257,585 +2507,11 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(client.startThread).not.toHaveBeenCalled()
   })
 
-  it('injects the thread workspace into workspace-intel dynamic MCP calls', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const seenServers: unknown[] = []
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: 'read-ok' }]
-    }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_workspace_read',
-          description: 'Read workspace file.',
-          inputSchema: {
-            type: 'object',
-            properties: {
-              path: { type: 'string' },
-              workspaceRoot: { type: 'string' }
-            }
-          }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/settings-workspace'
-      }),
-      sink: { send: vi.fn() },
-      storageRoot,
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return mcpClient
-      },
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({
-      title: 'Workspace intel thread',
-      workspace: '/tmp/awesome-ai-scientist'
-    })).resolves.toMatchObject({
-      ok: true
-    })
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_workspace_intel',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workspace-intel-mcp-node-entry.js',
-          '--gui-workspace-intel-mcp-server',
-          '--include-global-skills'
-        ]
-      })
-    ])
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'docs/research/single_cell/smoke_test_plan.md' }
-    })).resolves.toMatchObject({
-      contentItems: [{ type: 'inputText', text: 'read-ok' }],
-      success: true
-    })
-    expect(callTool).toHaveBeenCalledWith(
-      {
-        name: 'gui_workspace_read',
-        arguments: {
-          path: 'docs/research/single_cell/smoke_test_plan.md',
-          workspaceRoot: '/tmp/awesome-ai-scientist'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
-  })
-
-  it('advertises the workspace patch tool, requests approval in workspace mode, and auto-applies in full access', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    const workspaceRoot = join(storageRoot, 'workspace')
-    await mkdir(workspaceRoot, { recursive: true })
-    await writeFile(join(workspaceRoot, 'notes.txt'), 'alpha\nbeta\ngamma\n', 'utf8')
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_workspace_read',
-          description: 'Read workspace file.',
-          inputSchema: {
-            type: 'object',
-            properties: { path: { type: 'string' }, workspaceRoot: { type: 'string' } },
-            required: ['path']
-          }
-        }]
-      })),
-      callTool: vi.fn(async ({ arguments: args }) => ({
-        content: [{ type: 'text', text: 'read-ok' }],
-        structuredContent: {
-          ok: true,
-          kind: 'text',
-          workspaceRoot: args.workspaceRoot,
-          relativePath: args.path,
-          content: await readFile(join(String(args.workspaceRoot), String(args.path)), 'utf8'),
-          truncated: false
-        }
-      })),
-      close: vi.fn(async () => undefined)
-    }
-    let serviceSettings = { ...settings(), workspaceRoot }
-    const service = new CodexRuntimeService({
-      settings: async () => serviceSettings,
-      sink: { send: vi.fn() },
-      storageRoot,
-      managedMcpServers: [{ id: 'gui_workspace_intel', command: '/bin/workspace-intel' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({ threadId: 'gui-thread', workspace: workspaceRoot })).resolves.toMatchObject({ ok: true })
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([expect.objectContaining({
-        name: 'gui_workspace_apply_patch',
-        inputSchema: {
-          type: 'object',
-          properties: { path: expect.any(Object), patch: expect.any(Object) },
-          required: ['path', 'patch'],
-          additionalProperties: false
-        }
-      })]),
-      developerInstructions: expect.stringContaining('instead of Python')
-    }))
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'read-before-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'notes.txt' }
-    })).resolves.toMatchObject({ success: true })
-
-    const patchResult = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'patch-request',
-      callId: 'patch-call',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: {
-        path: 'notes.txt',
-        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta\n+beta edited\n gamma\n*** End Patch'
-      }
-    })
-    await vi.waitFor(() => expect(service.pendingServerRequests()).toEqual([
-      expect.objectContaining({ kind: 'approval', method: 'item/fileChange/requestApproval' })
-    ]))
-    const approvalId = service.pendingServerRequests()[0]!.requestId
-    await expect(service.resolveApproval({ requestId: approvalId, decision: 'allowed' })).resolves.toEqual({ ok: true })
-    await expect(patchResult).resolves.toMatchObject({ success: true })
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'patch-without-reread',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+beta twice' }
-    })).resolves.toMatchObject({
-      success: false,
-      contentItems: [expect.objectContaining({ text: expect.stringContaining('read-before-edit guard') })]
-    })
-
-    await pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'read-before-denied-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_read',
-      arguments: { path: 'notes.txt' }
-    })
-    const deniedPatch = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'denied-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: { path: 'notes.txt', patch: '@@\n-beta edited\n+must not be written' }
-    })
-    await vi.waitFor(() => expect(service.pendingServerRequests()).toHaveLength(1))
-    await service.resolveApproval({
-      requestId: service.pendingServerRequests()[0]!.requestId,
-      decision: 'denied'
-    })
-    await expect(deniedPatch).resolves.toMatchObject({ success: false })
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta edited\ngamma\n')
-
-    serviceSettings = {
-      ...serviceSettings,
-      agents: {
-        ...serviceSettings.agents,
-        codex: {
-          ...defaultCodexRuntimeSettings(),
-          ...serviceSettings.agents.codex,
-          sandboxMode: 'danger-full-access',
-          approvalPolicy: 'on-request'
-        }
-      }
-    }
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'full-access-patch',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'gui_workspace_apply_patch',
-      arguments: {
-        path: 'notes.txt',
-        patch: '*** Begin Patch\n*** Update File: notes.txt\n@@\n alpha\n-beta edited\n+beta full access\n gamma\n*** End Patch'
-      }
-    })).resolves.toMatchObject({ success: true })
-    expect(service.pendingServerRequests()).toEqual([])
-    await expect(readFile(join(workspaceRoot, 'notes.txt'), 'utf8')).resolves.toBe('alpha\nbeta full access\ngamma\n')
-  })
-
-  it('does not inject a workspace root into visible-context or visual-capture dynamic MCP calls', async () => {
-    const client = controllableClient()
-    const storageRoot = await tempRoot()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const callTool = vi.fn(async () => ({
-      content: [{ type: 'text', text: '{"ok":true,"components":[]}' }]
-    }))
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [
-          {
-            name: 'gui_visible_context',
-            description: 'Inspect current visible GUI context.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                region: { type: 'string' },
-                componentId: { type: 'string' },
-                includeHidden: { type: 'boolean' }
-              },
-              additionalProperties: false
-            }
-          },
-          {
-            name: 'gui_visual_capture',
-            description: 'Capture one published visual target.',
-            inputSchema: {
-              type: 'object',
-              properties: {
-                scope: { type: 'string' },
-                componentId: { type: 'string' },
-                targetId: { type: 'string' }
-              },
-              additionalProperties: false
-            }
-          }
-        ]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/settings-workspace'
-      }),
-      sink: { send: vi.fn() },
-      storageRoot,
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startThread({
-      title: 'Visible context thread',
-      workspace: '/tmp/awesome-ai-scientist'
-    })).resolves.toMatchObject({
-      ok: true
-    })
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'visible-context-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_visible_context',
-      arguments: { region: 'right-sidebar' }
-    })).resolves.toMatchObject({
-      contentItems: [{ type: 'inputText', text: '{"ok":true,"components":[]}' }],
-      success: true
-    })
-    expect(callTool).toHaveBeenCalledWith(
-      {
-        name: 'gui_visible_context',
-        arguments: {
-          region: 'right-sidebar'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
-
-    await expect(pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'visual-capture-request-1',
-      threadId: 'thread-1',
-      tool: 'gui_visual_capture',
-      arguments: {
-        scope: 'target',
-        componentId: 'right-sidebar.file-preview',
-        targetId: 'current-page'
-      }
-    })).resolves.toMatchObject({ success: true })
-    expect(callTool).toHaveBeenLastCalledWith(
-      {
-        name: 'gui_visual_capture',
-        arguments: {
-          scope: 'target',
-          componentId: 'right-sidebar.file-preview',
-          targetId: 'current-page'
-        }
-      },
-      expect.objectContaining({ signal: expect.any(AbortSignal), timeout: 120_000 })
-    )
-  })
-
-  it('aborts active dynamic MCP worker requests when a Codex turn is interrupted', async () => {
-    const client = controllableClient()
-    let pendingServerRequests: CodexAppServerPendingRequestRegistryOptions | undefined
-    const started = deferred<void>()
-    const callTool: CodexDynamicMcpClient['callTool'] = vi.fn((_input, options) => {
-      started.resolve()
-      return new Promise((_, reject) => {
-        options?.signal?.addEventListener('abort', () => {
-          reject(options.signal?.reason ?? new Error('aborted'))
-        }, { once: true })
-      })
-    })
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'slow_tool',
-          description: 'Slow worker request.',
-          inputSchema: { type: 'object', properties: {} }
-        }]
-      })),
-      callTool,
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      managedMcpServers: [{ id: 'research', command: '/bin/research-mcp' }],
-      mcpClientFactory: async () => mcpClient,
-      createClient: (options) => {
-        pendingServerRequests = options.pendingServerRequests as CodexAppServerPendingRequestRegistryOptions
-        return client
-      }
-    })
-
-    await expect(service.startTurn({ threadId: 'thread-1', text: 'run slow tool' })).resolves.toMatchObject({
-      ok: true,
-      turnId: 'turn-1'
-    })
-    const pendingTool = pendingServerRequests?.onToolCallRequest?.({
-      requestId: 'tool-request-1',
-      threadId: 'thread-1',
-      turnId: 'turn-1',
-      tool: 'slow_tool',
-      arguments: {}
-    })
-    await started.promise
-
-    await expect(service.interruptTurn('thread-1', 'turn-1')).resolves.toEqual({ ok: true })
-    await expect(pendingTool).resolves.toMatchObject({ success: false })
-    expect(client.interruptTurn).toHaveBeenCalledWith({ threadId: 'thread-1', turnId: 'turn-1' })
-  })
-
-  it('advertises the shared schedule MCP server as Codex dynamic tools', async () => {
-    const client = controllableClient()
-    const codexHome = await tempRoot()
-    const seenServers: Array<{ id: string; command: string; args?: string[]; env?: Record<string, string> }> = []
-    const mcpClient: CodexDynamicMcpClient = {
-      listTools: vi.fn(async () => ({
-        tools: [{
-          name: 'gui_schedule_list',
-          description: 'List schedule tasks.',
-          inputSchema: { type: 'object', properties: {} }
-        }]
-      })),
-      callTool: vi.fn(async () => ({
-        content: [{ type: 'text', text: 'schedule-ok' }]
-      })),
-      close: vi.fn(async () => undefined)
-    }
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        schedule: {
-          ...defaultScheduleSettings(),
-          internal: { port: 9797, secret: 'schedule-secret' }
-        }
-      }),
-      sink: { send: vi.fn() },
-      managedCodexHome: codexHome,
-      scheduleMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return mcpClient
-      },
-      createClient: () => client
-    })
-
-    await expect(service.startThread({ title: 'Schedule MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
-
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_schedule',
-        command: '/tmp/sciforge-test-app/SciForge',
-        args: [
-          '/tmp/sciforge-test-app/out/main/schedule-mcp-node-entry.js',
-          '--gui-schedule-mcp-server',
-          '--base-url',
-          'http://127.0.0.1:9797'
-        ],
-        env: expect.objectContaining({
-          ELECTRON_RUN_AS_NODE: '1',
-          GUI_SCHEDULE_INTERNAL_SECRET: 'schedule-secret'
-        })
-      })
-    ])
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_schedule]')
-    expect(config).not.toContain('schedule-mcp-node-entry')
-    expect(config).not.toContain('schedule-secret')
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([{
-        type: 'function',
-        name: 'gui_schedule_list',
-        description: 'List schedule tasks.',
-        inputSchema: { type: 'object', properties: {} }
-      }]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
-  })
-
-  it('advertises shared workflow and workspace intel MCP servers as Codex dynamic tools', async () => {
-    const client = controllableClient()
-    const codexHome = await tempRoot()
-    const seenServers: Array<{
-      id: string
-      command: string
-      args?: string[]
-      enabledTools?: string[]
-      env?: Record<string, string>
-    }> = []
-    const service = new CodexRuntimeService({
-      settings: async () => ({
-        ...settings(),
-        workspaceRoot: '/tmp/codex-workspace',
-        workflow: {
-          ...defaultWorkflowSettings(),
-          enabled: true,
-          webhookPort: 9898,
-          webhookSecret: 'workflow-secret'
-        }
-      }),
-      sink: { send: vi.fn() },
-      managedCodexHome: codexHome,
-      workflowMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      workspaceIntelMcpLaunch: {
-        appPath: '/tmp/sciforge-test-app',
-        execPath: '/tmp/sciforge-test-app/SciForge',
-        isPackaged: false
-      },
-      mcpClientFactory: async (server) => {
-        seenServers.push(server)
-        return {
-          listTools: vi.fn(async () => ({
-            tools: server.id === 'gui_workflow'
-              ? [{
-                  name: 'gui_workflow_list',
-                  description: 'List callable workflows.',
-                  inputSchema: { type: 'object', properties: {} }
-                }]
-              : [{
-                  name: 'gui_workspace_preview',
-                  description: 'Preview workspace content.',
-                  inputSchema: { type: 'object', properties: { path: { type: 'string' } } }
-                }]
-          })),
-          callTool: vi.fn(async () => ({ content: [{ type: 'text', text: 'ok' }] })),
-          close: vi.fn(async () => undefined)
-        }
-      },
-      createClient: () => client
-    })
-
-    await expect(service.startThread({ title: 'Workflow workspace MCP thread' })).resolves.toMatchObject({
-      ok: true
-    })
-
-    expect(seenServers).toEqual([
-      expect.objectContaining({
-        id: 'gui_workflow',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workflow-mcp-node-entry.js',
-          '--gui-workflow-mcp-server',
-          '--base-url',
-          'http://127.0.0.1:9898'
-        ],
-        env: expect.objectContaining({
-          ELECTRON_RUN_AS_NODE: '1',
-          GUI_WORKFLOW_INTERNAL_SECRET: 'workflow-secret'
-        }),
-        enabledTools: expect.arrayContaining(['gui_workflow_list', 'gui_workflow_run'])
-      }),
-      expect.objectContaining({
-        id: 'gui_workspace_intel',
-        args: [
-          '/tmp/sciforge-test-app/out/main/workspace-intel-mcp-node-entry.js',
-          '--gui-workspace-intel-mcp-server',
-          '--include-global-skills'
-        ],
-        enabledTools: expect.arrayContaining(['gui_workspace_list', 'gui_workspace_preview'])
-      })
-    ])
-    const config = await readFile(join(codexHome, 'config.toml'), 'utf8')
-    expect(config).not.toContain('[mcp_servers.gui_workflow]')
-    expect(config).not.toContain('[mcp_servers.gui_workspace_intel]')
-    expect(config).not.toContain('workflow-secret')
-    expect(client.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      dynamicTools: expect.arrayContaining([
-        expect.objectContaining({ name: 'gui_workflow_list' }),
-        expect.objectContaining({ name: 'gui_workspace_preview' })
-      ]),
-      developerInstructions: expect.stringContaining('specialized MCP tools')
-    }))
-  })
-
   it('forces Codex thread starts through the managed Model Router provider', async () => {
     const client = controllableClient()
     const service = new CodexRuntimeService({
       settings: async () => ({
         ...settings(),
-        provider: {
-          apiKey: 'sk-user-provider',
-          baseUrl: 'https://api.external-provider.test/v1',
-          providers: [{
-            id: 'external-provider',
-            name: 'External Provider',
-            apiKey: 'sk-profile',
-            baseUrl: 'https://profile.external-provider.test/v1',
-            models: ['external-model']
-          }]
-        },
         agents: {
           ...settings().agents,
           codex: {
@@ -2912,6 +2588,180 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(launch?.env?.CODEX_HOME).not.toBe(persistedCodexHome)
   })
 
+  it('trusts only the exact app-owned matcher-free PreToolUse hook before connecting', async () => {
+    const root = await tempRoot()
+    const managedCodexHome = join(root, 'codex-home')
+    const workspace = join(root, 'workspace')
+    const appPath = join(root, 'SciForge App')
+    const probeMarker = join(root, 'hook-probe-complete')
+    await mkdir(workspace, { recursive: true })
+    await mkdir(join(appPath, 'out/main'), { recursive: true })
+    await writeFile(join(appPath, 'package.json'), '{"type":"module"}\n', 'utf8')
+    await writeFile(
+      join(appPath, 'out/main/codex-pre-tool-use-governance-node-entry.js'),
+      `
+import { writeFileSync } from 'node:fs'
+const chunks = []
+for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk))
+const input = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+writeFileSync(${JSON.stringify(probeMarker)}, 'denied\\n')
+process.stdout.write(JSON.stringify({
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse',
+    permissionDecision: 'deny',
+    permissionDecisionReason: 'sciforge_hook_deny_challenge:' + input.tool_input.nonce
+  }
+}))
+`,
+      'utf8'
+    )
+    const current = settings()
+    current.workspaceRoot = workspace
+    const client = controllableClient()
+    vi.mocked(client.connect).mockResolvedValue({
+      userAgent: 'Codex Desktop/0.141.0 (test)',
+      codexHome: managedCodexHome,
+      platformFamily: 'unix',
+      platformOs: 'macos'
+    })
+    let trusted = false
+    client.listHooks = vi.fn(async (cwds) => {
+      const sourcePath = await realpath(join(managedCodexHome, 'hooks.json'))
+      const hookConfig = JSON.parse(
+        await readFile(join(managedCodexHome, 'hooks.json'), 'utf8')
+      ) as {
+        hooks: {
+          PreToolUse: Array<{
+            hooks: Array<{ command: string; commandWindows: string }>
+          }>
+        }
+      }
+      const handler = hookConfig.hooks.PreToolUse[0].hooks[0]
+      return {
+        data: [{
+          cwd: cwds[0],
+          hooks: [{
+            key: `${sourcePath}:pre_tool_use:0:0`,
+            eventName: 'preToolUse',
+            handlerType: 'command',
+            matcher: null,
+            command: process.platform === 'win32'
+              ? handler.commandWindows
+              : handler.command,
+            timeoutSec: 10,
+            statusMessage: 'Checking SciForge visual execution policy',
+            sourcePath,
+            source: 'user',
+            pluginId: null,
+            displayOrder: 0,
+            enabled: true,
+            isManaged: false,
+            currentHash: `sha256:${'a'.repeat(64)}`,
+            trustStatus: trusted ? 'trusted' as const : 'untrusted' as const
+          }],
+          warnings: [],
+          errors: []
+        }]
+      }
+    })
+    client.writeConfigBatch = vi.fn(async () => {
+      await expect(readFile(probeMarker, 'utf8')).resolves.toBe('denied\n')
+      trusted = true
+      return {
+        status: 'ok',
+        version: '2',
+        filePath: join(managedCodexHome, 'config.toml'),
+        overriddenMetadata: null
+      }
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      managedCodexHome,
+      storageRoot: root,
+      preToolUseHookLaunch: {
+        appPath,
+        execPath: process.execPath,
+        isPackaged: false
+      },
+      createClient: () => client
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({ ok: true })
+    expect(client.listHooks).toHaveBeenCalledTimes(2)
+    expect(client.writeConfigBatch).toHaveBeenCalledOnce()
+    const trustWrite = vi.mocked(client.writeConfigBatch).mock.calls[0]?.[0]
+    expect(trustWrite).toMatchObject({
+      edits: [{
+        keyPath: 'hooks.state',
+        mergeStrategy: 'upsert'
+      }],
+      filePath: join(managedCodexHome, 'config.toml'),
+      reloadUserConfig: true
+    })
+    const trustedState = trustWrite?.edits[0]?.value as Record<string, unknown>
+    expect(Object.entries(trustedState)).toEqual([[
+      expect.stringContaining(':pre_tool_use:0:0'),
+      {
+        enabled: true,
+        trusted_hash: `sha256:${'a'.repeat(64)}`
+      }
+    ]])
+  })
+
+  it.each([
+    {
+      name: 'an older runtime',
+      userAgent: 'Codex Desktop/0.140.0 (test)',
+      expectedMessage: 'connected Codex is 0.140.0'
+    },
+    {
+      name: 'an unversioned runtime',
+      userAgent: 'Codex Desktop/development (test)',
+      expectedMessage: 'cannot verify matcher-free PreToolUse coverage'
+    }
+  ])('fails governed startup for $name before trusting hooks', async ({
+    userAgent,
+    expectedMessage
+  }) => {
+    const root = await tempRoot()
+    const managedCodexHome = join(root, 'codex-home')
+    const client = controllableClient()
+    vi.mocked(client.connect).mockResolvedValue({
+      userAgent,
+      codexHome: managedCodexHome,
+      platformFamily: 'unix',
+      platformOs: 'macos'
+    })
+    client.listHooks = vi.fn(async () => ({ data: [] }))
+    client.writeConfigBatch = vi.fn(async () => ({
+      status: 'ok',
+      version: '2',
+      filePath: join(managedCodexHome, 'config.toml'),
+      overriddenMetadata: null
+    }))
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      managedCodexHome,
+      storageRoot: root,
+      preToolUseHookLaunch: {
+        appPath: join(root, 'SciForge App'),
+        execPath: process.execPath,
+        isPackaged: false
+      },
+      createClient: () => client
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining(expectedMessage)
+    })
+    expect(client.listHooks).not.toHaveBeenCalled()
+    expect(client.writeConfigBatch).not.toHaveBeenCalled()
+    expect(client.stop).toHaveBeenCalledOnce()
+  })
+
   it('forces Codex turns through the managed Model Router alias', async () => {
     const client = controllableClient()
     const service = new CodexRuntimeService({
@@ -2945,9 +2795,9 @@ describe('CodexRuntimeService compatibility operations', () => {
 
     const params = vi.mocked(client.startTurn).mock.calls[0]?.[0] ?? {}
     expect(params).toEqual(expect.objectContaining({
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
+      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
     }))
+    expect(params).not.toHaveProperty('modelProvider')
     expect(params).not.toEqual(expect.objectContaining({
       profile: expect.anything(),
       baseUrl: expect.anything(),
@@ -2957,7 +2807,54 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(params).not.toEqual(expect.objectContaining({ model: 'external-runtime-model' }))
   })
 
-  it('keeps warm Codex clients on the managed Model Router alias when settings drift', async () => {
+  it('correlates concurrent Codex turns by GUI thread without adding synthetic turn ids', async () => {
+    const storageRoot = await tempRoot()
+    const threadStore = new CodexThreadStore({ rootDir: storageRoot })
+    await Promise.all([
+      threadStore.upsert({
+        guiThreadId: 'gui-thread-a',
+        codexThreadId: 'codex-thread-a',
+        workspace: '/tmp/workspace',
+        title: 'Thread A'
+      }),
+      threadStore.upsert({
+        guiThreadId: 'gui-thread-b',
+        codexThreadId: 'codex-thread-b',
+        workspace: '/tmp/workspace',
+        title: 'Thread B'
+      })
+    ])
+    const client = controllableClient()
+    vi.mocked(client.startTurn)
+      .mockResolvedValueOnce({ turn: { id: 'native-turn-a' } })
+      .mockResolvedValueOnce({ turn: { id: 'native-turn-b' } })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+
+    await expect(Promise.all([
+      service.startTurn({ threadId: 'gui-thread-a', text: 'alpha' }),
+      service.startTurn({ threadId: 'gui-thread-b', text: 'beta' })
+    ])).resolves.toEqual([
+      expect.objectContaining({ ok: true, threadId: 'gui-thread-a' }),
+      expect.objectContaining({ ok: true, threadId: 'gui-thread-b' })
+    ])
+
+    const calls = vi.mocked(client.startTurn).mock.calls.map(([params]) => params)
+    expect(calls).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        responsesapiClientMetadata: { runtime_id: 'codex', gui_thread_id: 'gui-thread-a' }
+      }),
+      expect.objectContaining({
+        responsesapiClientMetadata: { runtime_id: 'codex', gui_thread_id: 'gui-thread-b' }
+      })
+    ]))
+  })
+
+  it('stops a warm Codex client and fails closed when Model Router settings drift invalid', async () => {
     const client = controllableClient()
     const current = settings()
     const service = new CodexRuntimeService({
@@ -2975,17 +2872,12 @@ describe('CodexRuntimeService compatibility operations', () => {
       threadId: 'thread-1',
       text: 'hello after settings drift'
     })).resolves.toMatchObject({
-      ok: true,
-      turnId: 'turn-1'
+      ok: false,
+      message: expect.stringContaining('model must be')
     })
 
-    expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
-    }))
-    expect(client.startTurn).not.toHaveBeenCalledWith(expect.objectContaining({
-      model: 'deepseek-v4-pro'
-    }))
+    expect(client.stop).toHaveBeenCalledTimes(1)
+    expect(client.startTurn).not.toHaveBeenCalled()
   })
 
   it('rematerializes and retries a turn when an old Codex thread uses a stale Model Router alias', async () => {
@@ -3009,7 +2901,11 @@ describe('CodexRuntimeService compatibility operations', () => {
       createClient: () => queued.client
     })
 
-    await expect(service.startTurn({ threadId: 'gui-thread-1', text: 'hello' })).resolves.toMatchObject({
+    await expect(service.startTurn({
+      threadId: 'gui-thread-1',
+      text: 'hello',
+      nativeVisualProofChainPending: true
+    })).resolves.toMatchObject({
       ok: true,
       threadId: 'gui-thread-1',
       turnId: 'turn-old'
@@ -3033,6 +2929,22 @@ describe('CodexRuntimeService compatibility operations', () => {
     await vi.waitFor(() => {
       expect(queued.client.startTurn).toHaveBeenCalledTimes(2)
     })
+    await expect(new CodexPreToolUseGovernanceBridge({ storageRoot }).evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'replacement-codex-thread',
+      turn_id: 'turn-retry-not-materialized-yet',
+      tool_name: 'Bash',
+      tool_use_id: 'call-retry-before-start-response',
+      tool_input: { command: 'python inspect.py' },
+      cwd: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_proof_chain_required'
+        )
+      }
+    })
     queued.push({
       type: 'event',
       channel: CODEX_MAIN_IPC_CHANNELS.event,
@@ -3054,14 +2966,21 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
     expect(queued.client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({
       threadId: 'stale-codex-thread',
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
+      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
     }))
     expect(queued.client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
       threadId: 'replacement-codex-thread',
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
+      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
     }))
+    expect(vi.mocked(queued.client.startTurn).mock.calls[0]?.[0]).not.toHaveProperty('modelProvider')
+    expect(vi.mocked(queued.client.startTurn).mock.calls[1]?.[0]).not.toHaveProperty('modelProvider')
+    expect(vi.mocked(queued.client.startTurn).mock.calls[0]?.[0].responsesapiClientMetadata).toEqual({
+      runtime_id: 'codex',
+      gui_thread_id: 'gui-thread-1'
+    })
+    expect(vi.mocked(queued.client.startTurn).mock.calls[1]?.[0].responsesapiClientMetadata).toEqual(
+      vi.mocked(queued.client.startTurn).mock.calls[0]?.[0].responsesapiClientMetadata
+    )
     await expect(threadStore.get('gui-thread-1')).resolves.toMatchObject({
       codexThreadId: 'replacement-codex-thread'
     })
@@ -3128,14 +3047,17 @@ describe('CodexRuntimeService compatibility operations', () => {
     }))
     expect(client.startTurn).toHaveBeenNthCalledWith(1, expect.objectContaining({
       threadId: 'codex-thread-old',
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
+      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
     }))
     expect(client.startTurn).toHaveBeenNthCalledWith(2, expect.objectContaining({
       threadId: 'codex-thread-new',
-      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS,
-      modelProvider: DEFAULT_MODEL_ROUTER_PROVIDER_ID
+      model: DEFAULT_MODEL_ROUTER_PUBLIC_MODEL_ALIAS
     }))
+    expect(vi.mocked(client.startTurn).mock.calls[0]?.[0]).not.toHaveProperty('modelProvider')
+    expect(vi.mocked(client.startTurn).mock.calls[1]?.[0]).not.toHaveProperty('modelProvider')
+    expect(vi.mocked(client.startTurn).mock.calls[1]?.[0].responsesapiClientMetadata).toEqual(
+      vi.mocked(client.startTurn).mock.calls[0]?.[0].responsesapiClientMetadata
+    )
   })
 
   it('passes explicit app-server reasoning params through thread and turn starts', async () => {
@@ -3524,7 +3446,6 @@ describe('CodexRuntimeService compatibility operations', () => {
     })
 
     expect(client.startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      displayText: 'short user prompt',
       input: [
         {
           type: 'text',
@@ -3533,6 +3454,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         }
       ]
     }))
+    expect(vi.mocked(client.startTurn).mock.calls[0]?.[0]).not.toHaveProperty('displayText')
     const events = await new CodexEventStore({ rootDir: storageRoot }).read('thread-1', { includeAll: true })
     expect(events.at(-1)?.event.userMessage).toMatchObject({
       itemId: 'user-1',
@@ -3678,6 +3600,103 @@ describe('CodexRuntimeService compatibility operations', () => {
 
     expect(client.interruptTurn).not.toHaveBeenCalled()
     expect(client.steerTurn).not.toHaveBeenCalled()
+  })
+
+  it('persists active turn governance for the Codex pre-tool bridge and removes it on stop', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      createClient: () => client
+    })
+    const bridge = new CodexPreToolUseGovernanceBridge({ storageRoot })
+
+    await expect(service.startTurn({
+      threadId: 'thread-1',
+      text: 'inspect the visual',
+      ownedVisualToolsAvailable: true
+    })).resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+    await expect(service.updateTurnGovernanceSnapshot({
+      runtimeId: 'codex',
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      snapshot: {
+        ownedVisualToolsAvailable: true,
+        nativeVisualProofChainPending: true
+      }
+    })).resolves.toEqual({ ok: true })
+    await expect(bridge.evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      tool_name: 'Bash',
+      tool_use_id: 'call-1',
+      tool_input: { command: 'python inspect.py' },
+      cwd: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('native_visual_proof_chain_required')
+      }
+    })
+
+    await service.stop()
+    await expect(bridge.evaluate({
+      hook_event_name: 'PreToolUse',
+      session_id: 'session-1',
+      turn_id: 'turn-1',
+      tool_name: 'Bash',
+      tool_use_id: 'call-2',
+      tool_input: { command: 'python inspect.py' },
+      cwd: '/tmp/workspace'
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining(
+          'native_visual_governance_unavailable'
+        )
+      }
+    })
+  })
+
+  it('seeds owned visual policy before the first Codex tool can run', async () => {
+    const storageRoot = await tempRoot()
+    const client = controllableClient()
+    const bridge = new CodexPreToolUseGovernanceBridge({ storageRoot })
+    let preDispatchDecision: Awaited<ReturnType<typeof bridge.evaluate>> | undefined
+    vi.mocked(client.startTurn).mockImplementation(async (params) => {
+      preDispatchDecision = await bridge.evaluate({
+        hook_event_name: 'PreToolUse',
+        session_id: params.threadId,
+        turn_id: 'turn-not-materialized-yet',
+        tool_name: 'Bash',
+        tool_use_id: 'call-before-start-response',
+        tool_input: { command: 'screencapture -x /tmp/window.png' },
+        cwd: '/tmp/workspace'
+      })
+      return { turn: { id: 'turn-1' } }
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot,
+      capabilityAgentTools: {} as AgentRuntimeToolSurface,
+      createClient: () => client
+    })
+
+    await expect(service.startTurn({
+      threadId: 'thread-1',
+      text: 'inspect the visual',
+      ownedVisualToolsAvailable: true
+    })).resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+    expect(preDispatchDecision).toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('owned_visual_policy_denied')
+      }
+    })
   })
 
   it('clears the active Codex turn after a terminal runtime event', async () => {
@@ -3957,16 +3976,16 @@ describe('CodexRuntimeService compatibility operations', () => {
       runtimeId: 'codex',
       threadId: 'thread-1',
       turnId: 'turn-1',
-      itemId: 'runtime-guard-tool-storm-turn-1',
+      itemId: 'runtime-guard-execution-governance-turn-1',
       recoverable: true,
       severity: 'error',
-      code: 'runtime_tool_storm_interrupted',
+      code: 'runtime_execution_interrupted',
       message: 'Runtime guard stopped this turn after repeated command_execution:shell/fetch tool activity.',
       detail: 'The runtime interrupted the turn to prevent a repeated tool-call loop.'
     })).resolves.toMatchObject({
       runtimeError: {
-        itemId: 'runtime-guard-tool-storm-turn-1',
-        code: 'runtime_tool_storm_interrupted',
+        itemId: 'runtime-guard-execution-governance-turn-1',
+        code: 'runtime_execution_interrupted',
         severity: 'error'
       }
     })
@@ -4197,6 +4216,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
 
       await vi.advanceTimersByTimeAsync(75_000)
 
@@ -4226,6 +4246,106 @@ describe('CodexRuntimeService compatibility operations', () => {
     }
   })
 
+  it('leaves Model Router request deadlines to the API gateway', async () => {
+    vi.useFakeTimers()
+    const queued = clientWithQueuedEvents()
+    try {
+      const sink = { send: vi.fn() }
+      const service = new CodexRuntimeService({
+        settings: async () => settings(),
+        sink,
+        createClient: () => queued.client
+      })
+
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'hello' })).resolves.toMatchObject({
+        ok: true,
+        turnId: 'turn-1'
+      })
+
+      await vi.advanceTimersByTimeAsync(75_000)
+
+      expect(sink.send.mock.calls.some((call) =>
+        call[1]?.event?.runtimeError?.code === 'first_activity_timeout'
+      )).toBe(false)
+      expect(queued.client.interruptTurn).not.toHaveBeenCalled()
+      expect(queued.client.stop).not.toHaveBeenCalled()
+    } finally {
+      queued.close()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not disconnect another active turn when one thread has no model activity', async () => {
+    vi.useFakeTimers()
+    const queued = clientWithQueuedEvents()
+    const startTurn = vi.fn()
+      .mockResolvedValueOnce({ turn: { id: 'turn-1' } })
+      .mockResolvedValueOnce({ turn: { id: 'turn-2' } })
+    queued.client.startTurn = startTurn
+    try {
+      const sink = { send: vi.fn() }
+      const service = new CodexRuntimeService({
+        settings: async () => settings(),
+        sink,
+        createClient: () => queued.client
+      })
+
+      await expect(service.startTurn({ threadId: 'thread-1', text: 'first' })).resolves.toMatchObject({
+        ok: true,
+        turnId: 'turn-1'
+      })
+      await expect(service.startTurn({ threadId: 'thread-2', text: 'second' })).resolves.toMatchObject({
+        ok: true,
+        turnId: 'turn-2'
+      })
+      scheduleFirstActivityGuard(service, 'thread-1', 'turn-1')
+      scheduleFirstActivityGuard(service, 'thread-2', 'turn-2')
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'item/agentMessage/delta',
+          params: { threadId: 'thread-2', turnId: 'turn-2', delta: 'working' }
+        }
+      })
+      await vi.waitFor(() => {
+        expect(sink.send.mock.calls.some((call) =>
+          call[1]?.event?.runtimeStatus?.phase === 'first_delta' &&
+          call[1]?.event?.threadId === 'thread-2'
+        )).toBe(true)
+      })
+
+      await vi.advanceTimersByTimeAsync(75_000)
+
+      expect(queued.client.interruptTurn).toHaveBeenCalledWith(
+        { threadId: 'thread-1', turnId: 'turn-1' },
+        expect.any(AbortSignal)
+      )
+      expect(queued.client.stop).not.toHaveBeenCalled()
+      expect(sink.send.mock.calls.some((call) =>
+        call[1]?.event?.threadId === 'thread-2' &&
+        call[1]?.event?.runtimeError?.code === 'runtime_disconnected'
+      )).toBe(false)
+
+      queued.push({
+        type: 'event',
+        channel: CODEX_MAIN_IPC_CHANNELS.event,
+        payload: {
+          method: 'turn/completed',
+          params: { threadId: 'thread-2', turnId: 'turn-2' }
+        }
+      })
+      await vi.waitFor(() => {
+        expect(sink.send.mock.calls.some((call) =>
+          call[1]?.event?.threadId === 'thread-2' && call[1]?.event?.turnComplete === true
+        )).toBe(true)
+      })
+    } finally {
+      queued.close()
+      vi.useRealTimers()
+    }
+  })
+
   it('treats pending approval requests as first activity for the active turn', async () => {
     vi.useFakeTimers()
     const queued = clientWithQueuedEvents()
@@ -4248,6 +4368,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
       expect(onPendingRequest).toEqual(expect.any(Function))
       onPendingRequest?.({
         requestId: 'approval-1',
@@ -4384,6 +4505,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
       onPendingRequest?.({
         requestId: 'input-1',
         method: 'item/tool/requestUserInput',
@@ -4632,6 +4754,7 @@ describe('CodexRuntimeService compatibility operations', () => {
         ok: true,
         turnId: 'turn-1'
       })
+      scheduleFirstActivityGuard(service)
 
       queued.push({
         type: 'event',
@@ -4906,6 +5029,24 @@ describe('CodexRuntimeService compatibility operations', () => {
         activeDays: 1
       }
     })
+
+    const usagePath = join(rootDir, 'usage', 'codex-usage.jsonl')
+    const rowsAfterFirstBackfill = (await readFile(usagePath, 'utf8')).trim().split('\n')
+    expect(rowsAfterFirstBackfill).toHaveLength(1)
+
+    const restartedService = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      storageRoot: rootDir,
+      createClient: () => controllableClient()
+    })
+    await restartedService.usage({
+      groupBy: 'thread',
+      threadId: 'gui-thread-1',
+      timezone: 'UTC'
+    })
+    const rowsAfterRestartedBackfill = (await readFile(usagePath, 'utf8')).trim().split('\n')
+    expect(rowsAfterRestartedBackfill).toHaveLength(1)
   })
 
   it('omits app-server startup status events when a Codex turn starts after prewarm', async () => {
@@ -5112,5 +5253,274 @@ describe('CodexRuntimeService compatibility operations', () => {
       requestId: 'input-1',
       answers: [{ id: 'q1', value: 'A' }]
     })
+  })
+
+  it('handles browser login completion, account state, rate limits, and logout through app-server', async () => {
+    const queued = clientWithQueuedEvents()
+    const readAccount = vi.fn(async () => ({
+      account: { type: 'chatgpt' as const, email: 'user@example.com', planType: 'plus' as const },
+      requiresOpenaiAuth: true
+    }))
+    const startAccountLogin = vi.fn(async () => ({
+      type: 'chatgpt' as const,
+      loginId: 'login-1',
+      authUrl: 'https://auth.example/login'
+    }))
+    const readAccountRateLimits = vi.fn(async () => ({
+      rateLimits: {
+        limitId: 'codex',
+        limitName: 'Codex',
+        primary: { usedPercent: 20, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+        secondary: null,
+        credits: null,
+        individualLimit: null,
+        planType: 'plus' as const,
+        rateLimitReachedType: null
+      },
+      rateLimitsByLimitId: null,
+      rateLimitResetCredits: null
+    }))
+    const logoutAccount = vi.fn(async () => ({}))
+    Object.assign(queued.client, {
+      readAccount,
+      startAccountLogin,
+      readAccountRateLimits,
+      logoutAccount
+    })
+    const current = settings()
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => queued.client
+    })
+
+    await expect(service.startCodingPlanLogin({ method: 'browser' })).resolves.toMatchObject({
+      ok: true,
+      method: 'browser',
+      loginId: 'login-1',
+      authUrl: 'https://auth.example/login'
+    })
+    const completion = service.waitForCodingPlanLogin('login-1')
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'account/login/completed',
+        params: { loginId: 'login-1', success: true, error: null }
+      }
+    })
+    await expect(completion).resolves.toMatchObject({
+      ok: true,
+      success: true,
+      account: { type: 'chatgpt', planType: 'plus' },
+      planType: 'plus'
+    })
+    await expect(service.getCodingPlanRateLimits()).resolves.toMatchObject({
+      ok: true,
+      rateLimits: { limitId: 'codex', planType: 'plus' }
+    })
+    await expect(service.logoutCodingPlanAccount()).resolves.toEqual({ ok: true })
+    expect(startAccountLogin).toHaveBeenCalledWith({ type: 'chatgpt' })
+    expect(logoutAccount).toHaveBeenCalledTimes(1)
+    expect(queued.client.startThread).not.toHaveBeenCalled()
+    expect(queued.client.startTurn).not.toHaveBeenCalled()
+    queued.close()
+  })
+
+  it('keeps the OAuth callback app-server alive while persisted model access still differs', async () => {
+    const queued = clientWithQueuedEvents()
+    const loginStart = deferred<{
+      type: 'chatgpt'
+      loginId: string
+      authUrl: string
+    }>()
+    Object.assign(queued.client, {
+      startAccountLogin: vi.fn(() => loginStart.promise),
+      readAccount: vi.fn(async () => ({
+        account: { type: 'chatgpt' as const, email: 'user@example.com', planType: 'plus' as const },
+        requiresOpenaiAuth: true
+      }))
+    })
+    const current = settings()
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => queued.client
+    })
+
+    const login = service.startCodingPlanLogin({ method: 'browser' })
+    await vi.waitFor(() => expect(queued.client.startAccountLogin).toHaveBeenCalledTimes(1))
+    await service.synchronizeModelAccess()
+    expect(queued.client.stop).not.toHaveBeenCalled()
+
+    loginStart.resolve({
+      type: 'chatgpt',
+      loginId: 'login-lease-1',
+      authUrl: 'https://auth.example/login'
+    })
+    await expect(login).resolves.toMatchObject({
+      ok: true,
+      loginId: 'login-lease-1'
+    })
+
+    await service.synchronizeModelAccess()
+    expect(queued.client.stop).not.toHaveBeenCalled()
+    await expect(service.connect()).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('sign-in is still in progress')
+    })
+    expect(queued.client.stop).not.toHaveBeenCalled()
+
+    const completion = service.waitForCodingPlanLogin('login-lease-1')
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'account/login/completed',
+        params: { loginId: 'login-lease-1', success: true, error: null }
+      }
+    })
+    await expect(completion).resolves.toMatchObject({ ok: true, success: true })
+
+    await service.synchronizeModelAccess()
+    expect(queued.client.stop).toHaveBeenCalledTimes(1)
+    queued.close()
+  })
+
+  it('starts Codex device-code login through the same managed account client', async () => {
+    const client = {
+      ...controllableClient(),
+      startAccountLogin: vi.fn(async () => ({
+        type: 'chatgptDeviceCode' as const,
+        loginId: 'device-login-1',
+        verificationUrl: 'https://auth.example/device',
+        userCode: 'ABCD-EFGH'
+      }))
+    } as unknown as CodexAppServerJsonRpcClient
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => client
+    })
+
+    await expect(service.startCodingPlanLogin({ method: 'device' })).resolves.toEqual({
+      ok: true,
+      method: 'device',
+      loginId: 'device-login-1',
+      verificationUrl: 'https://auth.example/device',
+      userCode: 'ABCD-EFGH'
+    })
+    expect(client.startAccountLogin).toHaveBeenCalledWith({ type: 'chatgptDeviceCode' })
+    expect(client.startTurn).not.toHaveBeenCalled()
+  })
+
+  it('fails coding-plan model use when managed CODEX_HOME has no ChatGPT account', async () => {
+    const startThread = vi.fn(async () => ({ thread: { id: 'thread-1' } }))
+    const client = {
+      ...controllableClient(),
+      readAccount: vi.fn(async () => ({ account: null, requiresOpenaiAuth: true })),
+      startThread
+    } as unknown as CodexAppServerJsonRpcClient
+    const service = new CodexRuntimeService({
+      settings: async () => ({
+        ...settings(),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      }),
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => client
+    })
+
+    await expect(service.startThread({ workspace: '/tmp/workspace' })).resolves.toMatchObject({
+      ok: false,
+      message: expect.stringContaining('requires a ChatGPT account')
+    })
+    expect(startThread).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a coding-plan failure through the API Model Router provider', async () => {
+    const queued = clientWithQueuedEvents()
+    const startThread = vi.mocked(queued.client.startThread)
+    const startTurn = vi.mocked(queued.client.startTurn)
+    Object.assign(queued.client, {
+      readAccount: vi.fn(async () => ({
+        account: { type: 'chatgpt' as const, email: 'user@example.com', planType: 'plus' as const },
+        requiresOpenaiAuth: true
+      }))
+    })
+    const service = new CodexRuntimeService({
+      settings: async () => ({
+        ...settings(),
+        modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+      }),
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient: () => queued.client
+    })
+
+    await expect(service.startTurn({
+      threadId: 'gui-thread-1',
+      text: 'hello',
+      workspace: '/tmp/workspace'
+    })).resolves.toMatchObject({ ok: true, turnId: 'turn-1' })
+    queued.push({
+      type: 'event',
+      channel: CODEX_MAIN_IPC_CHANNELS.event,
+      payload: {
+        method: 'turn/failed',
+        params: {
+          threadId: 'gui-thread-1',
+          turnId: 'turn-1',
+          error: { message: 'Model Router requests must use the public router model alias.' }
+        }
+      }
+    })
+    await vi.waitFor(() => expect(startTurn).toHaveBeenCalledTimes(1))
+
+    expect(startTurn).toHaveBeenCalledTimes(1)
+    expect(startTurn).toHaveBeenCalledWith(expect.objectContaining({
+      responsesapiClientMetadata: {
+        runtime_id: 'codex',
+        gui_thread_id: 'gui-thread-1'
+      }
+    }))
+    expect(startTurn.mock.calls[0]?.[0]).not.toHaveProperty('modelProvider')
+    expect(startThread).not.toHaveBeenCalled()
+    queued.close()
+  })
+
+  it('restarts a warm managed app-server when the billing access path changes', async () => {
+    let current = settings()
+    const first = controllableClient()
+    const second = controllableClient()
+    const createClient = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second)
+    const service = new CodexRuntimeService({
+      settings: async () => current,
+      sink: { send: vi.fn() },
+      managedCodexHome: await tempRoot(),
+      planGateway: { baseUrl: 'http://127.0.0.1:47931/v1' },
+      createClient
+    })
+
+    await expect(service.connect()).resolves.toMatchObject({ ok: true })
+    current = {
+      ...current,
+      modelAccess: { mode: 'coding-plan', planAdapterId: 'codex' }
+    }
+    await service.synchronizeModelAccess()
+    expect(first.stop).toHaveBeenCalledTimes(1)
+    expect(service.isClientWarm()).toBe(false)
+    await expect(service.connect()).resolves.toMatchObject({ ok: true })
+    expect(createClient).toHaveBeenCalledTimes(2)
   })
 })

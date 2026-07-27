@@ -1,14 +1,14 @@
 /**
- * Shared parser for local runtime error bodies.
+ * Shared parser for legacy and current agent runtime error bodies.
  *
- * The bundled runtime contract (`kun/src/contracts/errors.ts`) returns
- * `{ code, message, details? }`. Older code paths may also surface
+ * Historical runtime responses used `{ code, message, details? }`.
+ * Older persisted code paths may also surface
  * `{ error: string | { message }, message? }` where `error` is a
  * legacy machine-readable code (e.g. `runtime_auth_required`).
  *
  * This module normalises both shapes so the renderer and main
  * process agree on a single `RuntimeError` view. The `code` field
- * always carries either a local runtime contract code or one of the
+ * always carries either a runtime contract code or one of the
  * `LEGACY_MAIN_GUARD_CODES` (main-process guard codes that aren't
  * part of the runtime schema). `details` carries the original
  * payload untouched so callers that need more context can read it.
@@ -41,7 +41,7 @@ export type LegacyMainGuardCode =
   | 'runtime_port_conflict'
   | 'runtime_unhealthy'
   | 'runtime_request_user_input_unsupported'
-  | 'runtime_tool_storm_interrupted'
+  | 'runtime_execution_interrupted'
   | 'missing_api_key'
   | 'provider_auth_blocked'
 
@@ -81,7 +81,7 @@ const KNOWN_LEGACY_CODES: ReadonlySet<LegacyMainGuardCode> = new Set<LegacyMainG
   'runtime_port_conflict',
   'runtime_unhealthy',
   'runtime_request_user_input_unsupported',
-  'runtime_tool_storm_interrupted',
+  'runtime_execution_interrupted',
   'missing_api_key',
   'provider_auth_blocked'
 ])

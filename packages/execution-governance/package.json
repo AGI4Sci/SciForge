@@ -1,0 +1,27 @@
+{
+  "name": "@sciforge/execution-governance",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Runtime-neutral execution attempt and receipt governance for SciForge runtimes.",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "package.json"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.3",
+    "typescript": "^5.8.2",
+    "vitest": "^4.1.7"
+  }
+}

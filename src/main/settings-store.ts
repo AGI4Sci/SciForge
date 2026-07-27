@@ -16,7 +16,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultAgentCapabilitySettings,
   defaultComputerUseSettings,
   defaultRuntimeGuardSettings,
@@ -31,8 +30,8 @@ import {
   mergeCodexRuntimeSettings,
   mergeClaudeRuntimeSettings,
   mergeLocalRuntimeSettings,
+  mergeModelAccessSettings,
   mergeModelRouterSettings,
-  mergeModelProviderSettings,
   mergeComputerUseSettings,
   mergeConnectPhoneSettings,
   mergeAgentCapabilitySettings,
@@ -48,6 +47,7 @@ import {
   normalizeAppBehaviorSettings,
   normalizeKeyboardShortcuts,
   normalizeAppSettings,
+  normalizeModelAccessSettings,
   normalizeAgentRuntimeId,
   reconcileScheduleWorkflows,
   type AppSettingsPatch,
@@ -266,12 +266,11 @@ const defaultSettings = (): AppSettingsV1 => ({
   locale: 'en',
   theme: 'system',
   uiFontScale: 'small',
-  provider: defaultModelProviderSettings(),
   modelRouter: defaultModelRouterSettings(),
   agentCapabilities: defaultAgentCapabilitySettings(),
   computerUse: defaultComputerUseSettings(),
   runtimeGuards: defaultRuntimeGuardSettings(),
-  activeAgentRuntime: 'sciforge',
+  activeAgentRuntime: 'codex',
   agents: {
     sciforge: defaultLocalRuntimeSettings(),
     codex: defaultCodexRuntimeSettings(),
@@ -314,7 +313,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
     locale: migrated.locale ?? defaults.locale,
     theme: migrated.theme ?? defaults.theme,
     uiFontScale: migrated.uiFontScale ?? defaults.uiFontScale,
-    provider: mergeModelProviderSettings(defaults.provider, migrated.provider),
+    modelAccess: normalizeModelAccessSettings(migrated.modelAccess),
     modelRouter: mergeModelRouterSettings(defaults.modelRouter, migrated.modelRouter),
     agentCapabilities: mergeAgentCapabilitySettings(defaults.agentCapabilities, migrated.agentCapabilities),
     computerUse: mergeComputerUseSettings(defaults.computerUse, migrated.computerUse),
@@ -450,6 +449,7 @@ export class JsonSettingsStore {
       normalized.installationId !== normalizedBeforeLocalIds.installationId ||
       normalized.schedule.internal.secret !== normalizedBeforeLocalIds.schedule.internal.secret ||
       normalized.workflow.webhookSecret !== normalizedBeforeLocalIds.workflow.webhookSecret ||
+      parsed.activeAgentRuntime !== normalized.activeAgentRuntime ||
       !('remoteExecutor' in parsed) ||
       !('agentCapabilities' in parsed)
     ) {
@@ -472,7 +472,6 @@ export class JsonSettingsStore {
     const cur = await this.load()
     const {
       agents: agentsPatch,
-      provider: providerPatch,
       modelRouter: modelRouterPatch,
       computerUse: computerUsePatch,
       agentCapabilities: agentCapabilitiesPatch,
@@ -500,7 +499,7 @@ export class JsonSettingsStore {
       activeAgentRuntime: partial.activeAgentRuntime ?? cur.activeAgentRuntime,
       workspaceRoot: partial.workspaceRoot ?? cur.workspaceRoot,
       codePromptPrefix: partial.codePromptPrefix ?? cur.codePromptPrefix,
-      provider: mergeModelProviderSettings(cur.provider, providerPatch),
+      modelAccess: mergeModelAccessSettings(cur.modelAccess, partial.modelAccess),
       modelRouter: mergeModelRouterSettings(cur.modelRouter, modelRouterPatch),
       agentCapabilities: mergeAgentCapabilitySettings(cur.agentCapabilities, agentCapabilitiesPatch),
       computerUse: mergeComputerUseSettings(cur.computerUse, computerUsePatch),

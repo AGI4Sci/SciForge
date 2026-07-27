@@ -1,9 +1,11 @@
 import { createHash } from 'node:crypto'
+import { createExecutionReceipt } from '@sciforge/execution-governance'
 import type {
   AgentRuntimeCapabilities,
   AgentRuntimeChild,
   AgentRuntimeChildTranscriptEntry,
   AgentRuntimeChildTranscriptRef,
+  AgentRuntimeExecutionReceipt,
   AgentRuntimeEvent,
   AgentRuntimeInputQuestion,
   AgentRuntimeItem,
@@ -22,12 +24,18 @@ import {
   createDefaultAgentRuntimeCapabilities,
   filterAgentRuntimeThreadChildren
 } from '../../../shared/agent-runtime-contract'
-import type {
-  CodexChatBlock,
-  CodexNormalizedThread,
-  CodexThreadEventPayload
+import {
+  codexModelDeltaItemId,
+  type CodexChatBlock,
+  type CodexNormalizedThread,
+  type CodexThreadEventPayload
 } from './codex-runtime-api'
 import type { AgentRuntimeAdapter } from '../agent-runtime/adapter'
+import {
+  EXECUTION_INTEGRITY_POLICY_METADATA_KEY,
+  EXECUTION_INTEGRITY_POLICY_VERSION,
+  requiresExecutionIntegrityValidation
+} from '../agent-runtime/execution-integrity-guard'
 import type { CodexRuntimeService } from './codex-service'
 import {
   normalizeAgentCapabilitySettings,
@@ -91,7 +99,7 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
       })
     },
 
-    async startTurn(_context, input) {
+    async startTurn(context, input) {
       const result = await service.startTurn({
         threadId: input.threadId,
         text: input.text,
@@ -100,7 +108,10 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
         model: input.model,
         reasoningEffort: input.reasoningEffort,
         fileReferences: input.fileReferences,
-        metadata: input.metadata
+        ownedVisualToolsAvailable:
+          context.turnGovernanceSnapshot?.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending:
+          context.turnGovernanceSnapshot?.nativeVisualProofChainPending === true
       })
       if (!result.ok) throw codexFailure(result)
       return {
@@ -151,6 +162,11 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
       return mapCodexStoredEvent(stored)[0] ?? event
     },
 
+    async updateTurnGovernanceSnapshot(_context, input) {
+      const result = await service.updateTurnGovernanceSnapshot(input)
+      if (!result.ok) throw codexFailure(result)
+    },
+
     async compactThread(_context, input) {
       const result = await service.compactThread(input.threadId, input.reason)
       if (!result.ok) throw codexFailure(result)
@@ -186,6 +202,45 @@ export function createCodexAgentRuntimeAdapter(service: CodexRuntimeService): Ag
 
     async auxiliary(_context, input) {
       switch (input.operation) {
+        case 'getCodingPlanAccount': {
+          const payload = recordValue(input.payload)
+          const result = await service.getCodingPlanAccount({
+            refreshToken: payload.refreshToken === true
+          })
+          if (!result.ok) throw codexFailure(result)
+          return {
+            ...result,
+            authenticated: result.account?.type === 'chatgpt'
+          }
+        }
+        case 'startCodingPlanLogin': {
+          const payload = recordValue(input.payload)
+          const method = stringValue(payload.method)
+          if (method !== 'browser' && method !== 'device') {
+            throw new Error('startCodingPlanLogin requires payload.method browser or device.')
+          }
+          const result = await service.startCodingPlanLogin({ method })
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'waitForCodingPlanLogin': {
+          const payload = recordValue(input.payload)
+          const loginId = stringValue(payload.loginId)
+          if (!loginId) throw new Error('waitForCodingPlanLogin requires payload.loginId.')
+          const result = await service.waitForCodingPlanLogin(loginId)
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'logoutCodingPlanAccount': {
+          const result = await service.logoutCodingPlanAccount()
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
+        case 'getCodingPlanRateLimits': {
+          const result = await service.getCodingPlanRateLimits()
+          if (!result.ok) throw codexFailure(result)
+          return result
+        }
         case 'getRuntimeInfo':
           return codexRuntimeInfo(serviceMcpState(service, _context.settings))
         case 'getToolDiagnostics':
@@ -385,7 +440,7 @@ function codexCapabilities(state: CodexMcpState = emptyCodexMcpState): AgentRunt
       resumeSession: false
     },
     guard: {
-      toolStorm: 'observe'
+      execution: 'observe'
     },
     storage: {
       guiOwnedThreads: true,
@@ -642,6 +697,14 @@ function mapCodexBlock(
         id: block.id,
         kind: 'user_message',
         text: block.displayText?.trim() || block.text,
+        ...(requiresExecutionIntegrityValidation(block.text)
+          ? {
+              meta: {
+                [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]:
+                  EXECUTION_INTEGRITY_POLICY_VERSION
+              }
+            }
+          : {}),
         ...(block.turnId ? { turnId: block.turnId } : {}),
         createdAt: block.createdAt
       }
@@ -1214,20 +1277,32 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     })
   }
   for (const [index, delta] of (event.deltas ?? []).entries()) {
+    const itemId = codexModelDeltaItemId(event, delta, index)
     if (delta.kind === 'agent_reasoning') {
       mapped.push({
         ...common,
         kind: 'reasoning_delta',
-        itemId: `codex-reasoning-${event.seq ?? 'event'}-${index}`,
+        itemId,
         text: delta.text,
         visibility: 'summary',
         source: 'runtime_summary'
+      })
+    } else if (delta.snapshot) {
+      mapped.push({
+        ...common,
+        kind: 'item_snapshot',
+        item: {
+          id: itemId,
+          kind: 'assistant_message',
+          text: delta.text,
+          ...(event.turnId ? { turnId: event.turnId } : {})
+        }
       })
     } else {
       mapped.push({
         ...common,
         kind: 'assistant_delta',
-        itemId: `codex-delta-${event.seq ?? 'event'}-${index}`,
+        itemId,
         text: delta.text
       })
     }
@@ -1238,18 +1313,36 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     if (pendingRequest) {
       mapped.push(pendingRequest)
     } else {
-      mapped.push({
+      const base = {
         ...common,
-        kind: 'tool_event',
+        kind: 'tool_event' as const,
         itemId: event.tool.itemId,
-        status: event.tool.status,
         toolKind: normalizeToolKind(event.tool.toolKind),
+        ...(event.tool.effects?.length ? { effects: event.tool.effects } : {}),
+        ...(event.tool.completionReceipts?.length
+          ? { completionReceipts: event.tool.completionReceipts }
+          : {}),
         ...execution,
         summary: event.tool.summary,
         detail: event.tool.detail,
         filePath: event.tool.filePath,
         meta: event.tool.meta
-      })
+      }
+      if (event.tool.status === 'running') {
+        mapped.push({ ...base, status: 'running' })
+      } else if (event.tool.status === 'success') {
+        mapped.push({
+          ...base,
+          status: 'success',
+          receipt: codexExecutionReceipt('success', event.tool)
+        })
+      } else {
+        mapped.push({
+          ...base,
+          status: 'error',
+          receipt: codexExecutionReceipt('error', event.tool)
+        })
+      }
     }
   }
   const child = normalizeCodexChild(event.child, event)
@@ -1331,6 +1424,20 @@ function mapCodexStoredEvent(event: CodexThreadEventPayload): AgentRuntimeEvent[
     })
   }
   return mapped
+}
+
+function codexExecutionReceipt<Status extends 'success' | 'error'>(
+  status: Status,
+  tool: NonNullable<CodexThreadEventPayload['tool']>
+): AgentRuntimeExecutionReceipt & { status: Status } {
+  const meta = tool.meta ?? {}
+  const output = meta.structuredContent ?? meta.output ?? meta.result ?? tool.detail
+  return createExecutionReceipt({
+    status,
+    output,
+    detail: tool.detail,
+    metadata: meta
+  })
 }
 
 function codexToolExecutionFields(

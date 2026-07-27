@@ -1,5 +1,8 @@
 import { resolve } from 'path'
+import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
+
+const repositoryRoot = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   resolve: {
@@ -10,10 +13,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
-    include: [
-      'src/**/*.test.{ts,tsx}',
-      'packages/workers/evidence-dag/desktop/**/*.test.ts',
-      'packages/workers/project-dag/desktop/**/*.test.ts'
-    ]
+    setupFiles: [resolve(repositoryRoot, 'scripts/vitest.setup.ts')],
+    include: ['src/**/*.test.{ts,tsx}']
   }
 })

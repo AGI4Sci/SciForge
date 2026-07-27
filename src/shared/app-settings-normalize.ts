@@ -35,8 +35,7 @@ import {
   getClaudeRuntimeSettings,
   mergeClaudeRuntimeSettings
 } from './app-settings-claude'
-import { normalizeModelProviderSettings } from './app-settings-provider'
-import { normalizeModelRouterSettings } from './app-settings-model-router'
+import { normalizeModelAccessSettings, normalizeModelRouterSettings } from './app-settings-model-router'
 import { normalizeInstallationId } from './app-settings-normalizers'
 import { normalizeConnectPhoneSettings, normalizeRemoteChannelSettings } from './app-settings-remote-channel'
 import { normalizeScheduleSettings } from './app-settings-schedule'
@@ -53,7 +52,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
     appBehavior?: Partial<AppBehaviorConfigV1>
     keyboardShortcuts?: Partial<KeyboardShortcutsConfigV1>
     notifications?: Partial<NotificationConfigV1>
-    provider?: Parameters<typeof normalizeModelProviderSettings>[0]
+    modelAccess?: Parameters<typeof normalizeModelAccessSettings>[0]
     modelRouter?: Parameters<typeof normalizeModelRouterSettings>[0]
     write?: WriteSettingsPatchV1
     remoteChannel?: RemoteChannelSettingsPatchV1
@@ -85,7 +84,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
       maybeSettings.uiFontScale === 'large'
         ? maybeSettings.uiFontScale
         : 'small',
-    provider: normalizeModelProviderSettings(maybeSettings.provider),
+    modelAccess: normalizeModelAccessSettings(maybeSettings.modelAccess),
     modelRouter: normalizeModelRouterSettings(maybeSettings.modelRouter),
     runtimeGuards: normalizeRuntimeGuardSettings(maybeSettings.runtimeGuards),
     agentCapabilities: normalizeAgentCapabilitySettings(maybeSettings.agentCapabilities),

@@ -8,7 +8,6 @@ import {
   defaultRemoteChannelSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -24,6 +23,7 @@ import {
   remoteChannelAttachmentFromGeneratedFile,
   latestGeneratedFiles,
   prepareRemoteChannelReplyText,
+  sanitizeOutboundAttachmentFileName,
   splitRemoteChannelReplyText
 } from './remote-channel-runtime-helpers'
 import type { RemoteChannelRuntimeDeps, ThreadDetailJson } from './remote-channel-runtime-helpers'
@@ -45,7 +45,6 @@ function buildSettings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings()
     },
@@ -304,6 +303,16 @@ describe('RemoteChannelRuntime', () => {
     expect(chunks[0]).toContain('```ts')
     expect(chunks[0].trimEnd()).toMatch(/```$/)
     expect(chunks[1]).toMatch(/^```ts\n/)
+  })
+
+  it('sanitizes outbound attachment names at the provider boundary', () => {
+    expect(sanitizeOutboundAttachmentFileName('../reports\\paper\r\n".pdf', 'fallback.pdf')).toBe('paper_.pdf')
+    expect(sanitizeOutboundAttachmentFileName('\u0000\r\n', 'result.txt')).toBe('result.txt')
+    const longName = `${'a'.repeat(300)}.csv`
+    const sanitized = sanitizeOutboundAttachmentFileName(longName, 'fallback.csv')
+    expect(sanitized).toHaveLength(255)
+    expect(sanitized.endsWith('.csv')).toBe(true)
+    expect(sanitizeOutboundAttachmentFileName('实验结果.tsv', 'fallback.tsv')).toBe('实验结果.tsv')
   })
 
   it('adds an attachment fallback summary when a provider cannot deliver generated files', () => {
@@ -828,7 +837,7 @@ describe('RemoteChannelRuntime', () => {
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
   })
 
-  it('resolves IM auto to the managed Model Router alias before starting a local runtime turn', async () => {
+  it('resolves IM auto to the managed Model Router alias without reading the legacy Kun model', async () => {
     const settings = buildSettings()
     settings.agents.sciforge.model = 'deepseek-v4-flash'
     const forbiddenDirectCall = vi.fn()
@@ -876,6 +885,32 @@ describe('RemoteChannelRuntime', () => {
       governanceProfile: 'remote_guard'
     }))
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
+  })
+
+  it('defaults generated-file thread inspection to the Codex runtime', async () => {
+    const settings = buildSettings()
+    const agentRuntime = completedAgentRuntime({
+      readThread: async () => ({ id: 'thread-default-runtime', turns: [] })
+    })
+    const runtime = createRemoteChannelRuntime({
+      store: { load: vi.fn(async () => settings), patch: vi.fn(async () => settings) } as never,
+      agentRuntime,
+      logError: () => undefined
+    })
+
+    await (runtime as unknown as {
+      recentGeneratedFilesForThread: (
+        settingsArg: AppSettingsV1,
+        threadId: string,
+        workspaceRoot: string,
+        context: Record<string, unknown>
+      ) => Promise<unknown[]>
+    }).recentGeneratedFilesForThread(settings, 'thread-default-runtime', '/tmp/workspace', {})
+
+    expect(agentRuntime.readThread).toHaveBeenCalledWith({
+      runtimeId: 'codex',
+      threadId: 'thread-default-runtime'
+    })
   })
 
   it('resolves Codex IM auto to the Model Router runtime alias before agentRuntime calls', async () => {
@@ -1346,7 +1381,7 @@ describe('RemoteChannelRuntime', () => {
     })
 
     expect(current().remoteChannel.channels[0]).toMatchObject({
-      agentThreadIds: { sciforge: 'thr_group' },
+      agentThreadIds: { codex: 'thr_group' },
       remoteSession: expect.objectContaining({ chatId: 'oc_group_a', messageId: 'om_group_1' })
     })
     expect(current().remoteChannel.channels[0].conversations).toEqual([])
@@ -1364,8 +1399,15 @@ describe('RemoteChannelRuntime', () => {
   it('handles Feishu /clear locally by clearing the mapped IM thread', async () => {
     const settings = buildSettings()
     settings.remoteChannel.im.enabled = true
-    const conversation = buildConversation()
-    settings.remoteChannel.channels = [buildChannel({ conversations: [conversation] })]
+    const conversation = buildConversation({
+      runtimeId: 'codex',
+      agentThreadIds: { codex: 'thr_old' }
+    })
+    settings.remoteChannel.channels = [buildChannel({
+      runtimeId: 'codex',
+      agentThreadIds: { codex: 'thr_old' },
+      conversations: [conversation]
+    })]
     const { current, store } = mutableSettingsStore(settings)
     const forbiddenDirectCall = vi.fn()
     const send = vi.fn(async () => ({ messageId: 'om_sent' }))
@@ -1634,13 +1676,13 @@ describe('RemoteChannelRuntime', () => {
 
   it('returns the runtime reason when /new cannot create a thread', async () => {
     const settings = buildSettings()
-    settings.activeAgentRuntime = 'sciforge'
+    settings.activeAgentRuntime = 'codex'
     settings.remoteChannel.im.enabled = true
     settings.remoteChannel.channels = [buildChannel({
       provider: 'discord' as const,
       id: 'discord-bot-1-guild-1-channel-1',
       label: '#debug',
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       guardMode: 'all_messages',
       threadId: '',
       conversations: []
@@ -1681,11 +1723,11 @@ describe('RemoteChannelRuntime', () => {
       reply: expect.stringContaining('model unavailable for workspace /tmp/workspace')
     })
     expect(agentRuntime.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'sciforge'
+      runtimeId: 'codex'
     }))
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
     expect(current().remoteChannel.channels[0]).toMatchObject({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       lastFailure: expect.objectContaining({
         provider: 'discord',
         message: 'model unavailable for workspace /tmp/workspace',
@@ -1694,19 +1736,19 @@ describe('RemoteChannelRuntime', () => {
         chatId: 'channel-1'
       })
     })
-    expect(current().remoteChannel.channels[0].agentThreadIds?.sciforge).toBeUndefined()
+    expect(current().remoteChannel.channels[0].agentThreadIds?.codex).toBeUndefined()
     expect(current().remoteChannel.channels[0].conversations).toEqual([])
   })
 
-  it('creates local runtime /new IM threads through agentRuntime when the host is available', async () => {
+  it('creates Codex /new IM threads through agentRuntime when the host is available', async () => {
     const settings = buildSettings()
-    settings.activeAgentRuntime = 'sciforge'
+    settings.activeAgentRuntime = 'codex'
     settings.remoteChannel.im.enabled = true
     settings.remoteChannel.channels = [buildChannel({
       provider: 'discord' as const,
       id: 'discord-bot-1-guild-1-channel-1',
       label: '#debug',
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       guardMode: 'all_messages',
       threadId: '',
       conversations: []
@@ -1717,8 +1759,8 @@ describe('RemoteChannelRuntime', () => {
     })
     const agentRuntime = {
       startThread: vi.fn(async () => ({
-        id: 'kun-host-thread',
-        runtimeId: 'sciforge',
+        id: 'codex-host-thread',
+        runtimeId: 'codex',
         title: 'Fix failing model',
         updatedAt: '2026-06-02T00:00:00.000Z'
       })),
@@ -1748,18 +1790,18 @@ describe('RemoteChannelRuntime', () => {
 
     expect(result).toMatchObject({
       ok: true,
-      reply: expect.stringContaining('sciforge:kun-host...read')
+      reply: expect.stringContaining('codex:codex-ho...read')
     })
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
     expect(agentRuntime.startThread).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       workspace: '/tmp/workspace',
       title: 'Fix failing model'
     }))
     expect(current().remoteChannel.channels[0]).toMatchObject({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       agentThreadIds: {
-        sciforge: 'kun-host-thread'
+        codex: 'codex-host-thread'
       }
     })
   })
@@ -2365,7 +2407,8 @@ describe('RemoteChannelRuntime', () => {
         latestMessageId: 'wx_msg_previous',
         senderId: 'wx_user_1',
         senderName: 'Alice',
-        localThreadId: 'thr_summary'
+        runtimeId: 'codex',
+        agentThreadIds: { codex: 'thr_summary' }
       })]
     })]
     const { current, store } = mutableSettingsStore(settings)
@@ -3168,13 +3211,13 @@ describe('RemoteChannelRuntime', () => {
     }))
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
     expect(JSON.parse(responseBody).reply).toContain('Remote channel commands:')
-    expect(current().remoteChannel.channels[0].agentThreadIds).toEqual({ sciforge: 'thr_weixin' })
+    expect(current().remoteChannel.channels[0].agentThreadIds).toEqual({ codex: 'thr_weixin' })
     expect(current().remoteChannel.channels[0].conversations[0]).toMatchObject({
       chatId: 'wx_user_1',
       latestMessageId: 'wx_msg_1',
       senderId: 'wx_user_1',
       senderName: 'Alice',
-      agentThreadIds: { sciforge: 'thr_weixin' }
+      agentThreadIds: { codex: 'thr_weixin' }
     })
   })
 
@@ -4364,7 +4407,7 @@ describe('RemoteChannelRuntime', () => {
     })
   })
 
-  it('keeps a reconnected phone conversation on its stored runtime instead of using active desktop runtime', async () => {
+  it('starts a Codex thread instead of reconnecting a phone conversation to the removed Kun runtime', async () => {
     const settings = buildSettings()
     settings.activeAgentRuntime = 'codex'
     settings.remoteChannel.im.enabled = true
@@ -4457,33 +4500,37 @@ describe('RemoteChannelRuntime', () => {
     expect(status).toBe(200)
     expect(JSON.parse(responseBody)).toMatchObject({
       ok: true,
-      threadId: 'stale-kun-conversation-thread',
-      reply: expect.stringContaining('stored runtime reply')
+      threadId: 'unexpected-new-thread',
+      reply: expect.stringContaining('new process reply')
     })
     expect(agentRuntime.startTurn).toHaveBeenCalledWith(expect.objectContaining({
-      runtimeId: 'sciforge',
-      threadId: 'stale-kun-conversation-thread',
+      runtimeId: 'codex',
+      threadId: 'unexpected-new-thread',
       governanceProfile: 'remote_guard'
     }))
     expect(forbiddenDirectCall).not.toHaveBeenCalled()
-    expect(agentRuntime.startThread).not.toHaveBeenCalled()
+    expect(agentRuntime.startThread).toHaveBeenCalledWith(expect.objectContaining({
+      runtimeId: 'codex'
+    }))
     expect(notifyChannelActivity).toHaveBeenCalledWith({
       channelId: 'channel_weixin',
-      threadId: 'stale-kun-conversation-thread',
-      runtimeId: 'sciforge'
+      threadId: 'unexpected-new-thread',
+      runtimeId: 'codex'
     })
     expect(current().remoteChannel.channels[0]).toMatchObject({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       agentThreadIds: {
-        sciforge: 'stale-kun-conversation-thread'
+        sciforge: 'stale-kun-channel-thread',
+        codex: 'unexpected-new-thread'
       }
     })
     expect(current().remoteChannel.channels[0].conversations[0]).toMatchObject({
       id: 'conversation-1',
       latestMessageId: 'wx_msg_3',
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       agentThreadIds: {
-        sciforge: 'stale-kun-conversation-thread'
+        sciforge: 'stale-kun-conversation-thread',
+        codex: 'unexpected-new-thread'
       },
       workspaceRoot: '/tmp/old-phone-workspace'
     })
@@ -5080,7 +5127,8 @@ describe('RemoteChannelRuntime', () => {
         latestMessageId: 'om_previous',
         senderId: 'ou_1',
         senderName: 'Alice',
-        agentThreadIds: { sciforge: 'thr_1' },
+        runtimeId: 'codex',
+        agentThreadIds: { codex: 'thr_1' },
         workspaceRoot,
         createdAt: '2026-06-02T00:00:00.000Z',
         updatedAt: '2026-06-02T00:00:00.000Z'

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { VisibleContextSnapshot } from '@shared/visible-context'
+import type { VisibleContextPublishInput } from '@shared/visible-context'
 import {
   ensureVisibleContextRefreshListener,
   measureVisibleContextBounds,
@@ -41,7 +41,7 @@ describe('visible context visual targets', () => {
   })
 
   it('publishes immediately when main requests an on-demand refresh', () => {
-    const publish = vi.fn(async (snapshot: VisibleContextSnapshot) => snapshot)
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({ ...snapshot, windowId: 'electron:1' }))
     let refresh: (() => void) | undefined
     vi.stubGlobal('window', {
       sciforge: {
@@ -61,14 +61,14 @@ describe('visible context visual targets', () => {
     refresh?.()
 
     expect(publish).toHaveBeenCalledWith(expect.objectContaining({
-      schemaVersion: 2,
+      schemaVersion: 3,
       revision: 1,
       freshness: { stale: false, ageMs: 0, staleAfterMs: 5_000 }
     }))
   })
 
   it('auto-publishes password and explicitly sensitive controls as generic redactions', () => {
-    const publish = vi.fn(async (snapshot: VisibleContextSnapshot) => snapshot)
+    const publish = vi.fn(async (snapshot: VisibleContextPublishInput) => ({ ...snapshot, windowId: 'electron:1' }))
     const password = {
       getBoundingClientRect: () => ({ left: 10, top: 20, width: 100, height: 30 })
     } as unknown as Element

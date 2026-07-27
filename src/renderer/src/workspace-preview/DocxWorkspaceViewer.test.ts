@@ -9,6 +9,7 @@ import {
 vi.mock('../components/write/WriteDocxViewer', () => ({
   WriteDocxViewer: (props: {
     filePath: string
+    documentContentKey?: string
     paragraphs: Array<{ index: number; text: string }>
     content: string
     workspaceRoot: string
@@ -20,6 +21,7 @@ vi.mock('../components/write/WriteDocxViewer', () => ({
   }) => createElement('div', {
     'data-write-docx-viewer': 'true',
     'data-file-path': props.filePath,
+    'data-document-content-key': props.documentContentKey,
     'data-workspace-root': props.workspaceRoot,
     'data-paragraph-count': props.paragraphs.length,
     'data-content': props.content,
@@ -73,7 +75,8 @@ describe('DocxWorkspaceViewer', () => {
     const observation = createDocxObservation()
     const model = buildDocxWorkspaceViewerModel(observation)
     const html = renderToStaticMarkup(createElement(DocxWorkspaceViewer, {
-      observation
+      observation,
+      documentContentKey: 'docx-content-revision'
     }))
 
     expect(model).toMatchObject({
@@ -87,6 +90,7 @@ describe('DocxWorkspaceViewer', () => {
     expect(html).toContain('data-workspace-preview-docx-viewer')
     expect(html).toContain('data-write-docx-viewer="true"')
     expect(html).toContain('data-paragraph-count="2"')
+    expect(html).toContain('data-document-content-key="docx-content-revision"')
   })
 
   it('enables DOCX annotation actions when the shell provides applyEdit', () => {

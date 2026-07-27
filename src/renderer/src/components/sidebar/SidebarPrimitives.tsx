@@ -51,11 +51,11 @@ export function SidebarFrame({
   return (
     <aside
       className={cx(
-        'ds-drag ds-sidebar-shell relative flex h-full w-full shrink-0 flex-col overflow-hidden px-4 pb-3',
+        'ds-sidebar-shell relative flex h-full w-full shrink-0 flex-col overflow-hidden px-4 pb-3',
         className
       )}
     >
-      <div className="ds-sidebar-titlebar-spacer shrink-0 pb-5 pt-3">
+      <div className="ds-sidebar-titlebar-spacer ds-drag shrink-0 pb-5 pt-3">
         <div className="ds-sidebar-titlebar-row flex min-h-[34px] items-start justify-between">
           <div aria-hidden className="ds-titlebar-safe-block min-w-[86px]" />
           {onCollapse ? (

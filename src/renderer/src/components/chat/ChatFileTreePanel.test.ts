@@ -6,10 +6,14 @@ import {
   fileTreeCopyContentFromReadResult,
   fileTreeExternalImportPayload,
   fileTreeWorkspaceDropDecision,
+  fileTreeWorkspaceDropDecisionForDrag,
   fileTreeWorkspaceDropDecisionFromDragData,
+  fileTreeWorkspaceDropPayload,
+  isPdfWorkspaceReference,
   renamedRelativePath,
   rewriteRenamedPath,
-  shouldProcessInitialDirectory
+  shouldProcessInitialDirectory,
+  workspaceChildPath
 } from './ChatFileTreePanel'
 import {
   WORKSPACE_REFERENCE_DRAG_MIME,
@@ -18,6 +22,21 @@ import {
 } from '../../lib/workspace-reference-drag'
 
 describe('ChatFileTreePanel helpers', () => {
+  it('shows automatic naming only for PDF workspace references', () => {
+    expect(isPdfWorkspaceReference({
+      workspaceRoot: '/tmp/workspace',
+      relativePath: 'papers/2603.10165v2.pdf',
+      name: '2603.10165v2.pdf',
+      kind: 'file'
+    })).toBe(true)
+    expect(isPdfWorkspaceReference({
+      workspaceRoot: '/tmp/workspace',
+      relativePath: 'notes/readme.md',
+      name: 'readme.md',
+      kind: 'text'
+    })).toBe(false)
+  })
+
   it('converts shared workspace references into composer references', () => {
     expect(composerReferenceFromWorkspaceReference({
       workspaceRoot: '/tmp/workspace',
@@ -53,6 +72,12 @@ describe('ChatFileTreePanel helpers', () => {
   it('derives renamed workspace paths without moving entries between directories', () => {
     expect(renamedRelativePath('pdfs/old.pdf', 'new.pdf')).toBe('pdfs/new.pdf')
     expect(renamedRelativePath('old.pdf', 'new.pdf')).toBe('new.pdf')
+  })
+
+  it('builds normalized child paths for new workspace entries', () => {
+    expect(workspaceChildPath('', 'notes/new.md')).toBe('notes/new.md')
+    expect(workspaceChildPath('papers', '/drafts\\\\new.md')).toBe('papers/drafts/new.md')
+    expect(workspaceChildPath('/workspace/project', 'assets')).toBe('/workspace/project/assets')
   })
 
   it('derives the containing folder target for file tree entries', () => {
@@ -101,7 +126,7 @@ describe('ChatFileTreePanel helpers', () => {
         displayName: 'paper.pdf',
         mimeType: 'application/pdf',
         size: 128,
-        supportedActions: ['copy-path', 'attach-to-session', 'native-file']
+        supportedActions: ['copy-path', 'attach-to-session']
       }
     })
   })
@@ -215,6 +240,45 @@ describe('ChatFileTreePanel helpers', () => {
       action: 'move',
       sourcePath: 'results/table.csv',
       targetDirectory: 'archive'
+    })
+  })
+
+  it('uses the in-memory drag source while Chromium protects custom data during dragover', () => {
+    expect(fileTreeWorkspaceDropDecisionForDrag({
+      workspaceRoot: '/workspace/project',
+      reference: {
+        workspaceRoot: '/workspace/project',
+        relativePath: 'source/test-move.txt',
+        name: 'test-move.txt',
+        kind: 'text'
+      }
+    }, {
+      types: [WORKSPACE_REFERENCE_DRAG_MIME],
+      getData: () => ''
+    }, {
+      targetDirectory: 'destination',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toEqual({
+      action: 'move',
+      sourcePath: 'source/test-move.txt',
+      sourceWorkspaceRoot: '/workspace/project',
+      targetDirectory: 'destination',
+      targetWorkspaceRoot: '/workspace/project'
+    })
+  })
+
+  it('removes renderer-only action metadata before invoking strict workspace IPC', () => {
+    expect(fileTreeWorkspaceDropPayload({
+      action: 'move',
+      sourcePath: 'source/test-move.txt',
+      sourceWorkspaceRoot: '/workspace/project',
+      targetDirectory: 'destination',
+      targetWorkspaceRoot: '/workspace/project'
+    })).toEqual({
+      sourcePath: 'source/test-move.txt',
+      sourceWorkspaceRoot: '/workspace/project',
+      targetDirectory: 'destination',
+      targetWorkspaceRoot: '/workspace/project'
     })
   })
 

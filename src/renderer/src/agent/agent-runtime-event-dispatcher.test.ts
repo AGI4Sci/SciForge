@@ -5,6 +5,7 @@ import {
   type AgentRuntimeEventKind
 } from '@shared/agent-runtime-contract'
 import {
+  AGENT_RUNTIME_DELTA_HANDLES_SEQ,
   AGENT_RUNTIME_EVENT_REPLAY_FILTER,
   agentRuntimeEventBelongsToThread,
   dispatchAgentRuntimeEvent,
@@ -167,6 +168,18 @@ describe('agent runtime event dispatcher', () => {
       seq: 8,
       meta: { reasoning: { visibility: 'summary' } }
     }])
+  })
+
+  it('lets a batching sink advance delta cursors in the same state update', () => {
+    const sink = Object.assign(makeSink(), { [AGENT_RUNTIME_DELTA_HANDLES_SEQ]: true })
+
+    dispatchAgentRuntimeEvent(
+      { kind: 'assistant_delta', threadId: 'thread-1', itemId: 'assistant-1', text: 'hello', seq: 7 },
+      sink
+    )
+
+    expect(sink.onSeq).not.toHaveBeenCalled()
+    expect(sink.onDeltas).toHaveBeenCalledWith([expect.objectContaining({ seq: 7, text: 'hello' })])
   })
 
   it('keeps hidden reasoning deltas out of visible chat blocks', () => {

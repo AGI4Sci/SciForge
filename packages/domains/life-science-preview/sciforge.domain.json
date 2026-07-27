@@ -1,0 +1,315 @@
+{
+  "contractVersion": 1,
+  "kind": "trusted-compile-time",
+  "packageName": "@sciforge/domain-life-science-preview",
+  "module": {
+    "id": "sciforge.life-science-preview",
+    "displayName": "Life Science Preview",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    },
+    "priority": 200
+  },
+  "contributionContracts": {
+    "sciforge.life-science-preview.molecular": {
+      "contractVersion": 1,
+      "id": "molecular",
+      "displayName": "Molecular Structure Viewer",
+      "version": "0.1.0",
+      "modality": "sciforge.life-science-preview.molecular",
+      "lifecycle": "hybrid",
+      "priority": 900,
+      "extensions": [
+        ".pdb",
+        ".cif",
+        ".mmcif",
+        ".sdf",
+        ".mol",
+        ".mol2",
+        ".xyz",
+        ".xtc",
+        ".dcd",
+        ".trr",
+        ".mrc",
+        ".ccp4"
+      ],
+      "mimeTypes": [
+        "chemical/x-pdb",
+        "chemical/x-cif",
+        "chemical/x-mdl-sdfile"
+      ],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": true,
+        "export": [
+          "pdb",
+          "cif",
+          "mmcif",
+          "sdf",
+          "mol",
+          "mol2",
+          "xyz",
+          "xtc",
+          "dcd",
+          "trr",
+          "mrc",
+          "ccp4"
+        ]
+      },
+      "workerPackage": "@sciforge/workspace-molecular"
+    },
+    "sciforge.life-science-preview.sequence-genomics": {
+      "contractVersion": 1,
+      "id": "sequence-genomics",
+      "displayName": "Sequence and Genomics Viewer",
+      "version": "0.1.0",
+      "modality": "sciforge.life-science-preview.sequence",
+      "lifecycle": "hybrid",
+      "priority": 820,
+      "extensions": [
+        ".fasta",
+        ".fa",
+        ".fna",
+        ".faa",
+        ".fastq",
+        ".gb",
+        ".gbk",
+        ".gff",
+        ".gff3",
+        ".gtf",
+        ".bed",
+        ".vcf"
+      ],
+      "mimeTypes": [
+        "text/x-fasta",
+        "application/gff3"
+      ],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": true,
+        "export": [
+          "fasta",
+          "fa",
+          "fastq",
+          "gb",
+          "gbk",
+          "gff",
+          "gtf",
+          "bed",
+          "vcf"
+        ]
+      },
+      "workerPackage": "@sciforge/workspace-sequence"
+    },
+    "sciforge.life-science-preview.biology-index-transport": {
+      "contractVersion": 1,
+      "id": "biology-index-transport",
+      "displayName": "Biology Index Transport",
+      "version": "0.1.0",
+      "modality": "unknown",
+      "lifecycle": "main",
+      "priority": 805,
+      "extensions": [
+        ".fai",
+        ".gzi",
+        ".tbi",
+        ".csi"
+      ],
+      "mimeTypes": [],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": false,
+        "export": []
+      },
+      "notes": "Passive byte-range transport for validated Biology Room companion indexes."
+    },
+    "sciforge.life-science-preview.omics-matrix": {
+      "contractVersion": 1,
+      "id": "omics-matrix",
+      "displayName": "Omics Matrix Viewer",
+      "version": "0.1.0",
+      "modality": "sciforge.life-science-preview.omics",
+      "lifecycle": "worker",
+      "priority": 760,
+      "extensions": [
+        ".h5ad",
+        ".loom",
+        ".mtx",
+        ".h5",
+        ".hdf5",
+        ".zarr"
+      ],
+      "mimeTypes": [
+        "application/x-hdf5"
+      ],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": true,
+        "export": [
+          "h5ad",
+          "loom",
+          "mtx",
+          "h5",
+          "hdf5",
+          "zarr"
+        ]
+      },
+      "workerPackage": "@sciforge/workspace-omics"
+    },
+    "sciforge.life-science-preview.bioimaging": {
+      "contractVersion": 1,
+      "id": "bioimaging",
+      "displayName": "Bioimaging Viewer",
+      "version": "0.1.0",
+      "modality": "sciforge.life-science-preview.bioimaging",
+      "lifecycle": "worker",
+      "priority": 740,
+      "extensions": [
+        ".tif",
+        ".tiff",
+        ".ome.tiff",
+        ".ome.tif",
+        ".czi",
+        ".svs",
+        ".ndpi"
+      ],
+      "mimeTypes": [
+        "image/tiff"
+      ],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": true,
+        "export": [
+          "tif",
+          "tiff",
+          "czi",
+          "svs",
+          "ndpi"
+        ]
+      },
+      "workerPackage": "@sciforge/workspace-bioimaging"
+    },
+    "sciforge.life-science-preview.proteomics-spectra": {
+      "contractVersion": 1,
+      "id": "proteomics-spectra",
+      "displayName": "Proteomics and Spectra Viewer",
+      "version": "0.1.0",
+      "modality": "sciforge.life-science-preview.spectra",
+      "lifecycle": "worker",
+      "priority": 700,
+      "extensions": [
+        ".mzml",
+        ".mzxml",
+        ".mgf",
+        ".fcs"
+      ],
+      "mimeTypes": [
+        "application/mzml+xml"
+      ],
+      "capabilities": {
+        "preview": true,
+        "edit": false,
+        "inspect": true,
+        "structuredSelection": true,
+        "export": [
+          "mzml",
+          "mzxml",
+          "mgf",
+          "fcs"
+        ]
+      },
+      "workerPackage": "@sciforge/workspace-spectra"
+    }
+  },
+  "entrypoints": [
+    {
+      "process": "main",
+      "export": "./main",
+      "contributions": [
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.molecular",
+          "priority": 900
+        },
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.sequence-genomics",
+          "priority": 820
+        },
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.biology-index-transport",
+          "priority": 805
+        },
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.omics-matrix",
+          "priority": 760
+        },
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.bioimaging",
+          "priority": 740
+        },
+        {
+          "kind": "main.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.proteomics-spectra",
+          "priority": 700
+        }
+      ]
+    },
+    {
+      "process": "renderer",
+      "export": "./renderer",
+      "contributions": [
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.molecular",
+          "priority": 900
+        },
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.sequence-genomics",
+          "priority": 820
+        },
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.biology-index-transport",
+          "priority": 805
+        },
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.omics-matrix",
+          "priority": 760
+        },
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.bioimaging",
+          "priority": 740
+        },
+        {
+          "kind": "renderer.workspace-preview-plugin",
+          "id": "sciforge.life-science-preview.proteomics-spectra",
+          "priority": 700
+        },
+        {
+          "kind": "renderer.lifecycle",
+          "id": "sciforge.life-science-preview.molstar-prewarm",
+          "priority": 100
+        }
+      ]
+    }
+  ]
+}

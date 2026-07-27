@@ -1,5 +1,4 @@
 import {
-  DEFAULT_DEEPSEEK_BASE_URL,
   type RemoteChannelGuardModeV1,
   type RemoteChannelProvider,
   type RemoteChannelModel,
@@ -9,11 +8,6 @@ import {
   type ScheduleReasoningEffort,
   type ScheduleTaskStatus
 } from './app-settings-types'
-
-export function normalizeDeepseekBaseUrl(baseUrl: string | null | undefined): string {
-  const trimmed = typeof baseUrl === 'string' ? baseUrl.trim() : ''
-  return trimmed || DEFAULT_DEEPSEEK_BASE_URL
-}
 
 export function compactStrings(values: unknown): string[] {
   if (!Array.isArray(values)) return []

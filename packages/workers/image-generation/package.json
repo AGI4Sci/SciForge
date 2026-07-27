@@ -22,6 +22,7 @@
     "./mcp-server": "./src/mcp-server.ts",
     "./engine": "./src/image-generation-engine.ts",
     "./visual-production-planner": "./src/visual-production-planner.ts",
+    "./visual-scene": "./src/visual-scene.ts",
     "./service": "./src/service.ts"
   },
   "files": [

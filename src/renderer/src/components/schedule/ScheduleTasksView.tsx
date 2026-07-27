@@ -24,7 +24,6 @@ import {
   DEFAULT_SCHEDULE_REASONING_EFFORT,
   SCHEDULE_MODEL_IDS,
   mergeScheduleSettings,
-  normalizeAgentRuntimeId,
   normalizeScheduleSettings,
   type AgentRuntimeId,
   type AppSettingsV1,
@@ -85,11 +84,20 @@ export function newScheduledTask(workspaceRoot: string, defaults?: Partial<Sched
     nextRunAt: '',
     lastStatus: 'idle',
     lastMessage: '',
-    runtimeId: 'sciforge',
     agentThreadIds: {},
     ...defaults,
+    runtimeId: selectableScheduleRuntimeId(defaults?.runtimeId),
     mode: 'agent'
   }
+}
+
+function selectableScheduleRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
+  return value === 'claude' ? 'claude' : 'codex'
+}
+
+function historicalScheduleRuntimeId(value: AgentRuntimeId | undefined): AgentRuntimeId {
+  if (value === 'claude' || value === 'sciforge') return value
+  return 'codex'
 }
 
 export function dateTimeLocalValueFromIso(value: string): string {
@@ -183,14 +191,14 @@ export function filterScheduledTasks(tasks: ScheduledTaskV1[], filter: TaskFilte
 export function scheduledTaskLastThreadId(
   task: Pick<ScheduledTaskV1, 'runtimeId' | 'agentThreadIds'>
 ): string {
-  const runtimeId = normalizeAgentRuntimeId(task.runtimeId)
+  const runtimeId = historicalScheduleRuntimeId(task.runtimeId)
   return task.agentThreadIds?.[runtimeId]?.trim() || ''
 }
 
 export function scheduledTaskLastThreadRuntimeId(
   task: Pick<ScheduledTaskV1, 'runtimeId' | 'agentThreadIds'>
 ): AgentRuntimeId | undefined {
-  const runtimeId = normalizeAgentRuntimeId(task.runtimeId)
+  const runtimeId = historicalScheduleRuntimeId(task.runtimeId)
   if (task.agentThreadIds?.[runtimeId]?.trim()) return runtimeId
   return undefined
 }
@@ -280,7 +288,7 @@ export function ScheduleTasksView({
 
   const openCreateDialog = (): void => {
     const workspaceRoot = resolveDialogWorkspaceRoot()
-    const runtimeId: AgentRuntimeId = normalizeAgentRuntimeId(settings?.activeAgentRuntime)
+    const runtimeId = selectableScheduleRuntimeId(settings?.activeAgentRuntime)
     setDialog({ mode: 'create', draft: newScheduledTask(workspaceRoot, {
       model: schedule?.model || DEFAULT_SCHEDULE_MODEL,
       runtimeId,
@@ -336,6 +344,7 @@ export function ScheduleTasksView({
       prompt: dialog.draft.prompt,
       workspaceRoot,
       mode: 'agent' as const,
+      runtimeId: selectableScheduleRuntimeId(dialog.draft.runtimeId),
       updatedAt: now,
       nextRunAt: ''
     }
@@ -527,8 +536,13 @@ export function ScheduleTasksView({
                         {lastThreadId ? (
                           <button
                             type="button"
-                            onClick={() => onOpenThread?.(lastThreadId, lastThreadRuntimeId)}
-                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+                            disabled={lastThreadRuntimeId === 'sciforge'}
+                            onClick={() => {
+                              if (lastThreadRuntimeId !== 'sciforge') {
+                                onOpenThread?.(lastThreadId, lastThreadRuntimeId)
+                              }
+                            }}
+                            className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink disabled:cursor-not-allowed disabled:opacity-45"
                             title={t('scheduleOpenLastThread')}
                             aria-label={t('scheduleOpenLastThread')}
                           >

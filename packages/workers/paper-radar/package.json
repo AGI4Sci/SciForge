@@ -4,26 +4,22 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "SciForge Paper Radar MCP facade and shared SQLite-backed paper metadata core.",
+  "description": "SciForge Paper Radar SQLite-backed service and metadata core.",
   "sciforge": {
     "lifecycleLayer": "workers",
     "skillFacing": false,
     "sideEffects": "filesystem, network",
     "publicContract": true,
     "runtimeAdapter": false,
-    "mcpServer": true,
-    "packagingStrategy": "ship with packages/workers/paper-radar; main-process launch config must pass PAPER_RADAR_DB and PAPER_RADAR_PROFILES from the userData paper-radar directory"
+    "mcpServer": false,
+    "packagingStrategy": "compile into the Paper Radar domain main entry; do not ship worker source as a parallel runtime"
   },
   "engines": {
     "node": ">=22.5.0"
   },
-  "bin": {
-    "sciforge-paper-radar-mcp": "./src/cli.ts"
-  },
   "exports": {
     ".": "./src/index.ts",
     "./contract": "./src/contract.ts",
-    "./mcp-server": "./src/mcp-server.ts",
     "./service": "./src/service.ts"
   },
   "files": [
@@ -33,11 +29,9 @@
   ],
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "start": "node --env-file-if-exists=.env --import tsx src/cli.ts",
     "test": "node --import tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
     "fast-xml-parser": "^5.3.2",
     "zod": "^4.4.3"
   },

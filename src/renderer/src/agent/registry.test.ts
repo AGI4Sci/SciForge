@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -28,7 +27,6 @@ function settings(activeAgentRuntime: AgentRuntimeId): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -275,7 +273,7 @@ describe('registry provider selector', () => {
       title: 'Side path'
     })
     expect(agentRuntimeResumeSession).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       sessionId: 'session-1',
       model: 'deepseek-v4-pro',
       mode: 'agent'
@@ -344,7 +342,7 @@ describe('registry provider selector', () => {
     })).resolves.toEqual({ ok: true })
 
     expect(agentRuntimeAuxiliary).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       operation: 'runCodeNavigation',
       payload: {
         workspaceRoot: '/tmp/workspace',

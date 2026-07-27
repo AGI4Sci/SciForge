@@ -1,56 +1,27 @@
 import type { AppSettingsV1 } from '../shared/app-settings'
 import {
-  buildDatasetApiLocalRuntimeMcpServerConfig,
-  buildDatasetApiMcpArgs,
-  datasetApiMcpEnabledTools,
-  GUI_DATASET_API_MCP_DESCRIPTOR,
-  GUI_DATASET_API_MCP_SERVER_NAME,
-  GUI_DATASET_API_MCP_TIMEOUT_MS,
-  resolveDatasetApiMcpCommand,
-  type DatasetApiMcpLaunchConfig
-} from './dataset-api-mcp-config'
-import {
   buildScheduleMcpArgs,
-  buildScheduleLocalRuntimeMcpServerConfig,
   scheduleMcpEnabledTools,
   GUI_SCHEDULE_INTERNAL_SECRET_ENV,
-  GUI_SCHEDULE_MCP_DESCRIPTOR,
   GUI_SCHEDULE_MCP_SERVER_NAME,
   GUI_SCHEDULE_MCP_TIMEOUT_MS,
   resolveScheduleMcpCommand,
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
 import {
-  buildComputerUseLocalRuntimeMcpServerConfig,
   buildComputerUseMcpArgs,
   computerUseMcpEnabledTools,
   computerUseMcpEnv,
   COMPUTER_USE_MCP_TIMEOUT_MS,
-  GUI_COMPUTER_USE_MCP_DESCRIPTOR,
   GUI_COMPUTER_USE_MCP_SERVER_NAME,
   isComputerUseMcpConfigured,
   resolveComputerUseMcpCommand,
-  RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES,
   type ComputerUseMcpLaunchConfig
 } from './computer-use-mcp-config'
 import {
-  buildPaperRadarMcpArgs,
-  buildPaperRadarLocalRuntimeMcpServerConfig,
-  GUI_PAPER_RADAR_MCP_DESCRIPTOR,
-  GUI_PAPER_RADAR_MCP_SERVER_NAME,
-  PAPER_RADAR_MCP_TIMEOUT_MS,
-  paperRadarMcpEnabledTools,
-  paperRadarMcpEnv,
-  resolvePaperRadarMcpCommand,
-  type PaperRadarMcpLaunchConfig
-} from './paper-radar-mcp-config'
-import {
   buildResearchSearchMcpArgs,
-  buildResearchSearchLocalRuntimeMcpServerConfig,
-  GUI_RESEARCH_MCP_DESCRIPTOR,
   GUI_RESEARCH_MCP_SERVER_NAME,
   RESEARCH_SEARCH_MCP_TIMEOUT_MS,
-  RETIRED_GUI_RESEARCH_MCP_SERVER_NAMES,
   researchSearchMcpEnabledTools,
   researchSearchMcpEnv,
   resolveResearchSearchMcpCommand,
@@ -58,8 +29,6 @@ import {
 } from './research-search-mcp-config'
 import {
   buildRuntimeInspectorMcpArgs,
-  buildRuntimeInspectorLocalRuntimeMcpServerConfig,
-  GUI_RUNTIME_INSPECTOR_MCP_DESCRIPTOR,
   GUI_RUNTIME_INSPECTOR_MCP_SERVER_NAME,
   resolveRuntimeInspectorMcpCommand,
   RUNTIME_INSPECTOR_MCP_TIMEOUT_MS,
@@ -69,8 +38,6 @@ import {
 } from './runtime-inspector-mcp-config'
 import {
   buildWorkspaceIntelMcpArgs,
-  buildWorkspaceIntelLocalRuntimeMcpServerConfig,
-  GUI_WORKSPACE_INTEL_MCP_DESCRIPTOR,
   GUI_WORKSPACE_INTEL_MCP_SERVER_NAME,
   resolveWorkspaceIntelMcpCommand,
   WORKSPACE_INTEL_MCP_TIMEOUT_MS,
@@ -80,8 +47,6 @@ import {
 } from './workspace-intel-mcp-config'
 import {
   buildRemoteExecutorMcpArgs,
-  buildRemoteExecutorLocalRuntimeMcpServerConfig,
-  GUI_REMOTE_EXECUTOR_MCP_DESCRIPTOR,
   GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
   GUI_REMOTE_EXECUTOR_MCP_TIMEOUT_MS,
   remoteExecutorMcpEnabledTools,
@@ -91,9 +56,7 @@ import {
 } from './remote-executor-mcp-config'
 import {
   buildWorkflowMcpArgs,
-  buildWorkflowLocalRuntimeMcpServerConfig,
   GUI_WORKFLOW_INTERNAL_SECRET_ENV,
-  GUI_WORKFLOW_MCP_DESCRIPTOR,
   GUI_WORKFLOW_MCP_SERVER_NAME,
   resolveWorkflowMcpCommand,
   WORKFLOW_MCP_TIMEOUT_MS,
@@ -103,8 +66,6 @@ import {
 } from './workflow-mcp-config'
 import {
   buildWriteAssistMcpArgs,
-  buildWriteAssistLocalRuntimeMcpServerConfig,
-  GUI_WRITE_ASSIST_MCP_DESCRIPTOR,
   GUI_WRITE_ASSIST_MCP_SERVER_NAME,
   resolveWriteAssistMcpCommand,
   WRITE_ASSIST_MCP_TIMEOUT_MS,
@@ -114,9 +75,7 @@ import {
 } from './write-assist-mcp-config'
 import {
   buildScientificSkillsMcpArgs,
-  buildScientificSkillsLocalRuntimeMcpServerConfig,
   buildScientificSkillsMcpJsonServerConfig,
-  GUI_SCIENTIFIC_SKILLS_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_SKILLS_MCP_SERVER_NAME,
   GUI_SCIENTIFIC_SKILLS_MCP_TIMEOUT_MS,
   resolveScientificSkillsMcpCommand,
@@ -125,9 +84,7 @@ import {
 } from './scientific-skills-mcp-config'
 import {
   buildScientificPlottingMcpArgs,
-  buildScientificPlottingLocalRuntimeMcpServerConfig,
   buildScientificPlottingMcpJsonServerConfig,
-  GUI_SCIENTIFIC_PLOTTING_MCP_DESCRIPTOR,
   GUI_SCIENTIFIC_PLOTTING_MCP_SERVER_NAME,
   GUI_SCIENTIFIC_PLOTTING_MCP_TIMEOUT_MS,
   resolveScientificPlottingMcpCommand,
@@ -136,8 +93,6 @@ import {
 } from './scientific-plotting-mcp-config'
 import {
   buildBgcDiscoveryMcpArgs,
-  buildBgcDiscoveryLocalRuntimeMcpServerConfig,
-  GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
   GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
   GUI_BGC_DISCOVERY_MCP_TIMEOUT_MS,
   resolveBgcDiscoveryMcpCommand,
@@ -146,9 +101,7 @@ import {
 } from './bgc-discovery-mcp-config'
 import {
   buildImageGenerationMcpArgs,
-  buildImageGenerationLocalRuntimeMcpServerConfig,
   buildImageGenerationMcpJsonServerConfig,
-  GUI_IMAGE_GENERATION_MCP_DESCRIPTOR,
   GUI_IMAGE_GENERATION_MCP_SERVER_NAME,
   GUI_IMAGE_GENERATION_MCP_TIMEOUT_MS,
   resolveImageGenerationMcpCommand,
@@ -157,9 +110,7 @@ import {
 } from './image-generation-mcp-config'
 import {
   buildPptMasterMcpArgs,
-  buildPptMasterLocalRuntimeMcpServerConfig,
   buildPptMasterMcpJsonServerConfig,
-  GUI_PPT_MASTER_MCP_DESCRIPTOR,
   GUI_PPT_MASTER_MCP_SERVER_NAME,
   GUI_PPT_MASTER_MCP_TIMEOUT_MS,
   resolvePptMasterMcpCommand,
@@ -168,21 +119,12 @@ import {
 } from './ppt-master-mcp-config'
 import {
   buildVisualDocumentMcpArgs,
-  buildVisualDocumentLocalRuntimeMcpServerConfig,
-  GUI_VISUAL_DOCUMENT_MCP_DESCRIPTOR,
   GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
   GUI_VISUAL_DOCUMENT_MCP_TIMEOUT_MS,
-  RETIRED_GUI_VISUAL_DOCUMENT_MCP_SERVER_NAMES,
   resolveVisualDocumentMcpCommand,
   visualDocumentMcpEnabledTools,
   type VisualDocumentMcpLaunchConfig
 } from './visual-document-mcp-config'
-import {
-  managedGuiMcpNames,
-  resolveLocalRuntimeMcpJsonPath,
-  syncExternalLocalRuntimeMcpJson,
-  type ManagedGuiMcpDescriptor
-} from './managed-gui-mcp-config'
 import { internalSecretEnv } from './internal-http-secret'
 
 export type GuiMcpRuntimeServerConfig = {
@@ -216,9 +158,6 @@ export type GuiMcpRegistryInput = {
     launch: RemoteExecutorMcpLaunchConfig
     enabled?: boolean
   }
-  paperRadarMcp?: {
-    launch: PaperRadarMcpLaunchConfig
-  }
   writeAssistMcp?: {
     settings?: AppSettingsV1
     launch: WriteAssistMcpLaunchConfig
@@ -226,10 +165,6 @@ export type GuiMcpRegistryInput = {
   runtimeInspectorMcp?: {
     settings?: AppSettingsV1
     launch: RuntimeInspectorMcpLaunchConfig
-  }
-  datasetApiMcp?: {
-    settings?: AppSettingsV1
-    launch: DatasetApiMcpLaunchConfig
   }
   scientificSkillsMcp?: {
     settings?: AppSettingsV1
@@ -261,260 +196,14 @@ export type GuiMcpRegistryInput = {
   }
 }
 
-type LocalRuntimeServerBuilder = () => Record<string, unknown>
-
-export const GUI_MCP_DESCRIPTORS: readonly ManagedGuiMcpDescriptor[] = [
-  GUI_SCHEDULE_MCP_DESCRIPTOR,
-  GUI_RESEARCH_MCP_DESCRIPTOR,
-  GUI_WORKFLOW_MCP_DESCRIPTOR,
-  GUI_WORKSPACE_INTEL_MCP_DESCRIPTOR,
-  GUI_REMOTE_EXECUTOR_MCP_DESCRIPTOR,
-  GUI_PAPER_RADAR_MCP_DESCRIPTOR,
-  GUI_WRITE_ASSIST_MCP_DESCRIPTOR,
-  GUI_RUNTIME_INSPECTOR_MCP_DESCRIPTOR,
-  GUI_DATASET_API_MCP_DESCRIPTOR,
-  GUI_SCIENTIFIC_SKILLS_MCP_DESCRIPTOR,
-  GUI_SCIENTIFIC_PLOTTING_MCP_DESCRIPTOR,
-  GUI_BGC_DISCOVERY_MCP_DESCRIPTOR,
-  GUI_IMAGE_GENERATION_MCP_DESCRIPTOR,
-  GUI_PPT_MASTER_MCP_DESCRIPTOR,
-  GUI_VISUAL_DOCUMENT_MCP_DESCRIPTOR,
-  GUI_COMPUTER_USE_MCP_DESCRIPTOR
-] as const
-
-export function managedGuiMcpServerNames(): string[] {
-  return [
-    ...GUI_MCP_DESCRIPTORS.flatMap((descriptor) => managedGuiMcpNames(descriptor)),
-    ...RETIRED_GUI_RESEARCH_MCP_SERVER_NAMES,
-    ...RETIRED_GUI_VISUAL_DOCUMENT_MCP_SERVER_NAMES,
-    ...RETIRED_GUI_COMPUTER_USE_MCP_SERVER_NAMES
-  ]
-}
-
-export async function syncExternalManagedGuiMcpConfig(path = resolveLocalRuntimeMcpJsonPath()): Promise<void> {
-  await syncExternalLocalRuntimeMcpJson(path, managedGuiMcpServerNames())
-}
-
-export function buildLocalRuntimeManagedGuiMcpServers(
+export function buildManagedGuiMcpServers(
   input: GuiMcpRegistryInput
-): Record<string, unknown> {
-  const servers: Record<string, unknown> = {}
-  for (const [serverName, build] of localRuntimeServerBuilders(input)) {
-    servers[serverName] = build()
-  }
-  return servers
-}
-
-export function hasEnabledManagedGuiMcpServer(servers: Record<string, unknown>): boolean {
-  return Object.values(servers).some((server) => objectValue(server).enabled !== false)
-}
-
-export function buildCodexManagedGuiMcpServers(
-  input: GuiMcpRegistryInput,
-  existingServers: readonly GuiMcpRuntimeServerConfig[] = []
 ): GuiMcpRuntimeServerConfig[] {
-  const servers = new Map<string, GuiMcpRuntimeServerConfig>()
-  for (const server of existingServers) {
-    servers.set(server.id, server)
-  }
-  for (const server of managedRuntimeServerConfigs(input, 'codex')) {
-    if (!servers.has(server.id)) servers.set(server.id, server)
-  }
-  return [...servers.values()]
-}
-
-export function buildClaudeCodeManagedGuiMcpServers(input: GuiMcpRegistryInput = {}): Record<string, {
-  type: 'stdio'
-  command: string
-  args: string[]
-  env: Record<string, string>
-  timeout: number
-  alwaysLoad: true
-}> {
-  const servers: Record<string, {
-    type: 'stdio'
-    command: string
-    args: string[]
-    env: Record<string, string>
-    timeout: number
-    alwaysLoad: true
-  }> = {}
-  for (const server of managedRuntimeServerConfigs(input, 'claude')) {
-    if (!server.command || !server.args || !server.env || !server.timeoutMs) continue
-    servers[server.id] = {
-      type: 'stdio',
-      command: server.command,
-      args: server.args,
-      env: server.env,
-      timeout: server.timeoutMs,
-      alwaysLoad: true
-    }
-  }
-  return servers
-}
-
-function localRuntimeServerBuilders(input: GuiMcpRegistryInput): Array<[string, LocalRuntimeServerBuilder]> {
-  const builders: Array<[string, LocalRuntimeServerBuilder]> = []
-  const settings = input.settings
-  const scheduleSettings = input.scheduleMcp?.settings ?? settings
-  if (input.scheduleMcp && scheduleSettings) {
-    builders.push([
-      GUI_SCHEDULE_MCP_SERVER_NAME,
-      () => buildScheduleLocalRuntimeMcpServerConfig(scheduleSettings, input.scheduleMcp!.launch)
-    ])
-  }
-  if (input.researchMcp) {
-    builders.push([
-      GUI_RESEARCH_MCP_SERVER_NAME,
-      () => buildResearchSearchLocalRuntimeMcpServerConfig(input.researchMcp!.launch)
-    ])
-  }
-  const workflowSettings = input.workflowMcp?.settings ?? settings
-  if (input.workflowMcp && workflowSettings) {
-    builders.push([
-      GUI_WORKFLOW_MCP_SERVER_NAME,
-      () => buildWorkflowLocalRuntimeMcpServerConfig(workflowSettings, input.workflowMcp!.launch)
-    ])
-  }
-  const workspaceIntelSettings = input.workspaceIntelMcp?.settings ?? settings
-  if (input.workspaceIntelMcp && workspaceIntelSettings) {
-    builders.push([
-      GUI_WORKSPACE_INTEL_MCP_SERVER_NAME,
-      () => buildWorkspaceIntelLocalRuntimeMcpServerConfig(
-        workspaceIntelSettings,
-        input.workspaceIntelMcp!.launch
-      )
-    ])
-  }
-  if (input.remoteExecutorMcp) {
-    const remoteExecutorSettings = input.remoteExecutorMcp.settings ?? settings
-    builders.push([
-      GUI_REMOTE_EXECUTOR_MCP_SERVER_NAME,
-      () => buildRemoteExecutorLocalRuntimeMcpServerConfig(
-        input.remoteExecutorMcp!.launch,
-        undefined,
-        input.remoteExecutorMcp!.enabled !== false,
-        remoteExecutorSettings
-      )
-    ])
-  }
-  if (input.paperRadarMcp) {
-    builders.push([
-      GUI_PAPER_RADAR_MCP_SERVER_NAME,
-      () => buildPaperRadarLocalRuntimeMcpServerConfig(input.paperRadarMcp!.launch)
-    ])
-  }
-  const writeAssistSettings = input.writeAssistMcp?.settings ?? settings
-  if (input.writeAssistMcp && writeAssistSettings) {
-    builders.push([
-      GUI_WRITE_ASSIST_MCP_SERVER_NAME,
-      () => buildWriteAssistLocalRuntimeMcpServerConfig(writeAssistSettings, input.writeAssistMcp!.launch)
-    ])
-  }
-  const runtimeInspectorSettings = input.runtimeInspectorMcp?.settings ?? settings
-  if (input.runtimeInspectorMcp && runtimeInspectorSettings) {
-    builders.push([
-      GUI_RUNTIME_INSPECTOR_MCP_SERVER_NAME,
-      () => buildRuntimeInspectorLocalRuntimeMcpServerConfig(
-        runtimeInspectorSettings,
-        input.runtimeInspectorMcp!.launch
-      )
-    ])
-  }
-  const datasetApiSettings = input.datasetApiMcp?.settings ?? settings
-  if (input.datasetApiMcp && datasetApiSettings) {
-    builders.push([
-      GUI_DATASET_API_MCP_SERVER_NAME,
-      () => buildDatasetApiLocalRuntimeMcpServerConfig(
-        input.datasetApiMcp!.launch,
-        undefined,
-        datasetApiSettings.workspaceRoot
-      )
-    ])
-  }
-  const scientificSkillsSettings = input.scientificSkillsMcp?.settings ?? settings
-  if (input.scientificSkillsMcp && scientificSkillsSettings) {
-    builders.push([
-      GUI_SCIENTIFIC_SKILLS_MCP_SERVER_NAME,
-      () => buildScientificSkillsLocalRuntimeMcpServerConfig(
-        input.scientificSkillsMcp!.launch,
-        undefined,
-        scientificSkillsSettings.workspaceRoot
-      )
-    ])
-  }
-  const scientificPlottingSettings = input.scientificPlottingMcp?.settings ?? settings
-  if (input.scientificPlottingMcp && scientificPlottingSettings) {
-    builders.push([
-      GUI_SCIENTIFIC_PLOTTING_MCP_SERVER_NAME,
-      () => buildScientificPlottingLocalRuntimeMcpServerConfig(
-        input.scientificPlottingMcp!.launch,
-        undefined,
-        scientificPlottingSettings.workspaceRoot
-      )
-    ])
-  }
-  const bgcDiscoverySettings = input.bgcDiscoveryMcp?.settings ?? settings
-  if (input.bgcDiscoveryMcp && bgcDiscoverySettings) {
-    builders.push([
-      GUI_BGC_DISCOVERY_MCP_SERVER_NAME,
-      () => buildBgcDiscoveryLocalRuntimeMcpServerConfig(
-        input.bgcDiscoveryMcp!.launch,
-        undefined,
-        bgcDiscoverySettings.workspaceRoot
-      )
-    ])
-  }
-  const imageGenerationSettings = input.imageGenerationMcp?.settings ?? settings
-  if (input.imageGenerationMcp && imageGenerationSettings) {
-    builders.push([
-      GUI_IMAGE_GENERATION_MCP_SERVER_NAME,
-      () => buildImageGenerationLocalRuntimeMcpServerConfig(
-        input.imageGenerationMcp!.launch,
-        undefined,
-        imageGenerationSettings.workspaceRoot,
-        imageGenerationSettings
-      )
-    ])
-  }
-  const pptMasterSettings = input.pptMasterMcp?.settings ?? settings
-  if (input.pptMasterMcp && pptMasterSettings) {
-    builders.push([
-      GUI_PPT_MASTER_MCP_SERVER_NAME,
-      () => buildPptMasterLocalRuntimeMcpServerConfig(
-        input.pptMasterMcp!.launch,
-        undefined,
-        pptMasterSettings.workspaceRoot
-      )
-    ])
-  }
-  const visualDocumentSettings = input.visualDocumentMcp?.settings ?? settings
-  if (input.visualDocumentMcp && visualDocumentSettings) {
-    builders.push([
-      GUI_VISUAL_DOCUMENT_MCP_SERVER_NAME,
-      () => buildVisualDocumentLocalRuntimeMcpServerConfig(
-        input.visualDocumentMcp!.launch,
-        undefined,
-        visualDocumentSettings.workspaceRoot
-      )
-    ])
-  }
-  const computerUseSettings = input.computerUseMcp?.settings ?? settings
-  if (input.computerUseMcp && computerUseSettings) {
-    builders.push([
-      GUI_COMPUTER_USE_MCP_SERVER_NAME,
-      () => buildComputerUseLocalRuntimeMcpServerConfig(
-        computerUseSettings,
-        input.computerUseMcp!.launch
-      )
-    ])
-  }
-  return builders
+  return managedRuntimeServerConfigs(input)
 }
 
 function managedRuntimeServerConfigs(
-  input: GuiMcpRegistryInput,
-  runtime: 'codex' | 'claude'
+  input: GuiMcpRegistryInput
 ): GuiMcpRuntimeServerConfig[] {
   const servers: GuiMcpRuntimeServerConfig[] = []
   const settings = input.settings
@@ -575,16 +264,6 @@ function managedRuntimeServerConfigs(
       enabledTools: remoteExecutorMcpEnabledTools()
     })
   }
-  if (input.paperRadarMcp) {
-    servers.push({
-      id: GUI_PAPER_RADAR_MCP_SERVER_NAME,
-      command: resolvePaperRadarMcpCommand(input.paperRadarMcp.launch),
-      args: buildPaperRadarMcpArgs(input.paperRadarMcp.launch),
-      env: paperRadarMcpEnv(),
-      timeoutMs: PAPER_RADAR_MCP_TIMEOUT_MS,
-      enabledTools: paperRadarMcpEnabledTools()
-    })
-  }
   const writeAssistSettings = input.writeAssistMcp?.settings ?? settings
   if (input.writeAssistMcp && writeAssistSettings) {
     servers.push({
@@ -605,20 +284,6 @@ function managedRuntimeServerConfigs(
       env: runtimeInspectorMcpEnv(),
       timeoutMs: RUNTIME_INSPECTOR_MCP_TIMEOUT_MS,
       enabledTools: runtimeInspectorMcpEnabledTools()
-    })
-  }
-  const datasetApiSettings = input.datasetApiMcp?.settings ?? settings
-  if (input.datasetApiMcp && datasetApiSettings) {
-    servers.push({
-      id: GUI_DATASET_API_MCP_SERVER_NAME,
-      command: resolveDatasetApiMcpCommand(input.datasetApiMcp.launch),
-      args: buildDatasetApiMcpArgs(
-        input.datasetApiMcp.launch,
-        datasetApiSettings.workspaceRoot
-      ),
-      env: { ELECTRON_RUN_AS_NODE: '1' },
-      timeoutMs: GUI_DATASET_API_MCP_TIMEOUT_MS,
-      enabledTools: datasetApiMcpEnabledTools()
     })
   }
   const scientificSkillsSettings = input.scientificSkillsMcp?.settings ?? settings
@@ -700,7 +365,14 @@ function managedRuntimeServerConfigs(
     })
   }
   const computerUseSettings = input.computerUseMcp?.settings ?? settings
-  if (input.computerUseMcp && computerUseSettings && isComputerUseMcpConfigured(computerUseSettings, runtime)) {
+  if (
+    input.computerUseMcp
+    && computerUseSettings
+    && (
+      isComputerUseMcpConfigured(computerUseSettings, 'codex')
+      || isComputerUseMcpConfigured(computerUseSettings, 'claude')
+    )
+  ) {
     servers.push({
       id: GUI_COMPUTER_USE_MCP_SERVER_NAME,
       command: resolveComputerUseMcpCommand(input.computerUseMcp.launch),

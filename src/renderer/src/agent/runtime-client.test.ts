@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -20,7 +19,6 @@ function settings(apiKey: string): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: {
       ...defaultModelRouterSettings(),
       runtimeApiKey: apiKey

@@ -32,16 +32,14 @@ import {
 } from '@shared/app-settings'
 import { rendererRuntimeClient } from '../../agent/runtime-client'
 import { confirmDialog } from '../../lib/confirm-dialog'
-import { SidebarTitlebarToggleButton } from '../sidebar/SidebarPrimitives'
+import { SETTINGS_CHANGED_EVENT } from '../../lib/keyboard-shortcut-settings'
 import { parseWorkflowDsl, serializeWorkflowDsl } from '@shared/workflow-dsl'
 import { WorkflowEditorView } from './WorkflowEditorView'
 import { WorkflowHookTriggers } from './WorkflowHookTriggers'
 import { createWorkflow } from './workflow-types'
 
 type Props = {
-  leftSidebarCollapsed: boolean
-  onToggleLeftSidebar: () => void
-  onOpenThread?: (threadId: string) => void
+  onCollapse?: () => void
 }
 
 const EMPTY_WORKFLOWS: WorkflowV1[] = []
@@ -59,7 +57,7 @@ function formatDateTime(value: string, fallback: string): string {
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : fallback
 }
 
-export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Props): ReactElement {
+export function WorkflowView({ onCollapse }: Props): ReactElement {
   const { t } = useTranslation('common')
   const [settings, setSettings] = useState<AppSettingsV1 | null>(null)
   const [status, setStatus] = useState<WorkflowRuntimeStatus | null>(null)
@@ -115,6 +113,20 @@ export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Prop
       window.clearTimeout(timer)
     }
   }, [load, refreshStatus])
+
+  // Keep the panel in sync when a chat agent creates a Loop through the
+  // workflow MCP facade while this view is already open.
+  useEffect(() => {
+    const onSettingsChanged = (event: Event): void => {
+      const nextSettings = (event as CustomEvent<AppSettingsV1>).detail
+      if (!nextSettings) return
+      setSettings(nextSettings)
+      setLoading(false)
+      setError(null)
+    }
+    window.addEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+    return () => window.removeEventListener(SETTINGS_CHANGED_EVENT, onSettingsChanged)
+  }, [])
 
   const workflowSettings = settings ? normalizeWorkflowSettings(settings.workflow) : null
   const workflows = workflowSettings?.workflows ?? EMPTY_WORKFLOWS
@@ -363,30 +375,28 @@ export function WorkflowView({ leftSidebarCollapsed, onToggleLeftSidebar }: Prop
   }
 
   return (
-    <div className="ds-drag flex h-full min-h-0 flex-col bg-ds-main">
-      <div className="ds-stage-inset shrink-0">
-        <header className="ds-topbar-surface relative z-10 mt-3 flex min-h-[46px] w-full items-stretch overflow-visible rounded-[24px]">
-          <div className="grid w-full min-w-0 items-center gap-2.5 px-3 py-2 sm:px-4 md:pl-5 md:pr-2">
-            <div
-              className={`flex min-w-0 items-center gap-2.5 ${
-                leftSidebarCollapsed ? 'ds-window-controls-safe-inset' : ''
-              }`}
-            >
-              <SidebarTitlebarToggleButton
-                onClick={onToggleLeftSidebar}
-                title={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-                ariaLabel={leftSidebarCollapsed ? t('sidebarExpand') : t('sidebarCollapse')}
-              />
-              <h1 className="min-w-0 flex-1 truncate text-[15px] font-medium text-ds-muted">
-                {t('workflow')}
-              </h1>
-            </div>
-          </div>
-        </header>
-      </div>
+    <div className="ds-no-drag flex h-full min-h-0 flex-col bg-ds-sidebar">
+      <header className="flex shrink-0 items-center gap-2 border-b border-ds-border bg-ds-sidebar px-3 py-2.5">
+        <WorkflowIcon className="h-4 w-4 shrink-0 text-accent" strokeWidth={1.8} />
+        <div className="min-w-0 flex-1">
+          <h1 className="truncate text-[13px] font-semibold text-ds-ink">{t('workflow')}</h1>
+          <p className="truncate text-[10.5px] text-ds-faint">{t('workflowChatHint')}</p>
+        </div>
+        {onCollapse ? (
+          <button
+            type="button"
+            onClick={onCollapse}
+            className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-ds-muted transition hover:bg-ds-hover hover:text-ds-ink"
+            aria-label={t('rightPanelCollapse')}
+            title={t('rightPanelCollapse')}
+          >
+            <X className="h-4 w-4" strokeWidth={1.8} />
+          </button>
+        ) : null}
+      </header>
 
-      <main className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-8">
-        <div className="mx-auto flex w-full max-w-[880px] flex-col gap-6">
+      <main className="ds-no-drag min-h-0 flex-1 overflow-y-auto px-3 pb-4 pt-3">
+        <div className="mx-auto flex w-full max-w-none flex-col gap-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-[14px] leading-6 text-ds-faint">{t('workflowSubtitle')}</p>
             <div className="flex items-center gap-2">

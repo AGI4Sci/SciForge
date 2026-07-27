@@ -100,7 +100,7 @@ export type VisualRevision = {
 }
 
 export type VisualCandidateReviewEvidence = {
-  tool: 'visual_artifact_review'
+  tool: 'image_generation_review_candidate'
   ok: true
   reviewedArtifactPath: string
   reviewedArtifactHash: string

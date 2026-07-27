@@ -19,8 +19,8 @@ import {
   mergeConnectPhoneSettings,
   mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
+  mergeModelAccessSettings,
   mergeModelRouterSettings,
-  mergeModelProviderSettings,
   mergeComputerUseSettings,
   mergeAgentCapabilitySettings,
   mergeRuntimeGuardSettings,
@@ -36,7 +36,7 @@ import {
   normalizeRemoteChannelSettings,
   normalizeGuiUpdateChannel,
   normalizeKeyboardShortcuts,
-  normalizeModelProviderSettings,
+  normalizeModelAccessSettings,
   normalizeModelRouterSettings,
   normalizeComputerUseSettings,
   normalizeAgentCapabilitySettings,
@@ -76,7 +76,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
   const safeCurrent = coerceRendererSettings(current)
   const {
     agents: agentsPatch,
-    provider: providerPatch,
+    modelAccess: modelAccessPatch,
     modelRouter: modelRouterPatch,
     agentCapabilities: agentCapabilitiesPatch,
     computerUse: computerUsePatch,
@@ -103,7 +103,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
       agentsPatch?.claude
     ),
     ...restSettingsPatch,
-    provider: mergeModelProviderSettings(safeCurrent.provider, providerPatch),
+    modelAccess: mergeModelAccessSettings(safeCurrent.modelAccess, modelAccessPatch),
     modelRouter: mergeModelRouterSettings(safeCurrent.modelRouter, modelRouterPatch),
     agentCapabilities: mergeAgentCapabilitySettings(safeCurrent.agentCapabilities, agentCapabilitiesPatch),
     computerUse: mergeComputerUseSettings(safeCurrent.computerUse, computerUsePatch),
@@ -157,7 +157,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
     locale: raw.locale === 'zh' ? 'zh' : 'en',
     theme,
     uiFontScale,
-    provider: normalizeModelProviderSettings(raw.provider),
+    modelAccess: normalizeModelAccessSettings(raw.modelAccess),
     modelRouter: normalizeModelRouterSettings(raw.modelRouter),
     agentCapabilities: mergeAgentCapabilitySettings(
       defaultAgentCapabilitySettings(),

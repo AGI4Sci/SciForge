@@ -461,8 +461,8 @@ export async function createVisualCandidateRevision(
   const summary = request.summary.trim()
   if (!summary) throw new Error('A candidate summary is required.')
   const candidateHash = await hashFile(candidateSourcePath)
-  if (request.reviewEvidence.tool !== 'visual_artifact_review') {
-    throw new Error('Candidate review evidence must come from visual_artifact_review.')
+  if (request.reviewEvidence.tool !== 'image_generation_review_candidate') {
+    throw new Error('Candidate QA evidence must come from image_generation_review_candidate.')
   }
   const reviewedArtifactPath = await resolveOpenTargetPath(
     request.reviewEvidence.reviewedArtifactPath,

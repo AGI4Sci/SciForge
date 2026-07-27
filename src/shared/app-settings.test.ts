@@ -18,7 +18,6 @@ import {
   defaultConnectPhoneSettings,
   defaultRemoteChannelSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultSpeechToTextSettings,
   defaultRuntimeGuardSettings,
   defaultAgentCapabilitySettings,
@@ -42,14 +41,18 @@ import {
   getCodexRuntimeSettings,
   getClaudeRuntimeSettings,
   getComputerUseSettings,
+  getModelAccessSettings,
   isComputerUseEnabledForRuntime,
   getAgentCapabilitySettings,
   isLocalRuntimeInsecure,
+  listModelRouterModelIds,
   mergeRemoteChannelSettings,
   normalizeRemoteExecutorSettings,
   remoteExecutorWorkspaceMatchesTrust,
   isRemoteExecutorTargetTrustedForWorkspace,
   normalizeAppSettings,
+  normalizeModelAccessSettings,
+  normalizeModelRouterSettings,
   normalizeRuntimeGuardSettings,
   parseRemoteChannelUserPromptForDisplay,
   normalizeScheduleSettings,
@@ -69,7 +72,6 @@ function settings(): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     activeAgentRuntime: 'sciforge',
     agents: {
@@ -243,7 +245,7 @@ describe('local runtime defaults', () => {
     })
   })
 
-  it('defaults advanced local runtime tuning to conservative values', () => {
+  it('defaults advanced local runtime settings to conservative values', () => {
     expect(defaultLocalRuntimeSettings()).toMatchObject({
       storage: {
         backend: 'hybrid',
@@ -256,34 +258,17 @@ describe('local runtime defaults', () => {
         summaryTimeoutMs: 15000,
         summaryMaxTokens: 1200,
         summaryInputMaxBytes: 98304
-      },
-      runtimeTuning: {
-        toolArgumentRepair: {
-          maxStringBytes: 524288
-        },
-        toolBudget: {
-          enabled: true,
-          profiles: {
-            explanation: { softLimit: 2, hardLimit: 5, maxAutomaticPhases: 1, totalLimit: 5 },
-            review: { softLimit: 8, hardLimit: 16, maxAutomaticPhases: 1, totalLimit: 16 },
-            implementation: { softLimit: 16, hardLimit: 32, maxAutomaticPhases: 1, totalLimit: 32 },
-            long: { softLimit: 16, hardLimit: 16, maxAutomaticPhases: 3, totalLimit: 48 }
-          }
-        },
-        parallelism: {
-          localReadOnly: 8,
-          networkMcp: 4
-        }
       }
     })
   })
 
-  it('defaults runtime guard settings to runtime-neutral tool storm limits', () => {
+  it('defaults runtime guard settings to runtime-neutral execution governance limits', () => {
     expect(defaultRuntimeGuardSettings()).toMatchObject({
-      toolStorm: {
+      execution: {
         enabled: true,
         windowSize: 8,
-        threshold: 3
+        exactRepeatThreshold: 3,
+        semanticFailureThreshold: 2
       }
     })
   })
@@ -292,7 +277,7 @@ describe('local runtime defaults', () => {
     expect(defaultComputerUseSettings()).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -318,7 +303,7 @@ describe('local runtime defaults', () => {
     expect(getComputerUseSettings(normalized)).toEqual({
       enabled: false,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: false,
         claude: true
       }
@@ -343,37 +328,49 @@ describe('local runtime defaults', () => {
     expect(getComputerUseSettings(legacyExperimental)).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
     })
   })
 
-  it('normalizes runtime guard tool storm settings', () => {
+  it('normalizes runtime guard execution governance settings', () => {
     expect(normalizeRuntimeGuardSettings({
-      toolStorm: {
+      execution: {
         enabled: false,
         windowSize: 10,
-        threshold: 5
+        exactRepeatThreshold: 5,
+        semanticFailureThreshold: 4
       }
-    }).toolStorm).toMatchObject({
+    }).execution).toMatchObject({
       enabled: false,
       windowSize: 10,
-      threshold: 5
+      exactRepeatThreshold: 5,
+      semanticFailureThreshold: 4
     })
   })
 
   it('drops legacy runtime guard soft and hard thresholds', () => {
     expect(normalizeRuntimeGuardSettings({
-      toolStorm: {
+      execution: {
         softThreshold: 5,
         hardThreshold: 7
       }
-    } as never).toolStorm).toMatchObject({
+    } as never).execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      threshold: 3
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
+    })
+  })
+
+  it('does not interpret the obsolete ambiguous execution threshold', () => {
+    expect(normalizeRuntimeGuardSettings({
+      execution: { threshold: 7 }
+    } as never).execution).toMatchObject({
+      exactRepeatThreshold: 3,
+      semanticFailureThreshold: 2
     })
   })
 })
@@ -532,6 +529,17 @@ describe('app behavior settings', () => {
       startMinimized: false,
       closeToTray: true
     })
+  })
+})
+
+describe('obsolete settings fields', () => {
+  it('ignores legacy domain-owned fields without retaining them in normalized settings', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      evidenceDag: { enabled: false }
+    } as AppSettingsV1)
+
+    expect('evidenceDag' in normalized).toBe(false)
   })
 })
 
@@ -834,7 +842,7 @@ describe('claw settings', () => {
     } as unknown as AppSettingsV1)
 
     const channel = normalized.remoteChannel.channels[0]
-    expect(channel.runtimeId).toBe('sciforge')
+    expect(channel.runtimeId).toBe('codex')
     expect(channel).not.toHaveProperty('threadId')
     expect(channel.agentThreadIds).toEqual({})
     expect(channel.agentThreadIds?.codex).toBeUndefined()
@@ -955,7 +963,7 @@ describe('mergeComputerUseSettings', () => {
     expect(current).toEqual({
       enabled: true,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -969,7 +977,7 @@ describe('mergeComputerUseSettings', () => {
     expect(disabled).toEqual({
       enabled: false,
       runtimeEnabled: {
-        sciforge: true,
+        sciforge: false,
         codex: true,
         claude: true
       }
@@ -985,7 +993,7 @@ describe('mergeComputerUseSettings', () => {
     })
 
     expect(next.runtimeEnabled).toEqual({
-      sciforge: true,
+      sciforge: false,
       codex: false,
       claude: false
     })
@@ -1004,7 +1012,6 @@ describe('mergeLocalRuntimeSettings', () => {
     expect(next.port).toBe(9000)
     expect(next.tokenEconomyMode).toBe(true)
     expect(next.tokenEconomy.enabled).toBe(true)
-    expect(next.providerId).toBe(current.providerId)
   })
 
   it('drops legacy local runtime credential patches', () => {
@@ -1069,23 +1076,6 @@ describe('mergeLocalRuntimeSettings', () => {
       },
       contextCompaction: {
         defaultSoftThreshold: 64000
-      },
-      runtimeTuning: {
-        toolArgumentRepair: {
-          maxStringBytes: 262144
-        },
-        toolBudget: {
-          profiles: {
-            implementation: {
-              softLimit: 24,
-              hardLimit: 48,
-              totalLimit: 96
-            }
-          }
-        },
-        parallelism: {
-          localReadOnly: 12
-        }
       }
     })
 
@@ -1094,67 +1084,21 @@ describe('mergeLocalRuntimeSettings', () => {
     expect(next.contextCompaction.defaultSoftThreshold).toBe(64000)
     expect(next.contextCompaction.defaultHardThreshold).toBe(64000)
     expect(next.contextCompaction.summaryMode).toBe('heuristic')
-    expect(next.runtimeTuning.toolArgumentRepair).toEqual({
-      maxStringBytes: 262144
-    })
-    expect(next.runtimeTuning.toolBudget.profiles.implementation).toEqual({
-      softLimit: 24,
-      hardLimit: 48,
-      maxAutomaticPhases: 1,
-      totalLimit: 96
-    })
-    expect(next.runtimeTuning.toolBudget.profiles.review).toEqual(
-      current.runtimeTuning.toolBudget.profiles.review
-    )
-    expect(next.runtimeTuning.parallelism).toEqual({
-      localReadOnly: 12,
-      networkMcp: 4
-    })
-  })
-
-  it('normalizes tool budget relationships and parallelism bounds', () => {
-    const next = mergeLocalRuntimeSettings(defaultLocalRuntimeSettings(), {
-      runtimeTuning: {
-        toolBudget: {
-          profiles: {
-            long: {
-              softLimit: 100,
-              hardLimit: 20,
-              maxAutomaticPhases: 99,
-              totalLimit: 10
-            }
-          }
-        },
-        parallelism: {
-          localReadOnly: 100,
-          networkMcp: 0
-        }
-      }
-    } as never)
-
-    expect(next.runtimeTuning.toolBudget.profiles.long).toEqual({
-      softLimit: 20,
-      hardLimit: 20,
-      maxAutomaticPhases: 32,
-      totalLimit: 20
-    })
-    expect(next.runtimeTuning.parallelism).toEqual({
-      localReadOnly: 64,
-      networkMcp: 4
-    })
   })
 
   it('deep-merges runtime guard settings through the new config model', () => {
     const next = mergeRuntimeGuardSettings(defaultRuntimeGuardSettings(), {
-      toolStorm: {
-        threshold: 5
+      execution: {
+        exactRepeatThreshold: 5,
+        semanticFailureThreshold: 4
       }
     })
 
-    expect(next.toolStorm).toMatchObject({
+    expect(next.execution).toMatchObject({
       enabled: true,
       windowSize: 8,
-      threshold: 5
+      exactRepeatThreshold: 5,
+      semanticFailureThreshold: 4
     })
   })
 })
@@ -1178,7 +1122,7 @@ describe('local runtime envelope helpers', () => {
 })
 
 describe('agent runtime settings', () => {
-  it('defaults to SciForge while normalizing a Codex runtime settings slot', () => {
+  it('migrates the legacy SciForge selection to Codex', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: {
@@ -1186,7 +1130,7 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(getActiveAgentRuntime(normalized)).toBe('sciforge')
+    expect(getActiveAgentRuntime(normalized)).toBe('codex')
     expect(getCodexRuntimeSettings(normalized)).toEqual(expect.objectContaining({
       command: 'codex',
       codexHome: DEFAULT_CODEX_DATA_DIR,
@@ -1194,13 +1138,13 @@ describe('agent runtime settings', () => {
     }))
   })
 
-  it('normalizes invalid runtime ids back to SciForge', () => {
+  it('normalizes invalid runtime ids to Codex', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       activeAgentRuntime: 'mystery-runtime'
     } as unknown as AppSettingsV1)
 
-    expect(getActiveAgentRuntime(normalized)).toBe('sciforge')
+    expect(getActiveAgentRuntime(normalized)).toBe('codex')
   })
 
   it('preserves Claude Code as an active runtime with default settings', () => {
@@ -1229,11 +1173,7 @@ describe('agent runtime settings', () => {
   it('does not require a local runtime API key when Codex is the active runtime', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
-      activeAgentRuntime: 'codex',
-      provider: {
-        ...defaultModelProviderSettings(),
-        apiKey: ''
-      }
+      activeAgentRuntime: 'codex'
     })
 
     expect(getActiveAgentApiKey(normalized)).toBe('')
@@ -1243,10 +1183,6 @@ describe('agent runtime settings', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       activeAgentRuntime: 'codex',
-      provider: {
-        ...defaultModelProviderSettings(),
-        apiKey: 'sk-codex-shared'
-      },
       modelRouter: {
         ...defaultModelRouterSettings(),
         runtimeApiKey: 'sk-router-runtime'
@@ -1286,8 +1222,24 @@ describe('agent runtime settings', () => {
     expect(modelRouter.baseUrl).toBe('http://localhost:49876/v1')
   })
 
-  it('defaults missing Model Router image generator models to gpt-image-2', () => {
-    expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('gpt-image-2')
+  it('normalizes an explicit generic model access mode and adapter id', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      modelAccess: {
+        mode: 'coding-plan',
+        planAdapterId: 'example-plan'
+      }
+    })
+
+    expect(getModelAccessSettings(normalized)).toEqual({
+      mode: 'coding-plan',
+      planAdapterId: 'example-plan'
+    })
+    expect(normalizeModelAccessSettings({ mode: 'invalid' as never })).toBeUndefined()
+  })
+
+  it('keeps an unconfigured Model Router image generator generic', () => {
+    expect(defaultModelRouterSettings().profiles.default.imageGenerator.model).toBe('')
 
     const normalized = normalizeAppSettings({
       ...settings(),
@@ -1297,7 +1249,6 @@ describe('agent runtime settings', () => {
           default: {
             ...defaultModelRouterSettings().profiles.default,
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://image.example/v1',
               apiKey: 'image-key',
               model: ''
@@ -1307,7 +1258,7 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('gpt-image-2')
+    expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('')
   })
 
   it('preserves an explicitly configured Model Router image generator model', () => {
@@ -1319,7 +1270,6 @@ describe('agent runtime settings', () => {
           default: {
             ...defaultModelRouterSettings().profiles.default,
             imageGenerator: {
-              provider: 'openai-compatible',
               baseUrl: 'https://legacy-image.example/v1',
               apiKey: 'legacy-image-key',
               model: 'legacy-image-model'
@@ -1332,7 +1282,7 @@ describe('agent runtime settings', () => {
     expect(normalized.modelRouter?.profiles.default.imageGenerator.model).toBe('legacy-image-model')
   })
 
-  it('preserves Model Router vision supplement rounds when configured', () => {
+  it('normalizes Model Router protocol preferences without provider inference', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       modelRouter: {
@@ -1343,11 +1293,10 @@ describe('agent runtime settings', () => {
             imageGenerator: defaultModelRouterSettings().profiles.default.imageGenerator,
             translators: {
               vision: {
-                provider: 'openai-compatible',
                 baseUrl: 'https://vision.example/v1',
                 apiKey: 'vision-key',
                 model: 'vision-model',
-                maxSupplementRounds: 1.9
+                protocol: 'anthropic-messages'
               },
               scientific: defaultModelRouterSettings().profiles.default.translators.scientific
             }
@@ -1356,7 +1305,36 @@ describe('agent runtime settings', () => {
       }
     })
 
-    expect(normalized.modelRouter?.profiles.default.translators.vision.maxSupplementRounds).toBe(1)
+    expect(normalized.modelRouter?.profiles.default.translators.vision).toEqual({
+      baseUrl: 'https://vision.example/v1',
+      apiKey: 'vision-key',
+      model: 'vision-model',
+      protocol: 'anthropic-messages'
+    })
+    expect(listModelRouterModelIds(normalized)).toEqual(['sciforge-router'])
+  })
+
+  it('does not preserve a legacy Model Router provider field', () => {
+    const normalized = normalizeModelRouterSettings({
+      profiles: {
+        default: {
+          textReasoner: {
+            provider: 'legacy-provider',
+            baseUrl: 'https://text.example/v1',
+            apiKey: 'text-key',
+            model: 'text-model'
+          } as never
+        }
+      }
+    })
+
+    expect(normalized.profiles.default.textReasoner).toEqual({
+      baseUrl: 'https://text.example/v1',
+      apiKey: 'text-key',
+      model: 'text-model',
+      protocol: 'auto'
+    })
+    expect(normalized.profiles.default.textReasoner).not.toHaveProperty('provider')
   })
 
   it('wraps codex runtime patches into the shared agents envelope', () => {
@@ -1436,7 +1414,20 @@ describe('agent runtime settings', () => {
 })
 
 describe('local runtime settings normalization', () => {
-  it('drops local runtime credential fields without mutating provider settings', () => {
+  it('drops the removed top-level provider credential chain', () => {
+    const normalized = normalizeAppSettings({
+      ...settings(),
+      provider: {
+        apiKey: 'sk-legacy',
+        baseUrl: 'https://legacy.example/v1',
+        providers: []
+      }
+    } as unknown as AppSettingsV1)
+
+    expect(normalized).not.toHaveProperty('provider')
+  })
+
+  it('drops local runtime credential fields', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
       agents: {
@@ -1448,10 +1439,6 @@ describe('local runtime settings normalization', () => {
       }
     })
 
-    expect(normalized.provider).toEqual(expect.objectContaining({
-      apiKey: settings().provider.apiKey,
-      baseUrl: settings().provider.baseUrl
-    }))
     expect('apiKey' in normalized.agents.sciforge).toBe(false)
     expect('baseUrl' in normalized.agents.sciforge).toBe(false)
   })
@@ -1474,24 +1461,9 @@ describe('local runtime settings normalization', () => {
     }))
   })
 
-  it('preserves custom model providers without runtime credential migration', () => {
+  it('drops the removed local runtime provider selection', () => {
     const normalized = normalizeAppSettings({
       ...settings(),
-      provider: {
-        apiKey: 'sk-default',
-        baseUrl: 'https://api.deepseek.com',
-        providers: [
-          ...defaultModelProviderSettings().providers,
-          {
-            id: 'custom-provider-2',
-            name: 'Custom Provider',
-            apiKey: 'sk-custom',
-            baseUrl: 'https://custom.example/v1',
-            endpointFormat: 'responses',
-            models: ['custom-model']
-          }
-        ]
-      },
       agents: {
         sciforge: {
           ...defaultLocalRuntimeSettings(),
@@ -1501,21 +1473,7 @@ describe('local runtime settings normalization', () => {
       }
     } as unknown as AppSettingsV1)
 
-    expect(normalized.provider.providers).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'custom-provider-2',
-          name: 'Custom Provider',
-          apiKey: 'sk-custom',
-          baseUrl: 'https://custom.example/v1',
-          models: ['custom-model']
-        })
-      ])
-    )
-    expect(
-      normalized.provider.providers.find((provider) => provider.id === 'custom-provider-2')
-    ).not.toHaveProperty('endpointFormat')
-    expect(normalized.agents.sciforge.providerId).toBe('custom-provider-2')
+    expect(normalized.agents.sciforge).not.toHaveProperty('providerId')
     expect(resolveLocalRuntimeSettings(normalized)).toEqual(
       expect.objectContaining({
         apiKey: '',
@@ -1603,7 +1561,7 @@ describe('schedule settings', () => {
     } as unknown as AppSettingsV1['schedule'])
 
     expect(normalized.tasks[0]).toMatchObject({
-      runtimeId: 'sciforge',
+      runtimeId: 'codex',
       agentThreadIds: {}
     })
     expect(normalized.tasks[0]).not.toHaveProperty('lastThreadId')
@@ -1813,15 +1771,13 @@ describe('claw runtime prompts', () => {
 })
 
 describe('write inline completion runtime config', () => {
-  it('uses the Model Router base URL instead of the General provider URL', () => {
+  it('uses the Model Router base URL', () => {
     const state = settings()
-    state.provider.baseUrl = 'https://general.example/v1'
     expect(resolveWriteInlineCompletionBaseUrl(state)).toBe('http://127.0.0.1:3892/v1')
   })
 
   it('drops legacy write-only baseUrl overrides from runtime-facing calls', () => {
     const state = settings()
-    state.provider.baseUrl = 'https://general.example/v1'
     state.write.inlineCompletion = {
       ...state.write.inlineCompletion,
       baseUrl: 'https://write-only.example/v1'
@@ -1849,8 +1805,6 @@ describe('write inline completion runtime config', () => {
 
   it('tolerates legacy write inline settings without new override fields', () => {
     const state = settings()
-    state.provider.apiKey = 'general-key'
-    state.provider.baseUrl = 'https://general.example/v1'
     state.modelRouter = {
       ...defaultModelRouterSettings(),
       ...state.modelRouter,

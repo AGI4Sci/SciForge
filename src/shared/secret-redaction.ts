@@ -1,7 +1,8 @@
-const SECRET_KEY_PATTERN = /(api[-_\s]?key|authorization|bearer|bot[-_\s]?token|client[-_\s]?secret|app[-_\s]?secret|webhook[-_\s]?secret|password|secret|token)/i
+const SECRET_KEY_PATTERN = /(api[-_\s]?key|access[-_\s]?key(?:[-_\s]?id)?|private[-_\s]?key|authorization|bearer|bot[-_\s]?token|client[-_\s]?secret|app[-_\s]?secret|webhook[-_\s]?secret|password|passphrase|secret|token)/i
+const PRIVATE_KEY_BLOCK_PATTERN = /-----BEGIN(?: [A-Z0-9]+)? PRIVATE KEY-----[\s\S]*?-----END(?: [A-Z0-9]+)? PRIVATE KEY-----/gi
 const SECRET_TEXT_PATTERNS = [
   /(["'])(authorization|api[-_\s]?key|bot[-_\s]?token|client[-_\s]?secret|app[-_\s]?secret|webhook[-_\s]?secret|password|token|secret|x-sciforge-secret)\1\s*:\s*(["'])((?:Bearer|Bot)\s+)?[^"']*\3/gi,
-  /\b(authorization|api[-_\s]?key|bot[-_\s]?token|client[-_\s]?secret|app[-_\s]?secret|webhook[-_\s]?secret|password|token|secret|x-sciforge-secret)\s*(:|=)\s*((?:Bearer|Bot)\s+)?[^\s,;]+/gi,
+  /\b(authorization|api[-_\s]?key|(?:aws[-_\s]?)?access[-_\s]?key(?:[-_\s]?id)?|aws[-_\s]?secret[-_\s]?access[-_\s]?key|private[-_\s]?key|bot[-_\s]?token|client[-_\s]?secret|app[-_\s]?secret|webhook[-_\s]?secret|password|passphrase|token|secret|x-sciforge-secret)\s*(:|=)\s*((?:Bearer|Bot)\s+)?[^\s,;]+/gi,
   /\b(bearer|bot)\s+([^\s,;]+)/gi
 ]
 
@@ -30,7 +31,7 @@ function redact(value: unknown, key = '', seen: WeakSet<object>): unknown {
 }
 
 export function redactSecretText(value: string): string {
-  return SECRET_TEXT_PATTERNS.reduce((current, pattern, index) =>
+  const redacted = SECRET_TEXT_PATTERNS.reduce((current, pattern, index) =>
     current.replace(pattern, (...args) => {
       const match = String(args[0])
       if (index === 0) {
@@ -50,4 +51,5 @@ export function redactSecretText(value: string): string {
       const scheme = match.toLowerCase().startsWith('bot ') ? 'Bot' : 'Bearer'
       return `${scheme} ${REDACTED_SECRET}`
     }), value)
+  return redacted.replace(PRIVATE_KEY_BLOCK_PATTERN, REDACTED_SECRET)
 }

@@ -58,7 +58,7 @@ class FakeProvider implements AgentProvider {
   async createThread(input: Parameters<AgentProvider['createThread']>[0]): Promise<NormalizedThread> {
     this.createMock(input)
     return {
-      id: 'standalone-side-thread',
+      id: 'created-side-thread',
       title: input.title ?? 'Standalone side',
       updatedAt: '2026-06-02T00:00:00.000Z',
       model: 'deepseek-chat',
@@ -74,13 +74,18 @@ class FakeProvider implements AgentProvider {
   async sendUserMessage(
     threadId: string,
     text: string,
-    options?: { model?: string; reasoningEffort?: string }
+    options?: Parameters<AgentProvider['sendUserMessage']>[2]
   ) {
     this.sendMock(threadId, text, options)
     return { threadId, turnId: `turn_${threadId}_${Date.now()}` }
   }
-  async steerUserMessage(threadId: string, turnId: string, text: string) {
-    this.steerMock(threadId, turnId, text)
+  async steerUserMessage(
+    threadId: string,
+    turnId: string,
+    text: string,
+    options?: Parameters<NonNullable<AgentProvider['steerUserMessage']>>[3]
+  ) {
+    this.steerMock(threadId, turnId, text, options)
   }
   async interruptTurn(threadId: string, turnId: string) {
     this.interruptMock(threadId, turnId)
@@ -203,7 +208,6 @@ function buildHarness(overrides: Partial<ChatState> = {}): Harness {
     openConnectPhone: () => undefined,
     setConnectPhonePanelOpen: () => undefined,
     openSchedule: () => undefined,
-    openWorkflow: () => undefined,
     refreshRemoteChannels: async () => undefined,
     addRemoteChannel: async () => undefined,
     selectRemoteChannel: async () => undefined,
@@ -313,7 +317,8 @@ describe('chat-store-side-actions', () => {
     const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
       source: 'pdf_annotation',
       title: 'PDF: selected text',
-      openPanel: false
+      openPanel: false,
+      displayText: 'What does this mean?'
     })
 
     expect(id).toBe('side_thr_main')
@@ -329,13 +334,20 @@ describe('chat-store-side-actions', () => {
       })
     )
     expect(provider.forkMock).toHaveBeenCalledWith('thr_main', { relation: 'side', title: 'PDF: selected text' })
-    expect(provider.sendMock).toHaveBeenCalledWith('side_thr_main', 'Answer this selected PDF text.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'side_thr_main',
+      'Answer this selected PDF text.',
+      expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max',
+        displayText: 'What does this mean?',
+        visibleContextOwnerThreadId: 'thr_main'
+      })
+    )
   })
 
-  it('spawns PDF annotation answers as standalone hidden side threads when fork is unavailable', async () => {
+  it('creates hidden PDF annotation side threads when fork is unavailable', async () => {
     const { actions, state, provider } = buildHarness()
     provider.capabilities = {
       ...provider.capabilities,
@@ -345,7 +357,7 @@ describe('chat-store-side-actions', () => {
     state.threads = [
       ...state.threads,
       {
-        id: 'standalone-side-thread',
+        id: 'created-side-thread',
         title: 'PDF: selected text',
         updatedAt: '2026-06-02T00:00:00.000Z',
         model: 'deepseek-chat',
@@ -353,17 +365,16 @@ describe('chat-store-side-actions', () => {
         status: 'running'
       }
     ]
-    state.watchTurnCompletion = { 'standalone-side-thread': true }
-    state.unreadThreadIds = { 'standalone-side-thread': true }
+    state.watchTurnCompletion = { 'created-side-thread': true }
+    state.unreadThreadIds = { 'created-side-thread': true }
 
     const id = await actions.spawnSideConversation('Answer this selected PDF text.', {
       source: 'pdf_annotation',
       title: 'PDF: selected text',
-      openPanel: false,
-      allowStandalone: true
+      openPanel: false
     })
 
-    expect(id).toBe('standalone-side-thread')
+    expect(id).toBe('created-side-thread')
     expect(state.activeThreadId).toBe('thr_main')
     expect(state.sidePanel.open).toBe(false)
     expect(state.sideConversations[id!]).toEqual(
@@ -386,80 +397,17 @@ describe('chat-store-side-actions', () => {
       threadSource: 'pdf_annotation',
       sidebarVisibility: 'hidden'
     })
-    expect(provider.updateRelationMock).toHaveBeenCalledWith('standalone-side-thread', 'side')
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer this selected PDF text.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
-  })
-
-  it('spawns standalone PDF annotation answers without an active main thread', async () => {
-    const { actions, state, provider } = buildHarness({ activeThreadId: null })
-
-    const id = await actions.spawnSideConversation('Answer without a main thread.', {
-      source: 'pdf_annotation',
-      title: 'PDF: standalone',
-      openPanel: false,
-      allowStandalone: true,
-      standalone: true
-    })
-
-    expect(id).toBe('standalone-side-thread')
-    expect(state.activeThreadId).toBeNull()
-    expect(state.sidePanel.open).toBe(false)
-    expect(state.sideConversations[id!]).toEqual(
+    expect(provider.updateRelationMock).not.toHaveBeenCalled()
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      'created-side-thread',
+      'Answer this selected PDF text.',
       expect.objectContaining({
-        source: 'pdf_annotation',
-        title: 'PDF: standalone',
-        parentThreadId: 'standalone-side-thread',
-        busy: true
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        model: 'deepseek-chat',
+        reasoningEffort: 'max',
+        visibleContextOwnerThreadId: 'thr_main'
       })
     )
-    expect(provider.forkMock).not.toHaveBeenCalled()
-    expect(provider.createMock).toHaveBeenCalledWith({
-      title: 'PDF: standalone',
-      mode: undefined,
-      workspace: '/tmp',
-      relation: 'side',
-      threadSource: 'pdf_annotation',
-      sidebarVisibility: 'hidden'
-    })
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer without a main thread.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
-  })
-
-  it('connects the runtime before spawning standalone PDF annotation answers', async () => {
-    const { actions, state, provider } = buildHarness({
-      activeThreadId: null,
-      runtimeConnection: 'idle'
-    })
-
-    const id = await actions.spawnSideConversation('Answer after connecting.', {
-      source: 'pdf_annotation',
-      title: 'PDF: reconnect',
-      openPanel: false,
-      allowStandalone: true,
-      standalone: true
-    })
-
-    expect(id).toBe('standalone-side-thread')
-    expect(provider.connectMock).toHaveBeenCalledTimes(1)
-    expect(state.runtimeConnection).toBe('ready')
-    expect(state.error).toBeNull()
-    expect(provider.createMock).toHaveBeenCalledWith({
-      title: 'PDF: reconnect',
-      mode: undefined,
-      workspace: '/tmp',
-      relation: 'side',
-      threadSource: 'pdf_annotation',
-      sidebarVisibility: 'hidden'
-    })
-    expect(provider.sendMock).toHaveBeenCalledWith('standalone-side-thread', 'Answer after connecting.', {
-      model: 'deepseek-chat',
-      reasoningEffort: 'max'
-    })
   })
 
   it('openSideConversationDraft opens the side surface without forking a thread', () => {
@@ -471,37 +419,6 @@ describe('chat-store-side-actions', () => {
     expect(state.sidePanel.activeSideId).toBeNull()
     expect(state.sideConversations).toEqual({})
     expect(provider.forkMock).not.toHaveBeenCalled()
-  })
-
-  it('does not spawn side conversations when the provider gates are unavailable', async () => {
-    const forkCapability = buildHarness()
-    forkCapability.provider.capabilities = {
-      ...forkCapability.provider.capabilities,
-      fork: false,
-      sideConversations: true
-    }
-
-    await expect(forkCapability.actions.spawnSideConversation()).resolves.toBeNull()
-    expect(forkCapability.provider.forkMock).not.toHaveBeenCalled()
-    expect(forkCapability.state.error).toBe('common:runtimeFeatureUnsupported')
-
-    const sideCapability = buildHarness()
-    sideCapability.provider.capabilities = {
-      ...sideCapability.provider.capabilities,
-      fork: true,
-      sideConversations: false
-    }
-
-    await expect(sideCapability.actions.spawnSideConversation()).resolves.toBeNull()
-    expect(sideCapability.provider.forkMock).not.toHaveBeenCalled()
-    expect(sideCapability.state.error).toBe('common:runtimeFeatureUnsupported')
-
-    const missingForkMethod = buildHarness()
-    Object.defineProperty(missingForkMethod.provider, 'forkThread', { value: undefined })
-
-    await expect(missingForkMethod.actions.spawnSideConversation()).resolves.toBeNull()
-    expect(missingForkMethod.provider.forkMock).not.toHaveBeenCalled()
-    expect(missingForkMethod.state.error).toBe('common:runtimeFeatureUnsupported')
   })
 
   it('attaches an existing child thread without opening the side panel or changing the main thread', async () => {
@@ -651,6 +568,7 @@ describe('chat-store-side-actions', () => {
       id,
       'use less reasoning',
       expect.objectContaining({
+        clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/),
         model: 'deepseek-chat',
         reasoningEffort: 'off'
       })
@@ -706,12 +624,17 @@ describe('chat-store-side-actions', () => {
     })
 
     const sent = await actions.sendSideMessage(id, 'hi from side')
+    const attemptedDirectiveId = provider.sendMock.mock.calls[0]?.[2]?.clientDirectiveId
 
     expect(sent).toBe(true)
+    expect(attemptedDirectiveId).toMatch(/^[0-9a-f-]{36}$/)
     expect(state.sideConversations[id]).toEqual(expect.objectContaining({
       busy: true,
       error: null,
-      queuedMessages: [expect.objectContaining({ text: 'hi from side' })]
+      queuedMessages: [expect.objectContaining({
+        id: attemptedDirectiveId,
+        text: 'hi from side'
+      })]
     }))
     expect(provider.subscribeMock).toHaveBeenCalledWith(id, 0, expect.anything(), expect.any(AbortSignal))
   })
@@ -737,10 +660,44 @@ describe('chat-store-side-actions', () => {
     expect(provider.steerMock).toHaveBeenCalledWith(
       'child-thread',
       'turn-child',
-      'inspect the visual evidence'
+      'inspect the visual evidence',
+      { clientDirectiveId: expect.stringMatching(/^[0-9a-f-]{36}$/) }
     )
     expect(provider.sendMock).not.toHaveBeenCalled()
     expect(state.sideConversations[id].queuedMessages).toEqual([])
+  })
+
+  it('reuses the steer identity when turn_not_running falls back to a new side turn', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.capabilities = { ...provider.capabilities, steer: true }
+    provider.threadDetail = {
+      blocks: [],
+      latestSeq: 4,
+      threadStatus: 'running',
+      latestTurnId: 'turn-child'
+    }
+    provider.steerMock.mockImplementationOnce(() => {
+      throw new Error(JSON.stringify({ code: 'turn_not_running', message: 'turn ended' }))
+    })
+    const id = (await actions.attachSideConversation({
+      threadId: 'child-thread',
+      parentThreadId: 'thr_main',
+      source: 'child_agent'
+    }))!
+
+    await expect(actions.sendSideMessage(id, '/steer continue safely')).resolves.toBe(true)
+
+    const steerDirectiveId = provider.steerMock.mock.calls[0]?.[3]?.clientDirectiveId
+    expect(steerDirectiveId).toMatch(/^[0-9a-f-]{36}$/)
+    expect(provider.sendMock).toHaveBeenCalledWith(
+      id,
+      'continue safely',
+      expect.objectContaining({ clientDirectiveId: steerDirectiveId })
+    )
+    expect(state.sideConversations[id]).toEqual(expect.objectContaining({
+      busy: true,
+      queuedMessages: []
+    }))
   })
 
   it('queues complete multimodal payloads when a running child turn cannot be steered', async () => {
@@ -815,6 +772,7 @@ describe('chat-store-side-actions', () => {
     }))!
     await actions.sendSideMessage(id, 'follow up after completion')
     expect(state.sideConversations[id].queuedMessages).toHaveLength(1)
+    const queuedId = state.sideConversations[id].queuedMessages?.[0]?.id
     const subscription = provider.subscribeMock.mock.calls.at(-1) as
       | [string, number, ThreadEventSink, AbortSignal]
       | undefined
@@ -825,7 +783,11 @@ describe('chat-store-side-actions', () => {
     expect(provider.sendMock).toHaveBeenCalledWith(
       id,
       'follow up after completion',
-      expect.objectContaining({ model: 'deepseek-chat', reasoningEffort: 'max' })
+      expect.objectContaining({
+        clientDirectiveId: queuedId,
+        model: 'deepseek-chat',
+        reasoningEffort: 'max'
+      })
     )
     expect(state.sideConversations[id].queuedMessages).toEqual([])
     expect(state.sideConversations[id].busy).toBe(true)
@@ -919,5 +881,69 @@ describe('chat-store-side-actions', () => {
     await actions.closeSideConversation(id)
     expect(state.activeThreadId).toBe('thr_other')
     expect(state.busy).toBe(false)
+  })
+
+  it('rekeys a Session-owned side conversation without losing its running state', async () => {
+    const { actions, state, provider } = buildHarness()
+    provider.threadDetail = {
+      blocks: [{ kind: 'assistant', id: 'answer', text: 'working' }],
+      latestSeq: 7,
+      threadStatus: 'running',
+      latestTurnId: 'turn-old'
+    }
+    await actions.attachSideConversation({
+      threadId: 'session-old',
+      parentThreadId: 'session-old',
+      source: 'sdd_assistant'
+    })
+    actions.setSideInput('session-old', 'keep this draft')
+    const previousSubscription = provider.subscribeMock.mock.calls.at(-1) as
+      | [string, number, ThreadEventSink, AbortSignal]
+      | undefined
+
+    actions.rekeySessionSideConversations('session-old', 'session-new')
+
+    expect(previousSubscription?.[3].aborted).toBe(true)
+    expect(state.sideConversations['session-old']).toBeUndefined()
+    expect(state.sideConversations['session-new']).toMatchObject({
+      threadId: 'session-new',
+      parentThreadId: 'session-new',
+      blocks: [{ kind: 'assistant', id: 'answer', text: 'working' }],
+      input: 'keep this draft',
+      busy: true,
+      turnId: 'turn-old',
+      lastSeq: 7
+    })
+    expect(provider.subscribeMock).toHaveBeenLastCalledWith(
+      'session-new',
+      7,
+      expect.anything(),
+      expect.any(AbortSignal)
+    )
+  })
+
+  it('preserves an existing canonical target side conversation on rekey collision', async () => {
+    const { actions, state, provider } = buildHarness()
+    await actions.attachSideConversation({
+      threadId: 'session-old',
+      parentThreadId: 'session-old',
+      source: 'sdd_assistant'
+    })
+    await actions.attachSideConversation({
+      threadId: 'session-target',
+      parentThreadId: 'session-target',
+      source: 'sdd_assistant'
+    })
+    actions.setSideInput('session-old', 'source')
+    actions.setSideInput('session-target', 'canonical target')
+    const target = state.sideConversations['session-target']
+    const subscriptionCount = provider.subscribeMock.mock.calls.length
+
+    actions.rekeySessionSideConversations('session-old', 'session-target')
+
+    expect(state.sideConversations['session-old']).toBeUndefined()
+    expect(state.sideConversations['session-target']).toBe(target)
+    expect(state.sideConversations['session-target'].input).toBe('canonical target')
+    expect(provider.subscribeMock).toHaveBeenCalledTimes(subscriptionCount)
   })
 })

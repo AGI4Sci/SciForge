@@ -1,40 +1,39 @@
 import type {
+  AgentRuntimeCompletionReceipt,
+  AgentRuntimeCompletionReceiptKind,
   AgentRuntimeEvent,
+  AgentRuntimeExecutionEffectClass,
+  AgentRuntimeExecutionIntent,
   AgentRuntimeId,
   AgentRuntimeToolEvidenceStrength,
   AgentRuntimeToolExecutionPhase,
   AgentRuntimeToolFactSource,
   AgentRuntimeTurnStartInput
 } from '../../../shared/agent-runtime-contract'
-import {
-  isVerifiedVisualExecutionEvent,
-  VISUAL_EXECUTION_REQUIRED_METADATA_KEY
-} from './visual-execution-guard'
 
-export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v1'
+export const EXECUTION_INTEGRITY_POLICY_VERSION = 'execution-integrity.v3'
 export const EXECUTION_INTEGRITY_POLICY_METADATA_KEY = 'sciforgeExecutionIntegrityPolicy'
-export const EXECUTION_OBLIGATIONS_METADATA_KEY = 'sciforgeExecutionObligations'
+export const EXECUTION_PUBLICATION_PENDING_CODE = 'runtime_execution_publication_pending'
+export const EXECUTION_PUBLICATION_COMMITTED_CODE = 'runtime_execution_publication_committed'
 
 const EXECUTION_INTEGRITY_MARKER = 'Runtime-enforced execution integrity gate:'
-const MAX_ASSISTANT_CLAIM_TEXT = 16_384
 const MAX_REMEMBERED_VIOLATIONS = 2_048
 
-export type ExecutionEffectClass =
-  | 'read'
-  | 'command_execution'
-  | 'local_write'
-  | 'external_mutation'
-  | 'async_job'
-  | 'child_agent'
-  | 'other'
+export type ExecutionEffectClass = AgentRuntimeExecutionEffectClass
 
 export type ExecutionObligation = {
   id: string
-  kind: 'any_success' | 'visual_inspection' | 'tool' | 'effect'
+  kind: 'any_success' | 'tool' | 'effect' | 'receipt'
   toolNames?: string[]
   effectClass?: ExecutionEffectClass
-  source: 'user' | 'metadata' | 'visual'
+  receiptKind?: AgentRuntimeCompletionReceiptKind
+  requiresRegionRef?: boolean
+  dependsOn?: string[]
+  completion?: 'terminal' | 'success'
+  source: 'intent' | 'native_tool'
 }
+
+export type ExecutionIntent = AgentRuntimeExecutionIntent
 
 type ToolReceipt = {
   callId: string
@@ -44,20 +43,21 @@ type ToolReceipt = {
   evidenceStrength: AgentRuntimeToolEvidenceStrength
   attempt: number
   effectClasses: ExecutionEffectClass[]
+  completionReceipts: AgentRuntimeCompletionReceipt[]
   resultDigest?: string
   errorCode?: string
   /** Stable executor handle shared by an asynchronous launch and later poll calls. */
   asyncHandle?: string
   /** True only when the executor reports that the asynchronous handle is terminal. */
   asyncTerminal?: boolean
+  trustedTerminal: boolean
   trustedSuccess: boolean
-  visualSuccess: boolean
 }
 
 type ExecutionIntegrityState = {
   obligations: ExecutionObligation[]
+  obligationRefCounts: Map<string, number>
   calls: Map<string, ToolReceipt>
-  assistantText: string
   enabled: boolean
 }
 
@@ -78,6 +78,11 @@ export type ExecutionIntegrityObservation = {
   violation?: ExecutionIntegrityViolation
 }
 
+export type ExecutionIntegrityTurnValidationState = Readonly<{
+  requiresTerminalValidation: boolean
+  nativeVisualObligationsPending: boolean
+}>
+
 /**
  * Host-owned receipt ledger. It consumes events the runtimes already emit and
  * never invokes a model, tool, network endpoint, or filesystem operation.
@@ -90,11 +95,62 @@ export class RuntimeExecutionIntegrityGuard {
     const key = executionKey(runtimeId, threadId, turnId)
     if (!key) return
     this.states.set(key, {
-      obligations: obligationsFromInput(input),
+      ...obligationState(obligationsFromInput(input)),
       calls: new Map(),
-      assistantText: '',
       enabled: true
     })
+  }
+
+  rememberSteer(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string,
+    obligations: ExecutionObligation[]
+  ): () => void {
+    const key = executionKey(runtimeId, threadId, turnId)
+    const state = key ? this.states.get(key) : undefined
+    if (!state) return () => undefined
+    const contribution = dedupeObligations(obligations)
+    for (const obligation of contribution) {
+      const count = state.obligationRefCounts.get(obligation.id) ?? 0
+      state.obligationRefCounts.set(obligation.id, count + 1)
+      if (count === 0) state.obligations.push(obligation)
+    }
+    let active = true
+    return () => {
+      if (!active) return
+      active = false
+      for (const obligation of contribution) {
+        const count = state.obligationRefCounts.get(obligation.id) ?? 0
+        if (count <= 1) {
+          state.obligationRefCounts.delete(obligation.id)
+          state.obligations = state.obligations.filter((item) => item.id !== obligation.id)
+          continue
+        }
+        state.obligationRefCounts.set(obligation.id, count - 1)
+      }
+    }
+  }
+
+  rememberSteerInput(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string,
+    input: AgentRuntimeTurnStartInput
+  ): () => void {
+    return this.rememberSteer(runtimeId, threadId, turnId, obligationsFromInput(input))
+  }
+
+  turnStartValidationState(
+    input: AgentRuntimeTurnStartInput
+  ): ExecutionIntegrityTurnValidationState {
+    const obligations = obligationsFromInput(input)
+    return {
+      requiresTerminalValidation: obligations.length > 0,
+      nativeVisualObligationsPending: obligations.some(
+        isNativeVisualObligation
+      )
+    }
   }
 
   rejectedTurnIds(runtimeId: AgentRuntimeId, threadId: string): string[] {
@@ -106,6 +162,28 @@ export class RuntimeExecutionIntegrityGuard {
       .filter(Boolean)
   }
 
+  turnValidationState(
+    runtimeId: AgentRuntimeId,
+    threadId: string,
+    turnId: string
+  ): ExecutionIntegrityTurnValidationState {
+    const key = executionKey(runtimeId, threadId, turnId)
+    const state = key ? this.states.get(key) : undefined
+    if (!state?.enabled) {
+      return {
+        requiresTerminalValidation: false,
+        nativeVisualObligationsPending: false
+      }
+    }
+    const assessment = assessCompletionState(state)
+    return {
+      requiresTerminalValidation: state.obligations.length > 0,
+      nativeVisualObligationsPending: assessment.unsatisfied.some(
+        isNativeVisualObligation
+      )
+    }
+  }
+
   observe(runtimeId: AgentRuntimeId, event: AgentRuntimeEvent): ExecutionIntegrityObservation {
     const turnId = event.turnId?.trim() ?? ''
     const key = executionKey(runtimeId, event.threadId, turnId)
@@ -114,9 +192,8 @@ export class RuntimeExecutionIntegrityGuard {
     let state = this.states.get(key)
     if (!state && event.kind === 'user_message' && isIntegrityMarker(event.text)) {
       state = {
-        obligations: obligationsFromMarker(event.text),
+        ...obligationState(obligationsFromMarker(event.text)),
         calls: new Map(),
-        assistantText: '',
         enabled: true
       }
       this.states.set(key, state)
@@ -127,9 +204,11 @@ export class RuntimeExecutionIntegrityGuard {
       return { event }
     }
 
-    rememberAssistantText(state, event)
     const receipt = receiptFromEvent(event)
-    if (receipt) rememberReceipt(state, receipt)
+    if (receipt) {
+      rememberReceipt(state, receipt)
+      rememberNativeVisualPlan(state, event, receipt)
+    }
 
     if (event.kind === 'child_event') rememberChildReceipt(state, event)
     if (event.kind !== 'turn_lifecycle') return { event }
@@ -166,19 +245,15 @@ export function withExecutionIntegrityRequirement(
   if (!obligations.length) return input
   const metadata = {
     ...(input.metadata ?? {}),
-    [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION,
-    ...(obligations.length ? { [EXECUTION_OBLIGATIONS_METADATA_KEY]: obligations } : {})
+    [EXECUTION_INTEGRITY_POLICY_METADATA_KEY]: EXECUTION_INTEGRITY_POLICY_VERSION
   }
-  if (
-    input.text.includes(EXECUTION_INTEGRITY_MARKER) ||
-    input.text.includes('Runtime-enforced visual completion gate:')
-  ) {
+  if (input.text.includes(EXECUTION_INTEGRITY_MARKER)) {
     return { ...input, metadata }
   }
   const marker = `${EXECUTION_INTEGRITY_MARKER} ${JSON.stringify(obligations)}`
   const instruction = [
     marker,
-    'Only a real terminal executor receipt counts; otherwise report the blocker.'
+    'Only a matching typed terminal executor receipt counts; success requirements also need a successful outcome.'
   ].join('\n')
   return {
     ...input,
@@ -188,46 +263,75 @@ export function withExecutionIntegrityRequirement(
   }
 }
 
-export function requiresRuntimeExecution(text: string): boolean {
-  return requestedExecutionClass(text) !== null
-}
-
-/**
- * Policy text often contains explicit safety boundaries such as "do not edit"
- * or "禁止删除" next to the action that is actually requested. Those negated
- * phrases must not broaden the receipt obligation into a write or mutation.
- */
-function executionIntentText(text: string): string {
-  return text
-    .replace(
-      /\b(?:(?:do|does|did)\s+not|don't|doesn't|didn't|must\s+not|should\s+not|cannot|can't|never)\b[^.!?;\n]*?(?=(?:[.!?;\n]|,\s*(?:but|however|instead|only|then)\b|$))/giu,
-      ' '
-    )
-    .replace(
-      /(?:不要|不得|禁止|无需|无须|不应|不能|不可|不需要|切勿|勿)[^。；;!！?？\n]*?(?=(?:[。；;!！?？\n]|[，,]\s*(?:但|但是|不过|而是|只|仅|然后|并且|且|同时)|$))/gu,
-      ' '
-    )
+export function requiresExecutionIntegrityValidation(text: string | undefined): boolean {
+  return typeof text === 'string' && isIntegrityMarker(text)
 }
 
 function obligationsFromInput(input: AgentRuntimeTurnStartInput): ExecutionObligation[] {
-  const metadata = recordValue(input.metadata)
-  const explicit = normalizeObligations(metadata[EXECUTION_OBLIGATIONS_METADATA_KEY])
-  const obligations = [...explicit]
-  if (metadata[VISUAL_EXECUTION_REQUIRED_METADATA_KEY] === true) {
-    obligations.push({ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' })
+  return dedupeObligations(executionObligationsFromIntent(input.executionIntent))
+}
+
+/**
+ * Natural-language understanding belongs to the caller that owns routing.
+ * This guard consumes only a typed decision and never reclassifies user text,
+ * quoted documents, assistant prose, or historical context.
+ */
+export function executionObligationsFromIntent(value: unknown): ExecutionObligation[] {
+  const intent = recordValue(value)
+  const mode = stringValue(intent.mode)
+  if (mode === 'answer' || (mode !== 'inspect' && mode !== 'execute')) return []
+  const requirements = Array.isArray(intent.requirements) ? intent.requirements : []
+  if (requirements.length === 0) {
+    return [{
+      id: 'requested-execution',
+      kind: 'any_success',
+      completion: 'success',
+      source: 'intent'
+    }]
   }
-  const displayText = input.displayText ?? input.text
-  if (requiresRuntimeExecution(displayText) && !obligations.some((item) => item.id === 'requested-execution')) {
-    obligations.push(requestedExecutionObligation(displayText))
-  }
-  return dedupeObligations(obligations)
+  const obligations: ExecutionObligation[] = []
+  requirements.forEach((entry, index) => {
+    const requirement = recordValue(entry)
+    const effectClass = normalizedEffectClass(requirement.effectClass)
+    const receiptKind = normalizedCompletionReceiptKind(requirement.receiptKind)
+    const dependsOn = Array.isArray(requirement.dependsOn)
+      ? requirement.dependsOn.map(stringValue).filter(Boolean)
+      : []
+    const toolNames = Array.isArray(requirement.toolNames)
+      ? requirement.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
+      : []
+    const completion = requirement.completion === 'terminal' ? 'terminal' : 'success'
+    const requiresRegionRef = requirement.requiresRegionRef === true
+    const id = stringValue(requirement.id) || (
+      requirements.length === 1 ? 'requested-execution' : `requested-execution-${index + 1}`
+    )
+    if (toolNames.length > 0) {
+      obligations.push({ id, kind: 'tool', toolNames, completion, source: 'intent' })
+      return
+    }
+    if (receiptKind) {
+      obligations.push({
+        id,
+        kind: 'receipt',
+        receiptKind,
+        ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+        ...(dependsOn.length ? { dependsOn } : {}),
+        completion,
+        source: 'intent'
+      })
+      return
+    }
+    if (effectClass) {
+      obligations.push({ id, kind: 'effect', effectClass, completion, source: 'intent' })
+      return
+    }
+    obligations.push({ id, kind: 'any_success', completion, source: 'intent' })
+  })
+  return obligations
 }
 
 function obligationsFromMarker(text: string): ExecutionObligation[] {
   const line = text.split(/\r?\n/u).find((value) => value.includes(EXECUTION_INTEGRITY_MARKER)) ?? ''
-  if (!line && text.includes('Runtime-enforced visual completion gate:')) {
-    return [{ id: 'visual-inspection', kind: 'visual_inspection', source: 'visual' }]
-  }
   const start = line.indexOf('[', line.indexOf(EXECUTION_INTEGRITY_MARKER))
   if (start < 0) return []
   try {
@@ -242,18 +346,28 @@ function normalizeObligations(value: unknown): ExecutionObligation[] {
   return value.flatMap((entry, index) => {
     const item = recordValue(entry)
     const kind = stringValue(item.kind)
-    if (kind !== 'any_success' && kind !== 'visual_inspection' && kind !== 'tool' && kind !== 'effect') return []
-    const source = stringValue(item.source)
+    if (kind !== 'any_success' && kind !== 'tool' && kind !== 'effect' && kind !== 'receipt') return []
     const effectClass = normalizedEffectClass(item.effectClass)
+    const receiptKind = normalizedCompletionReceiptKind(item.receiptKind)
+    const completion = item.completion === 'terminal' ? 'terminal' : 'success'
     const toolNames = Array.isArray(item.toolNames)
       ? item.toolNames.map(stringValue).filter(Boolean).map(normalizedToolName)
       : undefined
+    const dependsOn = Array.isArray(item.dependsOn)
+      ? item.dependsOn.map(stringValue).filter(Boolean)
+      : undefined
+    const requiresRegionRef = item.requiresRegionRef === true
+    if (kind === 'receipt' && !receiptKind) return []
     return [{
       id: stringValue(item.id) || `obligation-${index + 1}`,
       kind,
       ...(toolNames?.length ? { toolNames } : {}),
       ...(effectClass ? { effectClass } : {}),
-      source: source === 'metadata' || source === 'visual' ? source : 'user'
+      ...(receiptKind ? { receiptKind } : {}),
+      ...(requiresRegionRef ? { requiresRegionRef: true } : {}),
+      ...(dependsOn?.length ? { dependsOn } : {}),
+      completion,
+      source: 'intent'
     } satisfies ExecutionObligation]
   })
 }
@@ -265,6 +379,17 @@ function dedupeObligations(obligations: ExecutionObligation[]): ExecutionObligat
     seen.add(item.id)
     return true
   })
+}
+
+function obligationState(obligations: ExecutionObligation[]): Pick<
+  ExecutionIntegrityState,
+  'obligations' | 'obligationRefCounts'
+> {
+  const unique = dedupeObligations(obligations)
+  return {
+    obligations: unique,
+    obligationRefCounts: new Map(unique.map((obligation) => [obligation.id, 1]))
+  }
 }
 
 function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
@@ -298,13 +423,12 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
   const attempt = typeof attemptValue === 'number' && Number.isInteger(attemptValue) && attemptValue > 0
     ? attemptValue
     : 1
-  const visualSuccess = phase === 'succeeded' && isVerifiedVisualExecutionEvent(event)
-  const trustedSuccess = phase === 'succeeded' && (
-    visualSuccess ||
+  const trustedTerminal = (phase === 'succeeded' || phase === 'failed' || phase === 'cancelled') && (
     factSource === 'executor_result' ||
     evidenceStrength === 'executor_receipt' ||
     evidenceStrength === 'attested'
   )
+  const trustedSuccess = phase === 'succeeded' && trustedTerminal
   const asyncReceipt = asyncReceiptFromMeta(meta)
   return {
     callId: rawCallId.trim(),
@@ -313,7 +437,10 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
     factSource,
     evidenceStrength,
     attempt,
-    effectClasses: effectClassesFromEvent(event, toolName, meta),
+    effectClasses: effectClassesFromEvent(event, meta),
+    completionReceipts: phase === 'succeeded'
+      ? completionReceiptsFromEvent(event, rawCallId.trim())
+      : [],
     ...(event.kind === 'tool_event'
       ? {
           ...(event.resultDigest || stringValue(meta.resultDigest)
@@ -329,8 +456,8 @@ function receiptFromEvent(event: AgentRuntimeEvent): ToolReceipt | null {
         }),
     ...(asyncReceipt.handle ? { asyncHandle: asyncReceipt.handle } : {}),
     ...(asyncReceipt.terminal ? { asyncTerminal: true } : {}),
-    trustedSuccess,
-    visualSuccess
+    trustedTerminal,
+    trustedSuccess
   }
 }
 
@@ -366,8 +493,9 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
       ...receipt,
       callId: existing.callId,
       phase: 'unresolved',
-      trustedSuccess: false,
-      visualSuccess: false
+      completionReceipts: [],
+      trustedTerminal: false,
+      trustedSuccess: false
     })
     return
   }
@@ -377,10 +505,74 @@ function rememberReceipt(state: ExecutionIntegrityState, receipt: ToolReceipt): 
     callId: existing.callId,
     toolName: receipt.toolName || existing.toolName,
     effectClasses: mergeEffectClasses(existing.effectClasses, receipt.effectClasses),
+    completionReceipts: mergeCompletionReceipts(
+      existing.completionReceipts,
+      receipt.completionReceipts
+    ),
     asyncHandle: receipt.asyncHandle || existing.asyncHandle,
     asyncTerminal: receipt.asyncTerminal || existing.asyncTerminal
   })
   closeCorrelatedAsyncReceipts(state, key, receipt)
+}
+
+function rememberNativeVisualPlan(
+  state: ExecutionIntegrityState,
+  event: AgentRuntimeEvent,
+  tool: ToolReceipt
+): void {
+  if (event.kind !== 'tool_event' && event.kind !== 'item_snapshot') return
+  const meta = recordValue(event.kind === 'tool_event' ? event.meta : event.item.meta)
+  const argumentsRecord = recordValue(meta.arguments)
+  const captureMode = stringValue(argumentsRecord.capture)
+  if (
+    tool.toolName !== 'sciforge_look' ||
+    (captureMode !== 'snapshot' && captureMode !== 'region') ||
+    state.obligations.some((obligation) => (
+      obligation.kind === 'receipt' && obligation.receiptKind === 'visual.capture'
+    ))
+  ) {
+    return
+  }
+  const locateId = `native-visual-locate:${tool.callId}`
+  const captureId = `native-visual-capture:${tool.callId}`
+  addObligations(state, [
+    {
+      id: locateId,
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
+      completion: 'success',
+      source: 'native_tool'
+    },
+    {
+      id: captureId,
+      kind: 'receipt',
+      receiptKind: 'visual.capture',
+      ...(captureMode === 'region' ? { requiresRegionRef: true } : {}),
+      dependsOn: [locateId],
+      completion: 'success',
+      source: 'native_tool'
+    },
+    {
+      id: `native-visual-final-look:${tool.callId}`,
+      kind: 'receipt',
+      receiptKind: 'visual.look',
+      dependsOn: [captureId],
+      completion: 'success',
+      source: 'native_tool'
+    }
+  ])
+}
+
+function addObligations(
+  state: ExecutionIntegrityState,
+  obligations: ExecutionObligation[]
+): void {
+  for (const obligation of dedupeObligations(obligations)) {
+    if (state.obligationRefCounts.has(obligation.id)) continue
+    state.obligationRefCounts.set(obligation.id, 1)
+    state.obligations.push(obligation)
+  }
 }
 
 function mergeEffectClasses(
@@ -389,6 +581,24 @@ function mergeEffectClasses(
 ): ExecutionEffectClass[] {
   const concrete = new Set([...existing, ...incoming].filter((effect) => effect !== 'other'))
   return concrete.size > 0 ? [...concrete] : ['other']
+}
+
+function mergeCompletionReceipts(
+  existing: AgentRuntimeCompletionReceipt[],
+  incoming: AgentRuntimeCompletionReceipt[]
+): AgentRuntimeCompletionReceipt[] {
+  const byId = new Map(existing.map((receipt) => [receipt.receiptId, receipt]))
+  for (const receipt of incoming) {
+    const prior = byId.get(receipt.receiptId)
+    if (!prior) {
+      byId.set(receipt.receiptId, receipt)
+      continue
+    }
+    if (JSON.stringify(prior) !== JSON.stringify(receipt)) {
+      byId.delete(receipt.receiptId)
+    }
+  }
+  return [...byId.values()]
 }
 
 /**
@@ -463,17 +673,60 @@ function rememberChildReceipt(
     evidenceStrength: 'runtime_lifecycle',
     attempt: 1,
     effectClasses: ['child_agent'],
-    trustedSuccess: phase === 'succeeded',
-    visualSuccess: false
+    completionReceipts: [],
+    trustedTerminal: phase === 'succeeded' || phase === 'failed' || phase === 'cancelled',
+    trustedSuccess: phase === 'succeeded'
   })
 }
 
 function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrityViolation | null {
+  const { open, unsatisfied } = assessCompletionState(state)
+  if (!open.length && !unsatisfied.length) return null
+
+  const visualMissing = unsatisfied.some(isNativeVisualObligation)
+  const code = visualMissing ? 'runtime_visual_execution_missing' : 'runtime_execution_incomplete'
+  const verdict = 'blocked'
+  const openCallIds = open.map((item) => item.callId)
+  const unsatisfiedObligationIds = unsatisfied.map((item) => item.id)
+  const failureReasons = [
+    openCallIds.length ? `open calls: ${openCallIds.join(', ')}` : '',
+    unsatisfiedObligationIds.length ? `unsatisfied requirements: ${unsatisfiedObligationIds.join(', ')}` : ''
+  ].filter(Boolean)
+  return {
+    code,
+    verdict,
+    message: visualMissing
+      ? 'Visual completion rejected: verified visual inspection did not execute.'
+      : `Completion rejected: ${failureReasons.join('; ')}.`,
+    detail: [
+      openCallIds.length ? `Open calls: ${openCallIds.join(', ')}.` : '',
+      unsatisfiedObligationIds.length ? `Unsatisfied obligations: ${unsatisfiedObligationIds.join(', ')}.` : '',
+      'A model statement, request event, dispatch event, or accepted asynchronous job is not proof of completion.'
+    ].filter(Boolean).join(' '),
+    openCallIds,
+    unsatisfiedObligationIds
+  }
+}
+
+function isNativeVisualObligation(obligation: ExecutionObligation): boolean {
+  return obligation.kind === 'receipt' && (
+    obligation.receiptKind === 'visual.look' ||
+    obligation.receiptKind === 'visual.capture'
+  )
+}
+
+function assessCompletionState(state: ExecutionIntegrityState): {
+  open: ToolReceipt[]
+  unsatisfied: ExecutionObligation[]
+} {
   const receipts = [...state.calls.values()]
   const open = receipts.filter((item) => !isTerminalPhase(item.phase))
-  const trusted = receipts.filter((item) => item.trustedSuccess)
+  const trustedTerminal = receipts.filter((item) => item.trustedTerminal)
+  const trustedSuccess = receipts.filter((item) => item.trustedSuccess)
+  const satisfiedSemantic = satisfiedReceiptObligations(state.obligations, trustedSuccess)
   const unsatisfied = state.obligations.filter((obligation) => {
-    if (obligation.kind === 'visual_inspection') return !trusted.some((item) => item.visualSuccess)
+    const trusted = obligation.completion === 'terminal' ? trustedTerminal : trustedSuccess
+    if (obligation.kind === 'receipt') return !satisfiedSemantic.has(obligation.id)
     if (obligation.kind === 'tool') {
       const names = new Set((obligation.toolNames ?? []).map(normalizedToolName))
       return !trusted.some((item) => names.size === 0 || names.has(item.toolName))
@@ -483,69 +736,71 @@ function completionViolation(state: ExecutionIntegrityState): ExecutionIntegrity
     }
     return trusted.length === 0
   })
-  const claimedEffect = affirmativeExecutionClaim(state.assistantText)
-  const claimUnverified = claimedEffect !== null && !trusted.some((item) => (
-    claimedEffect === 'any' || item.effectClasses.includes(claimedEffect)
+  return { open, unsatisfied }
+}
+
+type IndexedCompletionReceipt = {
+  receipt: AgentRuntimeCompletionReceipt
+  order: number
+}
+
+function satisfiedReceiptObligations(
+  obligations: ExecutionObligation[],
+  trustedSuccess: ToolReceipt[]
+): Map<string, IndexedCompletionReceipt> {
+  const available = trustedSuccess.flatMap((tool, toolIndex) => (
+    tool.completionReceipts.map((receipt, receiptIndex) => ({
+      receipt,
+      order: toolIndex * 1_000 + receiptIndex
+    }))
   ))
-  if (!open.length && !unsatisfied.length && !claimUnverified) return null
-
-  const visualMissing = unsatisfied.some((item) => item.kind === 'visual_inspection')
-  const code = visualMissing
-    ? 'runtime_visual_execution_missing'
-    : claimUnverified && !open.length && !unsatisfied.length
-      ? 'runtime_execution_claim_unverified'
-      : 'runtime_execution_incomplete'
-  const verdict = code === 'runtime_execution_claim_unverified' ? 'unverified' : 'blocked'
-  const openCallIds = open.map((item) => item.callId)
-  const unsatisfiedObligationIds = unsatisfied.map((item) => item.id)
-  return {
-    code,
-    verdict,
-    message: visualMissing
-      ? 'Visual completion rejected: verified visual inspection did not execute.'
-      : verdict === 'unverified'
-        ? 'Completion rejected: the assistant claimed execution without an executor receipt.'
-        : 'Completion rejected: required execution has no successful terminal receipt.',
-    detail: [
-      openCallIds.length ? `Open calls: ${openCallIds.join(', ')}.` : '',
-      unsatisfiedObligationIds.length ? `Unsatisfied obligations: ${unsatisfiedObligationIds.join(', ')}.` : '',
-      claimUnverified ? 'An affirmative execution claim was observed without trusted success evidence.' : '',
-      'A model statement, request event, dispatch event, or accepted asynchronous job is not proof of completion.'
-    ].filter(Boolean).join(' '),
-    openCallIds,
-    unsatisfiedObligationIds
+  const satisfied = new Map<string, IndexedCompletionReceipt>()
+  const usedReceiptIds = new Set<string>()
+  const pending = obligations.filter((obligation) => (
+    obligation.kind === 'receipt' && Boolean(obligation.receiptKind)
+  ))
+  let progressed = true
+  while (pending.length > 0 && progressed) {
+    progressed = false
+    for (let index = 0; index < pending.length;) {
+      const obligation = pending[index]
+      if (!obligation.receiptKind) {
+        pending.splice(index, 1)
+        continue
+      }
+      const dependencies = (obligation.dependsOn ?? []).map((id) => satisfied.get(id))
+      if (dependencies.some((entry) => !entry)) {
+        index += 1
+        continue
+      }
+      const matched = available.find((candidate) => {
+        if (usedReceiptIds.has(candidate.receipt.receiptId)) return false
+        if (candidate.receipt.kind !== obligation.receiptKind) return false
+        if (
+          obligation.requiresRegionRef === true &&
+          !(candidate.receipt.relatedRefs ?? []).some((ref) => /^region_[A-Za-z0-9_-]{20,}$/u.test(ref))
+        ) {
+          return false
+        }
+        for (const dependency of dependencies) {
+          if (!dependency || candidate.order <= dependency.order) return false
+          if (!(candidate.receipt.parentReceiptIds ?? []).includes(dependency.receipt.receiptId)) {
+            return false
+          }
+        }
+        return true
+      })
+      if (!matched) {
+        index += 1
+        continue
+      }
+      usedReceiptIds.add(matched.receipt.receiptId)
+      satisfied.set(obligation.id, matched)
+      pending.splice(index, 1)
+      progressed = true
+    }
   }
-}
-
-function rememberAssistantText(state: ExecutionIntegrityState, event: AgentRuntimeEvent): void {
-  let text = ''
-  if (event.kind === 'assistant_delta') text = event.text
-  if (event.kind === 'item_snapshot' && event.item.kind === 'assistant_message') {
-    text = event.item.text ?? event.item.detail ?? ''
-  }
-  if (!text) return
-  state.assistantText = `${state.assistantText}${text}`.slice(-MAX_ASSISTANT_CLAIM_TEXT)
-}
-
-function affirmativeExecutionClaim(text: string): ExecutionEffectClass | 'any' | null {
-  if (!text.trim()) return null
-  const affirmative = [
-    /(?:我|我们|已|已经)(?:成功)?(?:执行|运行|调用|修改|编辑|删除|发送|提交|安装|渲染|部署|发布|修复|实现)(?!不了|失败|尚未|未)/u,
-    /(?:我|我们|已|已经)(?:成功)?使用.{0,16}(?:工具|命令|接口|API)/iu,
-    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?(?:ran|executed|called|invoked|edited|modified|deleted|removed|sent|submitted|installed|opened|clicked|downloaded|uploaded|rendered|deployed|published|implemented|fixed)\b/iu,
-    /\b(?:i|we)\s+(?:have\s+)?(?:successfully\s+)?used\s+(?:the\s+)?(?:tool|command|api|view_image|gui_visual_capture)\b/iu
-  ].some((pattern) => pattern.test(text))
-  if (!affirmative) return null
-  if (
-    /(?:修改|编辑|删除|安装|修复|实现)/u.test(text) ||
-    /\b(?:edited|modified|deleted|removed|installed|implemented|fixed)\b/iu.test(text)
-  ) return 'local_write'
-  if (
-    /(?:发送|提交|上传|部署|发布)/u.test(text) ||
-    /\b(?:sent|submitted|uploaded|deployed|published)\b/iu.test(text)
-  ) return 'external_mutation'
-  if (/(?:执行|运行)/u.test(text) || /\b(?:ran|executed)\b/iu.test(text)) return 'command_execution'
-  return 'any'
+  return satisfied
 }
 
 function normalizedPhase(value: unknown, status: unknown): AgentRuntimeToolExecutionPhase | null {
@@ -579,245 +834,104 @@ function isAcceptedAsyncResult(meta: Record<string, unknown>): boolean {
   return status === 'accepted' || status === 'submitted' || status === 'queued' || status === 'pending' || status === 'running'
 }
 
-function requestedExecutionObligation(text: string): ExecutionObligation {
-  const effectClass = requestedExecutionClass(text)
-  if (effectClass && effectClass !== 'any_success') {
-    return { id: 'requested-execution', kind: 'effect', effectClass, source: 'user' }
-  }
-  return { id: 'requested-execution', kind: 'any_success', source: 'user' }
-}
-
-type RequestedExecutionClass = ExecutionEffectClass | 'any_success'
-
-/** Classify affirmative action requests, not incidental action-word mentions. */
-function requestedExecutionClass(text: string): RequestedExecutionClass | null {
-  const value = executionIntentText(text).toLowerCase().trim()
-  if (!value) return null
-  const requested = new Set<RequestedExecutionClass>()
-  for (const clause of value.split(/[.!?;,，。；！？？\n]+/u)) {
-    for (const root of requestedClauseRoots(clause)) collectRequestedClauseEffects(root, requested)
-  }
-  if (requested.has('external_mutation')) return 'external_mutation'
-  if (requested.has('local_write')) return 'local_write'
-  if (requested.has('command_execution')) return 'command_execution'
-  return requested.has('any_success') ? 'any_success' : null
-}
-
-const ENGLISH_ACTION = /^(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/iu
-const CHINESE_ACTION = /^(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/u
-const EXTERNAL_OBJECT_ACTIONS = new Set([
-  'create', 'open', 'delete', 'remove', 'update', '创建', '新建', '打开', '删除', '移除', '更新'
-])
-
-function requestedClauseRoots(clause: string): string[] {
-  const value = clause.trim()
-  const separator = value.search(/[:：]/u)
-  if (separator < 0) return [value]
-  const header = value.slice(0, separator).trim()
-  const body = value.slice(separator + 1).trim()
-  if (
-    /^(?:task|action|required action|instruction|next step|step|please (?:do|perform) (?:the )?following|do (?:the )?following)$/iu.test(header) ||
-    /^(?:任务|操作|必要操作|指令|下一步|步骤|请(?:执行|完成)以下(?:任务|操作|步骤)?)$/u.test(header)
-  ) return [body]
-  return [header]
-}
-
-function collectRequestedClauseEffects(clause: string, requested: Set<RequestedExecutionClass>): void {
-  const english = requestedEnglishRoot(clause)
-  const englishRoot = ENGLISH_ACTION.exec(english)
-  if (englishRoot && !isStatusDescription(englishRoot[1], english.slice(englishRoot[0].length))) {
-    requested.add(effectForRequestedAction(englishRoot[1], english.slice(englishRoot[0].length)))
-    const coordinated = /\b(?:and|then|also)(?:\s+(?:then|also))?\s+(?:(?:please|kindly|actually|now)\s+)*(run|execute|send|submit|upload|deploy|publish|edit|modify|create|delete|remove|update|install|implement|fix|patch|write|call|invoke|use|open|click|search|query|read|download|render|generate)\b/giu
-    for (const match of english.matchAll(coordinated)) {
-      requested.add(effectForRequestedAction(match[1], english.slice((match.index ?? 0) + match[0].length)))
-    }
-    return
-  }
-
-  const chinese = requestedChineseRoot(clause)
-  const chineseRoot = CHINESE_ACTION.exec(chinese)
-  if (!chineseRoot || isStatusDescription(chineseRoot[1], chinese.slice(chineseRoot[0].length))) return
-  requested.add(effectForRequestedAction(chineseRoot[1], chinese.slice(chineseRoot[0].length)))
-  const coordinated = /(?:并且|然后|同时|且|再)\s*(?:(?:请|务必|直接)\s*)*(执行|运行|发送|提交|上传|部署|发布|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入|调用|使用|打开|点击|搜索|查询|读取|下载|渲染|生成)/gu
-  for (const match of chinese.matchAll(coordinated)) {
-    requested.add(effectForRequestedAction(match[1], chinese.slice((match.index ?? 0) + match[0].length)))
-  }
-}
-
-function requestedEnglishRoot(clause: string): string {
-  return clause.trim()
-    .replace(/^(?:[-*]\s*|\d+[.)]\s*)/u, '')
-    .replace(/^(?:(?:but|however|instead|only|then)\s+)/iu, '')
-    .replace(
-      /^(?:(?:(?:can|could|would|will)\s+you\s+)(?:(?:please|kindly|actually|now)\s+)*|(?:i|we)\s+(?:(?:need|want)\s+(?:you\s+)?to|must|should|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|you\s+(?:must|should|need\s+to|have\s+to)\s+(?:(?:please|kindly|actually|now)\s+)*|(?:(?:please|kindly|now|actually|just|must|should|need\s+to|have\s+to)\s+)+)/iu,
-      ''
-    )
-}
-
-function requestedChineseRoot(clause: string): string {
-  let value = clause.trim()
-    .replace(/^(?:[-*]\s*|\d+[.)、]\s*)/u, '')
-    .replace(/^(?:但是|不过|而是|然后|并且|同时|但|只|仅|且)\s*/u, '')
-  let prefixRemoved = false
-  for (;;) {
-    const before = value
-    value = value
-      .replace(/^(?:我|我们)\s*(?:需要|必须|务必|希望|想让)\s*/u, '')
-      .replace(/^(?:请|麻烦|现在|直接|继续|只|仅|务必|必须|需要|实际|真正|确实|重新|帮我)\s*/u, '')
-    if (value !== before) prefixRemoved = true
-    if (prefixRemoved) value = value.replace(/^你\s*/u, '')
-    else value = value.replace(/^你\s*(?=(?:需要|必须|务必|希望|想让))/u, '')
-    if (value === before) break
-  }
-  return value
-}
-
-function isStatusDescription(action: string, remainder: string): boolean {
-  if (remainder.startsWith('-')) return true
-  if (/^[a-z]/iu.test(action)) {
-    return /^(?:\s+[\w@./:-]+){0,5}\s+(?:is|are|was|were|shows?|failed|succeeded|completed|enabled|open|closed|pending)\b/iu
-      .test(remainder)
-  }
-  return /^.{0,20}?(?:已|已经|曾经|当前|仍然)?(?:失败|成功|完成|开启|打开|关闭|待处理|运行中)$/u
-    .test(remainder.trim())
-}
-
-function effectForRequestedAction(action: string, remainder: string): RequestedExecutionClass {
-  if (isExternalObjectMutation(action, remainder)) return 'external_mutation'
-  if (/^(?:send|submit|upload|deploy|publish|发送|提交|上传|部署|发布)$/iu.test(action)) {
-    if (/^(?:publish|发布)$/iu.test(action) && requestsLocalDatasetPublication(remainder)) return 'local_write'
-    return 'external_mutation'
-  }
-  if (/^(?:edit|modify|create|delete|remove|update|install|implement|fix|patch|write|修改|编辑|新增|创建|新建|删除|移除|更新|安装|修复|实现|写入)$/iu.test(action)) {
-    return 'local_write'
-  }
-  if (/^(?:run|execute|执行|运行)$/iu.test(action)) {
-    return requestsCommandSurface(remainder) ? 'command_execution' : 'any_success'
-  }
-  return 'any_success'
-}
-
-function requestsLocalDatasetPublication(value: string): boolean {
-  if (!/(?:\bdatasets?\b|数据集|数据制品)/iu.test(value)) return false
-  return !/(?:\b(?:github|gitlab|hugging\s*face|registry|remote|server|cloud|repository)\b|远程|云端|仓库|服务器|注册表)/iu
-    .test(value)
-}
-
-/**
- * "Run/execute" often describes a tool-backed workflow rather than a shell
- * command (for example, "执行一次 Dataset 验收"). Requiring a command receipt
- * in that case rejects successful MCP receipts. Keep the stricter command
- * obligation only when the requested object names a command-oriented surface.
- */
-function requestsCommandSurface(value: string): boolean {
-  return /\b(?:tests?|checks?|commands?|scripts?|build|lint|typecheck|shell|terminal|server|service|process|binary|executable|npm|pnpm|yarn|vitest|jest|pytest)\b/iu.test(value) ||
-    /(?:测试|检查|命令|脚本|构建|编译|类型检查|终端|服务|进程|可执行文件)/u.test(value)
-}
-
-function isExternalObjectMutation(action: string, objectText: string): boolean {
-  return EXTERNAL_OBJECT_ACTIONS.has(action.toLowerCase()) && hasExternalObject(objectText)
-}
-
-function hasExternalObject(value: string): boolean {
-  const normalized = value.replace(/[_-]+/gu, ' ')
-  if (
-    /(?:^|\s)(?:file|report|summary|cache|cached|note|artifact|document|record|copy|folder|directory|code)(?:\s|$)/iu.test(normalized) ||
-    /(?:文件|报告|摘要|缓存|笔记|制品|文档|记录|副本|目录|代码)/u.test(normalized)
-  ) return false
-  return /(?:^|\s)(?:message|email|issue|ticket|pr|pull\s+request|comment|release)(?:\s|$)/iu.test(normalized) ||
-    /(?:消息|邮件|工单|议题|评论|发布项)/u.test(normalized)
-}
-
-function isExternalMutationToolName(name: string): boolean {
-  if (/(?:^|_)(?:send|submit|upload|deploy|publish)(?:_|$)/u.test(name)) return true
-  const match = name.match(/(?:^|_)(create|open|delete|remove|update)_(.+)$/u)
-  return Boolean(match && isExternalObjectMutation(match[1], match[2]))
-}
-
-function isExternalMutationCommand(command: string): boolean {
-  return command.split(/&&|\|\||[;|\n]/u).some((part) => {
-    const segment = part.trim()
-    if (!segment || /(?:^|\s)--(?:dry[-_]?run|preview|no[-_]?act|noop)(?:[=\s]|$)/iu.test(segment)) {
-      return false
-    }
-    const shortNoOp = /(?:^|\s)-n(?:\s|$)/u.test(segment) &&
-      /^(?:sudo\s+)?(?:git\b|(?:npm|pnpm|yarn)\b)/iu.test(segment)
-    if (shortNoOp) return false
-    return [
-      /^(?:sudo\s+)?(?:deploy|publish|submit|upload|send)(?:\s|$)/iu,
-      /^(?:sudo\s+)?git(?:\s+(?:-[a-z]\s+\S+|--[\w-]+(?:=\S+)?))*\s+push(?:\s|$)/iu,
-      /^(?:sudo\s+)?gh\s+(?:issue|pr|release)\s+(?:create|edit|delete|close|reopen|merge|upload)(?:\s|$)/iu,
-      /^(?:sudo\s+)?(?:docker|podman)\s+push(?:\s|$)/iu,
-      /^(?:sudo\s+)?kubectl\s+(?:apply|create|delete|patch|replace|set|rollout)(?:\s|$)/iu,
-      /^(?:npm|pnpm|yarn)\s+(?:run\s+)?(?:deploy|publish)(?:\s|$)/iu
-    ].some((pattern) => pattern.test(segment))
-  })
-}
-
 function effectClassesFromEvent(
   event: Extract<AgentRuntimeEvent, { kind: 'tool_event' | 'item_snapshot' }>,
-  toolName: string,
   meta: Record<string, unknown>
 ): ExecutionEffectClass[] {
   const toolKind = event.kind === 'tool_event' ? event.toolKind : event.item.toolKind
-  const name = normalizedToolName(toolName)
-  const argumentsValue = recordValue(meta.arguments)
-  const outputValue = recordValue(meta.output)
-  const delegatedName = delegatedMcpToolName(name, argumentsValue, outputValue)
-  const names = delegatedName ? [name, delegatedName] : [name]
-  const effects = new Set<ExecutionEffectClass>()
-  const isCommand = toolKind === 'command_execution' ||
-    names.some((value) => /(?:^|_)(?:local_shell|shell|bash|exec|execute_command)(?:_|$)/u.test(value))
-  if (isCommand) effects.add('command_execution')
-
-  const command = [
-    stringValue(meta.command),
-    stringValue(argumentsValue.command),
-    stringValue(argumentsValue.cmd)
-  ].filter(Boolean).join(' ')
-  const externalTool = names.some((value) => (
-    isExternalMutationToolName(value) && !isLocalDatasetWriteToolName(value)
-  ))
-  if (
-    toolKind === 'file_change' ||
-    (!externalTool && names.some(isLocalWriteToolName)) ||
-    (isCommand && /(?:^|\s)(?:apply_patch|rm|mv|cp|mkdir|touch|install)(?:\s|$)|(?:sed\s+-i|>>?|\btee\b|--(?:fix|write)\b)/iu.test(command))
-  ) {
-    effects.add('local_write')
-  }
-  if (externalTool || (isCommand && isExternalMutationCommand(command))) {
-    effects.add('external_mutation')
-  }
-  if (names.some((value) => /(?:^|_)(?:read|view|find|search|list|get|fetch|open)(?:_|$)/u.test(value))) {
-    effects.add('read')
-  }
+  const typedEffects = event.kind === 'tool_event' ? event.effects : event.item.effects
+  const declared = Array.isArray(typedEffects)
+    ? typedEffects
+    : Array.isArray(meta.effectClasses)
+      ? meta.effectClasses
+      : Array.isArray(meta.effects)
+        ? meta.effects
+        : []
+  const effects = new Set(declared.map(normalizedEffectClass).filter((effect): effect is ExecutionEffectClass => Boolean(effect)))
+  if (toolKind === 'command_execution') effects.add('command_execution')
+  if (toolKind === 'file_change') effects.add('local_write')
   return effects.size > 0 ? [...effects] : ['other']
 }
 
-function delegatedMcpToolName(
-  wrapperName: string,
-  argumentsValue: Record<string, unknown>,
-  outputValue: Record<string, unknown>
-): string {
-  if (wrapperName !== 'mcp_call') return ''
-  const candidate = stringValue(outputValue.toolName) ||
-    stringValue(outputValue.toolId) ||
-    stringValue(argumentsValue.toolName) ||
-    stringValue(argumentsValue.toolId)
-  const leaf = candidate.split('/').filter(Boolean).at(-1) ?? ''
-  return normalizedToolName(leaf)
-}
-
-function isLocalWriteToolName(name: string): boolean {
-  if (/(?:^|_)(?:apply_patch|write|edit|delete|remove|move|copy|mkdir|install)(?:_|$)/u.test(name)) {
-    return true
+function completionReceiptsFromEvent(
+  event: Extract<AgentRuntimeEvent, { kind: 'tool_event' | 'item_snapshot' }>,
+  callId: string
+): AgentRuntimeCompletionReceipt[] {
+  const value = event.kind === 'tool_event'
+    ? event.completionReceipts
+    : event.item.completionReceipts
+  if (!Array.isArray(value)) return []
+  const item = event.kind === 'tool_event' ? event : event.item
+  const meta = recordValue(item.meta)
+  const toolName = normalizedToolName(
+    event.kind === 'tool_event'
+      ? event.toolName || stringValue(meta.toolName) || stringValue(meta.name) || event.summary || ''
+      : stringValue(meta.toolName) || stringValue(meta.name) || item.summary || ''
+  )
+  const byId = new Map<string, AgentRuntimeCompletionReceipt>()
+  const conflicts = new Set<string>()
+  for (const candidate of value) {
+    const receipt = normalizedCompletionReceipt(candidate, callId)
+    if (!receipt || conflicts.has(receipt.receiptId)) continue
+    if (receipt.kind === 'visual.look' && toolName !== 'sciforge_look') continue
+    if (receipt.kind === 'visual.capture' && toolName !== 'sciforge_capture') continue
+    const prior = byId.get(receipt.receiptId)
+    if (prior && JSON.stringify(prior) !== JSON.stringify(receipt)) {
+      byId.delete(receipt.receiptId)
+      conflicts.add(receipt.receiptId)
+      continue
+    }
+    byId.set(receipt.receiptId, receipt)
   }
-  return isLocalDatasetWriteToolName(name)
+  return [...byId.values()]
 }
 
-function isLocalDatasetWriteToolName(name: string): boolean {
-  return /^dataset_(?:api_(?:register(?:_provider)?|metadata|raw_data)|prepare_plan|profile|filter|select_columns|transform|deduplicate|id_map(?:_provider)?|join|structure_(?:profile|validate)|graph_organize|validate|publish)$/u
-    .test(name)
+function normalizedCompletionReceipt(
+  value: unknown,
+  callId: string
+): AgentRuntimeCompletionReceipt | undefined {
+  const receipt = recordValue(value)
+  const kind = normalizedCompletionReceiptKind(receipt.kind)
+  const receiptId = stringValue(receipt.receiptId)
+  const issuer = stringValue(receipt.issuer)
+  const subjectRef = stringValue(receipt.subjectRef)
+  const createdAt = stringValue(receipt.createdAt)
+  if (
+    receipt.contractVersion !== 'completion-receipt.v1' ||
+    receipt.status !== 'satisfied' ||
+    !kind ||
+    !/^[A-Za-z][A-Za-z0-9_-]{7,255}$/u.test(receiptId) ||
+    !issuer ||
+    stringValue(receipt.callId) !== callId ||
+    !subjectRef ||
+    !createdAt ||
+    !Number.isFinite(Date.parse(createdAt))
+  ) return undefined
+  const relatedRefs = normalizedStringArray(receipt.relatedRefs)
+  const parentReceiptIds = normalizedStringArray(receipt.parentReceiptIds)
+  const attestation = stringValue(receipt.attestation)
+  const sha256 = stringValue(receipt.sha256)
+  if (attestation && !/^sha256:[a-f0-9]{64}$/u.test(attestation)) return undefined
+  if (sha256 && !/^[a-f0-9]{64}$/u.test(sha256)) return undefined
+  return {
+    contractVersion: 'completion-receipt.v1',
+    receiptId,
+    kind,
+    status: 'satisfied',
+    issuer,
+    callId,
+    subjectRef,
+    ...(relatedRefs.length ? { relatedRefs } : {}),
+    ...(parentReceiptIds.length ? { parentReceiptIds } : {}),
+    ...(attestation ? { attestation } : {}),
+    ...(sha256 ? { sha256 } : {}),
+    createdAt
+  }
+}
+
+function normalizedStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map(stringValue).filter(Boolean))].slice(0, 128)
 }
 
 function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined {
@@ -833,6 +947,17 @@ function normalizedEffectClass(value: unknown): ExecutionEffectClass | undefined
   ) {
     return effect
   }
+  return undefined
+}
+
+function normalizedCompletionReceiptKind(
+  value: unknown
+): AgentRuntimeCompletionReceiptKind | undefined {
+  if (
+    value === 'visual.look' ||
+    value === 'visual.capture' ||
+    value === 'artifact.reference-validation'
+  ) return value
   return undefined
 }
 
@@ -873,7 +998,7 @@ function failedCompletion(
 }
 
 function isIntegrityMarker(text: string): boolean {
-  return text.includes(EXECUTION_INTEGRITY_MARKER) || text.includes('Runtime-enforced visual completion gate:')
+  return text.includes(EXECUTION_INTEGRITY_MARKER)
 }
 
 function executionKey(runtimeId: AgentRuntimeId, threadId: string, turnId: string): string {

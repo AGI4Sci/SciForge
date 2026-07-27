@@ -20,6 +20,12 @@ export const REMOTE_CHANNEL_WEIXIN_INBOUND_MESSAGE_HEADING = '[WeChat inbound me
 export const REMOTE_CHANNEL_ZULIP_INBOUND_MESSAGE_HEADING = '[Zulip inbound message]'
 export const SCHEDULE_CURRENT_USER_REQUEST_HEADING = '[Current scheduled task]'
 export const SCHEDULE_MANAGED_INSTRUCTIONS_HEADING = '[Schedule managed instructions]'
+export const REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH = 4_000
+export const REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH = 128
+export const REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH = 512
+export const REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH = 256
+export const REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH = 512
+export const REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH = 128
 
 const REMOTE_CHANNEL_SKILL_POLICY_PREFIX = 'Remote channel skill policy:'
 
@@ -188,15 +194,32 @@ export function normalizeRemoteChannelLastFailure(input: unknown, fallbackProvid
   const raw = typeof input === 'object' && input !== null && !Array.isArray(input)
     ? input as Record<string, unknown>
     : {}
-  const message = typeof raw.message === 'string' ? raw.message.trim().slice(0, 4_000) : ''
+  const message = typeof raw.message === 'string'
+    ? raw.message.trim().slice(0, REMOTE_CHANNEL_FAILURE_MESSAGE_MAX_LENGTH)
+    : ''
   if (!message) return undefined
   const now = new Date().toISOString()
-  const failureKind = typeof raw.failureKind === 'string' ? raw.failureKind.trim().slice(0, 128) : ''
-  const failureTitle = typeof raw.failureTitle === 'string' ? raw.failureTitle.trim().slice(0, 512) : ''
-  const channelId = typeof raw.channelId === 'string' ? raw.channelId.trim().slice(0, 256) : ''
-  const chatId = typeof raw.chatId === 'string' ? raw.chatId.trim().slice(0, 512) : ''
-  const remoteThreadId = typeof raw.remoteThreadId === 'string' ? raw.remoteThreadId.trim().slice(0, 512) : ''
-  const threadId = typeof raw.threadId === 'string' ? raw.threadId.trim().slice(0, 512) : ''
+  const failureKind = typeof raw.failureKind === 'string'
+    ? raw.failureKind.trim().slice(0, REMOTE_CHANNEL_FAILURE_KIND_MAX_LENGTH)
+    : ''
+  const failureTitle = typeof raw.failureTitle === 'string'
+    ? raw.failureTitle.trim().slice(0, REMOTE_CHANNEL_FAILURE_TITLE_MAX_LENGTH)
+    : ''
+  const channelId = typeof raw.channelId === 'string'
+    ? raw.channelId.trim().slice(0, REMOTE_CHANNEL_FAILURE_CHANNEL_ID_MAX_LENGTH)
+    : ''
+  const chatId = typeof raw.chatId === 'string'
+    ? raw.chatId.trim().slice(0, REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH)
+    : ''
+  const remoteThreadId = typeof raw.remoteThreadId === 'string'
+    ? raw.remoteThreadId.trim().slice(0, REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH)
+    : ''
+  const threadId = typeof raw.threadId === 'string'
+    ? raw.threadId.trim().slice(0, REMOTE_CHANNEL_FAILURE_THREAD_ID_MAX_LENGTH)
+    : ''
+  const occurredAt = typeof raw.occurredAt === 'string'
+    ? raw.occurredAt.trim().slice(0, REMOTE_CHANNEL_FAILURE_OCCURRED_AT_MAX_LENGTH)
+    : ''
   return {
     provider: raw.provider === 'feishu' || raw.provider === 'weixin' || raw.provider === 'discord' || raw.provider === 'zulip'
       ? raw.provider
@@ -211,7 +234,7 @@ export function normalizeRemoteChannelLastFailure(input: unknown, fallbackProvid
     ...(raw.runtimeId === 'codex' || raw.runtimeId === 'claude' || raw.runtimeId === 'sciforge'
       ? { runtimeId: raw.runtimeId }
       : {}),
-    occurredAt: typeof raw.occurredAt === 'string' && raw.occurredAt ? raw.occurredAt : now
+    occurredAt: occurredAt || now
   }
 }
 
@@ -231,7 +254,7 @@ export function normalizeAgentThreadIds(input: unknown): AgentThreadIdsV1 {
 
 export function normalizeSettingsRuntimeId(value: unknown): AgentRuntimeId {
   if (value === 'sciforge' || value === 'codex' || value === 'claude') return value
-  return 'sciforge'
+  return 'codex'
 }
 
 export function normalizeRemoteChannelConversation(

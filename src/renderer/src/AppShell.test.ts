@@ -1,7 +1,7 @@
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import AppShell, { RouteFallback } from './AppShell'
+import AppShell, { PersistentWorkbenchRoutes, RouteFallback } from './AppShell'
 
 describe('AppShell', () => {
   afterEach(() => {
@@ -25,5 +25,18 @@ describe('AppShell', () => {
 
     expect(html).toContain('Restoring workspace')
     expect(html).toContain('bg-ds-card')
+  })
+
+  it('keeps the Workbench mounted behind Settings', () => {
+    const html = renderToStaticMarkup(createElement(PersistentWorkbenchRoutes, {
+      route: 'settings',
+      workbench: createElement('span', null, 'persistent-workbench'),
+      settings: createElement('span', null, 'settings-view')
+    }))
+
+    expect(html).toContain('persistent-workbench')
+    expect(html).toContain('settings-view')
+    expect(html).toContain('aria-hidden="true"')
+    expect(html).toContain('inert=""')
   })
 })

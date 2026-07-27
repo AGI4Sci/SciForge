@@ -7,14 +7,16 @@ const MAX_ARGUMENT_STRING_CHARS = 6_000;
 const MAX_ARGUMENT_ARRAY_ITEMS = 32;
 const ARGUMENT_ARRAY_PREVIEW_ITEMS = 6;
 const MARKER_KEY = '__sciforge_request_hygiene__';
-const OMITTED_SHELL_COMMAND = ': # sciforge request hygiene omitted prior shell command; inspect paired tool result';
+const OMITTED_SHELL_COMMAND =
+  'false # sciforge history metadata only; prior shell command omitted; do not execute or reuse; create a fresh smaller command';
 
-export function hygienizeChatProviderBody(body: Record<string, unknown>): Record<string, unknown> {
-  return hygienizeValue(body, { source: 'chat_request' }) as Record<string, unknown>;
+export function hygienizeModelRequestBody(body: Record<string, unknown>): Record<string, unknown> {
+  return hygienizeValue(body, { source: 'model_request' }) as Record<string, unknown>;
 }
 
 function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (typeof value === 'string') {
+    if (isOpaqueResponsesContinuationState(context)) return value;
     if (context.key === 'arguments') return hygienizeToolArguments(value, sourceForContext(context, 'tool_call.arguments'));
     return hygienizeText(value, context);
   }
@@ -29,15 +31,28 @@ function hygienizeValue(value: unknown, context: HygieneContext): unknown {
   if (isStructuredImagePart(value)) return value;
 
   const role = stringField(value.role);
+  const recordType = stringField(value.type) || context.recordType;
   const out: JsonRecord = {};
   for (const [key, entry] of Object.entries(value)) {
-    out[key] = hygienizeValue(entry, {
+    const hygienized = hygienizeValue(entry, {
       key,
       role,
+      recordType,
       source: sourceForRecordEntry(context, role, key),
+    });
+    Object.defineProperty(out, key, {
+      configurable: true,
+      enumerable: true,
+      value: hygienized,
+      writable: true,
     });
   }
   return out;
+}
+
+function isOpaqueResponsesContinuationState(context: HygieneContext): boolean {
+  return context.key === 'encrypted_content'
+    && (context.recordType === 'reasoning' || context.recordType === 'compaction');
 }
 
 function hygienizeToolArguments(value: string, source: string): string {
@@ -53,6 +68,7 @@ function hygienizeToolArguments(value: string, source: string): string {
 function hygienizeArgumentValue(value: unknown, source: string): unknown {
   if (typeof value === 'string') {
     const text = replaceEncodedPayloads(value, source);
+    if (isShellCommandSource(source) && isShellHistoryPlaceholder(text)) return OMITTED_SHELL_COMMAND;
     if (text.length <= MAX_ARGUMENT_STRING_CHARS) return text;
     if (isShellCommandSource(source)) return OMITTED_SHELL_COMMAND;
     return markerText(source, 'large_argument_string', value, safeSummary(text));
@@ -75,19 +91,34 @@ function hygienizeArgumentValue(value: unknown, source: string): unknown {
 }
 
 function isShellCommandSource(source: string): boolean {
-  return /(?:^|\.)(?:cmd|command)$/u.test(source);
+  return /(?:^|\.)(?:cmd|command|shell_command|shellcommand)$/iu.test(source);
+}
+
+function isShellHistoryPlaceholder(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith('[cache hygiene:') ||
+    trimmed.startsWith('[sciforge request_hygiene') ||
+    /^(?::|false)\s*#\s*sciforge\s+(?:history metadata only|history omitted prior (?:bash|shell) command|request hygiene omitted prior shell command)\b/iu.test(trimmed)
+  );
 }
 
 function hygienizeText(value: string, context: HygieneContext): string {
   const source = sourceForContext(context, context.source);
-  if (context.role === 'tool' && context.key === 'content' && value.length > MAX_TOOL_OUTPUT_CHARS) {
+  if (isToolOutputContext(context) && value.length > MAX_TOOL_OUTPUT_CHARS) {
     return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaceEncodedPayloads(value, 'tool_message.content')));
   }
   const replaced = replaceEncodedPayloads(value, source);
-  if (context.role === 'tool' && context.key === 'content' && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
+  if (isToolOutputContext(context) && replaced.length > MAX_TOOL_OUTPUT_CHARS) {
     return markerText('tool_message.content', 'large_tool_output', value, safeSummary(replaced));
   }
   return replaced;
+}
+
+function isToolOutputContext(context: HygieneContext): boolean {
+  return (context.role === 'tool' && context.key === 'content')
+    || (context.recordType === 'function_call_output' && context.key === 'output')
+    || (context.recordType === 'tool_result' && context.key === 'content');
 }
 
 function replaceEncodedPayloads(value: string, source: string): string {
@@ -189,5 +220,6 @@ function stringField(value: unknown) {
 type HygieneContext = {
   key?: string;
   role?: string;
+  recordType?: string;
   source: string;
 };

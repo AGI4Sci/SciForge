@@ -8,7 +8,6 @@ import {
   defaultCodexRuntimeSettings,
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
-  defaultModelProviderSettings,
   defaultModelRouterSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
@@ -29,7 +28,6 @@ function settings(channel: RemoteChannelV1): AppSettingsV1 {
     locale: 'en',
     theme: 'system',
     uiFontScale: 'small',
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     activeAgentRuntime: 'sciforge',
     agents: {

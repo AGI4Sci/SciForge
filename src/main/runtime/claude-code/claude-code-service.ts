@@ -1,5 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import {
+  ExecutionGovernorCore,
+  createExecutionReceipt
+} from '@sciforge/execution-governance'
 import type {
+  HookCallback,
   Options as ClaudeAgentSdkOptions,
   Query as ClaudeAgentSdkQuery,
   SDKMessage,
@@ -11,6 +16,7 @@ import type {
   AgentRuntimeChild,
   AgentRuntimeChildStatus,
   AgentRuntimeChildTranscriptEntry,
+  AgentRuntimeExecutionReceipt,
   AgentRuntimeListThreadChildrenResponse,
   AgentRuntimeReadChildTranscriptResponse,
   AgentRuntimeEvent,
@@ -25,6 +31,7 @@ import {
   filterAgentRuntimeThreadChildren
 } from '../../../shared/agent-runtime-contract'
 import {
+  resolveModelAccessRuntimePolicy,
   resolveRuntimeModelRouterSettings,
   type AppSettingsV1
 } from '../../../shared/app-settings'
@@ -35,7 +42,15 @@ import {
 import {
   isComputerUseMcpConfigured,
 } from '../../computer-use-mcp-config'
-import type { GuiMcpRegistryInput } from '../../gui-mcp-registry'
+import {
+  nativeAgentToolExecutionMetadata,
+  type AgentRuntimeToolSurface
+} from '../agent-runtime/agent-tool-surface'
+import type {
+  AgentRuntimeTurnGovernanceSnapshot,
+  AgentRuntimeTurnGovernanceSnapshotInput
+} from '../agent-runtime/adapter'
+import { createClaudeCodeAgentToolTransport } from './claude-code-agent-tool-transport'
 import { ClaudeCodeSessionStore } from './claude-code-session-store'
 import {
   ClaudeCodeEventStore,
@@ -56,7 +71,7 @@ export type ClaudeCodeRuntimeServiceOptions = {
   settings: () => Promise<AppSettingsV1>
   storageRoot: string
   managedConfigDir?: string
-  managedMcp?: Omit<GuiMcpRegistryInput, 'settings'>
+  agentTools?: AgentRuntimeToolSurface
   claudeAgentSdk?: ClaudeAgentSdk
 }
 
@@ -132,12 +147,41 @@ type ClaudeToolResult = {
   fingerprint: string
 }
 
+function terminalExecutionReceipt<Status extends 'success' | 'error'>(
+  status: Status,
+  output: unknown,
+  detail: string,
+  metadata?: Record<string, unknown>
+): AgentRuntimeExecutionReceipt & { status: Status } {
+  return createExecutionReceipt({ status, output, detail, metadata })
+}
+
+function appendClaudePreToolUseHook(
+  hooks: ClaudeAgentSdkOptions['hooks'],
+  hook: HookCallback
+): NonNullable<ClaudeAgentSdkOptions['hooks']> {
+  return {
+    ...hooks,
+    PreToolUse: [
+      ...(hooks?.PreToolUse ?? []),
+      {
+        hooks: [hook]
+      }
+    ]
+  }
+}
+
+function turnGovernanceKey(threadId: string, turnId: string): string {
+  return `${threadId.trim()}\u0000${turnId.trim()}`
+}
+
 export class ClaudeCodeRuntimeService {
   private readonly sdk: ClaudeAgentSdk
   private readonly threadStore: ClaudeCodeThreadStore
   private readonly eventStore: ClaudeCodeEventStore
   private readonly sessionStore: ClaudeCodeSessionStore
   private readonly activeTurns = new Map<string, ActiveClaudeTurn>()
+  private readonly turnGovernanceSnapshots = new Map<string, AgentRuntimeTurnGovernanceSnapshot>()
   private readonly eventSubscribers = new Set<ClaudeRuntimeEventSubscriber>()
   private readonly childState = new Map<string, AgentRuntimeChild>()
 
@@ -149,16 +193,13 @@ export class ClaudeCodeRuntimeService {
   }
 
   isComputerUseMcpConfigured(settings?: AppSettingsV1): boolean {
-    return Boolean(
-      settings &&
-      this.options.managedMcp?.computerUseMcp &&
-      isComputerUseMcpConfigured(settings, 'claude')
-    )
+    return isComputerUseMcpConfigured(settings, 'claude')
   }
 
   async connect(): Promise<ClaudeCodeConnectResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const runtime = settings.agents.claude
       const command = runtime?.command?.trim() || 'claude'
       return { ok: true, info: { command, sdk: '@anthropic-ai/claude-agent-sdk' } }
@@ -196,6 +237,7 @@ export class ClaudeCodeRuntimeService {
   }): Promise<ClaudeCodeThreadStartResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const workspace = resolveClaudeWorkspace(settings, payload.workspace)
       const model = resolveRuntimeModelRouterSettings(settings).model
       const thread = await this.threadStore.upsert({
@@ -251,9 +293,12 @@ export class ClaudeCodeRuntimeService {
     displayText?: string
     workspace?: string
     reasoningEffort?: string
+    ownedVisualToolsAvailable?: boolean
+    nativeVisualProofChainPending?: boolean
   }): Promise<ClaudeCodeTurnStartResult> {
     try {
       const settings = await this.options.settings()
+      requireClaudeRuntimeSelected(settings)
       const existingThread = await this.threadStore.get(payload.threadId)
       const workspace = resolveClaudeWorkspace(settings, payload.workspace || existingThread?.workspace)
       const turnId = `claude-turn-${randomUUID()}`
@@ -262,11 +307,12 @@ export class ClaudeCodeRuntimeService {
       const launch = await prepareClaudeCodeSdkLaunch({
         settings,
         text: payload.text,
+        threadId: payload.threadId,
+        turnId,
         workspace,
         sessionId: existingThread?.claudeSessionId,
         reasoningEffort: payload.reasoningEffort,
-        managedConfigDir: this.options.managedConfigDir,
-        managedMcp: this.options.managedMcp
+        managedConfigDir: this.options.managedConfigDir
       })
       const storedThread = await this.threadStore.upsert({
         guiThreadId: payload.threadId,
@@ -305,17 +351,51 @@ export class ClaudeCodeRuntimeService {
         }
       })
       const abortController = new AbortController()
-      const query = this.sdk.query({
-        prompt: launch.prompt,
-        options: {
-          ...launch.sdkOptions,
-          abortController,
-          forwardSubagentText: true,
-          agentProgressSummaries: true,
-          sessionStore: this.sessionStore,
-          sessionStoreFlush: 'eager'
-        }
-      })
+      const agentToolServer = this.options.agentTools
+        ? createClaudeCodeAgentToolTransport({
+            surface: this.options.agentTools,
+            context: {
+              runtimeId: 'claude',
+              threadId: payload.threadId,
+              turnId,
+              workspaceId: workspace,
+              requestId: turnId
+            }
+          })
+        : undefined
+      const governanceKey = turnGovernanceKey(payload.threadId, turnId)
+      this.turnGovernanceSnapshots.set(governanceKey, Object.freeze({
+        ownedVisualToolsAvailable: payload.ownedVisualToolsAvailable === true,
+        nativeVisualProofChainPending: payload.nativeVisualProofChainPending === true
+      }))
+      let query: ClaudeAgentSdkQuery
+      try {
+        query = this.sdk.query({
+          prompt: launch.prompt,
+          options: {
+            ...launch.sdkOptions,
+            hooks: appendClaudePreToolUseHook(
+              launch.sdkOptions.hooks,
+              this.createPreToolUseGovernanceHook({
+                threadId: payload.threadId,
+                turnId,
+                workspace
+              })
+            ),
+            ...(agentToolServer
+              ? { mcpServers: { sciforge_runtime_tools: agentToolServer } }
+              : {}),
+            abortController,
+            forwardSubagentText: true,
+            agentProgressSummaries: true,
+            sessionStore: this.sessionStore,
+            sessionStoreFlush: 'eager'
+          }
+        })
+      } catch (error) {
+        this.turnGovernanceSnapshots.delete(governanceKey)
+        throw error
+      }
       this.activeTurns.set(payload.threadId, {
         threadId: payload.threadId,
         turnId,
@@ -344,10 +424,12 @@ export class ClaudeCodeRuntimeService {
     try {
       const active = this.activeTurns.get(threadId)
       if (!active || active.turnId !== turnId) return { ok: true }
+      this.options.agentTools?.abortTurn?.({ runtimeId: 'claude', threadId, turnId }, 'user_stop')
       active.abortController.abort()
       active.query.close?.()
       await this.completeTurn(threadId, turnId, 'aborted', 'Claude Code turn interrupted.')
       this.activeTurns.delete(threadId)
+      this.turnGovernanceSnapshots.delete(turnGovernanceKey(threadId, turnId))
       return { ok: true }
     } catch (error) {
       return failure(error)
@@ -361,6 +443,16 @@ export class ClaudeCodeRuntimeService {
       code: 'capability_unavailable',
       recoverable: true
     }
+  }
+
+  updateTurnGovernanceSnapshot(input: AgentRuntimeTurnGovernanceSnapshotInput): void {
+    if (input.runtimeId !== 'claude') return
+    const active = this.activeTurns.get(input.threadId)
+    if (!active || active.turnId !== input.turnId) return
+    this.turnGovernanceSnapshots.set(
+      turnGovernanceKey(input.threadId, input.turnId),
+      Object.freeze({ ...input.snapshot })
+    )
   }
 
   async renameThread(threadId: string, title: string): Promise<ClaudeCodeTurnMutationResult> {
@@ -388,6 +480,7 @@ export class ClaudeCodeRuntimeService {
         active.query.close?.()
       }
       this.activeTurns.delete(threadId)
+      this.deleteThreadGovernanceSnapshots(threadId)
       await this.threadStore.delete(threadId)
       return { ok: true }
     } catch (error) {
@@ -604,11 +697,66 @@ export class ClaudeCodeRuntimeService {
       active.query.close?.()
     }
     this.activeTurns.clear()
+    this.turnGovernanceSnapshots.clear()
     for (const subscriber of this.eventSubscribers) {
       subscriber.closed = true
       subscriber.wake?.()
     }
     this.eventSubscribers.clear()
+  }
+
+  private createPreToolUseGovernanceHook(input: {
+    threadId: string
+    turnId: string
+    workspace: string
+  }): HookCallback {
+    const governor = new ExecutionGovernorCore({ workspace: input.workspace })
+    return async (hookInput, toolUseId) => {
+      if (hookInput.hook_event_name !== 'PreToolUse') return {}
+      const snapshot = this.turnGovernanceSnapshots.get(
+        turnGovernanceKey(input.threadId, input.turnId)
+      )
+      if (!snapshot) {
+        return {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+            permissionDecisionReason: [
+              'native_visual_governance_unavailable:',
+              'The Host-owned turn governance snapshot is unavailable, so Claude tool dispatch is denied.'
+            ].join(' ')
+          }
+        }
+      }
+      const decision = governor.inspectAttempt({
+        callId: toolUseId?.trim() || hookInput.tool_use_id.trim(),
+        toolName: hookInput.tool_name,
+        arguments: recordValue(hookInput.tool_input)
+      }, {
+        workspace: input.workspace,
+        ownedVisualToolsAvailable: snapshot.ownedVisualToolsAvailable,
+        nativeVisualProofChainPending: snapshot.nativeVisualProofChainPending
+      })
+      if (decision.action !== 'deny') return {}
+      return {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: [
+            `${decision.code ?? 'execution_policy_denied'}: ` +
+              `${decision.reason ?? 'Execution governance rejected this tool call.'}`,
+            decision.guidance
+          ].filter(Boolean).join(' ')
+        }
+      }
+    }
+  }
+
+  private deleteThreadGovernanceSnapshots(threadId: string): void {
+    const prefix = `${threadId.trim()}\u0000`
+    for (const key of this.turnGovernanceSnapshots.keys()) {
+      if (key.startsWith(prefix)) this.turnGovernanceSnapshots.delete(key)
+    }
   }
 
   private async runClaudeTurn(options: {
@@ -637,6 +785,7 @@ export class ClaudeCodeRuntimeService {
       if (this.activeTurns.get(options.threadId)?.turnId !== options.turnId) return
       await this.finalizeToolExecutions(options.threadId, options.turnId, state)
       this.activeTurns.delete(options.threadId)
+      this.turnGovernanceSnapshots.delete(turnGovernanceKey(options.threadId, options.turnId))
       await this.completeTurn(options.threadId, options.turnId, state.terminalState, state.terminalMessage)
     } catch (error) {
       if (this.activeTurns.get(options.threadId)?.turnId !== options.turnId) return
@@ -875,19 +1024,28 @@ export class ClaudeCodeRuntimeService {
     state: ClaudeSdkTurnState
   }): Promise<void> {
     input.state.toolResultFingerprints.set(input.callId, input.result.fingerprint)
+    const nativeExecution = input.result.isError
+      ? { effects: [], completionReceipts: [] }
+      : nativeAgentToolExecutionMetadata({
+          tool: input.toolUse.name,
+          value: nativeAgentToolResultValue(input.result.payload, input.toolUse.name)
+        }, input.callId)
     const error = input.result.isError
       ? {
           code: 'claude_tool_error',
           message: input.result.detail || `Claude tool ${input.toolUse.name} failed.`
         }
       : null
-    await this.emit({
+    const event = {
       threadId: input.threadId,
       turnId: input.turnId,
-      kind: 'tool_event',
+      kind: 'tool_event' as const,
       itemId: input.callId,
-      status: input.result.isError ? 'error' : 'success',
       toolKind: toolKindFromName(input.toolUse.name),
+      ...(nativeExecution.effects.length ? { effects: nativeExecution.effects } : {}),
+      ...(nativeExecution.completionReceipts.length
+        ? { completionReceipts: nativeExecution.completionReceipts }
+        : {}),
       summary: `Claude Code tool result: ${input.toolUse.name}`,
       detail: input.result.detail,
       meta: {
@@ -902,7 +1060,23 @@ export class ClaudeCodeRuntimeService {
         error,
         ...(input.result.payload ? { output: input.result.payload } : {})
       }
-    })
+    }
+    const output = input.result.payload ?? input.result.content
+    if (input.result.isError) {
+      await this.emit({
+        ...event,
+        status: 'error',
+        receipt: terminalExecutionReceipt('error', output, input.result.detail, {
+          errorCode: error?.code
+        })
+      })
+    } else {
+      await this.emit({
+        ...event,
+        status: 'success',
+        receipt: terminalExecutionReceipt('success', output, input.result.detail)
+      })
+    }
     if (input.result.payload) {
       await this.emitChildFromToolResult({
         threadId: input.threadId,
@@ -934,6 +1108,9 @@ export class ClaudeCodeRuntimeService {
       kind: 'tool_event',
       itemId: input.callId,
       status: 'error',
+      receipt: terminalExecutionReceipt('error', undefined, input.message, {
+        errorCode: 'claude_tool_result_conflict'
+      }),
       toolKind: toolKindFromName(input.toolName),
       summary: `Claude Code tool unresolved: ${input.toolName}`,
       detail: input.message,
@@ -969,6 +1146,9 @@ export class ClaudeCodeRuntimeService {
         kind: 'tool_event',
         itemId: callId,
         status: 'error',
+        receipt: terminalExecutionReceipt('error', undefined, message, {
+          errorCode: 'claude_tool_result_missing'
+        }),
         toolKind: toolKindFromName(toolUse.name),
         summary: `Claude Code tool unresolved: ${toolUse.name}`,
         detail: message,
@@ -996,6 +1176,12 @@ export class ClaudeCodeRuntimeService {
         kind: 'tool_event',
         itemId: callId,
         status: 'error',
+        receipt: terminalExecutionReceipt(
+          'error',
+          result.payload ?? result.content,
+          result.detail || message,
+          { errorCode: 'claude_tool_use_missing' }
+        ),
         toolKind: 'tool_call',
         summary: 'Claude Code tool result unresolved',
         detail: result.detail || message,
@@ -1516,6 +1702,7 @@ export class ClaudeCodeRuntimeService {
     if (this.activeTurns.get(threadId)?.turnId === turnId) {
       this.activeTurns.delete(threadId)
     }
+    this.turnGovernanceSnapshots.delete(turnGovernanceKey(threadId, turnId))
     const message = error instanceof Error ? error.message : String(error)
     await this.emit({
       threadId,
@@ -1546,6 +1733,14 @@ export class ClaudeCodeRuntimeService {
       subscriber.wake?.()
     }
     return stored
+  }
+}
+
+function requireClaudeRuntimeSelected(settings: AppSettingsV1): void {
+  if (!resolveModelAccessRuntimePolicy(settings).claude) {
+    throw new Error(
+      'Claude Code requires API model access and must be the selected Agent runtime.'
+    )
   }
 }
 
@@ -1598,6 +1793,16 @@ function parseToolResultPayload(content: unknown): Record<string, unknown> {
   } catch {
     return {}
   }
+}
+
+function nativeAgentToolResultValue(
+  payload: Record<string, unknown> | undefined,
+  toolName: string
+): unknown {
+  if (!payload) return undefined
+  return payload.tool === toolName && Object.prototype.hasOwnProperty.call(payload, 'value')
+    ? payload.value
+    : payload
 }
 
 function firstRecord(...records: Record<string, unknown>[]): Record<string, unknown> | null {

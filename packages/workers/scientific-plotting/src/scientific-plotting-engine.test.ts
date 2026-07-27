@@ -680,6 +680,72 @@ describe('scientific plotting engine', () => {
     }
   }, 60_000)
 
+  it('maps the route-locked VisualScene through the same schematic renderer', async () => {
+    const workspace = await tempWorkspace()
+    try {
+      const scene = {
+        version: 1 as const,
+        coordinateSystem: 'normalized' as const,
+        canvas: { width: 1200, height: 700 },
+        layers: [{
+          id: 'truth',
+          owner: 'code' as const,
+          primitives: [
+            { id: 'start', type: 'circle' as const, x: 0.25, y: 0.5, radius: 0.1, fill: '#3366CC' },
+            { id: 'end', type: 'triangle' as const, x: 0.75, y: 0.5, width: 0.2, height: 0.2, fill: '#DC3912' },
+            { id: 'flow', type: 'arrow' as const, x1: 0.38, y1: 0.5, x2: 0.62, y2: 0.5 }
+          ]
+        }]
+      }
+      const mapping = await mapScientificPlottingDataEngine({
+        workspaceRoot: workspace,
+        task: 'Render the supplied exact vector scene.',
+        data: scene,
+        visualPlan: {
+          ...CONTROLLED_PLOT_PLAN,
+          reproducibleInputs: [],
+          lockedElements: [],
+          scene
+        }
+      })
+
+      expect(mapping).toMatchObject({
+        ok: true,
+        selectedTemplate: 'schematic-grid',
+        renderRequest: {
+          template: 'schematic-grid',
+          data: {
+            primitives: expect.arrayContaining([
+              expect.objectContaining({ id: 'start', type: 'circle' }),
+              expect.objectContaining({ id: 'flow', type: 'arrow' })
+            ])
+          },
+          reviewTask: 'Render the supplied exact vector scene.'
+        }
+      })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects raw vector-scene data outside the unified VisualScene handoff', async () => {
+    const workspace = await tempWorkspace()
+    try {
+      const mapping = await mapScientificPlottingData({
+        workspaceRoot: workspace,
+        task: 'Render a vector scene.',
+        data: { primitives: [{ type: 'circle', x: 0.5, y: 0.5, radius: 0.1 }] }
+      })
+      expect(mapping).toMatchObject({
+        ok: false,
+        status: 'invalid_request',
+        missingInputs: ['visualPlan.scene']
+      })
+    } finally {
+      await rm(workspace, { recursive: true, force: true })
+    }
+  })
+
   it('renders print-scale PNGs without changing the plotting data contract', async () => {
     const status = await getScientificPlottingStatus()
     if (!status.ok || !status.renderer.available) {
@@ -926,6 +992,7 @@ describe('scientific plotting engine', () => {
 
       const result = await compositeScientificPlotLayers({
         workspaceRoot: workspace,
+        reviewTask: 'Review the composed hybrid artifact.',
         visualPlan: {
           ...CONTROLLED_PLOT_PLAN,
           route: 'hybrid',
@@ -1079,7 +1146,7 @@ describe('scientific plotting engine', () => {
         },
         data: {
           nodes: [
-            { id: 'ra', label: 'RA gradient', x: 0.18, y: 0.5, color: '#2166AC' },
+            { id: 'ra', label: 'RA gradient', x: 0.18, y: 0.5, shape: 'circle', color: '#2166AC' },
             {
               id: 'rar',
               label: 'RAR/RXR\nlicensing context\nnode',
@@ -1091,7 +1158,12 @@ describe('scientific plotting engine', () => {
               maxLines: 4,
               color: '#4DAF4A'
             },
-            { id: 'stra8', label: 'STRA8/MEIOSIN trigger', x: 0.78, y: 0.5, color: '#D6604D' }
+            { id: 'stra8', label: 'STRA8/MEIOSIN trigger', x: 0.78, y: 0.5, shape: 'triangle', color: '#D6604D' }
+          ],
+          primitives: [
+            { type: 'ellipse', x: 0.5, y: 0.18, width: 0.22, height: 0.08, fill: '#F0F0F0', stroke: '#333333' },
+            { type: 'line', x1: 0.3, y1: 0.82, x2: 0.7, y2: 0.82, stroke: '#333333', strokeWidth: 1.5 },
+            { type: 'text', x: 0.5, y: 0.88, text: 'Regulatory axis', fontSize: 8 }
           ],
           edges: [
             { source: 'ra', target: 'rar', label: 'binds' },
@@ -1110,6 +1182,7 @@ describe('scientific plotting engine', () => {
       expect(schematicWithAliasEdges.attempts[0]?.rendererDiagnostics).toMatchObject({
         schematicNodeCount: 3,
         schematicEdgeCount: 2,
+        schematicPrimitiveCount: 3,
         schematicExplicitPositions: true
       })
 
@@ -1671,7 +1744,7 @@ describe('scientific plotting engine', () => {
           referencePath: result.croppedImagePath,
           suggestedPlanTool: 'visual_generate',
           suggestedRenderTool: 'scientific_plotting_render',
-          suggestedReviewTool: 'visual_artifact_review'
+          suggestedReviewTool: 'image_generation_review_candidate'
         }
       })
       const manifest = JSON.parse(await readFile(result.referenceManifestPath, 'utf8')) as {

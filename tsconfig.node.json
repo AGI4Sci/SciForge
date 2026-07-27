@@ -12,8 +12,6 @@
     "electron.vite.config.ts",
     "src/main/**/*",
     "src/preload/**/*",
-    "src/shared/**/*",
-    "packages/workers/evidence-dag/desktop/**/*",
-    "packages/workers/project-dag/desktop/**/*"
+    "src/shared/**/*"
   ]
 }

@@ -11,6 +11,7 @@ import {
   deriveRemoteChannelThreadStatusKind,
   hydrateBlockModelLabels,
   isRemoteChannelThread,
+  mergeComposerPickList,
   newRemoteChannel,
   normalizeTurnModelMap,
   rememberTurnModel,
@@ -81,6 +82,13 @@ describe('chat-store remote-channel helpers', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('uses only the public models returned by the upstream model catalog', () => {
+    expect(mergeComposerPickList(false, ['sciforge-router'])).toEqual([])
+    expect(mergeComposerPickList(true, [' sciforge-router ', 'sciforge-router', ''])).toEqual([
+      'sciforge-router'
+    ])
   })
 
   it('compacts code workspace roots while excluding write, temporary, and remote-channel roots', () => {
@@ -258,8 +266,10 @@ describe('chat-store remote-channel helpers', () => {
 
     expect(feishu.label).toBe('feishu agent')
     expect(feishu.agentProfile.name).toBe('feishu agent')
+    expect(feishu.runtimeId).toBe('codex')
     expect(weixin.label).toBe('weixin agent')
     expect(weixin.agentProfile.name).toBe('weixin agent')
+    expect(weixin.runtimeId).toBe('codex')
   })
 
   it('recognizes current remote-channel summaries but not legacy Claw titles as managed sessions', () => {

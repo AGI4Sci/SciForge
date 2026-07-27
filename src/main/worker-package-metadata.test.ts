@@ -141,7 +141,10 @@ describe('worker package metadata', () => {
 
     expect(metadata.name).toBe('@sciforge/paper-radar')
     expect(metadata.sciforge?.publicContract).toBe(true)
-    expect(metadata.sciforge?.mcpServer).toBe(true)
+    expect(metadata.sciforge?.mcpServer).toBe(false)
+    expect(metadata.exports).not.toHaveProperty('./mcp-server')
+    expect(metadata).not.toHaveProperty('bin')
+    expect(metadata.scripts).not.toHaveProperty('start')
     expect(metadata.sciforge?.distribution).toBeUndefined()
   })
 })

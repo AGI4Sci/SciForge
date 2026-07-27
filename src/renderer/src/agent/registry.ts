@@ -82,16 +82,6 @@ class RegistryAgentProvider implements AgentProvider {
     return this.neutral.runCodeNavigation(...args)
   }
 
-  listModelAuditRecords(
-    ...args: Parameters<NonNullable<AgentProvider['listModelAuditRecords']>>
-  ): ReturnType<NonNullable<AgentProvider['listModelAuditRecords']>> {
-    return this.neutral.listModelAuditRecords(...args)
-  }
-
-  clearModelAuditRecords(): ReturnType<NonNullable<AgentProvider['clearModelAuditRecords']>> {
-    return this.neutral.clearModelAuditRecords()
-  }
-
   getContextState(
     ...args: Parameters<NonNullable<AgentProvider['getContextState']>>
   ): ReturnType<NonNullable<AgentProvider['getContextState']>> {

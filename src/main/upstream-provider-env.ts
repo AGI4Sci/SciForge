@@ -58,7 +58,6 @@ export const UPSTREAM_PROVIDER_CONFIG_ENV_NAMES = [
 ] as const
 
 export const DIRECT_PROVIDER_WORKER_ENV_PREFIXES = [
-  'EDAG_LLM_',
   'SCIFORGE_IMAGE_'
 ] as const
 

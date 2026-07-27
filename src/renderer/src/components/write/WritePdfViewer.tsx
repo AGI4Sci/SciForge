@@ -54,11 +54,15 @@ import {
   type RotatedPdfTextGeometry
 } from './write-pdf-viewer-geometry'
 import { normalizedBoundsForPageRects } from './write-pdf-visible-context'
+import {
+  boundWorkspacePreviewPresentationState,
+  type WorkspacePreviewPresentationStateChangeHandler
+} from '../../workspace-preview/presentation-state'
 
 GlobalWorkerOptions.workerSrc = pdfWorkerUrl
 
 const PDF_MIN_SCALE = 0.65
-const PDF_MAX_SCALE = 2.4
+export const PDF_MAX_SCALE = 5
 const PDF_SCALE_STEP = 0.1
 const DEFAULT_PDF_SCALE = 1.15
 const MAX_SELECTION_FRAGMENT_RECTS = 6000
@@ -67,10 +71,82 @@ const TEXT_LAYER_TOKEN_HIT_PAD_X = 2
 const TEXT_LAYER_TOKEN_HIT_PAD_Y = 5
 const TEXT_LAYER_TOKEN_MAX_PICK_DISTANCE = 18
 const MAX_SEARCH_HIGHLIGHTS_PER_PAGE = 240
+const PDF_RENDER_WINDOW_RADIUS = 2
+
+type PdfDocumentMetadata = { info: Object; metadata: unknown }
+
+function pdfDocumentTitleFromMetadata(metadata: PdfDocumentMetadata): string {
+  const info = metadata.info as Record<string, unknown>
+  const infoTitle = typeof info.Title === 'string' ? info.Title.trim() : ''
+  if (infoTitle) return infoTitle
+
+  const documentMetadata = metadata.metadata
+  if (!documentMetadata || typeof documentMetadata !== 'object' || !('get' in documentMetadata)) return ''
+  const get = (documentMetadata as { get?: unknown }).get
+  if (typeof get !== 'function') return ''
+  const metadataTitle = get.call(documentMetadata, 'dc:title')
+  return typeof metadataTitle === 'string' ? metadataTitle.trim() : ''
+}
+
+function pdfSelectionPresentationSummary(selection: WritePdfSelection): string {
+  const start = selection.pageStart ?? selection.rects?.[0]?.page
+  const end = selection.pageEnd ?? selection.rects?.at(-1)?.page ?? start
+  const pageLabel = start == null
+    ? 'PDF selection'
+    : end != null && end !== start
+      ? `Pages ${start}-${end}`
+      : `Page ${start}`
+  return `${pageLabel}; ${selection.charCount} selected characters`
+}
+
+export function buildPdfPresentationState(input: {
+  title: string
+  currentPage: number
+  pageCount: number
+  currentPageText: string
+  selection?: WritePdfSelection | null
+}) {
+  return boundWorkspacePreviewPresentationState({
+    schemaVersion: 1,
+    kind: 'document',
+    title: input.title,
+    position: {
+      index: input.currentPage,
+      ...(input.pageCount > 0 ? { count: input.pageCount } : {}),
+      label: input.pageCount > 0
+        ? `Page ${input.currentPage} of ${input.pageCount}`
+        : `Page ${input.currentPage}`
+    },
+    visibleContent: {
+      kind: 'text',
+      label: `Page ${input.currentPage}`,
+      text: input.currentPageText,
+      truncated: false
+    },
+    selection: input.selection
+      ? {
+          kind: input.selection.visualImage ? 'visual' : 'text',
+          ...(input.selection.text ? { text: input.selection.text } : {}),
+          summary: pdfSelectionPresentationSummary(input.selection)
+        }
+      : null
+  })
+}
+const DEFAULT_PDF_PAGE_WIDTH = 612
+const DEFAULT_PDF_PAGE_HEIGHT = 792
 
 type PageText = {
   page: number
   text: string
+}
+
+export function pdfPageRenderWindow(currentPage: number, pageCount: number, radius = PDF_RENDER_WINDOW_RADIUS): number[] {
+  if (pageCount <= 0) return []
+  const center = clamp(Math.round(currentPage), 1, pageCount)
+  const normalizedRadius = Math.max(0, Math.round(radius))
+  const start = Math.max(1, center - normalizedRadius)
+  const end = Math.min(pageCount, center + normalizedRadius)
+  return Array.from({ length: end - start + 1 }, (_, index) => start + index)
 }
 
 type WritePdfSearchIndexItem = {
@@ -201,6 +277,7 @@ export type WritePdfAnnotationOverlay = {
 
 export type WritePdfViewerProps = {
   filePath: string
+  documentContentKey?: string
   dataBase64?: string
   data?: Uint8Array | ArrayBuffer
   sourceUrl?: string
@@ -225,6 +302,7 @@ export type WritePdfViewerProps = {
   onAnnotationSelect?: (annotationId: string) => void
   onOpenAnnotations?: (selection: WritePdfSelection | null) => void
   onToggleAnnotations?: () => void
+  onPresentationStateChange?: WorkspacePreviewPresentationStateChangeHandler
 }
 
 type PdfSelectionContext = {
@@ -525,7 +603,7 @@ function clamp01(value: number): number {
   return clamp(value, 0, 1)
 }
 
-function nextScale(value: number, direction: 1 | -1): number {
+export function nextPdfScale(value: number, direction: 1 | -1): number {
   return stepContentScale(value, direction, {
     min: PDF_MIN_SCALE,
     max: PDF_MAX_SCALE,
@@ -533,7 +611,7 @@ function nextScale(value: number, direction: 1 | -1): number {
   })
 }
 
-function normalizePdfScale(value: number): number {
+export function normalizePdfScale(value: number): number {
   return clampContentScale(value, PDF_MIN_SCALE, PDF_MAX_SCALE)
 }
 
@@ -1930,7 +2008,7 @@ function WritePdfPage({
   annotationOverlays,
   activeAnnotationId,
   onAnnotationSelect,
-  onPageText
+  onPageSize
 }: {
   document: PDFDocumentProxy
   pageNumber: number
@@ -1941,7 +2019,7 @@ function WritePdfPage({
   annotationOverlays: WritePdfAnnotationOverlay[]
   activeAnnotationId?: string | null
   onAnnotationSelect?: (annotationId: string) => void
-  onPageText: (page: PageText) => void
+  onPageSize: (page: number, width: number, height: number) => void
 }): ReactElement {
   const pageRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -1954,70 +2032,61 @@ function WritePdfPage({
   useEffect(() => {
     let cancelled = false
     let renderTask: { cancel: () => void; promise: Promise<unknown> } | null = null
+    let page: PDFPageProxy | null = null
+    const canvas = canvasRef.current
+    const textLayer = textLayerRef.current
 
     const renderPage = async (): Promise<void> => {
-      const canvas = canvasRef.current
-      const textLayer = textLayerRef.current
       if (!canvas || !textLayer) return
-      textLayer.replaceChildren()
-      setSearchHighlights([])
-      setPdfSearchSegments([])
-      const page: PDFPageProxy = await document.getPage(pageNumber)
-      if (cancelled) {
-        page.cleanup()
-        return
-      }
-      const viewport = page.getViewport({ scale })
-      const outputScale = Math.max(1, window.devicePixelRatio || 1)
-      textLayer.style.setProperty('--scale-factor', String(viewport.scale))
-      textLayer.style.setProperty('--total-scale-factor', String(viewport.scale))
-      canvas.width = Math.floor(viewport.width * outputScale)
-      canvas.height = Math.floor(viewport.height * outputScale)
-      canvas.style.width = `${viewport.width}px`
-      canvas.style.height = `${viewport.height}px`
-      setPageSize({ width: viewport.width, height: viewport.height })
+      try {
+        textLayer.replaceChildren()
+        setSearchHighlights([])
+        setPdfSearchSegments([])
+        page = await document.getPage(pageNumber)
+        if (cancelled) return
+        const viewport = page.getViewport({ scale })
+        const outputScale = Math.max(1, window.devicePixelRatio || 1)
+        textLayer.style.setProperty('--scale-factor', String(viewport.scale))
+        textLayer.style.setProperty('--total-scale-factor', String(viewport.scale))
+        canvas.width = Math.floor(viewport.width * outputScale)
+        canvas.height = Math.floor(viewport.height * outputScale)
+        canvas.style.width = `${viewport.width}px`
+        canvas.style.height = `${viewport.height}px`
+        setPageSize({ width: viewport.width, height: viewport.height })
+        onPageSize(pageNumber, viewport.width, viewport.height)
 
-      const context = canvas.getContext('2d')
-      if (!context) {
-        page.cleanup()
-        return
-      }
-      context.setTransform(outputScale, 0, 0, outputScale, 0, 0)
-      const task = page.render({ canvasContext: context, viewport })
-      renderTask = task
-      await task.promise
-      if (cancelled) {
-        page.cleanup()
-        return
-      }
+        const context = canvas.getContext('2d')
+        if (!context) return
+        context.setTransform(outputScale, 0, 0, outputScale, 0, 0)
+        const task = page.render({ canvasContext: context, viewport })
+        renderTask = task
+        await task.promise
+        if (cancelled) return
 
-      const textContent = await page.getTextContent()
-      const pageSearchSegments = buildPdfSearchSegmentsFromTextContent(
-        textContent.items,
-        textContent.styles as Record<string, PdfTextGeometryStyle>,
-        viewport as unknown as PdfTextGeometryViewport,
-        pageNumber
-      )
-      const textLayerRenderer = new TextLayer({
-        textContentSource: textContent,
-        container: textLayer,
-        viewport
-      })
-      await textLayerRenderer.render()
-      if (!cancelled) {
-        for (const span of Array.from(textLayer.querySelectorAll<HTMLElement>('span'))) {
-          if (!(span.textContent ?? '').trim()) span.classList.add('write-pdf-text-ws')
+        const textContent = await page.getTextContent()
+        const pageSearchSegments = buildPdfSearchSegmentsFromTextContent(
+          textContent.items,
+          textContent.styles as Record<string, PdfTextGeometryStyle>,
+          viewport as unknown as PdfTextGeometryViewport,
+          pageNumber
+        )
+        const textLayerRenderer = new TextLayer({
+          textContentSource: textContent,
+          container: textLayer,
+          viewport
+        })
+        await textLayerRenderer.render()
+        if (!cancelled) {
+          for (const span of Array.from(textLayer.querySelectorAll<HTMLElement>('span'))) {
+            if (!(span.textContent ?? '').trim()) span.classList.add('write-pdf-text-ws')
+          }
+          setPdfSearchSegments(pageSearchSegments)
+          setTextLayerRevision((value) => value + 1)
         }
-        const pageText = textContent.items
-          .map((item: TextContentItem) => (typeof item.str === 'string' ? item.str : ''))
-          .filter(Boolean)
-          .join(' ')
-          .trim()
-        setPdfSearchSegments(pageSearchSegments)
-        onPageText({ page: pageNumber, text: pageText })
-        setTextLayerRevision((value) => value + 1)
+      } finally {
+        page?.cleanup()
+        page = null
       }
-      page.cleanup()
     }
 
     void renderPage().catch(() => undefined)
@@ -2028,8 +2097,13 @@ function WritePdfPage({
       } catch {
         // pdf.js can throw when a completed render task is cancelled during cleanup.
       }
+      if (canvas) {
+        canvas.width = 0
+        canvas.height = 0
+      }
+      textLayer?.replaceChildren()
     }
-  }, [document, onPageText, pageNumber, scale])
+  }, [document, onPageSize, pageNumber, scale])
 
   useEffect(() => {
     const pageElement = pageRef.current
@@ -2109,6 +2183,7 @@ function WritePdfPage({
 
 export function WritePdfViewer({
   filePath,
+  documentContentKey,
   dataBase64,
   data,
   sourceUrl,
@@ -2131,7 +2206,8 @@ export function WritePdfViewer({
   onAnnotationAction,
   onAnnotationSelect,
   onOpenAnnotations,
-  onToggleAnnotations
+  onToggleAnnotations,
+  onPresentationStateChange
 }: WritePdfViewerProps): ReactElement {
   const { t } = useTranslation('common')
   const rememberedInitialView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
@@ -2147,10 +2223,24 @@ export function WritePdfViewer({
   const skipMouseUpSelectionSyncRef = useRef(false)
   const onSelectionChangeRef = useRef(onSelectionChange)
   const onQuoteSelectionRef = useRef(onQuoteSelection)
+  const onPresentationStateChangeRef = useRef(onPresentationStateChange)
   const currentPageRef = useRef(Math.max(1, Math.round(restoredInitialPage)))
+  const pdfDocumentRef = useRef<PDFDocumentProxy | null>(null)
+  const preservedReloadViewRef = useRef<{ currentPage: number; scrollTop: number } | null>(null)
+  const handledJumpTargetRef = useRef<WritePdfSelectionPageRect | null>(null)
   const initialPageRef = useRef(initialPage)
   const activeFilePathRef = useRef(filePath)
   const activeViewStateKeyRef = useRef(viewStateKey)
+  const documentLoadInputRef = useRef({
+    data,
+    dataBase64,
+    sourceUrl,
+    filePath,
+    sourceTitle: relativeToWorkspace(workspaceRoot, filePath),
+    mimeType,
+    size,
+    mtimeMs
+  })
   const viewStateKeyChanged = activeViewStateKeyRef.current !== viewStateKey
   const [pdfDocument, setPdfDocument] = useState<PDFDocumentProxy | null>(null)
   const [loading, setLoading] = useState(true)
@@ -2162,15 +2252,35 @@ export function WritePdfViewer({
   const deferredSearchQuery = useDeferredValue(searchQuery)
   const [searchIndex, setSearchIndex] = useState(0)
   const [pageTexts, setPageTexts] = useState<PageText[]>([])
+  const [documentTitle, setDocumentTitle] = useState('')
+  const [pageBaseSizes, setPageBaseSizes] = useState<Map<number, { width: number; height: number }>>(new Map())
   const [committedSelection, setCommittedSelection] = useState<WritePdfSelection | null>(null)
   const [committedSelectionRects, setCommittedSelectionRects] = useState<WritePdfSelectionPageRect[]>([])
   const [contextMenu, setContextMenu] = useState<PdfContextMenuState | null>(null)
   const [liveSelection, setLiveSelection] = useState(false)
   const rootRef = viewerRef ?? localViewerRef
   const pageCount = pdfDocument?.numPages ?? 0
+  pdfDocumentRef.current = pdfDocument
   currentPageRef.current = currentPage
   initialPageRef.current = initialPage
   const sourceTitle = useMemo(() => relativeToWorkspace(workspaceRoot, filePath), [filePath, workspaceRoot])
+  documentLoadInputRef.current = {
+    data,
+    dataBase64,
+    sourceUrl,
+    filePath,
+    sourceTitle,
+    mimeType,
+    size,
+    mtimeMs
+  }
+  const resolvedDocumentContentKey = documentContentKey?.trim() ?? ''
+  const unkeyedDocumentMetadata = resolvedDocumentContentKey
+    ? null
+    : `${filePath}\u0000${mimeType}\u0000${mtimeMs ?? ''}\u0000${size ?? ''}`
+  const unkeyedData = resolvedDocumentContentKey ? null : data
+  const unkeyedDataBase64 = resolvedDocumentContentKey ? null : dataBase64
+  const unkeyedSourceUrl = resolvedDocumentContentKey ? null : sourceUrl
   const selectionContext = useMemo<PdfSelectionContext>(() => ({
     filePath,
     sourceTitle,
@@ -2185,11 +2295,11 @@ export function WritePdfViewer({
   }, [t])
 
   const zoomIn = useCallback((): void => {
-    setScale((value) => nextScale(value, 1))
+    setScale((value) => nextPdfScale(value, 1))
   }, [])
 
   const zoomOut = useCallback((): void => {
-    setScale((value) => nextScale(value, -1))
+    setScale((value) => nextPdfScale(value, -1))
   }, [])
 
   const handleZoomWheel = useCallback((event: ReactWheelEvent<HTMLDivElement>): void => {
@@ -2209,38 +2319,56 @@ export function WritePdfViewer({
     onQuoteSelectionRef.current = onQuoteSelection
   }, [onQuoteSelection])
 
+  useEffect(() => {
+    onPresentationStateChangeRef.current = onPresentationStateChange
+  }, [onPresentationStateChange])
+
   const emitSelection = useCallback((selection: WritePdfSelection): void => {
     onSelectionChangeRef.current?.(selection)
   }, [])
 
   useEffect(() => {
     let cancelled = false
+    const loadInput = documentLoadInputRef.current
+    const currentScrollTop = scrollerRef.current?.scrollTop
+    const reloadingSameDocument = activeFilePathRef.current === loadInput.filePath &&
+      activeViewStateKeyRef.current === viewStateKey
+    if (pdfDocumentRef.current && currentScrollTop != null) {
+      const currentView = {
+        currentPage: currentPageRef.current,
+        scrollTop: currentScrollTop
+      }
+      rememberRightPanelContextState<RememberedPdfViewState>(activeViewStateKeyRef.current, currentView)
+      preservedReloadViewRef.current = reloadingSameDocument ? currentView : null
+    }
     const rememberedView = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)
-    const pageToRestore = activeFilePathRef.current === filePath
+    const pageToRestore = activeFilePathRef.current === loadInput.filePath
       ? currentPageRef.current
       : rememberedView?.currentPage ?? initialPageRef.current
-    activeFilePathRef.current = filePath
+    activeFilePathRef.current = loadInput.filePath
     activeViewStateKeyRef.current = viewStateKey
     setLoading(true)
     setError('')
     setPdfDocument(null)
     setPageTexts([])
+    setDocumentTitle('')
+    setPageBaseSizes(new Map())
     setCommittedSelection(null)
     setCommittedSelectionRects([])
     setContextMenu(null)
     setLiveSelection(false)
     setSearchQuery(rememberedView?.searchQuery ?? '')
     emitSelection(emptyPdfSelection({
-      filePath,
-      sourceTitle,
-      mimeType,
-      size,
-      mtimeMs
+      filePath: loadInput.filePath,
+      sourceTitle: loadInput.sourceTitle,
+      mimeType: loadInput.mimeType,
+      size: loadInput.size,
+      mtimeMs: loadInput.mtimeMs
     }))
 
     let task: ReturnType<typeof getDocument>
     try {
-      task = getDocument(documentSourceFromProps({ data, dataBase64, sourceUrl }))
+      task = getDocument(documentSourceFromProps(loadInput))
     } catch (reason) {
       if (!cancelled) {
         setError(reason instanceof Error ? reason.message : String(reason))
@@ -2261,6 +2389,16 @@ export function WritePdfViewer({
       setCurrentPage(targetPage)
       setPageInput(String(targetPage))
       setLoading(false)
+      const metadataLoader = (pdf as PDFDocumentProxy & {
+        getMetadata?: () => Promise<PdfDocumentMetadata>
+      }).getMetadata
+      if (metadataLoader) {
+        void metadataLoader.call(pdf)
+          .then((metadata) => {
+            if (!cancelled) setDocumentTitle(pdfDocumentTitleFromMetadata(metadata))
+          })
+          .catch(() => undefined)
+      }
     }).catch((reason: unknown) => {
       if (!cancelled) {
         setError(reason instanceof Error ? reason.message : String(reason))
@@ -2272,17 +2410,29 @@ export function WritePdfViewer({
       cancelled = true
       void task.destroy()
     }
-  }, [data, dataBase64, emitSelection, filePath, mimeType, mtimeMs, size, sourceTitle, sourceUrl, viewStateKey])
+  }, [
+    emitSelection,
+    resolvedDocumentContentKey,
+    unkeyedData,
+    unkeyedDataBase64,
+    unkeyedDocumentMetadata,
+    unkeyedSourceUrl,
+    viewStateKey
+  ])
 
   useEffect(() => {
     if (!pdfDocument) return
     const page = currentPageRef.current
+    const preservedReloadView = preservedReloadViewRef.current
+    preservedReloadViewRef.current = null
     const frame = window.requestAnimationFrame(() => {
-      const rememberedScrollTop = readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scrollTop
+      const rememberedScrollTop = preservedReloadView?.scrollTop ??
+        readRightPanelContextState<RememberedPdfViewState>(viewStateKey)?.scrollTop
       if (rememberedScrollTop != null && scrollerRef.current) {
         scrollerRef.current.scrollTop = rememberedScrollTop
       } else {
-        pageRefs.current.get(page)?.scrollIntoView({ block: 'start' })
+        const restoredPage = preservedReloadView?.currentPage ?? page
+        pageRefs.current.get(restoredPage)?.scrollIntoView({ block: 'start' })
       }
     })
     return () => window.cancelAnimationFrame(frame)
@@ -2326,15 +2476,70 @@ export function WritePdfViewer({
       emitSelection(empty)
   }, [emitSelection, scale, selectionContext])
 
-  const updatePageText = useCallback((page: PageText): void => {
-    setPageTexts((current) => {
-      const existing = current.find((item) => item.page === page.page)
-      if (existing?.text === page.text) return current
-      const next = current.filter((item) => item.page !== page.page)
-      next.push(page)
-      return next.sort((a, b) => a.page - b.page)
+  const updatePageSize = useCallback((page: number, width: number, height: number): void => {
+    setPageBaseSizes((current) => {
+      const nextSize = { width: width / scale, height: height / scale }
+      const existing = current.get(page)
+      if (existing && Math.abs(existing.width - nextSize.width) < 0.5 && Math.abs(existing.height - nextSize.height) < 0.5) {
+        return current
+      }
+      const next = new Map(current)
+      next.set(page, nextSize)
+      return next
     })
-  }, [])
+  }, [scale])
+
+  useEffect(() => {
+    if (!pdfDocument) return undefined
+    let cancelled = false
+
+    const indexDocumentText = async (): Promise<void> => {
+      const indexed: PageText[] = []
+      const indexedSizes = new Map<number, { width: number; height: number }>()
+      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+        if (cancelled) return
+        let page: PDFPageProxy | null = null
+        try {
+          page = await pdfDocument.getPage(pageNumber)
+          if (cancelled) return
+          const viewport = page.getViewport({ scale: 1 })
+          indexedSizes.set(pageNumber, { width: viewport.width, height: viewport.height })
+          const textContent = await page.getTextContent()
+          if (cancelled) return
+          indexed.push({
+            page: pageNumber,
+            text: textContent.items
+              .map((item: TextContentItem) => (typeof item.str === 'string' ? item.str : ''))
+              .filter(Boolean)
+              .join(' ')
+              .trim()
+          })
+        } catch {
+          if (cancelled) return
+          indexed.push({ page: pageNumber, text: '' })
+        } finally {
+          page?.cleanup()
+        }
+        if (indexed.length % 8 === 0 ||
+          pageNumber === currentPageRef.current ||
+          pageNumber === pdfDocument.numPages) {
+          setPageTexts([...indexed])
+          if (indexedSizes.size > 0) {
+            setPageBaseSizes((current) => {
+              const next = new Map(current)
+              indexedSizes.forEach((size, page) => next.set(page, size))
+              return next
+            })
+          }
+        }
+      }
+    }
+
+    void indexDocumentText().catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [pdfDocument])
 
   const scrollToPage = useCallback((page: number): void => {
     const clamped = clamp(Math.round(page), 1, pageCount || 1)
@@ -2342,6 +2547,22 @@ export function WritePdfViewer({
     setPageInput(String(clamped))
     pageRefs.current.get(clamped)?.scrollIntoView({ block: 'start', behavior: 'smooth' })
   }, [pageCount])
+
+  const renderedPages = useMemo(
+    () => new Set(pdfPageRenderWindow(currentPage, pageCount)),
+    [currentPage, pageCount]
+  )
+
+  const placeholderPageSize = useCallback((page: number): CSSProperties => {
+    const baseSize = pageBaseSizes.get(page) ?? pageBaseSizes.get(1) ?? {
+      width: DEFAULT_PDF_PAGE_WIDTH,
+      height: DEFAULT_PDF_PAGE_HEIGHT
+    }
+    return {
+      width: baseSize.width * scale,
+      height: baseSize.height * scale
+    }
+  }, [pageBaseSizes, scale])
 
   const updateCurrentPageFromScroll = useCallback((): void => {
     const scroller = scrollerRef.current
@@ -2389,6 +2610,21 @@ export function WritePdfViewer({
   const allPageTextLoaded = pageCount > 0 && pageTexts.length >= pageCount
   const pdfHasText = pageTexts.some((page) => page.text.trim().length > 0)
   const visualSelectionEnabled = allPageTextLoaded && !pdfHasText
+  const currentPageText = pageTexts.find((entry) => entry.page === currentPage)?.text ?? ''
+
+  useEffect(() => {
+    onPresentationStateChangeRef.current?.(buildPdfPresentationState({
+      title: documentTitle || sourceTitle,
+      currentPage,
+      pageCount,
+      currentPageText,
+      selection: committedSelection
+    }))
+  }, [committedSelection, currentPage, currentPageText, documentTitle, pageCount, sourceTitle])
+
+  useEffect(() => () => {
+    onPresentationStateChangeRef.current?.(null)
+  }, [])
   const committedRectsByPage = useMemo(() => {
     const byPage = new Map<number, WritePdfSelectionPageRect[]>()
     for (const rect of committedSelectionRects) {
@@ -2796,7 +3032,10 @@ export function WritePdfViewer({
   }, [contextMenu])
 
   useEffect(() => {
-    if (!jumpToRect) return
+    if (!jumpToRect || pageCount <= 0 || handledJumpTargetRef.current === jumpToRect) return
+    // A jump target represents a user navigation request. PDF reloads change pageCount,
+    // but must not replay an already handled request and move the reader's viewport.
+    handledJumpTargetRef.current = jumpToRect
     const page = clamp(Math.round(jumpToRect.page), 1, pageCount || 1)
     setCurrentPage(page)
     setPageInput(String(page))
@@ -3011,20 +3250,29 @@ export function WritePdfViewer({
                   else pageRefs.current.delete(pageNumber)
                 }}
               >
-                <WritePdfPage
-                  document={pdfDocument}
-                  pageNumber={pageNumber}
-                  scale={scale}
-                  searchQuery={activeSearchMatch?.page === pageNumber ? deferredSearchQuery : ''}
-                  activeSearchMatchIndex={
-                    activeSearchMatch?.page === pageNumber ? activeSearchMatch.pageMatchIndex : null
-                  }
-                  selectionRects={committedRectsByPage.get(pageNumber) ?? []}
-                  annotationOverlays={annotationOverlaysByPage.get(pageNumber) ?? []}
-                  activeAnnotationId={activeAnnotationId}
-                  onAnnotationSelect={onAnnotationSelect}
-                  onPageText={updatePageText}
-                />
+                {renderedPages.has(pageNumber) ? (
+                  <WritePdfPage
+                    document={pdfDocument}
+                    pageNumber={pageNumber}
+                    scale={scale}
+                    searchQuery={activeSearchMatch?.page === pageNumber ? deferredSearchQuery : ''}
+                    activeSearchMatchIndex={
+                      activeSearchMatch?.page === pageNumber ? activeSearchMatch.pageMatchIndex : null
+                    }
+                    selectionRects={committedRectsByPage.get(pageNumber) ?? []}
+                    annotationOverlays={annotationOverlaysByPage.get(pageNumber) ?? []}
+                    activeAnnotationId={activeAnnotationId}
+                    onAnnotationSelect={onAnnotationSelect}
+                    onPageSize={updatePageSize}
+                  />
+                ) : (
+                  <div
+                    aria-hidden="true"
+                    className="write-pdf-page bg-white dark:bg-neutral-900"
+                    data-write-pdf-page-placeholder={pageNumber}
+                    style={placeholderPageSize(pageNumber)}
+                  />
+                )}
                 <div className="mt-1 text-center text-[11px] text-ds-faint">
                   {label('writePdfPageLabel', 'Page {{page}}', { page: pageNumber })}
                 </div>

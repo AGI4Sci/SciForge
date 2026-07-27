@@ -1,0 +1,121 @@
+{
+  "version": 1,
+  "renderer": "sciforge-image-generation-mcp",
+  "rendererVersion": "0.1.0",
+  "tool": "image_generation_render",
+  "createdAt": "2026-07-18T03:29:32.598Z",
+  "requestHash": "f23a0d909c9822c4",
+  "workspaceRoot": "/Applications/workspace/ailab/research/app/DeepSeek-GUI",
+  "outputPath": "/Applications/workspace/ailab/research/app/DeepSeek-GUI/paper_reading/heuresis_6strategies_v1.png",
+  "outputHash": "f9abd35beb8785e436497d027d065c7378a0d55e2f3f2233f83d4f48265e1538",
+  "stageForVisualReview": true,
+  "recipe": {
+    "mode": "text_to_image",
+    "prompt": "Create a scientific educational diagram explaining 6 AI research agent search strategies from the Heuresis paper. The diagram should show 6 panels arranged in a 3x2 grid, each panel illustrating one strategy with its core mechanism. The strategies are: 1) Greedy Search - simple best-first selection, 2) MAP-Elites - grid archive with quality-diversity cells, 3) Go-Explore - cell selection biased by quality and visit count, 4) Island-based Evolution - multiple island populations with migration, 5) OMNI - KNN-indexed archive with interestingness gate, 6) Curiosity - prediction error based learning progress steering. Each panel should have the strategy name as title, a simple visual metaphor for the mechanism, and 2-3 bullet points of key characteristics. Use a clean, academic presentation style with consistent color coding across panels. Chinese labels preferred.\n\nSciForge semantic visual brief:\n- Treat any upstream scientific_plotting or diagram draft as structure only; create the polished final visual, not a tiny box draft.\n- Use a full-canvas composition with clear hierarchy, large readable labels, grouped modules, directional arrows, and visual emphasis on the key scientific/technical relationships.\n- Prefer a publication-grade schematic style: clean typography, balanced spacing, subtle color coding, light background, and concise annotations.\n- Fill the canvas with meaningful content while preserving the requested scientific semantics; avoid sparse center-only layouts, overlapping labels, illegible microtext, and generic placeholder blocks.\n- For model architecture or workflow figures, show inputs, core stages, outputs, side effects/context, and feedback/control loops when relevant.\n- Output: one self-contained high-resolution PNG-style figure suitable for VisualDocument review.",
+    "size": {
+      "width": 1920,
+      "height": 1200
+    },
+    "outputFormat": "png",
+    "intent": "general_image",
+    "visualPlan": {
+      "planId": "plan_heuresis_6strategies",
+      "route": "model",
+      "routeLocked": true,
+      "rationale": "Educational comparison diagram",
+      "sourceArtifacts": [],
+      "reproducibleInputs": [],
+      "inlineSpecification": "A scientific educational diagram explaining 6 AI research agent search strategies from the Heuresis paper.",
+      "scene": {
+        "version": 1,
+        "coordinateSystem": "normalized",
+        "canvas": {
+          "width": 1920,
+          "height": 1200,
+          "background": "#FAFAFA"
+        },
+        "layers": [
+          {
+            "id": "diagram",
+            "owner": "model",
+            "z": 0,
+            "primitives": [
+              {
+                "id": "panel1",
+                "type": "rectangle",
+                "x": 0.02,
+                "y": 0.1,
+                "width": 0.3,
+                "height": 0.28,
+                "fill": "#E8F4FD",
+                "stroke": "#2B6CB0",
+                "strokeWidth": 2
+              }
+            ]
+          }
+        ]
+      },
+      "lockedElements": [],
+      "modelOwnedElements": [
+        "diagram"
+      ],
+      "contextStatus": "ready",
+      "contextStopReason": "sufficient",
+      "contextEvidenceIds": [],
+      "unresolvedContext": [],
+      "releaseCeiling": "publication_ready",
+      "fallbackPolicy": "fail_closed"
+    }
+  },
+  "intent": "general_image",
+  "visualPlan": {
+    "planId": "plan_heuresis_6strategies",
+    "route": "model",
+    "routeLocked": true,
+    "rationale": "Educational comparison diagram",
+    "sourceArtifacts": [],
+    "reproducibleInputs": [],
+    "inlineSpecification": "A scientific educational diagram explaining 6 AI research agent search strategies from the Heuresis paper.",
+    "scene": {
+      "version": 1,
+      "coordinateSystem": "normalized",
+      "canvas": {
+        "width": 1920,
+        "height": 1200,
+        "background": "#FAFAFA"
+      },
+      "layers": [
+        {
+          "id": "diagram",
+          "owner": "model",
+          "z": 0,
+          "primitives": [
+            {
+              "id": "panel1",
+              "type": "rectangle",
+              "x": 0.02,
+              "y": 0.1,
+              "width": 0.3,
+              "height": 0.28,
+              "fill": "#E8F4FD",
+              "stroke": "#2B6CB0",
+              "strokeWidth": 2
+            }
+          ]
+        }
+      ]
+    },
+    "lockedElements": [],
+    "modelOwnedElements": [
+      "diagram"
+    ],
+    "contextStatus": "ready",
+    "contextStopReason": "sufficient",
+    "contextEvidenceIds": [],
+    "unresolvedContext": [],
+    "releaseCeiling": "publication_ready",
+    "fallbackPolicy": "fail_closed"
+  },
+  "provider": "image-endpoint",
+  "warnings": []
+}

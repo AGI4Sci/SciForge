@@ -62,9 +62,31 @@ docs/R2_RELEASE.md
 ### Local acceptance launcher (contains a dev gateway key + local logs — not for upstream)
 /local-run/
 
-# ### Paper build artifacts
-# paper/
+### Paper files
+paper/*
+paper_reading/
+
+### Paper build artifacts
 *.synctex.gz
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.fdb_latexmk
+paper/*.fls
+paper/*.out
+paper/*.tex.bak*
+paper/*.pdf.bak*
+paper/*-bak*.pdf
+paper/_review_*.txt
+paper/preview-pg*.png
+paper/tmp/
+paper/figures/*.components/
+paper/figures/*.semantic-layers/
+paper/figures/*.component-base.png
+paper/figures/*.component-segmentation-preview.png
+paper/figures/*.component-segmentation.json
+paper/figures/*.framework-components.json
 
 ### Local end-to-end run artifacts
 temp/
+.tmp/

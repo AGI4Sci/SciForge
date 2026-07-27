@@ -26,7 +26,14 @@ import {
 import { workspaceLabelFromPath } from '../lib/workspace-label'
 import { isInternalTemporaryWorkspace, normalizeWorkspaceRoot } from '../lib/workspace-path'
 import { onRemoteChannelActivityApi } from '../lib/remote-channel-api'
-import { buildRemoteChannelRuntimePrompt, getActiveAgentApiKey, getActiveAgentRuntime, type AgentRuntimeId } from '@shared/app-settings'
+import { disposeSessionRightPanelWorkspace } from '../lib/session-right-panel-lifecycle'
+import {
+  buildRemoteChannelRuntimePrompt,
+  getActiveAgentApiKey,
+  getActiveAgentRuntime,
+  getModelAccessSettings,
+  type AgentRuntimeId
+} from '@shared/app-settings'
 import type { ChatState, ChatStoreGet, ChatStoreSet } from './chat-store-types'
 import {
   activeRemoteChannel,
@@ -391,7 +398,13 @@ export function createNavigationActions(
           [workspaceRoot]
         )
         const codeWorkspaceRoots = rememberCodeWorkspaceRoots(readCodeWorkspaceRoots(), [workspaceRoot])
-        const needsInitialSetup = !getActiveAgentApiKey(settings).trim()
+        // Older SciForge settings can contain a valid runtime key while
+        // predating the explicit Model API / Coding Plan selection. Do not
+        // probe a runtime with that ambiguous billing configuration: route it
+        // through the current setup experience instead. Settings that already
+        // completed the new flow (including macOS installs) are unchanged.
+        const modelAccess = getModelAccessSettings(settings)
+        const needsInitialSetup = !modelAccess || !getActiveAgentApiKey(settings).trim()
         applyTheme(settings.theme)
         applyUiFontScale(settings.uiFontScale)
         await get().applyI18nFromSettings(settings.locale)
@@ -419,6 +432,7 @@ export function createNavigationActions(
           hiddenCodeWorkspaceRoots,
           workspaceLabel: workspaceLabelFromPath(workspaceRoot),
           activeAgentRuntime: getActiveAgentRuntime(settings),
+          modelAccessMode: modelAccess?.mode ?? null,
           remoteChannels: settings.remoteChannel.channels,
           activeRemoteChannelId: settings.remoteChannel.channels.find((channel) => channel.enabled)?.id ?? '',
           runtimeConnection: needsInitialSetup ? 'idle' : get().runtimeConnection,
@@ -452,6 +466,7 @@ export function createNavigationActions(
   },
 
   chooseWorkspace: async ({ createThreadAfter = false, selectThreadAfter = true } = {}) => {
+    const ownerSessionId = get().activeThreadId
     try {
       if (typeof window.sciforge === 'undefined' || typeof window.sciforge.pickWorkspaceDirectory !== 'function') {
         throw new Error(i18n.t('common:workspacePickerUnavailable'))
@@ -465,11 +480,6 @@ export function createNavigationActions(
       }
       const next = await rendererRuntimeClient.setSettings({ workspaceRoot: picked.path })
       const workspaceRoot = normalizeWorkspaceRoot(next.workspaceRoot)
-      // New workspace picked: let the Project DAG button prompt for the
-      // project's purpose (it listens for this event in the top bar).
-      window.dispatchEvent(
-        new CustomEvent('sciforge:project-dag-setup', { detail: { workspaceRoot } })
-      )
       const hiddenCodeWorkspaceRoots = restoreHiddenCodeWorkspaceRoots(
         get().hiddenCodeWorkspaceRoots ?? [],
         [workspaceRoot]
@@ -482,18 +492,17 @@ export function createNavigationActions(
       // when the PATCH actually succeeds — otherwise we must fall
       // through to the fallback selection below, or the global
       // workspaceRoot and the active thread would diverge.
-      const activeThreadId = get().activeThreadId
       let movedActiveThread = false
-      if (activeThreadId && workspaceRoot) {
+      if (ownerSessionId && workspaceRoot) {
         const p = getProvider()
         if (typeof p.updateThreadWorkspace === 'function') {
           try {
-            await p.updateThreadWorkspace(activeThreadId, workspaceRoot)
+            await p.updateThreadWorkspace(ownerSessionId, workspaceRoot)
             // Update the local threads list so the sidebar shows the
             // thread under the new workspace immediately.
             set((s) => ({
               threads: s.threads.map((thread) =>
-                thread.id === activeThreadId ? { ...thread, workspace: workspaceRoot } : thread
+                thread.id === ownerSessionId ? { ...thread, workspace: workspaceRoot } : thread
               )
             }))
             movedActiveThread = true
@@ -504,15 +513,20 @@ export function createNavigationActions(
         }
       }
 
-      set({
-        workspaceRoot,
+      set((state) => ({
         codeWorkspaceRoots,
         hiddenCodeWorkspaceRoots,
-        workspaceLabel: workspaceLabelFromPath(workspaceRoot),
-        error: null
-      })
+        ...(state.activeThreadId === ownerSessionId
+          ? {
+              workspaceRoot,
+              workspaceLabel: workspaceLabelFromPath(workspaceRoot),
+              error: null
+            }
+          : {})
+      }))
       await get().refreshThreads()
       if (workspaceRoot) {
+        if (get().activeThreadId !== ownerSessionId) return workspaceRoot
         if (!selectThreadAfter) return workspaceRoot
         // If we successfully moved the active thread, stay on it.
         if (movedActiveThread) return workspaceRoot
@@ -615,6 +629,7 @@ export function createNavigationActions(
         error: null
       }
     })
+    for (const threadId of removeIds) disposeSessionRightPanelWorkspace(threadId)
     // If the removed workspace is the current workspaceRoot, clear it.
     if (normalizeWorkspaceRoot(get().workspaceRoot) === normalizedPath) {
       try {

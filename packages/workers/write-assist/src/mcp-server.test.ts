@@ -44,8 +44,10 @@ test('serves write-assist tools and resources over MCP', async (t) => {
   ])
 
   const tools = await client.listTools()
-  assert.ok(tools.tools.some((tool) => tool.name === 'gui_write_retrieve_context'))
-  assert.ok(tools.tools.some((tool) => tool.name === 'gui_pdf_extract_text'))
+  assert.deepEqual(tools.tools.map((tool) => tool.name).sort(), [
+    'gui_pdf_extract_text',
+    'gui_write_retrieve_context'
+  ])
 
   const retrieval = await client.callTool({
     name: 'gui_write_retrieve_context',

@@ -1,4 +1,4 @@
-import { WriteAssistService } from '../../../packages/workers/write-assist/src/service'
+import { WriteAssistService } from '@sciforge/write-assist/service'
 
 let writeAssistService: WriteAssistService | null = null
 

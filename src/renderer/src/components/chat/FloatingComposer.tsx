@@ -43,6 +43,7 @@ import {
 import { useTranslation } from 'react-i18next'
 import type { ModelProviderModelGroup } from '@shared/sciforge-api'
 import type { AgentRuntimeContextState } from '@shared/agent-runtime-contract'
+import type { VisibleContextComponentSnapshot } from '@shared/visible-context'
 import type { AgentProviderCapabilities, AttachmentReference, ReviewTarget } from '../../agent/types'
 import { useChatStore } from '../../store/chat-store'
 import {
@@ -94,18 +95,18 @@ import {
 import { useComposerDraft } from './use-composer-draft'
 import {
   composerDraftContextKey,
+  createComposerDraftPersistence,
   mergeComposerInputHistory,
   readComposerDraft,
   readComposerInputHistory,
-  rememberComposerInput,
-  writeComposerDraft
+  rememberComposerInput
 } from './composer-input-memory'
 import {
   SPEECH_TRANSCRIPTION_MAX_DURATION_MS,
   getModelRouterSettings,
   type AgentRuntimeId,
   type AppSettingsV1,
-  type ModelRouterMemberProviderSettingsV1
+  type ModelRouterMemberSettingsV1
 } from '@shared/app-settings'
 import {
   useSpeechToTextSettings,
@@ -119,6 +120,7 @@ import {
   hasWorkspaceReferenceDragData,
   type WorkspaceReferenceDragDataSource
 } from '../../lib/workspace-reference-drag'
+import { registerVisibleContextComponent } from '../../lib/visible-context'
 
 export type { ComposerFileReference } from '../../lib/composer-file-references'
 
@@ -147,6 +149,7 @@ type Props = {
   composerPickList: string[]
   composerModelGroups?: ModelProviderModelGroup[]
   activeAgentRuntime?: AgentRuntimeId
+  runtimeLocked?: boolean
   composerReasoningEffort?: string
   onComposerModelChange: (modelId: string) => void
   onActiveAgentRuntimeChange?: (runtimeId: AgentRuntimeId) => void
@@ -221,6 +224,67 @@ const EMPTY_FILE_REFERENCES: ComposerFileReference[] = []
 const EMPTY_COMMENT_REFERENCES: ComposerCommentReference[] = []
 const EMPTY_CHANGED_FILES: ComposerChangedFile[] = []
 const EMPTY_SKILL_COMMANDS: SkillCommand[] = []
+
+export function floatingComposerVisibleContextComponentId(input: {
+  variant: 'default' | 'compact'
+  activeThreadId: string | null
+  embedded: boolean
+}): string {
+  if (input.embedded && input.activeThreadId) return `chat.composer.thread.${input.activeThreadId}`
+  if (input.variant === 'compact') return 'chat.composer.compact'
+  return 'chat.composer'
+}
+
+export function buildFloatingComposerVisibleContextComponent(input: {
+  id: string
+  activeThreadId: string | null
+  variant: 'default' | 'compact'
+  draftNonEmpty: boolean
+  attachmentCount: number
+  fileReferenceCount: number
+  commentReferenceCount: number
+  queuedMessageCount: number
+  mode: 'plan' | 'agent'
+  model: string
+  reasoningEffort?: string
+  runtime?: AgentRuntimeId
+  busy: boolean
+  runtimeReady: boolean
+  canCompose: boolean
+  canSend: boolean
+  attachmentUploadBusy: boolean
+  updatedAt?: string
+}): VisibleContextComponentSnapshot {
+  const referenceCount = input.attachmentCount + input.fileReferenceCount + input.commentReferenceCount
+  return {
+    id: input.id,
+    region: 'main',
+    component: 'floating-composer',
+    title: 'Chat composer',
+    visible: true,
+    priority: 110,
+    updatedAt: input.updatedAt ?? new Date().toISOString(),
+    summary: `Chat composer is ${input.busy ? 'busy' : 'idle'} with ${referenceCount} references and ${input.queuedMessageCount} queued messages.`,
+    state: {
+      activeThreadId: input.activeThreadId,
+      variant: input.variant,
+      draftNonEmpty: input.draftNonEmpty,
+      attachmentCount: input.attachmentCount,
+      fileReferenceCount: input.fileReferenceCount,
+      commentReferenceCount: input.commentReferenceCount,
+      queuedMessageCount: input.queuedMessageCount,
+      mode: input.mode,
+      model: input.model,
+      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
+      ...(input.runtime ? { runtime: input.runtime } : {}),
+      busy: input.busy,
+      runtimeReady: input.runtimeReady,
+      canCompose: input.canCompose,
+      canSend: input.canSend,
+      attachmentUploadBusy: input.attachmentUploadBusy
+    }
+  }
+}
 
 type ComposerTransferItem = {
   kind?: string
@@ -572,13 +636,13 @@ function shouldShowThreadContextState(state: AgentRuntimeContextState): boolean 
 }
 
 export function isImageGenerationConfigured(
-  settings: Pick<ModelRouterMemberProviderSettingsV1, 'apiKey' | 'baseUrl' | 'model'> | null | undefined
+  settings: Pick<ModelRouterMemberSettingsV1, 'apiKey' | 'baseUrl' | 'model'> | null | undefined
 ): boolean {
   return Boolean(settings?.apiKey.trim() && settings.baseUrl.trim() && settings.model.trim())
 }
 
-function useImageGenerationComposerSettings(): ModelRouterMemberProviderSettingsV1 | null {
-  const [imageGeneration, setImageGeneration] = useState<ModelRouterMemberProviderSettingsV1 | null>(null)
+function useImageGenerationComposerSettings(): ModelRouterMemberSettingsV1 | null {
+  const [imageGeneration, setImageGeneration] = useState<ModelRouterMemberSettingsV1 | null>(null)
 
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -675,6 +739,7 @@ export function FloatingComposer({
   composerPickList,
   composerModelGroups = EMPTY_MODEL_GROUPS,
   activeAgentRuntime,
+  runtimeLocked = false,
   composerReasoningEffort,
   onComposerModelChange,
   onActiveAgentRuntimeChange,
@@ -792,12 +857,56 @@ export function FloatingComposer({
       : (hasActiveThread || !!effectiveWorkspaceRoot)
   )
   const canChangeModel = canCompose && !busy
+  const draftNonEmpty = input.trim().length > 0
   const canSend = canCompose && (
-    input.trim().length > 0 ||
+    draftNonEmpty ||
     (attachmentUploadEnabled && attachments.length > 0) ||
     (fileReferenceEnabled && fileReferences.length > 0) ||
     commentReferences.length > 0
   )
+  const visibleContextComponentId = floatingComposerVisibleContextComponentId({
+    variant,
+    activeThreadId,
+    embedded: disableThreadManagementCommands
+  })
+
+  useEffect(() => registerVisibleContextComponent(buildFloatingComposerVisibleContextComponent({
+    id: visibleContextComponentId,
+    activeThreadId,
+    variant,
+    draftNonEmpty,
+    attachmentCount: attachments.length,
+    fileReferenceCount: fileReferences.length,
+    commentReferenceCount: commentReferences.length,
+    queuedMessageCount: queuedMessages.length,
+    mode,
+    model: composerModel,
+    reasoningEffort: composerReasoningEffort,
+    runtime: activeAgentRuntime,
+    busy,
+    runtimeReady,
+    canCompose,
+    canSend,
+    attachmentUploadBusy
+  })), [
+    activeAgentRuntime,
+    activeThreadId,
+    attachmentUploadBusy,
+    attachments.length,
+    busy,
+    canCompose,
+    canSend,
+    commentReferences.length,
+    composerModel,
+    composerReasoningEffort,
+    draftNonEmpty,
+    fileReferences.length,
+    mode,
+    queuedMessages.length,
+    runtimeReady,
+    variant,
+    visibleContextComponentId
+  ])
   const canOpenAttachmentPicker = canEditComposer && Boolean(onPickAttachments) && !attachmentUploadBusy
   const canPickAttachment = canOpenAttachmentPicker && attachmentUploadEnabled
   const imageGenerationSettings = useImageGenerationComposerSettings()
@@ -867,6 +976,10 @@ export function FloatingComposer({
   )
   const activeDraftKeyRef = useRef<string | null>(null)
   const skipDraftPersistenceRef = useRef(false)
+  const draftPersistenceRef = useRef<ReturnType<typeof createComposerDraftPersistence> | null>(null)
+  if (!draftPersistenceRef.current) {
+    draftPersistenceRef.current = createComposerDraftPersistence()
+  }
   const [composerCursor, setComposerCursor] = useState(() => input.length)
   const [dismissedFileMentionKey, setDismissedFileMentionKey] = useState<string | null>(null)
   const draft = useComposerDraft({
@@ -904,7 +1017,9 @@ export function FloatingComposer({
     if (!remembersComposerInput) return
     const previousKey = activeDraftKeyRef.current
     if (previousKey === composerDraftKey) return
-    if (previousKey) writeComposerDraft(previousKey, input)
+    // Commit any pending value for the previous thread before restoring the
+    // next one. This avoids both data loss and synchronous writes per keypress.
+    draftPersistenceRef.current?.flush()
     const restored = readComposerDraft(composerDraftKey)
     activeDraftKeyRef.current = composerDraftKey
     skipDraftPersistenceRef.current = true
@@ -917,8 +1032,12 @@ export function FloatingComposer({
       skipDraftPersistenceRef.current = false
       return
     }
-    writeComposerDraft(composerDraftKey, input)
+    draftPersistenceRef.current?.schedule(composerDraftKey, input)
   }, [composerDraftKey, input, remembersComposerInput])
+
+  useEffect(() => () => {
+    draftPersistenceRef.current?.flush()
+  }, [])
 
   useEffect(() => {
     imageGenerationModeRef.current = imageGenerationMode
@@ -1490,6 +1609,7 @@ export function FloatingComposer({
 
   const primaryActionRef = useRef<() => void>(() => undefined)
   primaryActionRef.current = (): void => {
+    if (remembersComposerInput) draftPersistenceRef.current?.flush()
     if (highlightedSlashCommand) {
       if (highlightedSlashCommand.disabled) return
       applySlashCommand(highlightedSlashCommand.id)
@@ -2303,14 +2423,16 @@ export function FloatingComposer({
             disabled={!canEditComposer}
             onChange={(e) => {
               draft.resetHistoryNavigation(e.target.value)
-              if (remembersComposerInput) writeComposerDraft(composerDraftKey, e.target.value)
               setInput(e.target.value)
               setComposerCursor(e.target.selectionStart ?? e.target.value.length)
               setDismissedFileMentionKey(null)
             }}
             onSelect={(e) => syncComposerCursor(e.currentTarget)}
             onFocus={draft.onFocus}
-            onBlur={draft.onBlur}
+            onBlur={() => {
+              draft.onBlur()
+              if (remembersComposerInput) draftPersistenceRef.current?.flush()
+            }}
             onCompositionStart={draft.onCompositionStart}
             onCompositionEnd={draft.onCompositionEnd}
             onKeyDown={handleComposerKeyDown}
@@ -2621,6 +2743,7 @@ export function FloatingComposer({
                   composerPickList={composerPickList}
                   composerModelGroups={composerModelGroups}
                   activeAgentRuntime={activeAgentRuntime}
+                  runtimeLocked={runtimeLocked}
                   composerReasoningEffort={composerReasoningEffort}
                   canChangeModel={canChangeModel}
                   stretch={stretchModelPicker}

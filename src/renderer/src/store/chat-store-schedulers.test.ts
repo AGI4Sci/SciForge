@@ -9,8 +9,11 @@ import {
   stopRuntimeBootRetry,
   stopRuntimeReconnectProbe,
   stopRuntimeThreadRefreshPoll,
+  stopTurnCompletionPoll,
+  syncTurnCompletionPoll,
   syncRuntimeThreadRefreshPoll
 } from './chat-store-schedulers'
+import type { ChatBlock } from '../agent/types'
 import type { ChatState, ChatStoreSet } from './chat-store-types'
 
 type StoreApi = { getState: () => ChatState; set: ChatStoreSet; get: () => ChatState }
@@ -400,5 +403,75 @@ describe('scheduleRuntimeBootRetry', () => {
     await vi.advanceTimersByTimeAsync(10)
 
     expect(boot).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('syncTurnCompletionPoll', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    stopTurnCompletionPoll()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('waits for the active read before scheduling another completion poll', async () => {
+    const readResolvers: Array<(value: { blocks: ChatBlock[]; threadStatus?: string }) => void> = []
+    const loadThreadState = vi.fn(() => new Promise<{ blocks: ChatBlock[]; threadStatus?: string }>((resolve) => {
+      readResolvers.push(resolve)
+    }))
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { t1: true }
+    } as Partial<ChatState>)
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: () => true,
+      onCompletedThreads: vi.fn(),
+      intervalMs: 10
+    })
+    expect(loadThreadState).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(100)
+    expect(loadThreadState).toHaveBeenCalledTimes(1)
+
+    readResolvers.shift()?.({ blocks: [], threadStatus: 'running' })
+    await Promise.resolve()
+    await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(9)
+    expect(loadThreadState).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(loadThreadState).toHaveBeenCalledTimes(2)
+    readResolvers.shift()?.({ blocks: [], threadStatus: 'running' })
+    await Promise.resolve()
+    await Promise.resolve()
+  })
+
+  it('uses a slower cadence while the renderer is hidden', async () => {
+    const loadThreadState = vi.fn(async () => ({ blocks: [], threadStatus: 'running' }))
+    vi.stubGlobal('document', { visibilityState: 'hidden' })
+    const h = makeHarness({
+      runtimeConnection: 'ready',
+      watchTurnCompletion: { t1: true }
+    } as Partial<ChatState>)
+
+    syncTurnCompletionPoll(h.set, h.get, {
+      loadThreadState,
+      threadLooksRunning: () => true,
+      onCompletedThreads: vi.fn(),
+      intervalMs: 10,
+      hiddenIntervalMs: 50
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(loadThreadState).toHaveBeenCalledTimes(1)
+
+    await vi.advanceTimersByTimeAsync(49)
+    expect(loadThreadState).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(loadThreadState).toHaveBeenCalledTimes(2)
   })
 })

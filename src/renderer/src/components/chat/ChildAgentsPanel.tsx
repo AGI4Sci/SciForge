@@ -87,6 +87,32 @@ export type ChildAgentsPanelProps = {
   className?: string
 }
 
+/**
+ * A session-owned child-agent panel. It resolves runtime refresh signals from
+ * the store inside the mounted panel, so an inactive session keeps polling its
+ * own child tree without following the globally focused thread.
+ */
+export type SessionChildAgentsPanelProps = {
+  sessionId: string
+  thread: NormalizedThread | null
+  busy?: boolean
+  focusChildId?: string | null
+  focusChildRequestKey?: number
+  onOpenChildInFocus?: (child: AgentRuntimeChild) => void
+  onCollapse: () => void
+  className?: string
+}
+
+export function sessionChildAgentsOwner(
+  sessionId: string,
+  thread: NormalizedThread | null
+): Pick<UseThreadChildrenInput, 'activeThreadId' | 'activeRuntimeId'> {
+  return {
+    activeThreadId: sessionId.trim() || null,
+    activeRuntimeId: thread?.runtimeId
+  }
+}
+
 export type ChildAgentNavigationCrumb = {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -233,7 +259,22 @@ export function filterDirectChildAgents(
       usage: primary.usage ?? fallback.usage
     })
   }
-  return [...deduped.values()]
+  const records = [...deduped.values()]
+  const pairedShadowIds = new Set<string>()
+  for (let index = 0; index < records.length; index += 1) {
+    const threadChild = records[index]
+    if (!childOpenThreadId(threadChild)) continue
+    const candidates = records.filter((candidate) =>
+      !childOpenThreadId(candidate) &&
+      !pairedShadowIds.has(candidate.id) &&
+      isSemanticShadowOfThreadChild(candidate, threadChild)
+    )
+    if (candidates.length !== 1) continue
+    const shadow = candidates[0]
+    records[index] = mergeShadowChildIntoThreadChild(threadChild, shadow)
+    pairedShadowIds.add(shadow.id)
+  }
+  return records.filter((child) => !pairedShadowIds.has(child.id))
 }
 
 export type ChildAgentAttemptInfo = {
@@ -251,9 +292,67 @@ function normalizedAttemptPart(value: string | undefined): string {
   return value?.trim().replace(/\s+/g, ' ').toLocaleLowerCase() ?? ''
 }
 
+function normalizedDelegatedPrompt(child: AgentRuntimeChild): string {
+  return normalizedAttemptPart(child.prompt ? stripChildRuntimeGuardrails(child.prompt) : '')
+}
+
+function isSemanticShadowOfThreadChild(
+  shadow: AgentRuntimeChild,
+  threadChild: AgentRuntimeChild
+): boolean {
+  const parentTurnId = shadow.parentTurnId?.trim()
+  if (!parentTurnId || parentTurnId !== threadChild.parentTurnId?.trim()) return false
+  if (shadow.runtimeId !== threadChild.runtimeId || shadow.parentThreadId !== threadChild.parentThreadId) return false
+  const shadowName = normalizedAttemptPart(shadow.name || shadow.label)
+  const threadName = normalizedAttemptPart(threadChild.name || threadChild.label)
+  if (!shadowName || shadowName !== threadName) return false
+  const shadowPrompt = normalizedDelegatedPrompt(shadow)
+  const threadPrompt = normalizedDelegatedPrompt(threadChild)
+  return !shadowPrompt || !threadPrompt || shadowPrompt === threadPrompt
+}
+
+function mergeShadowChildIntoThreadChild(
+  threadChild: AgentRuntimeChild,
+  shadow: AgentRuntimeChild
+): AgentRuntimeChild {
+  const threadTime = childCreatedTime(threadChild)
+  const shadowTime = childCreatedTime(shadow)
+  const latest = shadowTime > threadTime ? shadow : threadChild
+  const status = isActiveChildAttempt(threadChild)
+    ? threadChild.status
+    : isActiveChildAttempt(shadow)
+      ? shadow.status
+      : latest.status === 'unknown'
+        ? (latest === shadow ? threadChild.status : shadow.status)
+        : latest.status
+  return {
+    ...shadow,
+    ...threadChild,
+    id: threadChild.id,
+    kind: threadChild.kind,
+    status,
+    name: threadChild.name?.trim() ? threadChild.name : shadow.name,
+    label: threadChild.label?.trim() ? threadChild.label : shadow.label,
+    prompt: threadChild.prompt?.trim() ? threadChild.prompt : shadow.prompt,
+    summary: threadChild.summary?.trim() ? threadChild.summary : shadow.summary,
+    usage: threadChild.usage || shadow.usage
+      ? { ...(shadow.usage ?? {}), ...(threadChild.usage ?? {}) }
+      : undefined,
+    transcriptRef: threadChild.transcriptRef ?? shadow.transcriptRef,
+    openAsThreadRef: threadChild.openAsThreadRef,
+    updatedAt: latest.updatedAt ?? threadChild.updatedAt ?? shadow.updatedAt,
+    completedAt: latest.completedAt ?? threadChild.completedAt ?? shadow.completedAt,
+    metadata: {
+      ...(shadow.metadata ?? {}),
+      ...(threadChild.metadata ?? {}),
+      shadowChildId: shadow.id
+    }
+  }
+}
+
 function childAgentAttemptGroupKey(child: AgentRuntimeChild): string {
   const name = normalizedAttemptPart(child.name || child.label)
-  const prompt = normalizedAttemptPart(child.prompt)
+  const prompt = normalizedDelegatedPrompt(child)
   const scope = `${child.runtimeId}\u0000${child.parentThreadId}`
   if (!name || !prompt) return `child\u0000${scope}\u0000${child.id}`
   return `task\u0000${scope}\u0000${name}\u0000${prompt}`
@@ -292,6 +391,16 @@ export function childAgentAttemptGroups(
   })
 
   return groups.sort((a, b) => compareChildAgents(a.primary, b.primary))
+}
+
+export type ChildAgentListFilter = 'all' | 'active'
+
+export function filterChildAgentAttemptGroups(
+  groups: readonly ChildAgentAttemptGroup[],
+  filter: ChildAgentListFilter
+): ChildAgentAttemptGroup[] {
+  if (filter === 'all') return [...groups]
+  return groups.filter((group) => group.attempts.some(isActiveChildAttempt))
 }
 
 /**
@@ -1205,6 +1314,8 @@ export function ChildAgentsPanelView({
 }: ChildAgentsPanelViewProps): ReactElement {
   const directChildren = sortChildAgents(filterDirectChildAgents(children, activeThreadId, activeRuntimeId))
   const attemptGroups = childAgentAttemptGroups(directChildren)
+  const [listFilter, setListFilter] = useState<ChildAgentListFilter>('all')
+  const visibleAttemptGroups = filterChildAgentAttemptGroups(attemptGroups, listFilter)
   const [expandedAttemptGroups, setExpandedAttemptGroups] = useState<Set<string>>(() => new Set())
   const isAttemptGroupExpanded = (group: ChildAgentAttemptGroup): boolean =>
     expandedAttemptGroups.has(group.key) || (
@@ -1212,7 +1323,7 @@ export function ChildAgentsPanelView({
       selectedChildId !== group.primary.id &&
       group.attempts.some((child) => child.id === selectedChildId)
     )
-  const presentationChildren = attemptGroups.flatMap((group) => {
+  const presentationChildren = visibleAttemptGroups.flatMap((group) => {
     if (!isAttemptGroupExpanded(group)) return [group.primary]
     const history = group.attempts
       .filter((child) => child.id !== group.primary.id)
@@ -1222,6 +1333,14 @@ export function ChildAgentsPanelView({
   const selectedChild = presentationChildren.find((child) => child.id === selectedChildId) ?? presentationChildren[0] ?? null
   const attemptsByChildId = childAgentAttemptInfo(directChildren)
   const runningCount = attemptGroups.filter((group) => group.attempts.some(isActiveChildAttempt)).length
+  const selectListFilter = (nextFilter: ChildAgentListFilter): void => {
+    setListFilter(nextFilter)
+    const nextGroups = filterChildAgentAttemptGroups(attemptGroups, nextFilter)
+    const selectionStillVisible = nextGroups.some((group) =>
+      group.attempts.some((child) => child.id === selectedChildId)
+    )
+    if (!selectionStillVisible && nextGroups[0]) onSelectChild(nextGroups[0].primary.id)
+  }
   const transcriptScrollRef = useRef<HTMLDivElement | null>(null)
   const transcriptScrollKey = useMemo(() => {
     if (!selectedChild) return ''
@@ -1266,8 +1385,20 @@ export function ChildAgentsPanelView({
           {loading ? <Loader2 className="h-4 w-4 animate-spin text-ds-faint" strokeWidth={2} /> : null}
         </div>
         <div className="grid grid-cols-2 gap-2 px-4 pb-3">
-          <ChildAgentStat label={t('sidebarChildren')} value={attemptGroups.length} />
-          <ChildAgentStat label={t('sidebarChildrenActive')} value={runningCount} />
+          <ChildAgentStat
+            label={t('sidebarChildren')}
+            value={attemptGroups.length}
+            active={listFilter === 'all'}
+            title={t('sidebarChildrenFilterAll')}
+            onClick={() => selectListFilter('all')}
+          />
+          <ChildAgentStat
+            label={t('sidebarChildrenActive')}
+            value={runningCount}
+            active={listFilter === 'active'}
+            title={t('sidebarChildrenFilterActive')}
+            onClick={() => selectListFilter('active')}
+          />
         </div>
         {navigationPath.length > 0 ? (
           <nav
@@ -1305,13 +1436,13 @@ export function ChildAgentsPanelView({
             })}
           </nav>
         ) : null}
-        {attemptGroups.length > 0 ? (
+        {visibleAttemptGroups.length > 0 ? (
           <div
             role="tablist"
             aria-label={t('sidebarChildren')}
             className="flex min-w-0 gap-2 overflow-x-auto px-4 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
           >
-            {attemptGroups.map((group) => {
+            {visibleAttemptGroups.map((group) => {
               const expanded = isAttemptGroupExpanded(group)
               const displayedAttempts = expanded
                 ? [
@@ -1399,6 +1530,10 @@ export function ChildAgentsPanelView({
           <div className="h-full px-3 py-3">
             <ChildAgentsEmpty icon={<Bot className="h-6 w-6" strokeWidth={1.6} />} title={t('sidebarChildrenEmpty')} />
           </div>
+        ) : visibleAttemptGroups.length === 0 ? (
+          <div className="h-full px-3 py-3">
+            <ChildAgentsEmpty icon={<Clock3 className="h-6 w-6" strokeWidth={1.6} />} title={t('sidebarChildrenActiveEmpty')} />
+          </div>
         ) : selectedChild ? (
           <div className="flex min-h-0 flex-1 flex-col">
             {childOpenThreadId(selectedChild) && (onOpenChildInFocus || onOpenSelectedChildren) ? (
@@ -1470,12 +1605,35 @@ export function ChildAgentsPanelView({
   )
 }
 
-function ChildAgentStat({ label, value }: { label: string; value: number }): ReactElement {
+function ChildAgentStat({
+  label,
+  value,
+  active,
+  title,
+  onClick
+}: {
+  label: string
+  value: number
+  active: boolean
+  title: string
+  onClick: () => void
+}): ReactElement {
   return (
-    <div className="rounded-lg bg-ds-surface-subtle px-2.5 py-2 dark:bg-white/6">
+    <button
+      type="button"
+      aria-pressed={active}
+      aria-label={title}
+      title={title}
+      onClick={onClick}
+      className={`rounded-lg border px-2.5 py-2 text-left transition ${
+        active
+          ? 'border-accent/35 bg-accent/10 shadow-sm'
+          : 'border-transparent bg-ds-surface-subtle hover:border-ds-border-muted hover:bg-ds-hover dark:bg-white/6'
+      }`}
+    >
       <div className="text-[15px] font-semibold leading-none text-ds-ink">{value}</div>
-      <div className="mt-1 truncate text-[10.5px] font-medium text-ds-faint">{label}</div>
-    </div>
+      <div className={`mt-1 truncate text-[10.5px] font-medium ${active ? 'text-accent' : 'text-ds-faint'}`}>{label}</div>
+    </button>
   )
 }
 
@@ -1536,7 +1694,10 @@ export function useThreadChildren({
     }
 
     void refresh(true)
-    interval = window.setInterval(() => void refresh(false), busy ? 2500 : 5000)
+    // Child refresh events update this view immediately. Keep polling as a
+    // conservative fallback so an expensive tree scan cannot interrupt input
+    // or window dragging every few seconds.
+    interval = window.setInterval(() => void refresh(false), busy ? 10_000 : 30_000)
 
     return () => {
       cancelled = true
@@ -1545,6 +1706,46 @@ export function useThreadChildren({
   }, [activeThreadId, activeRuntimeId, busy, childRefreshKey, runtimeReady])
 
   return { children, loading, error }
+}
+
+export function SessionChildAgentsPanel({
+  sessionId,
+  thread,
+  busy = false,
+  focusChildId = null,
+  focusChildRequestKey = 0,
+  onOpenChildInFocus,
+  onCollapse,
+  className = ''
+}: SessionChildAgentsPanelProps): ReactElement {
+  const { runtimeConnection, childRefreshKey } = useChatStore(
+    useShallow((state) => ({
+      runtimeConnection: state.runtimeConnection,
+      childRefreshKey: state.childRefreshKey
+    }))
+  )
+  const owner = sessionChildAgentsOwner(sessionId, thread)
+  const childrenState = useThreadChildren({
+    ...owner,
+    childRefreshKey,
+    runtimeReady: runtimeConnection === 'ready',
+    busy
+  })
+
+  return (
+    <ChildAgentsPanel
+      activeThreadId={owner.activeThreadId}
+      activeThread={thread}
+      children={childrenState.children}
+      loading={childrenState.loading}
+      error={childrenState.error}
+      focusChildId={focusChildId}
+      focusChildRequestKey={focusChildRequestKey}
+      onOpenChildInFocus={onOpenChildInFocus}
+      onCollapse={onCollapse}
+      className={className}
+    />
+  )
 }
 
 export function ChildAgentsPanel({
@@ -1815,7 +2016,7 @@ export function ChildAgentsPanel({
     return () => {
       cancelled = true
     }
-  }, [currentParentThreadId, selectedTranscriptKey, t])
+  }, [currentParentThreadId, selectedChild, selectedTranscriptKey, t])
 
   return (
     <ChildAgentsPanelView

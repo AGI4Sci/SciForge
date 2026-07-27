@@ -33,6 +33,7 @@ function createUpdater(): MockUpdater {
 beforeEach(() => {
   vi.useFakeTimers()
   vi.resetModules()
+  vi.stubEnv('SCIFORGE_ALLOW_UNSIGNED_UPDATES', '1')
   updater = createUpdater()
   nativeUpdater = new EventEmitter()
   vi.doMock('electron', () => ({
@@ -54,6 +55,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllTimers()
   vi.useRealTimers()
+  vi.unstubAllEnvs()
   vi.doUnmock('electron')
   vi.doUnmock('electron-updater')
   vi.resetModules()
@@ -105,5 +107,27 @@ describe('installGuiUpdate', () => {
     finishCleanup()
     await expect(installing).resolves.toEqual({ ok: true })
     expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true)
+  })
+})
+
+describe('background update scheduling', () => {
+  it('keeps packaged updates enabled while source builds require an explicit opt-in', async () => {
+    const module = await import('./gui-updater')
+
+    expect(module.shouldScheduleBackgroundGuiUpdates(true, {})).toBe(true)
+    expect(module.shouldScheduleBackgroundGuiUpdates(false, {})).toBe(false)
+    expect(module.shouldScheduleBackgroundGuiUpdates(false, {
+      SCIFORGE_DEV_UPDATE_CHECK: '1'
+    })).toBe(true)
+  })
+})
+
+describe('native update trust policy', () => {
+  it('keeps unsigned Windows and Linux builds manual-only', async () => {
+    vi.stubEnv('SCIFORGE_ALLOW_UNSIGNED_UPDATES', '')
+    const module = await import('./gui-updater')
+
+    expect(module.nativeAutoUpdateAllowed('win32')).toBe(false)
+    expect(module.nativeAutoUpdateAllowed('linux')).toBe(false)
   })
 })

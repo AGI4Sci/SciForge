@@ -16,24 +16,25 @@ import {
   WriteDocxViewer
 } from '../components/write/WriteDocxViewer'
 import type {
-  WriteDocxAnnotationOverlay
-} from '../components/write/WriteDocxViewer'
-import type {
-  WritePdfAnnotationAction,
-  WritePdfSelection
-} from '../components/write/WritePdfViewer'
+  DocumentAnnotationAction,
+  DocumentAnnotationSelection,
+  DocumentNavigationRequest,
+  DocumentTextAnnotationOverlay
+} from './document-annotation-types'
 import {
-  createDocxWorkspacePreviewAnnotationOperation
+  createDocumentWorkspacePreviewAnnotationOperation
 } from './document-annotation-operations'
 
 export type DocxWorkspaceViewerProps = {
   observation?: WorkspaceObservation | null
+  documentContentKey?: string
   className?: string
   onApplyEdit?: (operation: WorkspacePreviewEditOperation) => Promise<void>
-  annotationOverlays?: WriteDocxAnnotationOverlay[]
+  annotationOverlays?: readonly DocumentTextAnnotationOverlay[]
   activeAnnotationId?: string | null
   onAnnotationSelect?: (threadId: string) => void
   onOpenAnnotations?: () => void
+  navigationRequest?: DocumentNavigationRequest | null
 }
 
 export type DocxWorkspaceViewerModel = {
@@ -126,27 +127,29 @@ export async function saveDocxWorkspaceParagraphs(input: {
 
 export function DocxWorkspaceViewer({
   observation,
+  documentContentKey,
   className,
   onApplyEdit,
   annotationOverlays = [],
   activeAnnotationId = null,
   onAnnotationSelect,
-  onOpenAnnotations
+  onOpenAnnotations,
+  navigationRequest = null
 }: DocxWorkspaceViewerProps): ReactElement {
   const { t } = useTranslation()
   const model = buildDocxWorkspaceViewerModel(observation)
-  const handleAnnotationAction = useCallback((action: WritePdfAnnotationAction, selection: WritePdfSelection): void => {
+  const handleAnnotationAction = useCallback((action: DocumentAnnotationAction, selection: DocumentAnnotationSelection): void => {
     if (!observation || !onApplyEdit) return
-    const operation = createDocxWorkspacePreviewAnnotationOperation({
+    const operation = createDocumentWorkspacePreviewAnnotationOperation({
+      documentKind: 'docx',
       path: observation.file.path,
       action,
       selection,
-      documentText: model.content,
       translationBody: t('writeDocxAnnotationTranslatePrompt')
     })
     if (!operation) return
     void onApplyEdit(operation)
-  }, [model.content, observation, onApplyEdit, t])
+  }, [observation, onApplyEdit, t])
 
   if (!observation || model.status !== 'ready') {
     return (
@@ -172,6 +175,7 @@ export function DocxWorkspaceViewer({
     >
       <WriteDocxViewer
         filePath={observation.file.path}
+        documentContentKey={documentContentKey}
         paragraphs={model.paragraphs}
         content={model.content}
         size={model.size}
@@ -182,6 +186,7 @@ export function DocxWorkspaceViewer({
         activeAnnotationId={activeAnnotationId}
         onAnnotationSelect={onAnnotationSelect}
         onOpenAnnotations={onOpenAnnotations}
+        navigationRequest={navigationRequest}
         onSaveParagraphs={(paragraphs) => saveDocxWorkspaceParagraphs({
           observation,
           paragraphs,

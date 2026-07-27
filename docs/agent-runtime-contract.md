@@ -1,17 +1,18 @@
 # AgentRuntime 中性接口设计
 
-本文记录 SciForge 下一阶段的运行时中性接口设计。目标不是让 Codex 伪装成
-SciForge Runtime HTTP/SSE server，而是让 **SciForge Runtime**、**Codex** 和
-**Claude Code** 都接入同一个
-`AgentRuntime` contract。Renderer 只消费中性线程、turn、event 和 capability，
-不再关心底层是 SciForge Runtime HTTP/SSE 还是 Codex app-server JSON-RPC stdio。
+本文记录 SciForge 的运行时中性接口设计。当前可执行 adapter 只有 **Codex** 和
+**Claude Code**；旧 `sciforge` ID 仅用于读取和迁移历史数据。两者都接入同一个
+`AgentRuntime` contract，Renderer 只消费中性线程、turn、event 和 capability。
+
+> 说明：后文的 “SciForge Runtime 能力审计” 是删除 Kun/custom runtime 前留下的
+> 历史设计输入，不表示当前安装包仍包含该 runtime。
 
 ## 设计目标
 
-- SciForge Runtime、Codex 和 Claude 共用同一条产品链路：Code、Write、连接手机和定时任务都通过
+- Codex 和 Claude 共用同一条产品链路：Code、Write、连接手机和定时任务都通过
   AgentRuntimeHost 选择当前 runtime。
-- 保留 runtime 差异：Codex 的 thread 物化、reasoning 可见性、approval/user
-  input 支持情况不能被伪装成 SciForge Runtime。
+- 保留 runtime 差异：Codex 与 Claude Code 的 thread 物化、reasoning 可见性及
+  approval/user input 支持情况必须如实暴露。
 - 提升可诊断性：Codex backend 慢时，UI 能区分慢在启动、initialize、thread
   创建、首 token、模型响应或工具执行。
 - 保持模块化：Codex app-server 细节继续集中在 `src/main/runtime/codex/`；
@@ -60,7 +61,7 @@ agent 编排是边界外能力，可以通过协议接进来。**
 - 入口策略：renderer 专用 `codex:*` IPC 已删除；应用代码统一走中性
   `agentRuntime:*` IPC，不再保留 `runtimeRequest` / `startSse` / `stopSse`
   旁路。
-- E2E 验收：Codex 和 SciForge Runtime 都至少做一次真实 assistant 回复 smoke；recoverable
+- E2E 验收：Codex 和 Claude Code 都至少做一次真实 assistant 回复 smoke；recoverable
   error 作为单独错误路径验证，不替代正常路径。
 
 ## SciForge Runtime 当前能力审计

@@ -8,8 +8,10 @@ import {
 import {
   MarkdownWorkspaceViewer,
   buildMarkdownWorkspaceViewerModel,
+  createMarkdownAnnotationSelection,
   createMarkdownReplaceAllOperation
 } from './MarkdownWorkspaceViewer'
+import { createDocumentTextAnchor } from './dom-text-annotations'
 
 function createMarkdownObservation(
   overrides: Partial<WorkspaceObservation> = {}
@@ -126,6 +128,91 @@ describe('MarkdownWorkspaceViewer', () => {
     expect(html).not.toContain('data-text-preview-editor')
     expect(html).toContain('data-markdown-preview-pane')
     expect(html).toContain('<h1>Alpha</h1>')
+  })
+
+  it('exposes the shared annotation surface in preview and split modes', () => {
+    const annotationProps = {
+      annotationOverlays: [{
+        id: 'thread-1',
+        kind: 'comment' as const,
+        quote: 'beta',
+        contextBefore: 'Alpha',
+        status: 'open' as const
+      }],
+      activeAnnotationId: 'thread-1',
+      onAnnotationAction: () => undefined,
+      onAnnotationSelect: () => undefined,
+      onOpenAnnotations: () => undefined,
+      navigationRequest: {
+        requestId: 'locate-1',
+        threadId: 'thread-1',
+        quote: 'beta',
+        contextBefore: 'Alpha'
+      }
+    }
+    const previewHtml = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      initialMode: 'preview',
+      ...annotationProps
+    }))
+    const splitHtml = renderToStaticMarkup(createElement(MarkdownWorkspaceViewer, {
+      observation: createMarkdownObservation(),
+      initialMode: 'split',
+      ...annotationProps
+    }))
+
+    for (const html of [previewHtml, splitHtml]) {
+      expect(html).toContain('data-markdown-annotation-actions="true"')
+      expect(html).toContain('data-markdown-annotation-overlay-count="1"')
+      expect(html).toContain('data-active-annotation-id="thread-1"')
+      expect(html).toContain('data-markdown-annotation-text-root')
+      expect(html).toContain('data-markdown-annotation-overlay-layer')
+      expect(html).toContain('data-markdown-open-annotations')
+    }
+  })
+
+  it('builds Markdown-native selections with rendered offsets and quote context', () => {
+    const text = 'Alpha beta cells gamma'
+    const anchor = createDocumentTextAnchor(
+      text,
+      text.indexOf('beta'),
+      text.indexOf('beta') + 'beta cells'.length
+    )
+    if (!anchor) throw new Error('Expected a Markdown text anchor.')
+
+    expect(createMarkdownAnnotationSelection({
+      anchor,
+      filePath: '/workspace/lab/notes.md',
+      mimeType: 'text/markdown',
+      size: 24,
+      mtimeMs: 42
+    })).toEqual({
+      text: 'beta cells',
+      ranges: [{
+        from: 6,
+        to: 16,
+        startLine: 1,
+        startColumn: 7,
+        endLine: 1,
+        endColumn: 17,
+        text: 'beta cells',
+        charCount: 10
+      }],
+      charCount: 10,
+      sourceKind: 'markdown',
+      contextBefore: 'Alpha',
+      contextAfter: 'gamma',
+      rects: [],
+      metadata: {
+        sourceKind: 'markdown',
+        filePath: '/workspace/lab/notes.md',
+        sourceTitle: 'notes.md',
+        mimeType: 'text/markdown',
+        size: 24,
+        mtimeMs: 42,
+        rects: []
+      }
+    })
   })
 
   it('rejects non-Markdown observations without falling back to hardcoded rendering', () => {

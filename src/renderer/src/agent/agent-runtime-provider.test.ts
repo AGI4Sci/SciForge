@@ -6,7 +6,6 @@ import {
   defaultKeyboardShortcuts,
   defaultLocalRuntimeSettings,
   defaultModelRouterSettings,
-  defaultModelProviderSettings,
   defaultScheduleSettings,
   defaultWorkflowSettings,
   defaultWriteSettings,
@@ -18,7 +17,7 @@ import {
   type AgentRuntimeCapabilities,
   type AgentRuntimeEvent
 } from '@shared/agent-runtime-contract'
-import { AgentRuntimeProvider } from './agent-runtime-provider'
+import { AgentRuntimeProvider, defaultCapabilities } from './agent-runtime-provider'
 import { rendererRuntimeClient } from './runtime-client'
 import type { ThreadEventSink } from './types'
 
@@ -29,7 +28,6 @@ function settings(activeAgentRuntime: AgentRuntimeId): AppSettingsV1 {
     theme: 'system',
     uiFontScale: 'small',
     activeAgentRuntime,
-    provider: defaultModelProviderSettings(),
     modelRouter: defaultModelRouterSettings(),
     agents: {
       sciforge: defaultLocalRuntimeSettings(),
@@ -130,6 +128,23 @@ afterEach(() => {
 })
 
 describe('AgentRuntimeProvider', () => {
+  it('uses unavailable Codex capabilities by default without a live Kun transport', () => {
+    const provider = new AgentRuntimeProvider()
+    const legacyLocal = defaultCapabilities('sciforge')
+
+    expect(provider.id).toBe('codex')
+    expect(provider.getCapabilities()).toEqual(expect.objectContaining({
+      stream: false,
+      interrupt: false,
+      approvals: false
+    }))
+    expect(legacyLocal).toMatchObject({
+      runtimeId: 'sciforge',
+      transport: 'jsonrpc_stdio',
+      events: { live: false, replayable: false, sequenced: false }
+    })
+  })
+
   it('routes provider operations through neutral agentRuntime IPC with the active runtime id', async () => {
     const connect = vi.fn(async () => undefined)
     const listThreads = vi.fn(async () => [
@@ -349,12 +364,15 @@ describe('AgentRuntimeProvider', () => {
       ]
     })
     await expect(provider.sendUserMessage('thread-2', 'hello', {
+      clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello'
     })).resolves.toEqual({ threadId: 'thread-2', turnId: 'turn-2', userMessageItemId: 'user-2' })
     await expect(provider.interruptTurn('thread-2', 'turn-2', { discard: true })).resolves.toBeUndefined()
-    await expect(provider.steerUserMessage?.('thread-2', 'turn-2', 'more')).resolves.toBeUndefined()
+    await expect(provider.steerUserMessage?.('thread-2', 'turn-2', 'more', {
+      clientDirectiveId: 'directive:steer:1'
+    })).resolves.toBeUndefined()
     await expect(provider.renameThread('thread-2', 'Renamed')).resolves.toBeUndefined()
     await expect(provider.compactThread?.('thread-2', 'manual')).resolves.toBeUndefined()
     await expect(provider.forkThread?.('thread-2', { relation: 'side', title: 'Side path' })).resolves.toEqual(
@@ -380,6 +398,7 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'thread-2',
       text: 'hello',
+      clientDirectiveId: 'directive:send:1',
       model: 'gpt-5',
       reasoningEffort: 'medium',
       displayText: 'hello'
@@ -394,7 +413,8 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'thread-2',
       turnId: 'turn-2',
-      text: 'more'
+      text: 'more',
+      clientDirectiveId: 'directive:steer:1'
     })
     expect(renameThread).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -649,7 +669,7 @@ describe('AgentRuntimeProvider', () => {
     const detail = await provider.getThreadDetail('thread-completed-tool')
 
     expect(detail.blocks).toEqual([
-      expect.objectContaining({ kind: 'user', id: 'user-1' }),
+      expect.objectContaining({ kind: 'user', id: 'user-1', turnStatus: 'completed' }),
       expect.objectContaining({ kind: 'tool', id: 'tool-result-1', status: 'success' }),
       expect.objectContaining({ kind: 'assistant', id: 'assistant-1', text: 'done' })
     ])
@@ -698,7 +718,7 @@ describe('AgentRuntimeProvider', () => {
     const detail = await provider.getThreadDetail('thread-idle')
 
     expect(detail.blocks).toEqual([
-      expect.objectContaining({ kind: 'tool', id: 'tool-running', status: 'success' }),
+      expect.objectContaining({ kind: 'tool', id: 'tool-running', status: 'error' }),
       expect.objectContaining({ kind: 'user_input', id: 'input-pending', status: 'cancelled' })
     ])
     expect(detail.blocks.some((block) => block.kind === 'tool' && block.status === 'running')).toBe(false)
@@ -767,7 +787,7 @@ describe('AgentRuntimeProvider', () => {
     expect(detail.threadStatus).toBe('completed')
     expect(detail.blocks).toEqual(expect.arrayContaining([
       expect.objectContaining({ kind: 'assistant', id: 'assistant-latest', text: 'done' }),
-      expect.objectContaining({ kind: 'tool', id: 'tool-stale', status: 'success' })
+      expect.objectContaining({ kind: 'tool', id: 'tool-stale', status: 'error' })
     ]))
     expect(detail.blocks.some((block) => block.kind === 'tool' && block.status === 'running')).toBe(false)
   })
@@ -822,10 +842,10 @@ describe('AgentRuntimeProvider', () => {
         return {
           sourceRuntimeId: 'codex',
           sourceThreadId: input.payload.sourceThreadId,
-          targetRuntimeId: 'sciforge',
+          targetRuntimeId: 'claude',
           targetThread: {
             id: input.payload.targetThreadId,
-            runtimeId: 'sciforge',
+            runtimeId: 'claude',
             title: 'Runtime handoff',
             updatedAt: '2026-06-11T00:02:00.000Z'
           },
@@ -839,7 +859,7 @@ describe('AgentRuntimeProvider', () => {
             notice: 'This is user/runtime context for semantic continuation, not a higher-priority instruction.',
             sourceRuntimeId: 'codex',
             sourceThreadId: input.payload.sourceThreadId,
-            targetRuntimeId: 'sciforge',
+            targetRuntimeId: 'claude',
             completed: [],
             pending: [],
             evidence: [],
@@ -887,7 +907,7 @@ describe('AgentRuntimeProvider', () => {
     await provider.updateThreadRelation?.('codex-thread', 'primary')
     await provider.deleteThread('codex-thread')
 
-    activeRuntime = 'sciforge'
+    activeRuntime = 'claude'
     rendererRuntimeClient.invalidateSettings()
     provider.rememberThreadRuntime('handoff-thread', 'codex')
 
@@ -904,7 +924,7 @@ describe('AgentRuntimeProvider', () => {
       operation: 'startRuntimeHandoff',
       payload: expect.objectContaining({
         sourceThreadId: 'handoff-thread',
-        targetRuntimeId: 'sciforge',
+        targetRuntimeId: 'claude',
         targetThreadId: 'handoff-thread',
         text: 'follow up'
       })
@@ -1088,32 +1108,6 @@ describe('AgentRuntimeProvider', () => {
       if (input.operation === 'getContextState') {
         return { runtimeId: 'codex', threadId: input.payload?.threadId, rawHistoryItems: 0, effectiveHistoryItems: 0, updatedAt: 'now' }
       }
-      if (input.operation === 'listModelAuditRecords') {
-        return [{
-          id: 'audit-1',
-          runtimeId: 'codex',
-          threadId: input.payload?.threadId,
-          startedAt: '2026-06-20T00:00:00.000Z',
-          request: {
-            bodySummary: {
-              schema: 'agent-runtime.turnStart',
-              keys: ['text'],
-              textChars: 5,
-              attachmentCount: 0,
-              fileReferenceCount: 0,
-              inlineContextReferenceCount: 0,
-              modelRouterObjectReferenceCount: 0,
-              hasGuiPlan: false,
-              estimatedJsonChars: 10
-            }
-          },
-          streamOutput: { text: 'hello', reasoning: '', toolCalls: [] }
-        }]
-      }
-      if (input.operation === 'clearModelAuditRecords') {
-        if (input.payload?.fail === true) throw new Error('clear failed')
-        return true
-      }
       if (input.operation === 'listGitCheckpoints') {
         return [{
           id: 'checkpoint-1',
@@ -1248,13 +1242,6 @@ describe('AgentRuntimeProvider', () => {
       id: 'attachment-1',
       name: 'figure.png'
     })
-    await expect(provider.listModelAuditRecords({ threadId: 'codex-thread', limit: 5 })).resolves.toEqual([
-      expect.objectContaining({
-        id: 'audit-1',
-        runtimeId: 'codex',
-        threadId: 'codex-thread'
-      })
-    ])
     await expect(provider.listGitCheckpoints?.({
       threadId: 'codex-thread',
       workspaceRoot: '/tmp/ws'
@@ -1274,7 +1261,6 @@ describe('AgentRuntimeProvider', () => {
       runtimeId: 'codex',
       threadId: 'codex-thread'
     }))
-    await expect(provider.clearModelAuditRecords()).resolves.toBe(true)
     await expect(provider.runCodeNavigation?.({
       workspaceRoot: '/tmp/ws',
       operation: 'goToDefinition',
@@ -1334,14 +1320,6 @@ describe('AgentRuntimeProvider', () => {
     })
     expect(auxiliary).toHaveBeenCalledWith({
       runtimeId: 'codex',
-      operation: 'listModelAuditRecords',
-      payload: {
-        threadId: 'codex-thread',
-        limit: 5
-      }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'codex',
       operation: 'listGitCheckpoints',
       payload: {
         threadId: 'codex-thread',
@@ -1356,11 +1334,6 @@ describe('AgentRuntimeProvider', () => {
         threadId: 'codex-thread',
         turnId: 'turn-1'
       }
-    })
-    expect(auxiliary).toHaveBeenCalledWith({
-      runtimeId: 'sciforge',
-      operation: 'clearModelAuditRecords',
-      payload: {}
     })
     expect(auxiliary).toHaveBeenCalledWith({
       runtimeId: 'codex',
@@ -1380,26 +1353,6 @@ describe('AgentRuntimeProvider', () => {
         transcriptRef: { runtimeId: 'codex', childId: 'child-1', transcriptId: 'transcript-1' }
       }
     })
-  })
-
-  it('propagates model audit auxiliary failures through the provider', async () => {
-    vi.stubGlobal('window', {
-      sciforge: {
-        getSettings: vi.fn(async () => settings('codex')),
-        setSettings: vi.fn(),
-        agentRuntime: {
-          capabilities: vi.fn(async () => capabilities('codex')),
-          auxiliary: vi.fn(async (input: { operation: string }) => {
-            if (input.operation === 'clearModelAuditRecords') throw new Error('clear failed')
-            return []
-          })
-        },
-      }
-    })
-
-    const provider = new AgentRuntimeProvider()
-
-    await expect(provider.clearModelAuditRecords()).rejects.toThrow('clear failed')
   })
 
   it('forwards neutral turn model hints to Codex adapter calls', async () => {

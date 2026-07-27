@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useShallow } from 'zustand/react/shallow'
 import {
   sddDraftFolderFromRelativePath,
   sddDraftTraceRelativePath
@@ -10,9 +9,10 @@ import {
 } from '@shared/sdd-trace'
 import { buildPlanRelativePath } from '@shared/gui-plan'
 import { useChatStore } from '../store/chat-store'
-import { useGuiPlanStore } from '../plan/plan-store'
-import { useSddDraftStore } from './sdd-draft-store'
-import { saveActiveSddDraftToDisk } from './sdd-draft-actions'
+import type { ChatState } from '../store/chat-store-types'
+import type { ThreadTodoList } from '../agent/types'
+import { guiPlanSession, useGuiPlanStore } from '../plan/plan-store'
+import { selectSddDraftSession, useSddDraftStore } from './sdd-draft-store'
 import { computeSddTrace, type SddTraceResult } from './sdd-trace-compute'
 
 function normalizeRoot(value: string): string {
@@ -37,7 +37,17 @@ export function sddPlanRelativePathForDraft(draftRelativePath: string): string |
   return buildPlanRelativePath(`sdd-${folder}`)
 }
 
+export function threadTodosForSession(
+  state: Pick<ChatState, 'activeThreadId' | 'activeThreadTodos' | 'threads'>,
+  ownerSessionId: string
+): ThreadTodoList | null {
+  return state.activeThreadId === ownerSessionId
+    ? state.activeThreadTodos
+    : (state.threads.find((thread) => thread.id === ownerSessionId)?.todos ?? null)
+}
+
 export function useSddTrace(input: {
+  ownerSessionId: string
   workspaceRoot: string
   draftRelativePath: string | null
 }): SddTraceResult | null {
@@ -47,25 +57,9 @@ export function useSddTrace(input: {
     () => (draftRelativePath ? sddPlanRelativePathForDraft(draftRelativePath) : null),
     [draftRelativePath]
   )
-
-  const activeThreadTodos = useChatStore((s) => s.activeThreadTodos)
-  const { activeDraft, draftContent, draftSaveStatus } = useSddDraftStore(
-    useShallow((s) => ({
-      activeDraft: s.activeDraft,
-      draftContent: s.content,
-      draftSaveStatus: s.saveStatus
-    }))
-  )
-  const { activePlan, planStoreContent } = useGuiPlanStore(
-    useShallow((s) => ({ activePlan: s.activePlan, planStoreContent: s.content }))
-  )
-
-  const draftIsActive = Boolean(
-    activeDraft &&
-      draftRelativePath &&
-      activeDraft.relativePath === draftRelativePath &&
-      normalizeRoot(activeDraft.workspaceRoot) === workspaceRoot
-  )
+  const threadTodos = useChatStore((state) => threadTodosForSession(state, input.ownerSessionId))
+  const planSession = useGuiPlanStore((state) => guiPlanSession(state, input.ownerSessionId))
+  const activePlan = planSession.activePlan
   const planIsActive = Boolean(
     activePlan &&
       planRelativePath &&
@@ -76,8 +70,7 @@ export function useSddTrace(input: {
   const [diskRequirement, setDiskRequirement] = useState<string | null>(null)
   const [diskPlan, setDiskPlan] = useState<string | null>(null)
   const [snapshot, setSnapshot] = useState<SddTraceSnapshot | null>(null)
-
-  const todosVersion = activeThreadTodos?.updatedAt ?? ''
+  const todosVersion = threadTodos?.updatedAt ?? ''
 
   useEffect(() => {
     if (!workspaceRoot || !draftRelativePath || !planRelativePath) {
@@ -119,23 +112,18 @@ export function useSddTrace(input: {
     }
   }, [workspaceRoot, draftRelativePath, planRelativePath, planIsActive, todosVersion])
 
-  const storeEditing =
-    draftIsActive && (draftSaveStatus === 'dirty' || draftSaveStatus === 'saving')
-  const requirementMarkdown = storeEditing
-    ? draftContent
-    : (diskRequirement ?? (draftIsActive ? draftContent : null))
-  const planMarkdown = planIsActive ? planStoreContent : diskPlan
-
+  const requirementMarkdown = diskRequirement
+  const planMarkdown = planIsActive ? planSession.content : diskPlan
   const result = useMemo(() => {
     if (!requirementMarkdown || !planRelativePath) return null
     return computeSddTrace({
       requirementMarkdown,
       planMarkdown: planMarkdown ?? null,
       planRelativePath,
-      threadTodos: activeThreadTodos,
+      threadTodos,
       traceSnapshot: snapshot
     })
-  }, [requirementMarkdown, planMarkdown, planRelativePath, activeThreadTodos, snapshot])
+  }, [requirementMarkdown, planMarkdown, planRelativePath, threadTodos, snapshot])
 
   const writebackBusyRef = useRef(false)
   useEffect(() => {
@@ -148,11 +136,17 @@ export function useSddTrace(input: {
     writebackBusyRef.current = true
     const run = async (): Promise<void> => {
       try {
-        if (storeEditing) {
-          const store = useSddDraftStore.getState()
-          if (store.saveStatus === 'saving') return
-          store.setContent(next)
-          await saveActiveSddDraftToDisk()
+        const draftState = useSddDraftStore.getState()
+        const draftSession = selectSddDraftSession(draftState, input.ownerSessionId)
+        const editorOwnsTarget = Boolean(
+          draftSession &&
+            draftSession.draft.relativePath === draftRelativePath &&
+            normalizeRoot(draftSession.draft.workspaceRoot) === workspaceRoot
+        )
+        if (
+          editorOwnsTarget &&
+          (draftSession?.saveStatus === 'dirty' || draftSession?.saveStatus === 'saving')
+        ) {
           return
         }
         if (typeof window.sciforge?.writeWorkspaceFile !== 'function') return
@@ -161,16 +155,13 @@ export function useSddTrace(input: {
           path: draftRelativePath,
           content: next
         })
-        if (written.ok) {
-          setDiskRequirement(next)
-          if (draftIsActive) useSddDraftStore.getState().markSaved(next)
-        }
+        if (written.ok) setDiskRequirement(next)
       } finally {
         writebackBusyRef.current = false
       }
     }
     void run()
-  }, [result, requirementMarkdown, draftRelativePath, draftIsActive, storeEditing, workspaceRoot])
+  }, [result, requirementMarkdown, draftRelativePath, workspaceRoot, input.ownerSessionId])
 
   return result
 }

@@ -6,6 +6,7 @@ import {
   buildExternalLocalRuntimeMcpJson,
   buildManagedGuiLocalRuntimeMcpServerConfig,
   resolveLocalRuntimeMcpJsonPath,
+  resolveManagedGuiMcpCommand,
   syncExternalLocalRuntimeMcpJson,
   type ManagedGuiMcpDescriptor,
   type ManagedGuiMcpLaunchConfig
@@ -43,6 +44,20 @@ describe('managed GUI MCP config helpers', () => {
 
   it('resolves the local runtime MCP JSON path under the existing SciForge data dir', () => {
     expect(resolveLocalRuntimeMcpJsonPath()).toBe(join(homedir(), '.sciforge', 'mcp.json'))
+  })
+
+  it('uses the SDK Electron-as-Node executable resolver', () => {
+    expect(resolveManagedGuiMcpCommand(launch, 'darwin')).toBe(
+      '/Applications/SciForge.app/Contents/Frameworks/SciForge Helper.app/Contents/MacOS/SciForge Helper'
+    )
+    expect(resolveManagedGuiMcpCommand({
+      ...launch,
+      execPath: String.raw`C:\Program Files\SciForge\SciForge.exe`
+    }, 'win32')).toBe(String.raw`C:\Program Files\SciForge\SciForge.exe`)
+    expect(resolveManagedGuiMcpCommand({
+      ...launch,
+      execPath: '/opt/SciForge/sciforge'
+    }, 'linux')).toBe('/opt/SciForge/sciforge')
   })
 
   it('uses current ~/.sciforge/mcp.json by default without reading legacy ~/.kun/mcp.json', async () => {

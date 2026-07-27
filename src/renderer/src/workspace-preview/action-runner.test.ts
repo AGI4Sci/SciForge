@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   WORKSPACE_PREVIEW_CONTRACT_VERSION,
+  workspacePreviewModalitySchema,
+  workspaceStructuredSelectionSchema,
   type WorkspaceObservation,
   type WorkspacePreviewSession,
   type WorkspaceStructuredSelection
@@ -11,23 +13,27 @@ import type {
   WorkspacePreviewInvokeActionResult
 } from '@shared/sciforge-api'
 import {
-  buildWorkspacePreviewPluginActionInput,
+  createExportWorkspacePreviewAction,
+  createInvokeWorkspacePreviewAction,
+  createSetSelectionWorkspacePreviewAction,
   runWorkspacePreviewToolbarAction
 } from './action-runner'
-import type { WorkspacePreviewToolbarAction } from './chrome-model'
-import { createWorkspacePreviewHostState, type WorkspacePreviewHost } from './host'
+import {
+  createWorkspacePreviewAssetTransportClient,
+  createWorkspacePreviewHostState,
+  type WorkspacePreviewHost
+} from './host'
+import type {
+  WorkspacePreviewPanelShellContext
+} from './WorkspacePreviewPanelShell'
+import type {
+  WorkspacePreviewActionContribution,
+  WorkspacePreviewToolbarAction
+} from './registry'
+
+vi.mock('./PdfWorkspaceViewer', () => ({ PdfWorkspaceViewer: () => null }))
 
 const NOW = '2026-07-08T00:00:00.000Z'
-
-function action(id: string, format?: string): WorkspacePreviewToolbarAction {
-  return {
-    id,
-    label: id,
-    source: 'observation',
-    enabled: true,
-    format
-  }
-}
 
 function session(overrides: Partial<WorkspacePreviewSession> = {}): WorkspacePreviewSession {
   return {
@@ -35,7 +41,7 @@ function session(overrides: Partial<WorkspacePreviewSession> = {}): WorkspacePre
     pluginId: 'molecular',
     workspaceRoot: '/workspace/lab',
     path: 'protein.pdb',
-    modality: 'molecular',
+    modality: workspacePreviewModalitySchema.parse('fixture.domain'),
     mode: 'preview',
     openedAt: NOW,
     updatedAt: NOW,
@@ -46,15 +52,10 @@ function session(overrides: Partial<WorkspacePreviewSession> = {}): WorkspacePre
 function observation(overrides: Partial<WorkspaceObservation> = {}): WorkspaceObservation {
   return {
     schemaVersion: WORKSPACE_PREVIEW_CONTRACT_VERSION,
-    file: {
-      path: '/workspace/lab/protein.pdb',
-      workspaceRoot: '/workspace/lab',
-      mimeType: 'chemical/x-pdb',
-      size: 128
-    },
+    file: { path: 'protein.pdb', workspaceRoot: '/workspace/lab' },
     view: {
       pluginId: 'molecular',
-      modality: 'molecular',
+      modality: workspacePreviewModalitySchema.parse('fixture.domain'),
       mode: 'preview',
       title: 'protein.pdb'
     },
@@ -63,585 +64,68 @@ function observation(overrides: Partial<WorkspaceObservation> = {}): WorkspaceOb
   }
 }
 
-describe('workspace preview action runner', () => {
-  it('derives safe default plugin inputs from life-science observations', () => {
-    const molecularWorkbench = buildWorkspacePreviewPluginActionInput(
-      'molecular.workbench',
-      observation({
-        molecular: {
-          chains: ['A', 'B'],
-          ligands: ['ATP']
-        }
-      })
-    )
-    const sequenceRegion = buildWorkspacePreviewPluginActionInput(
-      'sequence.selectRegion',
-      observation({
-        selection: {
-          kind: 'sequence',
-          sequenceId: 'chr1',
-          ranges: [{ start: 10, end: 25, strand: '+' }]
-        }
-      })
-    )
-    const omicsDataset = buildWorkspacePreviewPluginActionInput(
-      'omics.selectDataset',
-      observation({
-        omics: {
-          embeddings: ['X_umap']
-        }
-      })
-    )
-    const search = buildWorkspacePreviewPluginActionInput('sequence.search', observation())
+function toolbarAction(
+  contribution: WorkspacePreviewActionContribution,
+  format?: string
+): WorkspacePreviewToolbarAction {
+  return {
+    id: contribution.id,
+    label: contribution.label,
+    source: 'observation',
+    enabled: true,
+    format,
+    contribution
+  }
+}
 
-    expect(molecularWorkbench).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'molecular.workbench',
-        input: {
-          selection: { chains: ['A'] }
-        }
-      }
-    })
-    expect(sequenceRegion).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'sequence.selectRegion',
-        input: {
-          reference: 'chr1',
-          start: 10,
-          end: 25,
-          strand: '+'
-        }
-      }
-    })
-    expect(omicsDataset).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'omics.selectDataset',
-        input: {
-          embeddingNames: ['X_umap']
-        }
-      }
-    })
-    expect(search).toMatchObject({
-      ok: false,
-      reason: 'unsupported'
-    })
-  })
+function context(
+  host: WorkspacePreviewHost,
+  input: { session?: WorkspacePreviewSession; observation?: WorkspaceObservation } = {}
+): WorkspacePreviewPanelShellContext {
+  return {
+    host,
+    state: createWorkspacePreviewHostState({
+      session: input.session ?? session(),
+      observation: input.observation ?? observation()
+    }),
+    asset: null,
+    assetStatus: 'idle',
+    assetError: null,
+    transport: createWorkspacePreviewAssetTransportClient({
+      descriptor: null,
+      readRange: async () => ({ ok: false, message: 'not available' })
+    }),
+    refresh: vi.fn(),
+    refreshing: false
+  }
+}
 
-  it('maps molecular selections into unified workbench inputs', () => {
-    const molecularSelection: WorkspaceStructuredSelection = {
-      kind: 'molecular',
-      chains: ['A'],
-      residues: [{ chain: 'A', index: 42, name: 'GLY' }],
-      ligands: ['ATP'],
-      atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
-    }
-    const molecularWorkbench = buildWorkspacePreviewPluginActionInput(
-      'molecular.workbench',
-      observation({ selection: molecularSelection })
-    )
-    const missingMeasurement = buildWorkspacePreviewPluginActionInput(
-      'molecular.workbench',
-      observation({
-        selection: {
-          kind: 'molecular',
-          atoms: [{ element: 'N' }]
-        }
-      })
-    )
-
-    expect(molecularWorkbench).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'molecular.workbench',
-        input: {
-          selection: {
-            chains: ['A'],
-            residues: [{ chain: 'A', index: 42, name: 'GLY' }],
-            ligands: ['ATP'],
-            atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
-          },
-          measurement: {
-            kind: 'distance',
-            atoms: [{ id: 'atom-1' }, { index: 2 }]
-          }
-        }
-      }
+describe('workspace preview action contributions', () => {
+  it('runs selection and export through reusable host action contributions', async () => {
+    const selected: WorkspaceStructuredSelection = workspaceStructuredSelectionSchema.parse({
+      kind: 'domain',
+      selectionType: 'fixture.domain.selection',
+      data: { wireVersion: 2, selection: { ids: ['item-1'] } }
     })
-    expect(missingMeasurement).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'molecular.workbench',
-        input: {
-          selection: {
-            atoms: [{ element: 'N' }]
-          }
-        }
-      }
-    })
-  })
-
-  it('maps bioimaging and spectra selections into worker action inputs', () => {
-    const bioimagingAnnotation = buildWorkspacePreviewPluginActionInput(
-      'bioimaging.annotateRegion',
-      observation({
-        selection: {
-          kind: 'bioimaging',
-          roiIds: ['roi-1'],
-          channels: ['DAPI'],
-          regions: [{ x: 1, y: 2, width: 30, height: 40 }]
-        }
-      })
-    )
-    const spectraExport = buildWorkspacePreviewPluginActionInput(
-      'spectra.exportPeakList',
-      observation({
-        selection: {
-          kind: 'spectra',
-          ranges: [{ xStart: 100, xEnd: 400, yStart: 50 }]
-        }
-      })
-    )
-
-    expect(bioimagingAnnotation).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'bioimaging.annotateRegion',
-        input: {
-          roiId: 'roi-1',
-          label: 'ROI annotation',
-          channels: ['DAPI'],
-          region: { x: 1, y: 2, width: 30, height: 40 }
-        }
-      }
-    })
-    expect(spectraExport).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'spectra.exportPeakList',
-        input: {
-          format: 'csv',
-          range: {
-            mzMin: 100,
-            mzMax: 400,
-            intensityMin: 50
-          }
-        }
-      }
-    })
-  })
-
-  it('derives safe default plugin inputs from tabular and deck observations', () => {
-    const tabularSelection = buildWorkspacePreviewPluginActionInput(
-      'tabular.selectCells',
-      observation({
-        view: {
-          pluginId: 'tabular',
-          modality: 'tabular',
-          mode: 'preview',
-          title: 'samples.csv'
-        },
-        tables: [{ id: 'table-1', name: 'samples', rowCount: 20, columnCount: 8 }]
-      })
-    )
-    const tabularQuery = buildWorkspacePreviewPluginActionInput(
-      'tabular.filterRows',
-      observation({
-        view: {
-          pluginId: 'tabular',
-          modality: 'tabular',
-          mode: 'preview',
-          title: 'samples.csv'
-        }
-      })
-    )
-    const deckSlide = buildWorkspacePreviewPluginActionInput(
-      'deck.selectSlide',
-      observation({
-        view: {
-          pluginId: 'deck',
-          modality: 'deck',
-          mode: 'preview',
-          title: 'talk.pptx'
-        },
-        slides: [{ id: 'slide-2', index: 1, title: 'Results' }]
-      })
-    )
-    const deckText = buildWorkspacePreviewPluginActionInput(
-      'deck.selectText',
-      observation({
-        view: {
-          pluginId: 'deck',
-          modality: 'deck',
-          mode: 'preview',
-          title: 'talk.pptx'
-        },
-        selection: {
-          kind: 'deck',
-          slideIds: ['slide-3'],
-          elementIds: ['slide-3-notes-1']
-        },
-        deck: {
-          textElements: [
-            {
-              slideId: 'slide-3',
-              elementId: 'slide-3-title-1',
-              kind: 'title',
-              text: 'Results'
-            },
-            {
-              slideId: 'slide-3',
-              elementId: 'slide-3-notes-1',
-              kind: 'notes',
-              text: 'Discuss the confirmatory assay results.'
-            }
-          ]
-        }
-      })
-    )
-
-    expect(tabularSelection).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'tabular.selectCells',
-        input: {
-          selection: {
-            ranges: [{ rowStart: 0, rowEnd: 4, columnStart: 0, columnEnd: 4 }],
-            includeCellValues: true
-          }
-        }
-      }
-    })
-    expect(tabularQuery).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'tabular.filterRows',
-        input: { maxRows: 50 }
-      }
-    })
-    expect(deckSlide).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'deck.selectSlide',
-        input: {
-          slideId: 'slide-2',
-          maxElements: 20
-        }
-      }
-    })
-    expect(deckText).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'deck.selectText',
-        input: {
-          slideId: 'slide-3',
-          elementId: 'slide-3-notes-1',
-          kind: 'notes',
-          query: 'Discuss the confirmatory assay results.',
-          maxElements: 20
-        }
-      }
-    })
-  })
-
-  it('builds deck text inputs from selected and fallback bounded text elements', () => {
-    const textElements = [
-      {
-        slideId: 'slide-1',
-        elementId: 'slide-1-title-1',
-        kind: 'title' as const,
-        text: 'Opening question'
-      },
-      {
-        slideId: 'slide-2',
-        elementId: 'slide-2-body-1',
-        kind: 'body' as const,
-        text: 'Bounded assay result summary'
-      }
-    ]
-    const selectedText = buildWorkspacePreviewPluginActionInput(
-      'deck.selectText',
-      observation({
-        view: {
-          pluginId: 'deck',
-          modality: 'deck',
-          mode: 'preview',
-          title: 'talk.pptx'
-        },
-        selection: {
-          kind: 'deck',
-          slideIds: ['slide-2'],
-          elementIds: ['missing-element', 'slide-2-body-1']
-        },
-        deck: { textElements }
-      })
-    )
-    const fallbackText = buildWorkspacePreviewPluginActionInput(
-      'deck.selectText',
-      observation({
-        view: {
-          pluginId: 'deck',
-          modality: 'deck',
-          mode: 'preview',
-          title: 'talk.pptx'
-        },
-        selection: {
-          kind: 'deck',
-          slideIds: ['slide-2']
-        },
-        deck: { textElements }
-      })
-    )
-    const missingTextElements = () => buildWorkspacePreviewPluginActionInput(
-      'deck.selectText',
-      observation({
-        view: {
-          pluginId: 'deck',
-          modality: 'deck',
-          mode: 'preview',
-          title: 'talk.pptx'
-        },
-        slides: [{ id: 'slide-1', index: 0, title: 'Opening question' }],
-        selection: {
-          kind: 'deck',
-          slideIds: ['slide-1'],
-          elementIds: ['slide-1-title-1']
-        }
-      })
-    )
-
-    expect(selectedText).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'deck.selectText',
-        input: {
-          slideId: 'slide-2',
-          elementId: 'slide-2-body-1',
-          kind: 'body',
-          query: 'Bounded assay result summary',
-          maxElements: 20
-        }
-      }
-    })
-    expect(fallbackText).toMatchObject({
-      ok: true,
-      action: {
-        actionId: 'deck.selectText',
-        input: {
-          slideId: 'slide-1',
-          elementId: 'slide-1-title-1',
-          kind: 'title',
-          query: 'Opening question',
-          maxElements: 20
-        }
-      }
-    })
-    expect(missingTextElements).not.toThrow()
-    expect(missingTextElements()).toMatchObject({
-      ok: false,
-      reason: 'missing-selection'
-    })
-  })
-
-  it('invokes plugin actions and applies returned structured selections to the session', async () => {
-    const selected: WorkspaceStructuredSelection = {
-      kind: 'molecular',
-      chains: ['A']
-    }
-    const activeSession = session()
-    const invokeResult: WorkspacePreviewInvokeActionResult = {
-      ok: true,
-      sessionId: activeSession.id,
-      pluginId: activeSession.pluginId,
-      actionId: 'molecular.workbench',
-      invokedAt: NOW,
-      result: {
-        ok: true,
-        state: {
-          selection: selected
-        }
-      },
-      audit: {
-        pluginId: activeSession.pluginId,
-        path: activeSession.path,
-        actionId: 'molecular.workbench',
-        effect: 'worker-action'
-      }
-    }
-    const applyResult: WorkspacePreviewApplyEditResult = {
-      ok: true,
-      session: {
-        ...activeSession,
-        selection: selected,
-        updatedAt: NOW
-      },
-      operationKind: 'workspace.setSelection',
+    const activeSession = session({ selection: selected })
+    const selectionResult = {
+      ok: true as const,
+      session: activeSession,
+      operationKind: 'workspace.setSelection' as const,
       appliedAt: NOW,
       audit: {
         pluginId: activeSession.pluginId,
         path: activeSession.path,
-        operationKind: 'workspace.setSelection',
-        effect: 'session-update'
-      }
-    }
-    const host = {
-      invokeAction: vi.fn(async () => invokeResult),
-      setSelection: vi.fn(async () => applyResult)
-    } as unknown as WorkspacePreviewHost
-
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
-      host,
-      state: createWorkspacePreviewHostState({
-        session: activeSession,
-        observation: observation({
-          molecular: {
-            chains: ['A']
-          }
-        })
-      })
-    })
-
-    expect(result).toMatchObject({
-      ok: true,
-      kind: 'invoke-action',
-      actionId: 'molecular.workbench'
-    })
-    expect(host.invokeAction).toHaveBeenCalledWith(activeSession.id, {
-      actionId: 'molecular.workbench',
-      input: {
-        selection: { chains: ['A'] }
-      }
-    })
-    expect(host.setSelection).toHaveBeenCalledWith(selected, {
-      sessionId: activeSession.id,
-      path: activeSession.path
-    })
-  })
-
-  it('invokes molecular workbench measurement requests and applies the returned measured selection', async () => {
-    const measuredSelection: WorkspaceStructuredSelection = {
-      kind: 'molecular',
-      atoms: [{ id: 'atom-1' }, { index: 2 }]
-    }
-    const activeSession = session()
-    const invokeResult: WorkspacePreviewInvokeActionResult = {
-      ok: true,
-      sessionId: activeSession.id,
-      pluginId: activeSession.pluginId,
-      actionId: 'molecular.workbench',
-      invokedAt: NOW,
-      result: {
-        ok: true,
-        state: {
-          measurement: {
-            kind: 'distance',
-            coordinateAvailable: true,
-            value: 1.46,
-            unit: 'angstrom',
-            selection: measuredSelection
-          }
-        }
-      },
-      audit: {
-        pluginId: activeSession.pluginId,
-        path: activeSession.path,
-        actionId: 'molecular.workbench',
-        effect: 'worker-action'
-      }
-    }
-    const applyResult: WorkspacePreviewApplyEditResult = {
-      ok: true,
-      session: {
-        ...activeSession,
-        selection: measuredSelection,
-        updatedAt: NOW
-      },
-      operationKind: 'workspace.setSelection',
-      appliedAt: NOW,
-      audit: {
-        pluginId: activeSession.pluginId,
-        path: activeSession.path,
-        operationKind: 'workspace.setSelection',
-        effect: 'session-update'
-      }
-    }
-    const host = {
-      invokeAction: vi.fn(async () => invokeResult),
-      setSelection: vi.fn(async () => applyResult)
-    } as unknown as WorkspacePreviewHost
-
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
-      host,
-      state: createWorkspacePreviewHostState({
-        session: activeSession,
-        observation: observation({
-          selection: {
-            kind: 'molecular',
-            atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
-          }
-        })
-      })
-    })
-
-    expect(result).toMatchObject({
-      ok: true,
-      kind: 'invoke-action',
-      actionId: 'molecular.workbench'
-    })
-    expect(host.invokeAction).toHaveBeenCalledWith(activeSession.id, {
-      actionId: 'molecular.workbench',
-      input: {
-        selection: {
-          atoms: [{ id: 'atom-1' }, { index: 2 }, { element: 'N' }]
-        },
-        measurement: {
-          kind: 'distance',
-          atoms: [{ id: 'atom-1' }, { index: 2 }]
-        }
-      }
-    })
-    expect(host.setSelection).toHaveBeenCalledWith(measuredSelection, {
-      sessionId: activeSession.id,
-      path: activeSession.path
-    })
-  })
-
-  it('runs generic selection and export actions through the host', async () => {
-    const selected: WorkspaceStructuredSelection = {
-      kind: 'bioimaging',
-      channels: ['DAPI']
-    }
-    const activeSession = session({
-      pluginId: 'bioimaging',
-      modality: 'bioimaging',
-      path: 'cells.ome.tiff'
-    })
-    const applyResult: WorkspacePreviewApplyEditResult = {
-      ok: true,
-      session: {
-        ...activeSession,
-        selection: selected
-      },
-      operationKind: 'workspace.setSelection',
-      appliedAt: NOW,
-      audit: {
-        pluginId: activeSession.pluginId,
-        path: activeSession.path,
-        operationKind: 'workspace.setSelection',
-        effect: 'session-update'
+        operationKind: 'workspace.setSelection' as const,
+        effect: 'session-update' as const
       }
     }
     const exportResult: WorkspacePreviewExportResult = {
       ok: true,
       sessionId: activeSession.id,
-      path: 'cells.export.json',
-      target: {
-        kind: 'workspace-file',
-        format: 'json'
-      },
+      target: { kind: 'workspace-file', format: 'json' },
       exportedAt: NOW,
+      path: 'protein.json',
       audit: {
         pluginId: activeSession.pluginId,
         sourcePath: activeSession.path,
@@ -651,82 +135,50 @@ describe('workspace preview action runner', () => {
       }
     }
     const host = {
-      setSelection: vi.fn(async () => applyResult),
+      setSelection: vi.fn(async () => selectionResult),
       export: vi.fn(async () => exportResult)
     } as unknown as WorkspacePreviewHost
-    const state = createWorkspacePreviewHostState({
-      session: activeSession,
-      observation: observation({ selection: selected })
-    })
+    const runnerContext = context(host, { session: activeSession })
 
-    const selectionResult = await runWorkspacePreviewToolbarAction(action('workspace.setSelection'), {
-      host,
-      state
-    })
-    const downloadResult = await runWorkspacePreviewToolbarAction(action('workspace.export:json', 'json'), {
-      host,
-      state
-    })
-
-    expect(selectionResult).toMatchObject({ ok: true, kind: 'set-selection' })
-    expect(downloadResult).toMatchObject({ ok: true, kind: 'export' })
-    expect(host.setSelection).toHaveBeenCalledWith(selected, {
-      sessionId: activeSession.id,
-      path: activeSession.path
-    })
-    expect(host.export).toHaveBeenCalledWith(activeSession.id, {
-      kind: 'workspace-file',
-      format: 'json'
-    })
+    await expect(runWorkspacePreviewToolbarAction(
+      toolbarAction(createSetSelectionWorkspacePreviewAction()),
+      runnerContext
+    )).resolves.toMatchObject({ ok: true, kind: 'set-selection' })
+    await expect(runWorkspacePreviewToolbarAction(
+      toolbarAction(createExportWorkspacePreviewAction('json'), 'json'),
+      runnerContext
+    )).resolves.toMatchObject({ ok: true, kind: 'export' })
   })
 
-  it('reports a failure when an invoked action selection cannot be written back', async () => {
-    const selected: WorkspaceStructuredSelection = {
-      kind: 'molecular',
-      chains: ['A']
-    }
-    const activeSession = session()
-    const host = {
-      invokeAction: vi.fn(async (): Promise<WorkspacePreviewInvokeActionResult> => ({
-        ok: true,
-        sessionId: activeSession.id,
-        pluginId: activeSession.pluginId,
-        actionId: 'molecular.workbench',
-        invokedAt: NOW,
-        result: {
-          ok: true,
-          selection: selected
-        },
-        audit: {
-          pluginId: activeSession.pluginId,
-          path: activeSession.path,
-          actionId: 'molecular.workbench',
-          effect: 'worker-action'
-        }
-      })),
-      setSelection: vi.fn(async (): Promise<WorkspacePreviewApplyEditResult> => ({
-        ok: false,
-        message: 'selection writeback failed'
-      }))
-    } as unknown as WorkspacePreviewHost
-
-    const result = await runWorkspacePreviewToolbarAction(action('molecular.workbench'), {
-      host,
-      state: createWorkspacePreviewHostState({
-        session: activeSession,
-        observation: observation({
-          molecular: {
-            chains: ['A']
-          }
-        })
-      })
+  it('runs a package-contributed action without central action-id dispatch', async () => {
+    const custom = createInvokeWorkspacePreviewAction({
+      id: 'custom-domain.analyze',
+      label: 'Analyze',
+      buildInput: (current) => ({ path: current.file.path })
     })
+    const result: WorkspacePreviewInvokeActionResult = {
+      ok: true,
+      sessionId: 'session-1',
+      pluginId: 'molecular',
+      actionId: custom.id,
+      invokedAt: NOW,
+      result: { ok: true },
+      audit: {
+        pluginId: 'molecular',
+        path: 'protein.pdb',
+        actionId: custom.id,
+        effect: 'worker-action'
+      }
+    }
+    const host = { invokeAction: vi.fn(async () => result) } as unknown as WorkspacePreviewHost
 
-    expect(result).toEqual({
-      ok: false,
-      actionId: 'molecular.workbench',
-      reason: 'bridge',
-      message: 'selection writeback failed'
+    await expect(runWorkspacePreviewToolbarAction(
+      toolbarAction(custom),
+      context(host)
+    )).resolves.toMatchObject({ ok: true, kind: 'invoke-action', actionId: custom.id })
+    expect(host.invokeAction).toHaveBeenCalledWith('session-1', {
+      actionId: custom.id,
+      input: { path: 'protein.pdb' }
     })
   })
 })

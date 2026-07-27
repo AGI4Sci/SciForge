@@ -18,11 +18,8 @@ import type {
   WorkspaceObservation,
   WorkspacePreviewEditOperation
 } from '@shared/workspace-preview'
-import {
-  PDF_REVIEW_GENERATE_ACTION_ID,
-  PDF_REVIEW_IMPROVE_ACTION_ID,
-  type PdfReviewSelection
-} from '@shared/pdf-review'
+import type { WorkspacePreviewApplyEditResult } from '@shared/sciforge-api'
+import type { PdfReviewSelection } from '@shared/pdf-review'
 import {
   WritePdfAnnotationsPanel,
   type WritePdfAnnotationDisplayMode,
@@ -37,9 +34,6 @@ import type {
   WritePdfAnnotationOverlay
 } from '../components/write/WritePdfViewer'
 import type {
-  WriteDocxAnnotationOverlay
-} from '../components/write/WriteDocxViewer'
-import type {
   PdfAnnotationThreadSummary
 } from '../write/pdf-annotations'
 import type {
@@ -49,10 +43,20 @@ import {
   createAnnotationBodyUpdateOperation,
   createAnnotationThreadDeleteOperation,
   createAnnotationThreadStatusOperation,
-  createDocxAnnotationOverlaysFromSidecar,
+  createDocumentAnnotationNavigationRequest,
   createPdfAnnotationOverlaysFromSidecar,
-  firstPdfAnnotationThreadRect
+  createTextAnnotationOverlaysFromSidecar
 } from './document-annotation-operations'
+import type {
+  DocumentKind,
+  DocumentNavigationRequest,
+  DocumentTextAnnotationOverlay
+} from './document-annotation-types'
+
+const ANNOTATION_LIST_OPERATION_ID = 'workspace-preview.annotations.list'
+const ANNOTATION_IMPORT_OPERATION_ID = 'workspace-preview.annotations.import'
+const ANNOTATION_REVIEW_GENERATE_OPERATION_ID = 'workspace-preview.annotations.review.generate'
+const ANNOTATION_REVIEW_IMPROVE_OPERATION_ID = 'workspace-preview.annotations.review.improve'
 
 export type DocumentAnnotationPanelRenderInput = {
   pdf: {
@@ -66,9 +70,10 @@ export type DocumentAnnotationPanelRenderInput = {
     onOpenAnnotations: (selection: WritePdfSelection | null) => void
     onToggleAnnotations: () => void
   }
-  docx: {
-    annotationOverlays: WriteDocxAnnotationOverlay[]
+  text: {
+    annotationOverlays: DocumentTextAnnotationOverlay[]
     activeAnnotationId: string | null
+    navigationRequest: DocumentNavigationRequest | null
     onApplyEdit: (operation: WorkspacePreviewEditOperation) => Promise<void>
     onAnnotationSelect: (threadId: string) => void
     onOpenAnnotations: () => void
@@ -81,6 +86,9 @@ export type DocumentAnnotationQuestionSideBlock = {
   id: string
   kind: string
   text?: string
+  meta?: {
+    displayText?: string
+  }
   createdAt?: string
 }
 
@@ -101,17 +109,20 @@ export type DocumentAnnotationQuestionBridge = {
       source: 'pdf_annotation'
       title: string
       openPanel: boolean
-      allowStandalone: boolean
-      standalone: boolean
+      displayText: string
     }
   ) => Promise<string | null>
-  sendSideMessage: (sideId: string, text: string) => Promise<boolean>
+  sendSideMessage: (
+    sideId: string,
+    text: string,
+    overrides?: { displayText?: string }
+  ) => Promise<boolean>
 }
 
 export type DocumentAnnotationPanelControllerProps = {
   context: WorkspacePreviewPanelShellContext
   observation?: WorkspaceObservation | null
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   className?: string
   questionBridge?: DocumentAnnotationQuestionBridge
   renderDocument: (input: DocumentAnnotationPanelRenderInput) => ReactElement
@@ -129,7 +140,8 @@ export function DocumentAnnotationPanelController({
   const [sidecar, setSidecar] = useState<PdfAnnotationSidecar | null>(null)
   const [panelOpen, setPanelOpen] = useState(false)
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null)
-  const [jumpRevision, setJumpRevision] = useState(0)
+  const [navigationRequest, setNavigationRequest] = useState<DocumentNavigationRequest | null>(null)
+  const navigationSequenceRef = useRef(0)
   const [hoveredThreadId, setHoveredThreadId] = useState<string | null>(null)
   const [displayMode, setDisplayMode] = useState<WritePdfAnnotationDisplayMode>('current')
   const [loadingSidecar, setLoadingSidecar] = useState(false)
@@ -143,10 +155,26 @@ export function DocumentAnnotationPanelController({
   const importInputRef = useRef<HTMLInputElement | null>(null)
   const sessionId = context.state.session?.id ?? null
   const path = observation?.file.path ?? context.state.session?.path ?? ''
-  const canReadSidecar = Boolean(observation?.actions.includes('annotation.sidecar.read') && sessionId)
-  const canImportSidecar = Boolean(documentKind === 'pdf' && observation?.actions.includes('annotation.sidecar.import') && sessionId)
-  const canGeneratePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_GENERATE_ACTION_ID) && sessionId)
-  const canImprovePdfReview = Boolean(documentKind === 'pdf' && observation?.actions.includes(PDF_REVIEW_IMPROVE_ACTION_ID) && sessionId)
+  const operationIds = context.state.capability?.operations.map((operation) => operation.id) ?? []
+  const canReadSidecar = Boolean(
+    sessionId &&
+    operationIds.includes(ANNOTATION_LIST_OPERATION_ID)
+  )
+  const canImportSidecar = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_IMPORT_OPERATION_ID)
+  )
+  const canGeneratePdfReview = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_REVIEW_GENERATE_OPERATION_ID)
+  )
+  const canImprovePdfReview = Boolean(
+    documentKind === 'pdf' &&
+    sessionId &&
+    operationIds.includes(ANNOTATION_REVIEW_IMPROVE_OPERATION_ID)
+  )
   const pdfReviewHasSelection = Boolean(pdfReviewSelection && (pdfReviewSelection.text.trim() || pdfReviewSelection.rects?.length))
   const pdfReviewSelectionLabel = pdfReviewHasSelection
     ? `${pdfReviewSelection?.text.trim().length || pdfReviewSelection?.rects?.length || 0}${pdfReviewSelection?.text.trim() ? ' chars' : ' regions'}`
@@ -156,17 +184,14 @@ export function DocumentAnnotationPanelController({
     if (!sessionId || !canReadSidecar) return false
     setLoadingSidecar(true)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: 'annotation.sidecar.read',
-        input: {}
-      })
+      const result = await context.host.listAnnotations(sessionId)
       if (!result.ok) {
         setAnnotationNotice({ tone: 'error', message: result.message })
         return false
       }
-      const nextSidecar = sidecarFromActionResult(result)
-      if (nextSidecar) {
-        setSidecar(nextSidecar)
+      const parsed = pdfAnnotationSidecarSchema.safeParse(result.sidecar)
+      if (parsed.success) {
+        setSidecar(parsed.data)
         setAnnotationNotice(null)
         return true
       }
@@ -182,6 +207,7 @@ export function DocumentAnnotationPanelController({
   useEffect(() => {
     setSidecar(null)
     setSelectedThreadId(null)
+    setNavigationRequest(null)
     setHoveredThreadId(null)
     setPdfReviewSelection(null)
     setPdfReviewNotice(null)
@@ -195,14 +221,11 @@ export function DocumentAnnotationPanelController({
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const docxAnnotationOverlays = useMemo(() => createDocxAnnotationOverlaysFromSidecar(sidecar, {
+  const textAnnotationOverlays = useMemo(() => createTextAnnotationOverlaysFromSidecar(sidecar, {
     displayMode,
     activeThreadId
   }), [activeThreadId, displayMode, sidecar])
-  const jumpToRect = useMemo(() => {
-    const rect = firstPdfAnnotationThreadRect(sidecar, selectedThreadId)
-    return rect ? { ...rect, requestId: jumpRevision } : null
-  }, [jumpRevision, selectedThreadId, sidecar])
+  const jumpToRect = navigationRequest?.pageRect ?? null
 
   const clearPdfReviewNotice = useCallback((): void => {
     setPdfReviewNotice(null)
@@ -232,27 +255,68 @@ export function DocumentAnnotationPanelController({
 
   const selectThread = useCallback((threadId: string): void => {
     setSelectedThreadId(threadId)
-    setJumpRevision((revision) => revision + 1)
+    setNavigationRequest(null)
     setPanelOpen(true)
   }, [])
+
+  const locateThread = useCallback((threadId: string): void => {
+    setSelectedThreadId(threadId)
+    setDisplayMode((current) => current === 'hidden' ? 'current' : current)
+    navigationSequenceRef.current += 1
+    setNavigationRequest(createDocumentAnnotationNavigationRequest(
+      sidecar,
+      threadId,
+      `document-locate-${navigationSequenceRef.current}`
+    ))
+    setPanelOpen(true)
+  }, [sidecar])
+
+  const mutateAnnotationOperation = useCallback(async (
+    operation: WorkspacePreviewEditOperation | null
+  ): Promise<boolean> => {
+    if (!operation) return false
+    try {
+      const result = operation.kind === 'annotation.upsert'
+        ? await context.host.updateAnnotation({
+            annotationId: operation.annotationId,
+            annotationKind: operation.annotationKind,
+            body: operation.body,
+            ...(operation.target ? { target: operation.target } : {})
+          })
+        : operation.kind === 'annotation.thread.update' && operation.patch.status !== undefined
+          ? await context.host.resolveAnnotation({
+              threadId: operation.threadId,
+              resolved: operation.patch.status === 'resolved'
+            })
+          : operation.kind === 'annotation.thread.delete'
+            ? await context.host.deleteAnnotation({
+                threadId: operation.threadId,
+                pruneOrphanAnchors: operation.pruneOrphanAnchors
+              })
+            : { ok: false as const, message: 'Unsupported document annotation mutation.' }
+      if (!result.ok) {
+        setAnnotationNotice({ tone: 'error', message: result.message })
+        return false
+      }
+      setAnnotationNotice(null)
+      return true
+    } catch (error) {
+      setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      return false
+    }
+  }, [context.host])
 
   const applyAnnotationOperation = useCallback(async (
     operation: WorkspacePreviewEditOperation | null,
     options: { revealThread?: boolean } = {}
   ): Promise<boolean> => {
-    if (!operation) return false
+    if (!operation || !await mutateAnnotationOperation(operation)) return false
     try {
-      const result = await context.host.applyEdit(operation)
-      if (!result.ok) {
-        setAnnotationNotice({ tone: 'error', message: result.message })
-        return false
-      }
-      await context.host.observe(result.session.id)
       const sidecarLoaded = await loadSidecar()
       const threadId = annotationThreadIdFromOperation(operation)
       if (threadId && options.revealThread) {
         setSelectedThreadId(threadId)
-        setJumpRevision((revision) => revision + 1)
+        setNavigationRequest(null)
         setPanelOpen(true)
       }
       if (sidecarLoaded) setAnnotationNotice(null)
@@ -261,24 +325,31 @@ export function DocumentAnnotationPanelController({
       setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
       return false
     }
-  }, [context.host, loadSidecar])
+  }, [loadSidecar, mutateAnnotationOperation])
 
   const applyPreviewOperation = useCallback(async (operation: WorkspacePreviewEditOperation): Promise<void> => {
     if (isAnnotationEditOperation(operation)) {
       await applyAnnotationOperation(operation, { revealThread: true })
       return
     }
+    let result: WorkspacePreviewApplyEditResult
     try {
-      const result = await context.host.applyEdit(operation)
-      if (!result.ok) {
-        setAnnotationNotice({ tone: 'error', message: result.message })
-        return
-      }
-      await context.host.observe(result.session.id)
-      setAnnotationNotice(null)
+      result = await context.host.applyEdit(operation)
     } catch (error) {
       setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      throw error
     }
+    if (!result.ok) {
+      setAnnotationNotice({ tone: 'error', message: result.message })
+      throw new Error(result.message)
+    }
+    try {
+      await context.host.observe(result.session.id)
+    } catch (error) {
+      setAnnotationNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
+      throw error
+    }
+    setAnnotationNotice(null)
   }, [applyAnnotationOperation, context.host])
 
   const questionReplies = useMemo<Record<string, WritePdfQuestionAssistantReply>>(() => {
@@ -323,22 +394,23 @@ export function DocumentAnnotationPanelController({
         intent: options?.intent,
         previousDiscussion: existingSide || !summary.thread.sourceMessageId ? '' : previousDiscussionForAnnotationThread(summary)
       })
-      const title = `${documentKind === 'docx' ? 'DOCX' : 'PDF'}: ${clipInlineText(trimmed, 48)}`
+      const title = `${documentKind === 'pdf' ? 'PDF' : documentKind === 'docx' ? 'DOCX' : 'Markdown'}: ${clipInlineText(trimmed, 48)}`
       const sideThreadId = existingSide
         ? existingSide.threadId
         : await questionBridge.spawnSideConversation(prompt, {
             source: 'pdf_annotation',
             title,
             openPanel: false,
-            allowStandalone: true,
-            standalone: true
+            displayText: trimmed
           })
       if (!sideThreadId) {
         setAnnotationNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
         return
       }
       if (existingSide) {
-        const sent = await questionBridge.sendSideMessage(existingSide.threadId, prompt)
+        const sent = await questionBridge.sendSideMessage(existingSide.threadId, prompt, {
+          displayText: trimmed
+        })
         if (!sent) {
           setAnnotationNotice({ tone: 'error', message: t('writePdfAnnotationQuestionFailed') })
           return
@@ -368,10 +440,12 @@ export function DocumentAnnotationPanelController({
     if (!sidecar || !questionBridge || !path) return
     let cancelled = false
     const persist = async (): Promise<void> => {
+      let changed = false
       for (const thread of sidecar.threads) {
         if (cancelled || thread.kind !== 'question' || !thread.sourceMessageId) continue
         const side = questionBridge.sideConversations[thread.sourceMessageId]
         if (!side || side.source !== 'pdf_annotation') continue
+        if (side.busy) continue
         const turns = sideBlockTurns(side)
         for (const turn of turns) {
           if (cancelled) return
@@ -383,15 +457,18 @@ export function DocumentAnnotationPanelController({
             sideThreadId: side.threadId,
             turn
           })
-          if (operation) await applyAnnotationOperation(operation)
+          if (operation) {
+            changed = await mutateAnnotationOperation(operation) || changed
+          }
         }
       }
+      if (changed && !cancelled) await loadSidecar()
     }
     void persist()
     return () => {
       cancelled = true
     }
-  }, [applyAnnotationOperation, documentKind, path, questionBridge, sidecar])
+  }, [documentKind, loadSidecar, mutateAnnotationOperation, path, questionBridge, sidecar])
 
   const resolveThread = useCallback((threadId: string): void => {
     if (!path) return
@@ -415,6 +492,7 @@ export function DocumentAnnotationPanelController({
     if (!path) return
     void applyAnnotationOperation(createAnnotationThreadDeleteOperation({ path, threadId }))
     setSelectedThreadId((current) => current === threadId ? null : current)
+    setNavigationRequest((current) => current?.threadId === threadId ? null : current)
     setHoveredThreadId((current) => current === threadId ? null : current)
   }, [applyAnnotationOperation, path])
 
@@ -431,6 +509,7 @@ export function DocumentAnnotationPanelController({
   const generatePdfReview = useCallback(async (input: {
     scope: 'document' | 'selection'
     maxComments: number
+    prompt: string
   }): Promise<void> => {
     if (!sessionId || !canGeneratePdfReview) return
     const selection = input.scope === 'selection'
@@ -444,31 +523,27 @@ export function DocumentAnnotationPanelController({
     setPdfReviewGenerating(true)
     setPdfReviewNotice(null)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: PDF_REVIEW_GENERATE_ACTION_ID,
-        input: {
-          maxComments: input.maxComments,
-          replaceExisting: input.scope === 'document',
-          ...(selection ? { selection } : {})
-        }
+      const result = await context.host.generateAnnotationReview({
+        maxComments: input.maxComments,
+        prompt: input.prompt,
+        replaceExisting: input.scope === 'document',
+        ...(selection ? { selection } : {})
       })
       if (!result.ok) {
         setPdfReviewNotice({ tone: 'error', message: result.message })
         return
       }
-      const nextSidecar = sidecarFromActionResult(result)
+      const nextSidecar = pdfAnnotationSidecarSchema.parse(result.sidecar)
       if (nextSidecar) {
         setSidecar(nextSidecar)
         const firstReviewThread = nextSidecar.threads.find((thread) => thread.id.startsWith('sciforge-review-thread-'))
         setSelectedThreadId(firstReviewThread?.id ?? selectedThreadId)
-        setJumpRevision((revision) => revision + 1)
+        setNavigationRequest(null)
       }
       await context.host.observe(sessionId)
       setDisplayMode('all')
       setPanelOpen(true)
-      const payload = isRecord(result.result) ? result.result : {}
-      const commentCount = typeof payload.commentCount === 'number' ? payload.commentCount : 0
-      setPdfReviewNotice({ tone: 'success', message: `SciForge generated ${commentCount} PDF review comments.` })
+      setPdfReviewNotice({ tone: 'success', message: `SciForge generated ${result.commentCount} PDF review comments.` })
     } catch (error) {
       setPdfReviewNotice({ tone: 'error', message: error instanceof Error ? error.message : String(error) })
     } finally {
@@ -490,22 +565,19 @@ export function DocumentAnnotationPanelController({
     setPdfReviewImprovingThreadId(threadId)
     setPdfReviewNotice(null)
     try {
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: PDF_REVIEW_IMPROVE_ACTION_ID,
-        input: {
-          threadId,
-          annotationId
-        }
+      const result = await context.host.improveAnnotationReview({
+        threadId,
+        annotationId
       })
       if (!result.ok) {
         setPdfReviewNotice({ tone: 'error', message: result.message })
         return
       }
-      const nextSidecar = sidecarFromActionResult(result)
+      const nextSidecar = pdfAnnotationSidecarSchema.parse(result.sidecar)
       if (nextSidecar) setSidecar(nextSidecar)
       await context.host.observe(sessionId)
       setSelectedThreadId(threadId)
-      setJumpRevision((revision) => revision + 1)
+      setNavigationRequest(null)
       setPanelOpen(true)
       setPdfReviewNotice({ tone: 'success', message: 'SciForge added improvement advice to the selected comment.' })
     } catch (error) {
@@ -539,12 +611,9 @@ export function DocumentAnnotationPanelController({
     setImportingPackage(true)
     try {
       const packageBase64 = await readBrowserFileBase64(file)
-      const result = await context.host.invokeAction(sessionId, {
-        actionId: 'annotation.sidecar.import',
-        input: { packageBase64 }
-      })
+      const result = await context.host.importAnnotations({ packageBase64 }, sessionId)
       if (result.ok) {
-        await context.host.observe(result.sessionId)
+        await context.host.observe(sessionId)
         await loadSidecar()
         setPanelOpen(true)
       }
@@ -577,9 +646,10 @@ export function DocumentAnnotationPanelController({
             onOpenAnnotations: openPanel,
             onToggleAnnotations: togglePanel
           },
-          docx: {
-            annotationOverlays: docxAnnotationOverlays,
+          text: {
+            annotationOverlays: textAnnotationOverlays,
             activeAnnotationId: activeThreadId,
+            navigationRequest,
             onApplyEdit: applyPreviewOperation,
             onAnnotationSelect: selectThread,
             onOpenAnnotations: openPanel
@@ -599,7 +669,7 @@ export function DocumentAnnotationPanelController({
           reloadingSidecar={loadingSidecar}
           className="w-[360px] shrink-0"
           onAnnotationDisplayModeChange={setDisplayMode}
-          onSelectThread={selectThread}
+          onLocateThread={locateThread}
           onHoverThread={(threadId) => setHoveredThreadId(threadId)}
           onResolveThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => resolveThread(threadId)}
           onReopenThread={(threadId: string, _summary: PdfAnnotationThreadSummary) => reopenThread(threadId)}
@@ -629,12 +699,6 @@ export function DocumentAnnotationPanelController({
   )
 }
 
-function sidecarFromActionResult(result: Awaited<ReturnType<WorkspacePreviewPanelShellContext['host']['invokeAction']>>): PdfAnnotationSidecar | null {
-  if (!result.ok || !isRecord(result.result) || !isRecord(result.result.sidecar)) return null
-  const parsed = pdfAnnotationSidecarSchema.safeParse(result.result.sidecar)
-  return parsed.success ? parsed.data : null
-}
-
 type AnnotationQuestionTurn = {
   blockId: string
   sourceMessageId: string
@@ -648,15 +712,22 @@ function sideBlockSourceMessageId(sideThreadId: string, blockId: string): string
   return `${sideThreadId}:${blockId}`
 }
 
+export function documentAnnotationSideBlockText(block: DocumentAnnotationQuestionSideBlock): string {
+  if (block.kind === 'user') {
+    return block.meta?.displayText?.trim() || block.text?.trim() || ''
+  }
+  return block.text?.trim() || ''
+}
+
 function sideBlockTurns(side: DocumentAnnotationQuestionSideConversation): AnnotationQuestionTurn[] {
   return side.blocks
-    .filter((block) => (block.kind === 'user' || block.kind === 'assistant') && Boolean(block.text?.trim()))
+    .filter((block) => (block.kind === 'user' || block.kind === 'assistant') && Boolean(documentAnnotationSideBlockText(block)))
     .map((block) => ({
       blockId: block.id,
       sourceMessageId: sideBlockSourceMessageId(side.threadId, block.id),
       kind: block.kind === 'user' ? 'question' : 'answer',
       role: block.kind === 'user' ? 'user' : 'assistant',
-      text: block.text?.trim() ?? '',
+      text: documentAnnotationSideBlockText(block),
       ...(block.createdAt ? { createdAt: block.createdAt } : {})
     }))
 }
@@ -718,12 +789,16 @@ function buildAnnotationQuestionPrompt(input: {
   summary: PdfAnnotationThreadSummary
   documentPath: string
   workspaceRoot: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   intent?: 'question' | 'translate'
   previousDiscussion?: string
 }): string {
-  const documentLabel = input.documentKind === 'docx' ? 'DOCX document' : 'PDF'
-  const pageRange = pageRangeText(input.summary)
+  const documentLabel = input.documentKind === 'pdf'
+    ? 'PDF'
+    : input.documentKind === 'docx'
+      ? 'DOCX document'
+      : 'Markdown document'
+  const pageRange = input.documentKind === 'pdf' ? pageRangeText(input.summary) : ''
   const quote = input.summary.anchors
     .map((anchor) => anchor.quote.trim())
     .filter(Boolean)
@@ -749,7 +824,7 @@ function buildAnnotationQuestionPrompt(input: {
 
 function createQuestionAnnotationUpsertOperation(input: {
   path: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   summary: PdfAnnotationThreadSummary
   annotation: PdfAnnotation | undefined
   body: string
@@ -786,7 +861,7 @@ function createQuestionAnnotationUpsertOperation(input: {
 
 function createTurnPersistenceOperation(input: {
   path: string
-  documentKind: 'pdf' | 'docx'
+  documentKind: DocumentKind
   sidecar: PdfAnnotationSidecar
   threadId: string
   sideThreadId: string
@@ -850,6 +925,7 @@ function annotationAnchorTarget(anchor: PdfAnchor): NonNullable<Extract<Workspac
     quote: anchor.quote,
     contextBefore: anchor.contextBefore,
     contextAfter: anchor.contextAfter,
+    ...(anchor.textRange ? { textRange: anchor.textRange } : {}),
     pageStart: anchor.pageStart,
     pageEnd: anchor.pageEnd,
     rects: anchor.rects
@@ -906,8 +982,4 @@ function isAnnotationEditOperation(operation: WorkspacePreviewEditOperation): bo
 function annotationThreadIdFromOperation(operation: WorkspacePreviewEditOperation): string | null {
   if (operation.kind !== 'annotation.upsert') return null
   return operation.target?.threadId?.trim() || null
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
 }

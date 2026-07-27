@@ -14,6 +14,8 @@ const EMPTY_SUMMARY: ChildAgentAttentionSummary = {
   primaryTarget: null
 }
 
+const CHILD_ATTENTION_FALLBACK_POLL_MS = 30_000
+
 export type UseChildAgentAttentionInput = {
   rootThreadId: string | null
   rootLabel?: string
@@ -114,7 +116,12 @@ export function useChildAgentAttention(input: UseChildAgentAttentionInput): UseC
     }
 
     void load(true)
-    const pollIntervalMs = Math.max(0, input.pollIntervalMs ?? 5000)
+    // Runtime child-refresh events are the primary update path. Polling is a
+    // low-frequency recovery mechanism for missed events, not a live ticker.
+    const pollIntervalMs = Math.max(
+      0,
+      input.pollIntervalMs ?? CHILD_ATTENTION_FALLBACK_POLL_MS
+    )
     if (pollIntervalMs > 0) interval = window.setInterval(() => void load(false), pollIntervalMs)
     return () => {
       cancelled = true

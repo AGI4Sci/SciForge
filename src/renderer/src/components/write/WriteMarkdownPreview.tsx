@@ -23,7 +23,6 @@ import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import remarkMath from 'remark-math'
 import rehypeKatex from 'rehype-katex'
-import { harden } from 'rehype-harden'
 import type { PluggableList } from 'unified'
 import { useTranslation } from 'react-i18next'
 import {
@@ -32,17 +31,12 @@ import {
   transformWriteMarkdownLinkUrl,
   transformWriteMarkdownMediaUrl
 } from '@shared/write-markdown-resource'
-import {
-  SAFE_EMBEDDED_MEDIA_PROTOCOLS,
-  SAFE_EXTERNAL_PROTOCOLS,
-  normalizeSafeEmbeddedMediaUrl
-} from '@shared/external-url-policy'
+import { normalizeSafeEmbeddedMediaUrl } from '@shared/external-url-policy'
 import { normalizeMarkdownMathDelimiters } from '@shared/write-markdown-math'
 import {
   highlightCodeHtml,
   renderFallbackCodeHtml
 } from '../../lib/code-highlighting'
-import { FILE_REFERENCE_SCHEMES } from '../../lib/file-references'
 import { openSafeExternalUrl } from '../../lib/open-external'
 
 export {
@@ -97,18 +91,8 @@ type CodeBlockExpansionContextValue = {
 
 const CodeBlockExpansionContext = createContext<CodeBlockExpansionContextValue | null>(null)
 
-export const writeMarkdownHardenOptions = {
-  defaultOrigin: 'https://sciforge.local',
-  allowedLinkPrefixes: [...SAFE_EXTERNAL_PROTOCOLS, ...FILE_REFERENCE_SCHEMES],
-  allowedImagePrefixes: [...SAFE_EMBEDDED_MEDIA_PROTOCOLS]
-}
-
 const rehypePlugins = [
-  rehypeKatex,
-  [
-    harden,
-    writeMarkdownHardenOptions
-  ]
+  rehypeKatex
 ] as unknown as PluggableList
 
 const remarkPlugins = [remarkMath, remarkGfm] as unknown as PluggableList

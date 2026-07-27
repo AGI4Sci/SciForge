@@ -9,15 +9,13 @@ same SHA-256 before and after every room-only operation.
 Run:
 
 ```bash
+npm --prefix packages/domains/biology-room test
 npx vitest run \
-  src/shared/biology-room.test.ts \
-  src/main/services/biology-room-service.test.ts \
-  src/main/biology-room-mcp-tools.test.ts \
+  src/main/capabilities/app-registry.test.ts \
   src/main/workspace-preview-asset-protocol.test.ts \
   src/main/runtime/agent-runtime/host.test.ts \
-  src/renderer/src/biology-room/biology-room.test.ts \
-  src/renderer/src/biology-room/MolstarBiologyRoomAdapter.test.ts \
-  src/renderer/src/workspace-preview/molecular-molstar.test.ts
+  src/renderer/src/workspace-preview/registry.test.ts \
+  src/renderer/src/workspace-preview/plugin-outlet.test.tsx
 ```
 
 The service suite includes a multi-turn user/agent trajectory:
@@ -36,39 +34,19 @@ path/symlink escapes, manifest limits, and source immutability.
 
 ## Interactive release smoke cases
 
-### Circular GenBank plasmid
+### Canonical preview routing
 
-- Open a multi-feature `.gb`/`.gbk` file in Biology Room.
-- Switch to circular view and drag a motif selection across the sequence origin.
-- Add an annotation, add the selection to chat, close the room, and reopen it.
-- Pass when the two internal half-open ranges are restored as one clockwise
-  SeqViz selection, the exact JSON is present in chat, and the annotation anchor
-  remains valid.
-
-### Protein active site
-
-- Open an mmCIF structure containing polymer, ligand, ion, and water components.
-- Select a chain, a residue with an insertion code, and an atom; annotate the
-  active site and ask the agent to color it.
-- Change polymer representation to cartoon and capture a screenshot.
-- Pass when stable author-space locators round-trip, ligand/water remain visible
-  as ball-and-stick, camera orientation restores, and source SHA-256 is unchanged.
-
-### FASTA + GFF3 + VCF tracks
-
-- Open an indexed FASTA reference, then attach compatible GFF3 and VCF tracks.
-- Pan/zoom repeatedly, hide/show a track, select a feature and a variant, and
-  restart SciForge.
-- Pass when JBrowse is not remounted after each persisted viewport update, the
-  last room/location/visibility restore, and selected-feature details never
-  disagree with the Room selection/highlight.
-- Repeat with a partially matching track; pass when unmatched contigs are an
-  amber bounded warning. Repeat with zero overlap; pass when linking/viewing is
-  blocked.
+- Open representative sequence, structure, genome-feature, and variant files.
+- Pass when each file resolves through one Workspace Preview manifest and its
+  matching provider/renderer contribution, with no Biology-specific IPC call or
+  pre-registry route.
+- Exercise selection and viewport state where supported; pass when source bytes
+  and SHA-256 remain unchanged.
 
 ### User/agent revision conflict
 
-- Keep a Room open and have an agent add an annotation at revision N.
+- Create or load room state through generic Broker capabilities and have an agent
+  add an annotation at revision N.
 - At the same time, attempt a user mutation based on revision N.
 - Pass when exactly one commit wins, the open UI live-loads the winning
   revision, stale controls are gated until reload, and no source bytes change.
@@ -84,18 +62,15 @@ path/symlink escapes, manifest limits, and source immutability.
 
 ### Tool-use budget
 
-- With no Biology Room open, ask an unrelated coding/research question.
-- Pass when Biology Room tools are absent from Kun direct/search discovery and
-  Codex keeps them deferred.
-- With an active Room, ask to annotate the current selection.
-- Pass when the bounded active-room summary is injected directly, the model does
-  not call `gui_visible_context` to rediscover the Room, and it uses at most one
-  `biology_room_observe` before a requested `biology_room_apply`.
+- Ask an unrelated coding/research question. Pass when no Biology-specific MCP
+  tool or direct GUI transport appears.
+- Ask an agent to inspect and mutate known room state. Pass when it uses generic
+  capability discovery plus invocation, with no removed direct GUI path.
 
 ## Quality ledger
 
 For each smoke run, record app commit, platform, fixture hashes, room/revision,
-viewer, operation count, tool-call count, warnings, conflicts, reload behavior,
-and screenshots. Treat source-hash changes, silent stale-revision overwrites,
-remote JBrowse configuration/plugin loads, or executable biology formats as
+preview contribution, operation count, tool-call count, warnings, conflicts,
+reload behavior, and screenshots. Treat source-hash changes, silent
+stale-revision overwrites, remote viewer configuration/plugin loads, or executable biology formats as
 release blockers.

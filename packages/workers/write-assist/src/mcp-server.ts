@@ -49,7 +49,8 @@ export function createWriteAssistMcpServer(
   server.registerTool('gui_pdf_extract_text', {
     description: [
       'Extract bounded text from a workspace PDF with path guard, page filters, cursor pagination, and maxChars.',
-      'Use pdf://{path}/text resources for repeat reads of the same bounded PDF text surface.'
+      'Use pdf://{path}/text resources for repeat reads of the same bounded PDF text surface.',
+      'This tool is text-only: extracted text is not evidence for figures, charts, equations, or page layout.'
     ].join(' '),
     inputSchema: PdfExtractTextInputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true }
@@ -89,7 +90,10 @@ export async function startWriteAssistMcpServer(
   await server.connect(transport)
 }
 
-function resultToToolResult(result: WriteRetrieveContextResult | PdfExtractTextResult, label: string): McpTextToolResult {
+function resultToToolResult(
+  result: WriteRetrieveContextResult | PdfExtractTextResult,
+  label: string
+): McpTextToolResult {
   if (!result.ok) return errorToolResult(result, label)
   return {
     content: [{ type: 'text', text: result.summary }],

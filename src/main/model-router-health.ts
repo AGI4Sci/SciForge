@@ -1,4 +1,9 @@
-import { getModelRouterSettings, type AppSettingsV1 } from '../shared/app-settings'
+import {
+  getModelRouterSettings,
+  isModelRouterTextReasonerConfigured,
+  type AppSettingsV1
+} from '../shared/app-settings'
+import type { ModelAccessWireProtocol } from '../shared/sciforge-api'
 
 export type ModelRouterHealthStatus =
   | 'healthy'
@@ -10,8 +15,20 @@ export type ModelRouterHealthStatus =
   | 'provider_error'
 
 export type ModelRouterHealthResult =
-  | { ok: true; status: 'healthy'; message: string }
-  | { ok: false; status: Exclude<ModelRouterHealthStatus, 'healthy'>; message: string }
+  | {
+      ok: true
+      status: 'healthy'
+      message: string
+      protocol: ModelAccessWireProtocol | null
+      traceCaptureReady: boolean
+    }
+  | {
+      ok: false
+      status: Exclude<ModelRouterHealthStatus, 'healthy'>
+      message: string
+      protocol: ModelAccessWireProtocol | null
+      traceCaptureReady: boolean
+    }
 
 export async function isModelRouterServiceHealthy(
   settings: AppSettingsV1,
@@ -52,14 +69,23 @@ export async function checkModelRouterHealth(
     return {
       ok: false,
       status: 'not_configured',
-      message: 'Model Router is disabled'
+      message: 'Model Router is disabled',
+      protocol: null,
+      traceCaptureReady: false
     }
   }
-  if (!router.baseUrl.trim() || !router.runtimeApiKey.trim() || !router.publicModelAlias.trim()) {
+  if (
+    !router.baseUrl.trim() ||
+    !router.runtimeApiKey.trim() ||
+    !router.publicModelAlias.trim() ||
+    !isModelRouterTextReasonerConfigured(router)
+  ) {
     return {
       ok: false,
       status: 'not_configured',
-      message: 'Model Router URL, runtime API key, and public model alias are required'
+      message: 'Base URL, API key, and model name are required',
+      protocol: null,
+      traceCaptureReady: false
     }
   }
 
@@ -72,26 +98,49 @@ export async function checkModelRouterHealth(
       },
       signal: AbortSignal.timeout(5_000)
     })
+    const body = await safeResponseText(response)
+    const diagnostics = modelRouterDiagnostics(body)
     if (response.ok) {
       return {
         ok: true,
         status: 'healthy',
-        message: 'Model Router is healthy'
+        message: 'Model Router is healthy',
+        ...diagnostics
       }
     }
-    const body = await safeResponseText(response)
     const status = classifyHealthzFailure(response.status, body)
     return {
       ok: false,
       status,
-      message: modelRouterHealthFailureMessage(status)
+      message: modelRouterHealthFailureMessage(status),
+      ...diagnostics
     }
   } catch {
     return {
       ok: false,
       status: 'unavailable',
-      message: 'Model Router is unavailable'
+      message: 'Model Router is unavailable',
+      protocol: null,
+      traceCaptureReady: false
     }
+  }
+}
+
+function modelRouterDiagnostics(body: string): {
+  protocol: ModelAccessWireProtocol | null
+  traceCaptureReady: boolean
+} {
+  try {
+    const value = JSON.parse(body) as Record<string, unknown>
+    const protocol = value.protocol
+    return {
+      protocol: protocol === 'responses' || protocol === 'chat-completions' || protocol === 'anthropic-messages'
+        ? protocol
+        : null,
+      traceCaptureReady: value.traceCapture === 'ready'
+    }
+  } catch {
+    return { protocol: null, traceCaptureReady: false }
   }
 }
 

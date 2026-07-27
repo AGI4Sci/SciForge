@@ -1,7 +1,9 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, shell, Tray } from 'electron'
-import { existsSync, watch, type FSWatcher } from 'node:fs'
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, Notification, powerSaveBlocker, protocol, session, Tray, webContents, type WebContents } from 'electron'
+import { existsSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { homedir } from 'node:os'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import {
   JsonSettingsStore,
   devServerHintUrl
@@ -14,18 +16,14 @@ import { APP_PRODUCT_NAME, configureAppIdentity } from './app-identity'
 import {
   applyCodexRuntimePatch,
   applyClaudeRuntimePatch,
-  applyLocalRuntimePatch,
   agentRuntimeSettingsEnvelope,
-  getLocalRuntimeSettings,
-  getActiveAgentRuntime,
+  getModelAccessSettings,
   mergeConnectPhoneSettings,
-  mergeLocalRuntimeSettings,
   mergeRemoteChannelSettings,
   mergeRemoteExecutorSettings,
   mergeAgentCapabilitySettings,
   mergeComputerUseSettings,
   mergeModelRouterSettings,
-  mergeModelProviderSettings,
   mergeScheduleSettings,
   mergeWorkflowSettings,
   mergeSpeechToTextSettings,
@@ -34,58 +32,47 @@ import {
   normalizeAppBehaviorSettings,
   normalizeKeyboardShortcuts,
   resolveRuntimeModelRouterSettings,
-  resolveLocalRuntimeSettings,
+  modelAccessRuntimePolicyChanged,
+  resolveModelAccessRuntimePolicy,
   type AgentRuntimeId,
   type AppBehaviorConfigV1,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '../shared/app-settings'
-import { runtimeErrorToError, type RuntimeErrorCode } from '../shared/runtime-error'
 import type { GuiUpdateState } from '../shared/gui-update'
-import { DEV_PREVIEW_NAVIGATE_CHANNEL, isAllowedDevPreviewUrl } from '../shared/dev-preview-url'
 import { fetchUpstreamModelIds } from './upstream-models'
-import { decideDevPreviewPopup } from './dev-preview-popup-policy'
+import { isTrustedRendererUrl } from './renderer-trust'
 import {
-  ensureModelRouterConfigFile,
-  ensureModelRouterSidecar,
-  modelRouterConfigPath,
-  stopModelRouterSidecar,
-  syncModelRouterConfigFileFromSettings,
-  syncModelRouterSettingsFromConfigFile
-} from './model-router-sidecar'
+  codingPlanCredentialStateForAdapter,
+  getModelAccessStatus
+} from './model-access-status'
+import { synchronizeModelAccessSidecar } from './model-access-sidecars'
+import { stopModelAccessGatewaySidecar } from './model-access-gateway-sidecar'
+import { PLAN_GATEWAY_BASE_URL } from './plan-gateway-config'
 import {
-  ensureEvidenceDagSidecar,
-  stopEvidenceDagSidecar
-} from '../../packages/workers/evidence-dag/desktop/sidecar'
+  stopDisallowedAgentRuntimes
+} from './model-access-runtime-lifecycle'
+import { createAgentRuntimeHost, type AgentRuntimeHost } from './runtime/agent-runtime/host'
 import {
-  ensureProjectDagSidecar,
-  stopProjectDagSidecar
-} from '../../packages/workers/project-dag/desktop/sidecar'
-import {
-  paperRadarDbPath,
-  paperRadarProfilesPath
-} from './paper-radar-paths'
-import {
-  localRuntimeAdapter,
-  getRuntimeBaseUrlForSettings,
-  runtimeAuthHeaders,
-  localRuntimeHttpRequestViaHost
-} from './runtime/local-runtime-adapter'
-import { createAgentRuntimeHost } from './runtime/agent-runtime/host'
-import {
-  configureEvidenceDagUpdateQueue,
-  evidenceDagQueuePath
-} from './runtime/evidence-dag-feed'
-import { EvidenceArtifactLifecycle } from './runtime/evidence-artifact-lifecycle'
-import { createLocalRuntimeAgentRuntimeAdapter } from './runtime/local-runtime-agent-runtime-adapter'
+  createRuntimeMcpToolGateway,
+  type RuntimeMcpToolGateway
+} from './runtime/agent-runtime/runtime-mcp-tool-gateway'
+import type { RuntimeToolDefinition } from './runtime/agent-runtime/runtime-tool-contract'
+import { createRuntimeCapabilityBroker } from './runtime/agent-runtime/runtime-capability-broker'
 import { createCodexAgentRuntimeAdapter } from './runtime/codex/codex-agent-runtime-adapter'
 import {
   ClaudeCodeRuntimeService,
   createClaudeCodeAgentRuntimeAdapter
 } from './runtime/claude-code'
-import { waitForRuntimeTurnsIdle } from './runtime/managed-runtime-idle'
 import { LspCodeNavigationService } from './services/lsp-code-navigation-service'
-import { ModelRequestAuditRecorder } from './services/model-request-audit-service'
+import { LocalTraceStore } from '@sciforge/full-trace'
+import {
+  VISUAL_SOURCE_CONTRACT_VERSION,
+  defineVisualSourceProvider,
+  renderVisualSource
+} from '@sciforge/domain-sdk/visual-source'
+import { AgentRuntimeTraceRecorder } from './services/agent-runtime-trace-service'
+import { CurrentTraceSensitiveSettings } from './trace-sensitive-settings'
 import { RuntimeContextStateService } from './services/runtime-context-state-service'
 import { RuntimeContextLedgerService } from './services/runtime-context-ledger-service'
 import { GitCheckpointService } from './services/git-checkpoint-service'
@@ -96,9 +83,14 @@ import { WorkspaceReferenceService } from './services/workspace-reference-servic
 import {
   VisibleContextService,
   visibleContextSnapshotPath,
-  type CapturedVisualPage
+  type CapturedVisualPage,
+  type SurfaceCaptureProvider,
+  type SurfaceCaptureRequest,
+  type SurfaceCaptureResult
 } from './services/visible-context-service'
 import type { VisibleContextBounds } from '../shared/visible-context'
+import { createModelRouterVisualInspector } from '../../packages/workers/workspace-intel/src/visual-inspection'
+import { AgentVisualRuntime } from './runtime/agent-runtime/agent-visual-runtime'
 import { AnchoredCommentService } from './services/anchored-comment-service'
 import { AnchoredCommentScreenshotService } from './services/anchored-comment-screenshot-service'
 import { AnchoredCommentFeedbackService } from './services/anchored-comment-feedback-service'
@@ -108,48 +100,72 @@ import {
   configuredFeedbackGatewayUrl
 } from './services/feedback-gateway-client'
 import { workspaceHtmlPreviewService } from './services/workspace-html-preview-service'
-import {
-  createPaperRadarWorkerService,
-  type PaperRadarWorkerService
-} from './services/paper-radar-worker-service'
-import { configureLogger, logError, logWarn, pruneOnStartup } from './logger'
+import { configureLogger, logError, logInfo, logWarn, pruneOnStartup } from './logger'
 import { createRemoteChannelRuntime, type RemoteChannelRuntime } from './remote-channel-runtime'
 import { createDiscordBotRuntime, type DiscordBotRuntime } from './discord-bot-runtime'
 import { createZulipBotRuntime, type ZulipBotRuntime } from './zulip-bot-runtime'
 import { createScheduleRuntime, type ScheduleRuntime } from './schedule-runtime'
 import { createWorkflowRuntime, type WorkflowRuntime } from './workflow-runtime'
 import {
-  scheduleMcpSettingsChanged,
-  resolveLocalRuntimeMcpJsonPath,
   syncScheduleMcpConfig,
   type ScheduleMcpLaunchConfig
 } from './schedule-mcp-config'
 import type { ResearchSearchMcpLaunchConfig } from './research-search-mcp-config'
 import type { WorkflowMcpLaunchConfig } from './workflow-mcp-config'
 import type { WorkspaceIntelMcpLaunchConfig } from './workspace-intel-mcp-config'
-import type { PaperRadarMcpLaunchConfig } from './paper-radar-mcp-config'
 import type { WriteAssistMcpLaunchConfig } from './write-assist-mcp-config'
 import type { RuntimeInspectorMcpLaunchConfig } from './runtime-inspector-mcp-config'
-import type { DatasetApiMcpLaunchConfig } from './dataset-api-mcp-config'
 import type { ScientificSkillsMcpLaunchConfig } from './scientific-skills-mcp-config'
 import type { ScientificPlottingMcpLaunchConfig } from './scientific-plotting-mcp-config'
 import type { BgcDiscoveryMcpLaunchConfig } from './bgc-discovery-mcp-config'
 import {
-  imageGenerationMcpSettingsChanged,
   type ImageGenerationMcpLaunchConfig
 } from './image-generation-mcp-config'
 import type { PptMasterMcpLaunchConfig } from './ppt-master-mcp-config'
 import type { VisualDocumentMcpLaunchConfig } from './visual-document-mcp-config'
-import type { ComputerUseMcpLaunchConfig } from './computer-use-mcp-config'
-import { syncExternalManagedGuiMcpConfig } from './gui-mcp-registry'
+import {
+  GUI_COMPUTER_USE_MCP_SERVER_NAME,
+  isComputerUseMcpConfigured,
+  type ComputerUseMcpLaunchConfig
+} from './computer-use-mcp-config'
+import { buildManagedGuiMcpServers } from './gui-mcp-registry'
 import { migrateLegacyKunGlobalConfig } from './legacy-kun-global-config-migration'
 import { registerAppIpcHandlers } from './ipc/register-app-ipc-handlers'
 import { registerAnchoredCommentIpc } from './ipc/register-anchored-comment-ipc'
 import { registerTerminalPtyIpc } from './terminal/terminal-pty-ipc'
 import { WorkspacePreviewHost } from './services/workspace-preview'
+import { CapabilityBroker } from './capabilities/broker'
 import {
-  installWorkspacePreviewAssetProtocol,
-  registerWorkspacePreviewAssetScheme
+  WORKSPACE_PREVIEW_RESOURCE_KIND,
+  type AppCapabilityDependencies
+} from './capabilities/app-registry'
+import { registerCapabilityIpc } from './capabilities/ipc'
+import {
+  DomainModuleCatalog,
+  activateMainRuntimeContributions,
+  createApplicationCapabilityRegistry,
+  createApplicationDomainCatalog,
+  createMainActionGuardEvaluator,
+  createMainSystemCapabilityInvoker,
+  listMainAgentArtifactConsumers,
+  listMainVisualSourceContributions,
+  listMainWorkspacePreviewPluginContributions,
+  type ActivatedMainRuntimeContributions
+} from './modules'
+import type {
+  AgentRuntimeThreadListInput,
+  AgentRuntimeThreadReadInput
+} from '../shared/agent-runtime-contract'
+import {
+  createCapabilityAgentToolSurface,
+  capabilityAgentCallerId,
+  type CapabilityAgentToolSurface
+} from './capabilities/agent-tools'
+import { installElectronDomainNativeVisualSmoke } from './electron-domain-smoke'
+import { VisualSourceRegistry } from './runtime/agent-runtime/visual-source-registry'
+import {
+  installCapabilityResourceContentProtocol,
+  registerCapabilityResourceContentScheme
 } from './workspace-preview-asset-protocol'
 import {
   startDevBrowserBridgeServer,
@@ -162,7 +178,6 @@ import {
   startFeishuInstallQrcode,
   startWeixinInstallQrcode
 } from './claw-platform-install'
-import { localRuntimeEvents } from './runtime-sse-ipc'
 import {
   CodexRuntimeService,
   type CodexRuntimeEventSink
@@ -174,13 +189,6 @@ import {
   stopWeixinBridgeRuntime
 } from './weixin-bridge-runtime'
 import { webhookUrl } from './remote-channel-runtime-helpers'
-import { isLocalRuntimeHealthResponseBody } from './local-runtime-health'
-import {
-  resolveAvailableLocalRuntimePort,
-  setLocalRuntimeUnexpectedExitHandler,
-  type LocalRuntimeUnexpectedExitInfo
-} from './local-runtime-process'
-import { RestartBudget, type LocalRuntimeStatus } from './local-runtime-supervisor'
 import { APP_USER_MODEL_ID } from '../shared/app-brand'
 import { mainPerformanceMonitor } from './performance-monitor'
 
@@ -216,6 +224,29 @@ function syncWeixinBridgeRuntime(settings: AppSettingsV1): void {
 
 function resolveLogDirectory(): string {
   return join(app.getPath('userData'), 'logs')
+}
+
+async function synchronizeSelectedModelAccessSidecar(
+  settings: AppSettingsV1,
+  failureMessage: string
+): Promise<void> {
+  await synchronizeModelAccessSidecar(settings, {
+    userDataDir: app.getPath('userData'),
+    appRoot: app.getAppPath(),
+    resourcesPath: process.resourcesPath,
+    execPath: process.execPath,
+    isPackaged: app.isPackaged,
+    resolveProxy: (url) => session.defaultSession.resolveProxy(url),
+    logModelRouter: (message) => logWarn('model-router', message),
+    logPlanGateway: (message) => logWarn('plan-gateway', message)
+  }).catch((error) => {
+    const source = getModelAccessSettings(settings)?.mode === 'coding-plan'
+      ? 'plan-gateway'
+      : 'model-router'
+    logWarn(source, failureMessage, {
+      message: error instanceof Error ? error.message : String(error)
+    })
+  })
 }
 
 function resolvePreloadPath(): string {
@@ -257,17 +288,6 @@ function getWorkspaceIntelMcpLaunchConfig(): WorkspaceIntelMcpLaunchConfig {
   }
 }
 
-function getPaperRadarMcpLaunchConfig(): PaperRadarMcpLaunchConfig {
-  const userDataDir = app.getPath('userData')
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged,
-    dbPath: paperRadarDbPath(userDataDir),
-    profilesPath: paperRadarProfilesPath(userDataDir)
-  }
-}
-
 function getWriteAssistMcpLaunchConfig(): WriteAssistMcpLaunchConfig {
   return {
     appPath: app.getAppPath(),
@@ -282,14 +302,6 @@ function getRuntimeInspectorMcpLaunchConfig(): RuntimeInspectorMcpLaunchConfig {
     execPath: process.execPath,
     isPackaged: app.isPackaged,
     checkpointDataDir: app.getPath('userData')
-  }
-}
-
-function getDatasetApiMcpLaunchConfig(): DatasetApiMcpLaunchConfig {
-  return {
-    appPath: app.getAppPath(),
-    execPath: process.execPath,
-    isPackaged: app.isPackaged
   }
 }
 
@@ -350,24 +362,32 @@ function getComputerUseMcpLaunchConfig(): ComputerUseMcpLaunchConfig {
   }
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+function managedGuiMcpServers(settings: AppSettingsV1) {
+  return buildManagedGuiMcpServers({
+    settings,
+    scheduleMcp: { settings, launch: getScheduleMcpLaunchConfig() },
+    researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
+    workflowMcp: { settings, launch: getWorkflowMcpLaunchConfig() },
+    workspaceIntelMcp: { settings, launch: getWorkspaceIntelMcpLaunchConfig() },
+    writeAssistMcp: { settings, launch: getWriteAssistMcpLaunchConfig() },
+    runtimeInspectorMcp: { settings, launch: getRuntimeInspectorMcpLaunchConfig() },
+    scientificSkillsMcp: { settings, launch: getScientificSkillsMcpLaunchConfig() },
+    scientificPlottingMcp: { settings, launch: getScientificPlottingMcpLaunchConfig() },
+    bgcDiscoveryMcp: { settings, launch: getBgcDiscoveryMcpLaunchConfig() },
+    imageGenerationMcp: { settings, launch: getImageGenerationMcpLaunchConfig() },
+    pptMasterMcp: { settings, launch: getPptMasterMcpLaunchConfig() },
+    visualDocumentMcp: { settings, launch: getVisualDocumentMcpLaunchConfig() },
+    computerUseMcp: { settings, launch: getComputerUseMcpLaunchConfig() }
+  })
 }
 
-function runtimeFailure(code: string, message: string, status = 0, details?: unknown) {
-  return {
-    ok: false as const,
-    status,
-    body: JSON.stringify({ code, message, ...(details !== undefined ? { details } : {}) })
-  }
-}
-
-function resolveConfiguredApiKey(settings: AppSettingsV1): string {
-  return resolveRuntimeModelRouterSettings(settings).apiKey
-}
-
-function runtimeJsonError(code: string, message: string): Error {
-  return runtimeErrorToError({ code: code as RuntimeErrorCode, message })
+async function runtimeMayUseManagedTool(
+  runtimeId: string,
+  tool: RuntimeToolDefinition
+): Promise<boolean> {
+  if (tool.providerId !== GUI_COMPUTER_USE_MCP_SERVER_NAME) return true
+  if (runtimeId !== 'codex' && runtimeId !== 'claude') return false
+  return isComputerUseMcpConfigured(await store.load(), runtimeId)
 }
 
 traceStartup('main module evaluated')
@@ -379,7 +399,7 @@ traceStartup('main module evaluated')
 // whenReady 副作用污染。
 configureAppIdentity()
 configureLinuxWaylandImeSwitches()
-registerWorkspacePreviewAssetScheme(protocol)
+registerCapabilityResourceContentScheme(protocol)
 
 if (process.platform === 'win32') {
   app.setAppUserModelId(APP_USER_MODEL_ID)
@@ -394,24 +414,21 @@ let zulipBotRuntime: ZulipBotRuntime | null = null
 let scheduleRuntime: ScheduleRuntime | null = null
 let workflowRuntime: WorkflowRuntime | null = null
 let codexRuntime: CodexRuntimeService | null = null
+let capabilityAgentTools: CapabilityAgentToolSurface | null = null
+let agentRuntimeHostForShutdown: AgentRuntimeHost | null = null
+let runtimeMcpToolGateway: RuntimeMcpToolGateway | null = null
 let claudeCodeRuntime: ClaudeCodeRuntimeService | null = null
 let codeNavigationService: LspCodeNavigationService | null = null
-let paperRadarWorkerService: PaperRadarWorkerService | null = null
-let evidenceArtifactLifecycle: EvidenceArtifactLifecycle | null = null
+let domainModuleCatalog: DomainModuleCatalog | null = null
+let mainRuntimeContributions: ActivatedMainRuntimeContributions | null = null
 let managedRuntimesStoppedForQuit = false
 let managedRuntimesStopPromise: Promise<void> | null = null
-type RuntimeIdleListThreads = NonNullable<Parameters<typeof waitForRuntimeTurnsIdle>[0]['listThreads']>
-let runtimeIdleListThreads: RuntimeIdleListThreads | null = null
 let appBehavior: AppBehaviorConfigV1 = normalizeAppBehaviorSettings()
 let tray: Tray | null = null
 let isQuitting = false
 let devBrowserBridgeServer: DevBrowserBridgeServer | null = null
 let codexRuntimePrewarmTimer: ReturnType<typeof setTimeout> | null = null
 let codexRuntimePrewarmPromise: Promise<void> | null = null
-let modelRouterConfigWatcher: FSWatcher | null = null
-let modelRouterConfigWatchTimer: ReturnType<typeof setTimeout> | null = null
-let modelRouterConfigWatchSuppressUntil = 0
-let modelRouterConfigFileSyncPromise: Promise<void> | null = null
 let remoteChannelActiveThreadContext: {
   threadId: string
   runtimeId?: AgentRuntimeId
@@ -422,9 +439,87 @@ let remoteChannelActiveThreadContext: {
 async function captureMainWindowPage(bounds?: VisibleContextBounds): Promise<CapturedVisualPage> {
   const window = mainWindow
   if (!window || window.isDestroyed()) throw new Error('SciForge window is unavailable.')
+  return captureBrowserWindowPage(window, bounds)
+}
+
+async function captureVisibleContextSurface(
+  request: SurfaceCaptureRequest
+): Promise<SurfaceCaptureResult> {
+  const surface = parseVisibleContextSurfaceId(request.windowId)
+  if (surface?.kind === 'electron') {
+    const contents = webContents.fromId(surface.numericId)
+    const window = contents ? BrowserWindow.fromWebContents(contents) : null
+    if (!contents || contents.isDestroyed() || !window || window.isDestroyed()) {
+      return surfaceCaptureUnavailable(
+        'capture_surface_unavailable',
+        `Visible surface ${request.windowId} is no longer available.`,
+        true
+      )
+    }
+    return {
+      ok: true,
+      page: await captureBrowserWindowPage(window, request.bounds, contents)
+    }
+  }
+
+  if (surface?.kind === 'browser') {
+    if (!devBrowserBridgeServer?.hasClient(surface.numericId)) {
+      return surfaceCaptureUnavailable(
+        'capture_surface_unavailable',
+        `Browser surface ${request.windowId} is no longer connected.`,
+        true
+      )
+    }
+    // The development bridge transports semantic IPC and SSE events, but has no
+    // attested browser pixel source. Renderer-supplied image bytes would not be a
+    // trusted capture of the surface bound to this snapshot token.
+    return surfaceCaptureUnavailable(
+      'surface_capture_unsupported',
+      `Browser surface ${request.windowId} does not provide trusted pixel capture.`,
+      false
+    )
+  }
+
+  return surfaceCaptureUnavailable(
+    'surface_capture_unsupported',
+    `Visible surface ${request.windowId} uses an unsupported surface identity.`,
+    false
+  )
+}
+
+type VisibleContextSurfaceId = {
+  kind: 'electron' | 'browser'
+  numericId: number
+}
+
+function parseVisibleContextSurfaceId(windowId: string): VisibleContextSurfaceId | null {
+  const match = /^(electron|browser):(\d+)$/u.exec(windowId)
+  if (!match) return null
+  const numericId = Number(match[2])
+  if (!Number.isSafeInteger(numericId) || numericId < 1) return null
+  return { kind: match[1] as VisibleContextSurfaceId['kind'], numericId }
+}
+
+const visibleContextSurfaceCaptureProvider: SurfaceCaptureProvider = {
+  capture: captureVisibleContextSurface
+}
+
+function surfaceCaptureUnavailable(
+  code: 'surface_capture_unsupported' | 'capture_surface_unavailable',
+  message: string,
+  retryable: boolean
+): SurfaceCaptureResult {
+  return { ok: false, reason: { code, message, retryable } }
+}
+
+async function captureBrowserWindowPage(
+  window: BrowserWindow,
+  bounds?: VisibleContextBounds,
+  captureContents: WebContents = window.webContents
+): Promise<CapturedVisualPage> {
   const [viewportWidth, viewportHeight] = window.getContentSize()
   const clippedBounds = bounds ? clipCaptureBounds(bounds, viewportWidth, viewportHeight) : undefined
-  const image = await window.webContents.capturePage(clippedBounds)
+  const image = await captureContents.capturePage(clippedBounds)
   const imageSize = image.getSize()
   const cssWidth = clippedBounds?.width ?? Math.max(1, viewportWidth)
   return {
@@ -451,11 +546,20 @@ function clipCaptureBounds(
   return { x, y, width: right - x, height: bottom - y }
 }
 
-function emitVisibleContextRendererEvent(channel: string, payload?: unknown): void {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(channel, payload)
+function emitVisibleContextRendererEvent(
+  channel: string,
+  payload: unknown,
+  windowId: string
+): void {
+  const surface = parseVisibleContextSurfaceId(windowId)
+  if (surface?.kind === 'electron') {
+    const contents = webContents.fromId(surface.numericId)
+    if (contents && !contents.isDestroyed()) contents.send(channel, payload)
+    return
   }
-  devBrowserBridgeServer?.send(channel, payload)
+  if (surface?.kind === 'browser') {
+    devBrowserBridgeServer?.sendTo(surface.numericId, channel, payload)
+  }
 }
 
 type GuiUpdaterModule = typeof import('./gui-updater')
@@ -514,59 +618,11 @@ function codexRuntimeEventKind(payload: unknown): string | undefined {
   return typeof kind === 'string' && kind.trim() ? kind.trim() : undefined
 }
 
-function suppressModelRouterConfigFileWatch(durationMs = 1_000): void {
-  modelRouterConfigWatchSuppressUntil = Date.now() + durationMs
-}
-
-function stopModelRouterConfigWatcher(): void {
-  if (modelRouterConfigWatchTimer) {
-    clearTimeout(modelRouterConfigWatchTimer)
-    modelRouterConfigWatchTimer = null
-  }
-  try {
-    modelRouterConfigWatcher?.close()
-  } catch (error) {
-    logWarn('model-router', 'Failed to close Model Router config watcher.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  }
-  modelRouterConfigWatcher = null
-}
-
-function startModelRouterConfigWatcher(
-  userDataDir: string,
-  onExternalChange: () => void
-): void {
-  stopModelRouterConfigWatcher()
-  const configPath = modelRouterConfigPath(userDataDir)
-  const configDir = dirname(configPath)
-  try {
-    modelRouterConfigWatcher = watch(configDir, (_event, filename) => {
-      const changed = typeof filename === 'string' ? filename : ''
-      if (changed && changed !== 'config.json') return
-      if (Date.now() < modelRouterConfigWatchSuppressUntil) return
-      if (modelRouterConfigWatchTimer) clearTimeout(modelRouterConfigWatchTimer)
-      modelRouterConfigWatchTimer = setTimeout(() => {
-        modelRouterConfigWatchTimer = null
-        if (Date.now() < modelRouterConfigWatchSuppressUntil) return
-        onExternalChange()
-      }, 250)
-    })
-  } catch (error) {
-    logWarn('model-router', 'Failed to start Model Router config watcher.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-    return
-  }
-  modelRouterConfigWatcher.on('error', (error) => {
-    logWarn('model-router', 'Model Router config watcher failed.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-}
-
 function getCodexRuntime(): CodexRuntimeService {
   if (codexRuntime) return codexRuntime
+  if (!capabilityAgentTools) {
+    throw new Error('Capability agent tools must be registered before the Codex runtime starts.')
+  }
   const codexStorageRoot = join(app.getPath('userData'), 'codex-runtime')
   codexRuntime = new CodexRuntimeService({
     settings: async () => store.load(),
@@ -576,65 +632,36 @@ function getCodexRuntime(): CodexRuntimeService {
     managedCodexHome: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-codex', 'codex-home')
       : join(process.cwd(), '.codex-runtime', 'codex-home'),
-    scheduleMcpLaunch: getScheduleMcpLaunchConfig(),
-    researchMcpLaunch: getResearchSearchMcpLaunchConfig(),
-    workflowMcpLaunch: getWorkflowMcpLaunchConfig(),
-    workspaceIntelMcpLaunch: getWorkspaceIntelMcpLaunchConfig(),
-    paperRadarMcpLaunch: getPaperRadarMcpLaunchConfig(),
-    writeAssistMcpLaunch: getWriteAssistMcpLaunchConfig(),
-    runtimeInspectorMcpLaunch: getRuntimeInspectorMcpLaunchConfig(),
-    datasetApiMcpLaunch: getDatasetApiMcpLaunchConfig(),
-    scientificSkillsMcpLaunch: getScientificSkillsMcpLaunchConfig(),
-    scientificPlottingMcpLaunch: getScientificPlottingMcpLaunchConfig(),
-    bgcDiscoveryMcpLaunch: getBgcDiscoveryMcpLaunchConfig(),
-    imageGenerationMcpLaunch: getImageGenerationMcpLaunchConfig(),
-    pptMasterMcpLaunch: getPptMasterMcpLaunchConfig(),
-    visualDocumentMcpLaunch: getVisualDocumentMcpLaunchConfig(),
-    computerUseMcpLaunch: getComputerUseMcpLaunchConfig()
+    standardCodexAuthPath: join(homedir(), '.codex', 'auth.json'),
+    planGateway: { baseUrl: PLAN_GATEWAY_BASE_URL },
+    preToolUseHookLaunch: {
+      appPath: app.getAppPath(),
+      execPath: process.execPath,
+      isPackaged: app.isPackaged
+    },
+    capabilityAgentTools
   })
   return codexRuntime
 }
 
 function getClaudeCodeRuntime(): ClaudeCodeRuntimeService {
   if (claudeCodeRuntime) return claudeCodeRuntime
+  if (!capabilityAgentTools) {
+    throw new Error('Capability agent tools must be registered before the Claude runtime starts.')
+  }
   claudeCodeRuntime = new ClaudeCodeRuntimeService({
     settings: async () => store.load(),
     storageRoot: join(app.getPath('userData'), 'claude-code-runtime'),
     managedConfigDir: app.isPackaged
       ? join(app.getPath('userData'), 'runtime-claude-code', 'config')
       : join(process.cwd(), '.claude-code-runtime', 'config'),
-    managedMcp: {
-      scheduleMcp: { launch: getScheduleMcpLaunchConfig() },
-      researchMcp: { launch: getResearchSearchMcpLaunchConfig() },
-      workflowMcp: { launch: getWorkflowMcpLaunchConfig() },
-      workspaceIntelMcp: { launch: getWorkspaceIntelMcpLaunchConfig() },
-      paperRadarMcp: { launch: getPaperRadarMcpLaunchConfig() },
-      writeAssistMcp: { launch: getWriteAssistMcpLaunchConfig() },
-      runtimeInspectorMcp: { launch: getRuntimeInspectorMcpLaunchConfig() },
-      datasetApiMcp: { launch: getDatasetApiMcpLaunchConfig() },
-      scientificSkillsMcp: { launch: getScientificSkillsMcpLaunchConfig() },
-      scientificPlottingMcp: { launch: getScientificPlottingMcpLaunchConfig() },
-      bgcDiscoveryMcp: { launch: getBgcDiscoveryMcpLaunchConfig() },
-      imageGenerationMcp: { launch: getImageGenerationMcpLaunchConfig() },
-      pptMasterMcp: { launch: getPptMasterMcpLaunchConfig() },
-      visualDocumentMcp: { launch: getVisualDocumentMcpLaunchConfig() },
-      computerUseMcp: { launch: getComputerUseMcpLaunchConfig() }
-    }
+    agentTools: capabilityAgentTools
   })
   return claudeCodeRuntime
 }
 
-function getPaperRadarWorkerService(): PaperRadarWorkerService {
-  if (!paperRadarWorkerService) {
-    paperRadarWorkerService = createPaperRadarWorkerService({
-      userDataDir: app.getPath('userData')
-    })
-  }
-  return paperRadarWorkerService
-}
-
 function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' | 'settings-switch'): void {
-  if (getActiveAgentRuntime(settings) !== 'codex') return
+  if (!resolveModelAccessRuntimePolicy(settings).codex) return
   if (codexRuntimePrewarmTimer) {
     clearTimeout(codexRuntimePrewarmTimer)
     codexRuntimePrewarmTimer = null
@@ -642,9 +669,11 @@ function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' 
   codexRuntimePrewarmTimer = setTimeout(() => {
     codexRuntimePrewarmTimer = null
     const runtime = getCodexRuntime()
-    if (runtime.isClientWarm() || codexRuntimePrewarmPromise) return
-    const task = runtime.connect()
-      .then((result) => {
+    if (codexRuntimePrewarmPromise) return
+    const task = runtime.synchronizeModelAccess()
+      .then(async () => {
+        if (runtime.isClientWarm()) return
+        const result = await runtime.connect()
         if (!result.ok) {
           logWarn('codex-runtime', 'Failed to prewarm Codex app-server.', {
             reason,
@@ -668,6 +697,24 @@ function scheduleCodexRuntimePrewarm(settings: AppSettingsV1, reason: 'startup' 
   }, reason === 'startup' ? 1500 : 100)
 }
 
+function cancelCodexRuntimePrewarm(): void {
+  if (!codexRuntimePrewarmTimer) return
+  clearTimeout(codexRuntimePrewarmTimer)
+  codexRuntimePrewarmTimer = null
+}
+
+async function reconcileSelectedAgentRuntime(settings: AppSettingsV1): Promise<void> {
+  await stopDisallowedAgentRuntimes(settings, {
+    stopClaude: async () => {
+      await claudeCodeRuntime?.stop()
+    },
+    stopCodex: async () => {
+      cancelCodexRuntimePrewarm()
+      await codexRuntime?.stop()
+    }
+  })
+}
+
 async function stopManagedRuntimesForQuit(): Promise<void> {
   if (managedRuntimesStoppedForQuit) return
   await stopManagedRuntimes()
@@ -677,29 +724,34 @@ async function stopManagedRuntimesForQuit(): Promise<void> {
 async function stopManagedRuntimes(): Promise<void> {
   if (!managedRuntimesStopPromise) {
     managedRuntimesStopPromise = (async () => {
-      stopRuntimeWatchdog()
-      if (codexRuntimePrewarmTimer) {
-        clearTimeout(codexRuntimePrewarmTimer)
-        codexRuntimePrewarmTimer = null
-      }
+      cancelCodexRuntimePrewarm()
       workflowRuntime?.stop()
       scheduleRuntime?.stop()
       discordBotRuntime?.stop()
       zulipBotRuntime?.stop()
       remoteChannelRuntime?.stop()
+      const runtimeContributions = mainRuntimeContributions
+      mainRuntimeContributions = null
+      await runtimeContributions?.dispose().catch((error) => {
+        logWarn('domain-runtime', 'Failed to dispose domain runtime contributions.', error)
+      })
+      agentRuntimeHostForShutdown?.dispose()
+      agentRuntimeHostForShutdown = null
       codeNavigationService?.shutdown()
-      evidenceArtifactLifecycle?.stop()
-      evidenceArtifactLifecycle = null
-      paperRadarWorkerService?.close()
-      paperRadarWorkerService = null
-      await stopEvidenceDagSidecar()
-      await stopProjectDagSidecar()
-      await stopModelRouterSidecar()
+      const catalog = domainModuleCatalog
+      domainModuleCatalog = null
+      catalog?.dispose()
       stopWeixinBridgeRuntime()
       await claudeCodeRuntime?.stop()
       await codexRuntime?.stop()
-      await localRuntimeAdapter.stopAndWait()
-      publishRuntimeStatus({ state: 'stopped', source: 'app-shutdown' })
+      await runtimeMcpToolGateway?.close('service_shutdown')
+      runtimeMcpToolGateway = null
+      // Drain model clients before terminating the shared access sidecar so an
+      // active request can finish and its tail trace can be persisted.
+      await stopModelAccessGatewaySidecar({
+        userDataDir: app.getPath('userData'),
+        log: (message) => logWarn('model-access-gateway', message)
+      })
     })().finally(() => {
       managedRuntimesStopPromise = null
     })
@@ -741,54 +793,6 @@ async function readGuiUpdateState(): Promise<GuiUpdateState> {
       code: 'unknown'
     }
   }
-}
-
-
-function installDevPreviewWebviewGuards(): void {
-  app.on('web-contents-created', (_, contents) => {
-    contents.on('will-attach-webview', (event, webPreferences, params) => {
-      const src = typeof params.src === 'string' ? params.src : ''
-      if (!isAllowedDevPreviewUrl(src)) {
-        event.preventDefault()
-        return
-      }
-
-      delete webPreferences.preload
-      delete (webPreferences as { preloadURL?: string }).preloadURL
-      webPreferences.nodeIntegration = false
-      webPreferences.contextIsolation = true
-      webPreferences.sandbox = true
-      webPreferences.webSecurity = true
-      webPreferences.allowRunningInsecureContent = false
-    })
-
-    contents.on('will-navigate', (event, navigationUrl) => {
-      if (contents.getType() !== 'webview') return
-      if (!isAllowedDevPreviewUrl(navigationUrl)) event.preventDefault()
-    })
-
-    contents.setWindowOpenHandler(({ url }) => {
-      const decision = decideDevPreviewPopup(url, { fromWebview: contents.getType() === 'webview' })
-      if (decision.action === 'navigate-preview') {
-        try {
-          const hostContents = contents.hostWebContents
-          if (!hostContents.isDestroyed()) {
-            hostContents.send(DEV_PREVIEW_NAVIGATE_CHANNEL, {
-              url: decision.url,
-              webContentsId: contents.id
-            })
-          }
-        } catch {
-          /* host webContents may be unavailable while the guest is being torn down */
-        }
-        return { action: 'deny' }
-      }
-      if (decision.action === 'open-external') {
-        void shell.openExternal(decision.url).catch(() => undefined)
-      }
-      return { action: 'deny' }
-    })
-  })
 }
 
 
@@ -935,547 +939,6 @@ async function showTurnCompleteNotification(
   }
 }
 
-async function waitForLocalRuntimeHealth(settings: AppSettingsV1, timeoutMs: number): Promise<boolean> {
-  const base = getRuntimeBaseUrlForSettings(settings)
-  const deadline = Date.now() + timeoutMs
-
-  while (Date.now() <= deadline) {
-    try {
-      const remaining = Math.max(1, deadline - Date.now())
-      const res = await fetch(`${base}/health`, {
-        headers: runtimeAuthHeaders(settings),
-        signal: AbortSignal.timeout(Math.max(250, Math.min(1_000, remaining)))
-      })
-      if (res.ok && isLocalRuntimeHealthResponseBody(await res.text())) return true
-    } catch {
-      /* retry until the deadline */
-    }
-    await sleep(150)
-  }
-
-  return false
-}
-
-async function sleepWithAbort(ms: number, signal: AbortSignal): Promise<void> {
-  if (signal.aborted || ms <= 0) return
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(() => {
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }, ms)
-    const onAbort = (): void => {
-      clearTimeout(timer)
-      signal.removeEventListener('abort', onAbort)
-      resolve()
-    }
-    signal.addEventListener('abort', onAbort, { once: true })
-  })
-}
-
-let runtimeEnsurePromise: Promise<void> | null = null
-let runtimeEnsureFingerprint: string | null = null
-let runtimeRestartPromise: Promise<void> | null = null
-let runtimeSettingsApplyPromise: Promise<void> | null = null
-let lastAppliedSettings: AppSettingsV1 | null = null
-
-const RUNTIME_RESTART_MAX_ATTEMPTS = 3
-const RUNTIME_RESTART_BUDGET_RESET_MS = 60_000
-const RUNTIME_WATCHDOG_INTERVAL_MS = 30_000
-const RUNTIME_WATCHDOG_FAILURE_THRESHOLD = 3
-const runtimeRestartBudget = new RestartBudget({
-  windowMs: 60_000,
-  maxRestarts: RUNTIME_RESTART_MAX_ATTEMPTS
-})
-let lastRuntimeStatus: LocalRuntimeStatus | null = null
-let supervisedRestartInFlight = false
-let runtimeWatchdogTimer: NodeJS.Timeout | null = null
-let runtimeWatchdogFailures = 0
-let runtimeWatchdogTickInFlight = false
-let managedLocalRuntimePortOverride: { configuredPort: number; port: number } | null = null
-let runtimeRestartBudgetResetTimer: NodeJS.Timeout | null = null
-
-function publishRuntimeStatus(status: Omit<LocalRuntimeStatus, 'at'>): void {
-  const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.runtime.status')
-  mainPerformanceMonitor.count(`main.runtime.status.${status.state}`)
-  const full: LocalRuntimeStatus = { ...status, at: new Date().toISOString() }
-  lastRuntimeStatus = full
-  logWarn('runtime-status', `${full.state} (${full.source})${full.message ? `: ${full.message}` : ''}`)
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send('runtime:status', full)
-  }
-  devBrowserBridgeServer?.send('runtime:status', full)
-  mainPerformanceMonitor.sample('main.runtime.status.send', mainPerformanceMonitor.now() - startedAt, {
-    state: status.state,
-    source: status.source
-  })
-}
-
-function noteRuntimeHealthy(source: string): void {
-  runtimeWatchdogFailures = 0
-  scheduleRuntimeRestartBudgetReset()
-  startRuntimeWatchdog()
-  if (!lastRuntimeStatus || lastRuntimeStatus.state !== 'running') {
-    publishRuntimeStatus({ state: 'running', source })
-  }
-}
-
-function scheduleRuntimeRestartBudgetReset(): void {
-  if (runtimeRestartBudgetResetTimer) return
-  runtimeRestartBudgetResetTimer = setTimeout(() => {
-    runtimeRestartBudgetResetTimer = null
-    runtimeRestartBudget.reset()
-  }, RUNTIME_RESTART_BUDGET_RESET_MS)
-  runtimeRestartBudgetResetTimer.unref()
-}
-
-function clearRuntimeRestartBudgetReset(): void {
-  if (!runtimeRestartBudgetResetTimer) return
-  clearTimeout(runtimeRestartBudgetResetTimer)
-  runtimeRestartBudgetResetTimer = null
-}
-
-function handleUnexpectedLocalRuntimeExit(info: LocalRuntimeUnexpectedExitInfo): void {
-  void superviseLocalRuntimeCrash(info).catch((error: unknown) => {
-    logError('local-runtime-supervisor', 'Supervised local runtime restart crashed.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-}
-
-async function superviseLocalRuntimeCrash(info: LocalRuntimeUnexpectedExitInfo): Promise<void> {
-  if (managedRuntimesStoppedForQuit || isQuitting) return
-  clearRuntimeRestartBudgetReset()
-  const exitLabel = info.signal ? `signal ${info.signal}` : `code ${info.code ?? 'unknown'}`
-  publishRuntimeStatus({
-    state: 'crashed',
-    source: 'supervisor',
-    message: `SciForge Runtime exited unexpectedly (${exitLabel}).`,
-    stderrTail: info.stderrTail
-  })
-  if (supervisedRestartInFlight) return
-  supervisedRestartInFlight = true
-  try {
-    const settings = await store.load()
-    const runtime = getLocalRuntimeSettings(settings)
-    if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) {
-      publishRuntimeStatus({
-        state: 'stopped',
-        source: 'supervisor',
-        message: 'SciForge Runtime exited and automatic restart is unavailable because the API key is missing or auto-start is disabled.'
-      })
-      return
-    }
-
-    let lastError = ''
-    for (;;) {
-      if (managedRuntimesStoppedForQuit || isQuitting) return
-      const verdict = runtimeRestartBudget.note()
-      if (!verdict.allowed) {
-        publishRuntimeStatus({
-          state: 'failed',
-          source: 'supervisor',
-          message: lastError
-            ? `SciForge Runtime keeps crashing; automatic restarts are paused. Last error: ${lastError}`
-            : 'SciForge Runtime keeps crashing; automatic restarts are paused. Check the runtime logs, then retry.',
-          stderrTail: info.stderrTail
-        })
-        return
-      }
-      publishRuntimeStatus({
-        state: 'restarting',
-        source: 'supervisor',
-        attempt: verdict.attempt,
-        maxAttempts: RUNTIME_RESTART_MAX_ATTEMPTS,
-        message: `Restarting SciForge Runtime automatically (attempt ${verdict.attempt}/${RUNTIME_RESTART_MAX_ATTEMPTS}).`
-      })
-      await sleep(verdict.delayMs)
-      try {
-        await ensureRuntime(await store.load())
-        noteRuntimeHealthy('supervisor')
-        return
-      } catch (error) {
-        lastError = error instanceof Error ? error.message : String(error)
-        logWarn('local-runtime-supervisor', `Automatic restart attempt ${verdict.attempt} failed: ${lastError}`)
-      }
-    }
-  } finally {
-    supervisedRestartInFlight = false
-  }
-}
-
-function startRuntimeWatchdog(): void {
-  if (runtimeWatchdogTimer) return
-  const timer = setInterval(() => {
-    void runRuntimeWatchdogTick().catch((error: unknown) => {
-      logWarn('local-runtime-watchdog', 'Watchdog tick failed.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-  }, RUNTIME_WATCHDOG_INTERVAL_MS)
-  timer.unref()
-  runtimeWatchdogTimer = timer
-}
-
-function stopRuntimeWatchdog(): void {
-  if (runtimeWatchdogTimer) {
-    clearInterval(runtimeWatchdogTimer)
-    runtimeWatchdogTimer = null
-  }
-  runtimeWatchdogFailures = 0
-  clearRuntimeRestartBudgetReset()
-}
-
-async function runRuntimeWatchdogTick(): Promise<void> {
-  const startedAt = mainPerformanceMonitor.now()
-  mainPerformanceMonitor.count('main.runtime.watchdog.tick')
-  try {
-    await runtimeWatchdogTick()
-  } finally {
-    mainPerformanceMonitor.sample('main.runtime.watchdog.tick.duration', mainPerformanceMonitor.now() - startedAt)
-  }
-}
-
-async function runtimeWatchdogTick(): Promise<void> {
-  if (runtimeWatchdogTickInFlight) return
-  if (managedRuntimesStoppedForQuit || isQuitting) return
-  if (
-    supervisedRestartInFlight ||
-    runtimeRestartPromise ||
-    runtimeSettingsApplyPromise ||
-    runtimeEnsurePromise
-  ) {
-    return
-  }
-  if (!localRuntimeAdapter.isChildRunning()) return
-
-  runtimeWatchdogTickInFlight = true
-  try {
-    const settings = await store.load()
-    const healthy = await waitForLocalRuntimeHealth(settings, 5_000)
-    if (healthy) {
-      runtimeWatchdogFailures = 0
-      return
-    }
-    runtimeWatchdogFailures += 1
-    logWarn(
-      'local-runtime-watchdog',
-      `SciForge Runtime health probe failed (${runtimeWatchdogFailures}/${RUNTIME_WATCHDOG_FAILURE_THRESHOLD}).`
-    )
-    if (runtimeWatchdogFailures < RUNTIME_WATCHDOG_FAILURE_THRESHOLD) return
-    runtimeWatchdogFailures = 0
-    const verdict = runtimeRestartBudget.note()
-    if (!verdict.allowed) {
-      publishRuntimeStatus({
-        state: 'failed',
-        source: 'watchdog',
-        message: 'SciForge Runtime remains unhealthy after repeated automatic restarts; automatic restarts are paused.'
-      })
-      return
-    }
-    publishRuntimeStatus({
-      state: 'restarting',
-      source: 'watchdog',
-      attempt: verdict.attempt,
-      maxAttempts: RUNTIME_RESTART_MAX_ATTEMPTS,
-      message: `SciForge Runtime stopped responding to health checks; restarting it (attempt ${verdict.attempt}/${RUNTIME_RESTART_MAX_ATTEMPTS}).`
-    })
-    try {
-      await restartRuntime(settings)
-      noteRuntimeHealthy('watchdog')
-    } catch (error) {
-      publishRuntimeStatus({
-        state: 'failed',
-        source: 'watchdog',
-        message: `SciForge Runtime is unresponsive and the automatic restart failed: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      })
-    }
-  } finally {
-    runtimeWatchdogTickInFlight = false
-  }
-}
-
-function queueRuntimeSettingsApply(prev: AppSettingsV1, next: AppSettingsV1): void {
-  // Always update the prev/next anchor so a later task diffs against
-  // the settings that were actually applied last, not against the
-  // original `prev` captured when this call was queued.
-  const anchor = lastAppliedSettings ?? prev
-  lastAppliedSettings = next
-  const startupConfigChanged = runtimeStartupConfigChanged(anchor, next)
-  if (!startupConfigChanged) return
-
-  const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
-  const task = previousTask
-    .catch(() => undefined)
-    .then(async () => {
-      const current = lastAppliedSettings ?? next
-      await restartManagedRuntimeForSettingsChange(anchor, current)
-    })
-    .catch((error: unknown) => {
-      logWarn('settings-apply', 'Failed to apply local runtime settings in background', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-    .finally(() => {
-      if (runtimeSettingsApplyPromise === task) {
-        runtimeSettingsApplyPromise = null
-      }
-    })
-
-  runtimeSettingsApplyPromise = task
-}
-
-function queueRuntimeMcpConfigApply(settings: AppSettingsV1): void {
-  lastAppliedSettings = settings
-
-  const previousTask = runtimeSettingsApplyPromise ?? Promise.resolve()
-  const task = previousTask
-    .catch(() => undefined)
-    .then(async () => {
-      const current = lastAppliedSettings ?? settings
-      await restartManagedRuntimeForMcpConfigChange(current)
-    })
-    .catch((error: unknown) => {
-      logWarn('mcp-config', 'Failed to apply local runtime MCP config change in background', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    })
-    .finally(() => {
-      if (runtimeSettingsApplyPromise === task) {
-        runtimeSettingsApplyPromise = null
-      }
-    })
-
-  runtimeSettingsApplyPromise = task
-}
-
-async function waitForQueuedRuntimeSettingsApply(): Promise<void> {
-  if (!runtimeSettingsApplyPromise) return
-  await runtimeSettingsApplyPromise
-}
-
-/**
- * Build a stable fingerprint of the settings that affect the
- * local runtime so that `ensureRuntime` can debounce on real
- * state instead of on a single in-flight promise. Without this,
- * a fresh call that arrives while a failing ensure is still pending
- * would re-throw the old error.
- */
-function runtimeFingerprint(settings: AppSettingsV1): string {
-  return stableSettingsStringify(resolveLocalRuntimeSettings(settings))
-}
-
-async function ensureRuntime(settings: AppSettingsV1): Promise<void> {
-  const restart = runtimeRestartPromise
-  if (restart) {
-    try {
-      await restart
-      return
-    } catch {
-      /* fall through to a normal ensure so callers see the latest state */
-    }
-  }
-  const fingerprint = runtimeFingerprint(settings)
-  const pending = runtimeEnsurePromise
-  const pendingFingerprint = runtimeEnsureFingerprint
-  if (pending) {
-    // Wait for the in-flight ensure, then re-evaluate against the
-    // fingerprint so callers don't inherit a stale result.
-    let pendingSucceeded = true
-    try {
-      await pending
-    } catch {
-      pendingSucceeded = false
-      /* fall through to retry with the current settings */
-    }
-    if (pendingSucceeded && pendingFingerprint === fingerprint) return
-  }
-  const task = ensureRuntimeOnce(settings)
-  runtimeEnsurePromise = task.finally(() => {
-    if (runtimeEnsurePromise === task) {
-      runtimeEnsurePromise = null
-      runtimeEnsureFingerprint = null
-    }
-  })
-  runtimeEnsureFingerprint = fingerprint
-  try {
-    return await task
-  } finally {
-    /* cleanup runs via the .finally above */
-  }
-}
-
-async function ensureRuntimeOnce(settings: AppSettingsV1): Promise<void> {
-  await waitForQueuedRuntimeSettingsApply()
-  await ensureLocalRuntime(settings)
-}
-
-function syncSettingsObject(target: AppSettingsV1, source: AppSettingsV1): void {
-  Object.assign(target, source)
-}
-
-function settingsWithLocalRuntimePort(settings: AppSettingsV1, port: number): AppSettingsV1 {
-  return {
-    ...settings,
-    agents: {
-      ...settings.agents,
-      sciforge: {
-        ...settings.agents.sciforge,
-        port
-      }
-    }
-  }
-}
-
-function applyManagedLocalRuntimePortOverride(settings: AppSettingsV1): AppSettingsV1 {
-  const override = managedLocalRuntimePortOverride
-  if (!override) return settings
-  const runtime = getLocalRuntimeSettings(settings)
-  if (runtime.port === override.port) return settings
-  if (runtime.port !== override.configuredPort) {
-    managedLocalRuntimePortOverride = null
-    return settings
-  }
-  const next = settingsWithLocalRuntimePort(settings, override.port)
-  syncSettingsObject(settings, next)
-  return settings
-}
-
-async function resolveManagedLocalRuntimeLaunchSettings(
-  settings: AppSettingsV1,
-  source: string
-): Promise<AppSettingsV1> {
-  const runtime = getLocalRuntimeSettings(settings)
-  const resolved = await resolveAvailableLocalRuntimePort(runtime.port)
-  if (!resolved.changed) {
-    if (managedLocalRuntimePortOverride?.configuredPort === runtime.port) {
-      managedLocalRuntimePortOverride = null
-    }
-    return settings
-  }
-
-  managedLocalRuntimePortOverride = { configuredPort: runtime.port, port: resolved.port }
-  const next = settingsWithLocalRuntimePort(settings, resolved.port)
-  syncSettingsObject(settings, next)
-  const message = `SciForge Runtime port ${runtime.port} is unavailable; using ${resolved.port} instead.`
-  logWarn(source, message, {
-    previousPort: runtime.port,
-    port: resolved.port,
-    reason: resolved.message
-  })
-  publishRuntimeStatus({
-    state: source === 'runtime-start' ? 'starting' : 'restarting',
-    source,
-    message
-  })
-  return settings
-}
-
-async function ensureLocalRuntime(settings: AppSettingsV1): Promise<void> {
-  settings = applyManagedLocalRuntimePortOverride(settings)
-  const runtime = getLocalRuntimeSettings(settings)
-  const hasApiKey = Boolean(resolveConfiguredApiKey(settings))
-
-  const healthy = await waitForLocalRuntimeHealth(settings, 2_000)
-  if (healthy) {
-    noteRuntimeHealthy('ensure')
-    return
-  }
-
-  if (!hasApiKey) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'Model Router runtime API key is required before the GUI can start SciForge Runtime.'
-    )
-  }
-  if (!runtime.autoStart) {
-    throw runtimeJsonError(
-      'runtime_offline',
-      'SciForge Runtime is offline. Enable automatic startup in Settings, or start the configured runtime service manually.'
-    )
-  }
-
-  publishRuntimeStatus({ state: 'starting', source: 'ensure' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'runtime-start')
-    const adapter = localRuntimeAdapter
-    await adapter.ensureRunning(launchSettings)
-    const started = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!started) {
-      throw runtimeJsonError(
-        'runtime_unhealthy',
-        'SciForge Runtime did not become healthy after launch.'
-      )
-    }
-
-    noteRuntimeHealthy('ensure')
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.error('[sciforge] failed to start local runtime:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'ensure',
-      message: `SciForge Runtime failed to start: ${message}`
-    })
-    throw e
-  }
-}
-
-async function restartRuntime(settings: AppSettingsV1): Promise<void> {
-  if (runtimeRestartPromise) return runtimeRestartPromise
-  const task = restartRuntimeOnce(settings)
-    .finally(() => {
-      if (runtimeRestartPromise === task) {
-        runtimeRestartPromise = null
-      }
-    })
-  runtimeRestartPromise = task
-  runtimeEnsurePromise = null
-  runtimeEnsureFingerprint = null
-  return task
-}
-
-async function restartRuntimeOnce(settings: AppSettingsV1): Promise<void> {
-  await waitForQueuedRuntimeSettingsApply()
-  const runtime = getLocalRuntimeSettings(settings)
-
-  if (!resolveConfiguredApiKey(settings)) {
-    throw runtimeJsonError(
-      'missing_api_key',
-      'Model Router runtime API key is required before the GUI can start SciForge Runtime.'
-    )
-  }
-  if (!runtime.autoStart) {
-    throw runtimeJsonError(
-      'runtime_offline',
-      'SciForge Runtime is offline. Enable automatic startup in Settings, or start the configured runtime service manually.'
-    )
-  }
-
-  const adapter = localRuntimeAdapter
-  await adapter.stopAndWait()
-  const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'runtime-restart')
-
-  try {
-    await adapter.ensureRunning(launchSettings)
-  } catch (e) {
-    console.error('[sciforge] failed to restart local runtime:', e)
-    throw e
-  }
-
-  const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-  if (!healthy) {
-    throw runtimeJsonError(
-      'runtime_unhealthy',
-      'SciForge Runtime did not become healthy after restart.'
-    )
-  }
-
-  noteRuntimeHealthy('restart')
-}
-
 function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   traceStartup('createWindow:start')
   const preloadPath = resolvePreloadPath()
@@ -1493,8 +956,7 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     webPreferences: {
       preload: preloadPath,
       contextIsolation: true,
-      sandbox: true,
-      webviewTag: true
+      sandbox: true
     }
   })
   if (usesDesktopTitleBar) {
@@ -1505,6 +967,12 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
     const message = error instanceof Error ? error.message : String(error)
     console.error(`[sciforge] failed to load preload ${preloadPath}:`, error)
     logError('preload', 'Failed to load preload script', { preloadPath, message })
+  })
+  const devUrl = devServerHintUrl()
+  const rendererFile = join(__dirname, '../renderer/index.html')
+  const trustedRendererUrl = devUrl ?? pathToFileURL(rendererFile).toString()
+  mainWindow.webContents.on('will-navigate', (event, navigationUrl) => {
+    if (!isTrustedRendererUrl(navigationUrl, trustedRendererUrl)) event.preventDefault()
   })
   const showWindow = (): void => {
     if (options.suppressInitialShow) return
@@ -1519,12 +987,11 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   mainWindow.on('closed', () => {
     mainWindow = null
   })
-  const devUrl = devServerHintUrl()
   traceStartup('createWindow:load', { devUrl: devUrl ?? 'file' })
   if (devUrl) {
     mainWindow.loadURL(devUrl)
   } else {
-    mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
+    mainWindow.loadFile(rendererFile)
   }
   mainWindow.once('ready-to-show', () => {
     traceStartup('window:ready-to-show')
@@ -1532,9 +999,6 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   })
   mainWindow.webContents.once('did-finish-load', () => {
     traceStartup('window:did-finish-load')
-    if (lastRuntimeStatus && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('runtime:status', lastRuntimeStatus)
-    }
     showWindow()
   })
   setTimeout(() => {
@@ -1543,169 +1007,24 @@ function createWindow(options: { suppressInitialShow?: boolean } = {}): void {
   }, 1500)
 }
 
-/**
- * Stable equality for the local runtime settings. Most fields are flat,
- * but GUI-managed capability options can be nested, so compare values
- * structurally while still surviving future field additions.
- */
-function localRuntimeConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  const a = resolveLocalRuntimeSettings(prev)
-  const b = resolveLocalRuntimeSettings(next)
-  const keys = new Set([...Object.keys(a), ...Object.keys(b)] as Array<keyof typeof a>)
-  for (const key of keys) {
-    if (!stableSettingsValueEqual(a[key], b[key])) return true
-  }
-  return false
-}
-
-function stableSettingsValueEqual(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  return stableSettingsStringify(a) === stableSettingsStringify(b)
-}
-
-function stableSettingsStringify(value: unknown): string {
-  return JSON.stringify(canonicalSettingsValue(value))
-}
-
-function canonicalSettingsValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalSettingsValue)
-  if (!value || typeof value !== 'object') return value
-  const out: Record<string, unknown> = {}
-  for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-    out[key] = canonicalSettingsValue((value as Record<string, unknown>)[key])
-  }
-  return out
-}
-
-function runtimeStartupConfigChanged(prev: AppSettingsV1, next: AppSettingsV1): boolean {
-  return (
-    localRuntimeConfigChanged(prev, next) ||
-    scheduleMcpSettingsChanged(prev, next) ||
-    imageGenerationMcpSettingsChanged(prev, next)
-  )
-}
-
-async function restartManagedRuntimeForSettingsChange(
-  prev: AppSettingsV1,
-  next: AppSettingsV1
-): Promise<void> {
-  if (!runtimeStartupConfigChanged(prev, next)) return
-
-  const runtime = resolveLocalRuntimeSettings(next)
-  const adapter = localRuntimeAdapter
-  const wasRunning = adapter.isChildRunning()
-
-  if (!wasRunning) return
-  await waitForManagedRuntimeReadyBeforeStop(prev, 'settings-apply')
-  await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(next) || !runtime.autoStart) {
-    publishRuntimeStatus({
-      state: 'stopped',
-      source: 'settings-apply',
-      message: 'SciForge Runtime was stopped because the new settings have no API key or auto-start is disabled.'
-    })
-    return
-  }
-
-  publishRuntimeStatus({ state: 'restarting', source: 'settings-apply' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(next, 'settings-apply')
-    await adapter.ensureRunning(launchSettings)
-    const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!healthy) {
-      throw new Error('SciForge Runtime did not become healthy after the settings change')
-    }
-    noteRuntimeHealthy('settings-apply')
-    publishRuntimeStatus({ state: 'running', source: 'settings-apply' })
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[sciforge] local runtime restart failed after settings change:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'settings-apply',
-      message: `SciForge Runtime failed to restart after the settings change: ${message}`
-    })
-  }
-}
-
-async function restartManagedRuntimeForMcpConfigChange(settings: AppSettingsV1): Promise<void> {
-  const runtime = resolveLocalRuntimeSettings(settings)
-  const adapter = localRuntimeAdapter
-  const wasRunning = adapter.isChildRunning()
-
-  if (!wasRunning) return
-  await waitForManagedRuntimeReadyBeforeStop(settings, 'mcp-config')
-  await adapter.stopAndWait()
-  if (!resolveConfiguredApiKey(settings) || !runtime.autoStart) return
-
-  publishRuntimeStatus({ state: 'restarting', source: 'mcp-config' })
-  try {
-    const launchSettings = await resolveManagedLocalRuntimeLaunchSettings(settings, 'mcp-config')
-    await adapter.ensureRunning(launchSettings)
-    const healthy = await waitForLocalRuntimeHealth(launchSettings, 20_000)
-    if (!healthy) {
-      throw new Error('SciForge Runtime did not become healthy after the MCP config change')
-    }
-    noteRuntimeHealthy('mcp-config')
-    publishRuntimeStatus({ state: 'running', source: 'mcp-config' })
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e)
-    console.warn('[sciforge] local runtime restart failed after MCP config change:', e)
-    publishRuntimeStatus({
-      state: 'failed',
-      source: 'mcp-config',
-      message: `SciForge Runtime failed to restart after the MCP config change: ${message}`
-    })
-  }
-}
-
-async function waitForManagedRuntimeReadyBeforeStop(
-  settings: AppSettingsV1,
-  source: string
-): Promise<void> {
-  const healthy = await waitForLocalRuntimeHealth(settings, 20_000)
-  if (!healthy) {
-    logWarn(source, 'SciForge Runtime did not become healthy before a managed restart; stopping it anyway')
-    return
-  }
-  const idle = await waitForRuntimeTurnsIdle({
-    listThreads: runtimeIdleListThreads ?? undefined
-  })
-  if (idle === 'timeout') {
-    logWarn(source, 'SciForge Runtime still has running turns after waiting; stopping it anyway')
-  } else if (idle === 'unavailable') {
-    logWarn(source, 'Could not verify SciForge Runtime turn idleness before a managed restart; stopping it anyway')
-  }
-}
-
 app.whenReady().then(async () => {
   traceStartup('app.whenReady:start')
-  if (!gotSingleInstanceLock) return
-
-  traceStartup('install webview guards:start')
-  installDevPreviewWebviewGuards()
-  traceStartup('install webview guards:done')
+  if (!gotSingleInstanceLock) {
+    // electron-vite has already launched Electron by this point. Exiting here
+    // ensures its supervisor tears down the renderer instead of leaving a
+    // headless, port-owning development instance behind.
+    app.quit()
+    return
+  }
 
   if (process.platform === 'darwin' && !appIcon.isEmpty()) {
-    app.dock.setIcon(appIcon)
+    app.dock?.setIcon(appIcon)
   }
 
   store = new JsonSettingsStore(app.getPath('userData'))
   traceStartup('settings load:start')
-  let initial = await store.load()
-  initial = await syncModelRouterSettingsFromConfigFile(initial, {
-    userDataDir: app.getPath('userData')
-  }).then(async (synced) => {
-    if (JSON.stringify(synced.modelRouter) === JSON.stringify(initial.modelRouter)) return initial
-    return store.patch({ modelRouter: synced.modelRouter })
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to sync Model Router settings from config file during startup.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-    return initial
-  })
+  const initial = await store.load()
   traceStartup('settings load:done')
-  setLocalRuntimeUnexpectedExitHandler(handleUnexpectedLocalRuntimeExit)
   appBehavior = initial.appBehavior
   syncLoginItemSettings(initial)
   syncTray(initial)
@@ -1718,10 +1037,6 @@ app.whenReady().then(async () => {
   await syncScheduleMcpConfig(initial, getScheduleMcpLaunchConfig()).catch((error) => {
     console.error('[schedule-mcp] failed to sync config on startup:', error)
   })
-  await syncExternalManagedGuiMcpConfig().catch((error) => {
-    console.error('[managed-gui-mcp] failed to clean external SciForge MCP config on startup:', error)
-  })
-
   logDir = resolveLogDirectory()
   configureLogger({
     dir: logDir,
@@ -1729,33 +1044,19 @@ app.whenReady().then(async () => {
     retentionDays: initial.log.retentionDays
   })
   traceStartup('logger configured')
-  await syncModelRouterConfigFileFromSettings(initial, {
-    userDataDir: app.getPath('userData')
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to write Model Router config file during startup.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
+  const traceSensitiveSettings = new CurrentTraceSensitiveSettings(initial)
+  const fullTraceStore = new LocalTraceStore({
+    userDataDirectory: app.getPath('userData'),
+    sensitiveValues: traceSensitiveSettings.values
   })
-  void ensureModelRouterSidecar(initial, {
-    userDataDir: app.getPath('userData'),
-    appRoot: app.getAppPath(),
-    log: (message) => logWarn('model-router', message)
-  }).catch((error) => {
-    logWarn('model-router', 'Failed to auto-start Model Router.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-  void ensureEvidenceDagSidecar(initial, {
-    userDataDir: app.getPath('userData'),
-    appRoot: app.getAppPath(),
-    log: (message) => logWarn('evidence-dag', message)
-  }).catch((error) => {
-    logWarn('evidence-dag', 'Failed to auto-start Evidence DAG.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
+  await fullTraceStore.initialize()
+  const agentTraceRecorder = new AgentRuntimeTraceRecorder(fullTraceStore)
+  traceStartup('full trace store initialized')
+  await synchronizeSelectedModelAccessSidecar(
+    initial,
+    'Failed to start the selected model access service.'
+  )
   codeNavigationService = new LspCodeNavigationService()
-  const modelAuditRecorder = new ModelRequestAuditRecorder()
   const contextStateService = new RuntimeContextStateService()
   const contextLedgerService = new RuntimeContextLedgerService(app.getPath('userData'))
   const gitCheckpointService = new GitCheckpointService(app.getPath('userData'))
@@ -1763,35 +1064,154 @@ app.whenReady().then(async () => {
   const runtimeGoalService = new RuntimeGoalService(app.getPath('userData'))
   const researchCardService = new ResearchCardService(app.getPath('userData'))
   const workspaceReferenceService = new WorkspaceReferenceService()
+  const catalog = createApplicationDomainCatalog({
+    getUserDataDir: () => app.getPath('userData')
+  })
+  const actionGuardEvaluator = createMainActionGuardEvaluator(catalog)
+  const workspacePreviewHost = new WorkspacePreviewHost({
+    domainPlugins: listMainWorkspacePreviewPluginContributions(catalog),
+    loadSettings: () => store.load()
+  })
+  const resolveVisualInspector = async () => {
+    const router = resolveRuntimeModelRouterSettings(await store.load())
+    if (!router.baseUrl || !router.apiKey || !router.model) return undefined
+    return createModelRouterVisualInspector({
+      baseUrl: router.baseUrl,
+      apiKey: router.apiKey,
+      model: router.model
+    })
+  }
   const visibleContextService = new VisibleContextService(app.getPath('userData'), {
-    captureProvider: { capturePage: captureMainWindowPage },
-    requestContextRefresh: () => {
-      emitVisibleContextRendererEvent('visibleContext:refresh-requested')
+    surfaceCaptureProvider: visibleContextSurfaceCaptureProvider,
+    requestSurfaceRefresh: (windowId) => {
+      emitVisibleContextRendererEvent('visibleContext:refresh-requested', undefined, windowId)
     },
-    onCaptureState: (active) => {
-      emitVisibleContextRendererEvent('visibleContext:capture-state', active)
+    onCaptureState: (windowId, active) => {
+      emitVisibleContextRendererEvent('visibleContext:capture-state', active, windowId)
     }
   })
-  void visibleContextService.startCaptureRequestBroker().catch((error) => {
-    logWarn('visible-context', 'Failed to start the visual capture request broker.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
+  const appCapabilityDependencies: AppCapabilityDependencies = {
+    workspacePreviewHost,
+    visibleContextService
+  }
+  const capabilityBroker = new CapabilityBroker(
+    createApplicationCapabilityRegistry(catalog, appCapabilityDependencies)
+  )
+  const visualSourceRegistry = new VisualSourceRegistry([
+    {
+      ownerId: 'sciforge.agent-runtime',
+      provider: defineVisualSourceProvider({
+        contract: {
+          contractVersion: VISUAL_SOURCE_CONTRACT_VERSION,
+          id: 'sciforge.core.surface-visual-source',
+          resourceKinds: ['surface']
+        },
+        render: async (request) => {
+          const targetRef = request.target?.kind === 'target-ref'
+            ? request.target.targetRef
+            : undefined
+          if (request.target && !targetRef) {
+            throw new Error('The current surface source accepts only an opaque target reference.')
+          }
+          const frame = await visibleContextService.captureFrame(request.resource.resourceId, {
+            ...(targetRef ? { targetRef } : {})
+          })
+          return {
+            bytes: new Uint8Array(await readFile(frame.path)),
+            mimeType: frame.mimeType,
+            width: frame.width,
+            height: frame.height,
+            sourceRevision: request.resource.semanticRevision,
+            anchor: {
+              kind: targetRef ? 'surface-target' : 'surface'
+            }
+          }
+        }
+      })
+    },
+    {
+      ownerId: 'sciforge.workspace-preview',
+      provider: defineVisualSourceProvider({
+        contract: {
+          contractVersion: VISUAL_SOURCE_CONTRACT_VERSION,
+          id: 'sciforge.core.workspace-preview-visual-source',
+          resourceKinds: [WORKSPACE_PREVIEW_RESOURCE_KIND]
+        },
+        render: (request) => workspacePreviewHost.renderVisual(
+          request.resource.resourceId,
+          {
+            ...(request.frameIndex ? { frameIndex: request.frameIndex } : {}),
+            ...(request.target ? { target: request.target } : {}),
+            ...(request.maxDimension ? { maxDimension: request.maxDimension } : {})
+          }
+        )
+      })
+    },
+    ...listMainVisualSourceContributions(catalog)
+  ])
+  domainModuleCatalog = catalog
+  runtimeMcpToolGateway = createRuntimeMcpToolGateway({
+    servers: managedGuiMcpServers(initial)
   })
+  const runtimeCapabilityBroker = createRuntimeCapabilityBroker({
+    broker: capabilityBroker,
+    managedTools: runtimeMcpToolGateway,
+    isToolAvailable: (context, tool) => runtimeMayUseManagedTool(context.runtimeId, tool)
+  })
+  const agentVisualRuntime = new AgentVisualRuntime({
+    visibleContext: visibleContextService,
+    visualInspector: resolveVisualInspector,
+    frameDirectory: join(app.getPath('userData'), 'agent-visual', 'frames'),
+    resolveResourceFrame: async ({ sourceRef, targetRef, frame, caller, signal }) => {
+      const resource = capabilityBroker.describeResourceRef(caller, sourceRef)
+      const provider = visualSourceRegistry.resolve(resource.resourceKind)
+      if (!provider) {
+        throw new Error(`No visual source provider owns resource kind ${resource.resourceKind}.`)
+      }
+      return renderVisualSource(provider, {
+        resource: {
+          resourceId: resource.resourceId,
+          resourceKind: resource.resourceKind,
+          ...(resource.workspaceId ? { workspaceId: resource.workspaceId } : {}),
+          semanticRevision: resource.semanticRevision,
+          ...(resource.layoutRevision ? { layoutRevision: resource.layoutRevision } : {})
+        },
+        ...(targetRef ? { target: { kind: 'target-ref', targetRef } } : {}),
+        ...(frame ? { frameIndex: frame } : {})
+      }, { signal })
+    }
+  })
+  const agentRuntimeHostRef: { current: AgentRuntimeHost | null } = { current: null }
+  capabilityAgentTools = createCapabilityAgentToolSurface({
+    broker: runtimeCapabilityBroker,
+    visualRuntime: agentVisualRuntime,
+    resolveCaller: (context) => ({
+      audience: 'agent',
+      callerId: capabilityAgentCallerId(context),
+      ...(context.workspaceId ? { workspaceId: context.workspaceId } : {})
+    }),
+    requestApproval: (request, options) => (
+      agentRuntimeHostRef.current?.requestCapabilityApproval(request, options) ?? 'cancelled'
+    ),
+    cancelApprovalTurn: (identity, reason) => (
+      agentRuntimeHostRef.current?.cancelCapabilityApprovalTurn(identity, reason) ?? 0
+    )
+  })
+  installElectronDomainNativeVisualSmoke(capabilityAgentTools)
+  const capabilityIpcRegistration = registerCapabilityIpc({ broker: capabilityBroker })
   const anchoredCommentService = new AnchoredCommentService(app.getPath('userData'))
+  const artifactConsumers = listMainAgentArtifactConsumers(catalog)
   const agentRuntimeHost = createAgentRuntimeHost({
     settings: async () => store.load(),
+    nativeVisualToolsAvailable: () => Boolean(capabilityAgentTools),
+    artifactConsumers,
     adapters: [
-      createLocalRuntimeAgentRuntimeAdapter({
-        request: async (settings, pathAndQuery, init) =>
-          localRuntimeHttpRequestViaHost(settings, pathAndQuery, init, ensureRuntime),
-        events: localRuntimeEvents
-      }),
       createCodexAgentRuntimeAdapter(getCodexRuntime()),
       createClaudeCodeAgentRuntimeAdapter(getClaudeCodeRuntime())
     ],
     services: {
       codeNavigation: codeNavigationService,
-      modelAudit: modelAuditRecorder,
+      trace: agentTraceRecorder,
       contextState: contextStateService,
       contextLedger: contextLedgerService,
       gitCheckpoints: gitCheckpointService,
@@ -1801,70 +1221,77 @@ app.whenReady().then(async () => {
       goals: runtimeGoalService
     }
   })
-  configureEvidenceDagUpdateQueue({
-    storagePath: evidenceDagQueuePath(app.getPath('userData')),
-    // Evidence extraction performs several LLM-backed verification passes.
-    // Serializing jobs avoids a startup recovery stampede against one Model Router.
-    maxConcurrency: 1,
-    maxAttempts: 5,
-    canRunBackground: () => !agentRuntimeHost.hasActiveTurns(),
-    resolveProjectContext: async ({ runtimeId, threadId }) => {
-      if (runtimeId !== 'sciforge' && runtimeId !== 'codex' && runtimeId !== 'claude') return undefined
-      const detailWorkspace = await agentRuntimeHost.readThread({
-        runtimeId,
-        threadId
-      }).then((detail) => detail.workspace?.trim()).catch(() => undefined)
-      const workspaceRoot = detailWorkspace || await agentRuntimeHost.listThreads({
-        runtimeId,
-        limit: 1_000,
-        includeArchived: true,
-        includeSide: true
-      }).then((threads) => threads.find((thread) => thread.id === threadId)?.workspace?.trim())
-        .catch(() => undefined)
-      if (!workspaceRoot) return undefined
-      return {
-        projectKey: workspaceRoot,
-        workspaceRoot,
-        projectRoot: workspaceRoot,
-        includedSessions: [`${runtimeId}:${threadId}`]
+  agentRuntimeHostRef.current = agentRuntimeHost
+  agentRuntimeHostForShutdown = agentRuntimeHost
+  mainRuntimeContributions = await activateMainRuntimeContributions(catalog, {
+    userDataDir: app.getPath('userData'),
+    appRoot: app.isPackaged
+      ? join(process.resourcesPath, 'app.asar.unpacked')
+      : app.getAppPath(),
+    environment: Object.freeze({ ...process.env }),
+    agentThreads: {
+      list: async (input = {}) => {
+        const threads = await agentRuntimeHost.listThreads(
+          input as AgentRuntimeThreadListInput
+        )
+        return Object.freeze(threads.map((thread) => Object.freeze({
+          id: thread.id,
+          runtimeId: thread.runtimeId,
+          ...(thread.workspace?.trim() ? { workspaceRoot: thread.workspace.trim() } : {}),
+          ...(thread.archived === undefined ? {} : { archived: thread.archived })
+        })))
+      },
+      read: async (input) => {
+        const detail = await agentRuntimeHost.readThread(
+          input as AgentRuntimeThreadReadInput
+        )
+        return Object.freeze({
+          id: detail.id,
+          runtimeId: detail.runtimeId,
+          ...(detail.workspace?.trim() ? { workspaceRoot: detail.workspace.trim() } : {}),
+          ...(detail.archived === undefined ? {} : { archived: detail.archived }),
+          watermark: String(detail.latestSeq),
+          turns: Object.freeze((detail.turns ?? []).map((turn) => Object.freeze({
+            id: turn.id,
+            status: turn.status,
+            ...(turn.completedAt ? { completedAt: turn.completedAt } : {}),
+            artifacts: Object.freeze([...(turn.items ?? [])])
+          }))),
+          artifacts: Object.freeze([...(detail.items ?? [])])
+        })
+      },
+      hasActiveTurns: () => agentRuntimeHost.hasActiveTurns()
+    },
+    capabilities: createMainSystemCapabilityInvoker(capabilityBroker),
+    modelAccess: {
+      textReasoner: async () => {
+        const settings = await store.load()
+        if (getModelAccessSettings(settings)?.mode !== 'api') return null
+        const reasoner = resolveRuntimeModelRouterSettings(settings)
+        if (!reasoner.baseUrl.trim() || !reasoner.apiKey.trim() || !reasoner.model.trim()) {
+          return null
+        }
+        return Object.freeze({
+          baseUrl: reasoner.baseUrl.trim(),
+          apiKey: reasoner.apiKey.trim(),
+          model: reasoner.model.trim()
+        })
       }
     },
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
+    enablement: {
+      isEnabled: (moduleId) => catalog.hasModule(moduleId),
+      subscribe: () => () => undefined
     },
-    ensureProjectDagReady: async () => {
-      const settings = await store.load()
-      await ensureProjectDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('project-dag', message)
-      })
+    log: (entry) => {
+      if (entry.level === 'error') {
+        logError('domain-runtime', entry.message, entry.detail)
+      } else if (entry.level === 'warn') {
+        logWarn('domain-runtime', entry.message, entry.detail)
+      } else {
+        logInfo('domain-runtime', entry.message)
+      }
     }
   })
-  evidenceArtifactLifecycle = new EvidenceArtifactLifecycle({
-    threads: agentRuntimeHost,
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
-    },
-    log: (message, details) => logWarn('evidence-artifact', message, details)
-  })
-  void evidenceArtifactLifecycle.start().catch((error) => {
-    logWarn('evidence-artifact', 'Failed to start Artifact lifecycle monitoring.', {
-      message: error instanceof Error ? error.message : String(error)
-    })
-  })
-  runtimeIdleListThreads = (input) => agentRuntimeHost.listThreads(input)
-
   workflowRuntime = createWorkflowRuntime({
     store,
     agentRuntime: agentRuntimeHost,
@@ -2008,7 +1435,6 @@ app.whenReady().then(async () => {
     const prev = await store.load()
     const {
       agents: agentsPatch,
-      provider: providerPatch,
       modelRouter: modelRouterPatch,
       agentCapabilities: agentCapabilitiesPatch,
       computerUse: computerUsePatch,
@@ -2019,11 +1445,10 @@ app.whenReady().then(async () => {
     } = partial
     const next = normalizeAppSettings({
       ...applyClaudeRuntimePatch(
-        applyCodexRuntimePatch(applyLocalRuntimePatch(prev, agentsPatch?.sciforge), agentsPatch?.codex),
+        applyCodexRuntimePatch(prev, agentsPatch?.codex),
         agentsPatch?.claude
       ),
       ...restPatch,
-      provider: mergeModelProviderSettings(prev.provider, providerPatch),
       modelRouter: mergeModelRouterSettings(prev.modelRouter, modelRouterPatch),
       agentCapabilities: mergeAgentCapabilitySettings(prev.agentCapabilities, agentCapabilitiesPatch),
       computerUse: mergeComputerUseSettings(prev.computerUse, computerUsePatch),
@@ -2052,47 +1477,32 @@ app.whenReady().then(async () => {
       configureLogger({ enabled: next.log.enabled, retentionDays: next.log.retentionDays })
     }
     const saved = await store.patch(partial)
+    traceSensitiveSettings.update(saved)
+    await runtimeMcpToolGateway?.sync(managedGuiMcpServers(saved))
     emitSettingsChanged(saved)
     await syncScheduleMcpConfig(saved, getScheduleMcpLaunchConfig()).catch((error) => {
       console.error('[schedule-mcp] failed to sync config after settings change:', error)
     })
-    await syncExternalManagedGuiMcpConfig().catch((error) => {
-      console.error('[managed-gui-mcp] failed to clean external SciForge MCP config after settings change:', error)
-    })
     if (prev.guiUpdate.channel !== saved.guiUpdate.channel && guiUpdaterModulePromise) {
       void guiUpdaterModulePromise.then((module) => module.setGuiUpdateChannel(saved.guiUpdate.channel))
     }
-    queueRuntimeSettingsApply(prev, saved)
-    scheduleCodexRuntimePrewarm(saved, 'settings-switch')
-    if (partial.modelRouter) {
-      suppressModelRouterConfigFileWatch()
-      await syncModelRouterConfigFileFromSettings(saved, {
-        userDataDir: app.getPath('userData')
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to sync Model Router config file after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      suppressModelRouterConfigFileWatch()
-      void ensureModelRouterSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('model-router', message)
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to auto-start Model Router after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      void ensureEvidenceDagSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      }).catch((error) => {
-        logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after settings change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
+    const runtimePolicyChanged = modelAccessRuntimePolicyChanged(prev, saved)
+    if (runtimePolicyChanged) {
+      await reconcileSelectedAgentRuntime(saved)
     }
+    if (partial.modelRouter || partial.modelAccess) {
+      await synchronizeSelectedModelAccessSidecar(
+        saved,
+        'Failed to switch the selected model access service after settings change.'
+      )
+    }
+    if (
+      resolveModelAccessRuntimePolicy(saved).codex &&
+      (runtimePolicyChanged || Boolean(partial.modelRouter))
+    ) {
+      await getCodexRuntime().synchronizeModelAccess()
+    }
+    scheduleCodexRuntimePrewarm(saved, 'settings-switch')
     scheduleRuntime?.sync(saved)
     workflowRuntime?.sync(saved)
     remoteChannelRuntime?.sync(saved)
@@ -2106,117 +1516,47 @@ app.whenReady().then(async () => {
 
   const fetchModels = async () => {
     const settings = await store.load()
-    const key = resolveConfiguredApiKey(settings)
-    return fetchUpstreamModelIds(settings, key)
+    return fetchUpstreamModelIds(settings)
   }
 
-  const openModelRouterConfigFile = async (settings: AppSettingsV1) => {
-    let path = join(app.getPath('userData'), 'model-router', 'config.json')
-    try {
-      const syncedSettings = await syncModelRouterSettingsFromConfigFile(settings, {
-        userDataDir: app.getPath('userData')
-      })
-      let effectiveSettings = settings
-      if (JSON.stringify(syncedSettings.modelRouter) !== JSON.stringify(settings.modelRouter)) {
-        const prev = await store.load()
-        effectiveSettings = await store.patch({ modelRouter: syncedSettings.modelRouter })
-        emitSettingsChanged(effectiveSettings)
-        queueRuntimeSettingsApply(prev, effectiveSettings)
-        scheduleCodexRuntimePrewarm(effectiveSettings, 'settings-switch')
-        void ensureModelRouterSidecar(effectiveSettings, {
-          userDataDir: app.getPath('userData'),
-          appRoot: app.getAppPath(),
-          log: (message) => logWarn('model-router', message)
-        }).catch((error) => {
-          logWarn('model-router', 'Failed to auto-start Model Router after config file open.', {
-            message: error instanceof Error ? error.message : String(error)
-          })
-        })
-      }
-      suppressModelRouterConfigFileWatch()
-      const ensured = await ensureModelRouterConfigFile(effectiveSettings, {
-        userDataDir: app.getPath('userData')
-      })
-      suppressModelRouterConfigFileWatch()
-      path = ensured.path
-      const message = await shell.openPath(path)
-      if (message) {
-        return { ok: false as const, path, message }
-      }
-      return { ok: true as const, path }
-    } catch (error) {
-      return {
-        ok: false as const,
-        path,
-        message: error instanceof Error ? error.message : String(error)
-      }
-    }
-  }
-
-  const applyExternalModelRouterConfigFileChange = (): void => {
-    if (modelRouterConfigFileSyncPromise) return
-    const task = (async () => {
-      const prev = await store.load()
-      const synced = await syncModelRouterSettingsFromConfigFile(prev, {
-        userDataDir: app.getPath('userData')
-      })
-      if (JSON.stringify(synced.modelRouter) === JSON.stringify(prev.modelRouter)) return
-
-      const saved = await store.patch({ modelRouter: synced.modelRouter })
-      emitSettingsChanged(saved)
-      queueRuntimeSettingsApply(prev, saved)
-      scheduleCodexRuntimePrewarm(saved, 'settings-switch')
-      void ensureModelRouterSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('model-router', message)
-      }).catch((error) => {
-        logWarn('model-router', 'Failed to auto-start Model Router after config file change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      void ensureEvidenceDagSidecar(saved, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      }).catch((error) => {
-        logWarn('evidence-dag', 'Failed to auto-start Evidence DAG after config file change.', {
-          message: error instanceof Error ? error.message : String(error)
-        })
-      })
-      scheduleRuntime?.sync(saved)
-      workflowRuntime?.sync(saved)
-      remoteChannelRuntime?.sync(saved)
-      discordBotRuntime?.sync(saved)
-      zulipBotRuntime?.sync(saved)
-      syncWeixinBridgeRuntime(saved)
-    })().catch((error) => {
-      logWarn('model-router', 'Failed to sync Model Router settings from config file change.', {
-        message: error instanceof Error ? error.message : String(error)
-      })
-    }).finally(() => {
-      if (modelRouterConfigFileSyncPromise === task) {
-        modelRouterConfigFileSyncPromise = null
-      }
-    })
-    modelRouterConfigFileSyncPromise = task
-  }
-
-  startModelRouterConfigWatcher(app.getPath('userData'), applyExternalModelRouterConfigFileChange)
-
-  const workspacePreviewHost = new WorkspacePreviewHost({
-    loadSettings: () => store.load()
+  installCapabilityResourceContentProtocol(protocol, {
+    describe: (access) => capabilityBroker.describeResourceContent({
+      audience: 'ui',
+      callerId: 'electron:resource-content',
+      ...(access.workspaceId ? { workspaceId: access.workspaceId } : {})
+    }, access.resource),
+    readRange: (access, range) => capabilityBroker.readResourceContentRange({
+      audience: 'ui',
+      callerId: 'electron:resource-content',
+      ...(access.workspaceId ? { workspaceId: access.workspaceId } : {})
+    }, access.resource, range)
   })
-  installWorkspacePreviewAssetProtocol(protocol, {
-    isSessionAuthorized: (sessionId) => workspacePreviewHost.getSession(sessionId) !== null,
-    describeAsset: (sessionId) => workspacePreviewHost.describeAsset(sessionId),
-    readRange: (sessionId, range) => workspacePreviewHost.readRange(sessionId, range)
+
+  const readModelAccessStatus = (settings: AppSettingsV1) => getModelAccessStatus(settings, {
+    getCodingPlanCredentialStateImpl: async (_current, adapterId) =>
+      codingPlanCredentialStateForAdapter(
+        adapterId,
+        (input) => agentRuntimeHost.auxiliary(input)
+      )
   })
 
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
+    actionGuardEvaluator,
     getMainWindow: () => mainWindow,
+    isTrustedIpcSender: (event) => {
+      const window = mainWindow
+      if (!window || window.isDestroyed()) return false
+      const contents = window.webContents
+      const frame = event.senderFrame
+      const expected = devServerHintUrl() ?? pathToFileURL(join(__dirname, '../renderer/index.html')).toString()
+      return event.sender === contents &&
+        frame === contents.mainFrame &&
+        isTrustedRendererUrl(frame?.url ?? '', expected)
+    },
     applySettingsPatch,
+    getModelAccessStatus: readModelAccessStatus,
+    traces: fullTraceStore,
     agentRuntime: agentRuntimeHost,
     fetchUpstreamModels: fetchModels,
     getRemoteChannelRuntime: () => remoteChannelRuntime,
@@ -2237,41 +1577,15 @@ app.whenReady().then(async () => {
     pollFeishuInstall,
     startWeixinInstallQrcode,
     pollWeixinInstall,
-    resolveRuntimeConfigPath: resolveLocalRuntimeMcpJsonPath,
-    openModelRouterConfigFile,
-    getPaperRadarService: () => getPaperRadarWorkerService(),
     researchCards: researchCardService,
-    onRuntimeMcpConfigWritten: async () => {
-      const settings = await store.load()
-      queueRuntimeMcpConfigApply(settings)
-    },
     showTurnCompleteNotification,
     getAppVersion: () => app.getVersion(),
     readGuiUpdateState,
     loadGuiUpdaterModule,
     resolveLogDirectory,
     terminalPtyBridge,
-    workspacePreviewHost,
     getMainPerformanceSnapshot: () => mainPerformanceMonitor.snapshot(),
     logError,
-    ensureEvidenceDagReady: async () => {
-      const settings = await store.load()
-      await ensureEvidenceDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('evidence-dag', message)
-      })
-    },
-    // Lazy: the Project DAG sidecar starts on first use (export button), not at
-    // boot — it is only needed when the user compiles the project graph.
-    ensureProjectDagReady: async () => {
-      const settings = await store.load()
-      await ensureProjectDagSidecar(settings, {
-        userDataDir: app.getPath('userData'),
-        appRoot: app.getAppPath(),
-        log: (message) => logWarn('project-dag', message)
-      })
-    },
     getScientificSkillsMcpLaunchConfig,
     getScientificPlottingMcpLaunchConfig,
     getBgcDiscoveryMcpLaunchConfig,
@@ -2281,8 +1595,16 @@ app.whenReady().then(async () => {
 
   if (!app.isPackaged && process.env.SCIFORGE_DEV_BROWSER_BRIDGE !== '0') {
     void startDevBrowserBridgeServer({
-      dispatcher: appBridgeDispatcher,
-      allowAllChannels: true
+      dispatcher: {
+        invoke: (channel, payload, sender) => (
+          capabilityIpcRegistration.handles(channel)
+            ? capabilityIpcRegistration.invoke(channel, payload, sender)
+            : appBridgeDispatcher.invoke(channel, payload, sender)
+        )
+      },
+      resourceContent: capabilityIpcRegistration.resourceContent,
+      allowAllChannels: true,
+      instanceId: process.env.SCIFORGE_DEV_INSTANCE_ID
     }).then((server) => {
       devBrowserBridgeServer = server
       console.info(`[sciforge dev] browser bridge listening at ${server.url}`)
@@ -2306,14 +1628,6 @@ app.whenReady().then(async () => {
     console.warn('[sciforge] prune logs:', err)
   })
 
-  if (resolveConfiguredApiKey(initial)) {
-    setTimeout(() => {
-      void localRuntimeAdapter.resolveExecutable(initial).catch((err) => {
-        console.warn('[sciforge] prewarm local runtime binary:', err)
-      })
-    }, 1500)
-  }
-
   app.on('second-instance', () => {
     revealMainWindow()
   })
@@ -2330,16 +1644,15 @@ app.whenReady().then(async () => {
 })
 
 app.on('window-all-closed', () => {
-  void stopManagedRuntimes().catch((error) => {
-    console.warn('[sciforge] failed to stop local runtime:', error)
-  })
   if (process.platform !== 'darwin') {
+    void stopManagedRuntimes().catch((error) => {
+      console.warn('[sciforge] failed to stop managed runtimes:', error)
+    })
     app.quit()
   }
 })
 
 app.on('will-quit', () => {
-  stopModelRouterConfigWatcher()
   const server = devBrowserBridgeServer
   devBrowserBridgeServer = null
   void server?.close().catch((error) => {
@@ -2356,7 +1669,7 @@ app.on('before-quit', (event) => {
   event.preventDefault()
   void stopManagedRuntimesForQuit()
     .catch((error) => {
-      console.warn('[sciforge] failed to stop local runtime:', error)
+      console.warn('[sciforge] failed to stop managed runtimes:', error)
       managedRuntimesStoppedForQuit = true
     })
     .finally(() => {

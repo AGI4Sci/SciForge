@@ -1,25 +1,22 @@
 import { EventEmitter } from 'node:events'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import {
-  WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
-  WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES
-} from '../shared/workspace-preview'
-import type {
-  WorkspacePreviewDescribeAssetResult,
-  WorkspacePreviewReadRangeResult
-} from '../shared/sciforge-api'
 import type { AppBridgeSender } from './ipc/register-app-ipc-handlers'
+import {
+  capabilityResourceContentDescriptorSchema,
+  capabilityResourceContentRangeSchema
+} from '../shared/capability-broker'
+import { parseCapabilityResourceContentAccess } from '../shared/workspace-preview-asset-url'
 import { isLocalHttpBodyTooLargeError, readIncomingMessageBody } from './local-http-body'
 import { mainPerformanceMonitor } from './performance-monitor'
 
 const DEFAULT_DEV_BROWSER_BRIDGE_PORT = 5174
 const DEFAULT_MAX_INVOKE_BODY_BYTES = 24 * 1024 * 1024
 const CLIENT_DESTROY_DELAY_MS = 1_000
-const WORKSPACE_PREVIEW_ASSET_PATH_PREFIX = '/workspace-preview/assets/'
 const DEV_BROWSER_BRIDGE_ALLOWED_HEADERS = [
   'Content-Type',
-  'X-SciForge-Client'
+  'X-SciForge-Client',
+  'X-SciForge-Dev-Instance'
 ].join(',')
 
 // The bridge is gated to localhost renderer origins and is only started for
@@ -60,15 +57,14 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'anchoredComments:list',
   'anchoredComments:upsert',
   'app:version',
-  'biologyRoom:apply',
-  'biologyRoom:create',
-  'biologyRoom:history',
-  'biologyRoom:list',
-  'biologyRoom:load',
-  'biologyRoom:observe',
-  'biologyRoom:openOrCreate',
-  'biologyRoom:pick-file',
-  'biologyRoom:refresh',
+  'capability:bind',
+  'capability:readiness',
+  'capability:discover',
+  'capability:events',
+  'capability:invoke',
+  'capability:observe',
+  'capability:subscribe',
+  'capability:unsubscribe',
   'clipboard:paste-workspace',
   'clipboard:read-image',
   'computer-use:permissions',
@@ -89,10 +85,6 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'discord:test-send',
   'editor:list',
   'editor:open-path',
-  'evidenceDag:resolve-evidence-preview',
-  'evidenceDag:update',
-  'evidenceDag:priority',
-  'evidenceDag:view',
   'visual-style:extract-profile',
   'visual-style:save-profile',
   'file:copy-workspace-entry',
@@ -105,9 +97,9 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'file:read-workspace',
   'file:read-workspace-image',
   'file:rename-workspace-entry',
+  'file:suggest-workspace-pdf-name',
   'file:resolve-workspace',
   'file:save-workspace-clipboard-image',
-  'file:start-workspace-native-drag',
   'file:unwatch-workspace',
   'file:watch-workspace',
   'file:write-workspace',
@@ -122,29 +114,14 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'log:get-path',
   'log:open-dir',
   'mcp:bgc-discovery-config',
-  'mcp:dataset-api-config',
   'mcp:image-generation-config',
   'mcp:ppt-master-config',
   'mcp:scientific-plotting-config',
   'mcp:scientific-skills-config',
   'mcp:scientific-skills-status',
-  'modelRouter:config:open',
+  'modelAccess:status',
   'notification:turn-complete',
-  'paperRadar:digest',
-  'paperRadar:profiles:list',
-  'paperRadar:profiles:save',
-  'paperRadar:rank',
-  'paperRadar:review',
-  'paperRadar:search',
-  'paperRadar:status',
-  'paperRadar:sync-arxiv',
-  'paperRadar:sync-biorxiv',
-  'paperRadar:sync-profile',
   'performance:snapshot',
-  'projectDag:resolve-evidence-preview',
-  'projectDag:save-goal',
-  'projectDag:update',
-  'projectDag:view',
   'remoteChannel:active-thread-context',
   'remoteChannel:message:mirror',
   'remoteChannel:task:create-from-text',
@@ -152,9 +129,6 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'researchCards:create',
   'researchCards:list',
   'researchCards:update',
-  'runtimeConfig:open-dir',
-  'runtimeConfig:read',
-  'runtimeConfig:write',
   'schedule:status',
   'schedule:task:create-from-text',
   'schedule:task:run',
@@ -181,6 +155,10 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'terminal:dispose',
   'terminal:resize',
   'terminal:write',
+  'traces:clear',
+  'traces:export',
+  'traces:read',
+  'traces:summaries',
   'upstream:models',
   'visibleContext:capture:preview',
   'visibleContext:get',
@@ -194,19 +172,6 @@ export const DEFAULT_DEV_BROWSER_BRIDGE_ALLOWED_CHANNELS = [
   'workflow:stop',
   'workspace:pick-directory',
   'workspace:pick-file',
-  'workspacePreview:applyEdit',
-  'workspacePreview:describeAsset',
-  'workspacePreview:export',
-  'workspacePreview:invokeAction',
-  'workspacePreview:listPlugins',
-  'workspacePreview:observe',
-  'workspacePreview:open',
-  'workspacePreview:prepareArtifact',
-  'workspacePreview:readArtifactRange',
-  'workspacePreview:readRange',
-  'workspacePreview:releaseSession',
-  'workspacePreview:unwatch',
-  'workspacePreview:watch',
   'write:copy-rich-text',
   'write:export',
   'write:inline-completion',
@@ -230,17 +195,30 @@ export type DevBrowserBridgeServer = {
   server: Server
   url: string
   send: (channel: string, ...args: unknown[]) => void
+  sendTo: (clientNumericId: number, channel: string, ...args: unknown[]) => boolean
+  hasClient: (clientNumericId: number) => boolean
   close: () => Promise<void>
+}
+
+export type DevBrowserBridgeResourceContent = {
+  describe: (payload: unknown, sender: AppBridgeSender) => Promise<unknown>
+  readRange: (payload: unknown, sender: AppBridgeSender) => Promise<unknown>
 }
 
 type StartDevBrowserBridgeServerOptions = {
   dispatcher: DevBrowserBridgeDispatcher
+  resourceContent?: DevBrowserBridgeResourceContent
   host?: string
   port?: number
   maxInvokeBodyBytes?: number
   allowedChannels?: readonly string[]
   allowAllChannels?: boolean
+  instanceId?: string
 }
+
+type ParsedHttpByteRange =
+  | { ok: true; start: number; end: number }
+  | { ok: false; message: string }
 
 class DevBrowserBridgeClient extends EventEmitter implements AppBridgeSender {
   readonly id: number
@@ -378,134 +356,26 @@ function parseInvokeBody(value: unknown): { channel: string; payload: unknown } 
   }
 }
 
-type ParsedHttpByteRange =
-  | { ok: true; start: number; end: number }
-  | { ok: false; message: string }
-
-function parseHttpByteRange(value: string | string[] | undefined, size: number): ParsedHttpByteRange | null {
-  const header = Array.isArray(value) ? value[0] : value
-  if (!header) return null
-  const match = /^bytes=(\d*)-(\d*)$/u.exec(header.trim())
+function parseHttpByteRange(value: string | undefined, size: number): ParsedHttpByteRange | null {
+  if (!value) return null
+  const match = /^bytes=(\d*)-(\d*)$/u.exec(value.trim())
   if (!match) return { ok: false, message: 'Only a single bytes range is supported.' }
   const [, rawStart, rawEnd] = match
   if (!rawStart && !rawEnd) return { ok: false, message: 'Byte range is empty.' }
   if (size <= 0) return { ok: false, message: 'Byte range is not satisfiable.' }
-
   if (!rawStart) {
     const suffixLength = Number(rawEnd)
     if (!Number.isSafeInteger(suffixLength) || suffixLength <= 0) {
       return { ok: false, message: 'Byte range suffix is invalid.' }
     }
-    return {
-      ok: true,
-      start: Math.max(0, size - suffixLength),
-      end: size - 1
-    }
+    return { ok: true, start: Math.max(0, size - suffixLength), end: size - 1 }
   }
-
   const start = Number(rawStart)
   const end = rawEnd ? Number(rawEnd) : size - 1
   if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || start >= size) {
     return { ok: false, message: 'Byte range is not satisfiable.' }
   }
-  return {
-    ok: true,
-    start,
-    end: Math.min(end, size - 1)
-  }
-}
-
-function workspacePreviewSessionIdFromAssetPath(pathname: string): string | null {
-  if (!pathname.startsWith(WORKSPACE_PREVIEW_ASSET_PATH_PREFIX)) return null
-  const encodedSessionId = pathname.slice(WORKSPACE_PREVIEW_ASSET_PATH_PREFIX.length).split('/')[0] ?? ''
-  if (!encodedSessionId) return null
-  try {
-    const sessionId = decodeURIComponent(encodedSessionId).trim()
-    return sessionId || null
-  } catch {
-    return null
-  }
-}
-
-async function handleWorkspacePreviewAssetRequest(input: {
-  request: IncomingMessage
-  response: ServerResponse
-  requestUrl: URL
-  dispatcher: DevBrowserBridgeDispatcher
-  sender: AppBridgeSender
-}): Promise<void> {
-  const sessionId = workspacePreviewSessionIdFromAssetPath(input.requestUrl.pathname)
-  if (!sessionId) {
-    writeJson(input.response, 404, { ok: false, message: 'Workspace preview asset was not found.' })
-    return
-  }
-
-  const described = await input.dispatcher.invoke(
-    'workspacePreview:describeAsset',
-    { sessionId },
-    input.sender
-  ) as WorkspacePreviewDescribeAssetResult
-  if (!described.ok) {
-    writeJson(input.response, 404, { ok: false, message: described.message })
-    return
-  }
-
-  const descriptor = described.descriptor
-  if (!descriptor.range.available) {
-    writeJson(input.response, 409, { ok: false, message: 'Byte-range transport is not available for this asset.' })
-    return
-  }
-
-  const requestedRange = parseHttpByteRange(input.request.headers.range, descriptor.range.size)
-  if (requestedRange && !requestedRange.ok) {
-    input.response.statusCode = 416
-    input.response.setHeader('Content-Range', `bytes */${descriptor.range.size}`)
-    input.response.setHeader('Content-Type', 'application/json; charset=utf-8')
-    input.response.end(JSON.stringify({ ok: false, message: requestedRange.message }))
-    return
-  }
-
-  const start = requestedRange?.start ?? 0
-  const end = requestedRange?.end ?? descriptor.range.size - 1
-  const contentLength = descriptor.range.size === 0 ? 0 : Math.max(0, end - start + 1)
-  input.response.statusCode = requestedRange ? 206 : 200
-  input.response.setHeader('Accept-Ranges', 'bytes')
-  input.response.setHeader('Cache-Control', 'no-store')
-  input.response.setHeader('Content-Type', descriptor.file.mimeType || 'application/octet-stream')
-  input.response.setHeader('Content-Length', String(contentLength))
-  if (requestedRange) {
-    input.response.setHeader('Content-Range', `bytes ${start}-${end}/${descriptor.range.size}`)
-  }
-  if (input.request.method === 'HEAD' || contentLength === 0) {
-    input.response.end()
-    return
-  }
-
-  const chunkBytes = Math.max(1, Math.min(
-    descriptor.range.recommendedChunkBytes || WORKSPACE_PREVIEW_RECOMMENDED_RANGE_BYTES,
-    descriptor.range.maxChunkBytes || WORKSPACE_PREVIEW_MAX_RANGE_BYTES,
-    WORKSPACE_PREVIEW_MAX_RANGE_BYTES
-  ))
-  for (let offset = start; offset <= end;) {
-    const length = Math.min(chunkBytes, end - offset + 1)
-    const result = await input.dispatcher.invoke(
-      'workspacePreview:readRange',
-      {
-        sessionId,
-        range: { offset, length }
-      },
-      input.sender
-    ) as WorkspacePreviewReadRangeResult
-    if (!result.ok) {
-      input.response.destroy(new Error(result.message))
-      return
-    }
-    const chunk = Buffer.from(result.dataBase64, 'base64')
-    if (chunk.length === 0) break
-    input.response.write(chunk)
-    offset += chunk.length
-  }
-  input.response.end()
+  return { ok: true, start, end: Math.min(end, size - 1) }
 }
 
 export async function startDevBrowserBridgeServer(
@@ -515,7 +385,9 @@ export async function startDevBrowserBridgeServer(
   const port = options.port ?? DEFAULT_DEV_BROWSER_BRIDGE_PORT
   const maxInvokeBodyBytes = options.maxInvokeBodyBytes ?? DEFAULT_MAX_INVOKE_BODY_BYTES
   const allowedChannels = createAllowedChannelSet(options.allowedChannels)
+  const instanceId = options.instanceId?.trim() || ''
   const clients = new Map<string, DevBrowserBridgeClient>()
+  const clientsByNumericId = new Map<number, DevBrowserBridgeClient>()
   let nextClientNumericId = 1
 
   const getClient = (clientId: string): DevBrowserBridgeClient => {
@@ -524,8 +396,10 @@ export async function startDevBrowserBridgeServer(
     const created = new DevBrowserBridgeClient(nextClientNumericId++, clientId)
     created.once('destroyed', () => {
       if (clients.get(clientId) === created) clients.delete(clientId)
+      clientsByNumericId.delete(created.id)
     })
     clients.set(clientId, created)
+    clientsByNumericId.set(created.id, created)
     return created
   }
 
@@ -539,26 +413,20 @@ export async function startDevBrowserBridgeServer(
 
     const requestUrl = new URL(request.url ?? '/', `http://${host}:${port}`)
     if (request.method === 'GET' && requestUrl.pathname === '/health') {
-      writeJson(response, 200, { ok: true })
+      writeJson(response, 200, instanceId ? { ok: true, instanceId } : { ok: true })
       return
     }
 
-    if ((request.method === 'GET' || request.method === 'HEAD') &&
-      requestUrl.pathname.startsWith(WORKSPACE_PREVIEW_ASSET_PATH_PREFIX)) {
-      void handleWorkspacePreviewAssetRequest({
-        request,
-        response,
-        requestUrl,
-        dispatcher: options.dispatcher,
-        sender: getClient(normalizeClientId(requestUrl.searchParams.get('clientId') ?? request.headers['x-sciforge-client']))
-      }).catch((error) => {
-        if (response.writableEnded || response.destroyed) return
-        writeJson(response, 500, {
+    if (instanceId) {
+      const suppliedInstanceId = request.headers['x-sciforge-dev-instance']
+        ?? requestUrl.searchParams.get('devInstanceId')
+      if (suppliedInstanceId !== instanceId) {
+        writeJson(response, 409, {
           ok: false,
-          message: error instanceof Error ? error.message : String(error)
+          message: 'The renderer and Electron main belong to different development instances. Reload the current dev endpoint.'
         })
-      })
-      return
+        return
+      }
     }
 
     if (request.method === 'GET' && requestUrl.pathname === '/events') {
@@ -571,6 +439,80 @@ export async function startDevBrowserBridgeServer(
       })
       response.write('event: bridge-ready\ndata: {"ok":true}\n\n')
       client.attach(response)
+      return
+    }
+
+    if ((request.method === 'GET' || request.method === 'HEAD')
+      && requestUrl.pathname === '/capability/resources/content') {
+      void (async () => {
+        try {
+          if (!options.resourceContent) {
+            writeJson(response, 404, { ok: false, message: 'Capability resource content is unavailable.' })
+            return
+          }
+          const serializedAccess = requestUrl.searchParams.get('access')
+          if (!serializedAccess) {
+            writeJson(response, 400, { ok: false, message: 'Capability resource access is required.' })
+            return
+          }
+          const payload = parseCapabilityResourceContentAccess(serializedAccess)
+          if (!payload) {
+            writeJson(response, 400, { ok: false, message: 'Capability resource access is invalid.' })
+            return
+          }
+          const clientId = normalizeClientId(requestUrl.searchParams.get('clientId') ?? undefined)
+          const sender = getClient(clientId)
+          const descriptor = capabilityResourceContentDescriptorSchema.parse(
+            await options.resourceContent.describe(payload, sender)
+          )
+          const range = parseHttpByteRange(request.headers.range, descriptor.size)
+          if (range && !range.ok) {
+            response.setHeader('Content-Range', `bytes */${descriptor.size}`)
+            writeJson(response, 416, { ok: false, message: range.message })
+            return
+          }
+          const start = range?.start ?? 0
+          const end = range?.end ?? descriptor.size - 1
+          const contentLength = descriptor.size === 0 ? 0 : Math.max(0, end - start + 1)
+          response.statusCode = range ? 206 : 200
+          response.setHeader('Accept-Ranges', 'bytes')
+          response.setHeader('Cache-Control', 'no-store')
+          response.setHeader('Content-Type', descriptor.mimeType)
+          response.setHeader('Content-Length', String(contentLength))
+          response.setHeader('Cross-Origin-Resource-Policy', 'cross-origin')
+          if (range) response.setHeader('Content-Range', `bytes ${start}-${end}/${descriptor.size}`)
+          if (request.method === 'HEAD' || contentLength === 0) {
+            response.end()
+            return
+          }
+          const chunkBytes = Math.max(1, Math.min(
+            descriptor.recommendedChunkBytes,
+            descriptor.maxChunkBytes
+          ))
+          let offset = start
+          while (offset <= end) {
+            const length = Math.min(chunkBytes, end - offset + 1)
+            const result = capabilityResourceContentRangeSchema.parse(
+              await options.resourceContent.readRange({ ...payload, range: { offset, length } }, sender)
+            )
+            const bytes = Buffer.from(result.dataBase64, 'base64')
+            if (bytes.length === 0) throw new Error('Capability resource ended before the requested byte range.')
+            const bounded = bytes.length > length ? bytes.subarray(0, length) : bytes
+            response.write(bounded)
+            offset += bounded.length
+          }
+          response.end()
+        } catch (error) {
+          if (response.headersSent) {
+            response.destroy(error instanceof Error ? error : new Error(String(error)))
+            return
+          }
+          writeJson(response, 404, {
+            ok: false,
+            message: error instanceof Error ? error.message : String(error)
+          })
+        }
+      })()
       return
     }
 
@@ -629,11 +571,22 @@ export async function startDevBrowserBridgeServer(
         client.send(channel, ...args)
       }
     },
+    sendTo: (clientNumericId, channel, ...args) => {
+      const client = clientsByNumericId.get(clientNumericId)
+      if (!client || client.isDestroyed()) return false
+      client.send(channel, ...args)
+      return true
+    },
+    hasClient: (clientNumericId) => {
+      const client = clientsByNumericId.get(clientNumericId)
+      return Boolean(client && !client.isDestroyed())
+    },
     close: async () => {
       for (const client of clients.values()) {
         client.destroy()
       }
       clients.clear()
+      clientsByNumericId.clear()
       await new Promise<void>((resolve, reject) => {
         server.close((error) => {
           if (error) reject(error)

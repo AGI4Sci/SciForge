@@ -38,6 +38,7 @@ export function useComposerDraft({
   resetHistoryNavigation: (value: string) => void
 } {
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const resizeFrameRef = useRef(0)
   const composingRef = useRef(false)
   const historyStateRef = useRef<ComposerHistoryNavigationState>({ cursor: null, draft: input })
   const historyAppliedInputRef = useRef<string | null>(null)
@@ -61,38 +62,49 @@ export function useComposerDraft({
     const el = textareaRef.current
     if (!el) return
 
-    el.style.height = '0px'
-    const nextHeight = Math.min(el.scrollHeight, 176)
+    // Reset before measuring so the textarea can shrink as text is removed.
+    // Keep the layout read to one scrollHeight access and batch calls per frame.
+    el.style.height = 'auto'
+    const scrollHeight = el.scrollHeight
+    const nextHeight = Math.min(scrollHeight, 176)
     const minHeight = 36
-    el.style.height = `${Math.max(nextHeight, minHeight)}px`
-    el.style.overflowY = el.scrollHeight > 176 ? 'auto' : 'hidden'
+    const height = `${Math.max(nextHeight, minHeight)}px`
+    const overflowY = scrollHeight > 176 ? 'auto' : 'hidden'
+    if (el.style.height !== height) el.style.height = height
+    if (el.style.overflowY !== overflowY) el.style.overflowY = overflowY
   }, [])
 
+  const scheduleTextareaResize = useCallback(() => {
+    window.cancelAnimationFrame(resizeFrameRef.current)
+    resizeFrameRef.current = window.requestAnimationFrame(resizeTextarea)
+  }, [resizeTextarea])
+
   useLayoutEffect(() => {
-    resizeTextarea()
-  }, [canCompose, input, resizeTextarea])
+    scheduleTextareaResize()
+  }, [canCompose, input, scheduleTextareaResize])
+
+  useEffect(() => () => {
+    window.cancelAnimationFrame(resizeFrameRef.current)
+  }, [])
 
   useEffect(() => {
     const el = textareaRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
 
-    let frame = 0
     let previousWidth = el.getBoundingClientRect().width
     const observer = new ResizeObserver(([entry]) => {
       const nextWidth = entry?.contentRect.width ?? el.getBoundingClientRect().width
       if (Math.abs(nextWidth - previousWidth) < 0.5) return
       previousWidth = nextWidth
-      window.cancelAnimationFrame(frame)
-      frame = window.requestAnimationFrame(resizeTextarea)
+      scheduleTextareaResize()
     })
 
     observer.observe(el)
 
     return () => {
-      window.cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [resizeTextarea])
+  }, [scheduleTextareaResize])
 
   const focusComposer = useCallback(() => {
     window.requestAnimationFrame(() => textareaRef.current?.focus())

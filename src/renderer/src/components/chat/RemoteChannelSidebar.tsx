@@ -160,6 +160,7 @@ export function RemoteChannelSidebarContent({
                       <div className="ml-5 mt-1 space-y-0.5">
                         {sortedConversations.slice(0, 8).map((conversation) => {
                           const runtimeId = conversationRuntimeId(channel, conversation)
+                          const runtimeSelectable = runtimeId !== 'sciforge'
                           const threadId = conversationThreadId(conversation, runtimeId)
                           const conversationActive = conversationThreadIds(conversation).includes(activeThreadId ?? '')
                           const mappedThreadIds = conversationThreadIds(conversation)
@@ -185,10 +186,10 @@ export function RemoteChannelSidebarContent({
                             <SidebarTreeRow
                               key={conversation.id}
                               active={conversationActive}
-                              disabled={!runtimeReady || disabled}
+                              disabled={!runtimeReady || disabled || !runtimeSelectable}
                               title={`${title} · ${processLabel}`}
                               onClick={() => {
-                                if (threadId) onSelectConversation(channel.id, threadId)
+                                if (threadId && runtimeSelectable) onSelectConversation(channel.id, threadId)
                                 else onSelectChannel(channel.id)
                               }}
                               trailing={
@@ -326,11 +327,11 @@ function RemoteSidebarBadges({
   )
 }
 
-function conversationRuntimeId(
+export function conversationRuntimeId(
   channel: RemoteChannelV1,
   conversation: RemoteChannelV1['conversations'][number]
 ): AgentRuntimeId {
-  return conversation.runtimeId ?? channel.runtimeId ?? 'sciforge'
+  return conversation.runtimeId ?? channel.runtimeId ?? 'codex'
 }
 
 function conversationThreadId(

@@ -248,7 +248,7 @@ Zulip Mobile / Web
 
 #### Evidence DAG
 
-复用现有 `packages/workers/evidence-dag`。Bridge 或 AgentRuntimeHost 在 turn 完成后把 trace 输入 Evidence DAG。周报和成果卡片引用 Evidence DAG 的 claim/source/status。
+复用现有 `packages/domains/evidence-dag`。通用 Agent artifact consumer contribution 在 turn 完成后把 trace 输入 Evidence DAG。周报和成果卡片引用 Evidence DAG 的 claim/source/status。
 
 #### Digest Generator
 

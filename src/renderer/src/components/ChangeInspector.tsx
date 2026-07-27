@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react'
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { FileEdit, PanelRightClose } from 'lucide-react'
 import type { ChatBlock, ToolBlock } from '../agent/types'
@@ -9,7 +9,6 @@ import {
   extractUnifiedDiffText,
   formatFilePathForDisplay,
 } from '../lib/diff-stats'
-import { useChatStore } from '../store/chat-store'
 import { DiffView } from './DiffView'
 
 /**
@@ -18,17 +17,17 @@ import { DiffView } from './DiffView'
  */
 export function ChangeInspector({
   blocks,
+  workspaceRoot,
   className,
   onCollapse
 }: {
   blocks: ChatBlock[]
+  workspaceRoot: string
   className?: string
   onCollapse: () => void
 }): ReactElement {
   const { t } = useTranslation('common')
-  const selectedId = useChatStore((s) => s.inspectorSelectedId)
-  const selectInspectorItem = useChatStore((s) => s.selectInspectorItem)
-  const workspaceRoot = useChatStore((s) => s.workspaceRoot)
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const fileChanges = useMemo<ToolBlock[]>(() => {
     return blocks.flatMap((block): ToolBlock[] => {
@@ -51,13 +50,13 @@ export function ChangeInspector({
 
   useEffect(() => {
     if (fileChanges.length === 0 && selectedId !== null) {
-      selectInspectorItem(null)
+      setSelectedId(null)
       return
     }
     if (selectedId && !fileChanges.some((b) => b.id === selectedId)) {
-      selectInspectorItem(fileChanges[fileChanges.length - 1]?.id ?? null)
+      setSelectedId(fileChanges[fileChanges.length - 1]?.id ?? null)
     }
-  }, [fileChanges, selectedId, selectInspectorItem])
+  }, [fileChanges, selectedId])
 
   const active = fileChanges.find((b) => b.id === selectedId) ?? fileChanges[fileChanges.length - 1]
 
@@ -109,7 +108,7 @@ export function ChangeInspector({
                     <li key={b.id}>
                       <button
                         type="button"
-                        onClick={() => selectInspectorItem(b.id)}
+                        onClick={() => setSelectedId(b.id)}
                         className={`flex w-full items-start gap-2 px-4 py-2.5 text-left transition ${
                           active?.id === b.id
                             ? 'bg-ds-hover text-ds-ink'
