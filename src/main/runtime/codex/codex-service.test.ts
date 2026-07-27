@@ -22,6 +22,7 @@ import { CodexThreadStore } from './codex-thread-store'
 import {
   CODEX_MAIN_IPC_CHANNELS,
   type CodexAppServerClientEvent,
+  type CodexAppServerInitializeResponse,
   type CodexAppServerJsonRpcClient,
   type CodexAppServerJsonRpcClientOptions
 } from './app-server/json-rpc-client'
@@ -1640,6 +1641,78 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(secondClient.subscribe).not.toHaveBeenCalled()
   })
 
+  it('shares the complete app-server readiness handshake across concurrent connects', async () => {
+    const initialize = deferred<CodexAppServerInitializeResponse>()
+    const client = controllableClient()
+    vi.mocked(client.connect).mockImplementation(() => initialize.promise)
+    const createClient = vi.fn(() => client)
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    const firstConnect = service.connect()
+    const secondConnect = service.connect()
+    await vi.waitFor(() => {
+      expect(client.connect).toHaveBeenCalledOnce()
+    })
+    expect(createClient).toHaveBeenCalledOnce()
+
+    const initializeInfo: CodexAppServerInitializeResponse = {
+      userAgent: 'Codex Desktop/0.141.0 (test)',
+      codexHome: '/tmp/codex-home',
+      platformFamily: 'unix',
+      platformOs: 'macos'
+    }
+    initialize.resolve(initializeInfo)
+    await expect(Promise.all([firstConnect, secondConnect])).resolves.toEqual([
+      { ok: true, info: initializeInfo },
+      { ok: true, info: initializeInfo }
+    ])
+    expect(client.connect).toHaveBeenCalledOnce()
+    expect(client.subscribe).toHaveBeenCalledOnce()
+  })
+
+  it('finishes failed readiness cleanup before creating a retry client', async () => {
+    const initialize = deferred<CodexAppServerInitializeResponse>()
+    const stopped = deferred<void>()
+    const firstClient = controllableClient()
+    vi.mocked(firstClient.connect).mockImplementation(() => initialize.promise)
+    vi.mocked(firstClient.stop).mockImplementation(() => stopped.promise)
+    const secondClient = controllableClient()
+    const createClient = vi.fn()
+      .mockReturnValueOnce(firstClient)
+      .mockReturnValueOnce(secondClient)
+    const service = new CodexRuntimeService({
+      settings: async () => settings(),
+      sink: { send: vi.fn() },
+      createClient
+    })
+
+    const failedConnect = service.connect()
+    await vi.waitFor(() => {
+      expect(firstClient.connect).toHaveBeenCalledOnce()
+    })
+    initialize.reject(new Error('initialize failed'))
+    await vi.waitFor(() => {
+      expect(firstClient.stop).toHaveBeenCalledOnce()
+    })
+
+    const retryConnect = service.connect()
+    await Promise.resolve()
+    expect(createClient).toHaveBeenCalledOnce()
+
+    stopped.resolve()
+    await expect(failedConnect).resolves.toMatchObject({
+      ok: false,
+      message: 'initialize failed'
+    })
+    await expect(retryConnect).resolves.toEqual({ ok: true, info: {} })
+    expect(createClient).toHaveBeenCalledTimes(2)
+    expect(secondClient.stop).not.toHaveBeenCalled()
+  })
+
   it('returns recoverable failures when app-server requests fail', async () => {
     const service = new CodexRuntimeService({
       settings: async () => settings(),
@@ -2619,7 +2692,7 @@ process.stdout.write(JSON.stringify({
     current.workspaceRoot = workspace
     const client = controllableClient()
     vi.mocked(client.connect).mockResolvedValue({
-      userAgent: 'Codex Desktop/0.141.0 (test)',
+      userAgent: 'Codex Desktop/0.141.0 (Mac OS 15.7.4; arm64) dumb (sciforge; 0.1.0)',
       codexHome: managedCodexHome,
       platformFamily: 'unix',
       platformOs: 'macos'
@@ -2712,13 +2785,18 @@ process.stdout.write(JSON.stringify({
   it.each([
     {
       name: 'an older runtime',
-      userAgent: 'Codex Desktop/0.140.0 (test)',
-      expectedMessage: 'connected Codex is 0.140.0'
+      userAgent: 'Codex Desktop/0.140.99 (test)',
+      expectedMessage: 'connected Codex is 0.140.99'
+    },
+    {
+      name: 'a prerelease at the minimum stable version',
+      userAgent: 'Codex Desktop/0.141.0-alpha.1 (test)',
+      expectedMessage: 'connected Codex is 0.141.0-alpha.1'
     },
     {
       name: 'an unversioned runtime',
       userAgent: 'Codex Desktop/development (test)',
-      expectedMessage: 'cannot verify matcher-free PreToolUse coverage'
+      expectedMessage: 'Reported user agent: "Codex Desktop/development (test)"'
     }
   ])('fails governed startup for $name before trusting hooks', async ({
     userAgent,
