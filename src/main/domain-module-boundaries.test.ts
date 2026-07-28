@@ -369,15 +369,14 @@ describe('domain module boundaries', () => {
     }
   })
 
-  it('keeps DAG package implementations off host-private and cross-process imports', () => {
+  it('keeps every domain package implementation off host-private and cross-process imports', () => {
     const hostPrivateRoots = [
       resolve(projectRoot, 'src/main'),
       resolve(projectRoot, 'src/renderer'),
       resolve(projectRoot, 'src/shared')
     ]
 
-    for (const domain of dagDomainPackages) {
-      const packageRoot = resolve(packagesRoot, 'domains', domain.directory)
+    for (const packageRoot of filesNamed(packagesRoot, 'sciforge.domain.json').map(dirname)) {
       const packageFiles = productionSourceFiles(relative(projectRoot, join(packageRoot, 'src')))
       const violations = packageFiles.flatMap((path) => {
         const source = readFileSync(path, 'utf8')
@@ -409,6 +408,48 @@ describe('domain module boundaries', () => {
 
       expect(violations).toEqual([])
     }
+  })
+
+  it('keeps the runtime installer on public SDK contracts and out of extension execution', () => {
+    const installerFiles = productionSourceFiles('src/main/extensions')
+    expect(installerFiles.length).toBeGreaterThan(0)
+
+    const sdkPackageName = '@sciforge/domain-sdk'
+    const sdkPackage = JSON.parse(
+      readFileSync(resolve(packagesRoot, 'domain-sdk/package.json'), 'utf8')
+    ) as { exports: Record<string, unknown> }
+    const publicSdkSpecifiers = new Set(Object.keys(sdkPackage.exports).map((subpath) =>
+      subpath === '.' ? sdkPackageName : `${sdkPackageName}/${subpath.replace(/^\.\//u, '')}`
+    ))
+    const violations = installerFiles.flatMap((path) => {
+      const source = readFileSync(path, 'utf8')
+      const relativePath = relative(projectRoot, path)
+      const importViolations = importSpecifiers(source).flatMap((specifier) => {
+        if (
+          specifier === sdkPackageName ||
+          specifier.startsWith(`${sdkPackageName}/`)
+        ) {
+          return publicSdkSpecifiers.has(specifier)
+            ? []
+            : [`${relativePath} -> non-public SDK import ${specifier}`]
+        }
+        if (/^@sciforge\/domain-(?!sdk(?:\/|$))/u.test(specifier)) {
+          return [`${relativePath} -> runtime domain import ${specifier}`]
+        }
+        if (/(?:^|\/)src\/renderer(?:\/|$)|^@renderer(?:\/|$)/u.test(specifier)) {
+          return [`${relativePath} -> privileged renderer import ${specifier}`]
+        }
+        return []
+      })
+      const codeLoadingViolations =
+        /\b(?:import|require)\s*\(/u.test(source) ||
+        /\b(?:createRequire|runInNewContext|runInThisContext|SourceTextModule)\b/u.test(source)
+          ? [`${relativePath} -> dynamic code loading`]
+          : []
+      return [...importViolations, ...codeLoadingViolations]
+    })
+
+    expect(violations).toEqual([])
   })
 
   it('declares legacy DAG transport prefixes as broker-migrated with no exceptions', () => {

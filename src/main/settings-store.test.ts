@@ -42,6 +42,32 @@ describe('JsonSettingsStore', () => {
     expect(loaded.speechToText).toEqual(defaultSpeechToTextSettings())
     expect('evidenceDag' in loaded).toBe(false)
     expect(getModelAccessSettings(loaded)).toBeUndefined()
+    expect(loaded.workbenchToolbar).toEqual({
+      hiddenCommandIds: [],
+      commandOrder: []
+    })
+  })
+
+  it('persists normalized Workbench toolbar placement independently from extensions', async () => {
+    const userDataDir = await mkdtemp(join(tmpdir(), 'sciforge-settings-toolbar-'))
+    try {
+      const store = new JsonSettingsStore(userDataDir)
+      const saved = await store.patch({
+        workbenchToolbar: {
+          hiddenCommandIds: [' paper-radar.open ', 'paper-radar.open'],
+          commandOrder: ['remote-ssh.open', 'missing-package.open']
+        }
+      })
+      expect(saved.workbenchToolbar).toEqual({
+        hiddenCommandIds: ['paper-radar.open'],
+        commandOrder: ['remote-ssh.open', 'missing-package.open']
+      })
+
+      const reloaded = await new JsonSettingsStore(userDataDir).load()
+      expect(reloaded.workbenchToolbar).toEqual(saved.workbenchToolbar)
+    } finally {
+      await rm(userDataDir, { recursive: true, force: true })
+    }
   })
 
   it('keeps persisted settings without an access mode in setup-required state', async () => {

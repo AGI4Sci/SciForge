@@ -37,6 +37,7 @@ import {
   mergeAgentCapabilitySettings,
   mergeRuntimeGuardSettings,
   defaultWriteSettings,
+  defaultWorkbenchToolbarSettings,
   mergeRemoteChannelSettings,
   mergeScheduleSettings,
   mergeSpeechToTextSettings,
@@ -49,6 +50,8 @@ import {
   normalizeAppSettings,
   normalizeModelAccessSettings,
   normalizeAgentRuntimeId,
+  mergeWorkbenchToolbarSettings,
+  normalizeWorkbenchToolbarSettings,
   reconcileScheduleWorkflows,
   type AppSettingsPatch,
   type AppSettingsV1,
@@ -285,6 +288,7 @@ const defaultSettings = (): AppSettingsV1 => ({
     turnComplete: true
   },
   appBehavior: normalizeAppBehaviorSettings(),
+  workbenchToolbar: defaultWorkbenchToolbarSettings(),
   keyboardShortcuts: normalizeKeyboardShortcuts(),
   guiUpdate: {
     channel: DEFAULT_GUI_UPDATE_CHANNEL
@@ -339,6 +343,7 @@ function buildMergedSettings(parsed: Partial<AppSettingsV1>): AppSettingsV1 {
       ...defaults.appBehavior,
       ...migrated.appBehavior
     }),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(migrated.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(migrated.keyboardShortcuts),
     write: mergeWriteSettings(defaults.write, migrated.write),
     imageGeneration: mergeImageGenerationSettings(defaults.imageGeneration, migrated.imageGeneration),
@@ -510,6 +515,10 @@ export class JsonSettingsStore {
         ...cur.appBehavior,
         ...(partial.appBehavior ?? {})
       }),
+      workbenchToolbar: mergeWorkbenchToolbarSettings(
+        cur.workbenchToolbar,
+        partial.workbenchToolbar
+      ),
       keyboardShortcuts: normalizeKeyboardShortcuts({
         bindings: {
           ...cur.keyboardShortcuts.bindings,

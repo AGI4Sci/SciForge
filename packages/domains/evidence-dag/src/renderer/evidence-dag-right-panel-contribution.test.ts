@@ -5,11 +5,14 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import {
   createDomainRendererEntry,
-  type EvidenceDagRightPanelContribution
+  type EvidenceDagRightPanelContribution,
+  type EvidenceDagToolbarActionContribution
 } from './evidence-dag-right-panel-contribution'
 import type { EvidenceDagI18nResourceContribution } from './evidence-dag-messages'
 
@@ -29,7 +32,7 @@ test('contributes the package-owned Evidence panel and translations', () => {
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
   assert.deepEqual(entry.definition, domainPackageDefinition)
-  assert.equal(entry.contributions.length, 2)
+  assert.equal(entry.contributions.length, 3)
 
   const panel = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.kind
@@ -37,13 +40,11 @@ test('contributes the package-owned Evidence panel and translations', () => {
   assert.deepEqual({
     id: panel.id,
     mode: panel.mode,
-    label: panel.label,
     title: panel.title,
     resourceKind: panel.resourceKind
   }, {
     id: 'evidence-dag.workbench-right-panel',
     mode: 'evidence-dag',
-    label: 'rightPanelEvidenceDag',
     title: 'Evidence DAG',
     resourceKind: 'evidence-dag'
   })
@@ -57,6 +58,14 @@ test('contributes the package-owned Evidence panel and translations', () => {
   assert.equal(props.className, 'panel')
   assert.equal(props.workspacePreview, host.workspacePreview)
   assert.equal(typeof props.client, 'object')
+
+  const toolbarRuntime = entry.contributions.find(({ kind }) =>
+    kind === EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
+  )!
+  const toolbar = toolbarRuntime.value as EvidenceDagToolbarActionContribution
+  assert.deepEqual(toolbarRuntime.contract, EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT)
+  assert.equal(typeof toolbar.icon, 'object')
+  assert.equal(toolbar.isAvailable(), true)
 
   const translations = entry.contributions.find(({ kind }) =>
     kind === EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION.kind

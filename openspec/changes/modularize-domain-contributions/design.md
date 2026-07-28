@@ -76,6 +76,12 @@ The public Workspace Preview SDK carries built-in host shapes and bounded namesp
 
 Trusted compile-time domain dependencies are compiled into the Electron main or renderer output. Release packaging does not also ship those packages' TypeScript source as a parallel runtime. Source-shipped worker entries remain only for genuine sidecar runtimes.
 
+### 13. Toolbar availability and user placement are separate authorities
+
+A package owns whether an action exists, its stable command ID, target, label, icon, and contextual availability. The user owns whether that installed action is placed in the Workbench toolbar and its relative order. Preferences are persisted in the host settings store by command ID rather than contribution index or package path.
+
+An empty preference means the deterministic package-declared default. Newly installed actions therefore appear by default after explicitly ordered actions. Hidden or ordered command IDs are retained when their package is absent, so reinstalling the same command restores the user's choice. Resetting removes only placement preferences and never installs, enables, disables, or uninstalls a package.
+
 ## Risks and Mitigations
 
 - **Risk: registry abstraction changes precedence.** Preserve existing arrays' exact order and add selection tests.

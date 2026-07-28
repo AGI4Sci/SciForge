@@ -11,6 +11,8 @@ import type {
 import {
   PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,
   PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createPaperRadarCapabilityClient } from './paper-radar-capability-client'
@@ -29,16 +31,19 @@ export type PaperRadarRightPanelRenderProps = DomainWorkbenchRightPanelRenderCon
 export type PaperRadarRightPanelContribution = Readonly<{
   id: string
   mode: 'paper'
-  label: string
-  icon: typeof Newspaper
   title: string
   resourceKind: string
-  isAvailable: () => boolean
   render: (props: PaperRadarRightPanelRenderProps) => ReactElement
+}>
+
+export type PaperRadarToolbarActionContribution = Readonly<{
+  icon: typeof Newspaper
+  isAvailable: () => boolean
 }>
 
 export type PaperRadarRendererContribution =
   | PaperRadarRightPanelContribution
+  | PaperRadarToolbarActionContribution
   | PaperRadarI18nResourceContribution
 
 export function createPaperRadarRightPanelContribution(
@@ -48,11 +53,8 @@ export function createPaperRadarRightPanelContribution(
   return Object.freeze({
     id: PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     mode: 'paper',
-    label: 'rightPanelPaperRadar',
-    icon: Newspaper,
     title: 'Paper radar',
     resourceKind: 'paper-radar',
-    isAvailable: () => true,
     render: ({ className, onCollapse }): ReactElement => (
       <PaperRadarPanel
         capabilityClient={capabilityClient}
@@ -61,6 +63,14 @@ export function createPaperRadarRightPanelContribution(
         onCollapse={onCollapse}
       />
     )
+  })
+}
+
+export function createPaperRadarToolbarActionContribution():
+PaperRadarToolbarActionContribution {
+  return Object.freeze({
+    icon: Newspaper,
+    isAvailable: () => true
   })
 }
 
@@ -73,6 +83,11 @@ export function createDomainRendererEntry(
       {
         ...PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         value: createPaperRadarRightPanelContribution(host)
+      },
+      {
+        ...PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createPaperRadarToolbarActionContribution()
       },
       {
         ...PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,

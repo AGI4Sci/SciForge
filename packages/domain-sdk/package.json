@@ -4,7 +4,7 @@
   "license": "MIT",
   "type": "module",
   "private": false,
-  "description": "Pure contracts for trusted compile-time SciForge domain packages.",
+  "description": "Pure contracts for compile-time and sandboxed runtime SciForge domain packages.",
   "exports": {
     ".": "./src/index.ts",
     "./contract": "./src/contract.ts",

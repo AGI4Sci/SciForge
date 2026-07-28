@@ -11,6 +11,10 @@ import {
   SCHEDULE_REASONING_EFFORT_IDS,
   SPEECH_TO_TEXT_PROTOCOLS
 } from '../../shared/app-settings'
+import {
+  WORKBENCH_TOOLBAR_COMMAND_ID_MAX_LENGTH,
+  WORKBENCH_TOOLBAR_MAX_COMMANDS
+} from '../../shared/app-settings-workbench-toolbar'
 import { DESKTOP_COMMANDS } from '../../shared/sciforge-api'
 import { GUI_UPDATE_CHANNELS } from '../../shared/gui-update'
 import { KEYBOARD_SHORTCUT_COMMANDS } from '../../shared/keyboard-shortcuts'
@@ -51,6 +55,20 @@ import {
   workspaceStructuredSelectionSchema
 } from '../../shared/workspace-preview'
 import { workspaceFileConflictPolicySchema } from '../../shared/workspace-file'
+import {
+  DOMAIN_EXTENSION_EXECUTIONS,
+  DOMAIN_EXTENSION_SOURCES,
+  DOMAIN_EXTENSION_STATUSES,
+  DOMAIN_EXTENSION_VERIFICATIONS
+} from '../../shared/domain-extensions'
+import {
+  domainPackageContributionKindSchema,
+  domainPackageModuleIdSchema,
+  domainPackageNameSchema,
+  domainPackagePermissionIdSchema,
+  domainPackagePublisherIdSchema,
+  domainPackageVersionSchema
+} from '@sciforge/domain-sdk'
 export {
   visibleContextCapturePreviewRequestSchema as visibleContextCapturePreviewPayloadSchema,
   visibleContextPublishInputSchema as visibleContextPublishPayloadSchema
@@ -82,6 +100,44 @@ function optionalTrimmedString(max: number): z.ZodOptional<z.ZodString> {
 }
 
 export const defaultPathSchema = optionalTrimmedString(MAX_PATH_LENGTH)
+
+export const domainExtensionListPayloadSchema = z.object({}).strict()
+
+export const domainExtensionInstallPayloadSchema = z.object({
+  path: trimmedString(MAX_PATH_LENGTH)
+}).strict()
+
+export const domainExtensionPackagePayloadSchema = z.object({
+  packageName: domainPackageNameSchema
+}).strict()
+
+export const domainExtensionSetEnabledPayloadSchema = z.object({
+  packageName: domainPackageNameSchema,
+  enabled: z.boolean()
+}).strict()
+
+export const domainExtensionSummarySchema = z.object({
+  packageName: domainPackageNameSchema,
+  moduleId: domainPackageModuleIdSchema,
+  moduleDisplayName: trimmedString(160),
+  version: domainPackageVersionSchema,
+  publisher: z.object({
+    id: domainPackagePublisherIdSchema,
+    displayName: trimmedString(160)
+  }).strict(),
+  source: z.enum(DOMAIN_EXTENSION_SOURCES),
+  verification: z.enum(DOMAIN_EXTENSION_VERIFICATIONS),
+  execution: z.enum(DOMAIN_EXTENSION_EXECUTIONS),
+  status: z.enum(DOMAIN_EXTENSION_STATUSES),
+  permissions: z.array(domainPackagePermissionIdSchema).max(1_000),
+  contributionKinds: z.array(domainPackageContributionKindSchema).max(1_000),
+  contributionCount: z.number().int().min(0).max(2_000),
+  canRollback: z.boolean(),
+  installedAt: z.string().datetime({ offset: true }).optional(),
+  diagnostic: z.string().trim().min(1).max(4_000).optional()
+}).strict()
+
+export const domainExtensionListResultSchema = z.array(domainExtensionSummarySchema).max(1_024)
 
 const localeSchema = z.enum(['en', 'zh'])
 const themeSchema = z.enum(['system', 'light', 'dark'])
@@ -1472,6 +1528,14 @@ const settingsPatchObjectSchema = z.object({
   log: logPatchSchema.optional(),
   notifications: notificationsPatchSchema.optional(),
   appBehavior: appBehaviorPatchSchema.optional(),
+  workbenchToolbar: z.object({
+    hiddenCommandIds: z.array(
+      trimmedString(WORKBENCH_TOOLBAR_COMMAND_ID_MAX_LENGTH)
+    ).max(WORKBENCH_TOOLBAR_MAX_COMMANDS).optional(),
+    commandOrder: z.array(
+      trimmedString(WORKBENCH_TOOLBAR_COMMAND_ID_MAX_LENGTH)
+    ).max(WORKBENCH_TOOLBAR_MAX_COMMANDS).optional()
+  }).strict().optional(),
   keyboardShortcuts: keyboardShortcutsPatchSchema.optional(),
   write: writeSettingsPatchSchema.optional(),
   speechToText: speechToTextPatchSchema.optional(),

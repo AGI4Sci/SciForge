@@ -29,8 +29,12 @@ import { openSafeExternalUrl } from '../../lib/open-external'
 import { openWorkspacePathInEditor } from '../../lib/open-workspace-path'
 import { AnchoredCommentsTopBarActions } from '../anchored-comments'
 import type {
-  RegisteredWorkbenchRightPanelContribution
-} from '../../domain-modules/workbench-right-panel-slot'
+  RegisteredWorkbenchToolbarActionContribution,
+  WorkbenchToolbarContext
+} from '../../domain-modules/workbench-toolbar-slot'
+import { visibleWorkbenchToolbarActions } from '../../domain-modules/workbench-toolbar-preferences'
+import { useWorkbenchToolbarSettings } from '../../lib/use-workbench-toolbar-settings'
+import { WorkbenchToolbarCustomizer } from './WorkbenchToolbarCustomizer'
 
 export const RIGHT_PANEL_MODES = [
   'todo',
@@ -55,7 +59,8 @@ type Props = {
   onToggleRightPanelMode: (mode: Exclude<RightPanelMode, null>) => void
   workspaceRoot?: string
   planPanelEnabled?: boolean
-  rightPanelContributions?: readonly RegisteredWorkbenchRightPanelContribution[]
+  toolbarActions?: readonly RegisteredWorkbenchToolbarActionContribution[]
+  onExecuteToolbarCommand?: (commandId: string) => void
   sideChatCount?: number
   sideChatRunningCount?: number
   sideChatOpen?: boolean
@@ -75,7 +80,8 @@ export function WorkbenchTopBar({
   onToggleRightPanelMode,
   workspaceRoot = '',
   planPanelEnabled = false,
-  rightPanelContributions = [],
+  toolbarActions = [],
+  onExecuteToolbarCommand,
   sideChatCount = 0,
   sideChatRunningCount = 0,
   sideChatOpen = false,
@@ -97,18 +103,33 @@ export function WorkbenchTopBar({
   const [guiUpdateState, setGuiUpdateState] = useState<GuiUpdateState>({ status: 'idle' })
   const [applyingGuiUpdate, setApplyingGuiUpdate] = useState(false)
   const [openingWorkspace, setOpeningWorkspace] = useState(false)
+  const {
+    preferences: toolbarPreferences,
+    saveState: toolbarSaveState,
+    saveError: toolbarSaveError,
+    savePreferences: saveToolbarPreferences
+  } = useWorkbenchToolbarSettings()
   const editorMenuRef = useRef<HTMLDivElement>(null)
   const editorMenuButtonRef = useRef<HTMLButtonElement>(null)
   const editorMenuPanelRef = useRef<HTMLDivElement>(null)
   const [editorMenuPosition, setEditorMenuPosition] = useState<{ left: number; top: number; width: number } | null>(null)
+  const toolbarContext: WorkbenchToolbarContext = {
+    activeRightPanelMode: rightPanelMode,
+    workspaceRoot
+  }
+  const contributedItems = visibleWorkbenchToolbarActions(
+    toolbarActions,
+    toolbarPreferences
+  )
+    .filter(({ contribution }) => contribution.isAvailable(toolbarContext))
+    .map(({ id, contribution }) => ({
+      id,
+      commandId: contribution.commandId,
+      label: t(contribution.label),
+      icon: contribution.icon,
+      active: contribution.isActive(toolbarContext)
+    }))
   const items = [
-    ...rightPanelContributions
-      .filter(({ contribution }) => contribution.isAvailable())
-      .map(({ contribution }) => ({
-        mode: contribution.mode,
-        label: t(contribution.label),
-        icon: contribution.icon
-      })),
     ...(planPanelEnabled ? [{ mode: 'plan' as const, label: t('rightPanelPlan'), icon: ClipboardList }] : []),
     { mode: 'workflow' as const, label: t('workflow'), icon: Workflow },
     { mode: 'visual-review' as const, label: t('rightPanelVisualReview'), icon: Palette },
@@ -525,6 +546,38 @@ export function WorkbenchTopBar({
           ) : null}
         </button>
       ) : null}
+
+      {contributedItems.map((item) => {
+        const Icon = item.icon
+        return (
+          <button
+            key={item.id}
+            type="button"
+            onClick={() => onExecuteToolbarCommand?.(item.commandId)}
+            disabled={!onExecuteToolbarCommand}
+            className={`rounded-full border px-2.5 py-1.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.45)] transition dark:shadow-[inset_0_1px_0_rgba(255,255,255,0.05)] ${
+              item.active
+                ? 'border-ds-border-strong bg-white/70 text-ds-ink dark:bg-white/10'
+                : 'border-transparent bg-white/38 text-ds-faint opacity-90 hover:border-ds-border-muted hover:bg-white/55 hover:text-ds-ink hover:opacity-100 dark:bg-white/4 dark:hover:bg-white/8'
+            }`}
+            aria-label={item.label}
+            aria-pressed={item.active}
+            title={item.label}
+          >
+            <Icon className="h-4 w-4" strokeWidth={1.75} />
+          </button>
+        )
+      })}
+
+      <WorkbenchToolbarCustomizer
+        actions={toolbarActions}
+        preferences={toolbarPreferences}
+        saving={toolbarSaveState === 'saving'}
+        error={toolbarSaveError}
+        onChange={(next) => {
+          void saveToolbarPreferences(next)
+        }}
+      />
 
       {items.map((item) => {
         const active = rightPanelMode === item.mode

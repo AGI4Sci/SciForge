@@ -218,6 +218,7 @@ import type {
   ResearchCardListInput,
   ResearchCardUpdateInput
 } from './research-cards'
+import type { DomainExtensionsApi } from './domain-extensions'
 
 export type WorkspacePickResult = { canceled: boolean; path: string | null }
 export type WorkspaceFilePickerFilter = {
@@ -845,6 +846,7 @@ export type SciForgeApi = {
     export: (traceIds?: readonly string[]) => Promise<FullTraceExportDialogResult>
     clear: () => Promise<TraceClearResult>
   }
+  extensions: DomainExtensionsApi
   getConnectPhoneStatus: () => Promise<ConnectPhoneRuntimeStatus>
   getScheduleStatus: () => Promise<ScheduleRuntimeStatus>
   runScheduleTask: (taskId: string) => Promise<ScheduleRunResult>

@@ -70,6 +70,13 @@ const api = {
     export: (traceIds) => ipcRenderer.invoke('traces:export', { traceIds }),
     clear: () => ipcRenderer.invoke('traces:clear')
   },
+  extensions: {
+    list: () => ipcRenderer.invoke('extensions:list'),
+    install: (input) => ipcRenderer.invoke('extensions:install', input),
+    uninstall: (input) => ipcRenderer.invoke('extensions:uninstall', input),
+    rollback: (input) => ipcRenderer.invoke('extensions:rollback', input),
+    setEnabled: (input) => ipcRenderer.invoke('extensions:set-enabled', input)
+  },
   getConnectPhoneStatus,
   getScheduleStatus: () => ipcRenderer.invoke('schedule:status'),
   runScheduleTask: (taskId) =>

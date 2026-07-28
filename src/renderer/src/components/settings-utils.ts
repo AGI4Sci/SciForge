@@ -46,6 +46,8 @@ import {
   normalizeRemoteExecutorSettings,
   normalizeWriteSettings,
   normalizeImageGenerationSettings,
+  mergeWorkbenchToolbarSettings,
+  normalizeWorkbenchToolbarSettings,
   type AppSettingsPatch,
   type AppSettingsV1
 } from '@shared/app-settings'
@@ -84,6 +86,7 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     imageGeneration: imageGenerationPatch,
     connectPhone: connectPhonePatch,
     remoteExecutor: remoteExecutorPatch,
+    workbenchToolbar: workbenchToolbarPatch,
     ...restPatch
   } = patch
   const restSettingsPatch = restPatch as Partial<Pick<
@@ -109,6 +112,10 @@ export function mergeSettings(current: AppSettingsV1, patch: SettingsPatch): App
     computerUse: mergeComputerUseSettings(safeCurrent.computerUse, computerUsePatch),
     runtimeGuards: mergeRuntimeGuardSettings(safeCurrent.runtimeGuards, runtimeGuardsPatch),
     imageGeneration: mergeImageGenerationSettings(safeCurrent.imageGeneration, imageGenerationPatch),
+    workbenchToolbar: mergeWorkbenchToolbarSettings(
+      safeCurrent.workbenchToolbar,
+      workbenchToolbarPatch
+    ),
     log: {
       ...safeCurrent.log,
       ...(patch.log ?? {})
@@ -184,6 +191,7 @@ export function coerceRendererSettings(settings: AppSettingsV1): AppSettingsV1 {
       turnComplete: raw.notifications?.turnComplete !== false
     },
     appBehavior: normalizeAppBehaviorSettings(raw.appBehavior),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(raw.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(raw.keyboardShortcuts),
     write: normalizeWriteSettings(raw.write),
     speechToText: normalizeSpeechToTextSettings(raw.speechToText),

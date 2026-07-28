@@ -7,6 +7,7 @@ import {
   EVIDENCE_DAG_DOMAIN_PACKAGE_NAME,
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   EVIDENCE_DAG_RUNTIME_LIFECYCLE_CONTRIBUTION,
   EVIDENCE_DAG_WRITE_EXPORT_ACTION_GUARD_CONTRIBUTION,
   domainPackageDefinition
@@ -38,6 +39,7 @@ test('declares every required contribution without a host feature map', () => {
       'main.agent-artifact-consumer:evidence-dag.agent-artifact-consumer',
       'main.action-guard:evidence-dag.write-export-guard',
       'renderer.workbench-right-panel:evidence-dag.workbench-right-panel',
+      'renderer.workbench-toolbar-action:evidence-dag.workbench-toolbar-action',
       'renderer.i18n-resource:evidence-dag.translations'
     ]
   )
@@ -54,6 +56,10 @@ test('declares every required contribution without a host feature map', () => {
   assert.equal(
     EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     'evidence-dag.workbench-right-panel'
+  )
+  assert.equal(
+    EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.id,
+    'evidence-dag.workbench-toolbar-action'
   )
   assert.equal(EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION.id, 'evidence-dag.translations')
 })

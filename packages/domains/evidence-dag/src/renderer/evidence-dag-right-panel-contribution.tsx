@@ -12,6 +12,8 @@ import { EVIDENCE_DAG_RESOURCE_KIND } from '../contract'
 import {
   EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,
   EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createEvidenceDagCapabilityClient } from './evidence-dag-capability-client'
@@ -29,16 +31,19 @@ const EvidenceDagPanel = lazy(() =>
 export type EvidenceDagRightPanelContribution = Readonly<{
   id: string
   mode: 'evidence-dag'
-  label: string
-  icon: typeof Network
   title: string
   resourceKind: typeof EVIDENCE_DAG_RESOURCE_KIND
-  isAvailable: () => boolean
   render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
+}>
+
+export type EvidenceDagToolbarActionContribution = Readonly<{
+  icon: typeof Network
+  isAvailable: () => boolean
 }>
 
 export type EvidenceDagRendererContribution =
   | EvidenceDagRightPanelContribution
+  | EvidenceDagToolbarActionContribution
   | EvidenceDagI18nResourceContribution
 
 export function createEvidenceDagRightPanelContribution(
@@ -48,11 +53,8 @@ export function createEvidenceDagRightPanelContribution(
   return Object.freeze({
     id: EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     mode: 'evidence-dag',
-    label: 'rightPanelEvidenceDag',
-    icon: Network,
     title: 'Evidence DAG',
     resourceKind: EVIDENCE_DAG_RESOURCE_KIND,
-    isAvailable: () => true,
     render: (context) => (
       <EvidenceDagPanel
         {...context}
@@ -60,6 +62,14 @@ export function createEvidenceDagRightPanelContribution(
         workspacePreview={host.workspacePreview}
       />
     )
+  })
+}
+
+export function createEvidenceDagToolbarActionContribution():
+EvidenceDagToolbarActionContribution {
+  return Object.freeze({
+    icon: Network,
+    isAvailable: () => true
   })
 }
 
@@ -72,6 +82,11 @@ export function createDomainRendererEntry(
       {
         ...EVIDENCE_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         value: createEvidenceDagRightPanelContribution(host)
+      },
+      {
+        ...EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: EVIDENCE_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createEvidenceDagToolbarActionContribution()
       },
       {
         ...EVIDENCE_DAG_RENDERER_I18N_CONTRIBUTION,

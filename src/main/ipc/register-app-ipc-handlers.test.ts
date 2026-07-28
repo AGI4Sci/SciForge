@@ -464,7 +464,7 @@ describe('registerAppIpcHandlers', () => {
     const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
     registerAppIpcHandlers(registerOptions())
 
-    expect(handlers.size).toBe(142)
+    expect(handlers.size).toBe(147)
     expect([...handlers.keys()].filter((channel) => channel.startsWith('paperRadar:'))).toEqual([])
   })
 
@@ -818,6 +818,124 @@ describe('registerAppIpcHandlers', () => {
       title: 'Unsafe picker',
       filters: []
     }, createSender(12))).rejects.toThrow('Invalid payload for workspace:pick-file')
+  })
+
+  it('routes the generic extension lifecycle through injected functions', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const summary = {
+      packageName: '@sciforge/domain-browser',
+      moduleId: 'sciforge.browser',
+      moduleDisplayName: 'Browser',
+      version: '1.0.0',
+      publisher: { id: 'sciforge', displayName: 'SciForge' },
+      source: 'user' as const,
+      verification: 'official-signed' as const,
+      execution: 'sandboxed-runtime' as const,
+      status: 'active' as const,
+      permissions: ['network.outbound'],
+      contributionKinds: ['command', 'right-panel'],
+      contributionCount: 2,
+      canRollback: false,
+      installedAt: '2026-07-27T12:30:00.000Z'
+    }
+    const extensions = {
+      list: vi.fn(async () => [summary]),
+      install: vi.fn(async () => summary),
+      uninstall: vi.fn(async () => undefined),
+      rollback: vi.fn(async () => summary),
+      setEnabled: vi.fn(async () => ({ ...summary, status: 'disabled' as const }))
+    }
+    const dispatcher = registerAppIpcHandlers(registerOptions({ extensions }))
+    const sender = createSender(14)
+
+    await expect(dispatcher.invoke('extensions:list', {}, sender)).resolves.toEqual([summary])
+    await expect(dispatcher.invoke('extensions:install', {
+      path: ' /tmp/browser.sciforge-extension '
+    }, sender)).resolves.toEqual(summary)
+    await expect(dispatcher.invoke('extensions:uninstall', {
+      packageName: ' @sciforge/domain-browser '
+    }, sender)).resolves.toBeUndefined()
+    await expect(dispatcher.invoke('extensions:rollback', {
+      packageName: '@sciforge/domain-browser'
+    }, sender)).resolves.toEqual(summary)
+    await expect(dispatcher.invoke('extensions:set-enabled', {
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    }, sender)).resolves.toMatchObject({ status: 'disabled' })
+
+    expect(extensions.install).toHaveBeenCalledWith({
+      path: '/tmp/browser.sciforge-extension'
+    })
+    expect(extensions.uninstall).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(extensions.rollback).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(extensions.setEnabled).toHaveBeenCalledWith({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })
+  })
+
+  it('rejects invalid extension inputs before dispatch and fails clearly without a manager', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const install = vi.fn()
+    const dispatcher = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(),
+        install,
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+    const sender = createSender(15)
+
+    await expect(dispatcher.invoke('extensions:install', {
+      path: '',
+      allowUnsigned: true
+    }, sender)).rejects.toThrow('Invalid payload for extensions:install')
+    expect(install).not.toHaveBeenCalled()
+
+    const unavailable = registerAppIpcHandlers(registerOptions())
+    await expect(unavailable.invoke('extensions:list', {}, sender))
+      .rejects.toThrow('Extension management is not initialized.')
+  })
+
+  it('bounds extension manager errors and rejects unsafe result metadata', async () => {
+    const { registerAppIpcHandlers } = await import('./register-app-ipc-handlers')
+    const sender = createSender(16)
+    const failing = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(async () => {
+          throw new Error('Official signature failed.\n\u0000 Retry with a signed package.')
+        }),
+        install: vi.fn(),
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+
+    await expect(failing.invoke('extensions:list', {}, sender)).rejects.toThrow(
+      'Official signature failed. Retry with a signed package.'
+    )
+
+    const invalidResult = registerAppIpcHandlers(registerOptions({
+      extensions: {
+        list: vi.fn(async () => [{
+          packageName: '@sciforge/domain-browser',
+          secrets: { privateKey: 'not-renderer-safe' }
+        }]),
+        install: vi.fn(),
+        uninstall: vi.fn(),
+        rollback: vi.fn(),
+        setEnabled: vi.fn()
+      } as never
+    }))
+    await expect(invalidResult.invoke('extensions:list', {}, sender))
+      .rejects.toThrow('Invalid payload for extensions:list result')
   })
 
   it('keeps the generic workspace file watch and unwatch lifecycle', async () => {

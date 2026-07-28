@@ -925,6 +925,7 @@ export function Workbench(): ReactElement {
   const sddDraftOperationStatus = activeSddSession?.operationStatus ?? 'idle'
   const stageInsetClass = 'ds-stage-inset'
   const installedRightPanels = installedRendererContributions.rightPanels.list()
+  const installedToolbarActions = installedRendererContributions.toolbarActions.list()
   const keyboardShortcuts = useKeyboardShortcutSettings()
   const keyboardShortcutBindings = useMemo(
     () => resolveKeyboardShortcutBindings(keyboardShortcuts),
@@ -1470,12 +1471,6 @@ export function Workbench(): ReactElement {
   }, [activeGuiPlan, rightPanelMode, setRightPanelMode])
 
   useEffect(() => {
-    if (!rightPanelMode) return
-    const registered = installedRendererContributions.rightPanels.resolve(rightPanelMode)
-    if (registered && !registered.contribution.isAvailable()) setRightPanelMode(null)
-  }, [rightPanelMode, setRightPanelMode])
-
-  useEffect(() => {
     const openDomainRightPanel = (event: Event): void => {
       const detail = (event as CustomEvent<DomainWorkbenchOpenRightPanelInput>).detail
       const sessionId = detail?.sessionId?.trim()
@@ -1483,7 +1478,7 @@ export function Workbench(): ReactElement {
       if (!sessionId || !contributionId) return
       if (detail.activation && detail.activation.contributionId !== contributionId) return
       const registered = installedRendererContributions.rightPanels.resolveById(contributionId)
-      if (!registered?.contribution.isAvailable()) return
+      if (!registered) return
       setRightSidebarWidthForSession(
         sessionId,
         (width) => Math.max(width, CODE_PANEL_PREFERRED)
@@ -2729,7 +2724,7 @@ export function Workbench(): ReactElement {
     const ownerSessionId = workspace.sessionId
     const workspaceMode = workspace.mode
     const installedRightPanel = installedRightPanels.find(
-      ({ contribution }) => contribution.mode === workspaceMode && contribution.isAvailable()
+      ({ contribution }) => contribution.mode === workspaceMode
     )?.contribution
     const ownerFilePreviewTarget = workspace.filePreviewTarget
     const ownerFilePreviewReturnContext = workspace.filePreviewReturnContext
@@ -2759,9 +2754,7 @@ export function Workbench(): ReactElement {
         updateRightPanelWorkspace(ownerSessionId, {
           filePreviewTarget: null,
           filePreviewReturnContext: null,
-          mode: registered?.contribution.isAvailable()
-            ? registered.contribution.mode
-            : null,
+          mode: registered?.contribution.mode ?? null,
           panelActivation: registered ? ownerFilePreviewReturnContext.activation ?? null : null
         })
         return
@@ -3213,7 +3206,17 @@ export function Workbench(): ReactElement {
                     onToggleRightPanelMode={toggleTopBarRightPanelMode}
                     workspaceRoot={activeWorkspaceReferenceRoot}
                     planPanelEnabled={Boolean(activeGuiPlan)}
-                    rightPanelContributions={installedRightPanels}
+                    toolbarActions={installedToolbarActions}
+                    onExecuteToolbarCommand={(commandId) => {
+                      installedRendererContributions.toolbarActions.execute(
+                        commandId,
+                        {
+                          activeRightPanelMode: rightPanelMode,
+                          workspaceRoot: activeWorkspaceReferenceRoot
+                        },
+                        toggleTopBarRightPanelMode
+                      )
+                    }}
                     terminalOpen={terminalOpen}
                     onToggleTerminal={toggleTerminal}
                     sideChatCount={currentSideConversations.length}

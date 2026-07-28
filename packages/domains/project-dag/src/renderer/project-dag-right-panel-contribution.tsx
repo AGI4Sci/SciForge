@@ -12,6 +12,8 @@ import { PROJECT_DAG_RESOURCE_KIND } from '../contract'
 import {
   PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,
   PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createProjectDagCapabilityClient } from './project-dag-capability-client'
@@ -29,16 +31,19 @@ const ProjectDagPanel = lazy(() =>
 export type ProjectDagRightPanelContribution = Readonly<{
   id: string
   mode: 'project-dag'
-  label: string
-  icon: typeof GitMerge
   title: string
   resourceKind: typeof PROJECT_DAG_RESOURCE_KIND
-  isAvailable: () => boolean
   render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
+}>
+
+export type ProjectDagToolbarActionContribution = Readonly<{
+  icon: typeof GitMerge
+  isAvailable: () => boolean
 }>
 
 export type ProjectDagRendererContribution =
   | ProjectDagRightPanelContribution
+  | ProjectDagToolbarActionContribution
   | ProjectDagI18nResourceContribution
 
 export function createProjectDagRightPanelContribution(
@@ -48,11 +53,8 @@ export function createProjectDagRightPanelContribution(
   return Object.freeze({
     id: PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     mode: 'project-dag',
-    label: 'rightPanelProjectDag',
-    icon: GitMerge,
     title: 'Project DAG',
     resourceKind: PROJECT_DAG_RESOURCE_KIND,
-    isAvailable: () => true,
     render: (context) => (
       <ProjectDagPanel
         {...context}
@@ -61,6 +63,14 @@ export function createProjectDagRightPanelContribution(
         workbench={host.workbench}
       />
     )
+  })
+}
+
+export function createProjectDagToolbarActionContribution():
+ProjectDagToolbarActionContribution {
+  return Object.freeze({
+    icon: GitMerge,
+    isAvailable: () => true
   })
 }
 
@@ -73,6 +83,11 @@ export function createDomainRendererEntry(
       {
         ...PROJECT_DAG_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         value: createProjectDagRightPanelContribution(host)
+      },
+      {
+        ...PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: PROJECT_DAG_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createProjectDagToolbarActionContribution()
       },
       {
         ...PROJECT_DAG_RENDERER_I18N_CONTRIBUTION,

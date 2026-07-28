@@ -26,6 +26,12 @@ import {
   agentRuntimeStartTurnPayloadSchema,
   connectPhoneInstallQrPayloadSchema,
   connectPhoneInstallPollPayloadSchema,
+  domainExtensionInstallPayloadSchema,
+  domainExtensionListPayloadSchema,
+  domainExtensionListResultSchema,
+  domainExtensionPackagePayloadSchema,
+  domainExtensionSetEnabledPayloadSchema,
+  domainExtensionSummarySchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   isSafeOpenExternalUrl,
@@ -59,6 +65,64 @@ import {
 } from './app-ipc-schemas'
 
 describe('app-ipc-schemas', () => {
+  it('validates bounded renderer-safe extension metadata and strict operation inputs', () => {
+    const summary = {
+      packageName: '@sciforge/domain-browser',
+      moduleId: 'sciforge.browser',
+      moduleDisplayName: 'Browser',
+      version: '1.2.3',
+      publisher: {
+        id: 'sciforge',
+        displayName: 'SciForge'
+      },
+      source: 'user',
+      verification: 'official-signed',
+      execution: 'sandboxed-runtime',
+      status: 'active',
+      permissions: ['network.outbound'],
+      contributionKinds: ['command', 'right-panel'],
+      contributionCount: 2,
+      canRollback: false,
+      installedAt: '2026-07-27T12:30:00.000Z'
+    }
+
+    expect(domainExtensionListPayloadSchema.parse({})).toEqual({})
+    expect(domainExtensionInstallPayloadSchema.parse({ path: ' /tmp/browser.sfx ' })).toEqual({
+      path: '/tmp/browser.sfx'
+    })
+    expect(domainExtensionPackagePayloadSchema.parse({
+      packageName: ' @sciforge/domain-browser '
+    })).toEqual({
+      packageName: '@sciforge/domain-browser'
+    })
+    expect(domainExtensionSetEnabledPayloadSchema.parse({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })).toEqual({
+      packageName: '@sciforge/domain-browser',
+      enabled: false
+    })
+    expect(domainExtensionSummarySchema.parse(summary)).toEqual(summary)
+    expect(domainExtensionListResultSchema.parse([summary])).toEqual([summary])
+
+    expect(() => domainExtensionListPayloadSchema.parse({ includeInvalid: true })).toThrow()
+    expect(() => domainExtensionInstallPayloadSchema.parse({
+      path: '/tmp/browser.sfx',
+      allowUnsigned: true
+    })).toThrow()
+    expect(() => domainExtensionPackagePayloadSchema.parse({
+      packageName: 'domain-browser'
+    })).toThrow()
+    expect(() => domainExtensionSummarySchema.parse({
+      ...summary,
+      verification: 'unsigned'
+    })).toThrow()
+    expect(() => domainExtensionSummarySchema.parse({
+      ...summary,
+      permissions: Array.from({ length: 1_001 }, (_, index) => `permission.item-${index}`)
+    })).toThrow()
+  })
+
   it('accepts bounded protocol-neutral full-trace queries', () => {
     expect(traceReadPayloadSchema.parse({
       runtimeId: 'codex',
@@ -836,6 +900,26 @@ describe('app-ipc-schemas', () => {
     expect(payload.modelRouter?.profiles?.default?.imageGenerator?.model).toBe('image-model')
     expect(payload.remoteExecutor?.defaultTargetId).toBe('hpc-1')
     expect(payload.remoteExecutor?.targets?.[0]?.slurm?.defaults?.extraArgs).toEqual(['--exclusive'])
+  })
+
+  it('accepts bounded Workbench toolbar placement settings', () => {
+    expect(settingsPatchSchema.parse({
+      workbenchToolbar: {
+        hiddenCommandIds: [' paper-radar.open '],
+        commandOrder: ['remote-ssh.open', 'paper-radar.open']
+      }
+    })).toEqual({
+      workbenchToolbar: {
+        hiddenCommandIds: ['paper-radar.open'],
+        commandOrder: ['remote-ssh.open', 'paper-radar.open']
+      }
+    })
+
+    expect(() => settingsPatchSchema.parse({
+      workbenchToolbar: {
+        commandOrder: Array.from({ length: 257 }, (_, index) => `plugin-${index}.open`)
+      }
+    })).toThrow()
   })
 
   it('rejects obsolete host settings for installed domain packages', () => {

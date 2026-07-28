@@ -13,6 +13,11 @@ import {
   RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND,
   type WorkbenchRightPanelContribution
 } from './workbench-right-panel-slot'
+import {
+  RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  type WorkbenchToolbarActionContract,
+  type WorkbenchToolbarActionValue
+} from './workbench-toolbar-slot'
 
 describe('installed renderer contributions', () => {
   it('registers package-owned UI and translations and disposes both idempotently', () => {
@@ -38,21 +43,53 @@ describe('installed renderer contributions', () => {
         id: installed.declaration.id,
         ownerId: installed.owner.moduleId,
         mode: contribution.mode,
-        label: contribution.label,
         title: contribution.title,
-        resourceKind: contribution.resourceKind,
-        available: contribution.isAvailable()
+        resourceKind: contribution.resourceKind
       }))
 
     expect(runtime.rightPanels.list().map(({ id, ownerId, contribution }) => ({
       id,
       ownerId,
       mode: contribution.mode,
-      label: contribution.label,
       title: contribution.title,
-      resourceKind: contribution.resourceKind,
-      available: contribution.isAvailable()
+      resourceKind: contribution.resourceKind
     }))).toEqual(expectedPanels)
+    const expectedToolbarActions = installedRendererDomainEntrySet.contributions
+      .filter(({ declaration }) =>
+        declaration.kind === RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND
+      )
+      .map((installed) => ({
+        installed,
+        contract: installed.contract as WorkbenchToolbarActionContract,
+        value: installed.value as WorkbenchToolbarActionValue
+      }))
+      .sort((left, right) =>
+        left.installed.declaration.priority - right.installed.declaration.priority ||
+        left.installed.owner.moduleId.localeCompare(right.installed.owner.moduleId) ||
+        left.installed.declaration.id.localeCompare(right.installed.declaration.id)
+      )
+      .map(({ installed, contract, value }) => ({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        commandId: contract.commandId,
+        label: contract.label,
+        target: contract.target,
+        available: value.isAvailable({
+          activeRightPanelMode: null,
+          workspaceRoot: '/workspace'
+        })
+      }))
+    expect(runtime.toolbarActions.list().map(({ id, ownerId, contribution }) => ({
+      id,
+      ownerId,
+      commandId: contribution.commandId,
+      label: contribution.label,
+      target: contribution.target,
+      available: contribution.isAvailable({
+        activeRightPanelMode: null,
+        workspaceRoot: '/workspace'
+      })
+    }))).toEqual(expectedToolbarActions)
     const expectedEnglish = installedMessages('en')
     const expectedChinese = installedMessages('zh')
     expect(translations.bundle('en', 'common')).toMatchObject({
@@ -68,6 +105,7 @@ describe('installed renderer contributions', () => {
     runtime.dispose()
     expect(runtime.disposed).toBe(true)
     expect(runtime.rightPanels.list()).toEqual([])
+    expect(runtime.toolbarActions.list()).toEqual([])
     expect(translations.bundle('en', 'common')).toEqual({ coreTitle: 'Core' })
     expect(translations.bundle('zh', 'common')).toEqual({ coreTitle: '核心' })
   })
@@ -87,6 +125,35 @@ describe('installed renderer contributions', () => {
       entrySet: invalidEntrySet,
       translations
     })).toThrow('failed host validation')
+    expect(translations.mutations).toEqual([])
+  })
+
+  it('rejects an unknown toolbar target atomically before translations are installed', () => {
+    const translations = new MemoryTranslationHost()
+    const template = installedRendererDomainEntrySet.contributions.find(
+      ({ declaration }) =>
+        declaration.kind === RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND
+    )!
+    const entrySet = {
+      ...installedRendererDomainEntrySet,
+      contributions: installedRendererDomainEntrySet.contributions.map((contribution) =>
+        contribution === template
+          ? {
+              ...contribution,
+              contract: {
+                ...(contribution.contract as WorkbenchToolbarActionContract),
+                target: {
+                  kind: 'workbench.right-panel',
+                  contributionId: 'missing.workbench-right-panel'
+                }
+              }
+            }
+          : contribution
+      )
+    } as unknown as InstalledDomainProcessEntrySet<'renderer', unknown>
+
+    expect(() => createInstalledRendererContributions({ entrySet, translations }))
+      .toThrow('targets unknown right-panel contribution')
     expect(translations.mutations).toEqual([])
   })
 

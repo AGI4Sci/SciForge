@@ -1,7 +1,9 @@
 import type { ReactElement } from 'react'
-import type { LucideIcon } from 'lucide-react'
 import type { DomainWorkbenchRightPanelRenderContext } from '@sciforge/domain-sdk/host'
-import type { RightPanelMode } from '../components/chat/WorkbenchTopBar'
+import {
+  RIGHT_PANEL_MODES,
+  type RightPanelMode
+} from '../components/chat/WorkbenchTopBar'
 import {
   RendererSlotRegistry,
   type RegisteredRendererSlotContribution,
@@ -15,11 +17,8 @@ export const RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND =
 export type WorkbenchRightPanelContribution = {
   id: string
   mode: Exclude<RightPanelMode, null>
-  label: string
-  icon: LucideIcon
   title: string
   resourceKind: string
-  isAvailable: () => boolean
   render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
 }
 
@@ -40,6 +39,11 @@ export class WorkbenchRightPanelContributionRegistry {
     order?: number
     contribution: WorkbenchRightPanelContribution
   }): RendererSlotRegistrationDisposable {
+    if ((RIGHT_PANEL_MODES as readonly string[]).includes(input.contribution.mode)) {
+      throw new Error(
+        `Workbench right-panel mode "${input.contribution.mode}" is reserved by the host.`
+      )
+    }
     const duplicateMode = this.list().find(
       ({ contribution }) => contribution.mode === input.contribution.mode
     )

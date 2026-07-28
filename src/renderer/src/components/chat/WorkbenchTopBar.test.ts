@@ -9,7 +9,7 @@ import {
 import { installedRendererContributions } from '../../domain-modules/installed-renderer-contributions'
 import { WorkbenchTopBar } from './WorkbenchTopBar'
 
-describe('WorkbenchTopBar right-panel contributions', () => {
+describe('WorkbenchTopBar toolbar contributions', () => {
   beforeEach(async () => {
     await i18n.changeLanguage('en')
     i18n.addResourceBundle('en', 'common', {
@@ -23,7 +23,7 @@ describe('WorkbenchTopBar right-panel contributions', () => {
     })
   })
 
-  it('does not invent a Paper Radar entry without a registered contribution', () => {
+  it('does not invent a Paper Radar entry without a registered toolbar action', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,
       onToggleRightPanelMode: vi.fn()
@@ -32,51 +32,50 @@ describe('WorkbenchTopBar right-panel contributions', () => {
     expect(html).not.toContain('Paper Radar')
   })
 
-  it('renders and marks a registered right-panel contribution from its metadata', () => {
+  it('renders and marks a registered toolbar action from its metadata', () => {
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'paper',
       onToggleRightPanelMode: vi.fn(),
-      rightPanelContributions: installedRendererContributions.rightPanels.list()
+      toolbarActions: installedRendererContributions.toolbarActions.list(),
+      onExecuteToolbarCommand: vi.fn()
     }))
 
     expect(html).toContain('Paper Radar')
     expect(html).toContain('aria-pressed="true"')
+    expect(html).toContain('aria-label="Customize feature plugins"')
+    expect(html).toContain('>Configure plugins</span>')
   })
 
   it('omits a registered contribution when its generic availability predicate fails', () => {
-    const registered = installedRendererContributions.rightPanels.list()[0]!
+    const registered = installedRendererContributions.toolbarActions.list()[0]!
+    const isAvailable = vi.fn(() => false)
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: null,
       onToggleRightPanelMode: vi.fn(),
-      rightPanelContributions: [{
+      workspaceRoot: '/workspace/lab',
+      toolbarActions: [{
         ...registered,
         contribution: {
           ...registered.contribution,
-          isAvailable: () => false
+          isAvailable
         }
-      }]
+      }],
+      onExecuteToolbarCommand: vi.fn()
     }))
 
     expect(html).not.toContain('Paper Radar')
+    expect(isAvailable).toHaveBeenCalledWith({
+      activeRightPanelMode: null,
+      workspaceRoot: '/workspace/lab'
+    })
   })
 
   it('shows Evidence DAG as a right panel item', () => {
-    const contribution = {
-      ...installedRendererContributions.rightPanels.list()[0]!,
-      id: 'evidence-dag.workbench-right-panel',
-      contribution: {
-        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
-        id: 'evidence-dag.workbench-right-panel',
-        mode: 'evidence-dag',
-        label: 'rightPanelEvidenceDag',
-        title: 'Evidence DAG',
-        resourceKind: 'evidence-dag'
-      }
-    }
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'evidence-dag',
       onToggleRightPanelMode: vi.fn(),
-      rightPanelContributions: [contribution]
+      toolbarActions: installedRendererContributions.toolbarActions.list(),
+      onExecuteToolbarCommand: vi.fn()
     }))
 
     expect(html).toContain('Evidence DAG')
@@ -84,22 +83,11 @@ describe('WorkbenchTopBar right-panel contributions', () => {
   })
 
   it('shows Project DAG as a right panel item', () => {
-    const contribution = {
-      ...installedRendererContributions.rightPanels.list()[0]!,
-      id: 'project-dag.workbench-right-panel',
-      contribution: {
-        ...installedRendererContributions.rightPanels.list()[0]!.contribution,
-        id: 'project-dag.workbench-right-panel',
-        mode: 'project-dag',
-        label: 'rightPanelProjectDag',
-        title: 'Project DAG',
-        resourceKind: 'project-dag'
-      }
-    }
     const html = renderToStaticMarkup(createElement(WorkbenchTopBar, {
       rightPanelMode: 'project-dag',
       onToggleRightPanelMode: vi.fn(),
-      rightPanelContributions: [contribution]
+      toolbarActions: installedRendererContributions.toolbarActions.list(),
+      onExecuteToolbarCommand: vi.fn()
     }))
 
     expect(html).toContain('Project DAG')

@@ -123,10 +123,6 @@ import type { ManagedGuiMcpLaunchConfig } from '../../managed-gui-mcp-config'
 
 class CodexCodingPlanLoginInProgressError extends Error {}
 
-const MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION = '0.141.0'
-const CODEX_USER_AGENT_VERSION_PATTERN =
-  /\bCodex(?: Desktop)?\/(\d+)\.(\d+)\.(\d+)(-[0-9A-Za-z.-]+)?(?=$|[\s(])/u
-
 export type CodexRuntimeEventSink = {
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.event, payload: CodexEventPayload): void
   send(channel: typeof CODEX_MAIN_IPC_CHANNELS.error, payload: { message: string; detail?: unknown }): void
@@ -1294,11 +1290,7 @@ export class CodexRuntimeService {
     const existing = this.clientSession
     if (existing) {
       if (existing.accessKey === nextAccessKey && !existing.cancelled) {
-        const connected = await existing.readiness
-        if (access === 'runtime') {
-          this.assertCodexPreToolUseRuntimeVersion(connected.info)
-        }
-        return connected
+        return existing.readiness
       }
       if (
         (this.codingPlanLoginStartsInFlight > 0 || this.activeCodingPlanLoginIds.size > 0) &&
@@ -1327,14 +1319,13 @@ export class CodexRuntimeService {
       cleanupPromise: null
     } satisfies CodexClientSession
     this.clientSession = session
-    session.readiness = this.startClientSession(session, current, access)
+    session.readiness = this.startClientSession(session, current)
     return session.readiness
   }
 
   private async startClientSession(
     session: CodexClientSession,
-    settings: AppSettingsV1,
-    access: 'runtime' | 'account'
+    settings: AppSettingsV1
   ): Promise<CodexConnectedClient> {
     try {
       const launch = await prepareCodexAppServerLaunch({
@@ -1389,9 +1380,6 @@ export class CodexRuntimeService {
       session.subscription = this.forwardEvents(client, session)
       void session.subscription.catch(() => undefined)
       const info = await client.connect()
-      if (access === 'runtime') {
-        this.assertCodexPreToolUseRuntimeVersion(info)
-      }
       await this.ensureCodexPreToolUseHookTrusted(client, launch)
       if (session.cancelled || this.clientSession !== session) {
         throw new Error('Codex app-server startup was superseded.')
@@ -1483,39 +1471,6 @@ export class CodexRuntimeService {
       verified.trustStatus !== 'trusted'
     ) {
       throw new Error('Codex did not verify the exact SciForge PreToolUse hook after trust reload.')
-    }
-  }
-
-  private assertCodexPreToolUseRuntimeVersion(
-    info: CodexAppServerInitializeResponse
-  ): void {
-    if (!this.options.preToolUseHookLaunch) return
-    const match = CODEX_USER_AGENT_VERSION_PATTERN.exec(info.userAgent)
-    if (!match) {
-      const reportedUserAgent = typeof info.userAgent === 'string' && info.userAgent.trim()
-        ? JSON.stringify(info.userAgent)
-        : '<missing>'
-      throw new Error(
-        'SciForge cannot verify matcher-free PreToolUse coverage because the Codex ' +
-        `app-server did not report a supported runtime version. Codex ${MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION} ` +
-        `or newer is required. Reported user agent: ${reportedUserAgent}.`
-      )
-    }
-    const version = `${match[1]}.${match[2]}.${match[3]}${match[4] ?? ''}`
-    const core = [match[1], match[2], match[3]].map((part) => Number.parseInt(part, 10))
-    const minimumCore = MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION
-      .split('.')
-      .map((part) => Number.parseInt(part, 10))
-    const comparison = core.findIndex((part, index) => part !== minimumCore[index])
-    const meetsMinimum = comparison >= 0
-      ? core[comparison] > minimumCore[comparison]
-      : match[4] === undefined
-    if (!meetsMinimum) {
-      throw new Error(
-        `SciForge requires Codex ${MINIMUM_CODEX_MATCHER_FREE_PRE_TOOL_USE_VERSION} or newer for ` +
-        `matcher-free PreToolUse coverage across local function tools; connected Codex is ${version}. ` +
-        'Update the configured Codex runtime before starting the agent.'
-      )
     }
   }
 

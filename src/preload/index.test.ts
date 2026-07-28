@@ -99,6 +99,33 @@ describe('preload agentRuntime bridge', () => {
     expect(invoke).toHaveBeenCalledWith('traces:clear')
   })
 
+  it('exposes the grouped generic extension lifecycle', async () => {
+    const api = exposedApi as {
+      extensions: {
+        list(): Promise<unknown>
+        install(input: unknown): Promise<unknown>
+        uninstall(input: unknown): Promise<unknown>
+        rollback(input: unknown): Promise<unknown>
+        setEnabled(input: unknown): Promise<unknown>
+      }
+    }
+    const install = { path: '/tmp/browser.sciforge-extension' }
+    const byPackage = { packageName: '@sciforge/domain-browser' }
+    const disable = { ...byPackage, enabled: false }
+
+    await api.extensions.list()
+    await api.extensions.install(install)
+    await api.extensions.uninstall(byPackage)
+    await api.extensions.rollback(byPackage)
+    await api.extensions.setEnabled(disable)
+
+    expect(invoke).toHaveBeenCalledWith('extensions:list')
+    expect(invoke).toHaveBeenCalledWith('extensions:install', install)
+    expect(invoke).toHaveBeenCalledWith('extensions:uninstall', byPackage)
+    expect(invoke).toHaveBeenCalledWith('extensions:rollback', byPackage)
+    expect(invoke).toHaveBeenCalledWith('extensions:set-enabled', disable)
+  })
+
   it('does not expose the removed draw.io runtime API', () => {
     expect(exposedApi).not.toHaveProperty('getLocalDrawioUrl')
   })

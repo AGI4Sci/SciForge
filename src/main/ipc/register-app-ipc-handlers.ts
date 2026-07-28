@@ -36,6 +36,7 @@ import type {
   UpstreamModelsResult,
   WorkspacePickResult
 } from '../../shared/sciforge-api'
+import type { DomainExtensionsApi } from '../../shared/domain-extensions'
 import type { WorkspaceFileWatchResult } from '../../shared/workspace-file'
 import type { GuiUpdateDownloadResult, GuiUpdateInfo, GuiUpdateInstallResult, GuiUpdateState } from '../../shared/gui-update'
 import {
@@ -78,6 +79,12 @@ import {
   remoteChannelTaskFromTextPayloadSchema,
   desktopCommandSchema,
   defaultPathSchema,
+  domainExtensionInstallPayloadSchema,
+  domainExtensionListPayloadSchema,
+  domainExtensionListResultSchema,
+  domainExtensionPackagePayloadSchema,
+  domainExtensionSetEnabledPayloadSchema,
+  domainExtensionSummarySchema,
   visualStyleExtractPayloadSchema,
   visualStyleSaveProfilePayloadSchema,
   pptMasterMcpConfigPayloadSchema,
@@ -325,7 +332,7 @@ export type AppBridgeDispatcher = {
   invoke: (channel: string, payload: unknown, sender: AppBridgeSender) => Promise<unknown>
 }
 
-type RegisterAppIpcHandlersOptions = {
+export type RegisterAppIpcHandlersOptions = {
   store: JsonSettingsStore
   actionGuardEvaluator: MainActionGuardEvaluator
   getMainWindow: () => BrowserWindow | null
@@ -338,6 +345,7 @@ type RegisterAppIpcHandlersOptions = {
     export: (options: TraceExportOptions) => Promise<TraceExportResult>
     clear: () => Promise<TraceClearResult>
   }
+  extensions?: DomainExtensionsApi
   agentRuntime?: {
     connect: (runtimeId?: AgentRuntimeId) => Promise<void>
     capabilities: (runtimeId?: AgentRuntimeId) => Promise<AgentRuntimeCapabilities>
@@ -512,6 +520,7 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     applySettingsPatch,
     getModelAccessStatus,
     traces,
+    extensions,
     agentRuntime,
     fetchUpstreamModels,
     getRemoteChannelRuntime,
@@ -559,6 +568,29 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
   const requireTraceStore = (): NonNullable<RegisterAppIpcHandlersOptions['traces']> => {
     if (!traces) throw new Error('Full trace storage is not initialized.')
     return traces
+  }
+  const requireExtensionManager = (): DomainExtensionsApi => {
+    if (!extensions) throw new Error('Extension management is not initialized.')
+    return extensions
+  }
+  const runExtensionOperation = async <T>(
+    operation: string,
+    action: () => Promise<T>
+  ): Promise<T> => {
+    try {
+      return await action()
+    } catch (error) {
+      const rawMessage = error instanceof Error ? error.message : ''
+      const printableMessage = Array.from(rawMessage, (character) => {
+        const codePoint = character.codePointAt(0) ?? 0
+        return codePoint <= 31 || codePoint === 127 ? ' ' : character
+      }).join('')
+      const message = printableMessage
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 500)
+      throw new Error(message || `Extension ${operation} failed.`)
+    }
   }
 
   const handleInvoke = (channel: string, handler: AppBridgeInvokeHandler): void => {
@@ -621,6 +653,73 @@ export function registerAppIpcHandlers(options: RegisterAppIpcHandlersOptions): 
     return { canceled: false as const, ...result }
   })
   handleInvoke('traces:clear', async () => requireTraceStore().clear())
+
+  handleInvoke('extensions:list', async (_, payload: unknown) => {
+    parseIpcPayload('extensions:list', domainExtensionListPayloadSchema, payload ?? {})
+    return runExtensionOperation('listing', async () =>
+      parseIpcPayload(
+        'extensions:list result',
+        domainExtensionListResultSchema,
+        await requireExtensionManager().list()
+      )
+    )
+  })
+
+  handleInvoke('extensions:install', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'extensions:install',
+      domainExtensionInstallPayloadSchema,
+      payload
+    )
+    return runExtensionOperation('installation', async () =>
+      parseIpcPayload(
+        'extensions:install result',
+        domainExtensionSummarySchema,
+        await requireExtensionManager().install(request)
+      )
+    )
+  })
+
+  handleInvoke('extensions:uninstall', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'extensions:uninstall',
+      domainExtensionPackagePayloadSchema,
+      payload
+    )
+    await runExtensionOperation('uninstallation', () =>
+      requireExtensionManager().uninstall(request)
+    )
+  })
+
+  handleInvoke('extensions:rollback', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'extensions:rollback',
+      domainExtensionPackagePayloadSchema,
+      payload
+    )
+    return runExtensionOperation('rollback', async () =>
+      parseIpcPayload(
+        'extensions:rollback result',
+        domainExtensionSummarySchema,
+        await requireExtensionManager().rollback(request)
+      )
+    )
+  })
+
+  handleInvoke('extensions:set-enabled', async (_, payload: unknown) => {
+    const request = parseIpcPayload(
+      'extensions:set-enabled',
+      domainExtensionSetEnabledPayloadSchema,
+      payload
+    )
+    return runExtensionOperation('state update', async () =>
+      parseIpcPayload(
+        'extensions:set-enabled result',
+        domainExtensionSummarySchema,
+        await requireExtensionManager().setEnabled(request)
+      )
+    )
+  })
 
   const saveVisualStyleProfileHandler = saveVisualStyleProfileOverride ?? (async (
     request: VisualStyleSaveProfileRequest

@@ -3,7 +3,11 @@ import { describe, it } from 'node:test'
 import { z } from 'zod'
 import {
   DOMAIN_PACKAGE_CONTRACT_VERSION,
+  defineDomainPackage,
   defineTrustedDomainPackage,
+  isDomainPackageHostApiCompatible,
+  type DomainPackageDefinitionInput,
+  type SandboxedDomainPackageDefinitionInput,
   type TrustedDomainPackageDefinitionInput
 } from './contract.js'
 
@@ -22,6 +26,53 @@ const definitionFixture: TrustedDomainPackageDefinitionInput = {
     export: './main',
     contributions: []
   }]
+}
+
+const sandboxedDefinitionFixture: SandboxedDomainPackageDefinitionInput = {
+  contractVersion: DOMAIN_PACKAGE_CONTRACT_VERSION,
+  kind: 'sandboxed-runtime',
+  packageName: '@sciforge/domain-runtime-probe',
+  publisher: {
+    id: 'sciforge',
+    displayName: 'SciForge'
+  },
+  module: {
+    id: 'sciforge.domain-runtime-probe',
+    displayName: 'Runtime Probe',
+    version: '1.0.0',
+    hostApi: { minimum: '1.0.0', maximumExclusive: '2.0.0' }
+  },
+  requestedPermissions: [{
+    id: 'host.workspace.read',
+    process: 'main',
+    reason: 'Read explicitly selected workspace resources.',
+    required: true,
+    parameters: {
+      roots: ['workspace']
+    }
+  }],
+  entrypoints: [
+    {
+      process: 'main',
+      isolation: 'extension-host',
+      entry: 'dist/main.js',
+      format: 'module',
+      contributions: [{
+        id: 'runtime-probe.capabilities',
+        kind: 'main.capability-factory'
+      }]
+    },
+    {
+      process: 'renderer',
+      isolation: 'sandboxed-webview',
+      entry: 'dist/renderer/index.html',
+      format: 'html',
+      contributions: [{
+        id: 'runtime-probe.panel',
+        kind: 'renderer.workbench-right-panel'
+      }]
+    }
+  ]
 }
 
 describe('domain package packaging contract', () => {
@@ -117,5 +168,219 @@ describe('domain package packaging contract', () => {
       }),
       z.ZodError
     )
+  })
+})
+
+describe('sandboxed runtime domain package contract', () => {
+  it('keeps existing trusted manifests valid through the single package schema', () => {
+    const definition = defineDomainPackage(definitionFixture)
+
+    assert.equal(definition.kind, 'trusted-compile-time')
+    assert.equal(definition.packageName, definitionFixture.packageName)
+    assert.equal(Object.hasOwn(definition, 'publisher'), false)
+  })
+
+  it('normalizes and freezes publisher, permissions, compatibility, and isolated entrypoints', () => {
+    const definition = defineDomainPackage(sandboxedDefinitionFixture)
+
+    assert.equal(definition.kind, 'sandboxed-runtime')
+    if (definition.kind !== 'sandboxed-runtime') return
+    assert.deepEqual(definition.publisher, {
+      id: 'sciforge',
+      displayName: 'SciForge'
+    })
+    assert.equal(definition.entrypoints[0]?.process, 'main')
+    assert.equal(definition.entrypoints[0]?.isolation, 'extension-host')
+    assert.equal(definition.entrypoints[1]?.process, 'renderer')
+    assert.equal(definition.entrypoints[1]?.isolation, 'sandboxed-webview')
+    assert.equal(definition.requestedPermissions[0]?.process, 'main')
+    assert.equal(
+      isDomainPackageHostApiCompatible(definition.module.hostApi, '1.4.0'),
+      true
+    )
+    assert.equal(
+      isDomainPackageHostApiCompatible(definition.module.hostApi, '2.0.0'),
+      false
+    )
+    assert.equal(Object.isFrozen(definition), true)
+    assert.equal(Object.isFrozen(definition.publisher), true)
+    assert.equal(Object.isFrozen(definition.requestedPermissions), true)
+    assert.equal(Object.isFrozen(definition.requestedPermissions[0]?.parameters), true)
+    assert.equal(Object.isFrozen(definition.entrypoints), true)
+  })
+
+  it('does not allow a manifest to self-assert signature or publisher verification', () => {
+    for (const input of [
+      {
+        ...sandboxedDefinitionFixture,
+        signature: {
+          algorithm: 'ed25519',
+          verified: true
+        }
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        trust: {
+          publisherVerified: true
+        }
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        publisher: {
+          ...sandboxedDefinitionFixture.publisher,
+          verified: true
+        }
+      }
+    ]) {
+      assert.throws(
+        () => defineDomainPackage(input as unknown as DomainPackageDefinitionInput),
+        z.ZodError
+      )
+    }
+  })
+
+  it('fails closed on unknown fields, package kinds, and unsafe entrypoint shapes', () => {
+    for (const input of [
+      {
+        ...sandboxedDefinitionFixture,
+        undocumentedFlag: true
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        kind: 'trusted-runtime'
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        entrypoints: [{
+          process: 'main',
+          isolation: 'electron-main',
+          entry: 'dist/main.js',
+          format: 'module',
+          contributions: []
+        }]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        entrypoints: [{
+          process: 'renderer',
+          isolation: 'host-renderer',
+          entry: 'dist/renderer.js',
+          format: 'module',
+          contributions: []
+        }]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        entrypoints: [{
+          process: 'main',
+          isolation: 'extension-host',
+          entry: '../outside.js',
+          format: 'module',
+          contributions: []
+        }]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        entrypoints: [{
+          process: 'main',
+          isolation: 'extension-host',
+          export: './main',
+          format: 'module',
+          contributions: []
+        }]
+      }
+    ]) {
+      assert.throws(
+        () => defineDomainPackage(input as unknown as DomainPackageDefinitionInput),
+        z.ZodError
+      )
+    }
+  })
+
+  it('rejects missing, duplicate, or process-orphaned permission requests', () => {
+    const mainOnly = {
+      ...sandboxedDefinitionFixture,
+      entrypoints: [sandboxedDefinitionFixture.entrypoints[0]!]
+    }
+    for (const input of [
+      {
+        ...sandboxedDefinitionFixture,
+        requestedPermissions: undefined
+      },
+      {
+        ...mainOnly,
+        requestedPermissions: [{
+          id: 'host.clipboard.write',
+          process: 'renderer',
+          reason: 'Copy an explicit user export.',
+          required: false
+        }]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        requestedPermissions: [
+          sandboxedDefinitionFixture.requestedPermissions[0]!,
+          sandboxedDefinitionFixture.requestedPermissions[0]!
+        ]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        requestedPermissions: [{
+          id: 'filesystem',
+          process: 'main',
+          reason: 'Too broad and not namespaced.',
+          required: true
+        }]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        requestedPermissions: [{
+          ...sandboxedDefinitionFixture.requestedPermissions[0]!,
+          granted: true
+        }]
+      }
+    ]) {
+      assert.throws(
+        () => defineDomainPackage(input as unknown as DomainPackageDefinitionInput),
+        z.ZodError
+      )
+    }
+  })
+
+  it('rejects duplicate process entrypoints and invalid host API ranges', () => {
+    for (const input of [
+      {
+        ...sandboxedDefinitionFixture,
+        entrypoints: [
+          sandboxedDefinitionFixture.entrypoints[0]!,
+          sandboxedDefinitionFixture.entrypoints[0]!
+        ]
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        module: {
+          ...sandboxedDefinitionFixture.module,
+          hostApi: {
+            minimum: '2.0.0',
+            maximumExclusive: '2.0.0'
+          }
+        }
+      },
+      {
+        ...sandboxedDefinitionFixture,
+        module: {
+          ...sandboxedDefinitionFixture.module,
+          hostApi: {
+            minimum: '1.0',
+            maximumExclusive: '2.0.0'
+          }
+        }
+      }
+    ]) {
+      assert.throws(
+        () => defineDomainPackage(input as unknown as DomainPackageDefinitionInput),
+        z.ZodError
+      )
+    }
   })
 })

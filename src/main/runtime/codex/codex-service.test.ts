@@ -2661,7 +2661,7 @@ describe('CodexRuntimeService compatibility operations', () => {
     expect(launch?.env?.CODEX_HOME).not.toBe(persistedCodexHome)
   })
 
-  it('trusts only the exact app-owned matcher-free PreToolUse hook before connecting', async () => {
+  it('trusts only the exact app-owned matcher-free PreToolUse hook without a version gate', async () => {
     const root = await tempRoot()
     const managedCodexHome = join(root, 'codex-home')
     const workspace = join(root, 'workspace')
@@ -2692,7 +2692,7 @@ process.stdout.write(JSON.stringify({
     current.workspaceRoot = workspace
     const client = controllableClient()
     vi.mocked(client.connect).mockResolvedValue({
-      userAgent: 'Codex Desktop/0.141.0 (Mac OS 15.7.4; arm64) dumb (sciforge; 0.1.0)',
+      userAgent: 'sciforge/development (Mac OS 15.7.4; arm64) xterm-256color (sciforge; 0.1.0)',
       codexHome: managedCodexHome,
       platformFamily: 'unix',
       platformOs: 'macos'
@@ -2780,64 +2780,6 @@ process.stdout.write(JSON.stringify({
         trusted_hash: `sha256:${'a'.repeat(64)}`
       }
     ]])
-  })
-
-  it.each([
-    {
-      name: 'an older runtime',
-      userAgent: 'Codex Desktop/0.140.99 (test)',
-      expectedMessage: 'connected Codex is 0.140.99'
-    },
-    {
-      name: 'a prerelease at the minimum stable version',
-      userAgent: 'Codex Desktop/0.141.0-alpha.1 (test)',
-      expectedMessage: 'connected Codex is 0.141.0-alpha.1'
-    },
-    {
-      name: 'an unversioned runtime',
-      userAgent: 'Codex Desktop/development (test)',
-      expectedMessage: 'Reported user agent: "Codex Desktop/development (test)"'
-    }
-  ])('fails governed startup for $name before trusting hooks', async ({
-    userAgent,
-    expectedMessage
-  }) => {
-    const root = await tempRoot()
-    const managedCodexHome = join(root, 'codex-home')
-    const client = controllableClient()
-    vi.mocked(client.connect).mockResolvedValue({
-      userAgent,
-      codexHome: managedCodexHome,
-      platformFamily: 'unix',
-      platformOs: 'macos'
-    })
-    client.listHooks = vi.fn(async () => ({ data: [] }))
-    client.writeConfigBatch = vi.fn(async () => ({
-      status: 'ok',
-      version: '2',
-      filePath: join(managedCodexHome, 'config.toml'),
-      overriddenMetadata: null
-    }))
-    const service = new CodexRuntimeService({
-      settings: async () => settings(),
-      sink: { send: vi.fn() },
-      managedCodexHome,
-      storageRoot: root,
-      preToolUseHookLaunch: {
-        appPath: join(root, 'SciForge App'),
-        execPath: process.execPath,
-        isPackaged: false
-      },
-      createClient: () => client
-    })
-
-    await expect(service.connect()).resolves.toMatchObject({
-      ok: false,
-      message: expect.stringContaining(expectedMessage)
-    })
-    expect(client.listHooks).not.toHaveBeenCalled()
-    expect(client.writeConfigBatch).not.toHaveBeenCalled()
-    expect(client.stop).toHaveBeenCalledOnce()
   })
 
   it('forces Codex turns through the managed Model Router alias', async () => {

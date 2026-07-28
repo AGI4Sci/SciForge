@@ -26,10 +26,16 @@ import type {
 } from '@shared/sciforge-api'
 import { useChatStore } from '../store/chat-store'
 import { NoticeView, type MarketplaceNotice } from './PluginMarketplaceParts'
+import {
+  ExtensionCatalog,
+  extensionCatalogItemsFromSummaries,
+  type ExtensionCatalogItem
+} from './extensions/ExtensionCatalog'
 
-type PluginFilter = 'all' | 'recommended' | 'installed'
+type SkillFilter = 'all' | 'recommended' | 'installed'
+type ExtensionCenterTab = 'extensions' | 'skills'
 
-export type MarketplaceItem = {
+export type SkillCatalogItem = {
   id: string
   kind: 'skill'
   titleKey?: string
@@ -58,7 +64,7 @@ export function scientificSkillsInstallTargetForWorkspace(workspaceRoot: string)
     : ''
 }
 
-function normalizePluginId(raw: string): string {
+function normalizeSkillId(raw: string): string {
   return raw
     .trim()
     .toLowerCase()
@@ -83,18 +89,18 @@ function skillItemKey(id: string): string {
   return `skill:${id}`
 }
 
-function itemTitle(item: MarketplaceItem, t: (key: string) => string): string {
+function itemTitle(item: SkillCatalogItem, t: (key: string) => string): string {
   return item.title ?? (item.titleKey ? t(item.titleKey) : item.id)
 }
 
-function itemDescription(item: MarketplaceItem, t: (key: string) => string): string {
+function itemDescription(item: SkillCatalogItem, t: (key: string) => string): string {
   return item.description ?? (item.descriptionKey ? t(item.descriptionKey) : '')
 }
 
-export function skillMarketplaceItemsFromDiscoveredSkills(
+export function skillCatalogItemsFromDiscoveredSkills(
   skills: SkillListItem[],
   labels: { project: string; global: string }
-): MarketplaceItem[] {
+): SkillCatalogItem[] {
   return skills.map((skill) => ({
     id: skill.id,
     kind: 'skill' as const,
@@ -110,7 +116,13 @@ function skillNameLooksValid(raw: string): boolean {
   return !!value && value !== '.' && value !== '..' && !/[\\/]/.test(value)
 }
 
-export const RECOMMENDED_SKILL_ITEMS: readonly MarketplaceItem[] = [
+function extensionOperationMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback
+  const message = error.message.replace(/^Error invoking remote method '[^']+':\s*/i, '').trim()
+  return message || fallback
+}
+
+export const RECOMMENDED_SKILL_ITEMS: readonly SkillCatalogItem[] = [
   {
     id: 'code-review',
     kind: 'skill',
@@ -152,8 +164,13 @@ export const RECOMMENDED_SKILL_ITEMS: readonly MarketplaceItem[] = [
 export function PluginMarketplaceView(): ReactElement {
   const { t } = useTranslation('common')
   const workspaceRoot = normalizeWorkspaceRoot(useChatStore((s) => s.workspaceRoot))
+  const [activeTab, setActiveTab] = useState<ExtensionCenterTab>('extensions')
+  const [extensionItems, setExtensionItems] = useState<ExtensionCatalogItem[] | null>(null)
+  const [extensionsLoading, setExtensionsLoading] = useState(false)
+  const [extensionsError, setExtensionsError] = useState('')
+  const [busyExtension, setBusyExtension] = useState<string | null>(null)
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<PluginFilter>('all')
+  const [filter, setFilter] = useState<SkillFilter>('all')
   const [busyId, setBusyId] = useState<string | null>(null)
   const [notice, setNotice] = useState<MarketplaceNotice | null>(null)
   const [customOpen, setCustomOpen] = useState(false)
@@ -172,6 +189,93 @@ export function PluginMarketplaceView(): ReactElement {
     useState<ScientificSkillsInstallBackend>('git')
   const [scientificSkillsInstalling, setScientificSkillsInstalling] = useState(false)
   const [scientificSkillsInstallError, setScientificSkillsInstallError] = useState('')
+
+  const refreshExtensions = useCallback(async (): Promise<void> => {
+    setExtensionsLoading(true)
+    try {
+      const summaries = await window.sciforge.extensions.list()
+      setExtensionItems(extensionCatalogItemsFromSummaries(summaries))
+      setExtensionsError('')
+    } catch (error) {
+      setExtensionsError(extensionOperationMessage(error, t('extensionListFailed')))
+    } finally {
+      setExtensionsLoading(false)
+    }
+  }, [t])
+
+  useEffect(() => {
+    void refreshExtensions()
+  }, [refreshExtensions])
+
+  const installExtension = useCallback(async (): Promise<void> => {
+    const selection = await window.sciforge.pickFile({
+      title: t('extensionInstallPickerTitle'),
+      filters: [
+        { name: 'SciForge extension', extensions: ['sciforge-plugin'] }
+      ]
+    })
+    if (selection.canceled || !selection.path) return
+    setBusyExtension('__install__')
+    setExtensionsError('')
+    try {
+      await window.sciforge.extensions.install({ path: selection.path })
+      await refreshExtensions()
+    } catch (error) {
+      setExtensionsError(extensionOperationMessage(error, t('extensionInstallFailed')))
+    } finally {
+      setBusyExtension(null)
+    }
+  }, [refreshExtensions, t])
+
+  const setExtensionEnabled = useCallback(async (
+    extension: ExtensionCatalogItem,
+    enabled: boolean
+  ): Promise<void> => {
+    setBusyExtension(extension.packageName)
+    setExtensionsError('')
+    try {
+      await window.sciforge.extensions.setEnabled({
+        packageName: extension.packageName,
+        enabled
+      })
+      await refreshExtensions()
+    } catch (error) {
+      setExtensionsError(extensionOperationMessage(error, t('extensionStateFailed')))
+    } finally {
+      setBusyExtension(null)
+    }
+  }, [refreshExtensions, t])
+
+  const rollbackExtension = useCallback(async (
+    extension: ExtensionCatalogItem
+  ): Promise<void> => {
+    setBusyExtension(extension.packageName)
+    setExtensionsError('')
+    try {
+      await window.sciforge.extensions.rollback({ packageName: extension.packageName })
+      await refreshExtensions()
+    } catch (error) {
+      setExtensionsError(extensionOperationMessage(error, t('extensionRollbackFailed')))
+    } finally {
+      setBusyExtension(null)
+    }
+  }, [refreshExtensions, t])
+
+  const uninstallExtension = useCallback(async (
+    extension: ExtensionCatalogItem
+  ): Promise<void> => {
+    if (!window.confirm(t('extensionUninstallConfirm', { name: extension.displayName }))) return
+    setBusyExtension(extension.packageName)
+    setExtensionsError('')
+    try {
+      await window.sciforge.extensions.uninstall({ packageName: extension.packageName })
+      await refreshExtensions()
+    } catch (error) {
+      setExtensionsError(extensionOperationMessage(error, t('extensionUninstallFailed')))
+    } finally {
+      setBusyExtension(null)
+    }
+  }, [refreshExtensions, t])
 
   const skillRootOptions = useMemo<SkillRootOption[]>(() => {
     const hasWorkspace = !!workspaceRoot
@@ -324,25 +428,25 @@ export function PluginMarketplaceView(): ReactElement {
     [discoveredSkills]
   )
   const discoveredSkillItems = useMemo(
-    () => skillMarketplaceItemsFromDiscoveredSkills(discoveredSkills, {
+    () => skillCatalogItemsFromDiscoveredSkills(discoveredSkills, {
       project: t('pluginSkillSourceProject'),
       global: t('pluginSkillSourceGlobal')
     }),
     [discoveredSkills, t]
   )
-  const marketplaceItems = useMemo(
+  const skillItems = useMemo(
     () => [...RECOMMENDED_SKILL_ITEMS, ...discoveredSkillItems],
     [discoveredSkillItems]
   )
 
   const isInstalled = useCallback(
-    (item: Pick<MarketplaceItem, 'id'>): boolean => discoveredSkillIds.has(item.id),
+    (item: Pick<SkillCatalogItem, 'id'>): boolean => discoveredSkillIds.has(item.id),
     [discoveredSkillIds]
   )
 
   const visibleItems = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase()
-    return marketplaceItems.filter((item) => {
+    return skillItems.filter((item) => {
         const title = itemTitle(item, t).toLowerCase()
         const description = itemDescription(item, t).toLowerCase()
         const source = item.sourceLabel?.toLowerCase() ?? ''
@@ -357,12 +461,12 @@ export function PluginMarketplaceView(): ReactElement {
         if (filter === 'installed') return isInstalled(item)
         return true
       })
-  }, [filter, isInstalled, marketplaceItems, query, t])
+  }, [filter, isInstalled, query, skillItems, t])
 
   const recommendedItems = visibleItems.filter((item) => item.group === 'recommended' && !isInstalled(item))
   const personalItems = visibleItems.filter((item) => item.group === 'personal')
 
-  const addItem = async (item: MarketplaceItem): Promise<void> => {
+  const addItem = async (item: SkillCatalogItem): Promise<void> => {
     setBusyId(skillItemKey(item.id))
     setNotice(null)
     try {
@@ -394,7 +498,7 @@ export function PluginMarketplaceView(): ReactElement {
   }
 
   const addCustom = async (): Promise<void> => {
-    const id = normalizePluginId(customName)
+    const id = normalizeSkillId(customName)
     if (!id) {
       setNotice({ tone: 'error', message: t('pluginCustomNameRequired') })
       return
@@ -443,161 +547,247 @@ export function PluginMarketplaceView(): ReactElement {
   return (
     <div className="ds-no-drag h-full min-h-0 overflow-y-auto px-6 py-7 md:px-10 lg:px-14">
       <div className="mx-auto max-w-6xl">
-        <div className="flex flex-wrap items-center justify-end gap-3">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void openManageTarget()}
-              className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
-            >
-              <Settings className="h-4 w-4" strokeWidth={1.75} />
-              {t('pluginManage')}
-            </button>
-            <button
-              type="button"
-              onClick={() => setCustomOpen((value) => !value)}
-              className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
-            >
-              <Plus className="h-4 w-4" strokeWidth={1.9} />
-              {t('pluginCreate')}
-            </button>
+        <header className="flex flex-col gap-5 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h1 className="text-[30px] font-semibold text-ds-ink md:text-[36px]">
+              {t('extensionCenterTitle')}
+            </h1>
+            <p className="mt-2 max-w-2xl text-[14px] leading-6 text-ds-muted">
+              {t('extensionCenterDescription')}
+            </p>
           </div>
+          {activeTab === 'skills' ? (
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => void openManageTarget()}
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-subtle px-3 py-2 text-[13px] font-semibold text-ds-ink transition hover:bg-ds-hover"
+              >
+                <Settings className="h-4 w-4" strokeWidth={1.75} aria-hidden="true" />
+                {t('pluginManageSkills')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomOpen((value) => !value)}
+                className="inline-flex items-center gap-2 rounded-xl bg-ds-userbubble px-3 py-2 text-[13px] font-semibold text-ds-userbubbleFg shadow-sm transition hover:opacity-90"
+              >
+                <Plus className="h-4 w-4" strokeWidth={1.9} aria-hidden="true" />
+                {t('pluginCreateSkill')}
+              </button>
+            </div>
+          ) : null}
+        </header>
+
+        <div
+          role="tablist"
+          aria-label={t('extensionCenterNavigation')}
+          className="mt-7 flex gap-1 border-b border-ds-border-muted"
+        >
+          {(['extensions', 'skills'] as const).map((tab) => {
+            const selected = activeTab === tab
+            return (
+              <button
+                key={tab}
+                id={`extension-center-${tab}-tab`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`extension-center-${tab}-panel`}
+                tabIndex={selected ? 0 : -1}
+                onClick={() => setActiveTab(tab)}
+                onKeyDown={(event) => {
+                  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+                  event.preventDefault()
+                  const nextTab = event.key === 'Home'
+                    ? 'extensions'
+                    : event.key === 'End'
+                      ? 'skills'
+                      : tab === 'extensions'
+                        ? 'skills'
+                        : 'extensions'
+                  setActiveTab(nextTab)
+                  requestAnimationFrame(() => {
+                    document.getElementById(`extension-center-${nextTab}-tab`)?.focus()
+                  })
+                }}
+                className={`border-b-2 px-4 py-3 text-[14px] font-semibold transition ${
+                  selected
+                    ? 'border-[var(--ds-accent)] text-ds-ink'
+                    : 'border-transparent text-ds-muted hover:text-ds-ink'
+                }`}
+              >
+                {t(tab === 'extensions' ? 'extensionTabExtensions' : 'extensionTabSkills')}
+              </button>
+            )
+          })}
         </div>
 
-        <div className="mt-9 flex flex-col items-center text-center">
-          <h1 className="text-[32px] font-semibold text-ds-ink md:text-[40px]">
-            {t('pluginSkillTitle')}
-          </h1>
-        </div>
+        {activeTab === 'extensions' ? (
+          <ExtensionCatalog
+            extensions={extensionItems ?? undefined}
+            loading={extensionsLoading}
+            error={extensionsError}
+            busyPackageName={busyExtension}
+            onInstall={() => void installExtension()}
+            onSetEnabled={(extension, enabled) => void setExtensionEnabled(extension, enabled)}
+            onRollback={(extension) => void rollbackExtension(extension)}
+            onUninstall={(extension) => void uninstallExtension(extension)}
+          />
+        ) : (
+          <section
+            id="extension-center-skills-panel"
+            role="tabpanel"
+            aria-labelledby="extension-center-skills-tab"
+          >
+            <div className="mt-7">
+              <h2 className="text-[24px] font-semibold text-ds-ink">{t('pluginSkillTitle')}</h2>
+              <p className="mt-1 text-[13px] leading-5 text-ds-muted">
+                {t('pluginSkillPageDescription')}
+              </p>
+            </div>
 
-        <div className="mt-9 flex flex-col gap-3 md:flex-row md:items-center">
-          <label className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-ds-faint" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-              placeholder={t('pluginSearchSkill')}
+            <div className="mt-6 flex flex-col gap-3 md:flex-row md:items-center">
+              <label className="relative min-w-0 flex-1">
+                <span className="sr-only">{t('pluginSearchSkill')}</span>
+                <Search
+                  className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-ds-faint"
+                  aria-hidden="true"
+                />
+                <input
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                  className="h-11 w-full rounded-2xl border border-ds-border bg-ds-card pl-11 pr-4 text-[15px] text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                  placeholder={t('pluginSearchSkill')}
+                />
+              </label>
+              <label className="relative w-full md:w-[168px]">
+                <span className="sr-only">{t('pluginSkillFilterLabel')}</span>
+                <select
+                  value={filter}
+                  onChange={(event) => setFilter(event.target.value as SkillFilter)}
+                  className="h-11 w-full appearance-none rounded-2xl border border-ds-border bg-ds-card px-4 pr-9 text-[15px] font-medium text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+                >
+                  <option value="all">{t('pluginFilterAll')}</option>
+                  <option value="recommended">{t('pluginFilterRecommended')}</option>
+                  <option value="installed">{t('pluginFilterInstalled')}</option>
+                </select>
+                <ChevronDown
+                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ds-faint"
+                  aria-hidden="true"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
+              <select
+                value={selectedSkillRoot?.id ?? ''}
+                aria-label={t('pluginSkillRootLabel')}
+                onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
+                className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
+              >
+                {skillRootOptions.map((option) => (
+                  <option key={option.id} value={option.id} disabled={!option.available}>
+                    {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={() => void openManageTarget()}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
+              >
+                <FolderOpen className="h-4 w-4" aria-hidden="true" />
+                {t('pluginOpenLocation')}
+              </button>
+              <button
+                type="button"
+                onClick={() => void refreshSkillList()}
+                disabled={skillListLoading}
+                className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {skillListLoading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                )}
+                {t('pluginSkillRefresh')}
+              </button>
+              {skillListError ? (
+                <span className="text-[12px] text-red-700 dark:text-red-300">
+                  {skillListError}
+                </span>
+              ) : (
+                <span className="text-[12px] text-ds-faint">
+                  {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
+                </span>
+              )}
+            </div>
+
+            <ScientificSkillsStatusPanel
+              status={scientificSkillsStatus}
+              loading={scientificSkillsLoading}
+              error={scientificSkillsError}
+              installTarget={scientificSkillsInstallTarget}
+              installDisabled={!workspaceRoot || scientificSkillsInstalling}
+              onRefresh={() => void refreshScientificSkillsStatus()}
+              onInstall={() => {
+                setScientificSkillsInstallError('')
+                setScientificSkillsInstallOpen(true)
+              }}
+              t={t}
             />
-          </label>
-          <label className="relative w-full md:w-[168px]">
-            <select
-              value={filter}
-              onChange={(event) => setFilter(event.target.value as PluginFilter)}
-              className="h-11 w-full appearance-none rounded-2xl border border-ds-border bg-ds-card px-4 pr-9 text-[15px] font-medium text-ds-ink shadow-sm outline-none transition focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-            >
-              <option value="all">{t('pluginFilterAll')}</option>
-              <option value="recommended">{t('pluginFilterRecommended')}</option>
-              <option value="installed">{t('pluginFilterInstalled')}</option>
-            </select>
-            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-ds-faint" />
-          </label>
-        </div>
 
-        <div className="mt-4 flex flex-col gap-2 md:flex-row md:items-center">
-          <select
-            value={selectedSkillRoot?.id ?? ''}
-            onChange={(event) => setSkillRootId(event.target.value as SkillRootId)}
-            className="h-10 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] text-ds-ink shadow-sm outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
-          >
-            {skillRootOptions.map((option) => (
-              <option key={option.id} value={option.id} disabled={!option.available}>
-                {option.available ? option.label : `${option.label} · ${t('pluginSkillRootNeedsWorkspace')}`}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => void openManageTarget()}
-            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover"
-          >
-            <FolderOpen className="h-4 w-4" />
-            {t('pluginOpenLocation')}
-          </button>
-          <button
-            type="button"
-            onClick={() => void refreshSkillList()}
-            disabled={skillListLoading}
-            className="inline-flex h-10 items-center gap-2 rounded-xl border border-ds-border bg-ds-card px-3 text-[13px] font-medium text-ds-ink shadow-sm transition hover:bg-ds-hover disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {skillListLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            {t('pluginSkillRefresh')}
-          </button>
-          {skillListError ? (
-            <span className="text-[12px] text-red-700 dark:text-red-300">
-              {skillListError}
-            </span>
-          ) : (
-            <span className="text-[12px] text-ds-faint">
-              {t('pluginSkillDiscoveredCount', { count: discoveredSkills.length })}
-            </span>
-          )}
-        </div>
+            {customOpen ? (
+              <CustomSkillPanel
+                customName={customName}
+                customDescription={customDescription}
+                customSkillBody={customSkillBody}
+                busy={busyId === 'custom:skill'}
+                onNameChange={setCustomName}
+                onDescriptionChange={setCustomDescription}
+                onSkillBodyChange={setCustomSkillBody}
+                onAdd={() => void addCustom()}
+              />
+            ) : null}
 
-        <ScientificSkillsStatusPanel
-          status={scientificSkillsStatus}
-          loading={scientificSkillsLoading}
-          error={scientificSkillsError}
-          installTarget={scientificSkillsInstallTarget}
-          installDisabled={!workspaceRoot || scientificSkillsInstalling}
-          onRefresh={() => void refreshScientificSkillsStatus()}
-          onInstall={() => {
-            setScientificSkillsInstallError('')
-            setScientificSkillsInstallOpen(true)
-          }}
-          t={t}
-        />
+            {notice ? <NoticeView notice={notice} /> : null}
 
-        {customOpen ? (
-          <CustomPluginPanel
-            customName={customName}
-            customDescription={customDescription}
-            customSkillBody={customSkillBody}
-            busy={busyId === 'custom:skill'}
-            onNameChange={setCustomName}
-            onDescriptionChange={setCustomDescription}
-            onSkillBodyChange={setCustomSkillBody}
-            onAdd={() => void addCustom()}
-          />
-        ) : null}
+            {scientificSkillsInstallOpen ? (
+              <ScientificSkillsInstallDialog
+                backend={scientificSkillsInstallBackend}
+                error={scientificSkillsInstallError}
+                installing={scientificSkillsInstalling}
+                targetPath={scientificSkillsInstallTarget}
+                onBackendChange={setScientificSkillsInstallBackend}
+                onCancel={() => {
+                  if (!scientificSkillsInstalling) setScientificSkillsInstallOpen(false)
+                }}
+                onConfirm={() => void installScientificSkills()}
+                t={t}
+              />
+            ) : null}
 
-        {notice ? <NoticeView notice={notice} /> : null}
+            <SkillSection
+              title={t('pluginSkillTemplates')}
+              emptyText={t('pluginNoSkillResults')}
+              items={recommendedItems}
+              busyId={busyId}
+              isInstalled={isInstalled}
+              onAdd={addItem}
+              t={t}
+            />
 
-        {scientificSkillsInstallOpen ? (
-          <ScientificSkillsInstallDialog
-            backend={scientificSkillsInstallBackend}
-            error={scientificSkillsInstallError}
-            installing={scientificSkillsInstalling}
-            targetPath={scientificSkillsInstallTarget}
-            onBackendChange={setScientificSkillsInstallBackend}
-            onCancel={() => {
-              if (!scientificSkillsInstalling) setScientificSkillsInstallOpen(false)
-            }}
-            onConfirm={() => void installScientificSkills()}
-            t={t}
-          />
-        ) : null}
-
-        <PluginSection
-          title={t('pluginRecommended')}
-          emptyText={t('pluginNoResults')}
-          items={recommendedItems}
-          busyId={busyId}
-          isInstalled={isInstalled}
-          onAdd={addItem}
-          t={t}
-        />
-
-        <PluginSection
-          title={t('pluginPersonal')}
-          emptyText={t('pluginPersonalEmpty')}
-          items={personalItems}
-          busyId={busyId}
-          isInstalled={isInstalled}
-          onAdd={addItem}
-          t={t}
-        />
-
+            <SkillSection
+              title={t('pluginPersonalSkills')}
+              emptyText={t('pluginPersonalSkillEmpty')}
+              items={personalItems}
+              busyId={busyId}
+              isInstalled={isInstalled}
+              onAdd={addItem}
+              t={t}
+            />
+          </section>
+        )}
       </div>
     </div>
   )
@@ -859,7 +1049,7 @@ export function scientificSkillsRootSourceTitle(
   return path
 }
 
-function marketplaceSourceTone(tone: MarketplaceItem['statusTone']): string {
+function skillSourceTone(tone: SkillCatalogItem['statusTone']): string {
   switch (tone) {
     case 'success':
       return 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/30 dark:text-emerald-200'
@@ -873,7 +1063,7 @@ function marketplaceSourceTone(tone: MarketplaceItem['statusTone']): string {
   }
 }
 
-function PluginSection({
+function SkillSection({
   title,
   emptyText,
   items,
@@ -884,10 +1074,10 @@ function PluginSection({
 }: {
   title: string
   emptyText: string
-  items: MarketplaceItem[]
+  items: SkillCatalogItem[]
   busyId: string | null
-  isInstalled: (item: Pick<MarketplaceItem, 'id'>) => boolean
-  onAdd: (item: MarketplaceItem) => Promise<void>
+  isInstalled: (item: Pick<SkillCatalogItem, 'id'>) => boolean
+  onAdd: (item: SkillCatalogItem) => Promise<void>
   t: (key: string, values?: Record<string, unknown>) => string
 }): ReactElement {
   return (
@@ -915,7 +1105,7 @@ function PluginSection({
                     </span>
                     {item.sourceLabel ? (
                       <span
-                        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${marketplaceSourceTone(item.statusTone)}`}
+                        className={`shrink-0 rounded-md px-2 py-0.5 text-[11px] font-semibold ${skillSourceTone(item.statusTone)}`}
                       >
                         {item.sourceLabel}
                       </span>
@@ -953,7 +1143,7 @@ function PluginSection({
   )
 }
 
-function CustomPluginPanel({
+function CustomSkillPanel({
   customName,
   customDescription,
   customSkillBody,
@@ -979,12 +1169,14 @@ function CustomPluginPanel({
         <input
           value={customName}
           onChange={(event) => onNameChange(event.target.value)}
+          aria-label={t('pluginCustomName')}
           className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
           placeholder={t('pluginCustomName')}
         />
         <input
           value={customDescription}
           onChange={(event) => onDescriptionChange(event.target.value)}
+          aria-label={t('pluginCustomDescription')}
           className="h-10 rounded-xl border border-ds-border bg-ds-main/45 px-3 text-[14px] text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
           placeholder={t('pluginCustomDescription')}
         />
@@ -992,6 +1184,7 @@ function CustomPluginPanel({
       <textarea
         value={customSkillBody}
         onChange={(event) => onSkillBodyChange(event.target.value)}
+        aria-label={t('pluginCustomSkillBody')}
         className="mt-3 min-h-[140px] w-full rounded-xl border border-ds-border bg-ds-main/45 px-3 py-2 font-mono text-[13px] leading-5 text-ds-ink outline-none focus:border-accent/40 focus:ring-1 focus:ring-accent/30"
         placeholder={t('pluginCustomSkillBody')}
         spellCheck={false}

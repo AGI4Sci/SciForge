@@ -243,6 +243,23 @@ afterEach(() => {
 })
 
 describe('electron-builder release packaging', () => {
+  it('embeds an explicitly configured host-owned extension public keyring', () => {
+    const root = tempRoot()
+    const keyringPath = join(root, 'official-keys.json')
+    touch(keyringPath)
+    const configured = loadBuilderConfigWithEnv({
+      SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE: keyringPath
+    })
+
+    expect(configured.extraResources).toContainEqual({
+      from: keyringPath,
+      to: 'extensions/official-keys.json'
+    })
+    expect(() => loadBuilderConfigWithEnv({
+      SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE: join(root, 'missing.json')
+    })).toThrow('does not exist')
+  })
+
   it('packages shared agent support without the retired Kun runtime', () => {
     expect(builderConfig.npmRebuild).toBe(true)
     expect(builderConfig.files).toEqual(expect.arrayContaining([

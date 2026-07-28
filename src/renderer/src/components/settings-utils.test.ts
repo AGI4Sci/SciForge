@@ -35,4 +35,17 @@ describe('renderer model access settings', () => {
   it('keeps missing access settings setup-required', () => {
     expect(coerceRendererSettings(settings()).modelAccess).toBeUndefined()
   })
+
+  it('preserves Workbench toolbar preferences across unrelated settings edits', () => {
+    const current = {
+      ...settings(),
+      workbenchToolbar: {
+        hiddenCommandIds: ['paper-radar.open'],
+        commandOrder: ['remote-ssh.open', 'paper-radar.open']
+      }
+    }
+    const next = mergeSettings(current, { locale: 'zh' })
+
+    expect(next.workbenchToolbar).toEqual(current.workbenchToolbar)
+  })
 })

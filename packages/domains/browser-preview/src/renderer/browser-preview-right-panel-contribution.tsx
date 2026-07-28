@@ -11,6 +11,8 @@ import {
 import {
   BROWSER_PREVIEW_RENDERER_I18N_CONTRIBUTION,
   BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createBrowserPreviewCapabilityClient } from './browser-preview-capability-client'
@@ -28,16 +30,19 @@ const BrowserPreviewPanel = lazy(() =>
 export type BrowserPreviewRightPanelContribution = Readonly<{
   id: string
   mode: 'browser'
-  label: string
-  icon: typeof Globe2
   title: string
   resourceKind: string
-  isAvailable: () => boolean
   render: (context: DomainWorkbenchRightPanelRenderContext) => ReactElement
+}>
+
+export type BrowserPreviewToolbarActionContribution = Readonly<{
+  icon: typeof Globe2
+  isAvailable: () => boolean
 }>
 
 type BrowserPreviewRendererContribution =
   | BrowserPreviewRightPanelContribution
+  | BrowserPreviewToolbarActionContribution
   | BrowserPreviewI18nResourceContribution
 
 export function createBrowserPreviewRightPanelContribution(
@@ -51,11 +56,8 @@ export function createBrowserPreviewRightPanelContribution(
   return Object.freeze({
     id: BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     mode: 'browser',
-    label: 'browserPreviewRightPanelBrowser',
-    icon: Globe2,
     title: 'Playwright browser',
     resourceKind: 'browser-page',
-    isAvailable: () => true,
     render: ({ active, className, onCollapse, session }) => (
       <BrowserPreviewPanel
         active={active}
@@ -70,6 +72,14 @@ export function createBrowserPreviewRightPanelContribution(
   })
 }
 
+export function createBrowserPreviewToolbarActionContribution():
+BrowserPreviewToolbarActionContribution {
+  return Object.freeze({
+    icon: Globe2,
+    isAvailable: () => true
+  })
+}
+
 export function createDomainRendererEntry(
   host: DomainRendererHost
 ): TrustedRendererDomainPackageEntry<BrowserPreviewRendererContribution> {
@@ -79,6 +89,11 @@ export function createDomainRendererEntry(
       {
         ...BROWSER_PREVIEW_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         value: createBrowserPreviewRightPanelContribution(host)
+      },
+      {
+        ...BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: BROWSER_PREVIEW_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createBrowserPreviewToolbarActionContribution()
       },
       {
         ...BROWSER_PREVIEW_RENDERER_I18N_CONTRIBUTION,

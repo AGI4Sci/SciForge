@@ -66,3 +66,12 @@
 - [x] 10.2 Add real Electron Workspace Preview read/edit/release coverage and Paper Radar UI capability coverage.
 - [x] 10.3 Build an unpacked distributable and launch the packaged app through the migrated domain paths.
 - [x] 10.4 Re-run full tests, package tests, typechecks, governance, lint on changed files, build, and dead-path audits.
+
+## 11. User-configurable Workbench toolbar contributions
+
+- [x] 11.1 Add bounded, normalized host settings for hidden command IDs and explicit toolbar order.
+- [x] 11.2 Resolve visible toolbar contributions from installed actions plus user preferences without changing contribution availability or execution authority.
+- [x] 11.3 Add an accessible toolbar configuration surface for add/remove, reorder, and reset actions.
+- [x] 11.4 Cover normalization, persistence, ordering, missing-package retention, and UI rendering with focused tests.
+- [x] 11.5 Run typechecks, focused regressions, build verification, and local UI validation.
+- [x] 11.6 Make the toolbar customization entry visibly labeled and verify it in the running app.

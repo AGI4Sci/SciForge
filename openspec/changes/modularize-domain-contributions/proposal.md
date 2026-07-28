@@ -15,6 +15,7 @@ This change establishes a trusted compile-time domain-package boundary that owns
 - Package Biology Room, Life Science Preview, and Paper Radar as trusted vertical domain modules and remove their superseded host-owned wiring.
 - Route Paper Radar GUI operations through the Capability Broker and delete its domain-specific IPC/preload transport.
 - Add architecture checks for duplicate IDs, incompatible host contracts, deterministic ordering, and cleanup/disposal.
+- Let users choose which installed Workbench toolbar contributions are visible and in which order, with preferences stored by stable command ID.
 - Remove superseded compatibility paths plus dead or redundant code established by repository-wide reference search and tests.
 - Generate one installed-domain package set from `packages/domains/*/sciforge.domain.json` as the only composition input for main, renderer, and governance.
 - Keep domain-specific Workspace Preview wire schemas in their owning package, carried through generic namespaced SDK extension slots without legacy decoders.
@@ -26,6 +27,7 @@ This change establishes a trusted compile-time domain-package boundary that owns
 
 - `domain-module-catalog`: Defines module manifests, contribution ownership, compatibility validation, deterministic composition, and lifecycle disposal for built-in modules.
 - `domain-ui-contributions`: Defines typed renderer slots and registries used by Workspace Preview and selected Workbench panels.
+- `workbench-toolbar-customization`: Persists user-owned visibility and ordering preferences for installed toolbar contributions.
 - `workspace-preview-provider-registry`: Routes preview observe/action/artifact operations through registered backend providers rather than plugin-ID switches.
 
 ### Modified Capabilities
@@ -37,6 +39,7 @@ This change establishes a trusted compile-time domain-package boundary that owns
 ## Impact
 
 - Affected code: shared module contracts, main composition and Workspace Preview services, renderer contribution registries and Workbench assembly, focused tests, and architecture documentation.
+- User toolbar preferences are app-global, survive package removal/reinstallation, and can be reset without changing package installation state.
 - No persistent data migration is required.
 - Paper Radar's private domain IPC namespace is removed in favor of the existing public Capability Broker transport.
 - No untrusted runtime JavaScript loading is introduced in this change; selected trusted packages are composed at build time through separate process entrypoints.

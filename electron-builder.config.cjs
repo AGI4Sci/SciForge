@@ -61,6 +61,15 @@ const releaseAppVersion = (
   ''
 ).trim()
 const artifactVersion = releaseAppVersion || '${version}'
+const officialExtensionKeysFile = (
+  process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE || ''
+).trim()
+
+if (officialExtensionKeysFile && !existsSync(officialExtensionKeysFile)) {
+  throw new Error(
+    `SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE does not exist: ${officialExtensionKeysFile}`
+  )
+}
 
 function normalizeUpdateChannel(raw) {
   const value = String(raw || '').trim()
@@ -107,7 +116,13 @@ module.exports = {
   extraResources: [
     { from: 'LICENSE', to: 'compliance/LICENSE' },
     { from: 'THIRD_PARTY_NOTICES.md', to: 'compliance/THIRD_PARTY_NOTICES.md' },
-    { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' }
+    { from: 'src/asset/img/README.md', to: 'compliance/ASSET_PROVENANCE.md' },
+    ...(officialExtensionKeysFile
+      ? [{
+          from: officialExtensionKeysFile,
+          to: 'extensions/official-keys.json'
+        }]
+      : [])
   ],
   artifactName: `SciForge-${artifactVersion}-\${os}-\${arch}.\${ext}`,
   publish: [

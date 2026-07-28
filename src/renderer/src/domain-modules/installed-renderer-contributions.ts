@@ -7,6 +7,13 @@ import {
   type WorkbenchRightPanelContribution
 } from './workbench-right-panel-slot'
 import {
+  RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND,
+  WORKBENCH_TOOLBAR_SLOT,
+  WorkbenchToolbarActionContributionRegistry,
+  type WorkbenchToolbarActionContract,
+  type WorkbenchToolbarActionValue
+} from './workbench-toolbar-slot'
+import {
   createBuiltInWorkspacePreviewPluginRegistrations
 } from '../workspace-preview/built-in-plugin-contributions'
 import {
@@ -47,6 +54,7 @@ export type RendererTranslationHost = Readonly<{
 
 export type InstalledRendererContributions = Readonly<{
   rightPanels: WorkbenchRightPanelContributionRegistry
+  toolbarActions: WorkbenchToolbarActionContributionRegistry
   workspacePreviews: RendererWorkspacePreviewRegistry
   readonly disposed: boolean
   dispose(): void
@@ -69,18 +77,42 @@ export function createInstalledRendererContributions(
     contribution: WorkbenchRightPanelContribution
   }> = []
   const resources: RendererI18nResourceContribution[] = []
+  const toolbarActions: Array<{
+    id: string
+    ownerId: string
+    order: number
+    contract: WorkbenchToolbarActionContract
+    value: WorkbenchToolbarActionValue
+  }> = []
   const workspacePreviewPlugins: RendererWorkspacePreviewPluginRegistrationInput[] = []
   const lifecycles: RendererLifecycleContribution[] = []
 
   for (const installed of entrySet.contributions) {
     if (installed.declaration.kind === RENDERER_WORKBENCH_RIGHT_PANEL_CONTRIBUTION_KIND) {
-      if (!isWorkbenchRightPanelContribution(installed.value)) {
+      if (
+        !isWorkbenchRightPanelContribution(installed.value) ||
+        installed.value.id !== installed.declaration.id
+      ) {
         throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
       }
       panels.push({
         ownerId: installed.owner.moduleId,
         order: installed.declaration.priority,
         contribution: installed.value
+      })
+      continue
+    }
+    if (installed.declaration.kind === RENDERER_WORKBENCH_TOOLBAR_ACTION_CONTRIBUTION_KIND) {
+      const contract = parseWorkbenchToolbarActionContract(installed.contract)
+      if (!contract || !isWorkbenchToolbarActionValue(installed.value)) {
+        throw invalidContribution(installed.declaration.id, installed.owner.moduleId)
+      }
+      toolbarActions.push({
+        id: installed.declaration.id,
+        ownerId: installed.owner.moduleId,
+        order: installed.declaration.priority,
+        contract,
+        value: installed.value
       })
       continue
     }
@@ -114,6 +146,7 @@ export function createInstalledRendererContributions(
   }
 
   const rightPanels = new WorkbenchRightPanelContributionRegistry()
+  const workbenchToolbarActions = new WorkbenchToolbarActionContributionRegistry(rightPanels)
   const workspacePreviews = createRendererWorkspacePreviewRegistry({
     registrations: [
       ...createBuiltInWorkspacePreviewPluginRegistrations(),
@@ -123,10 +156,11 @@ export function createInstalledRendererContributions(
   const translationDisposers: Array<() => void> = []
   const lifecycleDisposers: Array<() => void> = []
   try {
+    for (const panel of panels) rightPanels.register(panel)
+    for (const action of toolbarActions) workbenchToolbarActions.register(action)
     for (const resource of resources) {
       translationDisposers.push(installTranslationResource(translations, resource))
     }
-    for (const panel of panels) rightPanels.register(panel)
     for (const lifecycle of lifecycles) {
       const dispose = lifecycle.activate()
       if (dispose !== undefined && typeof dispose !== 'function') {
@@ -136,6 +170,7 @@ export function createInstalledRendererContributions(
     }
   } catch (error) {
     for (const dispose of lifecycleDisposers.reverse()) dispose()
+    workbenchToolbarActions.dispose()
     rightPanels.dispose()
     workspacePreviews.dispose()
     for (const dispose of translationDisposers.reverse()) dispose()
@@ -145,6 +180,7 @@ export function createInstalledRendererContributions(
   let disposed = false
   return Object.freeze({
     rightPanels,
+    toolbarActions: workbenchToolbarActions,
     workspacePreviews,
     get disposed() {
       return disposed
@@ -153,6 +189,7 @@ export function createInstalledRendererContributions(
       if (disposed) return
       disposed = true
       for (const dispose of lifecycleDisposers.reverse()) dispose()
+      workbenchToolbarActions.dispose()
       rightPanels.dispose()
       workspacePreviews.dispose()
       for (const dispose of translationDisposers.reverse()) dispose()
@@ -203,16 +240,40 @@ function installTranslationResource(
 function isWorkbenchRightPanelContribution(
   value: unknown
 ): value is WorkbenchRightPanelContribution {
-  if (!value || typeof value !== 'object') return false
+  if (!hasExactKeys(value, ['id', 'mode', 'title', 'resourceKind', 'render'])) return false
   const candidate = value as Partial<WorkbenchRightPanelContribution>
   return typeof candidate.id === 'string' &&
     typeof candidate.mode === 'string' &&
-    typeof candidate.label === 'string' &&
-    typeof candidate.icon === 'object' &&
     typeof candidate.title === 'string' &&
     typeof candidate.resourceKind === 'string' &&
-    typeof candidate.isAvailable === 'function' &&
     typeof candidate.render === 'function'
+}
+
+function parseWorkbenchToolbarActionContract(
+  value: unknown
+): WorkbenchToolbarActionContract | null {
+  if (!hasExactKeys(value, ['location', 'commandId', 'label', 'target'])) return null
+  if (
+    value.location !== WORKBENCH_TOOLBAR_SLOT ||
+    !isNamespacedIdentifier(value.commandId) ||
+    typeof value.label !== 'string' ||
+    !value.label.trim() ||
+    !hasExactKeys(value.target, ['kind', 'contributionId']) ||
+    value.target.kind !== 'workbench.right-panel' ||
+    !isNamespacedIdentifier(value.target.contributionId)
+  ) {
+    return null
+  }
+  return value as WorkbenchToolbarActionContract
+}
+
+function isWorkbenchToolbarActionValue(
+  value: unknown
+): value is WorkbenchToolbarActionValue {
+  if (!hasExactKeys(value, ['icon', 'isAvailable'])) return false
+  return (typeof value.icon === 'object' || typeof value.icon === 'function') &&
+    value.icon !== null &&
+    typeof value.isAvailable === 'function'
 }
 
 function isRendererI18nResourceContribution(
@@ -232,4 +293,20 @@ function invalidContribution(id: string, ownerId: string): Error {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasExactKeys<Value extends string>(
+  value: unknown,
+  keys: readonly Value[]
+): value is Record<Value, unknown> {
+  if (!isRecord(value)) return false
+  const actual = Object.keys(value).sort()
+  const expected = [...keys].sort()
+  return actual.length === expected.length &&
+    actual.every((key, index) => key === expected[index])
+}
+
+function isNamespacedIdentifier(value: unknown): value is string {
+  return typeof value === 'string' &&
+    /^[a-z][a-z0-9]*(?:[._-][a-z0-9]+)+$/.test(value)
 }

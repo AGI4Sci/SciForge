@@ -154,6 +154,13 @@ function createApi(): SciForgeApi {
       export: (traceIds) => invoke('traces:export', { traceIds }),
       clear: () => invoke('traces:clear')
     },
+    extensions: {
+      list: () => invoke('extensions:list'),
+      install: (input) => invoke('extensions:install', input),
+      uninstall: (input) => invoke('extensions:uninstall', input),
+      rollback: (input) => invoke('extensions:rollback', input),
+      setEnabled: (input) => invoke('extensions:set-enabled', input)
+    },
     getConnectPhoneStatus,
     getScheduleStatus: () => invoke('schedule:status'),
     runScheduleTask: (taskId) => invoke('schedule:task:run', taskId),

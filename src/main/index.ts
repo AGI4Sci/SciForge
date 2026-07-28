@@ -141,6 +141,11 @@ import {
 } from './capabilities/app-registry'
 import { registerCapabilityIpc } from './capabilities/ipc'
 import {
+  createDomainExtensionsApi,
+  loadOfficialExtensionKeyring,
+  SignedExtensionStore
+} from './extensions'
+import {
   DomainModuleCatalog,
   activateMainRuntimeContributions,
   createApplicationCapabilityRegistry,
@@ -1067,6 +1072,49 @@ app.whenReady().then(async () => {
   const catalog = createApplicationDomainCatalog({
     getUserDataDir: () => app.getPath('userData')
   })
+  let officialExtensionKeys
+  let extensionInstallationBlockedReason: string | undefined
+  try {
+    officialExtensionKeys = await loadOfficialExtensionKeyring({
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      isPackaged: app.isPackaged,
+      explicitPath: process.env.SCIFORGE_OFFICIAL_EXTENSION_KEYS_FILE
+    })
+    if (officialExtensionKeys.keys.length === 0) {
+      extensionInstallationBlockedReason =
+        'No SciForge official extension signing keys are configured in this build.'
+      logWarn('extensions', extensionInstallationBlockedReason)
+    } else {
+      logInfo(
+        'extensions',
+        `Loaded ${officialExtensionKeys.keys.length} SciForge official extension signing key(s).`
+      )
+    }
+  } catch (error) {
+    extensionInstallationBlockedReason =
+      error instanceof Error ? error.message : 'The SciForge official extension keyring is invalid.'
+    officialExtensionKeys = { keys: [], sourcePath: null }
+    logError('extensions', 'Official extension keyring initialization failed.', {
+      message: extensionInstallationBlockedReason
+    })
+  }
+  const signedExtensionStore = new SignedExtensionStore({
+    userDataPath: app.getPath('userData'),
+    hostApiVersion: catalog.hostApiVersion,
+    trustedKeys: officialExtensionKeys.keys,
+    reservedIdentities: {
+      packageNames: catalog.listPackages().map((definition) => definition.packageName),
+      moduleIds: catalog.listPackages().map((definition) => definition.module.id)
+    }
+  })
+  const domainExtensionsApi = createDomainExtensionsApi({
+    bundledDefinitions: catalog.listPackages(),
+    store: signedExtensionStore,
+    ...(extensionInstallationBlockedReason
+      ? { installationBlockedReason: extensionInstallationBlockedReason }
+      : {})
+  })
   const actionGuardEvaluator = createMainActionGuardEvaluator(catalog)
   const workspacePreviewHost = new WorkspacePreviewHost({
     domainPlugins: listMainWorkspacePreviewPluginContributions(catalog),
@@ -1543,6 +1591,7 @@ app.whenReady().then(async () => {
   const appBridgeDispatcher = registerAppIpcHandlers({
     store,
     actionGuardEvaluator,
+    extensions: domainExtensionsApi,
     getMainWindow: () => mainWindow,
     isTrustedIpcSender: (event) => {
       const window = mainWindow

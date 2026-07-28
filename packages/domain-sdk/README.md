@@ -1,7 +1,13 @@
 # `@sciforge/domain-sdk`
 
-This package defines the pure-data boundary for trusted domain packages selected at build time.
-It does not locate packages, dynamically import code, or execute untrusted JavaScript.
+This package defines the pure-data boundary for SciForge domain packages. A single strict
+`sciforge.domain.json` contract represents both trusted packages selected at build time and
+sandboxed packages installed at runtime. It does not locate packages, verify signatures, grant
+permissions, dynamically import code, or execute untrusted JavaScript.
+
+`defineDomainPackage` parses either manifest kind and returns deeply frozen data.
+`defineTrustedDomainPackage` remains the narrower entrypoint for the existing generated
+compile-time composition path.
 
 A domain package publishes one shared definition plus process-separated implementation entrypoints:
 
@@ -21,6 +27,71 @@ Every package exports the conventional names `domainPackageDefinition`, `createD
 and, when declared, `createDomainRendererEntry`. The repository generator scans
 `packages/domains/*/sciforge.domain.json`, sorts by package name, and emits static imports. It never
 imports a process entry that the manifest does not declare.
+
+## Sandboxed runtime packages
+
+Runtime packages use `kind: "sandboxed-runtime"` and must explicitly declare their claimed
+publisher identity, compatible host API range, requested permissions, and isolated process
+entrypoints:
+
+```json
+{
+  "contractVersion": 1,
+  "kind": "sandboxed-runtime",
+  "packageName": "@sciforge/domain-example",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
+  "module": {
+    "id": "sciforge.domain-example",
+    "displayName": "Example",
+    "version": "1.0.0",
+    "hostApi": {
+      "minimum": "1.0.0",
+      "maximumExclusive": "2.0.0"
+    }
+  },
+  "requestedPermissions": [
+    {
+      "id": "host.workspace.read",
+      "process": "main",
+      "reason": "Read user-selected workspace resources.",
+      "required": true,
+      "parameters": {
+        "roots": ["workspace"]
+      }
+    }
+  ],
+  "entrypoints": [
+    {
+      "process": "main",
+      "isolation": "extension-host",
+      "entry": "dist/main.js",
+      "format": "module",
+      "contributions": []
+    },
+    {
+      "process": "renderer",
+      "isolation": "sandboxed-webview",
+      "entry": "dist/renderer/index.html",
+      "format": "html",
+      "contributions": []
+    }
+  ]
+}
+```
+
+The manifest identifies the publisher it claims to come from; that claim is not trust evidence.
+Signature bytes, verification results, grants, and installation trust belong to host-owned
+installation records outside the package. Strict parsing rejects manifest fields that attempt to
+self-assert those decisions. Permission declarations are requests scoped to a declared process,
+not grants. A separate host policy must reject unknown permission IDs and refuse activation until
+all required requests have an acceptable grant.
+
+The main entry can only target a process-separated extension host, and renderer code can only
+target a sandboxed webview document. Runtime manifests cannot select Electron's main process or
+the privileged host renderer. Both entry paths are package-relative POSIX paths.
 
 Packages that must ship runtime assets declare them in the same manifest:
 

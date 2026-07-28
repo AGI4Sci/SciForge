@@ -1,5 +1,4 @@
 import { createElement } from 'react'
-import { Newspaper } from 'lucide-react'
 import { describe, expect, it } from 'vitest'
 import {
   WorkbenchRightPanelContributionRegistry,
@@ -10,11 +9,8 @@ function contribution(mode: WorkbenchRightPanelContribution['mode']): WorkbenchR
   return {
     id: `example.${mode}.workbench-right-panel`,
     mode,
-    label: 'rightPanelPaperRadar',
-    icon: Newspaper,
     title: 'Example panel',
     resourceKind: `example-${mode}`,
-    isAvailable: () => true,
     render: () => createElement('div')
   }
 }
@@ -58,6 +54,14 @@ describe('WorkbenchRightPanelContributionRegistry', () => {
         id: 'example.other.workbench-right-panel'
       }
     })).toThrow('Duplicate Workbench right-panel mode "paper"')
+  })
+
+  it('rejects modes reserved for host-owned panels', () => {
+    const registry = new WorkbenchRightPanelContributionRegistry()
+    expect(() => registry.register({
+      ownerId: 'example.files',
+      contribution: contribution('file')
+    })).toThrow('Workbench right-panel mode "file" is reserved by the host')
   })
 
   it('passes session and activation data through the generic render contract', () => {

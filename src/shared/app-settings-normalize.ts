@@ -16,6 +16,7 @@ import {
   type WorkflowSettingsPatchV1,
   type WriteSettingsPatchV1
 } from './app-settings-types'
+import { normalizeWorkbenchToolbarSettings } from './app-settings-workbench-toolbar'
 import { normalizeKeyboardShortcuts, type KeyboardShortcutsConfigV1 } from './keyboard-shortcuts'
 import {
   defaultLocalRuntimeSettings,
@@ -50,6 +51,7 @@ import { normalizeImageGenerationSettings } from './app-settings-image-generatio
 export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
   const maybeSettings = settings as AppSettingsV1 & {
     appBehavior?: Partial<AppBehaviorConfigV1>
+    workbenchToolbar?: Parameters<typeof normalizeWorkbenchToolbarSettings>[0]
     keyboardShortcuts?: Partial<KeyboardShortcutsConfigV1>
     notifications?: Partial<NotificationConfigV1>
     modelAccess?: Parameters<typeof normalizeModelAccessSettings>[0]
@@ -105,6 +107,7 @@ export function normalizeAppSettings(settings: AppSettingsV1): AppSettingsV1 {
       turnComplete: maybeSettings.notifications?.turnComplete !== false
     },
     appBehavior: normalizeAppBehaviorSettings(maybeSettings.appBehavior),
+    workbenchToolbar: normalizeWorkbenchToolbarSettings(maybeSettings.workbenchToolbar),
     keyboardShortcuts: normalizeKeyboardShortcuts(maybeSettings.keyboardShortcuts),
     write: normalizeWriteSettings(maybeSettings.write),
     speechToText: normalizeSpeechToTextSettings(maybeSettings.speechToText),

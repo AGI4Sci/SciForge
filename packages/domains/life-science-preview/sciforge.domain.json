@@ -2,6 +2,10 @@
   "contractVersion": 1,
   "kind": "trusted-compile-time",
   "packageName": "@sciforge/domain-life-science-preview",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
   "module": {
     "id": "sciforge.life-science-preview",
     "displayName": "Life Science Preview",

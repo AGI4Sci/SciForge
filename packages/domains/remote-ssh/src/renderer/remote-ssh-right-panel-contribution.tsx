@@ -12,6 +12,8 @@ import { REMOTE_SSH_TARGET_RESOURCE_KIND } from '../contract'
 import {
   REMOTE_SSH_RENDERER_I18N_CONTRIBUTION,
   REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import { createRemoteSshCapabilityClient } from './remote-ssh-capability-client'
@@ -30,16 +32,19 @@ export type RemoteSshRightPanelRenderProps = DomainWorkbenchRightPanelRenderCont
 export type RemoteSshRightPanelContribution = Readonly<{
   id: string
   mode: 'remote-ssh'
-  label: string
-  icon: typeof Server
   title: string
   resourceKind: string
-  isAvailable: () => boolean
   render: (props: RemoteSshRightPanelRenderProps) => ReactElement
+}>
+
+export type RemoteSshToolbarActionContribution = Readonly<{
+  icon: typeof Server
+  isAvailable: () => boolean
 }>
 
 export type RemoteSshRendererContribution =
   | RemoteSshRightPanelContribution
+  | RemoteSshToolbarActionContribution
   | RemoteSshI18nResourceContribution
 
 export function createRemoteSshRightPanelContribution(
@@ -49,11 +54,8 @@ export function createRemoteSshRightPanelContribution(
   return Object.freeze({
     id: REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION.id,
     mode: 'remote-ssh',
-    label: 'rightPanelRemoteSsh',
-    icon: Server,
     title: 'Remote targets',
     resourceKind: REMOTE_SSH_TARGET_RESOURCE_KIND,
-    isAvailable: () => true,
     render: ({ className, onCollapse, session }): ReactElement => (
       <RemoteSshPanel
         capabilityClient={capabilityClient}
@@ -66,6 +68,14 @@ export function createRemoteSshRightPanelContribution(
   })
 }
 
+export function createRemoteSshToolbarActionContribution():
+RemoteSshToolbarActionContribution {
+  return Object.freeze({
+    icon: Server,
+    isAvailable: () => true
+  })
+}
+
 export function createDomainRendererEntry(
   host: DomainRendererHost
 ): TrustedRendererDomainPackageEntry<RemoteSshRendererContribution> {
@@ -75,6 +85,11 @@ export function createDomainRendererEntry(
       {
         ...REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION,
         value: createRemoteSshRightPanelContribution(host)
+      },
+      {
+        ...REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
+        contract: REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRACT,
+        value: createRemoteSshToolbarActionContribution()
       },
       {
         ...REMOTE_SSH_RENDERER_I18N_CONTRIBUTION,

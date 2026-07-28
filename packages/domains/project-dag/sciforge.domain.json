@@ -2,6 +2,10 @@
   "contractVersion": 1,
   "kind": "trusted-compile-time",
   "packageName": "@sciforge/domain-project-dag",
+  "publisher": {
+    "id": "sciforge",
+    "displayName": "SciForge"
+  },
   "module": {
     "id": "sciforge.project-dag",
     "displayName": "Project DAG",
@@ -24,6 +28,17 @@
       "dependencies": [
         "@sciforge/domain-evidence-dag"
       ]
+    }
+  },
+  "contributionContracts": {
+    "project-dag.workbench-toolbar-action": {
+      "location": "workbench.topbar",
+      "commandId": "project-dag.open",
+      "label": "rightPanelProjectDag",
+      "target": {
+        "kind": "workbench.right-panel",
+        "contributionId": "project-dag.workbench-right-panel"
+      }
     }
   },
   "entrypoints": [
@@ -52,6 +67,10 @@
         {
           "kind": "renderer.workbench-right-panel",
           "id": "project-dag.workbench-right-panel"
+        },
+        {
+          "kind": "renderer.workbench-toolbar-action",
+          "id": "project-dag.workbench-toolbar-action"
         },
         {
           "kind": "renderer.i18n-resource",

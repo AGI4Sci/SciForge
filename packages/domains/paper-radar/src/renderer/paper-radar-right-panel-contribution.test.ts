@@ -5,11 +5,14 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   PAPER_RADAR_RENDERER_I18N_CONTRIBUTION,
   PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import {
   createDomainRendererEntry,
-  type PaperRadarRightPanelContribution
+  type PaperRadarRightPanelContribution,
+  type PaperRadarToolbarActionContribution
 } from './paper-radar-right-panel-contribution'
 import type { PaperRadarI18nResourceContribution } from './paper-radar-messages'
 
@@ -29,7 +32,7 @@ test('creates declared Workbench and translation values without host side effect
   const entry = createDomainRendererEntry(host)
   assert.equal(entry.process, 'renderer')
   assert.deepEqual(entry.definition, domainPackageDefinition)
-  assert.equal(entry.contributions.length, 2)
+  assert.equal(entry.contributions.length, 3)
 
   const runtime = entry.contributions.find(({ kind }) =>
     kind === PAPER_RADAR_RENDERER_RIGHT_PANEL_CONTRIBUTION.kind
@@ -39,19 +42,14 @@ test('creates declared Workbench and translation values without host side effect
   assert.deepEqual({
     id: panel.id,
     mode: panel.mode,
-    label: panel.label,
     title: panel.title,
     resourceKind: panel.resourceKind
   }, {
     id: 'paper-radar.workbench-right-panel',
     mode: 'paper',
-    label: 'rightPanelPaperRadar',
     title: 'Paper radar',
     resourceKind: 'paper-radar'
   })
-  assert.equal(typeof panel.icon, 'object')
-  assert.equal(panel.isAvailable(), true)
-
   const rendered = panel.render({
     active: true,
     className: 'panel',
@@ -62,6 +60,14 @@ test('creates declared Workbench and translation values without host side effect
   assert.equal(props.className, 'panel')
   assert.equal(typeof props.capabilityClient, 'object')
   assert.equal(props.openExternal, host.openExternal)
+
+  const toolbarRuntime = entry.contributions.find(({ kind }) =>
+    kind === PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
+  )!
+  const toolbar = toolbarRuntime.value as PaperRadarToolbarActionContribution
+  assert.deepEqual(toolbarRuntime.contract, PAPER_RADAR_RENDERER_TOOLBAR_ACTION_CONTRACT)
+  assert.equal(typeof toolbar.icon, 'object')
+  assert.equal(toolbar.isAvailable(), true)
 
   const translations = entry.contributions.find(({ kind }) =>
     kind === PAPER_RADAR_RENDERER_I18N_CONTRIBUTION.kind

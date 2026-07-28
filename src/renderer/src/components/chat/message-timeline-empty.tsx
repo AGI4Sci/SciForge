@@ -4,7 +4,6 @@ import { FolderOpen, GitFork, RefreshCw, Settings } from 'lucide-react'
 import type { AgentRuntimeId, RemoteChannelV1 } from '@shared/app-settings'
 import { AnimatedWorkLogo } from './AnimatedWorkLogo'
 import { InitialSessionUsageHeatmap } from './InitialSessionUsageHeatmap'
-import { WhaleHeroStage } from './WhaleHeroStage'
 
 /**
  * Empty / hero states rendered by `MessageTimeline` when there is no
@@ -92,8 +91,6 @@ function RuntimeWakeHero({
 
   return (
     <div className="ds-runtime-wake-hero ds-no-drag px-6 pb-8 pt-12 text-center md:pt-16">
-      <WhaleHeroStage />
-
       <p className="text-[12px] font-semibold uppercase tracking-[0] text-accent">
         {t('runtimeOfflineHeroKicker')}
       </p>

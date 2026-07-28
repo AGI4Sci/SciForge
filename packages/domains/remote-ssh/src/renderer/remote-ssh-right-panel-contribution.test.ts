@@ -4,11 +4,14 @@ import type { DomainRendererHost } from '@sciforge/domain-sdk/host'
 import {
   REMOTE_SSH_RENDERER_I18N_CONTRIBUTION,
   REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION,
+  REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRACT,
+  REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION,
   domainPackageDefinition
 } from '../definition'
 import {
   createDomainRendererEntry,
-  type RemoteSshRightPanelContribution
+  type RemoteSshRightPanelContribution,
+  type RemoteSshToolbarActionContribution
 } from './remote-ssh-right-panel-contribution'
 import type { RemoteSshI18nResourceContribution } from './remote-ssh-messages'
 
@@ -29,7 +32,7 @@ describe('Remote SSH right-panel contribution', () => {
     const entry = createDomainRendererEntry(host)
     expect(entry.process).toBe('renderer')
     expect(entry.definition).toEqual(domainPackageDefinition)
-    expect(entry.contributions).toHaveLength(2)
+    expect(entry.contributions).toHaveLength(3)
 
     const runtime = entry.contributions.find(({ kind }) =>
       kind === REMOTE_SSH_RENDERER_RIGHT_PANEL_CONTRIBUTION.kind
@@ -39,18 +42,14 @@ describe('Remote SSH right-panel contribution', () => {
     expect({
       id: panel.id,
       mode: panel.mode,
-      label: panel.label,
       title: panel.title,
       resourceKind: panel.resourceKind
     }).toEqual({
       id: 'remote-ssh.workbench-right-panel',
       mode: 'remote-ssh',
-      label: 'rightPanelRemoteSsh',
       title: 'Remote targets',
       resourceKind: 'remote-ssh-target'
     })
-    expect(panel.isAvailable()).toBe(true)
-
     const rendered = panel.render({
       active: true,
       className: 'panel',
@@ -65,6 +64,14 @@ describe('Remote SSH right-panel contribution', () => {
     expect(props.workspaceId).toBe('/workspace')
     expect(typeof props.capabilityClient).toBe('object')
     expect(props.openExternal).toBe(host.openExternal)
+
+    const toolbarRuntime = entry.contributions.find(({ kind }) =>
+      kind === REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRIBUTION.kind
+    )!
+    const toolbar = toolbarRuntime.value as RemoteSshToolbarActionContribution
+    expect(toolbarRuntime.contract).toEqual(REMOTE_SSH_RENDERER_TOOLBAR_ACTION_CONTRACT)
+    expect(typeof toolbar.icon).toBe('object')
+    expect(toolbar.isAvailable()).toBe(true)
 
     const translations = entry.contributions.find(({ kind }) =>
       kind === REMOTE_SSH_RENDERER_I18N_CONTRIBUTION.kind
